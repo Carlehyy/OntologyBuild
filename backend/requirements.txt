@@ -1,0 +1,16 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.6
+openai>=1.52.0
+kuzu>=0.11.0
+networkx>=3.0
+aiofiles>=24.0.0
+pyyaml>=6.0
+passlib>=1.7.4
+python-jose[cryptography]>=3.3.0
+python-dotenv>=1.0.0
+neo4j>=5.25.0
+py2neo>=2021.2
