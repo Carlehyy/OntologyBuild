@@ -120,7 +120,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
   const isGroupActive = (item: NavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent')
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events')
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true
@@ -425,7 +425,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         )}
-        <div className={`flex-1 overflow-auto ${isEdgeToEdgePage || isStewardPage ? '' : 'p-6'}`}>
+        <div className={`flex-1 overflow-auto ${isEdgeToEdgePage || isStewardPage ? 'h-full min-h-0' : 'p-6'}`}>
           {children}
         </div>
       </main>
