@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil,
-  X, Loader2, CheckCircle2, XCircle, Clock, Table2, PlugZap, Sparkles,
+  X, Loader2, CheckCircle2, XCircle, Clock, Table2, Sparkles,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
-import ConnectionsTab from './connections/ConnectionsTab'
+import { stewardApi } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import RunPreviewModal from './RunPreviewModal'
 
@@ -65,24 +65,11 @@ function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onT
 
 export default function PipelineListPage() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
-  // 数据连接是流水线连接器的数据源配置库，作为流水线页的子视图管理
-  const [view, setView] = useState<'pipelines' | 'connections'>(
-    searchParams.get('view') === 'connections' ? 'connections' : 'pipelines')
-  const switchView = (v: 'pipelines' | 'connections') => {
-    setView(v)
-    setSearchParams(prev => {
-      const n = new URLSearchParams(prev)
-      if (v === 'connections') n.set('view', v)
-      else n.delete('view')
-      return n
-    }, { replace: true })
-  }
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filterDomain, setFilterDomain] = useState('')
-  const [filterStatus, setFilterStatus] = useState('')
+  const [filterSource, setFilterSource] = useState('')     // '' | 'canvas' | 'n8n'
+  const [filterEnabled, setFilterEnabled] = useState('')   // '' | 'enabled' | 'disabled'
 
   const [showCreate, setShowCreate] = useState(false)
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
@@ -92,13 +79,13 @@ export default function PipelineListPage() {
 
   const load = () => {
     setLoading(true)
-    pipelinesApi.list({ search, domain: filterDomain, status: filterStatus })
+    pipelinesApi.list({ search })
       .then(res => setPipelines(Array.isArray(res) ? res : []))
       .catch(() => setPipelines([]))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [search, filterDomain, filterStatus])
+  useEffect(() => { load() }, [search])
 
   const handleToggleEnabled = async (pl: Pipeline) => {
     const next = !(pl.enabled ?? true)
@@ -126,11 +113,12 @@ export default function PipelineListPage() {
     }
   }
 
-  const domains = [...new Set(pipelines.map(p => p.domain || '通用').filter(Boolean))]
-
   const filtered = pipelines.filter(p => {
-    if (filterDomain && p.domain !== filterDomain) return false
-    if (filterStatus && p.status !== filterStatus) return false
+    const source = isN8nPipeline(p) ? 'n8n' : 'canvas'
+    if (filterSource && source !== filterSource) return false
+    const enabled = p.enabled ?? true
+    if (filterEnabled === 'enabled' && !enabled) return false
+    if (filterEnabled === 'disabled' && enabled) return false
     if (search) {
       const q = search.toLowerCase()
       return p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
@@ -151,51 +139,23 @@ export default function PipelineListPage() {
             编排数据采集与加工节点，在线测试运行；<b>发布后</b>可在数据任务池挂接调度自动触发，产物进入数据资产湖
           </p>
         </div>
-        {view === 'pipelines' && (
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => navigate('/data/pipelines/steward')}
-              className="flex items-center gap-1.5 px-3.5 py-2 border border-violet-300 bg-violet-50 text-violet-700 text-sm font-medium rounded-lg hover:bg-violet-100"
-              title="用对话创建和管理基于 n8n 的数据流水线（草稿需审批后生效）"
-            >
-              <Sparkles size={15} /> 数据管家
-            </button>
-            <button
-              onClick={() => setShowCreate(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-[var(--color-nav-bg)] text-white text-sm font-medium rounded-lg hover:opacity-90"
-            >
-              <Plus size={15} /> 新建流水线
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* 子视图切换：流水线 / 数据连接 */}
-      <div className="flex items-center gap-1 border-b border-gray-200">
-        {([
-          ['pipelines', '流水线', <GitBranch size={13} key="i" />],
-          ['connections', '数据连接', <PlugZap size={13} key="i" />],
-        ] as ['pipelines' | 'connections', string, React.ReactNode][]).map(([key, label, icon]) => (
+        <div className="flex items-center gap-2 shrink-0">
           <button
-            key={key}
-            onClick={() => switchView(key)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${
-              view === key
-                ? 'border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] font-medium'
-                : 'border-transparent text-gray-500 hover:text-gray-800'
-            }`}
+            onClick={() => navigate('/data/pipelines/steward')}
+            className="flex items-center gap-1.5 px-3.5 py-2 border border-violet-300 bg-violet-50 text-violet-700 text-sm font-medium rounded-lg hover:bg-violet-100"
+            title="用对话创建和管理基于 n8n 的数据流水线（草稿需审批后生效）"
           >
-            {icon} {label}
+            <Sparkles size={15} /> 数据管家
           </button>
-        ))}
-        <span className="ml-auto text-xs text-gray-400 pb-2">
-          {view === 'pipelines' ? '' : '连接是流水线连接器的数据源配置；文件类数据请到资产湖直接上传'}
-        </span>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-[var(--color-nav-bg)] text-white text-sm font-medium rounded-lg hover:opacity-90"
+          >
+            <Plus size={15} /> 新建流水线
+          </button>
+        </div>
       </div>
 
-      {view === 'connections' && <ConnectionsTab />}
-
-      {view === 'pipelines' && <>
       {/* 搜索与筛选 */}
       <div className="flex items-center gap-3 bg-white rounded-xl border px-4 py-3 flex-wrap">
         <div className="relative w-72">
@@ -213,26 +173,26 @@ export default function PipelineListPage() {
           )}
         </div>
         <select
-          value={filterDomain}
-          onChange={e => setFilterDomain(e.target.value)}
+          value={filterSource}
+          onChange={e => setFilterSource(e.target.value)}
           className="border rounded-lg px-3 py-1.5 text-sm"
         >
-          <option value="">全部领域</option>
-          {domains.map(d => <option key={d} value={d}>{d}</option>)}
+          <option value="">全部来源</option>
+          <option value="canvas">系统自定义</option>
+          <option value="n8n">n8n 流水线</option>
         </select>
         <select
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value)}
+          value={filterEnabled}
+          onChange={e => setFilterEnabled(e.target.value)}
           className="border rounded-lg px-3 py-1.5 text-sm"
         >
-          <option value="">全部状态</option>
-          {Object.entries(STATUS_LABEL).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
+          <option value="">全部启用状态</option>
+          <option value="enabled">已启用</option>
+          <option value="disabled">未启用</option>
         </select>
-        {(search || filterDomain || filterStatus) && (
+        {(search || filterSource || filterEnabled) && (
           <button
-            onClick={() => { setSearch(''); setFilterDomain(''); setFilterStatus('') }}
+            onClick={() => { setSearch(''); setFilterSource(''); setFilterEnabled('') }}
             className="text-xs text-gray-500 hover:text-black px-2 py-1"
           >
             清除筛选
@@ -246,20 +206,20 @@ export default function PipelineListPage() {
       ) : filtered.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <GitBranch size={32} className="mx-auto opacity-30" />
-          <p className="text-sm font-medium">{search || filterDomain || filterStatus ? '没有匹配的流水线' : '暂无流水线'}</p>
+          <p className="text-sm font-medium">{search || filterSource || filterEnabled ? '没有匹配的流水线' : '暂无流水线'}</p>
           <p className="text-xs">新建流水线后，在画布中编排「连接器 → 存储 → 转换 → 输出」节点并测试运行</p>
         </div>
       ) : (
-        <div className="border rounded-xl overflow-hidden bg-white">
+        <div className="border rounded-xl bg-white">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">流水线名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">来源</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">启用状态</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">最近运行</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">产物</th>
-                <th className="text-right px-4 py-2.5 font-medium text-gray-600 text-xs">操作</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl">流水线名称</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">来源</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">启用状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">最近运行</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">产物</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -277,30 +237,30 @@ export default function PipelineListPage() {
                   >
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900 flex items-center gap-1.5">
-                        {pl.name}
+                        <span className="hover:underline">{pl.name}</span>
                         <span className={`text-[10px] px-1.5 py-px rounded border ${STATUS_STYLE[pl.status] || STATUS_STYLE.draft}`}>
                           {STATUS_LABEL[pl.status] || pl.status}{pl.status === 'published' ? ` v${pl.version || 1}` : ''}
                         </span>
                       </p>
                       <p className="text-xs text-gray-400 truncate max-w-[240px]" title={pl.description || pl.id}>
-                        {pl.domain || '通用'} · {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
+                        {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
                       </p>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       {n8n ? (
-                        <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-600"
+                        <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-600"
                           title="由数据管家托管的 n8n 流水线，编辑与审批在数据管家">
                           <Sparkles size={10} /> n8n 流水线
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
+                        <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
                           title="在流水线画布中自行编排的流水线">
                           <GitBranch size={10} /> 系统自定义
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center gap-2">
+                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                      <div className="inline-flex items-center gap-2">
                         <EnabledSwitch
                           on={enabled}
                           busy={togglingId === pl.id}
@@ -311,23 +271,27 @@ export default function PipelineListPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       {runMeta ? (
-                        <div
-                          className={runFailed ? 'cursor-help inline-block' : 'inline-block'}
-                          title={runFailed ? pl.last_run_error : undefined}
-                        >
+                        <div className={`relative inline-block ${runFailed ? 'cursor-help group/err' : ''}`}>
                           <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color} ${
                             runFailed ? 'border-b border-dashed border-red-300' : ''}`}>
                             {runMeta.icon}{runMeta.label}
                           </span>
                           <span className="text-xs text-gray-400 ml-1.5">{formatTime(pl.last_run_at)}</span>
+                          {runFailed && (
+                            <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-30 hidden group-hover/err:block w-80 text-left">
+                              <div className="bg-gray-900/95 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl whitespace-normal break-all leading-relaxed">
+                                {pl.last_run_error}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <span className="text-xs text-gray-300">从未运行</span>
                       )}
                     </td>
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
                       {curatedCount > 0 ? (
                         <button
                           onClick={() => navigate(`/data/structured?pipeline=${encodeURIComponent(pl.name)}`)}
@@ -340,8 +304,8 @@ export default function PipelineListPage() {
                         <span className="text-xs text-gray-300">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
-                      <div className="flex gap-1 justify-end">
+                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                      <div className="flex gap-1 justify-center">
                         <button
                           onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
@@ -375,8 +339,6 @@ export default function PipelineListPage() {
         </div>
       )}
 
-      </>}
-
       {/* 执行：试运行预览 → 确认入湖 */}
       {previewTarget && (
         <RunPreviewModal
@@ -394,6 +356,10 @@ export default function PipelineListPage() {
             setShowCreate(false)
             navigate(`/data/pipelines/${pl.id}`)
           }}
+          onN8nCreated={(recordId) => {
+            setShowCreate(false)
+            navigate(`/data/pipelines/steward?record=${encodeURIComponent(recordId)}`)
+          }}
         />
       )}
 
@@ -410,16 +376,17 @@ export default function PipelineListPage() {
   )
 }
 
-/** Pipeline 创建弹窗 */
+/** Pipeline 创建弹窗：系统流水线（画布编排）/ n8n 流水线（后台自动在 n8n 创建骨架并纳管） */
 function PipelineCreateModal({
-  onClose, onCreated,
+  onClose, onCreated, onN8nCreated,
 }: {
   onClose: () => void
   onCreated: (pl: Pipeline) => void
+  onN8nCreated: (recordId: string) => void
 }) {
   const [name, setName] = useState('')
-  const [domain, setDomain] = useState('供应链')
   const [description, setDescription] = useState('')
+  const [mode, setMode] = useState<'canvas' | 'n8n'>('canvas')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -428,13 +395,17 @@ function PipelineCreateModal({
     setSaving(true)
     setError('')
     try {
-      const pl = await pipelinesApi.create({
-        name: name.trim(),
-        domain,
-        description,
-        definition: { nodes: [], edges: [] },
-      })
-      onCreated(pl)
+      if (mode === 'n8n') {
+        const res = await stewardApi.bootstrap(name.trim(), description)
+        onN8nCreated(res.record.id)
+      } else {
+        const pl = await pipelinesApi.create({
+          name: name.trim(),
+          description,
+          definition: { nodes: [], edges: [] },
+        })
+        onCreated(pl)
+      }
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setError(err?.detail || err?.message || '创建失败')
@@ -445,7 +416,7 @@ function PipelineCreateModal({
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-lg p-6 w-[420px]" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-lg p-6 w-[460px]" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-semibold">新建数据流水线</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-black">
@@ -453,6 +424,33 @@ function PipelineCreateModal({
           </button>
         </div>
         <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1.5">创建方式 *</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setMode('canvas')}
+                className={`text-left p-3 rounded-lg border-2 transition-all ${
+                  mode === 'canvas' ? 'border-[var(--color-nav-bg)] bg-blue-50/40' : 'border-gray-200 hover:border-gray-300'}`}
+              >
+                <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'canvas' ? 'text-[var(--color-nav-bg)]' : 'text-gray-900'}`}>
+                  <GitBranch size={13} /> 系统流水线
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">创建后进入画布，自行编排采集与加工节点</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('n8n')}
+                className={`text-left p-3 rounded-lg border-2 transition-all ${
+                  mode === 'n8n' ? 'border-violet-400 bg-violet-50/40' : 'border-gray-200 hover:border-gray-300'}`}
+              >
+                <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'n8n' ? 'text-violet-600' : 'text-gray-900'}`}>
+                  <Sparkles size={13} /> n8n 流水线
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">后台自动在 n8n 创建骨架工作流，进入数据管家完善并审批</div>
+              </button>
+            </div>
+          </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">流水线名称 *</label>
             <input
@@ -462,20 +460,6 @@ function PipelineCreateModal({
               placeholder="例：供应链数据清洗"
               autoFocus
             />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">业务领域</label>
-            <select
-              value={domain}
-              onChange={e => setDomain(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-            >
-              <option value="供应链">供应链</option>
-              <option value="金融">金融</option>
-              <option value="医疗">医疗</option>
-              <option value="法律">法律</option>
-              <option value="通用">通用</option>
-            </select>
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">描述</label>
@@ -499,7 +483,7 @@ function PipelineCreateModal({
             className="flex items-center gap-1.5 px-4 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-50"
           >
             {saving && <Loader2 size={13} className="animate-spin" />}
-            {saving ? '创建中...' : '创建'}
+            {saving ? (mode === 'n8n' ? '正在 n8n 创建...' : '创建中...') : '创建'}
           </button>
         </div>
       </div>

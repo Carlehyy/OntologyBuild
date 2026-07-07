@@ -102,36 +102,74 @@ def _live_next_run_map(task_ids: list[str]) -> dict[str, str]:
 
 
 def _computed_next_run(task) -> str | None:
-    """调度器未起（如预览环境）时按配置推算下一次执行时间。"""
+    """调度器未起（或未注册 Job）时按配置推算下一次执行时间，作为兜底。
+
+    INTERVAL 走纯标准库最稳；CRON 用 APScheduler 触发器（pytz→zoneinfo 兜底）。
+    MANUAL 或未启用返回 None（前端相应显示「手动触发 / 已停用」）。
+    """
     if not task.enabled:
         return None
-    try:
-        import pytz
-        from datetime import timedelta
-        tz = pytz.timezone("Asia/Shanghai")
-        now = datetime.now(tz)
-        if task.schedule_type == "CRON" and (task.cron_expression or "").strip():
-            parts = task.cron_expression.strip().split()
-            if len(parts) != 5:
-                return None
+    from datetime import timedelta, timezone as _tz
+
+    # INTERVAL：last_run + 间隔；从未运行则以当前时间起算
+    if task.schedule_type == "INTERVAL" and (task.interval_seconds or 0) > 0:
+        base = task.last_run_at or datetime.utcnow()
+        if base.tzinfo is None:
+            base = base.replace(tzinfo=_tz.utc)
+        return (base + timedelta(seconds=task.interval_seconds)).isoformat()
+
+    # CRON：标准 5 段表达式，用触发器推算下次触发点
+    if task.schedule_type == "CRON" and (task.cron_expression or "").strip():
+        parts = task.cron_expression.strip().split()
+        if len(parts) != 5:
+            return None
+        try:
+            try:
+                import pytz
+                tz = pytz.timezone("Asia/Shanghai")
+            except Exception:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo("Asia/Shanghai")
             from apscheduler.triggers.cron import CronTrigger
             trig = CronTrigger(minute=parts[0], hour=parts[1], day=parts[2],
                                month=parts[3], day_of_week=parts[4], timezone=tz)
-            nxt = trig.get_next_fire_time(None, now)
+            nxt = trig.get_next_fire_time(None, datetime.now(tz))
             return nxt.isoformat() if nxt else None
-        if task.schedule_type == "INTERVAL" and (task.interval_seconds or 0) > 0:
-            base = task.last_run_at or datetime.utcnow()
-            if base.tzinfo is None:
-                base = pytz.utc.localize(base)
-            return (base + timedelta(seconds=task.interval_seconds)).astimezone(tz).isoformat()
-    except Exception:
-        return None
+        except Exception:
+            return None
     return None
+
+
+def _last_impact_map(db: Session, task_ids: list[str]) -> dict[str, dict]:
+    """每个任务最近一次执行对资产湖的影响（新增/更新/删除）— 列表页「执行结果」列。
+
+    仅取每个任务最新的一条 run（按 max(created_at)），避免加载全部历史 stats。
+    """
+    if not task_ids:
+        return {}
+    from sqlalchemy import func
+    out: dict[str, dict] = {}
+    try:
+        sub = (db.query(PipelineRun.task_id, func.max(PipelineRun.created_at).label("mx"))
+               .filter(PipelineRun.task_id.in_(task_ids))
+               .group_by(PipelineRun.task_id).subquery())
+        latest = (db.query(PipelineRun)
+                  .join(sub, (PipelineRun.task_id == sub.c.task_id)
+                        & (PipelineRun.created_at == sub.c.mx)).all())
+        for r in latest:
+            imp = (r.stats or {}).get("lake_impact")
+            if r.task_id not in out and imp:
+                out[r.task_id] = imp
+    except Exception:
+        pass
+    return out
 
 
 def _with_pipeline_info(db: Session, tasks: list[PipelineTask]) -> list[dict]:
     pipe_map = {p.id: p for p in db.query(Pipeline).all()}
-    live = _live_next_run_map([t.id for t in tasks])
+    task_ids = [t.id for t in tasks]
+    live = _live_next_run_map(task_ids)
+    impacts = _last_impact_map(db, task_ids)
     items = []
     for t in tasks:
         d = t.to_dict()
@@ -140,6 +178,7 @@ def _with_pipeline_info(db: Session, tasks: list[PipelineTask]) -> list[dict]:
         d["pipeline_status"] = (pipe.status or "draft") if pipe else "deleted"
         d["pipeline_version"] = (pipe.version or 1) if pipe else None
         d["next_run_at"] = live.get(t.id) or _computed_next_run(t)
+        d["last_impact"] = impacts.get(t.id)
         items.append(d)
     return items
 

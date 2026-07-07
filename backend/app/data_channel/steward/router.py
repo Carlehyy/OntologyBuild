@@ -207,6 +207,28 @@ def list_pipeline_records(include_archived: bool = Query(False),
                 for r in records])
 
 
+class BootstrapBody(BaseModel):
+    name: str
+    description: str = ""
+
+
+@router.post("/pipelines/bootstrap", status_code=201)
+def bootstrap_pipeline(body: BootstrapBody, db: Session = Depends(get_db),
+                       current_user=Depends(get_current_user)):
+    """流水线列表「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流（草稿纳管）。
+
+    与对话工具 create_workflow 同源治理：创建即草稿、n8n 侧不激活，
+    完善与审批仍在数据管家页面完成。返回治理记录供前端深链跳转。
+    """
+    try:
+        rec = service.bootstrap_blank_workflow(
+            db, body.name, body.description,
+            user_id=getattr(current_user, "id", None))
+    except Exception as e:  # noqa: BLE001
+        raise _handle(e)
+    return _ok({"record": service.record_out(rec, active=False)})
+
+
 @router.get("/pipelines/{record_id}")
 def get_pipeline_record(record_id: str, db: Session = Depends(get_db),
                         _=Depends(get_current_user)):

@@ -60,6 +60,58 @@ def get_n8n_client(db: Session) -> N8nClient:
                      timeout_seconds=cfg.timeout_seconds or 10)
 
 
+def bootstrap_blank_workflow(db: Session, name: str, description: str = "",
+                             user_id: str | None = None) -> N8nPipeline:
+    """流水线列表「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流并纳管为草稿。
+
+    骨架 = Webhook 触发器（平台调度约定：path=ob-*、POST、responseMode=lastNode）
+    → NoOp 输出节点。用户随后在数据管家对话中完善取数逻辑，审批后才可被调度。
+    """
+    import re
+    import uuid as _uuid
+
+    name = (name or "").strip()
+    if not name:
+        raise StewardError("流水线名称不能为空。")
+    dup = (db.query(N8nPipeline)
+           .filter(N8nPipeline.name == name, N8nPipeline.status != STATUS_ARCHIVED).first())
+    if dup:
+        raise StewardError(f"已存在同名受管流水线「{name}」，请换一个名称。")
+
+    client = get_n8n_client(db)
+    # 中文名转不出可读 slug，统一用随机短径，避免撞车
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:24]
+    webhook_path = f"ob-{slug}-{_uuid.uuid4().hex[:6]}" if slug else f"ob-{_uuid.uuid4().hex[:10]}"
+    webhook_node = {
+        "id": str(_uuid.uuid4()), "name": "Webhook",
+        "type": "n8n-nodes-base.webhook", "typeVersion": 2,
+        "position": [0, 300],
+        "parameters": {"path": webhook_path, "httpMethod": "POST", "responseMode": "lastNode"},
+    }
+    output_node = {
+        "id": str(_uuid.uuid4()), "name": "输出",
+        "type": "n8n-nodes-base.noOp", "typeVersion": 1,
+        "position": [260, 300], "parameters": {},
+    }
+    created = client.create_workflow({
+        "name": name,
+        "nodes": [webhook_node, output_node],
+        "connections": {"Webhook": {"main": [[{"node": "输出", "type": "main", "index": 0}]]}},
+        "settings": {},
+    })
+    rec = N8nPipeline(
+        name=name,
+        description=(description or "").strip(),
+        n8n_workflow_id=str(created.get("id")),
+        workflow_snapshot=N8nClient.sanitize_workflow(created),
+        created_by=user_id,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
 # ── workflow JSON 摘要与约定 ──────────────────────────────────────
 
 TRIGGER_TYPE_PREFIXES = ("n8n-nodes-base.webhook", "n8n-nodes-base.scheduleTrigger",

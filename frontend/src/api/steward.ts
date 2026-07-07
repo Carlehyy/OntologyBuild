@@ -101,6 +101,9 @@ export const stewardApi = {
 
   pipelines: () => apiClientV2.get<StewardPipeline[]>('/steward/pipelines'),
   pipeline: (id: string) => apiClientV2.get<StewardPipelineDetail>(`/steward/pipelines/${id}`),
+  /** 列表页新建 n8n 流水线：后台自动在 n8n 创建骨架工作流并纳管为草稿 */
+  bootstrap: (name: string, description = '') =>
+    apiClientV2.post<{ record: StewardPipeline }>('/steward/pipelines/bootstrap', { name, description }),
   submit: (id: string) => apiClientV2.post<StewardPipeline>(`/steward/pipelines/${id}/submit`),
   approve: (id: string) => apiClientV2.post<StewardPipeline>(`/steward/pipelines/${id}/approve`),
   reject: (id: string, reason?: string) =>
