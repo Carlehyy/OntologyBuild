@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, Sparkles,
@@ -65,9 +65,11 @@ function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onT
 
 export default function PipelineListPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
+  // 从任务池「关联数据流水线」跳转而来时，用 ?search= 预置检索词，唯一定位该流水线
+  const [search, setSearch] = useState(() => searchParams.get('search') || '')
   const [filterSource, setFilterSource] = useState('')     // '' | 'canvas' | 'n8n'
   const [filterEnabled, setFilterEnabled] = useState('')   // '' | 'enabled' | 'disabled'
 

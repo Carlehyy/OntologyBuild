@@ -23,6 +23,8 @@ export interface PipelineTask {
   status: PipelineTaskStatus
   last_run_at: string | null
   next_run_at?: string | null
+  /** 最近一次执行对资产湖的影响（新增/更新/删除行数） */
+  last_impact?: LakeImpact | null
   last_rows: number
   last_error: string
   created_at: string | null

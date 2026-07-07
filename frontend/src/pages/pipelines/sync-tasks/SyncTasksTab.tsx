@@ -5,10 +5,9 @@ import {
   Plus, History, RefreshCw, Trash2, Edit2,
   Database, Clock, CheckCircle2, XCircle, Loader2, AlertCircle,
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
-  RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, Info, CalendarClock,
+  RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, ExternalLink, CalendarClock,
 } from 'lucide-react'
-import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode } from '@/api/v2/pipeline-tasks'
-import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
+import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -32,17 +31,20 @@ const SCHEDULE_LABEL: Record<string, { label: string; color: string; Icon: typeo
 // 毛玻璃基础样式 - 紧凑、圆角更小、阴影更轻
 const GLASS = 'backdrop-blur-xl bg-white/70 border border-white/80 shadow-[0_2px_12px_rgba(15,23,42,0.04)] rounded-lg overflow-hidden'
 
-function formatTime(iso: string | null): string {
+/** 后端裸时间戳按 UTC 处理：无时区标识则补 Z，避免被 JS 当成本地时间产生偏移 */
+function toLocalDate(iso: string): Date {
+  const hasTz = /(Z|[+-]\d\d:?\d\d)$/.test(iso)
+  return new Date(hasTz ? iso : iso + 'Z')
+}
+
+/** 执行标准时间：YYYY-MM-DD HH:mm:ss（本地时区） */
+function formatStdTime(iso: string | null): string {
   if (!iso) return '—'
   try {
-    const d = new Date(iso)
-    const now = new Date()
-    const diff = (now.getTime() - d.getTime()) / 1000
-    if (diff < 60) return '刚刚'
-    if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
-    return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-  } catch { return '—' }
+    const d = toLocalDate(iso)
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  } catch { return iso }
 }
 
 function relativeDuration(seconds?: number): string {
@@ -63,7 +65,6 @@ export default function SyncTasksTab() {
   const [showForm, setShowForm] = useState(false)
   const [editingTask, setEditingTask] = useState<PipelineTask | null>(null)
   const [historyTask, setHistoryTask] = useState<PipelineTask | null>(null)
-  const [detailPipelineId, setDetailPipelineId] = useState<string | null>(null)
   const [triggeringIds, setTriggeringIds] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<PipelineTask | null>(null)
   const [actionError, setActionError] = useState('')
@@ -372,13 +373,14 @@ export default function SyncTasksTab() {
                       <thead className="sticky top-0 z-10">
                         <tr className="text-slate-500 text-[11px] bg-white/75 backdrop-blur-sm border-b border-slate-200/60">
                           <th className="text-left font-medium px-3 py-1.5">任务名称</th>
-                          <th className="text-left font-medium px-2 py-1.5">关联流水线</th>
-                          <th className="text-left font-medium px-2 py-1.5">入库方式</th>
-                          <th className="text-left font-medium px-2 py-1.5">调度方式</th>
-                          <th className="text-left font-medium px-2 py-1.5">当前状态</th>
-                          <th className="text-left font-medium px-2 py-1.5">最近执行</th>
-                          <th className="text-left font-medium px-2 py-1.5">下一次执行</th>
-                          <th className="text-right font-medium px-3 py-1.5">操作</th>
+                          <th className="text-center font-medium px-2 py-1.5">关联数据流水线</th>
+                          <th className="text-center font-medium px-2 py-1.5">入库方式</th>
+                          <th className="text-center font-medium px-2 py-1.5">调度方式</th>
+                          <th className="text-center font-medium px-2 py-1.5">当前状态</th>
+                          <th className="text-center font-medium px-2 py-1.5">最近执行</th>
+                          <th className="text-center font-medium px-2 py-1.5">执行结果</th>
+                          <th className="text-center font-medium px-2 py-1.5">下一次执行时间</th>
+                          <th className="text-center font-medium px-3 py-1.5">操作</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -391,81 +393,87 @@ export default function SyncTasksTab() {
                           const SchIcon = sch.Icon
                           return (
                             <tr key={t.id} className="border-b border-slate-100/60 last:border-b-0 hover:bg-white/60 transition-colors group">
+                              {/* 任务名称（左对齐，无竖线） */}
                               <td className="px-3 py-2">
-                                <div className="flex items-center gap-2">
-                                  <span className={`w-[3px] h-5 rounded-full shrink-0 ${
-                                    !t.enabled ? 'bg-slate-300' :
-                                    t.status === 'failed' ? 'bg-rose-400' :
-                                    t.status === 'running' ? 'bg-blue-400' :
-                                    'bg-emerald-400'
-                                  }`} />
-                                  <div className="min-w-0">
-                                    <div className="font-medium text-slate-800 text-[12.5px] truncate max-w-[180px]">{t.name}</div>
-                                    {t.description && <div className="text-[10.5px] text-slate-400 truncate max-w-[200px]">{t.description}</div>}
-                                  </div>
+                                <div className="min-w-0">
+                                  <div className="font-medium text-slate-800 text-[12.5px] truncate max-w-[180px]">{t.name}</div>
+                                  {t.description && <div className="text-[10.5px] text-slate-400 truncate max-w-[200px]">{t.description}</div>}
                                 </div>
                               </td>
+                              {/* 关联数据流水线：点击跳转管理页并检索该流水线 */}
                               <td className="px-2 py-2">
-                                <button
-                                  onClick={() => !pipelineGone && setDetailPipelineId(t.pipeline_id)}
-                                  className={`flex items-center gap-1 text-[11.5px] max-w-[150px] ${pipelineGone ? 'text-slate-400 cursor-default' : 'text-blue-600 hover:underline underline-offset-2'}`}
-                                  title={pipelineGone ? '流水线已删除' : '查看流水线详情'}
-                                >
-                                  <GitBranch size={10} className="shrink-0" />
-                                  <span className="truncate">{t.pipeline_name || t.pipeline_id.slice(0, 8)}</span>
-                                  {!pipelineGone && <Info size={9} className="shrink-0 opacity-60" />}
-                                </button>
-                                {(pipelineGone || pipelineUnpub) && (
-                                  <div className="text-[10px] text-rose-500 mt-0.5 flex items-center gap-0.5">
-                                    <AlertCircle size={9} />
-                                    {pipelineGone ? '已删除' : '未发布'}
-                                  </div>
-                                )}
+                                <div className="flex flex-col items-center">
+                                  <button
+                                    onClick={() => !pipelineGone && navigate(`/data/pipelines?search=${encodeURIComponent(t.pipeline_name || t.pipeline_id)}`)}
+                                    className={`flex items-center gap-1 text-[11.5px] max-w-[170px] ${pipelineGone ? 'text-slate-400 cursor-default' : 'text-blue-600 hover:underline underline-offset-2'}`}
+                                    title={pipelineGone ? '流水线已删除' : '前往数据流水线管理页并检索该流水线'}
+                                  >
+                                    <GitBranch size={10} className="shrink-0" />
+                                    <span className="truncate">{t.pipeline_name || t.pipeline_id.slice(0, 8)}</span>
+                                    {!pipelineGone && <ExternalLink size={9} className="shrink-0 opacity-60" />}
+                                  </button>
+                                  {(pipelineGone || pipelineUnpub) && (
+                                    <div className="text-[10px] text-rose-500 mt-0.5 flex items-center gap-0.5">
+                                      <AlertCircle size={9} />{pipelineGone ? '已删除' : '未发布'}
+                                    </div>
+                                  )}
+                                </div>
                               </td>
+                              {/* 入库方式 */}
                               <td className="px-2 py-2">
-                                <div className="flex items-center gap-0.5">
+                                <div className="flex items-center justify-center gap-0.5">
                                   <span className="inline-flex items-center px-1.5 py-px rounded text-[10.5px] whitespace-nowrap bg-slate-100/80 text-slate-600 border border-slate-200/50" title={wm?.desc}>
                                     {wm?.label || t.write_mode}
                                   </span>
                                   {t.skip_empty && <span title="空输出保护"><ShieldCheck size={10} className="inline text-emerald-500" /></span>}
                                 </div>
                               </td>
+                              {/* 调度方式 */}
                               <td className="px-2 py-2">
-                                <div className="flex items-center gap-1 text-[11.5px] text-slate-600 whitespace-nowrap">
-                                  <SchIcon size={10} className={sch.color} />
-                                  <span>{sch.label}</span>
+                                <div className="flex flex-col items-center">
+                                  <div className="flex items-center gap-1 text-[11.5px] text-slate-600 whitespace-nowrap">
+                                    <SchIcon size={10} className={sch.color} />
+                                    <span>{sch.label}</span>
+                                  </div>
+                                  {t.schedule_type === 'CRON' && t.cron_expression && (
+                                    <div className="text-[10px] text-slate-400 font-mono truncate max-w-[92px]" title={t.cron_expression}>{t.cron_expression}</div>
+                                  )}
+                                  {t.schedule_type === 'INTERVAL' && !!t.interval_seconds && (
+                                    <div className="text-[10px] text-slate-400">每 {relativeDuration(t.interval_seconds)}</div>
+                                  )}
                                 </div>
-                                {t.schedule_type === 'CRON' && t.cron_expression && (
-                                  <div className="text-[10px] text-slate-400 font-mono truncate max-w-[92px] ml-3.5" title={t.cron_expression}>{t.cron_expression}</div>
-                                )}
-                                {t.schedule_type === 'INTERVAL' && !!t.interval_seconds && (
-                                  <div className="text-[10px] text-slate-400 ml-3.5">每 {relativeDuration(t.interval_seconds)}</div>
-                                )}
                               </td>
+                              {/* 当前状态（开关） */}
                               <td className="px-2 py-2">
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center justify-center gap-1.5">
                                   <Switch checked={t.enabled} onChange={() => handleToggle(t)} />
                                   <span className={`text-[11px] ${t.enabled ? 'text-emerald-600' : 'text-slate-400'}`}>
                                     {t.enabled ? '已启用' : '未启用'}
                                   </span>
                                 </div>
                               </td>
+                              {/* 最近执行（标准时间） */}
                               <td className="px-2 py-2">
-                                <div className="text-[11.5px] text-slate-600 tabular-nums">{formatTime(t.last_run_at)}</div>
-                                {t.last_rows > 0 && (
-                                  <div className="text-[10.5px] text-slate-400 tabular-nums">+{t.last_rows} 行</div>
-                                )}
-                                {t.status === 'failed' && t.last_error && (
-                                  <div className="text-[10px] text-rose-500 truncate max-w-[120px]" title={t.last_error}>
-                                    {t.last_error}
-                                  </div>
-                                )}
+                                <div className="flex flex-col items-center">
+                                  <div className="text-[11px] text-slate-600 tabular-nums whitespace-nowrap">{formatStdTime(t.last_run_at)}</div>
+                                  {t.status === 'failed' && t.last_error && (
+                                    <div className="text-[10px] text-rose-500 truncate max-w-[130px]" title={t.last_error}>{t.last_error}</div>
+                                  )}
+                                </div>
                               </td>
+                              {/* 执行结果（资产湖影响） */}
                               <td className="px-2 py-2">
-                                <NextRunCell task={t} />
+                                <div className="flex justify-center">
+                                  <ExecResultCell impact={t.last_impact} status={t.status} />
+                                </div>
                               </td>
-                              <td className="px-3 py-2 text-right">
-                                <div className="inline-flex items-center gap-0 opacity-60 group-hover:opacity-100 transition-opacity">
+                              {/* 下一次执行时间 */}
+                              <td className="px-2 py-2">
+                                <div className="flex justify-center"><NextRunCell task={t} /></div>
+                              </td>
+                              {/* 操作 */}
+                              <td className="px-3 py-2">
+                                <div className="flex items-center justify-center gap-0 opacity-60 group-hover:opacity-100 transition-opacity">
                                   <IconBtn2 title="立即执行" disabled={t.status === 'running' || isTriggering || pipelineGone} onClick={() => handleTrigger(t)} accent="blue">
                                     <RotateCw size={11} className={isTriggering ? 'animate-spin' : ''} />
                                   </IconBtn2>
@@ -643,13 +651,6 @@ export default function SyncTasksTab() {
         />
       )}
       {historyTask && <HistoryDrawer task={historyTask} onClose={() => setHistoryTask(null)} />}
-      {detailPipelineId && (
-        <PipelineDetailModal
-          pipelineId={detailPipelineId}
-          onClose={() => setDetailPipelineId(null)}
-          onOpenBuilder={(id) => { setDetailPipelineId(null); navigate(`/data/pipelines/${id}`) }}
-        />
-      )}
       <ConfirmDialog
         open={!!deleteTarget}
         title="删除调度任务"
@@ -783,7 +784,7 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: () => void 
 // ── 下一次执行时间 ─────────────────────────────────────
 function formatFuture(iso: string): string {
   try {
-    const diff = (new Date(iso).getTime() - Date.now()) / 1000
+    const diff = (toLocalDate(iso).getTime() - Date.now()) / 1000
     if (diff <= 0) return '即将'
     if (diff < 60) return `${Math.round(diff)}秒后`
     if (diff < 3600) return `${Math.round(diff / 60)}分钟后`
@@ -799,110 +800,31 @@ function NextRunCell({ task }: { task: PipelineTask }) {
     return <span className="text-[11px] text-slate-400">已停用</span>
   if (!task.next_run_at)
     return <span className="text-[11px] text-slate-400">—</span>
-  const d = new Date(task.next_run_at)
+  const d = toLocalDate(task.next_run_at)
+  const p = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
   return (
-    <div className="text-[11.5px] text-slate-600 tabular-nums" title={d.toLocaleString('zh-CN')}>
-      <div className="flex items-center gap-1">
-        <CalendarClock size={10} className="text-slate-400 shrink-0" />
-        {d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+    <div className="flex flex-col items-center text-[11px] text-slate-600 tabular-nums">
+      <div className="flex items-center gap-1 whitespace-nowrap">
+        <CalendarClock size={10} className="text-slate-400 shrink-0" />{stamp}
       </div>
       <div className="text-[10px] text-blue-500/80 mt-px">{formatFuture(task.next_run_at)}</div>
     </div>
   )
 }
 
-// ── 关联流水线详情弹窗 ─────────────────────────────────
-const PIPE_STATUS_META: Record<string, { label: string; cls: string }> = {
-  published: { label: '已发布', cls: 'bg-emerald-50 text-emerald-600 border-emerald-200' },
-  draft:     { label: '草稿',   cls: 'bg-slate-100 text-slate-500 border-slate-200' },
-  editing:   { label: '编辑中', cls: 'bg-amber-50 text-amber-600 border-amber-200' },
-  running:   { label: '运行中', cls: 'bg-blue-50 text-blue-600 border-blue-200' },
-  failed:    { label: '失败',   cls: 'bg-rose-50 text-rose-600 border-rose-200' },
-}
-
-function PipelineDetailModal({ pipelineId, onClose, onOpenBuilder }: {
-  pipelineId: string; onClose: () => void; onOpenBuilder: (id: string) => void
-}) {
-  const [pipe, setPipe] = useState<Pipeline | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState('')
-  useEffect(() => {
-    setLoading(true); setErr('')
-    pipelinesApi.get(pipelineId)
-      .then(setPipe)
-      .catch(() => setErr('加载流水线详情失败'))
-      .finally(() => setLoading(false))
-  }, [pipelineId])
-
-  const st = pipe ? (PIPE_STATUS_META[pipe.status] || { label: pipe.status, cls: 'bg-slate-100 text-slate-500 border-slate-200' }) : null
-  const nodeCount = pipe?.definition?.nodes?.length ?? 0
-  const curatedCount = pipe?.target_curated_ids?.length ?? 0
-
+// ── 执行结果：最近一次执行对资产湖的影响 ──────────────
+function ExecResultCell({ impact, status }: { impact?: LakeImpact | null; status: string }) {
+  if (status === 'failed') return <span className="text-[11px] text-rose-400">执行失败</span>
+  if (!impact) return <span className="text-[11px] text-slate-300">—</span>
+  const added = impact.added ?? 0, updated = impact.updated ?? 0, deleted = impact.deleted ?? 0
+  if (!added && !updated && !deleted) return <span className="text-[11px] text-slate-400">无变化</span>
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-[0_24px_70px_rgba(15,23,42,0.18)] border border-white/70 w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
-          <h3 className="text-[14px] font-semibold text-slate-800 flex items-center gap-2">
-            <GitBranch size={15} className="text-blue-500" /> 流水线详情
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={17} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading ? (
-            <div className="py-12 text-center text-slate-400 text-[12px] flex items-center justify-center gap-1.5">
-              <Loader2 size={14} className="animate-spin" /> 加载中...
-            </div>
-          ) : err || !pipe ? (
-            <div className="py-12 text-center text-rose-500 text-[12px]">{err || '流水线不存在'}</div>
-          ) : (
-            <div className="space-y-3.5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[15px] font-semibold text-slate-800">{pipe.name}</div>
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    {pipe.domain || '通用'} · v{pipe.version ?? 1}
-                  </div>
-                </div>
-                {st && <span className={`text-[11px] px-2 py-0.5 rounded-full border shrink-0 ${st.cls}`}>{st.label}</span>}
-              </div>
-              {pipe.description && (
-                <p className="text-[12px] text-slate-600 leading-relaxed bg-slate-50/70 rounded-lg p-2.5">{pipe.description}</p>
-              )}
-              <div className="grid grid-cols-3 gap-2">
-                <DetailStat label="画布节点" value={nodeCount} />
-                <DetailStat label="产出成品集" value={curatedCount} />
-                <DetailStat label="最近运行" value={PIPE_STATUS_META[pipe.last_run_status || '']?.label || (pipe.last_run_status ? pipe.last_run_status : '—')} small />
-              </div>
-              {pipe.last_run_at && (
-                <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                  <Clock size={11} /> 最近运行时间：{new Date(pipe.last_run_at).toLocaleString('zh-CN')}
-                </div>
-              )}
-              {pipe.last_run_error && (
-                <div className="text-[11px] text-rose-600 bg-rose-50 rounded-lg p-2 font-mono whitespace-pre-wrap break-all">
-                  {pipe.last_run_error}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/60">
-          <button onClick={onClose} className="px-3.5 py-1.5 text-[12px] text-slate-500 hover:bg-slate-100 rounded-lg transition">关闭</button>
-          <button onClick={() => onOpenBuilder(pipelineId)}
-            className="inline-flex items-center gap-1 px-3.5 py-1.5 text-[12px] bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
-            打开流水线画布 <ArrowUpRight size={13} />
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col items-center gap-px text-[10.5px] leading-tight tabular-nums whitespace-nowrap">
+      <span className="text-emerald-600">新增 {added} 行</span>
+      <span className="text-rose-600">删除 {deleted} 行</span>
+      <span className="text-amber-600">更新 {updated} 行</span>
     </div>
   )
 }
 
-function DetailStat({ label, value, small }: { label: string; value: number | string; small?: boolean }) {
-  return (
-    <div className="rounded-lg bg-slate-50/70 border border-slate-100 px-2.5 py-2 text-center">
-      <div className={`font-semibold text-slate-800 tabular-nums ${small ? 'text-[13px]' : 'text-[18px]'} leading-none`}>{value}</div>
-      <div className="text-[10.5px] text-slate-400 mt-1">{label}</div>
-    </div>
-  )
-}
