@@ -112,14 +112,14 @@ def _seed_db():
                 "ALTER TABLE v2_pipelines ADD COLUMN definition JSON",
                 "ALTER TABLE v2_pipelines ADD COLUMN branch VARCHAR(50) DEFAULT 'main'",
                 "ALTER TABLE v2_pipelines ADD COLUMN version INTEGER DEFAULT 1",
-                "ALTER TABLE logic_rules ADD COLUMN enabled BOOLEAN DEFAULT 1",
+                "ALTER TABLE logic_rules ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
                 "ALTER TABLE logic_rules ADD COLUMN status VARCHAR(20) DEFAULT 'draft'",
-                "ALTER TABLE actions ADD COLUMN enabled BOOLEAN DEFAULT 1",
+                "ALTER TABLE actions ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
                 "ALTER TABLE actions ADD COLUMN status VARCHAR(20) DEFAULT 'draft'",
                 "ALTER TABLE sentinels ADD COLUMN condition_rows JSON DEFAULT '[]'",
                 "ALTER TABLE sentinels ADD COLUMN condition_logic VARCHAR(8) DEFAULT 'and'",
                 "ALTER TABLE sentinels ADD COLUMN trigger_mode VARCHAR(16) DEFAULT 'on_enter'",
-                "ALTER TABLE sentinels ADD COLUMN muted BOOLEAN DEFAULT 0",
+                "ALTER TABLE sentinels ADD COLUMN muted BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE ontology_versions ADD COLUMN snapshot_formal JSON",
                 "ALTER TABLE fo_property_facts ADD COLUMN kind VARCHAR(16) DEFAULT 'property'",
                 "ALTER TABLE fo_property_facts ADD COLUMN derived_from JSON",
@@ -130,7 +130,7 @@ def _seed_db():
                 # —— 图谱编辑器主链路（缺此列则 GET /full 必 500）——
                 "ALTER TABLE fo_object_types ADD COLUMN interfaces JSON DEFAULT '[]'",
                 # —— HITL 审批闸门 + 执行溯源 ——
-                "ALTER TABLE fo_action_types ADD COLUMN requires_approval BOOLEAN DEFAULT 0",
+                "ALTER TABLE fo_action_types ADD COLUMN requires_approval BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE fo_action_logs ADD COLUMN actor_id VARCHAR",
                 "ALTER TABLE fo_action_logs ADD COLUMN decided_by VARCHAR",
                 "ALTER TABLE fo_action_logs ADD COLUMN decided_at DATETIME",
@@ -152,7 +152,7 @@ def _seed_db():
                 # —— 数据管家：试跑列样本 → 审批固化为影子流水线期望列契约 ——
                 "ALTER TABLE v2_n8n_pipelines ADD COLUMN last_test_result JSON",
                 # —— 流水线启用开关：停用后任务池/链式触发不执行 ——
-                "ALTER TABLE v2_pipelines ADD COLUMN enabled BOOLEAN DEFAULT 1",
+                "ALTER TABLE v2_pipelines ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
                 # —— 回填历史 NULL latest_version_id（create_version 旧 bug：flush 前取 id）——
                 "UPDATE v2_datasets SET latest_version_id = ("
                 " SELECT v.id FROM v2_dataset_versions v WHERE v.dataset_id = v2_datasets.id"
