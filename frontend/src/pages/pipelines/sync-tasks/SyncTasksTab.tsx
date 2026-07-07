@@ -427,7 +427,7 @@ export default function SyncTasksTab() {
                                 <span className="inline-flex items-center px-1.5 py-px rounded text-[10.5px] bg-slate-100/80 text-slate-600 border border-slate-200/50" title={wm?.desc}>
                                   {wm?.label || t.write_mode}
                                 </span>
-                                {t.skip_empty && <ShieldCheck size={10} className="inline text-emerald-500 ml-0.5" title="空输出保护" />}
+                                {t.skip_empty && <span title="空输出保护"><ShieldCheck size={10} className="inline text-emerald-500 ml-0.5" /></span>}
                               </td>
                               <td className="px-2 py-2">
                                 <div className="flex items-center gap-1 text-[11.5px] text-slate-600">
