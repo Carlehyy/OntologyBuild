@@ -1,11 +1,11 @@
 import { useMemo, useState, useEffect } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { useQuery } from '@tanstack/react-query'
-import { eventsApi } from '../../api/v2'
-import { Search, Plus, RefreshCcw, AlertTriangle, Activity, Database, Code2, Zap, AlertOctagon, ChevronLeft, ChevronRight, Filter, ListTodo, PlusCircle, ArrowUpRight, CircleDot, ExternalLink } from 'lucide-react'
+import { eventsApi } from '../../api/events'
+import type { EventItem, EventStats } from '../../api/events'
+import { Search, Plus, RefreshCcw, AlertTriangle, Activity, Database, Code2, Zap, AlertOctagon, ChevronLeft, ChevronRight, Filter, ListTodo, PlusCircle, ArrowUpRight, CircleDot, ExternalLink, Archive } from 'lucide-react'
 import EventFormModal from './EventFormModal'
-import ApiIntegrationModal from './ApiIntegrationModal'
-import type { EventRegistryRecord } from '../../types'
+import IngestKeysDrawer from './IngestKeysDrawer'
 
 // ─── 设计 token ──────────────────────────────────────────
 const GLASS = 'backdrop-blur-xl bg-white/70 border border-white/80 shadow-[0_4px_24px_rgba(15,23,42,0.05)] rounded-xl'
@@ -15,49 +15,50 @@ const PALETTE = {
 }
 const PAGE_SIZE = 8
 
-function fmt(iso: string | null): string {
+function fmt(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (isNaN(d.getTime())) return '—'
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 // ─── 数据 hooks ──────────────────────────────────────────
-function useStats() { return useQuery({ queryKey: ['events', 'stats'], queryFn: () => eventsApi.getStats() }) }
-function useList(params: { page: number; page_size: number; search?: string; source?: string; severity?: string }) {
+function useStats() { return useQuery({ queryKey: ['events', 'stats'], queryFn: () => eventsApi.stats() }) }
+function useList(params: { page: number; pageSize: number; q?: string; sourceType?: string; severity?: string; status?: string }) {
   return useQuery({ queryKey: ['events', 'list', params], queryFn: () => eventsApi.list(params) })
 }
 
 export default function EventRegistryPage() {
   const [search, setSearch] = useState('')
-  const [source, setSource] = useState<string>('')
+  const [sourceType, setSourceType] = useState<string>('')
   const [severity, setSeverity] = useState<string>('')
-  const [timeRange, setTimeRange] = useState<string>('7d')
+  const [status, setStatus] = useState<string>('active')
   const [onlyAbnormal, setOnlyAbnormal] = useState(false)
   const [page, setPage] = useState(1)
   const [formOpen, setFormOpen] = useState(false)
-  const [apiOpen, setApiOpen] = useState(false)
-  const [editRecord, setEditRecord] = useState<EventRegistryRecord | undefined>()
+  const [keysOpen, setKeysOpen] = useState(false)
+  const [editing, setEditing] = useState<EventItem | null>(null)
 
   const statsQ = useStats()
-  const stats = statsQ.data
+  const stats: EventStats | undefined = statsQ.data
   const listQ = useList({
-    page, page_size: PAGE_SIZE,
-    search: search || undefined,
-    source: source || undefined,
+    page, pageSize: PAGE_SIZE,
+    q: search || undefined,
+    sourceType: sourceType || undefined,
     severity: (severity || (onlyAbnormal ? 'critical' : '')) || undefined,
+    status: status || 'active',
   })
 
-  useEffect(() => { setPage(1) }, [search, source, severity, onlyAbnormal, timeRange])
+  useEffect(() => { setPage(1) }, [search, sourceType, severity, onlyAbnormal, status])
 
   const totalPages = Math.max(1, Math.ceil((listQ.data?.total ?? 0) / PAGE_SIZE))
   const refresh = () => { statsQ.refetch(); listQ.refetch() }
 
-  const abnormalCount = useMemo(() => (stats?.by_severity?.critical ?? 0) + (stats?.by_severity?.high ?? 0), [stats])
-  const integrationPct = useMemo(() => {
+  const abnormalCount = useMemo(() => (stats?.bySeverity?.critical ?? 0) + (stats?.bySeverity?.high ?? 0), [stats])
+  const apiCoverage = useMemo(() => {
     const total = stats?.total ?? 0
-    return total ? Math.round((stats?.by_source?.api ?? 0) / total * 100) : 0
+    return total ? Math.round((stats?.api ?? 0) / total * 100) : 0
   }, [stats])
 
   // 级别分布环形图
@@ -65,7 +66,7 @@ export default function EventRegistryPage() {
     const order = ['critical', 'high', 'medium', 'low', 'info'] as const
     const labels: Record<string, string> = { critical: '严重', high: '高', medium: '中', low: '低', info: '信息' }
     const colors = [PALETTE.red, PALETTE.orange, PALETTE.gold, PALETTE.teal, PALETTE.blue]
-    const data = order.map((k, i) => ({ name: labels[k], value: stats?.by_severity?.[k] ?? 0, itemStyle: { color: colors[i] } }))
+    const data = order.map((k, i) => ({ name: labels[k], value: stats?.bySeverity?.[k] ?? 0, itemStyle: { color: colors[i] } }))
     const total = data.reduce((s, d) => s + d.value, 0)
     return {
       animationDuration: 600,
@@ -87,41 +88,30 @@ export default function EventRegistryPage() {
     }
   }, [stats])
 
-  // 7日趋势：堆叠面积图（模拟按日新增，实际后端没返回就用总量估算 - 用统计里的 today/7d 做近似）
+  // 7日趋势（构造示例序列 - 实际后端有 7d 接口可替换）
   const trendOption = useMemo(() => {
-    // 构造 7 日数据：用 today 和 last7days 构造一个合理的合成序列（实际后端有接口可替换）
     const days: string[] = []
     const today = new Date()
     for (let i = 6; i >= 0; i--) {
       const d = new Date(today); d.setDate(d.getDate() - i)
       days.push(`${d.getMonth() + 1}/${d.getDate()}`)
     }
-    const last7 = stats?.last_7_days ?? 0
     const todayCnt = stats?.today ?? 0
-    // 构造自然波动
-    const base = Math.max(1, Math.round((last7 - todayCnt) / 6))
     const rand = (seed: number) => { const x = Math.sin(seed * 9999) * 10000; return x - Math.floor(x) }
     const build = (ratio: number, seed: number) => days.map((_, i) => {
-      if (i === 6) return Math.round(todayCnt * ratio)
-      return Math.max(0, Math.round(base * ratio * (0.6 + rand(seed + i) * 0.8)))
+      if (i === 6) return Math.max(0, Math.round(todayCnt * ratio))
+      return Math.max(0, Math.round(todayCnt * 1.2 * ratio * (0.5 + rand(seed + i) * 0.9)))
     })
-    const series_critical = build(0.08, 1)
-    const series_high = build(0.15, 2)
-    const series_medium = build(0.27, 3)
-    const series_low = build(0.25, 4)
-    const series_info = build(0.25, 5)
-
     return {
       animationDuration: 800,
-      grid: { top: 24, right: 16, bottom: 28, left: 36, containLabel: false },
+      grid: { top: 22, right: 12, bottom: 24, left: 32, containLabel: false },
       tooltip: {
         trigger: 'axis',
         backgroundColor: 'rgba(255,255,255,0.96)', borderColor: 'rgba(148,163,184,0.2)', borderWidth: 1,
         textStyle: { color: '#475569', fontSize: 11 },
-        extraCssText: 'backdrop-filter:blur(12px);border-radius:8px;box-shadow:0 4px 16px rgba(15,23,42,0.08);',
+        extraCssText: 'backdrop-filter:blur(12px);border-radius:8px;box-shadow:0 4px_16px rgba(15,23,42,0.08);',
         axisPointer: { type: 'line', lineStyle: { color: 'rgba(148,163,184,0.3)', type: 'dashed' } },
       },
-      legend: { show: false },
       xAxis: {
         type: 'category', data: days, boundaryGap: false,
         axisLine: { lineStyle: { color: 'rgba(148,163,184,0.2)' } },
@@ -135,27 +125,27 @@ export default function EventRegistryPage() {
         axisLabel: { color: '#94A3B8', fontSize: 10 },
       },
       series: [
-        { name: '严重', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: series_critical, itemStyle: { color: PALETTE.red }, areaStyle: { color: PALETTE.red, opacity: 0.25 } },
-        { name: '高', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: series_high, itemStyle: { color: PALETTE.orange }, areaStyle: { color: PALETTE.orange, opacity: 0.25 } },
-        { name: '中', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: series_medium, itemStyle: { color: PALETTE.gold }, areaStyle: { color: PALETTE.gold, opacity: 0.25 } },
-        { name: '低', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: series_low, itemStyle: { color: PALETTE.teal }, areaStyle: { color: PALETTE.teal, opacity: 0.25 } },
-        { name: '信息', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: series_info, itemStyle: { color: PALETTE.blue }, areaStyle: { color: PALETTE.blue, opacity: 0.25 } },
+        { name: '严重', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.08, 1), itemStyle: { color: PALETTE.red }, areaStyle: { color: PALETTE.red, opacity: 0.25 } },
+        { name: '高', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.15, 2), itemStyle: { color: PALETTE.orange }, areaStyle: { color: PALETTE.orange, opacity: 0.25 } },
+        { name: '中', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.27, 3), itemStyle: { color: PALETTE.gold }, areaStyle: { color: PALETTE.gold, opacity: 0.25 } },
+        { name: '低', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 4), itemStyle: { color: PALETTE.teal }, areaStyle: { color: PALETTE.teal, opacity: 0.25 } },
+        { name: '信息', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 5), itemStyle: { color: PALETTE.blue }, areaStyle: { color: PALETTE.blue, opacity: 0.25 } },
       ],
     }
   }, [stats])
 
   return (
     <div className="h-full flex flex-col relative overflow-hidden bg-gradient-to-br from-slate-50/80 via-white to-slate-50/60">
-      {/* 柔和光晕：均匀分布在四个角落，低透明度，不抢视线 */}
+      {/* 四角均匀柔光：对称分布、统一透明度、色彩克制 */}
       <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -left-40 w-[520px] h-[520px] rounded-full opacity-[0.18]"
-          style={{ background: 'radial-gradient(circle, rgba(94,234,212,0.6), transparent 70%)' }} />
-        <div className="absolute -top-32 -right-32 w-[480px] h-[480px] rounded-full opacity-[0.16]"
-          style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.55), transparent 70%)' }} />
-        <div className="absolute -bottom-40 -left-24 w-[480px] h-[480px] rounded-full opacity-[0.14]"
-          style={{ background: 'radial-gradient(circle, rgba(196,181,253,0.55), transparent 70%)' }} />
-        <div className="absolute -bottom-32 -right-40 w-[520px] h-[520px] rounded-full opacity-[0.12]"
-          style={{ background: 'radial-gradient(circle, rgba(253,186,116,0.5), transparent 70%)' }} />
+        <div className="absolute -top-32 -left-32 w-[480px] h-[480px] rounded-full opacity-[0.12]"
+          style={{ background: 'radial-gradient(circle, rgba(94,234,212,0.7), transparent 70%)' }} />
+        <div className="absolute -top-32 -right-32 w-[480px] h-[480px] rounded-full opacity-[0.12]"
+          style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.65), transparent 70%)' }} />
+        <div className="absolute -bottom-32 -left-32 w-[480px] h-[480px] rounded-full opacity-[0.10]"
+          style={{ background: 'radial-gradient(circle, rgba(196,181,253,0.6), transparent 70%)' }} />
+        <div className="absolute -bottom-32 -right-32 w-[480px] h-[480px] rounded-full opacity-[0.10]"
+          style={{ background: 'radial-gradient(circle, rgba(253,186,116,0.55), transparent 70%)' }} />
       </div>
 
       <div className="relative z-10 h-full flex flex-col p-5 gap-4">
@@ -167,56 +157,66 @@ export default function EventRegistryPage() {
             </div>
             <div>
               <h1 className="text-[17px] font-semibold text-slate-800 tracking-tight leading-tight">事件登记</h1>
-              <p className="text-xs text-slate-500 leading-tight mt-0.5">统一接入业务事件，支持平台登记与第三方 API 上报</p>
+              <p className="text-xs text-slate-500 leading-tight mt-0.5">统一接入业务事件 · 支持平台登记与第三方 API 上报</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex items-center bg-white/60 border border-slate-200/70 rounded-lg p-0.5 text-xs">
+              {[
+                { v: 'active', l: '活跃' },
+                { v: 'archived', l: '已归档' },
+                { v: 'all', l: '全部' },
+              ].map(o => (
+                <button key={o.v} onClick={() => setStatus(o.v)}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all ${status === o.v ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {o.v === 'archived' && <Archive className="w-3 h-3 inline -mt-0.5 mr-0.5" />}{o.l}
+                </button>
+              ))}
+            </div>
             {abnormalCount > 0 && (
-              <button
-                onClick={() => setOnlyAbnormal(!onlyAbnormal)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${onlyAbnormal ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-white/60 text-slate-600 border border-slate-200/70 hover:bg-white'}`}
-              >
-                <AlertOctagon className="w-3.5 h-3.5" />
-                {abnormalCount} 待关注
+              <button onClick={() => setOnlyAbnormal(!onlyAbnormal)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${onlyAbnormal ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-white/60 text-slate-600 border border-slate-200/70 hover:bg-white'}`}>
+                <AlertOctagon className="w-3.5 h-3.5" />{abnormalCount} 待关注
               </button>
             )}
-            <button onClick={() => setApiOpen(true)}
+            <button onClick={() => setKeysOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/60 border border-slate-200/70 text-xs font-medium text-slate-600 hover:bg-white transition-all">
               <Code2 className="w-3.5 h-3.5" />接入管理
               <span className="ml-0.5 inline-flex items-center px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-medium">API</span>
             </button>
-            <button onClick={() => setFormOpen(true)}
+            <button onClick={() => { setEditing(null); setFormOpen(true) }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white text-xs font-medium shadow-[0_4px_12px_rgba(59,130,246,0.3)] hover:shadow-[0_6px_16px_rgba(59,130,246,0.4)] transition-all">
               <Plus className="w-3.5 h-3.5" />登记事件
             </button>
           </div>
         </div>
 
-        {/* 第一行：总览指标 + 级别分布 + 7日趋势 */}
+        {/* 第一行：4 个小指标 + 级别分布 + 7日趋势 */}
         <div className="grid grid-cols-12 gap-3 shrink-0">
-          {/* 核心指标：4 个小卡 */}
-          <MetricCard icon={<Database className="w-3.5 h-3.5" />} label="事件总数" value={stats?.total ?? 0} sub={`较昨日 +${Math.round((stats?.last_7_days ?? 0) / 7)}`} accent="blue" />
-          <MetricCard icon={<ListTodo className="w-3.5 h-3.5" />} label="平台录入" value={stats?.by_source?.platform ?? 0} sub="人工登记" accent="teal" />
-          <MetricCard icon={<Activity className="w-3.5 h-3.5" />} label="API 接入" value={stats?.by_source?.api ?? 0} sub={`${integrationPct}% 覆盖率`} accent="purple" />
+          <MetricCard icon={<Database className="w-3.5 h-3.5" />} label="事件总数" value={stats?.total ?? 0} sub={`活跃 ${stats?.active ?? 0} · 归档 ${stats?.archived ?? 0}`} accent="blue" />
+          <MetricCard icon={<ListTodo className="w-3.5 h-3.5" />} label="平台录入" value={stats?.platform ?? 0} sub="人工登记" accent="teal" />
+          <MetricCard icon={<Activity className="w-3.5 h-3.5" />} label="API 接入" value={stats?.api ?? 0} sub={`${apiCoverage}% 覆盖率`} accent="purple" />
           <MetricCard icon={<Zap className="w-3.5 h-3.5" />} label="今日新增" value={stats?.today ?? 0} sub="实时" accent="gold" />
 
           {/* 级别分布环 */}
-          <div className={`col-span-3 ${GLASS} px-4 py-3 flex items-center gap-3 overflow-hidden`}>
+          <div className={`col-span-3 ${GLASS} px-4 py-2.5 flex items-center gap-3 overflow-hidden`}>
             <div className="relative w-[68px] h-[68px] shrink-0">
-              <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
+              <div className="w-full h-full overflow-hidden rounded-full">
+                <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
+              </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span className="text-[15px] font-semibold text-slate-800 tabular-nums leading-none">{severityOption._centerTotal as number}</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">合计</span>
               </div>
             </div>
-            <div className="flex-1 min-w-0 grid grid-cols-2 gap-x-2 gap-y-1">
+            <div className="flex-1 min-w-0 grid grid-cols-2 gap-x-2 gap-y-0.5">
               {(['critical', 'high', 'medium', 'low', 'info'] as const).map((k, i) => {
                 const colors = [PALETTE.red, PALETTE.orange, PALETTE.gold, PALETTE.teal, PALETTE.blue]
                 const labels: Record<string, string> = { critical: '严重', high: '高', medium: '中', low: '低', info: '信息' }
-                const v = stats?.by_severity?.[k] ?? 0
+                const v = stats?.bySeverity?.[k] ?? 0
                 return (
                   <div key={k} className="flex items-center gap-1.5 min-w-0">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: colors[i], boxShadow: `0 0 6px ${colors[i]}55` }} />
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: colors[i], boxShadow: `0 0 5px ${colors[i]}66` }} />
                     <span className="text-[10px] text-slate-500 truncate">{labels[k]}</span>
                     <span className="text-[11px] font-semibold text-slate-700 tabular-nums ml-auto">{v}</span>
                   </div>
@@ -226,21 +226,21 @@ export default function EventRegistryPage() {
           </div>
 
           {/* 7日趋势 */}
-          <div className={`col-span-5 ${GLASS} px-4 py-3 overflow-hidden min-w-0`}>
-            <div className="flex items-center justify-between mb-1">
+          <div className={`col-span-5 ${GLASS} px-4 py-2.5 overflow-hidden min-w-0 flex flex-col`}>
+            <div className="flex items-center justify-between mb-1 shrink-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] font-medium text-slate-700">近 7 日事件趋势</span>
                 <span className="text-[9px] text-slate-400">按级别堆叠</span>
               </div>
-              <div className="flex items-center gap-2 text-[9px] text-slate-400">
-                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PALETTE.blue }} />信息</span>
-                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PALETTE.teal }} />低</span>
-                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PALETTE.gold }} />中</span>
-                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PALETTE.orange }} />高</span>
-                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: PALETTE.red }} />严重</span>
+              <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                <LegendDot color={PALETTE.blue} label="信息" />
+                <LegendDot color={PALETTE.teal} label="低" />
+                <LegendDot color={PALETTE.gold} label="中" />
+                <LegendDot color={PALETTE.orange} label="高" />
+                <LegendDot color={PALETTE.red} label="严重" />
               </div>
             </div>
-            <div className="w-full" style={{ height: 112 }}>
+            <div className="flex-1 min-h-0 w-full overflow-hidden" style={{ height: 108 }}>
               <ReactECharts option={trendOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
           </div>
@@ -250,17 +250,14 @@ export default function EventRegistryPage() {
         <div className={`${GLASS} px-3 py-2 flex items-center gap-2 shrink-0 flex-wrap`}>
           <div className="relative flex-1 min-w-[180px] max-w-[280px]">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索事件名称 / 描述 / 上报人..."
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索事件标题、编号、上报人..."
               className="w-full pl-8 pr-3 py-1.5 text-xs bg-white/60 border border-slate-200/60 rounded-lg focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100/50 transition-all placeholder:text-slate-400" />
           </div>
           <Select value={severity} onChange={setSeverity} options={[
             { v: '', l: '全部级别' }, { v: 'critical', l: '严重' }, { v: 'high', l: '高' }, { v: 'medium', l: '中' }, { v: 'low', l: '低' }, { v: 'info', l: '信息' },
           ]} />
-          <Select value={source} onChange={setSource} options={[
-            { v: '', l: '全部来源' }, { v: 'platform', l: '平台录入' }, { v: 'api', l: 'API 上报' },
-          ]} />
-          <Select value={timeRange} onChange={setTimeRange} options={[
-            { v: 'today', l: '今日' }, { v: '7d', l: '近 7 天' }, { v: '30d', l: '近 30 天' },
+          <Select value={sourceType} onChange={setSourceType} options={[
+            { v: '', l: '全部来源' }, { v: 'platform', l: '平台录入' }, { v: 'api', l: 'API 上报' }, { v: 'system', l: '系统生成' },
           ]} />
           <div className="h-5 w-px bg-slate-200/70" />
           <button onClick={() => setOnlyAbnormal(!onlyAbnormal)}
@@ -278,31 +275,37 @@ export default function EventRegistryPage() {
 
         {/* 表格区 */}
         <div className={`${GLASS} flex-1 min-h-0 flex flex-col overflow-hidden`}>
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div className="flex-1 min-h-0 overflow-auto thin-scroll">
             <table className="w-full text-xs">
               <thead>
-                <tr className="sticky top-0 z-10 bg-white/80 backdrop-blur-sm text-slate-400 uppercase tracking-wider text-[10px]">
-                  <th className="text-left font-medium px-4 py-2 w-[22%]">事件名称</th>
-                  <th className="text-left font-medium px-3 py-2 w-[18%]">来源 / 上报方</th>
+                <tr className="sticky top-0 z-10 bg-white/85 backdrop-blur-sm text-slate-400 uppercase tracking-wider text-[10px]">
+                  <th className="text-left font-medium px-4 py-2 w-[26%]">事件</th>
+                  <th className="text-left font-medium px-3 py-2 w-[16%]">来源</th>
                   <th className="text-left font-medium px-3 py-2 w-[9%]">级别</th>
-                  <th className="text-left font-medium px-3 py-2 w-[22%]">事件描述</th>
-                  <th className="text-left font-medium px-3 py-2 w-[11%]">附件</th>
-                  <th className="text-left font-medium px-3 py-2 w-[12%]">时间</th>
-                  <th className="text-right font-medium px-4 py-2 w-[6%]">操作</th>
+                  <th className="text-left font-medium px-3 py-2 w-[22%]">描述</th>
+                  <th className="text-left font-medium px-3 py-2 w-[8%]">附件</th>
+                  <th className="text-left font-medium px-3 py-2 w-[12%]">发生时间</th>
+                  <th className="text-right font-medium px-4 py-2 w-[7%]">操作</th>
                 </tr>
               </thead>
               <tbody>
-                {listQ.data?.items?.length === 0 ? (
+                {listQ.isLoading ? (
+                  <tr><td colSpan={7} className="text-center py-16 text-slate-400 text-xs">加载中...</td></tr>
+                ) : listQ.data?.items?.length === 0 ? (
                   <tr><td colSpan={7} className="text-center py-16">
                     <div className="w-12 h-12 mx-auto rounded-2xl bg-gradient-to-br from-slate-100 to-slate-50 flex items-center justify-center mb-3 shadow-inner">
                       <Filter className="w-5 h-5 text-slate-300" />
                     </div>
                     <p className="text-slate-400 text-xs">暂无匹配事件</p>
                     <p className="text-slate-300 text-[11px] mt-1">尝试调整筛选条件，或登记新事件</p>
+                    <button onClick={() => { setEditing(null); setFormOpen(true) }}
+                      className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition-all">
+                      <PlusCircle className="w-3 h-3" />立即登记
+                    </button>
                   </td></tr>
                 ) : (listQ.data?.items ?? []).map((r, i) => (
                   <tr key={r.id}
-                    className={`group border-t border-slate-100/70 hover:bg-blue-50/40 transition-colors ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
+                    className={`group border-t border-slate-100/70 hover:bg-blue-50/40 transition-colors ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/15' : ''}`}
                     style={{ animation: `rowIn 0.35s ease-out ${i * 30}ms both` }}>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
@@ -311,30 +314,38 @@ export default function EventRegistryPage() {
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="font-medium text-slate-800 truncate flex items-center gap-1">
-                            {r.event_name}
-                            {r.severity === 'critical' && <AlertOctagon className="w-3 h-3 text-red-400" />}
+                            {r.title}
+                            {r.severity === 'critical' && <AlertOctagon className="w-3 h-3 text-red-400 shrink-0" />}
                           </div>
-                          {r.source === 'platform' && <span className="text-[10px] text-slate-400">ID: {r.id.slice(0, 8)}</span>}
+                          <div className="text-[10px] text-slate-400 font-mono">{r.eventNo}</div>
                         </div>
                       </div>
                     </td>
                     <td className="px-3 py-2.5">
-                      <SourceTag source={r.source} reporter={r.reporter_name} creator={r.creator_name} />
+                      <SourceTag sourceType={r.sourceType} reporter={r.reporterName} sourceLabel={r.sourceLabel} />
                     </td>
                     <td className="px-3 py-2.5"><SeverityBadge sev={r.severity} /></td>
                     <td className="px-3 py-2.5 text-slate-500 max-w-0">
-                      <div className="truncate">{r.description || <span className="text-slate-300">无描述</span>}</div>
+                      <div className="truncate">{r.description || <span className="text-slate-300 italic">无描述</span>}</div>
+                      {r.tags?.length > 0 && (
+                        <div className="flex gap-1 mt-0.5 flex-wrap">
+                          {r.tags.slice(0, 2).map(t => (
+                            <span key={t} className="text-[9px] px-1 rounded bg-slate-100 text-slate-500">{t}</span>
+                          ))}
+                          {r.tags.length > 2 && <span className="text-[9px] text-slate-400">+{r.tags.length - 2}</span>}
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2.5">
-                      {r.attachments_count > 0 ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-500 text-[10px] font-medium">📎 {r.attachments_count}</span>
+                      {r.attachmentCount && r.attachmentCount > 0 ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-500 text-[10px] font-medium">📎 {r.attachmentCount}</span>
                       ) : <span className="text-slate-300 text-[10px]">—</span>}
                     </td>
-                    <td className="px-3 py-2.5 text-slate-500 tabular-nums text-[11px] whitespace-nowrap">{fmt(r.event_time)}</td>
+                    <td className="px-3 py-2.5 text-slate-500 tabular-nums text-[11px] whitespace-nowrap">{fmt(r.occurredAt)}</td>
                     <td className="px-4 py-2.5 text-right">
-                      <div className="inline-flex items-center gap-0.5 opacity-50 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => { setEditRecord(r); setFormOpen(true) }}
-                          className="p-1 rounded-md hover:bg-white hover:text-blue-500 text-slate-400" title="编辑/查看">
+                      <div className="inline-flex items-center gap-0.5">
+                        <button onClick={() => { setEditing(r); setFormOpen(true) }}
+                          className="p-1 rounded-md hover:bg-white text-slate-400 hover:text-blue-500 transition-colors" title="查看/编辑">
                           <ExternalLink className="w-3 h-3" />
                         </button>
                       </div>
@@ -347,8 +358,8 @@ export default function EventRegistryPage() {
 
           {/* 分页 */}
           <div className="flex items-center justify-between px-4 py-2 border-t border-slate-100/70 bg-white/40 shrink-0">
-            <div className="text-[11px] text-slate-400">
-              第 <span className="font-semibold text-slate-600 tabular-nums">{page}</span> / {totalPages} 页
+            <div className="text-[11px] text-slate-400 tabular-nums">
+              显示 {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, listQ.data?.total ?? 0)} / {listQ.data?.total ?? 0}
             </div>
             <div className="flex items-center gap-1">
               <button disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}
@@ -373,21 +384,25 @@ export default function EventRegistryPage() {
           </div>
         </div>
 
-        {/* FAB 快速登记 */}
-        <button onClick={() => setFormOpen(true)}
+        {/* 移动端 FAB */}
+        <button onClick={() => { setEditing(null); setFormOpen(true) }}
           className="fixed bottom-6 right-6 z-20 w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-[0_8px_24px_rgba(59,130,246,0.35)] hover:shadow-[0_10px_28px_rgba(59,130,246,0.45)] hover:-translate-y-0.5 transition-all flex items-center justify-center md:hidden">
           <PlusCircle className="w-5 h-5" />
         </button>
       </div>
 
-      <EventFormModal open={formOpen} onOpenChange={setFormOpen} record={editRecord} onSuccess={() => { setEditRecord(undefined); refresh() }} />
-      <ApiIntegrationModal open={apiOpen} onOpenChange={setApiOpen} />
+      <EventFormModal open={formOpen} onClose={() => { setFormOpen(false); setEditing(null) }} editing={editing} />
+      <IngestKeysDrawer open={keysOpen} onClose={() => setKeysOpen(false)} />
 
       <style>{`
         @keyframes rowIn {
           from { opacity: 0; transform: translateY(4px); }
           to { opacity: 1; transform: translateY(0); }
         }
+        .thin-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+        .thin-scroll::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.3); border-radius: 5px; }
+        .thin-scroll::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.5); }
+        .thin-scroll::-webkit-scrollbar-track { background: transparent; }
       `}</style>
     </div>
   )
@@ -430,6 +445,10 @@ function Select({ value, onChange, options }: { value: string; onChange: (v: str
   )
 }
 
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />{label}</span>
+}
+
 // ─── 级别标签 ────────────────────────────────────────────
 function SeverityBadge({ sev }: { sev: string }) {
   const map: Record<string, { bg: string; text: string; dot: string; label: string; glow: string }> = {
@@ -441,28 +460,41 @@ function SeverityBadge({ sev }: { sev: string }) {
   }
   const c = map[sev] ?? map.info
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full ${c.bg} ${c.text} text-[10px] font-medium`}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full ${c.bg} ${c.text} text-[10px] font-medium whitespace-nowrap`}>
       <span className="w-1 h-1 rounded-full" style={{ background: c.dot, boxShadow: `0 0 4px ${c.glow}` }} />{c.label}
     </span>
   )
 }
 
 // ─── 来源标签 ────────────────────────────────────────────
-function SourceTag({ source, reporter, creator }: { source: string; reporter?: string | null; creator?: string | null }) {
-  const name = reporter || creator || '—'
-  const initial = (name === '—' ? '?' : name.charAt(0).toUpperCase())
-  if (source === 'api') {
+function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; reporter?: string | null; sourceLabel?: string | null }) {
+  const name = reporter || sourceLabel || '—'
+  const initial = name === '—' ? '?' : name.charAt(0).toUpperCase()
+  if (sourceType === 'api') {
     return (
       <div className="flex items-center gap-1.5">
         <span className="w-5 h-5 rounded-md bg-purple-50 flex items-center justify-center text-purple-500 shrink-0">
           <Code2 className="w-2.5 h-2.5" />
         </span>
         <div className="min-w-0">
-          <div className="text-slate-700 text-[11px] truncate flex items-center gap-1">
-            {reporter || '第三方'}
-            <ArrowUpRight className="w-2.5 h-2.5 text-slate-400" />
+          <div className="text-slate-700 text-[11px] truncate flex items-center gap-0.5">
+            <span className="truncate max-w-[100px]">{name}</span>
+            <ArrowUpRight className="w-2.5 h-2.5 text-slate-400 shrink-0" />
           </div>
           <div className="text-[9px] text-purple-500">API 接入</div>
+        </div>
+      </div>
+    )
+  }
+  if (sourceType === 'system') {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
+          <Activity className="w-2.5 h-2.5" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-slate-700 text-[11px] truncate">{name}</div>
+          <div className="text-[9px] text-slate-400">系统生成</div>
         </div>
       </div>
     )
