@@ -5,7 +5,7 @@ import {
   Plus, Play, Pause, History, RefreshCw, Trash2, Edit2,
   Database, Clock, CheckCircle2, XCircle, Loader2, AlertCircle,
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
-  RotateCw, Zap, Activity, ArrowUpRight, Waves,
+  RotateCw, Zap, Activity, ArrowUpRight, Waves, DatabaseZap,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode } from '@/api/v2/pipeline-tasks'
 import TaskFormModal from './TaskFormModal'
@@ -250,18 +250,25 @@ export default function SyncTasksTab() {
       }}
     >
       <div className="relative z-10 flex flex-col h-full min-h-0">
-        {/* ── 顶部：标题 + 6 个 KPI + 新建按钮 ── */}
-        <div className="flex items-center gap-3 mb-3 shrink-0">
-          <div className="shrink-0 pr-2">
-            <h2 className="text-[17px] font-semibold text-slate-800 flex items-center gap-2 tracking-tight">
-              <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-blue-400 text-white shadow-[0_3px_10px_rgba(59,130,246,0.3)]">
-                <Repeat size={14} />
-              </span>
-              数据任务池
-            </h2>
-            <p className="text-[11.5px] text-slate-500 mt-0.5">调度流水线产物入湖 · 自动执行 · 可观测</p>
+        {/* ── 顶部：标题 + 6 个 KPI + 新建按钮 —— 整合到同一个毛玻璃卡片 ── */}
+        <div className={`${GLASS} px-3.5 py-3 mb-3 shrink-0 flex items-center gap-4`}>
+          {/* 左侧：图标 + 标题 */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 text-white shadow-[0_3px_10px_rgba(59,130,246,0.25)]">
+              <DatabaseZap size={15} />
+            </span>
+            <div>
+              <h2 className="text-[15px] font-semibold text-slate-800 leading-tight tracking-tight">
+                数据任务池
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-0.5 leading-tight">调度 · 入湖 · 可观测</p>
+            </div>
           </div>
 
+          {/* 分隔线 */}
+          <div className="w-px h-8 bg-slate-200/70 shrink-0" />
+
+          {/* 中间：6 个 KPI 胶囊 */}
           <div className="flex-1 grid grid-cols-6 gap-2">
             <KpiPill label="总任务" value={stats?.total ?? 0} icon={<Database size={12} />} tone="slate" />
             <KpiPill label="运行中" value={runningCount} icon={<Zap size={12} />} tone="blue" pulse={runningCount > 0} />
@@ -271,11 +278,12 @@ export default function SyncTasksTab() {
             <KpiPill label="成功率" value={`${successRate}%`} icon={<Waves size={12} />} tone="cyan" suffix="" />
           </div>
 
+          {/* 右侧：新建按钮 */}
           <button
             onClick={handleCreate}
-            className="shrink-0 flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-blue-500 to-blue-400 text-white text-[13px] font-medium rounded-lg shadow-[0_3px_10px_rgba(59,130,246,0.3)] hover:shadow-[0_4px_14px_rgba(59,130,246,0.4)] hover:-translate-y-0.5 transition-all"
+            className="shrink-0 flex items-center gap-1.5 px-3.5 h-8 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-[12.5px] font-medium rounded-lg shadow-[0_3px_10px_rgba(59,130,246,0.3)] hover:shadow-[0_5px_16px_rgba(59,130,246,0.4)] hover:-translate-y-0.5 transition-all"
           >
-            <Plus size={14} />
+            <Plus size={13} />
             新建任务
           </button>
         </div>
@@ -667,8 +675,8 @@ function KpiPill({
     cyan:    { text: 'text-cyan-600',  iconBg: 'bg-cyan-50 text-cyan-500' },
   }[tone]
   return (
-    <div className={`${GLASS} px-2.5 py-1.5 flex items-center gap-2 transition-transform`}>
-      <span className={`w-6 h-6 rounded-md ${toneMap.iconBg} flex items-center justify-center shrink-0 relative overflow-hidden`}>
+    <div className="px-2.5 py-1 flex items-center gap-2 rounded-lg bg-white/40 border border-white/60 hover:bg-white/60 transition-all">
+      <span className={`w-5 h-5 rounded-md ${toneMap.iconBg} flex items-center justify-center shrink-0 relative overflow-hidden`}>
         {icon}
         {pulse && (
           <span className="absolute -top-0 -right-0 w-1.5 h-1.5 rounded-full bg-current animate-ping opacity-60" />
@@ -676,7 +684,7 @@ function KpiPill({
       </span>
       <div className="min-w-0 leading-tight">
         <div className="text-[10px] text-slate-500">{label}</div>
-        <div className={`text-[15px] font-semibold tabular-nums tracking-tight ${toneMap.text} leading-none mt-0.5`}>
+        <div className={`text-[14px] font-semibold tabular-nums tracking-tight ${toneMap.text} leading-none mt-0.5`}>
           {value}{suffix !== undefined && suffix}
         </div>
       </div>
