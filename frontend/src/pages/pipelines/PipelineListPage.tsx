@@ -431,9 +431,11 @@ export default function PipelineListPage() {
             setShowCreate(false)
             navigate(`/data/pipelines/${pl.id}`)
           }}
-          onN8nCreated={(recordId) => {
+          onN8nCreated={() => {
+            // 创建即在列表登记为草稿——留在列表让用户看到新行；
+            // 点击该行可随时进数据管家继续完善与审批
             setShowCreate(false)
-            navigate(`/data/pipelines/steward?record=${encodeURIComponent(recordId)}`)
+            load()
           }}
         />
       )}
@@ -521,7 +523,7 @@ function PipelineCreateModal({
                 <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'n8n' ? 'text-violet-600' : 'text-gray-900'}`}>
                   <Sparkles size={13} /> n8n 流水线
                 </div>
-                <div className="text-xs text-gray-500 mt-0.5">后台自动在 n8n 创建骨架工作流，进入数据管家完善并审批</div>
+                <div className="text-xs text-gray-500 mt-0.5">后台自动在 n8n 创建骨架工作流并加入列表；点击流水线可到数据管家用 AI 完善编排</div>
               </button>
             </div>
           </div>

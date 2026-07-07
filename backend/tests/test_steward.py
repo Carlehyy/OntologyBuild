@@ -140,8 +140,13 @@ def draft_record(db, fake_n8n):
 def test_create_is_inactive_draft(db, fake_n8n, draft_record):
     assert draft_record.status == "draft"
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
-    # 草稿不注册影子流水线
-    assert draft_record.pipeline_id is None
+    # 创建即登记影子流水线（draft）——流水线列表立即可见；审批只决定能否被调度
+    assert draft_record.pipeline_id is not None
+    from app.models.v2.pipeline import Pipeline
+    shadow = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
+    assert shadow is not None
+    assert shadow.status == "draft"
+    assert (shadow.definition or {}).get("engine") == "n8n"
     # 名称去重
     runner = ToolRunner(db, None, None)
     dup = runner.run("create_workflow", {"name": "订单同步流水线",
@@ -229,11 +234,17 @@ def test_reject_revoke_archive_flow(client, auth_headers, db, fake_n8n, draft_re
     assert draft_record.status == "draft"
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
 
-    # 归档后从面板消失
+    # 归档后从面板消失，影子流水线一并从列表移除
+    shadow_id = draft_record.pipeline_id
     r = client.delete(f"/api/v2/steward/pipelines/{rid}", headers=auth_headers)
     assert r.status_code == 200
     r = client.get("/api/v2/steward/pipelines", headers=auth_headers)
     assert all(item["id"] != rid for item in r.json()["data"])
+    from app.models.v2.pipeline import Pipeline
+    db.expire_all()
+    assert db.query(Pipeline).filter(Pipeline.id == shadow_id).first() is None
+    db.refresh(draft_record)
+    assert draft_record.pipeline_id is None
 
 
 def test_submit_requires_trigger(db, fake_n8n):

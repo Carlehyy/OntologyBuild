@@ -107,6 +107,9 @@ def bootstrap_blank_workflow(db: Session, name: str, description: str = "",
         created_by=user_id,
     )
     db.add(rec)
+    db.flush()
+    # 创建即在流水线列表可见（draft 影子行）；审批只负责升级为 published
+    ensure_shadow_pipeline(db, rec)
     db.commit()
     db.refresh(rec)
     return rec
@@ -263,7 +266,7 @@ def archive(db: Session, rec: N8nPipeline, client: N8nClient | None,
             except Exception:  # noqa: BLE001 — n8n 侧已删等场景不阻塞归档
                 logger.warning("归档时删除 n8n workflow %s 失败", rec.n8n_workflow_id, exc_info=True)
     rec.status = STATUS_ARCHIVED
-    _demote_shadow_pipeline(db, rec)
+    _remove_shadow_pipeline(db, rec)
     db.commit()
     return rec
 
@@ -294,9 +297,14 @@ def _shadow_definition(rec: N8nPipeline) -> dict:
     }
 
 
-def _register_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
-    """approved → 在流水线体系里可见可调度：status=published。"""
-    from app.models.v2.pipeline import Pipeline, PipelineVersion
+def ensure_shadow_pipeline(db: Session, rec: N8nPipeline, *, status: str | None = None):
+    """确保治理记录有对应的 v2_pipelines 影子行，并同步名称/定义。
+
+    创建即登记（draft）——n8n 流水线从诞生起就出现在流水线列表里；
+    数据管家只是 AI 编排工具，审批决定的是「能否被调度」（published），
+    不是「存不存在」。status=None 时保持现状（新建默认 draft）。
+    """
+    from app.models.v2.pipeline import Pipeline
 
     pl = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first() if rec.pipeline_id else None
     if pl is None:
@@ -306,15 +314,26 @@ def _register_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
             description=rec.description or f"由数据管家对话创建的 n8n 流水线（workflow {rec.n8n_workflow_id}）",
             route="A",  # 列有 NOT NULL 约束；n8n 引擎不使用 route
             spec={},
+            status="draft",
         )
         db.add(pl)
         db.flush()
         rec.pipeline_id = pl.id
     pl.name = rec.name
+    pl.description = rec.description or pl.description
     pl.definition = _shadow_definition(rec)
-    pl.status = "published"
-    pl.version = (pl.version or 1) + 1
+    if status is not None:
+        pl.status = status
     pl.updated_at = _now()
+    return pl
+
+
+def _register_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
+    """approved → 可被任务池调度：status=published + 版本快照。"""
+    from app.models.v2.pipeline import PipelineVersion
+
+    pl = ensure_shadow_pipeline(db, rec, status="published")
+    pl.version = (pl.version or 1) + 1
     db.add(PipelineVersion(pipeline_id=pl.id, version=pl.version,
                            definition=pl.definition, status="published"))
 
@@ -330,3 +349,18 @@ def _demote_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
         pl.definition = _shadow_definition(rec)
         pl.status = "draft"
         pl.updated_at = _now()
+
+
+def _remove_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
+    """归档 → 影子流水线从列表移除（运行记录/版本随外键级联清理）。
+
+    治理记录本身保留（status=archived）作为审计痕迹。
+    """
+    if not rec.pipeline_id:
+        return
+    from app.models.v2.pipeline import Pipeline
+
+    pl = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first()
+    if pl is not None:
+        db.delete(pl)
+    rec.pipeline_id = None

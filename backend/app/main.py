@@ -175,6 +175,22 @@ def _seed_db():
 
         seed_admin(db)
 
+        # 回填：存量 n8n 治理记录补建影子流水线行（创建即在列表可见的新规则）
+        # 幂等——已有 pipeline_id 的记录 ensure 只做同步，不重复建行
+        try:
+            from app.data_channel.steward.service import ensure_shadow_pipeline
+            from app.data_channel.steward.models import N8nPipeline as _N8nRec, STATUS_ARCHIVED as _ARCH
+            orphans = db.query(_N8nRec).filter(
+                _N8nRec.status != _ARCH, _N8nRec.pipeline_id.is_(None)).all()
+            for _rec in orphans:
+                ensure_shadow_pipeline(db, _rec)
+            if orphans:
+                db.commit()
+        except Exception:  # noqa: BLE001 — 回填失败不阻塞启动
+            db.rollback()
+            import logging
+            logging.getLogger(__name__).warning("n8n 影子流水线回填失败", exc_info=True)
+
         # Seed 内置技能（幂等，只补缺失，不覆盖用户编辑）
         from app.capabilities.builtin import seed_builtin_skills
         seed_builtin_skills(db)

@@ -457,11 +457,13 @@ class ToolRunner:
             created_by=self.user_id,
         )
         self.db.add(rec)
+        self.db.flush()
+        service.ensure_shadow_pipeline(self.db, rec)  # 创建即出现在流水线列表（draft）
         self.db.commit()
         self._touch(rec.id)
         return {
             "record": service.record_out(rec, active=False),
-            "notice": "已创建为草稿（n8n 侧未激活）。完善后请用 check_workflow 体检，经用户同意再 submit_for_approval。",
+            "notice": "已创建为草稿（n8n 侧未激活），流水线列表中已可见。完善后请用 check_workflow 体检，经用户同意再 submit_for_approval。",
         }
 
     def tool_update_workflow(self, record_id: str, name: str | None = None,
@@ -496,6 +498,8 @@ class ToolRunner:
                 rec.name = payload["name"]
         if description is not None:
             rec.description = description.strip()
+        # 名称/定义同步到影子行（状态由 demote_on_edit 负责，此处不动）
+        service.ensure_shadow_pipeline(self.db, rec)
         self.db.commit()
         self._touch(rec.id)
         out = {"record": service.record_out(rec)}
@@ -519,6 +523,8 @@ class ToolRunner:
             created_by=self.user_id,
         )
         self.db.add(rec)
+        self.db.flush()
+        service.ensure_shadow_pipeline(self.db, rec)  # 纳管即出现在流水线列表（draft）
         self.db.commit()
         self._touch(rec.id)
         out = {"record": service.record_out(rec, active=bool(workflow.get("active")))}
