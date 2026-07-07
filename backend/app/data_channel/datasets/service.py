@@ -46,6 +46,9 @@ class DatasetService:
             checksum=checksum,
         )
         self._db.add(ver)
+        # id 的 uuid 默认值在 flush 时才生成——flush 前取 ver.id 是 None，
+        # 会把 latest_version_id 永远写成 NULL（存量数据即如此）
+        self._db.flush()
         ds.latest_version_id = ver.id
         self._db.commit()
         self._db.refresh(ver)
@@ -65,12 +68,16 @@ class DatasetService:
             DatasetVersion.dataset_id == dataset_id
         ).order_by(DatasetVersion.version_no).all()
 
-    def preview(self, dataset_id: str, version_no: int | None, limit: int = 100) -> list[dict]:
+    def preview(self, dataset_id: str, version_no: int | None,
+                limit: int = 100, offset: int = 0) -> list[dict]:
         """CSV/JSON 数据预览。无需 DuckDB, 纯 Python 处理。
 
         version_no=None → 最新版本。消费方（映射/管道/质量报告）除非明确要
         历史版本，一律应传 None——增量同步产生 v2+ 后钉死 v1 会读到陈旧数据。
+
+        offset：跳过前 N 行数据行（表头不计），配合 limit 做分页预览。
         """
+        offset = max(0, offset)
         q = self._db.query(DatasetVersion).filter(
             DatasetVersion.dataset_id == dataset_id)
         if version_no is None:
@@ -90,9 +97,9 @@ class DatasetService:
                 import json
                 data = json.loads(text)
                 if isinstance(data, list):
-                    return data[:limit]
+                    return data[offset:offset + limit]
                 elif isinstance(data, dict):
-                    return [data]
+                    return [data] if offset == 0 else []
                 return []
 
             # 检测是否 Excel (xlsx) 二进制格式
@@ -103,17 +110,21 @@ class DatasetService:
                     ws = wb.active
                     rows_list = []
                     headers = []
+                    data_idx = -1  # 数据行序号（不含表头）
                     for ri, row in enumerate(ws.iter_rows(values_only=True)):
                         if ri == 0:
                             headers = [str(c) if c is not None else f"col_{i}" for i, c in enumerate(row)]
-                        else:
-                            row_dict = {}
-                            for i, val in enumerate(row):
-                                if i < len(headers):
-                                    row_dict[headers[i]] = val if val is not None else ""
-                            rows_list.append(row_dict)
-                            if len(rows_list) >= limit:
-                                break
+                            continue
+                        data_idx += 1
+                        if data_idx < offset:
+                            continue
+                        row_dict = {}
+                        for i, val in enumerate(row):
+                            if i < len(headers):
+                                row_dict[headers[i]] = val if val is not None else ""
+                        rows_list.append(row_dict)
+                        if len(rows_list) >= limit:
+                            break
                     wb.close()
                     return rows_list
                 except Exception:
@@ -124,7 +135,9 @@ class DatasetService:
             reader = csv.DictReader(io.StringIO(text))
             rows = []
             for i, row in enumerate(reader):
-                if i >= limit:
+                if i < offset:
+                    continue
+                if len(rows) >= limit:
                     break
                 rows.append(dict(row))
             return rows

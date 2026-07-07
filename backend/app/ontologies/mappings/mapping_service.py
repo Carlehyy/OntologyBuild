@@ -25,6 +25,7 @@ class MappingService:
         field_mapping = dict(field_mapping or {})
         if primary_key_column and "__primary_key__" not in field_mapping:
             field_mapping["__primary_key__"] = primary_key_column
+            field_mapping["__pk_source__"] = "mapping"  # 用户在映射里显式指定
         mapping = OntologyMapping(
             ontology_id=ontology_id, curated_dataset_id=curated_dataset_id,
             entity_class=entity_class, field_mapping=field_mapping,
@@ -62,6 +63,7 @@ class MappingService:
                 "mapping_id": mapping.id,
                 "curated_dataset_id": mapping.curated_dataset_id,
                 "entity_class": mapping.entity_class, "pk_col": pk_col,
+                "pk_source": (mapping.field_mapping or {}).get("__pk_source__"),
                 "target_object_type_id": mapping.target_object_type_id,
                 "rows": data,
                 "entity_id_map": {
@@ -138,6 +140,7 @@ class MappingService:
                 "curated_dataset_id": m.curated_dataset_id,
                 "dataset_name": dataset_name,
                 "entity_class": m.entity_class, "pk_col": pk_col,
+                "pk_source": (m.field_mapping or {}).get("__pk_source__"),
                 "target_object_type_id": m.target_object_type_id,
                 "rows": rows, "entity_id_map": entity_id_map,
                 "columns": list(rows[0].keys()) if rows else [],
@@ -646,7 +649,11 @@ class MappingService:
                 and (pk_col not in sample or not self._is_unique_col(rows, pk_col))
             )
         ):
-            field_map["__primary_key__"] = self._choose_pk_col(rows)
+            # 主键优先级：湖中声明的契约（入湖闸门校验过存在/非空/唯一）
+            # > 按本次数据启发式猜测。声明来源打进 __pk_source__ 供下游区分
+            declared = self._declared_pk_col(mapping.curated_dataset_id, rows)
+            field_map["__primary_key__"] = declared or self._choose_pk_col(rows)
+            field_map["__pk_source__"] = "lake" if declared else "inferred"
         field_map["__properties__"] = self._property_metadata(rows, field_map)
         if field_map != (mapping.field_mapping or {}):
             mapping.field_mapping = field_map
@@ -697,6 +704,27 @@ class MappingService:
             if value not in (None, ""):
                 return SchemaInferenceStep._infer_type(str(value).strip())
         return "string"
+
+    def _declared_pk_col(self, dataset_id: str | None, rows: list[dict]) -> str | None:
+        """资产湖中该数据集声明的主键列（schema_json.primary_key，入湖闸门维护）。
+
+        实例身份优先采用湖中契约而非按本次加载的数据猜测——启发式对数据
+        敏感（今天唯一的列明天未必），主键一漂移就是一整批实例身份作废。
+        复合主键（逗号分隔多列）暂无法充当单列身份，返回 None 走启发式兜底。
+        """
+        if not dataset_id:
+            return None
+        from app.models.v2.dataset import Dataset
+        ds = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        # getattr 防御：测试桩/旧数据里查回的对象未必带 schema_json
+        schema = getattr(ds, "schema_json", None) or {}
+        pk = str(schema.get("primary_key") or "").strip()
+        if not pk or "," in pk:
+            return None
+        if rows and pk not in rows[0]:
+            logger.warning("数据集 %s 声明的主键列「%s」不在当前行数据中，退回启发式", dataset_id, pk)
+            return None
+        return pk
 
     def _choose_pk_col(self, rows: list[dict]) -> str:
         if not rows:

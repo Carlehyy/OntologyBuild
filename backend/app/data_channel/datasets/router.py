@@ -338,23 +338,30 @@ def get_stats(dataset_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{dataset_id}/preview")
-def preview_dataset(dataset_id: str, limit: int = 20, db: Session = Depends(get_db)):
-    """预览数据集最新版本的前 N 行数据（默认20行）。"""
+def preview_dataset(dataset_id: str, limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
+    """预览数据集最新版本的数据，支持 offset/limit 分页。默认前 20 行。"""
     svc = DatasetService(db)
     ds = svc.get_dataset(dataset_id)
     if not ds:
         raise HTTPException(404, "Dataset not found")
     versions = svc.list_versions(dataset_id)
     if not versions:
-        return {"dataset_id": dataset_id, "rows": [], "columns": [], "total_rows": 0}
+        return {"dataset_id": dataset_id, "rows": [], "columns": [], "total_rows": 0,
+                "offset": 0, "limit": limit}
     latest = versions[-1]
-    rows = svc.preview(dataset_id, latest.version_no, limit=min(limit, 500))
-    columns = list(rows[0].keys()) if rows else []
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    rows = svc.preview(dataset_id, latest.version_no, limit=limit, offset=offset)
+    # 分页表头稳定性：offset>0 的页可能因该页某列全空而缺列，优先用契约列
+    schema_cols = (ds.schema_json or {}).get("columns") if ds.schema_json else None
+    columns = list(schema_cols) if schema_cols else (list(rows[0].keys()) if rows else [])
     return {
         "dataset_id": dataset_id,
         "dataset_name": ds.name,
         "version_no": latest.version_no,
         "total_rows": latest.rowcount or 0,
+        "offset": offset,
+        "limit": limit,
         "columns": columns,
         "rows": rows,
     }

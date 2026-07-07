@@ -83,6 +83,8 @@ def execute_pipeline(pipeline_id: str, triggered_by: str = "") -> dict:
         pipe = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
         if not pipe:
             return {"status": "error", "error": f"Pipeline {pipeline_id} 不存在"}
+        if pipe.enabled is False:  # 停用的流水线不参与链式触发（NULL 老数据视为启用）
+            return {"status": "error", "error": f"Pipeline「{pipe.name}」已停用，跳过链式触发"}
         if not pipe.source_dataset_id and not pipe.definition:
             return {"status": "error", "error": "Pipeline 未绑定源数据集"}
 

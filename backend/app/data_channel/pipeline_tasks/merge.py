@@ -94,3 +94,66 @@ def merge_rows(old: list[dict], new: list[dict], opts: dict[str, Any]) -> tuple[
         "rows_new": len(new),
         "rows_after": len(merged),
     }
+
+
+# ── 审计：资产湖影响 = 本次入库前后的行级差异 ─────────────────────────
+def _slim_row(row: dict, max_len: int = 200) -> dict:
+    """审计样本裁剪：丢弃二进制 content、超长值截断，避免 run.stats 膨胀。"""
+    out: dict = {}
+    for k, v in row.items():
+        if k == "content":
+            continue
+        if isinstance(v, str) and len(v) > max_len:
+            out[k] = v[:max_len] + "…"
+        elif isinstance(v, (dict, list)):
+            s = json.dumps(v, ensure_ascii=False, default=str)
+            out[k] = s[:max_len] + ("…" if len(s) > max_len else "")
+        else:
+            out[k] = v
+    return out
+
+
+def compute_lake_impact(before: list[dict], after: list[dict],
+                        pk_cols: list[str], sample_limit: int = 50) -> dict:
+    """本次入库对资产湖的行级影响 = diff(入库前全量, 入库后全量)。
+
+    有主键 → 按主键组合识别同一行，能区分「更新」（键在、内容变）。
+    无主键 → 退化为整行内容比对，只有「新增/删除」，没有「更新」。
+    返回计数 + 各类别的行样本（截断），供执行记录逐条追溯审计。
+    """
+    def key(r: dict):
+        if pk_cols:
+            return tuple(str(r.get(c, "")) for c in pk_cols)
+        return _row_signature(r)
+
+    before_map: dict = {}
+    for r in before:
+        before_map[key(r)] = r
+    after_map: dict = {}
+    for r in after:
+        after_map[key(r)] = r
+
+    added: list[dict] = []
+    updated: list[dict] = []
+    for k, r in after_map.items():
+        prev = before_map.get(k)
+        if prev is None:
+            added.append(r)
+        elif _row_signature(prev) != _row_signature(r):
+            updated.append({"before": _slim_row(prev), "after": _slim_row(r)})
+    deleted = [r for k, r in before_map.items() if k not in after_map]
+
+    return {
+        "keyed_by": list(pk_cols) if pk_cols else None,
+        "total_before": len(before),
+        "total_after": len(after),
+        "added_count": len(added),
+        "updated_count": len(updated),
+        "deleted_count": len(deleted),
+        "unchanged_count": max(0, len(after_map) - len(added) - len(updated)),
+        "added_sample": [_slim_row(r) for r in added[:sample_limit]],
+        "updated_sample": updated[:sample_limit],
+        "deleted_sample": [_slim_row(r) for r in deleted[:sample_limit]],
+        "sample_truncated": (len(added) > sample_limit or len(updated) > sample_limit
+                             or len(deleted) > sample_limit),
+    }

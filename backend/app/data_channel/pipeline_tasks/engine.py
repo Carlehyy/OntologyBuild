@@ -32,6 +32,9 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
         if (pipe.status or "draft") != "published":
             _fail(db, task, f"流水线「{pipe.name}」当前状态为未发布，任务只能触发已发布的流水线")
             return {"status": "error", "error": task.last_error}
+        if pipe.enabled is False:  # NULL（老数据）视为启用
+            _fail(db, task, f"流水线「{pipe.name}」已停用，请在流水线列表打开启用开关后再调度")
+            return {"status": "error", "error": task.last_error}
 
         task.status = "running"
         task.last_error = ""
@@ -40,7 +43,24 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
             task_id=task.id,
             status="pending",
             started_at=datetime.utcnow(),
-            stats={"triggered_by": f"task:{task.id}", "trigger_type": trigger_type},
+            # 审计：执行时刻的任务配置快照——配置日后被改，这条记录仍还原当时口径
+            stats={
+                "triggered_by": f"task:{task.id}",
+                "trigger_type": trigger_type,
+                "config_snapshot": {
+                    "task_name": task.name,
+                    "pipeline_id": task.pipeline_id,
+                    "pipeline_name": pipe.name,
+                    "pipeline_version": getattr(pipe, "version", None),
+                    "write_mode": task.write_mode,
+                    "primary_key": task.primary_key or "",
+                    "soft_delete_column": task.soft_delete_column or "",
+                    "skip_empty": bool(task.skip_empty),
+                    "schedule_type": task.schedule_type,
+                    "cron_expression": task.cron_expression or "",
+                    "interval_seconds": task.interval_seconds or 0,
+                },
+            },
         )
         db.add(run)
         db.commit()

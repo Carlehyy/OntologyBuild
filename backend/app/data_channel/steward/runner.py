@@ -8,15 +8,14 @@ write_opts 的 overwrite/append/upsert 合并、空输出保护），差别只�
   n8n 引擎：POST 生产 webhook → 轮询执行 → 取末节点输出 items
 
 被两处调用：
-  - app.tasks.v2.pipeline_run.pipeline_run_task 的 engine=n8n 分支（真实运行，
-    含任务池调度的 write_opts）
+  - pipeline_run_task 经 engine_registry 分发（真实运行，含任务池调度的
+    write_opts；通用骨架见 pipelines/external_runner）
   - steward router 的 test-run（临时激活 → 试跑 → 还原，不写资产湖）
 """
 from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -136,71 +135,61 @@ def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str]:
     return rec, rec.n8n_workflow_id, str(webhook_path)
 
 
+def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list[dict], dict]:
+    """试运行取数（不写湖）：治理校验 → 触发生产 webhook → 规整为行数据。
+
+    供列表页 dry-run 预览使用。注意：n8n 没有"只看不跑"的模式——试运行
+    依然真实触发生产 workflow（这就是它的执行方式），只是产物先不入湖。
+    """
+    rec, workflow_id, webhook_path = _resolve_n8n_context(db, pl)
+    client = service.get_n8n_client(db)
+    wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
+    rows, exec_meta = trigger_and_collect(client, workflow_id, webhook_path,
+                                          payload=payload or {"source": "ontoprompt-dry-run"},
+                                          wait_seconds=wait_seconds)
+    if exec_meta.get("error"):
+        raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
+    return rows, exec_meta
+
+
 def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> None:
-    """pipeline_run_task 的 engine=n8n 分支主体。负责回写 run 与 pipeline 状态。"""
-    from app.services.v2.dataset_service import DatasetService
-    from app.services.v2.pipeline.base import PipelineContext
-    from app.tasks.v2.pipeline_run import _save_curated_outputs
+    """pipeline_run_task 经 engine_registry 分发到此的 engine=n8n 运行入口。
 
-    rec: N8nPipeline | None = None
-    try:
-        run.status = "running"
-        run.started_at = run.started_at or datetime.now(timezone.utc)
-        db.commit()
+    run 状态机 / 资产湖准入闸门 / 版本化入湖 / 统计记账全部由通用的
+    run_external_pipeline 承担；这里只保留 n8n 特有的三件事：
+    治理校验 + webhook 取数（collector）、审批时固化的期望列（契约）、
+    影子流水线状态复位策略。新引擎照此文件抄作业即可。
+    """
+    from app.data_channel.pipelines.external_runner import run_external_pipeline
 
-        rec, workflow_id, webhook_path = _resolve_n8n_context(db, pl)
-        client = service.get_n8n_client(db)
-        wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
+    state: dict = {"rec": None}
 
+    def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
+        rec, workflow_id, webhook_path = _resolve_n8n_context(db_, pl_)
+        state["rec"] = rec
+        client = service.get_n8n_client(db_)
+        wait_seconds = int(((pl_.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
         rows, exec_meta = trigger_and_collect(client, workflow_id, webhook_path,
                                               payload={"source": "ontoprompt", "run_id": run.id},
                                               wait_seconds=wait_seconds)
         if exec_meta.get("error"):
             raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
+        return rows, exec_meta
 
-        ctx = PipelineContext(dataset_id="", version_no=1, route="A", spec={})
-        ctx.rows_in = len(rows)
-        ctx.rows_out = len(rows)
-        ctx.meta["n8n_execution"] = exec_meta
-        source = {"dataset_id": None, "filename": pl.name, "route": "A", "kind": "n8n"}
-        svc = DatasetService(db)
-        outputs = _save_curated_outputs(db, svc, pl, source, rows, ctx,
-                                        multi_source=False, write_opts=write_opts)
-
-        curated_ids = [o["curated_dataset_id"] for o in outputs]
-        pl.target_curated_ids = curated_ids
-        run.status = "success"
-        run.finished_at = datetime.now(timezone.utc)
-        run.dataset_version_id = next(
-            (o.get("dataset_version_id") for o in outputs if o.get("dataset_version_id")), None)
-        run.stats = {
-            **(run.stats or {}),
-            "engine": "n8n",
-            "n8n_execution": exec_meta,
-            "rows_in": len(rows),
-            "rows_out": len(rows),
-            "lake_rows": sum(o.get("lake_rows") or 0 for o in outputs),
-            "write_mode": (write_opts or {}).get("mode"),
-            "skipped_outputs": [o for o in outputs if o.get("skipped")] or None,
-            "curated_dataset_id": curated_ids[0] if curated_ids else None,
-            "curated_dataset_ids": curated_ids,
-            "meta": {"outputs": outputs},
-        }
-    except Exception as e:  # noqa: BLE001
-        logger.error("n8n 流水线运行失败: %s", e, exc_info=True)
-        run.status = "failed"
-        run.error_log = str(e)
-        run.finished_at = datetime.now(timezone.utc)
-    finally:
-        # 复位 pipeline 状态。已批准的影子流水线永远保持 published —— 运行失败
-        # 不取消发布资格（置 failed 会让任务池的"必须已发布"校验拦掉后续调度）；
+    def finalize(pl_, run_) -> None:
+        # 已批准的影子流水线永远保持 published —— 运行失败不取消发布资格
+        # （置 failed 会让任务池的"必须已发布"校验拦掉后续调度）；
         # 失败详情由 run.status/error_log 承载。
-        approved = bool(rec and rec.status == STATUS_APPROVED)
-        if approved:
-            pl.status = "published"
-        elif pl.status == "running":
-            pl.status = "failed" if run.status == "failed" else "draft"
-        db.commit()
+        rec = state["rec"]
+        if rec is not None and rec.status == STATUS_APPROVED:
+            pl_.status = "published"
+        elif pl_.status == "running":
+            pl_.status = "failed" if run_.status == "failed" else "draft"
+
+    contract_cols = ((pl.definition or {}).get("n8n") or {}).get("expected_columns") or None
+    run_external_pipeline(db, pl, run, write_opts, engine_name="n8n",
+                          collector=collector, contract_columns=contract_cols,
+                          finalize_status=finalize)
 
 
 def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None,

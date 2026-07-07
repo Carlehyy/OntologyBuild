@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil,
-  X, Loader2, CheckCircle2, XCircle, Clock, Table2, ArrowRight, PlugZap, Sparkles,
+  X, Loader2, CheckCircle2, XCircle, Clock, Table2, PlugZap, Sparkles,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import ConnectionsTab from './connections/ConnectionsTab'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import RunPreviewModal from './RunPreviewModal'
 
 const STATUS_STYLE: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-600 border-gray-200',
@@ -48,12 +49,18 @@ function formatTime(iso?: string | null): string {
   } catch { return iso }
 }
 
-interface RunBanner {
-  pipelineName: string
-  status: 'success' | 'failed'
-  rowsIn?: number
-  rowsOut?: number
-  error?: string
+/** 启用开关：停用后任务池调度与链式触发跳过该流水线；手动试运行不受限 */
+function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onToggle: () => void }) {
+  return (
+    <button
+      role="switch" aria-checked={on} disabled={busy} onClick={onToggle}
+      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
+        on ? 'bg-emerald-500' : 'bg-gray-300'} ${busy ? 'opacity-60' : 'cursor-pointer'}`}
+      title={on ? '已启用：任务池调度与联动触发会执行该流水线' : '未启用：任务池调度与联动触发将跳过（仍可手动执行试运行）'}
+    >
+      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${on ? 'left-[18px]' : 'left-0.5'}`} />
+    </button>
+  )
 }
 
 export default function PipelineListPage() {
@@ -78,8 +85,8 @@ export default function PipelineListPage() {
   const [filterStatus, setFilterStatus] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
-  const [runningId, setRunningId] = useState<string | null>(null)
-  const [runBanner, setRunBanner] = useState<RunBanner | null>(null)
+  const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -93,27 +100,17 @@ export default function PipelineListPage() {
 
   useEffect(() => { load() }, [search, filterDomain, filterStatus])
 
-  const handleRun = async (pl: Pipeline) => {
-    if (runningId) return
-    setRunningId(pl.id)
-    setRunBanner(null)
+  const handleToggleEnabled = async (pl: Pipeline) => {
+    const next = !(pl.enabled ?? true)
+    setTogglingId(pl.id)
+    // 乐观更新，失败回滚
+    setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: next } : p))
     try {
-      const res = await pipelinesApi.runSync(pl.id)
-      const stats = (res.stats || {}) as Record<string, unknown>
-      if (res.status === 'success') {
-        setRunBanner({
-          pipelineName: pl.name, status: 'success',
-          rowsIn: Number(stats.rows_in ?? 0), rowsOut: Number(stats.rows_out ?? 0),
-        })
-      } else {
-        setRunBanner({ pipelineName: pl.name, status: 'failed', error: String((res as { error?: string }).error || '运行失败') })
-      }
-    } catch (e: unknown) {
-      const err = e as { detail?: string; message?: string }
-      setRunBanner({ pipelineName: pl.name, status: 'failed', error: err?.detail || err?.message || '运行失败' })
+      await pipelinesApi.setEnabled(pl.id, next)
+    } catch {
+      setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: !next } : p))
     } finally {
-      setRunningId(null)
-      load()
+      setTogglingId(null)
     }
   }
 
@@ -199,37 +196,6 @@ export default function PipelineListPage() {
       {view === 'connections' && <ConnectionsTab />}
 
       {view === 'pipelines' && <>
-      {/* 运行结果提示条 */}
-      {runBanner && (
-        <div className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm ${
-          runBanner.status === 'success'
-            ? 'bg-green-50 border-green-200 text-green-700'
-            : 'bg-red-50 border-red-200 text-red-600'
-        }`}>
-          {runBanner.status === 'success' ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
-          {runBanner.status === 'success' ? (
-            <span className="flex-1">
-              「{runBanner.pipelineName}」运行成功：输入 {runBanner.rowsIn} 行 → 输出 {runBanner.rowsOut} 行
-            </span>
-          ) : (
-            <span className="flex-1 truncate" title={runBanner.error}>
-              「{runBanner.pipelineName}」运行失败：{runBanner.error}
-            </span>
-          )}
-          {runBanner.status === 'success' && (
-            <button
-              onClick={() => navigate('/data/structured')}
-              className="flex items-center gap-1 text-xs px-2.5 py-1 bg-white border border-green-300 rounded-lg hover:bg-green-100 shrink-0"
-            >
-              去资产湖查看产物 <ArrowRight size={11} />
-            </button>
-          )}
-          <button onClick={() => setRunBanner(null)} className="text-gray-400 hover:text-gray-600 shrink-0">
-            <X size={14} />
-          </button>
-        </div>
-      )}
-
       {/* 搜索与筛选 */}
       <div className="flex items-center gap-3 bg-white rounded-xl border px-4 py-3 flex-wrap">
         <div className="relative w-72">
@@ -288,9 +254,9 @@ export default function PipelineListPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">领域</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">状态</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">流水线名称</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">来源</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">启用状态</th>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">最近运行</th>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">产物</th>
                 <th className="text-right px-4 py-2.5 font-medium text-gray-600 text-xs">操作</th>
@@ -299,50 +265,63 @@ export default function PipelineListPage() {
             <tbody className="divide-y">
               {filtered.map(pl => {
                 const runMeta = pl.last_run_status ? RUN_STATUS_META[pl.last_run_status] : null
+                const runFailed = pl.last_run_status === 'failed' && !!pl.last_run_error
                 const curatedCount = pl.target_curated_ids?.length ?? 0
-                const isRunning = runningId === pl.id
                 const n8n = isN8nPipeline(pl)
+                const enabled = pl.enabled ?? true
                 return (
                   <tr
                     key={pl.id}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                    className={`hover:bg-gray-50 transition-colors cursor-pointer ${enabled ? '' : 'opacity-60'}`}
                     onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
                   >
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900 flex items-center gap-1.5">
                         {pl.name}
-                        {n8n && (
-                          <span className="inline-flex items-center gap-0.5 rounded border border-violet-200 bg-violet-50 px-1.5 py-px text-[10px] font-normal text-violet-600"
-                            title="由数据管家托管的 n8n 流水线">
-                            <Sparkles size={9} /> n8n 智能编排
-                          </span>
-                        )}
+                        <span className={`text-[10px] px-1.5 py-px rounded border ${STATUS_STYLE[pl.status] || STATUS_STYLE.draft}`}>
+                          {STATUS_LABEL[pl.status] || pl.status}{pl.status === 'published' ? ` v${pl.version || 1}` : ''}
+                        </span>
                       </p>
                       <p className="text-xs text-gray-400 truncate max-w-[240px]" title={pl.description || pl.id}>
-                        {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
+                        {pl.domain || '通用'} · {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
                       </p>
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{pl.domain || '通用'}</td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[pl.status] || STATUS_STYLE.draft}`}>
-                        {STATUS_LABEL[pl.status] || pl.status}
-                      </span>
-                      {pl.status === 'published' && (
-                        <span className="text-xs text-gray-400 ml-1.5">v{pl.version || 1}</span>
+                      {n8n ? (
+                        <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-600"
+                          title="由数据管家托管的 n8n 流水线，编辑与审批在数据管家">
+                          <Sparkles size={10} /> n8n 流水线
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
+                          title="在流水线画布中自行编排的流水线">
+                          <GitBranch size={10} /> 系统自定义
+                        </span>
                       )}
+                    </td>
+                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-2">
+                        <EnabledSwitch
+                          on={enabled}
+                          busy={togglingId === pl.id}
+                          onToggle={() => handleToggleEnabled(pl)}
+                        />
+                        <span className={`text-xs ${enabled ? 'text-emerald-600' : 'text-gray-400'}`}>
+                          {enabled ? '已启用' : '未启用'}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       {runMeta ? (
-                        <div>
-                          <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color}`}>
+                        <div
+                          className={runFailed ? 'cursor-help inline-block' : 'inline-block'}
+                          title={runFailed ? pl.last_run_error : undefined}
+                        >
+                          <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color} ${
+                            runFailed ? 'border-b border-dashed border-red-300' : ''}`}>
                             {runMeta.icon}{runMeta.label}
                           </span>
                           <span className="text-xs text-gray-400 ml-1.5">{formatTime(pl.last_run_at)}</span>
-                          {pl.last_run_status === 'failed' && pl.last_run_error && (
-                            <p className="text-xs text-red-400 truncate max-w-[200px]" title={pl.last_run_error}>
-                              {pl.last_run_error}
-                            </p>
-                          )}
                         </div>
                       ) : (
                         <span className="text-xs text-gray-300">从未运行</span>
@@ -371,12 +350,11 @@ export default function PipelineListPage() {
                           {n8n ? <Sparkles size={14} /> : <Pencil size={14} />}
                         </button>
                         <button
-                          onClick={() => handleRun(pl)}
-                          disabled={!!runningId}
-                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors disabled:opacity-40"
-                          title="立即运行一次"
+                          onClick={() => setPreviewTarget(pl)}
+                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                          title="执行：先试运行看输出，确认后再保存入资产湖"
                         >
-                          {isRunning ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                          <Play size={14} />
                         </button>
                         {!n8n && (
                           <button
@@ -398,6 +376,15 @@ export default function PipelineListPage() {
       )}
 
       </>}
+
+      {/* 执行：试运行预览 → 确认入湖 */}
+      {previewTarget && (
+        <RunPreviewModal
+          pipeline={previewTarget}
+          onClose={() => setPreviewTarget(null)}
+          onSaved={load}
+        />
+      )}
 
       {/* 新建弹窗 */}
       {showCreate && (

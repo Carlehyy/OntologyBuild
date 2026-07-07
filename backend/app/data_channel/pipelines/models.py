@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, JSON, Text, ForeignKey
+from sqlalchemy import Boolean, String, DateTime, JSON, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -18,6 +18,10 @@ class Pipeline(Base):
     target_curated_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|editing|running|failed|published
+    # 启用开关：False 时任务池调度与同步链式触发都不执行该流水线；
+    # 与 status(published) 正交——发布决定"能否被挂接"，启用决定"当下是否生效"。
+    # 手动试运行（dry-run 预览）不受影响，便于停用期间调试。
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     branch: Mapped[str | None] = mapped_column(String(50), nullable=True, default="main")
     version: Mapped[int] = mapped_column(default=1)
     created_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)

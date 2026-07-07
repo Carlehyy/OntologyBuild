@@ -235,6 +235,9 @@ def _shadow_definition(rec: N8nPipeline) -> dict:
             "steward_id": rec.id,
             "workflow_id": rec.n8n_workflow_id,
             "webhook_path": find_webhook_path(rec.workflow_snapshot),
+            # 审批契约：以最近一次试跑的列集合为期望列，运行期资产湖闸门
+            # 据此做漂移检测（警告不阻断——湖中主键契约才是硬校验）
+            "expected_columns": (rec.last_test_result or {}).get("columns") or None,
         },
     }
 

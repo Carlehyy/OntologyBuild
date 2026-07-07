@@ -272,6 +272,93 @@ def _execute_route(route: str, ctx, data: list[dict]) -> tuple[list[dict], objec
     return execute_route_a(ctx, data)
 
 
+def _execute_source(db, svc, pl, source: dict, transform_route: str | None, runtime_spec: dict):
+    """单个源的完整执行：定路由 → 读最新版本行 → 跑 A/B/C steps。
+
+    真实运行（pipeline_run_task）与试运行（collect_pipeline_output）共用，
+    保证 dry-run 预览所见 = 入湖所得。返回 (data, ctx)。
+    """
+    from app.services.v2.pipeline.base import PipelineContext
+
+    source["route"] = _source_runtime_route(source, transform_route, pl.route)
+    data = _load_source_rows(db, svc, source)
+
+    ctx = PipelineContext(
+        dataset_id=source["dataset_id"],
+        version_no=1,
+        route=source["route"],
+        spec=runtime_spec,
+    )
+    if source["route"] == "C":
+        ctx.spec = dict(ctx.spec or {})
+        # 默认使用规则提取保证可重复性。只有当 pipeline spec 中已明确写入
+        # md_to_structured.auto_extract=true 时才调用 LLM（非确定性）。
+        existing_md_spec = ctx.spec.get("md_to_structured") or {}
+        if existing_md_spec.get("auto_extract"):
+            # Pipeline spec 显式请求 LLM 提取：检查模型是否可用
+            from app.services.model_config_selector import select_llm_model_config
+            try:
+                _has_llm = bool(select_llm_model_config(
+                    purpose_tags=("结构化提取", "结构化抽取"), allow_vlm=False))
+            except Exception:
+                _has_llm = False
+            if not _has_llm:
+                existing_md_spec = {k: v for k, v in existing_md_spec.items() if k != "auto_extract"}
+                existing_md_spec["rule_based"] = True
+            ctx.spec["md_to_structured"] = existing_md_spec
+        else:
+            # 默认规则提取（确定性）
+            ctx.spec["md_to_structured"] = {"rule_based": True, **existing_md_spec}
+    ctx.rows_in = len(data)
+    data, ctx = _execute_route(source["route"], ctx, data)
+    ctx.rows_out = len(data)
+    return data, ctx
+
+
+def _strip_content(rows: list[dict]) -> list[dict]:
+    """去掉 route C 的原始文件 bytes 列——它从不入 CSV，也无法进 JSON 暂存。"""
+    return [{k: v for k, v in r.items() if k != "content"} for r in rows]
+
+
+def collect_pipeline_output(db, pl) -> list[dict]:
+    """试运行取数：执行采集与加工但【不写资产湖】。
+
+    供列表页「执行」弹窗的 dry-run 预览使用；宽表拆分在此展开成多个输出，
+    与 _save_curated_outputs 的落库粒度一一对应，commit 时按同样粒度回放。
+    返回 [{source, table_name, rows, rows_in, rows_out, route, meta, multi_source}]。
+    """
+    from app.services.v2.dataset_service import DatasetService
+
+    svc = DatasetService(db)
+    sources = _collect_sources(db, pl)
+    if not sources:
+        raise ValueError("Pipeline 未绑定源数据集，请先在画布中配置连接器节点")
+    transform_route, runtime_spec = _pipeline_runtime_config(pl)
+
+    outputs: list[dict] = []
+    multi_source = len(sources) > 1
+    for source in sources:
+        data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
+        base_meta = {k: v for k, v in ctx.meta.items()
+                     if k in ("rows_before", "rows_after")}  # 质量分只用这两个键
+        split_tables = ctx.meta.get("split_tables")
+        if isinstance(split_tables, dict) and split_tables:
+            for table_name, rows in split_tables.items():
+                rows = _strip_content(rows or [])
+                outputs.append({
+                    "source": dict(source), "table_name": str(table_name),
+                    "rows": rows, "rows_in": ctx.rows_in, "rows_out": len(rows),
+                    "route": source["route"], "meta": base_meta, "multi_source": True,
+                })
+        else:
+            outputs.append({
+                "source": dict(source), "table_name": None,
+                "rows": _strip_content(data), "rows_in": ctx.rows_in, "rows_out": ctx.rows_out,
+                "route": source["route"], "meta": base_meta, "multi_source": multi_source,
+            })
+    return outputs
+
+
 def _safe_csv_bytes(data: list[dict]) -> bytes:
     import csv
     import io
@@ -307,7 +394,8 @@ def _safe_csv_bytes(data: list[dict]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None) -> dict:
+def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None = None) -> str:
+    """产物 curated 数据集的命名规则——入湖与 dry-run 预检必须用同一套派生。"""
     stem = Path(source["filename"]).stem
     name_parts = [pl.name]
     if multi_source:
@@ -315,7 +403,11 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     if table_name:
         name_parts.append(table_name)
     name_parts.append("curated")
-    ds_name = " ".join(name_parts)
+    return " ".join(name_parts)
+
+
+def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> dict:
+    ds_name = _curated_name(pl, source, multi_source, table_name)
     # 复用既有 curated 数据集追加版本：同一管道反复运行不再无限增殖新数据集，
     # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本
     from app.models.v2.dataset import Dataset as _DS
@@ -324,10 +416,19 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     if curated_ds is None:
         curated_ds = svc.create_dataset(name=ds_name, kind="curated")
 
+    # ── 资产湖准入闸门：行格式规范化 + 主键契约（声明仲裁/三校验）+ 列漂移检测。
+    # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
+    from app.data_channel.datasets.lake_gate import (
+        gate_rows, persist_contract, split_pk, validate_upsert_base, infer_columns_typed)
+    gate = gate_rows(curated_ds, data, write_opts, engine_contract_cols=contract_columns)
+    data = gate["rows"]
+    effective_pk = gate["pk"]
+
     # 入库方式：任务触发时按 write_mode 与资产湖已有数据合并；
     # 手动画布运行不带 write_opts，保持原行为（本次输出即新版本 = 全量覆盖）
     merge_meta: dict = {}
     lake_rows = data
+    lake_impact: dict | None = None
     if write_opts:
         if not data and write_opts.get("skip_empty", True):
             # 空输出保护：本次流水线输出 0 行，跳过入库，避免误清空资产
@@ -344,19 +445,32 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
                 "skipped": "empty_output",
                 "meta": ctx.meta,
             }
-        from app.data_channel.pipeline_tasks.merge import load_latest_rows, merge_rows
-        old_rows = [] if write_opts.get("mode") in (None, "overwrite") else load_latest_rows(db, curated_ds.id)
-        lake_rows, merge_meta = merge_rows(old_rows, data, write_opts)
+        from app.data_channel.pipeline_tasks.merge import (
+            load_latest_rows, merge_rows, compute_lake_impact)
+        # 入库前的湖中全量——既作非 overwrite 的合并基，也作审计差异基线
+        prev_rows = load_latest_rows(db, curated_ds.id)
+        old_rows = [] if write_opts.get("mode") in (None, "overwrite") else prev_rows
+        if write_opts.get("mode") == "upsert":
+            # 湖中存量行缺主键列时按键去重会把它们折叠成一行——合并前硬校验
+            validate_upsert_base(old_rows, split_pk(effective_pk),
+                                 dataset_name=curated_ds.name)
+        # 合并统一用仲裁后的生效主键（湖中已声明的契约优先于任务本次填写）
+        lake_rows, merge_meta = merge_rows(
+            old_rows, data, {**write_opts, "primary_key": effective_pk})
+        # 审计：本次入库对资产湖的行级影响（入库前后 diff：新增/更新/删除）
+        lake_impact = compute_lake_impact(prev_rows, lake_rows, split_pk(effective_pk))
 
     ver = svc.create_version(curated_ds.id, _safe_csv_bytes(lake_rows), rowcount=len(lake_rows))
 
     if data or lake_rows:
         try:
             # 赋新 dict, 原地修改 JSON 列不会被 SQLAlchemy 跟踪
-            schema = dict(curated_ds.schema_json or {})
+            # 契约字段（primary_key/columns/columns_typed/last_output_columns）由闸门统一维护
+            schema = persist_contract(curated_ds, pk=effective_pk,
+                                      pk_source=gate["pk_source"],
+                                      lake_rows=lake_rows, output_rows=data)
             sample = data or lake_rows
             schema["quality_score"] = _compute_quality_score(sample, source["route"], ctx.meta)
-            schema["columns"] = [k for k in sample[0].keys() if k != "content"] if sample else []
             schema["route"] = source["route"]
             schema["source_dataset_id"] = source["dataset_id"]
             schema["pipeline_id"] = pl.id
@@ -369,38 +483,51 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
         except Exception:
             logger.warning("curated schema_json 更新失败（不影响数据版本）", exc_info=True)
 
+    # 审计：本次流水线输出样本（入库前的产物），供执行记录追溯「流水线的输出是什么」
+    from app.data_channel.pipeline_tasks.merge import _slim_row
+    output_columns = [c["name"] for c in infer_columns_typed(data)] if data else []
+    output_sample = [_slim_row(r) for r in data[:50]]
+
     return {
         "source_dataset_id": source["dataset_id"],
         "source_file": source["filename"],
         "route": source["route"],
         "table_name": table_name,
         "curated_dataset_id": curated_ds.id,
+        "curated_dataset_name": curated_ds.name,
         "dataset_version_id": ver.id,
+        "version_no": ver.version_no,
         "rows_in": ctx.rows_in,
         "rows_out": len(data),
         "lake_rows": len(lake_rows),
+        "output_columns": output_columns,
+        "output_sample": output_sample,
+        "lake_impact": lake_impact,
         "merge": merge_meta or None,
+        "primary_key": effective_pk or None,
+        "pk_source": gate["pk_source"] or None,
+        "schema_drift": gate["drift"],
+        "gate_warnings": gate["warnings"] or None,
         "meta": ctx.meta,
     }
 
 
-def _save_curated_outputs(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, write_opts: dict | None = None) -> list[dict]:
+def _save_curated_outputs(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> list[dict]:
     split_tables = ctx.meta.get("split_tables")
     if isinstance(split_tables, dict) and split_tables:
         outputs = []
         for table_name, rows in split_tables.items():
             outputs.append(_save_curated_dataset(
-                db, svc, pl, source, rows or [], ctx, multi_source=True, table_name=str(table_name), write_opts=write_opts
+                db, svc, pl, source, rows or [], ctx, multi_source=True, table_name=str(table_name), write_opts=write_opts, contract_columns=contract_columns
             ))
         return outputs
-    return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source, write_opts=write_opts)]
+    return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source, write_opts=write_opts, contract_columns=contract_columns)]
 
 
 def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = None):
     """Pipeline 执行任务 — 支持 DAG 编译 + 节点状态追踪"""
     from app.database import SessionLocal
     from app.models.v2.pipeline import Pipeline, PipelineRun
-    from app.services.v2.pipeline.base import PipelineContext
     from app.services.v2.pipeline.dag_compiler import compile_definition
     from app.services.v2.dataset_service import DatasetService
 
@@ -421,10 +548,20 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             db.commit()
             return
 
-        # ── n8n 引擎（数据管家）：触发 webhook 取数，共用入湖通道 ──
-        if (pl.definition or {}).get("engine") == "n8n":
-            from app.data_channel.steward.runner import run_n8n_pipeline
-            run_n8n_pipeline(db, pl, run, write_opts)
+        # ── 非画布引擎（n8n / 未来第三方工作流）：注册表分发，共用入湖通道 ──
+        from app.data_channel.pipelines.engine_registry import (
+            CANVAS_ENGINES, get_engine_runner, known_engines)
+        engine = (pl.definition or {}).get("engine")
+        if engine not in CANVAS_ENGINES:
+            runner = get_engine_runner(engine)
+            if runner is None:
+                run.status = "failed"
+                run.error_log = (f"未知采集引擎「{engine}」，已注册引擎：{known_engines()}。"
+                                 f"接入新引擎请在 engine_registry 登记 runner。")
+                run.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return
+            runner(db, pl, run, write_opts)
             return
 
         # ── DAG 编译 ──────────────────────────────────────────────
@@ -454,8 +591,7 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
         source_stats = []
         multi_source = len(sources) > 1
         for source in sources:
-            source["route"] = _source_runtime_route(source, transform_route, pl.route)
-            data = _load_source_rows(db, svc, source)
+            data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
 
             # 找到对应的 connector 节点
             conn_node_id = None
@@ -469,35 +605,6 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
                 if conn_node_id:
                     break
 
-            ctx = PipelineContext(
-                dataset_id=source["dataset_id"],
-                version_no=1,
-                route=source["route"],
-                spec=runtime_spec,
-            )
-            if source["route"] == "C":
-                ctx.spec = dict(ctx.spec or {})
-                # 默认使用规则提取保证可重复性。只有当 pipeline spec 中已明确写入
-                # md_to_structured.auto_extract=true 时才调用 LLM（非确定性）。
-                existing_md_spec = ctx.spec.get("md_to_structured") or {}
-                if existing_md_spec.get("auto_extract"):
-                    # Pipeline spec 显式请求 LLM 提取：检查模型是否可用
-                    from app.services.model_config_selector import select_llm_model_config
-                    try:
-                        _has_llm = bool(select_llm_model_config(
-                            purpose_tags=("结构化提取", "结构化抽取"), allow_vlm=False))
-                    except Exception:
-                        _has_llm = False
-                    if not _has_llm:
-                        existing_md_spec = {k: v for k, v in existing_md_spec.items() if k != "auto_extract"}
-                        existing_md_spec["rule_based"] = True
-                    ctx.spec["md_to_structured"] = existing_md_spec
-                else:
-                    # 默认规则提取（确定性）
-                    ctx.spec["md_to_structured"] = {"rule_based": True, **existing_md_spec}
-            ctx.rows_in = len(data)
-            data, ctx = _execute_route(source["route"], ctx, data)
-            ctx.rows_out = len(data)
             outputs.extend(_save_curated_outputs(db, svc, pl, source, data, ctx, multi_source, write_opts))
 
             # 记录逐源统计
@@ -548,12 +655,22 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
         # run ↔ 产物版本血缘：主产物的 DatasetVersion id
         run.dataset_version_id = next((o.get("dataset_version_id") for o in outputs if o.get("dataset_version_id")), None)
         lake_rows_total = sum(o.get("lake_rows") or 0 for o in outputs)
+        gate_warnings = [w for o in outputs for w in (o.get("gate_warnings") or [])]
+        # 审计：跨产物聚合的资产湖影响计数（列表页快速展示，明细在 meta.outputs）
+        _impacts = [o.get("lake_impact") for o in outputs if o.get("lake_impact")]
+        lake_impact_summary = {
+            "added": sum(i.get("added_count", 0) for i in _impacts),
+            "updated": sum(i.get("updated_count", 0) for i in _impacts),
+            "deleted": sum(i.get("deleted_count", 0) for i in _impacts),
+        } if _impacts else None
         run.stats = {
             **(run.stats or {}),
             "rows_in": total_in,
             "rows_out": total_out,
             "lake_rows": lake_rows_total,
+            "lake_impact": lake_impact_summary,
             "write_mode": (write_opts or {}).get("mode"),
+            "gate_warnings": gate_warnings or None,
             "skipped_outputs": [o for o in outputs if o.get("skipped")] or None,
             "node_status": dict(node_status),
             "source_stats": source_stats,

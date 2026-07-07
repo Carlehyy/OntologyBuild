@@ -560,6 +560,224 @@ def run_pipeline_sync(pipeline_id: str, db: Session = Depends(get_db)):
         return {"run_id": run.id, "status": "failed", "error": str(e)}
 
 
+# ── 启用开关 + 试运行预览（不落湖）→ 确认后入湖 ──────────────────────
+
+class EnabledBody(BaseModel):
+    enabled: bool
+
+
+@router.patch("/{pipeline_id}/enabled")
+def set_pipeline_enabled(pipeline_id: str, body: EnabledBody, db: Session = Depends(get_db)):
+    """启用/停用流水线：停用后任务池调度与同步链式触发都不执行。
+
+    n8n 流水线也允许切换——这是平台侧的调度闸门，独立于数据管家的
+    审批状态（审批决定"能不能存在"，启用决定"当下要不要跑"）。
+    """
+    pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if not pl:
+        raise HTTPException(404, "Pipeline not found")
+    pl.enabled = bool(body.enabled)
+    pl.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(pl)
+    return _format_pipeline(pl)
+
+
+_DRY_RUN_BUCKET = "raw-datasets"  # 复用既有桶（本地回退同样生效），免新增配置
+
+
+def _dry_run_uri(pipeline_id: str, dry_run_id: str) -> str:
+    """服务端确定性重建暂存 URI——不信任客户端回传，防任意对象读取。"""
+    import uuid as _uuid
+    _uuid.UUID(dry_run_id)  # 非法 id 直接 ValueError → 400
+    return f"s3://{_DRY_RUN_BUCKET}/dry-runs/{pipeline_id}/{dry_run_id}.json"
+
+
+@router.post("/{pipeline_id}/dry-run")
+def dry_run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+    """试运行：真实执行采集与加工，但【不写资产湖】。
+
+    返回逐产物的行数预览 + 资产湖准入闸门预检结果（主键契约/列漂移），
+    完整输出暂存到对象存储；用户在弹窗确认后调 commit 端点按原样入湖。
+    n8n 引擎：试运行同样会触发生产 workflow（其执行方式即如此）。
+    """
+    import json as _json
+    import uuid as _uuid
+    from types import SimpleNamespace
+    from datetime import datetime as _dt, timezone as _tz
+
+    pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if not pl:
+        raise HTTPException(404, "Pipeline not found")
+
+    engine_meta: dict = {}
+    try:
+        if _is_n8n_pipeline(pl):
+            from app.data_channel.steward.runner import collect_n8n_rows
+            from app.tasks.v2.pipeline_run import _strip_content
+            rows, engine_meta = collect_n8n_rows(db, pl)
+            outputs = [{
+                "source": {"dataset_id": None, "filename": pl.name, "route": "A", "kind": "n8n"},
+                "table_name": None, "rows": _strip_content(rows),
+                "rows_in": len(rows), "rows_out": len(rows),
+                "route": "A", "meta": {}, "multi_source": False,
+            }]
+        else:
+            from app.tasks.v2.pipeline_run import collect_pipeline_output
+            outputs = collect_pipeline_output(db, pl)
+    except Exception as e:  # noqa: BLE001 — 试运行失败原样透出给弹窗
+        raise HTTPException(400, f"试运行失败：{e}")
+
+    # 资产湖准入闸门预检：按将要写入的目标数据集逐个检查（不落任何数据）
+    from app.data_channel.datasets.lake_gate import LakeGateError, gate_rows
+    from app.tasks.v2.pipeline_run import _curated_name
+    from app.models.v2.dataset import Dataset
+
+    preview = []
+    for o in outputs:
+        ds_name = _curated_name(pl, o["source"], o["multi_source"], o["table_name"])
+        curated = db.query(Dataset).filter(
+            Dataset.kind == "curated", Dataset.name == ds_name).first()
+        gate_error = None
+        gate_info: dict = {"pk": "", "pk_source": "", "warnings": [], "drift": None}
+        try:
+            g = gate_rows(curated or SimpleNamespace(name=ds_name, schema_json=None),
+                          o["rows"], None)
+            gate_info = {"pk": g["pk"], "pk_source": g["pk_source"],
+                         "warnings": g["warnings"], "drift": g["drift"]}
+        except LakeGateError as e:
+            gate_error = str(e)
+
+        columns: list[str] = []
+        for row in o["rows"][:50]:
+            for k in row.keys():
+                if k not in columns:
+                    columns.append(k)
+        preview.append({
+            "dataset_name": ds_name,
+            "dataset_exists": curated is not None,
+            "rows_out": o["rows_out"],
+            "columns": columns,
+            "sample": o["rows"][:20],
+            "gate_error": gate_error,
+            **gate_info,
+        })
+
+    dry_run_id = str(_uuid.uuid4())
+    payload = {
+        "pipeline_id": pl.id,
+        "created_at": _dt.now(_tz.utc).isoformat(),
+        "engine_meta": engine_meta,
+        "outputs": outputs,
+    }
+    from app.services.storage_service import get_storage_service
+    get_storage_service().put_bytes(
+        _DRY_RUN_BUCKET, f"dry-runs/{pl.id}/{dry_run_id}.json",
+        _json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
+        content_type="application/json")
+
+    total_out = sum(o["rows_out"] for o in outputs)
+    return {
+        "dry_run_id": dry_run_id,
+        "engine": (pl.definition or {}).get("engine") or "canvas",
+        "rows_in": sum(o["rows_in"] for o in outputs),
+        "rows_out": total_out,
+        "outputs": preview,
+        "can_save": total_out > 0 and not any(p["gate_error"] for p in preview),
+    }
+
+
+@router.post("/{pipeline_id}/dry-run/{dry_run_id}/commit")
+def commit_dry_run(pipeline_id: str, dry_run_id: str, db: Session = Depends(get_db)):
+    """把某次试运行的输出按原样写入资产湖（不重新执行流水线）。
+
+    走与正式运行完全相同的入湖通道（准入闸门 + 版本化），并生成一条
+    PipelineRun 记录保住血缘：产物版本能回溯到这次确认入湖。
+    """
+    import json as _json
+    from app.services.v2.pipeline.base import PipelineContext
+    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.lake_gate import LakeGateError
+    from app.tasks.v2.pipeline_run import _save_curated_dataset
+
+    pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if not pl:
+        raise HTTPException(404, "Pipeline not found")
+    try:
+        from app.services.storage_service import get_storage_service
+        raw = get_storage_service().get_object(_dry_run_uri(pipeline_id, dry_run_id))
+        payload = _json.loads(raw.decode("utf-8"))
+    except ValueError:
+        raise HTTPException(400, "非法的 dry_run_id")
+    except Exception:
+        raise HTTPException(404, "试运行结果不存在或已过期，请重新执行")
+    if payload.get("pipeline_id") != pipeline_id:
+        raise HTTPException(400, "试运行结果与流水线不匹配")
+
+    run = PipelineRun(
+        pipeline_id=pipeline_id, status="running",
+        started_at=datetime.now(timezone.utc),
+        stats={"triggered_by": "preview-commit", "dry_run_id": dry_run_id},
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    svc = DatasetService(db)
+    saved = []
+    try:
+        for o in payload.get("outputs") or []:
+            ctx = PipelineContext(
+                dataset_id=o["source"].get("dataset_id") or "",
+                version_no=1, route=o.get("route") or "A", spec={})
+            ctx.rows_in = int(o.get("rows_in") or 0)
+            ctx.rows_out = int(o.get("rows_out") or 0)
+            ctx.meta = dict(o.get("meta") or {})
+            if payload.get("engine_meta"):
+                ctx.meta["n8n_execution"] = payload["engine_meta"]
+            saved.append(_save_curated_dataset(
+                db, svc, pl, o["source"], o.get("rows") or [], ctx,
+                bool(o.get("multi_source")), table_name=o.get("table_name"),
+                write_opts=None))
+    except LakeGateError as e:
+        run.status = "failed"
+        run.error_log = str(e)
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        run.status = "failed"
+        run.error_log = str(e)
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(500, f"入湖失败：{e}")
+
+    curated_ids = [s["curated_dataset_id"] for s in saved]
+    pl.target_curated_ids = curated_ids
+    run.status = "success"
+    run.finished_at = datetime.now(timezone.utc)
+    run.dataset_version_id = next(
+        (s.get("dataset_version_id") for s in saved if s.get("dataset_version_id")), None)
+    run.stats = {
+        **(run.stats or {}),
+        "engine": (pl.definition or {}).get("engine") or "canvas",
+        "rows_in": sum(s.get("rows_in") or 0 for s in saved),
+        "rows_out": sum(s.get("rows_out") or 0 for s in saved),
+        "lake_rows": sum(s.get("lake_rows") or 0 for s in saved),
+        "gate_warnings": [w for s in saved for w in (s.get("gate_warnings") or [])] or None,
+        "curated_dataset_id": curated_ids[0] if curated_ids else None,
+        "curated_dataset_ids": curated_ids,
+        "meta": {"outputs": saved},
+    }
+    db.commit()
+    return {
+        "run_id": run.id,
+        "curated_dataset_ids": curated_ids,
+        "lake_rows": sum(s.get("lake_rows") or 0 for s in saved),
+        "outputs": saved,
+    }
+
+
 class PreviewStepBody(BaseModel):
     op: str
     params: dict = {}
@@ -602,6 +820,9 @@ def _format_pipeline(pl: Pipeline) -> dict:
         "spec": pl.spec or {},
         "definition": pl.definition,
         "status": pl.status or "draft",
+        # 来源引擎：canvas=系统自定义画布 / n8n=数据管家托管（前端来源列据此渲染）
+        "engine": ((pl.definition or {}).get("engine") or "canvas"),
+        "enabled": True if pl.enabled is None else bool(pl.enabled),
         "branch": pl.branch or "main",
         "version": pl.version or 1,
         "target_curated_ids": pl.target_curated_ids or [],

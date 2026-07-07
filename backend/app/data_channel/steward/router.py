@@ -295,6 +295,16 @@ def test_run_record(record_id: str, body: TestRunBody = TestRunBody(),
     try:
         rec = service.require_record(db, record_id)
         result = test_run_workflow(db, rec, payload=body.payload)
+        # 试跑成功即持久化列样本：审批时固化为影子流水线的期望列契约
+        if not result.get("error"):
+            from datetime import datetime, timezone
+            rec.last_test_result = {
+                "rows": result.get("rows"),
+                "columns": result.get("columns") or [],
+                "sample": (result.get("sample") or [])[:5],
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            db.commit()
     except Exception as e:  # noqa: BLE001
         raise _handle(e)
     return _ok(result)

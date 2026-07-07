@@ -22,10 +22,33 @@ export interface PipelineTask {
   enabled: boolean
   status: PipelineTaskStatus
   last_run_at: string | null
+  next_run_at?: string | null
   last_rows: number
   last_error: string
   created_at: string | null
   updated_at: string | null
+}
+
+/** 单次入库对资产湖的行级影响计数（速览） */
+export interface LakeImpact {
+  added: number
+  updated: number
+  deleted: number
+}
+
+/** 执行时刻的任务配置快照 */
+export interface ConfigSnapshot {
+  task_name?: string
+  pipeline_id?: string
+  pipeline_name?: string
+  pipeline_version?: number | null
+  write_mode?: string
+  primary_key?: string
+  soft_delete_column?: string
+  skip_empty?: boolean
+  schedule_type?: string
+  cron_expression?: string
+  interval_seconds?: number
 }
 
 export interface PipelineTaskRun {
@@ -40,6 +63,57 @@ export interface PipelineTaskRun {
   write_mode: string | null
   skipped_outputs: Array<Record<string, unknown>> | null
   curated_dataset_ids: string[]
+  lake_impact?: LakeImpact | null
+  config_snapshot?: ConfigSnapshot | null
+  error_message: string
+}
+
+/** 单个成品数据集的行级影响明细（含样本） */
+export interface LakeImpactDetail {
+  keyed_by: string[] | null
+  total_before: number
+  total_after: number
+  added_count: number
+  updated_count: number
+  deleted_count: number
+  unchanged_count: number
+  added_sample: Array<Record<string, unknown>>
+  updated_sample: Array<{ before: Record<string, unknown>; after: Record<string, unknown> }>
+  deleted_sample: Array<Record<string, unknown>>
+  sample_truncated: boolean
+}
+
+export interface RunAuditOutput {
+  curated_dataset_id: string | null
+  curated_dataset_name: string | null
+  version_no: number | null
+  table_name: string | null
+  rows_out: number | null
+  lake_rows: number | null
+  primary_key: string | null
+  output_columns: string[]
+  output_sample: Array<Record<string, unknown>>
+  lake_impact: LakeImpactDetail | null
+  skipped?: string | null
+  gate_warnings?: string[] | null
+}
+
+export interface RunAudit {
+  id: string
+  task_id: string
+  status: string
+  trigger_type: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string | null
+  rows_in: number
+  rows_out: number
+  lake_rows: number | null
+  write_mode: string | null
+  lake_impact: LakeImpact | null
+  config_snapshot: ConfigSnapshot | null
+  pipeline: { id: string; name: string; version: number | null; status: string; domain: string | null }
+  outputs: RunAuditOutput[]
   error_message: string
 }
 
@@ -49,6 +123,47 @@ export interface PipelineTaskStats {
   enabled: number
   failed: number
   today_runs: number
+  today_errors?: number
+  total_runs?: number
+  total_errors?: number
+}
+
+export interface CuratedColumn {
+  name: string
+  type: string
+}
+
+export interface CuratedDataset {
+  id: string
+  name: string
+  rowcount: number
+  version_no: number
+  /** 湖中已固化的主键契约（逗号分隔）；非空即锁定，不可在任务里改写 */
+  primary_key: string
+  columns: CuratedColumn[]
+}
+
+/** 「选择流水线」阶段的候选：已发布且已产出数据的流水线 */
+export interface SelectablePipeline {
+  id: string
+  name: string
+  version?: number
+  domain?: string
+  status: string
+  total_rows: number
+  curated_datasets: CuratedDataset[]
+  updated_at?: string | null
+}
+
+export interface CuratedPreview {
+  dataset_id: string
+  dataset_name?: string
+  version_no?: number
+  total_rows: number
+  offset: number
+  limit: number
+  columns: string[]
+  rows: Array<Record<string, unknown>>
 }
 
 export interface PipelineTaskPayload {
@@ -90,8 +205,22 @@ export const pipelineTasksApi = {
   histories: (id: string, page = 1, page_size = 20): Promise<{ total: number; items: PipelineTaskRun[] }> =>
     apiClientV2.get(`/pipeline-tasks/${id}/histories`, { params: { page, page_size } }),
 
+  /** 单次执行的完整审计明细（配置快照 + 输出样本 + 资产湖行级影响） */
+  runAudit: (taskId: string, runId: string): Promise<RunAudit> =>
+    apiClientV2.get(`/pipeline-tasks/${taskId}/runs/${runId}/audit`),
+
   stats: (): Promise<PipelineTaskStats> =>
     apiClientV2.get('/pipeline-tasks/stats'),
+
+  /** 「选择流水线」候选：仅已发布且已产出数据的流水线（附成品数据集/列/主键契约） */
+  selectablePipelines: (): Promise<{ total: number; items: SelectablePipeline[] }> =>
+    apiClientV2.get('/pipeline-tasks/selectable-pipelines'),
+
+  /** 分页预览某成品数据集的实际数据 */
+  previewCurated: (datasetId: string, page = 1, pageSize = 20): Promise<CuratedPreview> =>
+    apiClientV2.get(`/datasets/${datasetId}/preview`, {
+      params: { offset: (page - 1) * pageSize, limit: pageSize },
+    }),
 }
 
 export const WRITE_MODE_META: Record<WriteMode, { label: string; desc: string }> = {

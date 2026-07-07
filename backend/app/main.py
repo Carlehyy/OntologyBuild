@@ -149,6 +149,16 @@ def _seed_db():
                 "ALTER TABLE v2_pipeline_runs ADD COLUMN task_id VARCHAR",
                 # —— 事件登记：留存明文密钥以便面板反复复制 ——
                 "ALTER TABLE event_ingest_keys ADD COLUMN secret_plain VARCHAR(120)",
+                # —— 数据管家：试跑列样本 → 审批固化为影子流水线期望列契约 ——
+                "ALTER TABLE v2_n8n_pipelines ADD COLUMN last_test_result JSON",
+                # —— 流水线启用开关：停用后任务池/链式触发不执行 ——
+                "ALTER TABLE v2_pipelines ADD COLUMN enabled BOOLEAN DEFAULT 1",
+                # —— 回填历史 NULL latest_version_id（create_version 旧 bug：flush 前取 id）——
+                "UPDATE v2_datasets SET latest_version_id = ("
+                " SELECT v.id FROM v2_dataset_versions v WHERE v.dataset_id = v2_datasets.id"
+                " ORDER BY v.version_no DESC LIMIT 1)"
+                " WHERE latest_version_id IS NULL AND EXISTS ("
+                " SELECT 1 FROM v2_dataset_versions v2 WHERE v2.dataset_id = v2_datasets.id)",
             ]:
                 try:
                     conn.execute(text(stmt))

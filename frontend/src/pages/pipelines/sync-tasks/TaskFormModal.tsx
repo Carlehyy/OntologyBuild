@@ -1,8 +1,14 @@
 import { useState, useEffect } from 'react'
-import { X, Loader2, AlertCircle, CheckCircle2, GitBranch, ArrowRight } from 'lucide-react'
+import {
+  X, Loader2, AlertCircle, CheckCircle2, GitBranch, ArrowRight,
+  Database, KeyRound, Lock, ChevronLeft, ChevronRight, Table2, Check, Sparkles,
+} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskPayload, type WriteMode, type PipelineTaskScheduleType } from '@/api/v2/pipeline-tasks'
-import { apiClientV2 } from '@/api/client'
+import {
+  pipelineTasksApi, WRITE_MODE_META,
+  type PipelineTask, type PipelineTaskPayload, type WriteMode,
+  type PipelineTaskScheduleType, type SelectablePipeline, type CuratedDataset, type CuratedPreview,
+} from '@/api/v2/pipeline-tasks'
 
 interface Props {
   initialTask: PipelineTask | null
@@ -12,7 +18,11 @@ interface Props {
   onSaved: () => void
 }
 
-const STEPS = ['基本信息', '流水线与入库方式', '调度设置']
+const STEPS = ['基本信息', '选择流水线', '设置入库方式', '调度设置', '确认配置']
+
+const splitPk = (s?: string): string[] =>
+  (s ?? '').split(',').map(x => x.trim()).filter(Boolean)
+const joinPk = (arr: string[]): string => arr.join(',')
 
 export default function TaskFormModal({ initialTask, initialPipelineId, onClose, onSaved }: Props) {
   const navigate = useNavigate()
@@ -21,8 +31,10 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  const [pipelines, setPipelines] = useState<Array<{ id: string; name: string; version?: number; domain?: string }>>([])
+  const [pipelines, setPipelines] = useState<SelectablePipeline[]>([])
   const [pipelinesLoading, setPipelinesLoading] = useState(true)
+  /** 当前用于「预览 + 主键勾选」的成品数据集 id（流水线可能产出多个） */
+  const [activeCuratedId, setActiveCuratedId] = useState<string>('')
 
   const [form, setForm] = useState<PipelineTaskPayload>(() => initialTask ? {
     name: initialTask.name,
@@ -51,28 +63,60 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   })
 
   useEffect(() => {
-    // 任务只能调度已发布的流水线
     setPipelinesLoading(true)
-    apiClientV2.get('/pipelines', { params: { status: 'published' } }).then((res: any) => {
-      const arr = Array.isArray(res) ? res : (res.items ?? [])
-      setPipelines(arr.map((p: any) => ({ id: p.id, name: p.name, version: p.version, domain: p.domain })))
-    }).catch(() => setPipelines([]))
+    pipelineTasksApi.selectablePipelines()
+      .then(res => setPipelines(res.items ?? []))
+      .catch(() => setPipelines([]))
       .finally(() => setPipelinesLoading(false))
   }, [])
+
+  const selectedPipeline = pipelines.find(p => p.id === form.pipeline_id) || null
+  const curatedList: CuratedDataset[] = selectedPipeline?.curated_datasets || []
+  const activeCurated = curatedList.find(c => c.id === activeCuratedId) || curatedList[0] || null
+  const pkColumns = activeCurated?.columns || []
+  const declaredPk = (activeCurated?.primary_key || '').trim()   // 湖中已固化 → 锁定
+  const pkLocked = declaredPk.length > 0
+
+  // 选中流水线后默认锁定第一个成品数据集
+  useEffect(() => {
+    if (selectedPipeline && !curatedList.some(c => c.id === activeCuratedId)) {
+      setActiveCuratedId(curatedList[0]?.id || '')
+    }
+  }, [selectedPipeline, curatedList, activeCuratedId])
+
+  // 湖中已声明主键时强制对齐（任务不能改写身份契约，否则运行会被闸门拒绝）
+  useEffect(() => {
+    if (pkLocked && form.primary_key !== declaredPk) {
+      setForm(prev => ({ ...prev, primary_key: declaredPk }))
+    }
+  }, [pkLocked, declaredPk]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = <K extends keyof PipelineTaskPayload>(key: K, val: PipelineTaskPayload[K]) => {
     setForm(prev => ({ ...prev, [key]: val }))
   }
 
+  const onPickPipeline = (id: string) => {
+    update('pipeline_id', id)
+    const np = pipelines.find(p => p.id === id)
+    setActiveCuratedId(np?.curated_datasets[0]?.id || '')
+    // 换流水线：清空旧主键，交给 declaredPk effect 或用户重新勾选
+    if (!isEdit) update('primary_key', '')
+    setError('')
+  }
+
+  const togglePk = (col: string) => {
+    if (pkLocked) return
+    const cur = splitPk(form.primary_key)
+    const next = cur.includes(col) ? cur.filter(c => c !== col) : [...cur, col]
+    update('primary_key', joinPk(next))
+  }
+
   const validateStep = (s: number): string | null => {
-    if (s === 0) {
-      if (!form.name.trim()) return '请填写任务名称'
-    }
-    if (s === 1) {
-      if (!form.pipeline_id) return '请选择要调度的流水线'
-      if (form.write_mode === 'upsert' && !(form.primary_key ?? '').trim()) return '「主键合并」入库方式必须指定主键列'
-    }
-    if (s === 2) {
+    if (s === 0 && !form.name.trim()) return '请填写任务名称'
+    if (s === 1 && !form.pipeline_id) return '请选择一条已产出数据的流水线'
+    if (s === 2 && form.write_mode === 'upsert' && !(form.primary_key ?? '').trim())
+      return '「主键合并」入库方式必须至少选择一个主键列'
+    if (s === 3) {
       if (form.schedule_type === 'CRON' && !(form.cron_expression ?? '').trim()) return '请填写 Cron 表达式'
       if (form.schedule_type === 'INTERVAL' && (!form.interval_seconds || form.interval_seconds < 10)) return '间隔必须 ≥ 10 秒'
     }
@@ -87,7 +131,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   }
 
   const handleSubmit = async () => {
-    for (const s of [0, 1, 2]) {
+    for (const s of [0, 1, 2, 3]) {
       const err = validateStep(s)
       if (err) { setError(err); setStep(s); return }
     }
@@ -107,165 +151,248 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     }
   }
 
-  const selectedPipeline = pipelines.find(p => p.id === form.pipeline_id)
+  // ── 确认阶段的自然语言预期效果 ─────────────────────────────
+  const buildEffectText = (): string => {
+    const pName = selectedPipeline
+      ? `「${selectedPipeline.name}${selectedPipeline.version ? ` v${selectedPipeline.version}` : ''}」`
+      : '所选流水线'
+    const sched = form.schedule_type === 'MANUAL' ? '在任务池手动点击「执行」时触发'
+      : form.schedule_type === 'CRON' ? `按 Cron 表达式「${form.cron_expression || '-'}」定时自动触发`
+      : `每隔 ${form.interval_seconds || 0} 秒自动触发一次`
+    const modeLabel = WRITE_MODE_META[form.write_mode].label
+    const targets = curatedList.length ? curatedList.map(c => `「${c.name}」`).join('、') : '其成品数据集'
+    const pk = (form.primary_key || '').trim()
+    const modeDetail =
+      form.write_mode === 'upsert'
+        ? `按主键（${pk || '未设置'}）识别同一条记录并保留最新` + (form.soft_delete_column ? `，依据「${form.soft_delete_column}」处理逻辑删除` : '')
+      : form.write_mode === 'overwrite' ? '先清空再写入本次全部产物（全量覆盖）'
+      : form.write_mode === 'append' ? '直接追加到已有数据尾部'
+      : '按整行内容去重后追加'
+    const guard = form.skip_empty
+      ? '若某次运行产出 0 行，将自动跳过入库、保护资产不被误清空。'
+      : '未开启空输出保护：即使产出 0 行也会执行入库（可能清空资产），请谨慎。'
+    const enable = form.enabled ? '创建后任务立即启用并纳入调度。' : '创建后任务处于停用状态，需手动启用后才会调度。'
+    return `任务将${sched}，运行流水线${pName}；每次把最终产物以【${modeLabel}】方式写入 ${targets}（${modeDetail}）。${guard}${enable}`
+  }
+
+  const show = (s: number) => isEdit || step === s
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <div>
-            <h3 className="text-lg font-bold text-gray-900">
-              {isEdit ? '编辑调度任务' : '新建调度任务'}
-            </h3>
-            <p className="text-xs text-gray-400 mt-0.5">任务负责按计划触发已发布的流水线，并把最终产物按入库方式写进数据资产湖</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-[0_24px_70px_rgba(15,23,42,0.18)] border border-white/70 w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        {/* 头部（居中） */}
+        <div className="relative px-6 py-5 border-b border-slate-100 text-center">
+          <h3 className="text-lg font-semibold text-slate-800">
+            {isEdit ? '编辑调度任务' : '新建调度任务'}
+          </h3>
+          <p className="text-xs text-slate-400 mt-1 max-w-lg mx-auto">
+            任务按计划触发已发布的流水线，并把最终产物按入库方式写进数据资产湖
+          </p>
+          <button onClick={onClose} className="absolute right-5 top-5 text-slate-400 hover:text-slate-600 transition-colors">
             <X size={18} />
           </button>
         </div>
 
-        {/* 步骤指示器 */}
+        {/* 步骤指示器（居中） */}
         {!isEdit && (
-          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-center flex-wrap gap-y-2">
             {STEPS.map((label, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
-                  ${i < step ? 'bg-green-100 text-green-600' : i === step ? 'bg-[var(--color-nav-bg)] text-white' : 'bg-gray-100 text-gray-400'}`}>
-                  {i < step ? <CheckCircle2 size={12} /> : i + 1}
+              <div key={i} className="flex items-center">
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
+                    ${i < step ? 'bg-emerald-100 text-emerald-600'
+                      : i === step ? 'bg-blue-500 text-white shadow-sm shadow-blue-500/30'
+                      : 'bg-slate-100 text-slate-400'}`}>
+                    {i < step ? <Check size={12} /> : i + 1}
+                  </div>
+                  <span className={`text-xs whitespace-nowrap ${i === step ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>{label}</span>
                 </div>
-                <span className={`text-xs ${i === step ? 'text-gray-900 font-medium' : 'text-gray-400'}`}>{label}</span>
-                {i < STEPS.length - 1 && <div className={`w-8 h-px ${i < step ? 'bg-green-300' : 'bg-gray-200'}`} />}
+                {i < STEPS.length - 1 && <div className={`w-6 h-px mx-2 ${i < step ? 'bg-emerald-300' : 'bg-slate-200'}`} />}
               </div>
             ))}
           </div>
         )}
 
         {/* 内容 */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto px-6 py-5">
           {error && (
-            <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
+            <div className="max-w-xl mx-auto mb-4 flex items-start gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
           {/* Step 0: 基本信息 */}
-          {(step === 0 || isEdit) && (
-            <div className="space-y-4">
+          {show(0) && (
+            <StepShell title="基本信息" subtitle="给任务起个一眼能认出用途的名字">
               <Field label="任务名称" required>
                 <input type="text" value={form.name} onChange={e => update('name', e.target.value)}
                   placeholder="例如：订单数据每日入湖" autoFocus={!isEdit}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-[var(--color-nav-bg)]" />
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" />
               </Field>
               <Field label="任务描述">
                 <textarea value={form.description} onChange={e => update('description', e.target.value)}
                   placeholder="任务用途说明（可选）" rows={2}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-[var(--color-nav-bg)] resize-none" />
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 resize-none transition" />
               </Field>
-            </div>
+            </StepShell>
           )}
 
-          {/* Step 1: 关联流水线 + 入库方式 */}
-          {(step === 1 || isEdit) && (!isEdit ? step === 1 : true) && (
-            <div className="space-y-4">
-              <Field label="关联流水线" required hint="仅显示已发布的流水线；流水线负责数据的采集与加工，任务只负责调度">
-                {pipelinesLoading ? (
-                  <div className="text-sm text-gray-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin" />加载中...</div>
-                ) : pipelines.length === 0 ? (
-                  <div className="text-sm text-gray-500 p-3 bg-gray-50 rounded-lg flex items-center justify-between gap-2">
-                    <span>暂无已发布的流水线，请先到流水线画布完成编排并发布</span>
-                    <button
-                      onClick={() => navigate('/data/pipelines')}
-                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg hover:bg-white text-[var(--color-nav-bg)] shrink-0"
-                    >
-                      去流水线 <ArrowRight size={11} />
-                    </button>
-                  </div>
-                ) : (
-                  <select value={form.pipeline_id} onChange={e => update('pipeline_id', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:border-[var(--color-nav-bg)]">
-                    <option value="">-- 请选择流水线 --</option>
-                    {pipelines.map(p => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}{p.version ? ` (v${p.version})` : ''}{p.domain ? ` · ${p.domain}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {initialPipelineId && form.pipeline_id === initialPipelineId && (
-                  <div className="text-xs text-green-600 mt-1">已自动选中刚发布的流水线</div>
-                )}
-                {selectedPipeline && (
-                  <div className="mt-2 p-2.5 bg-blue-50/50 border border-blue-100 rounded-lg text-xs text-blue-700 flex items-center gap-1.5">
-                    <GitBranch size={12} className="shrink-0" />
-                    任务触发时执行「{selectedPipeline.name}」，其<b>最终产物</b>将按下方入库方式写进资产湖的成品数据集
-                  </div>
-                )}
-              </Field>
+          {/* Step 1: 选择流水线（仅已产出数据）+ 数据预览 */}
+          {show(1) && (
+            <StepShell title="选择流水线" subtitle="只列出已发布且执行产出过数据的流水线，选中后可翻看实际数据" wide>
+              {pipelinesLoading ? (
+                <div className="text-sm text-slate-400 flex items-center justify-center gap-1.5 py-8">
+                  <Loader2 size={14} className="animate-spin" />加载可用流水线...
+                </div>
+              ) : pipelines.length === 0 ? (
+                <div className="text-sm text-slate-500 p-5 bg-slate-50 rounded-xl text-center space-y-2">
+                  <Database size={22} className="mx-auto text-slate-300" />
+                  <p>还没有「已发布且产出过数据」的流水线。</p>
+                  <p className="text-xs text-slate-400">请先到流水线画布完成编排、成功运行产出数据，并发布。</p>
+                  <button onClick={() => navigate('/data/pipelines')}
+                    className="mt-1 inline-flex items-center gap-1 text-xs px-3 py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50 text-blue-600">
+                    去流水线 <ArrowRight size={11} />
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {pipelines.map(p => (
+                    <PipelineCard key={p.id} pipeline={p} active={form.pipeline_id === p.id} onClick={() => onPickPipeline(p.id)} />
+                  ))}
+                </div>
+              )}
 
-              <Field label="入库方式" required hint="流水线最终产物与资产湖已有数据的合并策略">
+              {initialPipelineId && form.pipeline_id === initialPipelineId && (
+                <div className="text-xs text-emerald-600 mt-2 text-center">已自动选中刚发布的流水线</div>
+              )}
+
+              {/* 成品数据集选择 + 数据预览 */}
+              {selectedPipeline && activeCurated && (
+                <div className="mt-4 border border-slate-100 rounded-xl overflow-hidden">
+                  <div className="px-3.5 py-2.5 bg-slate-50/70 flex items-center gap-2 flex-wrap">
+                    <Table2 size={13} className="text-slate-400 shrink-0" />
+                    <span className="text-xs text-slate-500">预览成品数据集</span>
+                    {curatedList.length > 1 ? (
+                      <select value={activeCurated.id} onChange={e => setActiveCuratedId(e.target.value)}
+                        className="text-xs px-2 py-1 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-blue-400">
+                        {curatedList.map(c => <option key={c.id} value={c.id}>{c.name}（{c.rowcount} 行）</option>)}
+                      </select>
+                    ) : (
+                      <span className="text-xs font-medium text-slate-700">{activeCurated.name}</span>
+                    )}
+                    <span className="text-xs text-slate-400 ml-auto">共 {activeCurated.rowcount} 行 · {activeCurated.columns.length} 列</span>
+                  </div>
+                  <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} />
+                </div>
+              )}
+            </StepShell>
+          )}
+
+          {/* Step 2: 入库方式 + 主键多选 */}
+          {show(2) && (
+            <StepShell title="设置入库方式" subtitle="流水线最终产物与资产湖已有数据的合并策略">
+              <Field label="入库方式" required>
                 <div className="grid grid-cols-2 gap-2">
                   {(Object.keys(WRITE_MODE_META) as WriteMode[]).map(mode => (
-                    <ModeCard
-                      key={mode}
-                      active={form.write_mode === mode}
-                      onClick={() => update('write_mode', mode)}
-                      title={WRITE_MODE_META[mode].label}
-                      desc={WRITE_MODE_META[mode].desc}
-                    />
+                    <ModeCard key={mode} active={form.write_mode === mode} onClick={() => update('write_mode', mode)}
+                      title={WRITE_MODE_META[mode].label} desc={WRITE_MODE_META[mode].desc} />
                   ))}
                 </div>
               </Field>
 
-              {form.write_mode === 'upsert' && (
-                <div className="space-y-3 p-3 bg-purple-50/40 border border-purple-100 rounded-lg">
-                  <Field label="主键列" required hint="按这些列判断同一条记录；多列用逗号分隔，如：order_id 或 order_id,line_no">
-                    <input type="text" value={form.primary_key ?? ''} onChange={e => update('primary_key', e.target.value)}
-                      placeholder="例如：order_id"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:border-[var(--color-nav-bg)]" />
-                  </Field>
-                  <Field label="软删除列（可选）" hint="产物中的逻辑删除标识列（如 is_deleted）；命中的行会打上 __deleted__ 标记而非物理删除">
-                    <input type="text" value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
-                      placeholder="例如：is_deleted"
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:border-[var(--color-nav-bg)]" />
-                  </Field>
+              {/* 主键：勾选式多选，展示当前可设置的主键范围 */}
+              <div className={`space-y-3 p-3.5 rounded-xl border ${form.write_mode === 'upsert' ? 'bg-violet-50/40 border-violet-100' : 'bg-slate-50/60 border-slate-100'}`}>
+                <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                  <KeyRound size={13} className="text-slate-400" />
+                  主键列{form.write_mode === 'upsert' && <span className="text-red-500">*</span>}
+                  {pkLocked && (
+                    <span className="ml-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-100">
+                      <Lock size={9} /> 湖中已锁定
+                    </span>
+                  )}
                 </div>
-              )}
 
-              <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
-                <input type="checkbox" checked={form.skip_empty ?? true} onChange={e => update('skip_empty', e.target.checked)} className="mt-0.5" />
+                {pkLocked ? (
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    该资产已固化主键契约 <b className="font-mono text-slate-700">{declaredPk}</b>，作为本体实例身份不可在任务里改写；
+                    如需变更请先以「全量覆盖」重建资产。
+                  </p>
+                ) : pkColumns.length > 0 ? (
+                  <>
+                    <p className="text-xs text-slate-400">
+                      {form.write_mode === 'upsert'
+                        ? '勾选用于识别同一条记录的列（可多选，组合主键）'
+                        : '选填但建议：首次入湖将把所选列固化为该资产的主键契约（校验非空且唯一）'}
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {pkColumns.map(col => {
+                        const checked = splitPk(form.primary_key).includes(col.name)
+                        return (
+                          <button type="button" key={col.name} onClick={() => togglePk(col.name)}
+                            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-left transition
+                              ${checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+                            <span className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border
+                              ${checked ? 'bg-violet-500 border-violet-500 text-white' : 'border-slate-300 bg-white'}`}>
+                              {checked && <Check size={11} />}
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block text-xs font-mono text-slate-700 truncate">{col.name}</span>
+                              <span className="block text-[10px] text-slate-400">{col.type}</span>
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {splitPk(form.primary_key).length > 0 && (
+                      <div className="text-xs text-slate-500">
+                        当前主键：<span className="font-mono text-violet-600">{splitPk(form.primary_key).join(' , ')}</span>
+                        <span className="text-slate-400">（顺序即组合键顺序）</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // 兜底：拿不到列清单时回退手动输入
+                  <input type="text" value={form.primary_key ?? ''} onChange={e => update('primary_key', e.target.value)}
+                    placeholder="例如：order_id 或 order_id,line_no"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-400" />
+                )}
+
+                {form.write_mode === 'upsert' && !pkLocked && (
+                  <Field label="软删除列（可选）" hint="产物中的逻辑删除标识列；命中的行会打上 __deleted__ 标记而非物理删除">
+                    {pkColumns.length > 0 ? (
+                      <select value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-400">
+                        <option value="">— 不使用 —</option>
+                        {pkColumns.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                      </select>
+                    ) : (
+                      <input type="text" value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
+                        placeholder="例如：is_deleted"
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-400" />
+                    )}
+                  </Field>
+                )}
+              </div>
+
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" checked={form.skip_empty ?? true} onChange={e => update('skip_empty', e.target.checked)} className="mt-0.5 accent-blue-500" />
                 <span>
                   空输出保护
-                  <span className="block text-xs text-gray-400">流水线本次输出 0 行时跳过入库，防止源端异常导致资产被清空（建议开启）</span>
+                  <span className="block text-xs text-slate-400">流水线本次输出 0 行时跳过入库，防止源端异常导致资产被清空（建议开启）</span>
                 </span>
               </label>
-            </div>
+            </StepShell>
           )}
 
-          {/* Step 2: 调度 */}
-          {(step === 2 || isEdit) && (!isEdit ? step === 2 : true) && (
-            <div className="space-y-4">
+          {/* Step 3: 调度 */}
+          {show(3) && (
+            <StepShell title="调度设置" subtitle="决定任务何时触发">
               <Field label="调度方式" required>
                 <div className="grid grid-cols-3 gap-2">
-                  <ModeCard
-                    active={form.schedule_type === 'MANUAL'}
-                    onClick={() => update('schedule_type', 'MANUAL' as PipelineTaskScheduleType)}
-                    title="手动触发"
-                    desc="仅在任务池手动执行"
-                  />
-                  <ModeCard
-                    active={form.schedule_type === 'CRON'}
-                    onClick={() => update('schedule_type', 'CRON' as PipelineTaskScheduleType)}
-                    title="Cron 定时"
-                    desc="按 Cron 表达式定时执行"
-                  />
-                  <ModeCard
-                    active={form.schedule_type === 'INTERVAL'}
-                    onClick={() => update('schedule_type', 'INTERVAL' as PipelineTaskScheduleType)}
-                    title="固定间隔"
-                    desc="每 N 秒执行一次"
-                  />
+                  <ModeCard active={form.schedule_type === 'MANUAL'} onClick={() => update('schedule_type', 'MANUAL' as PipelineTaskScheduleType)} title="手动触发" desc="仅在任务池手动执行" />
+                  <ModeCard active={form.schedule_type === 'CRON'} onClick={() => update('schedule_type', 'CRON' as PipelineTaskScheduleType)} title="Cron 定时" desc="按 Cron 表达式定时执行" />
+                  <ModeCard active={form.schedule_type === 'INTERVAL'} onClick={() => update('schedule_type', 'INTERVAL' as PipelineTaskScheduleType)} title="固定间隔" desc="每 N 秒执行一次" />
                 </div>
               </Field>
 
@@ -273,7 +400,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="Cron 表达式" required hint="5 段格式：分 时 日 月 周。如 0 2 * * * 表示每天凌晨 2 点">
                   <input type="text" value={form.cron_expression} onChange={e => update('cron_expression', e.target.value)}
                     placeholder="0 2 * * *"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:border-[var(--color-nav-bg)]" />
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" />
                 </Field>
               )}
 
@@ -281,53 +408,67 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="间隔秒数" required hint="最小 10 秒">
                   <input type="number" min={10} value={form.interval_seconds}
                     onChange={e => update('interval_seconds', parseInt(e.target.value) || 0)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-[var(--color-nav-bg)]" />
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" />
                 </Field>
               )}
 
-              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                <input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)} />
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)} className="accent-blue-500" />
                 {isEdit ? '启用任务' : '创建后立即启用'}
               </label>
+            </StepShell>
+          )}
 
-              {/* 确认摘要 */}
-              {!isEdit && (
-                <div className="border-t pt-3 space-y-1.5">
-                  <p className="text-xs font-medium text-gray-500 mb-1">确认配置</p>
-                  <SummaryRow label="任务名" value={form.name} />
-                  <SummaryRow label="流水线" value={selectedPipeline ? `${selectedPipeline.name}${selectedPipeline.version ? ` (v${selectedPipeline.version})` : ''}` : '-'} />
-                  <SummaryRow label="入库方式" value={WRITE_MODE_META[form.write_mode].label + (form.write_mode === 'upsert' && form.primary_key ? ` · 主键 ${form.primary_key}` : '')} />
-                  <SummaryRow label="空输出保护" value={form.skip_empty ? '开启' : '关闭'} />
-                  <SummaryRow label="调度" value={
-                    form.schedule_type === 'MANUAL' ? '手动触发' :
-                    form.schedule_type === 'CRON' ? `Cron: ${form.cron_expression || '-'}` : `每 ${form.interval_seconds || 0} 秒`
-                  } />
+          {/* Step 4: 确认配置 */}
+          {!isEdit && step === 4 && (
+            <StepShell title="确认配置" subtitle="核对所有设置，确认无误后创建">
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
+                <SummaryRow label="任务名" value={form.name} />
+                <SummaryRow label="流水线" value={selectedPipeline ? `${selectedPipeline.name}${selectedPipeline.version ? ` (v${selectedPipeline.version})` : ''}` : '-'} />
+                <SummaryRow label="产出资产" value={curatedList.length ? curatedList.map(c => c.name).join('、') : '-'} />
+                <SummaryRow label="入库方式" value={WRITE_MODE_META[form.write_mode].label} />
+                <SummaryRow label="主键" value={(form.primary_key || '').trim() || (form.write_mode === 'upsert' ? '（未设置）' : '未设置')} mono />
+                {form.write_mode === 'upsert' && form.soft_delete_column && <SummaryRow label="软删除列" value={form.soft_delete_column} mono />}
+                <SummaryRow label="空输出保护" value={form.skip_empty ? '开启' : '关闭'} />
+                <SummaryRow label="调度" value={
+                  form.schedule_type === 'MANUAL' ? '手动触发'
+                    : form.schedule_type === 'CRON' ? `Cron: ${form.cron_expression || '-'}`
+                    : `每 ${form.interval_seconds || 0} 秒`
+                } />
+                <SummaryRow label="创建后状态" value={form.enabled ? '立即启用' : '停用'} />
+              </div>
+
+              {/* 预期效果（自然语言） */}
+              <div className="mt-4 p-4 rounded-xl bg-gradient-to-br from-blue-50/70 to-violet-50/50 border border-blue-100">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-blue-600 mb-1.5">
+                  <Sparkles size={13} /> 预期效果
                 </div>
-              )}
-            </div>
+                <p className="text-sm text-slate-600 leading-relaxed">{buildEffectText()}</p>
+              </div>
+            </StepShell>
           )}
         </div>
 
         {/* 底部 */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50/60">
+        <div className="flex items-center justify-between px-6 py-3.5 border-t border-slate-100 bg-slate-50/60">
           <div>
             {step > 0 && !isEdit && (
               <button onClick={() => { setStep(s => s - 1); setError('') }}
-                className="px-4 py-1.5 text-sm text-gray-600 hover:text-gray-900">上一步</button>
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-slate-500 hover:text-slate-800">
+                <ChevronLeft size={14} /> 上一步
+              </button>
             )}
           </div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
-              取消
-            </button>
+            <button onClick={onClose} className="px-4 py-1.5 text-sm text-slate-500 hover:bg-slate-100 rounded-lg transition">取消</button>
             {!isEdit && step < STEPS.length - 1 ? (
               <button onClick={handleNext}
-                className="px-4 py-1.5 text-sm bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90">
-                下一步
+                className="inline-flex items-center gap-1 px-4 py-1.5 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition shadow-sm shadow-blue-500/30">
+                下一步 <ChevronRight size={14} />
               </button>
             ) : (
               <button onClick={handleSubmit} disabled={submitting}
-                className="px-4 py-1.5 text-sm bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90 disabled:opacity-50 flex items-center gap-1.5">
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition shadow-sm shadow-blue-500/30">
                 {submitting && <Loader2 size={13} className="animate-spin" />}
                 {isEdit ? '保存修改' : '创建任务'}
               </button>
@@ -339,16 +480,143 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   )
 }
 
+/** 每个步骤的居中外壳 */
+function StepShell({ title, subtitle, wide, children }: {
+  title: string; subtitle?: string; wide?: boolean; children: React.ReactNode
+}) {
+  return (
+    <div className={`mx-auto w-full ${wide ? 'max-w-2xl' : 'max-w-lg'}`}>
+      <div className="text-center mb-4">
+        <h4 className="text-base font-semibold text-slate-800">{title}</h4>
+        {subtitle && <p className="text-xs text-slate-400 mt-1">{subtitle}</p>}
+      </div>
+      <div className="space-y-4">{children}</div>
+    </div>
+  )
+}
+
+function PipelineCard({ pipeline, active, onClick }: {
+  pipeline: SelectablePipeline; active: boolean; onClick: () => void
+}) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`w-full text-left p-3.5 rounded-xl border-2 transition-all
+        ${active ? 'border-blue-400 bg-blue-50/40 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+      <div className="flex items-center gap-2">
+        <GitBranch size={14} className={active ? 'text-blue-500' : 'text-slate-400'} />
+        <span className="text-sm font-medium text-slate-800 truncate">{pipeline.name}</span>
+        {pipeline.version ? <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">v{pipeline.version}</span> : null}
+        {active && <CheckCircle2 size={15} className="text-blue-500 ml-auto shrink-0" />}
+      </div>
+      <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400 flex-wrap">
+        {pipeline.domain && <span className="px-1.5 py-0.5 rounded-full bg-slate-50 border border-slate-100">{pipeline.domain}</span>}
+        <span className="inline-flex items-center gap-1"><Database size={10} />{pipeline.curated_datasets.length} 个成品集</span>
+        <span className="text-emerald-500">已产出 {pipeline.total_rows.toLocaleString()} 行</span>
+      </div>
+    </button>
+  )
+}
+
+/** 成品数据集分页预览面板 */
+function CuratedDataPreview({ datasetId, totalRows }: { datasetId: string; totalRows: number }) {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState<CuratedPreview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(1)
+  const pageSize = 10
+
+  useEffect(() => { setOpen(false); setData(null); setPage(1) }, [datasetId])
+
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    setLoading(true)
+    pipelineTasksApi.previewCurated(datasetId, page, pageSize)
+      .then(res => { if (alive) setData(res) })
+      .catch(() => { if (alive) setData(null) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [datasetId, page, open])
+
+  const total = data?.total_rows ?? totalRows
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const columns = data?.columns ?? []
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50/50 transition flex items-center justify-center gap-1.5">
+        <Table2 size={12} /> 查看实际数据（分页预览）
+      </button>
+    )
+  }
+
+  return (
+    <div className="bg-white">
+      <div className="overflow-x-auto max-h-64 overflow-y-auto">
+        {loading ? (
+          <div className="py-10 text-center text-xs text-slate-400 flex items-center justify-center gap-1.5">
+            <Loader2 size={13} className="animate-spin" /> 加载数据...
+          </div>
+        ) : !data || data.rows.length === 0 ? (
+          <div className="py-10 text-center text-xs text-slate-400">该页没有数据</div>
+        ) : (
+          <table className="w-full text-xs border-collapse">
+            <thead className="sticky top-0 bg-slate-50 z-10">
+              <tr>
+                <th className="px-2 py-1.5 text-left text-slate-400 font-medium border-b border-slate-100 whitespace-nowrap">#</th>
+                {columns.map(c => (
+                  <th key={c} className="px-2.5 py-1.5 text-left text-slate-500 font-medium border-b border-slate-100 whitespace-nowrap font-mono">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((row, ri) => (
+                <tr key={ri} className="hover:bg-slate-50/60">
+                  <td className="px-2 py-1.5 text-slate-300 border-b border-slate-50 whitespace-nowrap tabular-nums">
+                    {(page - 1) * pageSize + ri + 1}
+                  </td>
+                  {columns.map(c => (
+                    <td key={c} className="px-2.5 py-1.5 text-slate-600 border-b border-slate-50 whitespace-nowrap max-w-[220px] truncate" title={fmtCell(row[c])}>
+                      {fmtCell(row[c])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {/* 分页条 */}
+      <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-400">
+        <span>共 {total.toLocaleString()} 行 · 第 {page}/{totalPages} 页</span>
+        <div className="flex items-center gap-1">
+          <button disabled={page <= 1 || loading} onClick={() => setPage(p => Math.max(1, p - 1))}
+            className="p-1 rounded hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"><ChevronLeft size={14} /></button>
+          <button disabled={page >= totalPages || loading} onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            className="p-1 rounded hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"><ChevronRight size={14} /></button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function fmtCell(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') { try { return JSON.stringify(v) } catch { return String(v) } }
+  return String(v)
+}
+
 function Field({ label, required, hint, children }: {
   label: string; required?: boolean; hint?: string; children: React.ReactNode
 }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">
+      <label className="block text-sm font-medium text-slate-700 mb-1">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       {children}
-      {hint && <div className="text-xs text-gray-400 mt-1">{hint}</div>}
+      {hint && <div className="text-xs text-slate-400 mt-1">{hint}</div>}
     </div>
   )
 }
@@ -358,19 +626,19 @@ function ModeCard({ active, onClick, title, desc }: {
 }) {
   return (
     <button type="button" onClick={onClick}
-      className={`text-left p-3 rounded-lg border-2 transition-all
-        ${active ? 'border-[var(--color-nav-bg)] bg-blue-50/40' : 'border-gray-200 hover:border-gray-300'}`}>
-      <div className={`text-sm font-medium ${active ? 'text-[var(--color-nav-bg)]' : 'text-gray-900'}`}>{title}</div>
-      <div className="text-xs text-gray-500 mt-0.5">{desc}</div>
+      className={`text-left p-3 rounded-xl border-2 transition-all
+        ${active ? 'border-blue-400 bg-blue-50/40' : 'border-slate-200 hover:border-slate-300'}`}>
+      <div className={`text-sm font-medium ${active ? 'text-blue-600' : 'text-slate-800'}`}>{title}</div>
+      <div className="text-xs text-slate-500 mt-0.5">{desc}</div>
     </button>
   )
 }
 
-function SummaryRow({ label, value }: { label: string; value: string }) {
+function SummaryRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex justify-between py-1 text-sm">
-      <span className="text-gray-500">{label}</span>
-      <span className="text-gray-900 font-medium text-right max-w-[60%] truncate">{value || '-'}</span>
+    <div className="flex justify-between py-2 px-3.5 text-sm">
+      <span className="text-slate-500">{label}</span>
+      <span className={`text-slate-800 font-medium text-right max-w-[62%] truncate ${mono ? 'font-mono' : ''}`}>{value || '-'}</span>
     </div>
   )
 }

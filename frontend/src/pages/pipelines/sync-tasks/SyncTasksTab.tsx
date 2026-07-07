@@ -2,24 +2,18 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
 import {
-  Plus, Play, Pause, History, RefreshCw, Trash2, Edit2,
+  Plus, History, RefreshCw, Trash2, Edit2,
   Database, Clock, CheckCircle2, XCircle, Loader2, AlertCircle,
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
-  RotateCw, Zap, Activity, ArrowUpRight, Waves, DatabaseZap,
+  RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, Info, CalendarClock,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode } from '@/api/v2/pipeline-tasks'
+import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ── 常量 ──────────────────────────────────────────────
-const STATUS_META: Record<string, { icon: React.ReactNode; label: string; dot: string }> = {
-  idle:    { icon: <Clock size={9} />,       label: '待运行', dot: '#94A3B8' },
-  running: { icon: <Loader2 size={9} className="animate-spin" />, label: '执行中', dot: '#3B82F6' },
-  success: { icon: <CheckCircle2 size={9} />, label: '成功',   dot: '#10B981' },
-  failed:  { icon: <XCircle size={9} />,    label: '失败',   dot: '#F87171' },
-}
-
 const QUICK_TABS = [
   { key: '',          label: '全部',   dot: '' },
   { key: 'running',   label: '运行中', dot: '#3B82F6' },
@@ -69,6 +63,7 @@ export default function SyncTasksTab() {
   const [showForm, setShowForm] = useState(false)
   const [editingTask, setEditingTask] = useState<PipelineTask | null>(null)
   const [historyTask, setHistoryTask] = useState<PipelineTask | null>(null)
+  const [detailPipelineId, setDetailPipelineId] = useState<string | null>(null)
   const [triggeringIds, setTriggeringIds] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<PipelineTask | null>(null)
   const [actionError, setActionError] = useState('')
@@ -170,10 +165,12 @@ export default function SyncTasksTab() {
     [tasks],
   )
 
-  const successRate = useMemo(() => {
-    if (!stats) return 0
-    const base = stats.total || 1
-    return Math.round(((base - stats.failed) / base) * 100)
+  // 今日成功率 =（今日执行次数 - 今日异常数）/ 今日执行次数；今日无执行则显示 —
+  const todaySuccessRate = useMemo(() => {
+    const runs = stats?.today_runs ?? 0
+    if (runs <= 0) return '—'
+    const errs = stats?.today_errors ?? 0
+    return `${Math.round(((runs - errs) / runs) * 100)}%`
   }, [stats])
 
   const trendData = useMemo(() => {
@@ -250,12 +247,12 @@ export default function SyncTasksTab() {
       }}
     >
       <div className="relative z-10 flex flex-col h-full min-h-0">
-        {/* ── 顶部：标题 + 6 个 KPI + 新建按钮 —— 整合到同一个毛玻璃卡片 ── */}
-        <div className={`${GLASS} px-3.5 py-3 mb-3 shrink-0 flex items-center gap-4`}>
+        {/* ── 顶部：标题 + 5 个 KPI + 新建按钮 —— 整合到同一个毛玻璃卡片（加高呼吸感） ── */}
+        <div className={`${GLASS} px-4 py-3.5 mb-3 shrink-0 flex items-center gap-5`}>
           {/* 左侧：图标 + 标题 */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 text-white shadow-[0_3px_10px_rgba(59,130,246,0.25)]">
-              <DatabaseZap size={15} />
+            <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-400 text-white shadow-[0_3px_10px_rgba(59,130,246,0.25)]">
+              <DatabaseZap size={17} />
             </span>
             <div>
               <h2 className="text-[15px] font-semibold text-slate-800 leading-tight tracking-tight">
@@ -266,24 +263,25 @@ export default function SyncTasksTab() {
           </div>
 
           {/* 分隔线 */}
-          <div className="w-px h-8 bg-slate-200/70 shrink-0" />
+          <div className="w-px h-10 bg-slate-200/70 shrink-0" />
 
-          {/* 中间：6 个 KPI 胶囊 */}
-          <div className="flex-1 grid grid-cols-6 gap-2">
-            <KpiPill label="总任务" value={stats?.total ?? 0} icon={<Database size={12} />} tone="slate" />
-            <KpiPill label="运行中" value={runningCount} icon={<Zap size={12} />} tone="blue" pulse={runningCount > 0} />
-            <KpiPill label="异常" value={failedCount} icon={<AlertCircle size={12} />} tone="rose" pulse={failedCount > 0} />
-            <KpiPill label="已启用" value={stats?.enabled ?? 0} icon={<CheckCircle2 size={12} />} tone="emerald" />
-            <KpiPill label="今日执行" value={stats?.today_runs ?? 0} icon={<Activity size={12} />} tone="violet" />
-            <KpiPill label="成功率" value={`${successRate}%`} icon={<Waves size={12} />} tone="cyan" suffix="" />
+          {/* 中间：5 个 KPI 指标卡（主值 + 累计副值） */}
+          <div className="flex-1 grid grid-cols-5 gap-2.5">
+            <KpiCard label="总任务数" value={stats?.total ?? 0} icon={<Database size={13} />} tone="slate" />
+            <KpiCard label="启用任务数" value={stats?.enabled ?? 0} icon={<CheckCircle2 size={13} />} tone="emerald" />
+            <KpiCard label="今日执行" value={stats?.today_runs ?? 0} icon={<Activity size={13} />} tone="violet"
+              secondary={`累计 ${stats?.total_runs ?? 0}`} />
+            <KpiCard label="今日异常" value={stats?.today_errors ?? 0} icon={<AlertCircle size={13} />} tone="rose"
+              pulse={(stats?.today_errors ?? 0) > 0} secondary={`累计 ${stats?.total_errors ?? 0}`} />
+            <KpiCard label="今日成功率" value={todaySuccessRate} icon={<Waves size={13} />} tone="cyan" />
           </div>
 
           {/* 右侧：新建按钮 */}
           <button
             onClick={handleCreate}
-            className="shrink-0 flex items-center gap-1.5 px-3.5 h-8 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-[12.5px] font-medium rounded-lg shadow-[0_3px_10px_rgba(59,130,246,0.3)] hover:shadow-[0_5px_16px_rgba(59,130,246,0.4)] hover:-translate-y-0.5 transition-all"
+            className="shrink-0 flex items-center gap-1.5 px-4 h-9 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-[12.5px] font-medium rounded-lg shadow-[0_3px_10px_rgba(59,130,246,0.3)] hover:shadow-[0_5px_16px_rgba(59,130,246,0.4)] hover:-translate-y-0.5 transition-all"
           >
-            <Plus size={13} />
+            <Plus size={14} />
             新建任务
           </button>
         </div>
@@ -373,18 +371,18 @@ export default function SyncTasksTab() {
                     <table className="w-full text-[12.5px]">
                       <thead className="sticky top-0 z-10">
                         <tr className="text-slate-500 text-[11px] bg-white/75 backdrop-blur-sm border-b border-slate-200/60">
-                          <th className="text-left font-medium px-3 py-1.5">任务</th>
-                          <th className="text-left font-medium px-2 py-1.5">流水线</th>
-                          <th className="text-left font-medium px-2 py-1.5">入库</th>
-                          <th className="text-left font-medium px-2 py-1.5">调度</th>
-                          <th className="text-left font-medium px-2 py-1.5">状态</th>
+                          <th className="text-left font-medium px-3 py-1.5">任务名称</th>
+                          <th className="text-left font-medium px-2 py-1.5">关联流水线</th>
+                          <th className="text-left font-medium px-2 py-1.5">入库方式</th>
+                          <th className="text-left font-medium px-2 py-1.5">调度方式</th>
+                          <th className="text-left font-medium px-2 py-1.5">当前状态</th>
                           <th className="text-left font-medium px-2 py-1.5">最近执行</th>
+                          <th className="text-left font-medium px-2 py-1.5">下一次执行</th>
                           <th className="text-right font-medium px-3 py-1.5">操作</th>
                         </tr>
                       </thead>
                       <tbody>
                         {tasks.map(t => {
-                          const sm = STATUS_META[t.status] || STATUS_META.idle
                           const isTriggering = triggeringIds.has(t.id)
                           const wm = WRITE_MODE_META[t.write_mode as WriteMode]
                           const pipelineGone = t.pipeline_status === 'deleted'
@@ -409,12 +407,13 @@ export default function SyncTasksTab() {
                               </td>
                               <td className="px-2 py-2">
                                 <button
-                                  onClick={() => !pipelineGone && navigate(`/data/pipelines/${t.pipeline_id}`)}
-                                  className={`flex items-center gap-1 text-[11.5px] max-w-[140px] ${pipelineGone ? 'text-slate-400 cursor-default' : 'text-blue-600 hover:underline underline-offset-2'}`}
-                                  title={pipelineGone ? '流水线已删除' : '打开流水线'}
+                                  onClick={() => !pipelineGone && setDetailPipelineId(t.pipeline_id)}
+                                  className={`flex items-center gap-1 text-[11.5px] max-w-[150px] ${pipelineGone ? 'text-slate-400 cursor-default' : 'text-blue-600 hover:underline underline-offset-2'}`}
+                                  title={pipelineGone ? '流水线已删除' : '查看流水线详情'}
                                 >
                                   <GitBranch size={10} className="shrink-0" />
                                   <span className="truncate">{t.pipeline_name || t.pipeline_id.slice(0, 8)}</span>
+                                  {!pipelineGone && <Info size={9} className="shrink-0 opacity-60" />}
                                 </button>
                                 {(pipelineGone || pipelineUnpub) && (
                                   <div className="text-[10px] text-rose-500 mt-0.5 flex items-center gap-0.5">
@@ -440,20 +439,11 @@ export default function SyncTasksTab() {
                                 </div>
                               </td>
                               <td className="px-2 py-2">
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="inline-flex items-center gap-1 w-fit text-[10.5px]">
-                                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: sm.dot, boxShadow: `0 0 0 2px ${sm.dot}25` }} />
-                                    <span className="text-slate-600">{sm.label}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <Switch checked={t.enabled} onChange={() => handleToggle(t)} />
+                                  <span className={`text-[11px] ${t.enabled ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                    {t.enabled ? '已启用' : '未启用'}
                                   </span>
-                                  <button
-                                    onClick={() => handleToggle(t)}
-                                    className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[10px] w-fit transition-colors ${
-                                      t.enabled ? 'text-emerald-600 bg-emerald-50/70 hover:bg-emerald-100/70' : 'text-slate-400 bg-slate-100/70 hover:bg-slate-200/70'
-                                    }`}
-                                  >
-                                    {t.enabled ? <Play size={7} /> : <Pause size={7} />}
-                                    {t.enabled ? '启用' : '停用'}
-                                  </button>
                                 </div>
                               </td>
                               <td className="px-2 py-2">
@@ -466,6 +456,9 @@ export default function SyncTasksTab() {
                                     {t.last_error}
                                   </div>
                                 )}
+                              </td>
+                              <td className="px-2 py-2">
+                                <NextRunCell task={t} />
                               </td>
                               <td className="px-3 py-2 text-right">
                                 <div className="inline-flex items-center gap-0 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -646,6 +639,13 @@ export default function SyncTasksTab() {
         />
       )}
       {historyTask && <HistoryDrawer task={historyTask} onClose={() => setHistoryTask(null)} />}
+      {detailPipelineId && (
+        <PipelineDetailModal
+          pipelineId={detailPipelineId}
+          onClose={() => setDetailPipelineId(null)}
+          onOpenBuilder={(id) => { setDetailPipelineId(null); navigate(`/data/pipelines/${id}`) }}
+        />
+      )}
       <ConfirmDialog
         open={!!deleteTarget}
         title="删除调度任务"
@@ -659,34 +659,35 @@ export default function SyncTasksTab() {
 
 // ── 子组件 ────────────────────────────────────────────
 
-function KpiPill({
-  label, value, icon, tone, pulse, suffix,
+function KpiCard({
+  label, value, icon, tone, pulse, secondary,
 }: {
   label: string; value: number | string; icon: React.ReactNode
   tone: 'slate' | 'blue' | 'rose' | 'emerald' | 'violet' | 'cyan'
-  pulse?: boolean; suffix?: string
+  pulse?: boolean; secondary?: string
 }) {
   const toneMap = {
-    slate:   { text: 'text-slate-700',  iconBg: 'bg-slate-100 text-slate-500' },
-    blue:    { text: 'text-blue-600',   iconBg: 'bg-blue-50 text-blue-500' },
-    rose:    { text: 'text-rose-600',   iconBg: 'bg-rose-50 text-rose-500' },
-    emerald: { text: 'text-emerald-600',iconBg: 'bg-emerald-50 text-emerald-500' },
-    violet:  { text: 'text-violet-600',iconBg: 'bg-violet-50 text-violet-500' },
-    cyan:    { text: 'text-cyan-600',  iconBg: 'bg-cyan-50 text-cyan-500' },
+    slate:   { text: 'text-slate-800',   iconBg: 'bg-slate-100 text-slate-500' },
+    blue:    { text: 'text-blue-600',    iconBg: 'bg-blue-50 text-blue-500' },
+    rose:    { text: 'text-rose-600',    iconBg: 'bg-rose-50 text-rose-500' },
+    emerald: { text: 'text-emerald-600', iconBg: 'bg-emerald-50 text-emerald-500' },
+    violet:  { text: 'text-violet-600',  iconBg: 'bg-violet-50 text-violet-500' },
+    cyan:    { text: 'text-cyan-600',    iconBg: 'bg-cyan-50 text-cyan-500' },
   }[tone]
   return (
-    <div className="px-2.5 py-1 flex items-center gap-2 rounded-lg bg-white/40 border border-white/60 hover:bg-white/60 transition-all">
-      <span className={`w-5 h-5 rounded-md ${toneMap.iconBg} flex items-center justify-center shrink-0 relative overflow-hidden`}>
-        {icon}
-        {pulse && (
-          <span className="absolute -top-0 -right-0 w-1.5 h-1.5 rounded-full bg-current animate-ping opacity-60" />
-        )}
-      </span>
-      <div className="min-w-0 leading-tight">
-        <div className="text-[10px] text-slate-500">{label}</div>
-        <div className={`text-[14px] font-semibold tabular-nums tracking-tight ${toneMap.text} leading-none mt-0.5`}>
-          {value}{suffix !== undefined && suffix}
-        </div>
+    <div className="px-3 py-2 flex flex-col justify-center gap-1.5 rounded-xl bg-white/45 border border-white/70 hover:bg-white/65 transition-all">
+      <div className="flex items-center gap-1.5">
+        <span className={`w-5 h-5 rounded-md ${toneMap.iconBg} flex items-center justify-center shrink-0 relative`}>
+          {icon}
+          {pulse && (
+            <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-current animate-ping opacity-60" />
+          )}
+        </span>
+        <span className="text-[11px] text-slate-500 truncate">{label}</span>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className={`text-[22px] font-semibold tabular-nums tracking-tight leading-none ${toneMap.text}`}>{value}</span>
+        {secondary && <span className="text-[10.5px] text-slate-400 tabular-nums truncate">{secondary}</span>}
       </div>
     </div>
   )
@@ -754,6 +755,150 @@ function EmptyState({ activeTab, hasSearch, onClear, onCreate }: {
           </button>
         </>
       )}
+    </div>
+  )
+}
+
+// ── 启用开关 ──────────────────────────────────────────
+function Switch({ checked, onChange }: { checked: boolean; onChange: () => void }) {
+  return (
+    <button
+      type="button" role="switch" aria-checked={checked} onClick={onChange}
+      title={checked ? '点击停用' : '点击启用'}
+      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors shrink-0 ${
+        checked ? 'bg-emerald-500' : 'bg-slate-300'
+      }`}
+    >
+      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${
+        checked ? 'translate-x-3.5' : 'translate-x-0.5'
+      }`} />
+    </button>
+  )
+}
+
+// ── 下一次执行时间 ─────────────────────────────────────
+function formatFuture(iso: string): string {
+  try {
+    const diff = (new Date(iso).getTime() - Date.now()) / 1000
+    if (diff <= 0) return '即将'
+    if (diff < 60) return `${Math.round(diff)}秒后`
+    if (diff < 3600) return `${Math.round(diff / 60)}分钟后`
+    if (diff < 86400) return `${Math.round(diff / 3600)}小时后`
+    return `${Math.round(diff / 86400)}天后`
+  } catch { return '' }
+}
+
+function NextRunCell({ task }: { task: PipelineTask }) {
+  if (task.schedule_type === 'MANUAL')
+    return <span className="text-[11px] text-slate-400">手动触发</span>
+  if (!task.enabled)
+    return <span className="text-[11px] text-slate-400">已停用</span>
+  if (!task.next_run_at)
+    return <span className="text-[11px] text-slate-400">—</span>
+  const d = new Date(task.next_run_at)
+  return (
+    <div className="text-[11.5px] text-slate-600 tabular-nums" title={d.toLocaleString('zh-CN')}>
+      <div className="flex items-center gap-1">
+        <CalendarClock size={10} className="text-slate-400 shrink-0" />
+        {d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+      </div>
+      <div className="text-[10px] text-blue-500/80 mt-px">{formatFuture(task.next_run_at)}</div>
+    </div>
+  )
+}
+
+// ── 关联流水线详情弹窗 ─────────────────────────────────
+const PIPE_STATUS_META: Record<string, { label: string; cls: string }> = {
+  published: { label: '已发布', cls: 'bg-emerald-50 text-emerald-600 border-emerald-200' },
+  draft:     { label: '草稿',   cls: 'bg-slate-100 text-slate-500 border-slate-200' },
+  editing:   { label: '编辑中', cls: 'bg-amber-50 text-amber-600 border-amber-200' },
+  running:   { label: '运行中', cls: 'bg-blue-50 text-blue-600 border-blue-200' },
+  failed:    { label: '失败',   cls: 'bg-rose-50 text-rose-600 border-rose-200' },
+}
+
+function PipelineDetailModal({ pipelineId, onClose, onOpenBuilder }: {
+  pipelineId: string; onClose: () => void; onOpenBuilder: (id: string) => void
+}) {
+  const [pipe, setPipe] = useState<Pipeline | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    setLoading(true); setErr('')
+    pipelinesApi.get(pipelineId)
+      .then(setPipe)
+      .catch(() => setErr('加载流水线详情失败'))
+      .finally(() => setLoading(false))
+  }, [pipelineId])
+
+  const st = pipe ? (PIPE_STATUS_META[pipe.status] || { label: pipe.status, cls: 'bg-slate-100 text-slate-500 border-slate-200' }) : null
+  const nodeCount = pipe?.definition?.nodes?.length ?? 0
+  const curatedCount = pipe?.target_curated_ids?.length ?? 0
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-[0_24px_70px_rgba(15,23,42,0.18)] border border-white/70 w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+          <h3 className="text-[14px] font-semibold text-slate-800 flex items-center gap-2">
+            <GitBranch size={15} className="text-blue-500" /> 流水线详情
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={17} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <div className="py-12 text-center text-slate-400 text-[12px] flex items-center justify-center gap-1.5">
+              <Loader2 size={14} className="animate-spin" /> 加载中...
+            </div>
+          ) : err || !pipe ? (
+            <div className="py-12 text-center text-rose-500 text-[12px]">{err || '流水线不存在'}</div>
+          ) : (
+            <div className="space-y-3.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[15px] font-semibold text-slate-800">{pipe.name}</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {pipe.domain || '通用'} · v{pipe.version ?? 1}
+                  </div>
+                </div>
+                {st && <span className={`text-[11px] px-2 py-0.5 rounded-full border shrink-0 ${st.cls}`}>{st.label}</span>}
+              </div>
+              {pipe.description && (
+                <p className="text-[12px] text-slate-600 leading-relaxed bg-slate-50/70 rounded-lg p-2.5">{pipe.description}</p>
+              )}
+              <div className="grid grid-cols-3 gap-2">
+                <DetailStat label="画布节点" value={nodeCount} />
+                <DetailStat label="产出成品集" value={curatedCount} />
+                <DetailStat label="最近运行" value={PIPE_STATUS_META[pipe.last_run_status || '']?.label || (pipe.last_run_status ? pipe.last_run_status : '—')} small />
+              </div>
+              {pipe.last_run_at && (
+                <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                  <Clock size={11} /> 最近运行时间：{new Date(pipe.last_run_at).toLocaleString('zh-CN')}
+                </div>
+              )}
+              {pipe.last_run_error && (
+                <div className="text-[11px] text-rose-600 bg-rose-50 rounded-lg p-2 font-mono whitespace-pre-wrap break-all">
+                  {pipe.last_run_error}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/60">
+          <button onClick={onClose} className="px-3.5 py-1.5 text-[12px] text-slate-500 hover:bg-slate-100 rounded-lg transition">关闭</button>
+          <button onClick={() => onOpenBuilder(pipelineId)}
+            className="inline-flex items-center gap-1 px-3.5 py-1.5 text-[12px] bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+            打开流水线画布 <ArrowUpRight size={13} />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DetailStat({ label, value, small }: { label: string; value: number | string; small?: boolean }) {
+  return (
+    <div className="rounded-lg bg-slate-50/70 border border-slate-100 px-2.5 py-2 text-center">
+      <div className={`font-semibold text-slate-800 tabular-nums ${small ? 'text-[13px]' : 'text-[18px]'} leading-none`}>{value}</div>
+      <div className="text-[10.5px] text-slate-400 mt-1">{label}</div>
     </div>
   )
 }

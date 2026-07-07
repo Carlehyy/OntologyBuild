@@ -59,6 +59,9 @@ class N8nPipeline(Base):
     workflow_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 批准那一刻的 workflow JSON — 审计基线，用于对比"批准后是否被改过"
     approved_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 最近一次试跑结果 {rows, columns, sample, at} — 审批的判断依据；
+    # 批准时其 columns 固化为影子流水线的期望列契约（运行期做漂移检测）
+    last_test_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # 批准后注册的 v2_pipelines.id（engine=n8n 的影子流水线）
     pipeline_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
