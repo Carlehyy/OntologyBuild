@@ -5,7 +5,7 @@ import {
   Plus, History, RefreshCw, Trash2, Edit2,
   Database, Clock, CheckCircle2, XCircle, Loader2, AlertCircle,
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
-  RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, ExternalLink, CalendarClock,
+  RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, ExternalLink,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import TaskFormModal from './TaskFormModal'
@@ -37,14 +37,23 @@ function toLocalDate(iso: string): Date {
   return new Date(hasTz ? iso : iso + 'Z')
 }
 
-/** 执行标准时间：YYYY-MM-DD HH:mm:ss（本地时区） */
-function formatStdTime(iso: string | null): string {
-  if (!iso) return '—'
+/** 标准时间的两行紧凑展示：日期在上、时间在下（省表格横向宽度） */
+function TimeStack({ iso, withSeconds }: { iso: string | null; withSeconds?: boolean }) {
+  if (!iso) return <span className="text-[11px] text-slate-400">—</span>
   try {
     const d = toLocalDate(iso)
     const p = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-  } catch { return iso }
+    const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+    const time = withSeconds
+      ? `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+      : `${p(d.getHours())}:${p(d.getMinutes())}`
+    return (
+      <div className="text-center tabular-nums leading-tight whitespace-nowrap">
+        <div className="text-[11px] text-slate-600">{date}</div>
+        <div className="text-[10px] text-slate-400">{time}</div>
+      </div>
+    )
+  } catch { return <span className="text-[11px] text-slate-400">{iso}</span> }
 }
 
 function relativeDuration(seconds?: number): string {
@@ -455,9 +464,9 @@ export default function SyncTasksTab() {
                               {/* 最近执行（标准时间） */}
                               <td className="px-2 py-2">
                                 <div className="flex flex-col items-center">
-                                  <div className="text-[11px] text-slate-600 tabular-nums whitespace-nowrap">{formatStdTime(t.last_run_at)}</div>
+                                  <TimeStack iso={t.last_run_at} withSeconds />
                                   {t.status === 'failed' && t.last_error && (
-                                    <div className="text-[10px] text-rose-500 truncate max-w-[130px]" title={t.last_error}>{t.last_error}</div>
+                                    <div className="text-[10px] text-rose-500 truncate max-w-[120px] mt-0.5" title={t.last_error}>{t.last_error}</div>
                                   )}
                                 </div>
                               </td>
@@ -800,15 +809,10 @@ function NextRunCell({ task }: { task: PipelineTask }) {
     return <span className="text-[11px] text-slate-400">已停用</span>
   if (!task.next_run_at)
     return <span className="text-[11px] text-slate-400">—</span>
-  const d = toLocalDate(task.next_run_at)
-  const p = (n: number) => String(n).padStart(2, '0')
-  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
   return (
-    <div className="flex flex-col items-center text-[11px] text-slate-600 tabular-nums">
-      <div className="flex items-center gap-1 whitespace-nowrap">
-        <CalendarClock size={10} className="text-slate-400 shrink-0" />{stamp}
-      </div>
-      <div className="text-[10px] text-blue-500/80 mt-px">{formatFuture(task.next_run_at)}</div>
+    <div className="flex flex-col items-center">
+      <TimeStack iso={task.next_run_at} />
+      <div className="text-[10px] text-blue-500/80 mt-px whitespace-nowrap">{formatFuture(task.next_run_at)}</div>
     </div>
   )
 }
