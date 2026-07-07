@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil,
@@ -30,7 +30,6 @@ const RUN_STATUS_META: Record<string, { icon: React.ReactNode; label: string; co
   pending: { icon: <Clock size={12} />,        label: '排队中', color: 'text-gray-500' },
 }
 
-/** 数据管家托管的 n8n 流水线 — 编辑/删除走数据管家，不进画布 */
 function isN8nPipeline(pl: Pipeline): boolean {
   return (pl.definition as { engine?: string } | null)?.engine === 'n8n'
 }
@@ -49,7 +48,6 @@ function formatTime(iso?: string | null): string {
   } catch { return iso }
 }
 
-/** 启用开关：停用后任务池调度与链式触发跳过该流水线；手动试运行不受限 */
 function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onToggle: () => void }) {
   return (
     <button
@@ -63,21 +61,98 @@ function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onT
   )
 }
 
+const COLUMN_WIDTHS_DEFAULT: Record<string, number> = {
+  name: 280,
+  source: 130,
+  enabled: 120,
+  lastRun: 180,
+  output: 130,
+  actions: 130,
+}
+
+function ResizableTh({
+  colKey, label, widths, onResize, className,
+}: {
+  colKey: string; label: string; widths: Record<string, number>;
+  onResize: (key: string, delta: number) => void; className?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const dragging = useRef(false)
+  const startX = useRef(0)
+  const startW = useRef(0)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragging.current = true
+    startX.current = e.clientX
+    startW.current = widths[colKey] || 150
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const delta = ev.clientX - startX.current
+      onResize(colKey, startW.current + delta)
+    }
+    const onUp = () => {
+      dragging.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [colKey, widths, onResize])
+
+  return (
+    <div className={`relative flex items-center ${className || ''}`}
+      style={{ width: widths[colKey] || 150, minWidth: 60 }}
+    >
+      <span className="truncate">{label}</span>
+      <div
+        ref={ref}
+        onMouseDown={onMouseDown}
+        className="absolute right-0 top-0 bottom-0 w-4 cursor-col-resize z-10 flex items-center justify-center hover:bg-blue-100/60"
+      >
+        <div className="w-0.5 h-4 rounded bg-gray-300 hover:bg-blue-400" />
+      </div>
+    </div>
+  )
+}
+
 export default function PipelineListPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [loading, setLoading] = useState(true)
-  // 从任务池「关联数据流水线」跳转而来时，用 ?search= 预置检索词，唯一定位该流水线
   const [search, setSearch] = useState(() => searchParams.get('search') || '')
-  const [filterSource, setFilterSource] = useState('')     // '' | 'canvas' | 'n8n'
-  const [filterEnabled, setFilterEnabled] = useState('')   // '' | 'enabled' | 'disabled'
+  const [filterSource, setFilterSource] = useState('')
+  const [filterEnabled, setFilterEnabled] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  const STORAGE_KEY = 'pipeline_list_col_widths'
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      return saved ? { ...COLUMN_WIDTHS_DEFAULT, ...JSON.parse(saved) } : COLUMN_WIDTHS_DEFAULT
+    } catch { return COLUMN_WIDTHS_DEFAULT }
+  })
+
+  const handleResize = useCallback((key: string, w: number) => {
+    const clamped = Math.max(60, Math.min(600, w))
+    setColWidths(prev => {
+      const next = { ...prev, [key]: clamped }
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }, [])
 
   const load = () => {
     setLoading(true)
@@ -92,7 +167,6 @@ export default function PipelineListPage() {
   const handleToggleEnabled = async (pl: Pipeline) => {
     const next = !(pl.enabled ?? true)
     setTogglingId(pl.id)
-    // 乐观更新，失败回滚
     setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: next } : p))
     try {
       await pipelinesApi.setEnabled(pl.id, next)
@@ -129,36 +203,14 @@ export default function PipelineListPage() {
   })
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* 页头 */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <GitBranch size={20} className="text-[var(--color-nav-bg)]" />
-            数据流水线
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            编排数据采集与加工节点，在线测试运行；<b>发布后</b>可在数据任务池挂接调度自动触发，产物进入数据资产湖
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => navigate('/data/pipelines/steward')}
-            className="flex items-center gap-1.5 px-3.5 py-2 border border-violet-300 bg-violet-50 text-violet-700 text-sm font-medium rounded-lg hover:bg-violet-100"
-            title="用对话创建和管理基于 n8n 的数据流水线（草稿需审批后生效）"
-          >
-            <Sparkles size={15} /> 数据管家
-          </button>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-[var(--color-nav-bg)] text-white text-sm font-medium rounded-lg hover:opacity-90"
-          >
-            <Plus size={15} /> 新建流水线
-          </button>
-        </div>
-      </div>
+      <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+        <GitBranch size={20} className="text-[var(--color-nav-bg)]" />
+        数据流水线
+      </h1>
 
-      {/* 搜索与筛选 */}
+      {/* 搜索、筛选、操作按钮 */}
       <div className="flex items-center gap-3 bg-white rounded-xl border px-4 py-3 flex-wrap">
         <div className="relative w-72">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -200,6 +252,22 @@ export default function PipelineListPage() {
             清除筛选
           </button>
         )}
+        {/* 靠右按钮 */}
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            onClick={() => navigate('/data/pipelines/steward')}
+            className="flex items-center gap-1.5 px-3.5 py-2 border border-violet-300 bg-violet-50 text-violet-700 text-sm font-medium rounded-lg hover:bg-violet-100"
+            title="用对话创建和管理基于 n8n 的数据流水线（草稿需审批后生效）"
+          >
+            <Sparkles size={15} /> 数据管家
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-[var(--color-nav-bg)] text-white text-sm font-medium rounded-lg hover:opacity-90"
+          >
+            <Plus size={15} /> 新建流水线
+          </button>
+        </div>
       </div>
 
       {/* 列表 */}
@@ -212,16 +280,28 @@ export default function PipelineListPage() {
           <p className="text-xs">新建流水线后，在画布中编排「连接器 → 存储 → 转换 → 输出」节点并测试运行</p>
         </div>
       ) : (
-        <div className="border rounded-xl bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
+        <div className="border rounded-xl bg-white overflow-x-auto">
+          <table className="w-full text-sm table-fixed" style={{ minWidth: Object.values(colWidths).reduce((a, b) => a + b, 0) }}>
+            <thead className="bg-gray-50 border-b sticky top-0 z-10">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl">流水线名称</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">来源</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">启用状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">最近运行</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs">产物</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl">操作</th>
+                <th className="text-left px-2.5 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: colWidths.name }}>
+                  <ResizableTh colKey="name" label="流水线名称" widths={colWidths} onResize={handleResize} className="px-1.5" />
+                </th>
+                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.source }}>
+                  <ResizableTh colKey="source" label="来源" widths={colWidths} onResize={handleResize} className="justify-center" />
+                </th>
+                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.enabled }}>
+                  <ResizableTh colKey="enabled" label="启用状态" widths={colWidths} onResize={handleResize} className="justify-center" />
+                </th>
+                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.lastRun }}>
+                  <ResizableTh colKey="lastRun" label="最近运行" widths={colWidths} onResize={handleResize} className="justify-center" />
+                </th>
+                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.output }}>
+                  <ResizableTh colKey="output" label="产物" widths={colWidths} onResize={handleResize} className="justify-center" />
+                </th>
+                <th className="text-center py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: colWidths.actions }}>
+                  <span className="px-1.5">操作</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -237,18 +317,13 @@ export default function PipelineListPage() {
                     className={`hover:bg-gray-50 transition-colors cursor-pointer ${enabled ? '' : 'opacity-60'}`}
                     onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
                   >
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900 flex items-center gap-1.5">
-                        <span className="hover:underline">{pl.name}</span>
-                        <span className={`text-[10px] px-1.5 py-px rounded border ${STATUS_STYLE[pl.status] || STATUS_STYLE.draft}`}>
-                          {STATUS_LABEL[pl.status] || pl.status}{pl.status === 'published' ? ` v${pl.version || 1}` : ''}
-                        </span>
-                      </p>
+                    <td className="px-4 py-3 align-middle">
+                      <p className="font-medium text-gray-900">{pl.name}</p>
                       <p className="text-xs text-gray-400 truncate max-w-[240px]" title={pl.description || pl.id}>
                         {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
                       </p>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center align-middle">
                       {n8n ? (
                         <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-600"
                           title="由数据管家托管的 n8n 流水线，编辑与审批在数据管家">
@@ -261,7 +336,7 @@ export default function PipelineListPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center align-middle" onClick={e => e.stopPropagation()}>
                       <div className="inline-flex items-center gap-2">
                         <EnabledSwitch
                           on={enabled}
@@ -273,14 +348,14 @@ export default function PipelineListPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center align-middle">
                       {runMeta ? (
-                        <div className={`relative inline-block ${runFailed ? 'cursor-help group/err' : ''}`}>
+                        <div className={`relative inline-flex flex-col items-center ${runFailed ? 'cursor-help group/err' : ''}`}>
                           <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color} ${
                             runFailed ? 'border-b border-dashed border-red-300' : ''}`}>
                             {runMeta.icon}{runMeta.label}
                           </span>
-                          <span className="text-xs text-gray-400 ml-1.5">{formatTime(pl.last_run_at)}</span>
+                          <span className="text-xs text-gray-400">{formatTime(pl.last_run_at)}</span>
                           {runFailed && (
                             <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-30 hidden group-hover/err:block w-80 text-left">
                               <div className="bg-gray-900/95 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl whitespace-normal break-all leading-relaxed">
@@ -293,7 +368,7 @@ export default function PipelineListPage() {
                         <span className="text-xs text-gray-300">从未运行</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center align-middle" onClick={e => e.stopPropagation()}>
                       {curatedCount > 0 ? (
                         <button
                           onClick={() => navigate(`/data/structured?pipeline=${encodeURIComponent(pl.name)}`)}
@@ -306,7 +381,7 @@ export default function PipelineListPage() {
                         <span className="text-xs text-gray-300">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center align-middle" onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-center">
                         <button
                           onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
@@ -322,15 +397,13 @@ export default function PipelineListPage() {
                         >
                           <Play size={14} />
                         </button>
-                        {!n8n && (
-                          <button
-                            onClick={() => setDeleteTarget(pl)}
-                            className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                            title="删除"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
+                        <button
+                          onClick={() => setDeleteTarget(pl)}
+                          className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                          title="删除"
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -378,7 +451,6 @@ export default function PipelineListPage() {
   )
 }
 
-/** Pipeline 创建弹窗：系统流水线（画布编排）/ n8n 流水线（后台自动在 n8n 创建骨架并纳管） */
 function PipelineCreateModal({
   onClose, onCreated, onN8nCreated,
 }: {
