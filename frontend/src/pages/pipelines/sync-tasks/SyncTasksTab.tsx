@@ -423,20 +423,24 @@ export default function SyncTasksTab() {
                                 )}
                               </td>
                               <td className="px-2 py-2">
-                                <span className="inline-flex items-center px-1.5 py-px rounded text-[10.5px] bg-slate-100/80 text-slate-600 border border-slate-200/50" title={wm?.desc}>
-                                  {wm?.label || t.write_mode}
-                                </span>
-                                {t.skip_empty && <span title="空输出保护"><ShieldCheck size={10} className="inline text-emerald-500 ml-0.5" /></span>}
+                                <div className="flex items-center gap-0.5">
+                                  <span className="inline-flex items-center px-1.5 py-px rounded text-[10.5px] whitespace-nowrap bg-slate-100/80 text-slate-600 border border-slate-200/50" title={wm?.desc}>
+                                    {wm?.label || t.write_mode}
+                                  </span>
+                                  {t.skip_empty && <span title="空输出保护"><ShieldCheck size={10} className="inline text-emerald-500" /></span>}
+                                </div>
                               </td>
                               <td className="px-2 py-2">
-                                <div className="flex items-center gap-1 text-[11.5px] text-slate-600">
+                                <div className="flex items-center gap-1 text-[11.5px] text-slate-600 whitespace-nowrap">
                                   <SchIcon size={10} className={sch.color} />
-                                  <span>
-                                    {sch.label}
-                                    {t.schedule_type === 'CRON' && t.cron_expression ? ` · ${t.cron_expression}` : ''}
-                                    {t.schedule_type === 'INTERVAL' && t.interval_seconds ? ` · ${relativeDuration(t.interval_seconds)}` : ''}
-                                  </span>
+                                  <span>{sch.label}</span>
                                 </div>
+                                {t.schedule_type === 'CRON' && t.cron_expression && (
+                                  <div className="text-[10px] text-slate-400 font-mono truncate max-w-[92px] ml-3.5" title={t.cron_expression}>{t.cron_expression}</div>
+                                )}
+                                {t.schedule_type === 'INTERVAL' && !!t.interval_seconds && (
+                                  <div className="text-[10px] text-slate-400 ml-3.5">每 {relativeDuration(t.interval_seconds)}</div>
+                                )}
                               </td>
                               <td className="px-2 py-2">
                                 <div className="flex items-center gap-1.5">
