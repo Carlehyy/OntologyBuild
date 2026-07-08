@@ -48,6 +48,8 @@ fi
 [ -f .env ] || cp .env.example .env
 log "building images"
 run_with_retry compose build --pull
+log "running database migrations"
+run_with_retry compose run --rm backend alembic upgrade head
 log "starting services"
 run_with_retry compose up -d --remove-orphans
 log "waiting for public health endpoint: ${HEALTH_URL}"
