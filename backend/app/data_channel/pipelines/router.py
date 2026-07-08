@@ -43,7 +43,9 @@ class PipelineUpdate(BaseModel):
     route: Optional[str] = None
     spec: Optional[dict] = None
     definition: Optional[dict] = None
+    column_definitions: Optional[list] = None  # [{field_key, field_name, field_type, is_primary_key, nullable}]
     status: Optional[str] = None
+    enabled: Optional[bool] = None  # 启用开关：只有已发布才能启用
 
 
 class PipelineResponse(BaseModel):
@@ -176,6 +178,22 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
         raise HTTPException(404, "Pipeline not found")
     if _is_n8n_pipeline(pl):
         raise HTTPException(400, "该流水线由数据管家托管（n8n 引擎），请在数据管家对话中修改，或在审批面板管理其状态。")
+
+    # ── 已发布封版：definition / column_definitions / spec 不可修改 ──
+    PROTECTED_FIELDS = ("definition", "column_definitions", "spec")
+    if (pl.status or "") == "published":
+        protected_present = [k for k in PROTECTED_FIELDS if getattr(body, k, None) is not None]
+        if protected_present:
+            raise HTTPException(
+                400,
+                f"流水线已发布，封版字段不可修改：{', '.join(protected_present)}。"
+                f"如需修改，请先变更状态为 draft。"
+            )
+
+    # ── 启用约束：只有已发布才能启用 ──
+    if body.enabled is not None:
+        if bool(body.enabled) and (pl.status or "") != "published":
+            raise HTTPException(400, "只有已发布的流水线才能启用。")
 
     update_data = body.model_dump(exclude_unset=True)
     for k, v in update_data.items():
@@ -403,6 +421,142 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     return ValidateResult(valid=len(errors) == 0, errors=errors, warnings=warnings)
 
 
+# ── Validate Definitions ──────────────────────────────────────────
+
+class ValidateDefinitionsBody(BaseModel):
+    column_definitions: list  # [{field_key, field_name, field_type, is_primary_key, nullable}]
+
+
+class ValidateDefinitionsError(BaseModel):
+    field_key: str
+    message: str
+    severity: str  # "error" | "warning"
+
+
+class ValidateDefinitionsResult(BaseModel):
+    valid: bool
+    errors: list[dict] = []  # [{field_key, message, severity}]
+
+
+@router.post("/{pipeline_id}/validate-definitions", response_model=ValidateDefinitionsResult)
+def validate_column_definitions(
+    pipeline_id: str,
+    body: ValidateDefinitionsBody,
+    db: Session = Depends(get_db),
+    max_rows: int = Query(100, ge=1, le=10000, description="用于校验的数据行数"),
+):
+    """校验 column_definitions 与流水线实际产出的列及数据类型是否一致。
+
+    对提交的字段定义检查：
+      1. 列存在 —— field_key 是否在实际产出列中
+      2. 类型匹配 —— field_type 与采样数据推断的类型是否一致
+      3. 主键唯一 —— is_primary_key 的列组合值在采样数据中是否唯一
+      4. 空值约束 —— nullable=false 的列在采样数据中是否有空值/空字符串
+    """
+    import re as _re
+    from app.data_channel.steward.runner import collect_n8n_rows
+    from app.tasks.v2.pipeline_run import _strip_content
+
+    pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if not pl:
+        raise HTTPException(404, "Pipeline not found")
+
+    # ── 试运行获取实际列和数据 ──
+    try:
+        if _is_n8n_pipeline(pl):
+            rows, _ = collect_n8n_rows(db, pl)
+            rows = _strip_content(rows)
+        else:
+            from app.tasks.v2.pipeline_run import collect_pipeline_output
+            outputs = collect_pipeline_output(db, pl)
+            rows = []
+            for o in outputs:
+                rows.extend(o.get("rows", []))
+    except Exception as e:
+        raise HTTPException(400, f"试运行失败，无法校验字段定义：{e}")
+
+    # 取前 max_rows 行用于校验
+    sample = rows[:max_rows]
+    actual_columns = set()
+    for row in sample:
+        actual_columns.update(row.keys())
+
+    errors: list[dict] = []
+    definitions = body.column_definitions or []
+    pk_fields = [d for d in definitions if d.get("is_primary_key")]
+
+    # ── 1. 列存在检查 ──
+    for d in definitions:
+        fk = d.get("field_key", "")
+        if not fk:
+            errors.append({"field_key": "", "message": "field_key 不能为空", "severity": "error"})
+        elif fk not in actual_columns:
+            errors.append({"field_key": fk, "message": f"列「{fk}」在流水线输出中不存在", "severity": "error"})
+
+    # ── 2. 类型匹配检查 ──
+    for d in definitions:
+        fk = d.get("field_key", "")
+        ft = d.get("field_type", "string")
+        if not fk or fk not in actual_columns:
+            continue
+        # 从采样数据推断实际类型
+        actual_types = set()
+        for row in sample:
+            val = row.get(fk)
+            if val is None:
+                continue
+            if isinstance(val, bool):
+                actual_types.add("bool")
+            elif isinstance(val, int) and not isinstance(val, bool):
+                actual_types.add("int")
+            elif isinstance(val, float):
+                actual_types.add("float")
+            elif isinstance(val, str):
+                # 尝试推断是否是 datetime
+                if _re.match(r'^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}', str(val)):
+                    actual_types.add("datetime")
+                else:
+                    actual_types.add("string")
+        if actual_types and ft not in actual_types:
+            errors.append({
+                "field_key": fk,
+                "message": f"字段类型声明为「{ft}」，但采样数据显示为「{', '.join(sorted(actual_types))}」",
+                "severity": "warning",
+            })
+
+    # ── 3. 主键唯一性检查 ──
+    if pk_fields:
+        pk_keys = [d["field_key"] for d in pk_fields if d.get("field_key") in actual_columns]
+        if pk_keys:
+            seen = set()
+            for row in sample:
+                pk_tuple = tuple(str(row.get(k, "")) for k in pk_keys)
+                if pk_tuple in seen:
+                    errors.append({
+                        "field_key": ", ".join(pk_keys),
+                        "message": f"主键组合「{', '.join(pk_keys)}」在采样数据中存在重复值",
+                        "severity": "error",
+                    })
+                    break
+                seen.add(pk_tuple)
+
+    # ── 4. 可空约束检查 ──
+    for d in definitions:
+        fk = d.get("field_key", "")
+        if not fk or fk not in actual_columns:
+            continue
+        if not d.get("nullable", True):
+            null_count = sum(1 for row in sample if row.get(fk) is None or row.get(fk) == "")
+            if null_count > 0:
+                errors.append({
+                    "field_key": fk,
+                    "message": f"列「{fk}」不允许为空，但采样数据中存在 {null_count} 个空值",
+                    "severity": "error",
+                })
+
+    return ValidateDefinitionsResult(valid=len(errors) == 0, errors=errors)
+
+
 # ── Publish ───────────────────────────────────────────────────────
 
 @router.post("/{pipeline_id}/publish")
@@ -604,7 +758,11 @@ def _dry_run_uri(pipeline_id: str, dry_run_id: str) -> str:
 
 
 @router.post("/{pipeline_id}/dry-run")
-def dry_run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+def dry_run_pipeline(
+    pipeline_id: str,
+    db: Session = Depends(get_db),
+    max_rows: int = Query(100, ge=1, le=10000, description="预览和校验的最大行数，默认 100"),
+):
     """试运行：真实执行采集与加工，但【不写资产湖】。
 
     返回逐产物的行数预览 + 资产湖准入闸门预检结果（主键契约/列漂移），
@@ -668,7 +826,7 @@ def dry_run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             "dataset_exists": curated is not None,
             "rows_out": o["rows_out"],
             "columns": columns,
-            "sample": o["rows"][:20],
+            "sample": o["rows"][:max_rows],
             "gate_error": gate_error,
             **gate_info,
         })
@@ -833,6 +991,8 @@ def _format_pipeline(pl: Pipeline) -> dict:
         # 来源引擎：canvas=系统自定义画布 / n8n=数据管家托管（前端来源列据此渲染）
         "engine": ((pl.definition or {}).get("engine") or "canvas"),
         "enabled": True if pl.enabled is None else bool(pl.enabled),
+        "enabled": True if pl.enabled is None else bool(pl.enabled),
+        "column_definitions": pl.column_definitions,
         "branch": pl.branch or "main",
         "version": pl.version or 1,
         "target_curated_ids": pl.target_curated_ids or [],

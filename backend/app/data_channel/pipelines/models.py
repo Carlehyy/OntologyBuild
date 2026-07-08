@@ -15,6 +15,10 @@ class Pipeline(Base):
     route: Mapped[str | None] = mapped_column(String(1), nullable=True)  # A|B|C (legacy, inferred from definition)
     spec: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # legacy steps format
     definition: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # new DSL: {nodes: [...], edges: [...]}
+    # 字段定义（含主键声明）：入湖列名映射、类型、是否主键、可空性
+    # [{field_key, field_name, field_type, is_primary_key, nullable}]
+    # 已发布后不可修改；首次 dryRun 后可从列信息自动初始化默认定义
+    column_definitions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     target_curated_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|editing|running|failed|published
