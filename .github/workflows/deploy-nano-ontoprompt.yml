@@ -16,6 +16,16 @@ jobs:
       - name: Build Docker images
         run: docker compose -f docker-compose.prod.yml build
 
+      - name: Check deployment secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          if [ -n "${DEPLOY_HOST}" ]; then echo "DEPLOY_HOST configured: yes"; else echo "DEPLOY_HOST configured: no"; fi
+          if [ -n "${DEPLOY_USER}" ]; then echo "DEPLOY_USER configured: yes"; else echo "DEPLOY_USER configured: no"; fi
+          if [ -n "${DEPLOY_PASSWORD}" ]; then echo "DEPLOY_PASSWORD configured: yes"; else echo "DEPLOY_PASSWORD configured: no"; fi
+
       - name: Trust deployment host
         run: |
           mkdir -p ~/.ssh
