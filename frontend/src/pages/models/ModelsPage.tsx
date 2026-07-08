@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import {
@@ -126,6 +126,21 @@ export default function ModelsPage() {
   // UI States
   const [searchQuery, setSearchQuery] = useState('')
   const [filterType, setFilterType] = useState<string>('all')
+  const [enabledFilter, setEnabledFilter] = useState<string>('all')
+  const filterTabsRef = useRef<HTMLDivElement>(null)
+  const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
+  useEffect(() => {
+    const container = filterTabsRef.current
+    if (!container) return
+    const activeBtn = container.querySelector(`[data-tab-value="${filterType}"]`) as HTMLElement | null
+    if (!activeBtn) return
+    const containerRect = container.getBoundingClientRect()
+    const btnRect = activeBtn.getBoundingClientRect()
+    setIndicatorPos({
+      left: btnRect.left - containerRect.left,
+      width: btnRect.width,
+    })
+  }, [filterType, models.length])
 
   // Modal States
   const [showCreate, setShowCreate] = useState(false)
@@ -218,7 +233,10 @@ export default function ModelsPage() {
       m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.provider.toLowerCase().includes(searchQuery.toLowerCase())
     const matchType = filterType === 'all' || m.config_type === filterType
-    return matchSearch && matchType
+    const matchEnabled = enabledFilter === 'all' ||
+      (enabledFilter === 'enabled' && m.enabled !== false) ||
+      (enabledFilter === 'disabled' && m.enabled === false)
+    return matchSearch && matchType && matchEnabled
   })
 
   const sortedModels = [...filteredModels].sort((a, b) => {
@@ -310,17 +328,21 @@ export default function ModelsPage() {
 
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex items-center gap-3 bg-white rounded-xl border border-slate-200 px-4 py-3 flex-wrap mb-5 shadow-sm/50">
-        <div className="relative w-full sm:w-80">
+        <div className="relative w-full sm:w-96">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="搜索模型名称 / Provider..."
+            placeholder="搜索提供商..."
             className="w-full pl-8 pr-3 py-1.5 rounded-lg text-sm border border-slate-200 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all"
           />
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+        <div ref={filterTabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+          <div
+            className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+            style={{ left: `${indicatorPos.left}px`, width: `${indicatorPos.width}px` }}
+          />
           {[
             { value: 'all', label: '全部', count: models.length },
             { value: 'llm', label: 'LLM', count: typeCount('llm') },
@@ -329,11 +351,12 @@ export default function ModelsPage() {
           ].map(tab => (
             <button
               key={tab.value}
+              data-tab-value={tab.value}
               onClick={() => setFilterType(tab.value)}
-              className={`relative px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+              className={`relative px-3 py-1.5 rounded-md text-xs font-medium z-10 transition-colors duration-200 ${
                 filterType === tab.value
-                  ? 'bg-teal-600 text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-white'
+                  ? 'text-white'
+                  : 'text-slate-500 hover:text-slate-700'
               }`}
             >
               {tab.label}
@@ -343,6 +366,16 @@ export default function ModelsPage() {
             </button>
           ))}
         </div>
+
+        <select
+          value={enabledFilter}
+          onChange={e => setEnabledFilter(e.target.value)}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all cursor-pointer"
+        >
+          <option value="all">全部状态</option>
+          <option value="enabled">已启用</option>
+          <option value="disabled">已禁用</option>
+        </select>
 
         <div className="ml-auto flex items-center gap-2">
           <input
@@ -370,7 +403,7 @@ export default function ModelsPage() {
             onClick={() => { setShowCreate(true); reset({ config_type: 'llm', provider: 'openai', ocr_enabled: 'false', ocr_lang: 'ch', ocr_device: 'cpu' }) }}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-white bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
           >
-            <Plus size={14} /> {t('model.create')}
+            <Plus size={14} /> 添加提供商
           </button>
         </div>
       </div>
@@ -389,8 +422,8 @@ export default function ModelsPage() {
           <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4">
             <Settings2 size={28} className="text-slate-300" />
           </div>
-          <p className="text-slate-500 text-sm font-medium">暂无模型配置</p>
-          <p className="text-slate-400 text-xs mt-1">点击右上角按钮创建第一个模型</p>
+          <p className="text-slate-500 text-sm font-medium">暂无提供商配置</p>
+          <p className="text-slate-400 text-xs mt-1">点击右上角按钮添加第一个提供商</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -592,7 +625,7 @@ export default function ModelsPage() {
       {/* Create Modal */}
       {showCreate && (
         <ModelFormModal
-          title="新建模型"
+          title="添加提供商"
           onClose={() => setShowCreate(false)}
           onSubmit={handleCreate}
           register={register}
