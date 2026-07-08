@@ -145,7 +145,14 @@ export interface CuratedDataset {
   columns: CuratedColumn[]
 }
 
-/** 「选择流水线」阶段的候选：已发布且已产出数据的流水线 */
+/** 流水线字段契约（发布封版）——列清单与主键，任务侧只读消费 */
+export interface PipelineContract {
+  /** 契约声明的主键（入湖列名，逗号分隔）；非空即锁定，任务不可改写 */
+  primary_key: string
+  columns: Array<{ name: string; type: string; field_name?: string }>
+}
+
+/** 「选择流水线」阶段的候选：已发布且已启用的流水线 */
 export interface SelectablePipeline {
   id: string
   name: string
@@ -153,6 +160,8 @@ export interface SelectablePipeline {
   domain?: string
   status: string
   total_rows: number
+  /** 有契约即可选（首次入湖由任务运行完成）；无契约的旧流水线才要求已产出数据 */
+  contract?: PipelineContract | null
   curated_datasets: CuratedDataset[]
   updated_at?: string | null
 }

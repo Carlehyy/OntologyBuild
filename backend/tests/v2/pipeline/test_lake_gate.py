@@ -201,3 +201,115 @@ def test_persist_contract_never_rewrites_existing_pk():
 def test_infer_columns_typed_orders_and_skips_content():
     typed = infer_columns_typed([{"b": "1", "content": b"x"}, {"a": "y", "b": "2"}])
     assert [c["name"] for c in typed] == ["b", "a"]
+
+
+# ── 流水线字段契约（column_definitions）───────────────────────────
+
+from app.data_channel.datasets.lake_gate import (  # noqa: E402
+    apply_column_contract,
+    contract_pk,
+    normalize_definitions,
+)
+
+DEFS = [
+    {"source_key": "username", "field_key": "user_name", "field_name": "用户名称",
+     "field_type": "string", "is_primary_key": True, "nullable": False},
+    {"source_key": "age", "field_key": "age", "field_name": "年龄",
+     "field_type": "integer", "is_primary_key": False, "nullable": True},
+]
+
+
+def test_normalize_definitions_backfills_source_key_and_maps_legacy_types():
+    defs = normalize_definitions([
+        {"field_key": "order_id", "field_type": "int", "is_primary_key": True},
+        {"field_key": "created", "field_type": "datetime"},
+        {"field_key": "ok", "field_type": "bool", "nullable": False},
+        {"field_key": ""},  # 空项丢弃
+    ])
+    assert [d["source_key"] for d in defs] == ["order_id", "created", "ok"]
+    assert [d["field_type"] for d in defs] == ["integer", "timestamp", "boolean"]
+    assert defs[0]["field_name"] == "order_id"  # 缺省显示名回退列名
+    assert defs[2]["nullable"] is False
+
+
+def test_contract_pk_uses_field_keys():
+    assert contract_pk(DEFS) == "user_name"
+    assert contract_pk(None) == ""
+    assert contract_pk([{"field_key": "a"}, {"field_key": "b", "is_primary_key": True}]) == "b"
+
+
+def test_apply_column_contract_renames_source_to_field_key():
+    rows = [{"username": "张三", "age": 20, "extra": "保留"}]
+    out, warnings = apply_column_contract(rows, DEFS)
+    assert out == [{"user_name": "张三", "age": 20, "extra": "保留"}]
+    assert warnings == []
+
+
+def test_apply_column_contract_nullable_violation_hard_fails():
+    rows = [{"username": "张三"}, {"username": ""}]
+    with pytest.raises(LakeGateError) as e:
+        apply_column_contract(rows, DEFS, dataset_name="用户 curated")
+    assert "不允许为空" in str(e.value)
+
+
+def test_apply_column_contract_type_mismatch_warns_not_blocks():
+    rows = [{"username": "张三", "age": "不是数字"}]
+    out, warnings = apply_column_contract(rows, DEFS)
+    assert out[0]["user_name"] == "张三"
+    assert any("age" in w and "integer" in w for w in warnings)
+
+
+def test_apply_column_contract_float_accepts_integer_values():
+    defs = [{"source_key": "price", "field_key": "price", "field_name": "价格",
+             "field_type": "float", "is_primary_key": False, "nullable": True}]
+    _, warnings = apply_column_contract([{"price": 3}], defs)
+    assert warnings == []
+
+
+def test_resolve_pk_pipeline_contract_beats_task():
+    pk, source = resolve_pk("", None, "user_name")
+    assert (pk, source) == ("user_name", "pipeline")
+    pk, source = resolve_pk("user_name", None, "user_name")
+    assert (pk, source) == ("user_name", "pipeline")
+
+
+def test_resolve_pk_lake_beats_pipeline():
+    pk, source = resolve_pk("", "order_id", "order_id")
+    assert (pk, source) == ("order_id", "lake")
+
+
+def test_resolve_pk_conflicts_hard_fail():
+    with pytest.raises(LakeGateError):
+        resolve_pk("a", None, "b")  # 任务 vs 契约
+    with pytest.raises(LakeGateError):
+        resolve_pk("", "a", "b")  # 湖 vs 契约
+    with pytest.raises(LakeGateError):
+        resolve_pk("b", "a", None)  # 任务 vs 湖（原有语义保留）
+
+
+def test_gate_rows_applies_contract_rename_and_pk():
+    ds = FakeDataset(name="用户 curated", schema_json=None)
+    rows = [{"username": "张三", "age": 1}, {"username": "李四", "age": 2}]
+    g = gate_rows(ds, rows, None, column_definitions=DEFS)
+    assert [r["user_name"] for r in g["rows"]] == ["张三", "李四"]
+    assert g["pk"] == "user_name"
+    assert g["pk_source"] == "pipeline"
+
+
+def test_gate_rows_contract_pk_duplicate_fails():
+    ds = FakeDataset(name="用户 curated", schema_json=None)
+    rows = [{"username": "张三"}, {"username": "张三"}]
+    with pytest.raises(LakeGateError):
+        gate_rows(ds, rows, None, column_definitions=DEFS)
+
+
+def test_persist_contract_records_field_names_and_definitions():
+    ds = FakeDataset(schema_json=None)
+    renamed = [{"user_name": "张三", "age": 20}]
+    schema = persist_contract(ds, pk="user_name", pk_source="pipeline",
+                              lake_rows=renamed, output_rows=renamed,
+                              column_definitions=DEFS)
+    assert schema["field_names"] == {"user_name": "用户名称", "age": "年龄"}
+    assert schema["primary_key"] == "user_name"
+    assert schema["contract"]["pk_source"] == "pipeline"
+    assert [d["field_key"] for d in schema["contract_definitions"]] == ["user_name", "age"]

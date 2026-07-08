@@ -33,8 +33,17 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
             _fail(db, task, f"流水线「{pipe.name}」当前状态为未发布，任务只能触发已发布的流水线")
             return {"status": "error", "error": task.last_error}
         if pipe.enabled is False:  # NULL（老数据）视为启用
-            _fail(db, task, f"流水线「{pipe.name}」已停用，请在流水线列表打开启用开关后再调度")
-            return {"status": "error", "error": task.last_error}
+            if trigger_type == "manual":
+                # 手动触发：用户在等结果，明确报错
+                _fail(db, task, f"流水线「{pipe.name}」已停用，请在流水线列表打开启用开关后再调度")
+                return {"status": "error", "error": task.last_error}
+            # 定时/间隔调度：停用是预期内的暂停，跳过而非失败——
+            # 避免停用期间每次触发都刷一条失败记录
+            msg = f"流水线「{pipe.name}」已停用，本次调度已跳过（启用后自动恢复）"
+            task.last_error = msg
+            db.commit()
+            logger.info("PipelineTask %s 跳过：%s", task_id, msg)
+            return {"status": "skipped", "task_id": task_id, "reason": msg}
 
         task.status = "running"
         task.last_error = ""

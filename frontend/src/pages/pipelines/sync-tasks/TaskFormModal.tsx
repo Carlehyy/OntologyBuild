@@ -73,23 +73,30 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   const selectedPipeline = pipelines.find(p => p.id === form.pipeline_id) || null
   const curatedList: CuratedDataset[] = selectedPipeline?.curated_datasets || []
   const activeCurated = curatedList.find(c => c.id === activeCuratedId) || curatedList[0] || null
-  const pkColumns = activeCurated?.columns || []
-  const declaredPk = (activeCurated?.primary_key || '').trim()   // 湖中已固化 → 锁定
-  const pkLocked = declaredPk.length > 0
+  const contract = selectedPipeline?.contract || null
+  // 主键锁定来源优先级：湖中已固化 > 流水线契约（两者若都有必然一致，闸门保证）
+  const declaredPk = (activeCurated?.primary_key || '').trim()
+  const contractPk = (contract?.primary_key || '').trim()
+  const lockedPk = declaredPk || contractPk
+  const pkLocked = lockedPk.length > 0
+  const pkLockSource: 'lake' | 'contract' | null = declaredPk ? 'lake' : contractPk ? 'contract' : null
+  // 主键可选范围：湖列优先（真实数据），没有湖数据时用契约列
+  const pkColumns = (activeCurated?.columns?.length ? activeCurated.columns : null)
+    || (contract?.columns?.map(c => ({ name: c.name, type: c.type })) ?? [])
 
   // 选中流水线后默认锁定第一个成品数据集
   useEffect(() => {
-    if (selectedPipeline && !curatedList.some(c => c.id === activeCuratedId)) {
+    if (selectedPipeline && curatedList.length > 0 && !curatedList.some(c => c.id === activeCuratedId)) {
       setActiveCuratedId(curatedList[0]?.id || '')
     }
   }, [selectedPipeline, curatedList, activeCuratedId])
 
-  // 湖中已声明主键时强制对齐（任务不能改写身份契约，否则运行会被闸门拒绝）
+  // 湖中/契约已声明主键时强制对齐（任务不能改写身份契约，否则运行会被闸门拒绝）
   useEffect(() => {
-    if (pkLocked && form.primary_key !== declaredPk) {
-      setForm(prev => ({ ...prev, primary_key: declaredPk }))
+    if (pkLocked && form.primary_key !== lockedPk) {
+      setForm(prev => ({ ...prev, primary_key: lockedPk }))
     }
-  }, [pkLocked, declaredPk]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pkLocked, lockedPk]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = <K extends keyof PipelineTaskPayload>(key: K, val: PipelineTaskPayload[K]) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -99,8 +106,8 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     update('pipeline_id', id)
     const np = pipelines.find(p => p.id === id)
     setActiveCuratedId(np?.curated_datasets[0]?.id || '')
-    // 换流水线：清空旧主键，交给 declaredPk effect 或用户重新勾选
-    if (!isEdit) update('primary_key', '')
+    // 换流水线：预填契约主键（有则锁定），否则清空交给锁定 effect 或用户重新勾选
+    if (!isEdit) update('primary_key', (np?.contract?.primary_key || '').trim())
     setError('')
   }
 
@@ -238,9 +245,9 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
             </StepShell>
           )}
 
-          {/* Step 1: 选择流水线（仅已产出数据）+ 数据预览 */}
+          {/* Step 1: 选择流水线（已发布且已启用）+ 数据预览 */}
           {show(1) && (
-            <StepShell title="选择流水线" subtitle="只列出已发布且执行产出过数据的流水线，选中后可翻看实际数据" wide>
+            <StepShell title="选择流水线" subtitle="只列出已发布且已启用的流水线；有字段契约的流水线即使还没产出数据也可挂接" wide>
               {pipelinesLoading ? (
                 <div className="text-sm text-slate-400 flex items-center justify-center gap-1.5 py-8">
                   <Loader2 size={14} className="animate-spin" />加载可用流水线...
@@ -248,8 +255,8 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
               ) : pipelines.length === 0 ? (
                 <div className="text-sm text-slate-500 p-5 bg-slate-50 rounded-xl text-center space-y-2">
                   <Database size={22} className="mx-auto text-slate-300" />
-                  <p>还没有「已发布且产出过数据」的流水线。</p>
-                  <p className="text-xs text-slate-400">请先到流水线画布完成编排、成功运行产出数据，并发布。</p>
+                  <p>还没有「已发布且已启用」的流水线。</p>
+                  <p className="text-xs text-slate-400">请先在流水线编辑向导中完成发布并启用（设置主键组后发布即可挂接任务）。</p>
                   <button onClick={() => navigate('/data/pipelines')}
                     className="mt-1 inline-flex items-center gap-1 text-xs px-3 py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50 text-blue-600">
                     去流水线 <ArrowRight size={11} />
@@ -286,6 +293,29 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                   <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} />
                 </div>
               )}
+
+              {/* 尚未产出数据但有字段契约：展示契约列，说明首次入湖由任务完成 */}
+              {selectedPipeline && !activeCurated && contract && (
+                <div className="mt-4 border border-slate-100 rounded-xl p-4 bg-slate-50/50 space-y-2.5">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <Database size={13} className="text-slate-400" />
+                    该流水线还没有产出过数据——创建任务后，首次执行将按下方字段契约完成首次入湖。
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {contract.columns.map(c => (
+                      <span key={c.name}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[11px] font-mono ${
+                          splitPk(contract.primary_key).includes(c.name)
+                            ? 'border-violet-200 bg-violet-50 text-violet-700'
+                            : 'border-slate-200 bg-white text-slate-600'}`}>
+                        {splitPk(contract.primary_key).includes(c.name) && <KeyRound size={9} />}
+                        {c.name}
+                        <span className="text-slate-400 font-sans">{c.type}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </StepShell>
           )}
 
@@ -307,16 +337,24 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                   <KeyRound size={13} className="text-slate-400" />
                   主键列{form.write_mode === 'upsert' && <span className="text-red-500">*</span>}
                   {pkLocked && (
-                    <span className="ml-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-100">
-                      <Lock size={9} /> 湖中已锁定
+                    <span className={`ml-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border ${
+                      pkLockSource === 'lake'
+                        ? 'bg-amber-50 text-amber-600 border-amber-100'
+                        : 'bg-violet-50 text-violet-600 border-violet-100'}`}>
+                      <Lock size={9} /> {pkLockSource === 'lake' ? '湖中已固化' : '流水线契约'}
                     </span>
                   )}
                 </div>
 
                 {pkLocked ? (
                   <p className="text-xs text-slate-500 leading-relaxed">
-                    该资产已固化主键契约 <b className="font-mono text-slate-700">{declaredPk}</b>，作为本体实例身份不可在任务里改写；
-                    如需变更请先以「全量覆盖」重建资产。
+                    {pkLockSource === 'lake' ? (
+                      <>该资产已固化主键契约 <b className="font-mono text-slate-700">{lockedPk}</b>，作为本体实例身份不可在任务里改写；
+                        如需变更请先以「全量覆盖」重建资产。</>
+                    ) : (
+                      <>主键由流水线字段契约声明为 <b className="font-mono text-slate-700">{lockedPk}</b>（发布时封版），任务自动继承、不可改写；
+                        如需变更请撤回该流水线的发布后修改契约。</>
+                    )}
                   </p>
                 ) : pkColumns.length > 0 ? (
                   <>
@@ -510,8 +548,19 @@ function PipelineCard({ pipeline, active, onClick }: {
       </div>
       <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400 flex-wrap">
         {pipeline.domain && <span className="px-1.5 py-0.5 rounded-full bg-slate-50 border border-slate-100">{pipeline.domain}</span>}
-        <span className="inline-flex items-center gap-1"><Database size={10} />{pipeline.curated_datasets.length} 个成品集</span>
-        <span className="text-emerald-500">已产出 {pipeline.total_rows.toLocaleString()} 行</span>
+        {pipeline.contract && (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-violet-50 border border-violet-100 text-violet-600">
+            <KeyRound size={9} /> 字段契约{pipeline.contract.primary_key ? `（主键 ${pipeline.contract.primary_key}）` : ''}
+          </span>
+        )}
+        {pipeline.curated_datasets.length > 0 ? (
+          <>
+            <span className="inline-flex items-center gap-1"><Database size={10} />{pipeline.curated_datasets.length} 个成品集</span>
+            <span className="text-emerald-500">已产出 {pipeline.total_rows.toLocaleString()} 行</span>
+          </>
+        ) : (
+          <span className="text-slate-400">尚未产出数据 · 首次入湖由任务完成</span>
+        )}
       </div>
     </button>
   )

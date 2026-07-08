@@ -50,6 +50,18 @@
       "port": 8002
     },
     {
+      "name": "backend-wz",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["DATABASE_URL=sqlite:////tmp/ontoprompt-wz.db", "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8004", "--app-dir", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/hungry-colden-692503/backend"],
+      "port": 8004
+    },
+    {
+      "name": "frontend-wz",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["VITE_API_PROXY_TARGET=http://127.0.0.1:8004", "npm", "--prefix", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/hungry-colden-692503/frontend", "run", "dev", "--", "--port", "5478", "--strictPort"],
+      "port": 5478
+    },
+    {
       "name": "frontend-dc",
       "runtimeExecutable": "env",
       "runtimeArgs": ["VITE_API_PROXY_TARGET=http://127.0.0.1:8002", "npm", "--prefix", "/Users/carle/Desktop/OntologyBuild/frontend", "run", "dev", "--", "--port", "5474", "--strictPort"],

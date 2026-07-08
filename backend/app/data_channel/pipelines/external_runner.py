@@ -3,7 +3,8 @@
 
 引擎差异被压缩到一个 collector 回调（「行数据从哪来」）；其余全部通用：
 run 状态机、PipelineContext 记账、资产湖准入闸门 + 版本化入湖
-（_save_curated_outputs）、run.stats 统计、pipeline 状态复位。
+（_save_curated_outputs）、run.stats 统计。运行成败只写 run，不动
+pipeline.status——发布是显式动作（publish 端点），失败不夺走发布态。
 
 新引擎接入示例（另见 engine_registry 模块 docstring）：
 
@@ -26,14 +27,11 @@ logger = logging.getLogger(__name__)
 def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
                           engine_name: str,
                           collector: Callable,
-                          contract_columns: list[str] | None = None,
-                          finalize_status: Callable | None = None) -> None:
+                          contract_columns: list[str] | None = None) -> None:
     """执行一次外部引擎流水线，负责把 run 写到终态。
 
     collector(db, pipeline) -> (rows: list[dict], exec_meta: dict)，失败时抛异常。
     contract_columns：引擎侧审批固化的期望列（供准入闸门做漂移检测）。
-    finalize_status(pl, run)：引擎自定义的 pipeline 状态复位策略（如 n8n 的
-    「已批准影子流水线永远保持 published」）；缺省为 running → published/failed。
     """
     from app.services.v2.dataset_service import DatasetService
     from app.services.v2.pipeline.base import PipelineContext
@@ -83,8 +81,4 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
         run.error_log = str(e)
         run.finished_at = datetime.now(timezone.utc)
     finally:
-        if finalize_status is not None:
-            finalize_status(pl, run)
-        elif pl.status == "running":
-            pl.status = "failed" if run.status == "failed" else "published"
         db.commit()

@@ -329,17 +329,28 @@ def ensure_shadow_pipeline(db: Session, rec: N8nPipeline, *, status: str | None 
 
 
 def _register_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
-    """approved → 可被任务池调度：status=published + 版本快照。"""
+    """approved → 可被任务池调度：status=published + 启用 + 版本快照。
+
+    批准即启用：审批是 n8n 流水线的发布动作，保持「批准后立即可被任务
+    调度」的既有体验；如需暂停调度，在流水线列表关启用开关即可。
+    """
     from app.models.v2.pipeline import PipelineVersion
 
     pl = ensure_shadow_pipeline(db, rec, status="published")
+    pl.enabled = True
     pl.version = (pl.version or 1) + 1
     db.add(PipelineVersion(pipeline_id=pl.id, version=pl.version,
-                           definition=pl.definition, status="published"))
+                           definition=pl.definition,
+                           column_definitions=pl.column_definitions,
+                           status="published"))
 
 
 def _demote_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
-    """失去 approved 资格 → 影子流水线退回 draft（任务池发布校验自然拦截）。"""
+    """失去 approved 资格 → 影子流水线退回 draft 并停用。
+
+    停用维持「只有已发布才能启用」不变量（任务池发布校验也会拦，但状态
+    组合本身不允许出现草稿+已启用）。
+    """
     if not rec.pipeline_id:
         return
     from app.models.v2.pipeline import Pipeline
@@ -348,6 +359,7 @@ def _demote_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
     if pl is not None:
         pl.definition = _shadow_definition(rec)
         pl.status = "draft"
+        pl.enabled = False
         pl.updated_at = _now()
 
 

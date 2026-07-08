@@ -11,18 +11,18 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import RunPreviewModal from './RunPreviewModal'
 import PipelineEditWizard from './PipelineEditWizard'
 
+// 发布状态：draft/published 双态（运行态在「最近执行结果」列，不混入生命周期）；
+// editing/running/failed 是 0008 迁移前的遗留值，展示上归为草稿
 const STATUS_STYLE: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-600 border-gray-200',
-  editing:   'bg-blue-50 text-blue-600 border-blue-200',
-  running:   'bg-amber-50 text-amber-600 border-amber-200',
-  failed:    'bg-red-50 text-red-600 border-red-200',
   published: 'bg-green-50 text-green-600 border-green-200',
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  draft: '草稿', editing: '编辑中', running: '运行中',
-  failed: '失败', published: '已发布',
+  draft: '未发布', published: '已发布',
 }
+
+const normStatus = (s?: string): 'draft' | 'published' => (s === 'published' ? 'published' : 'draft')
 
 const RUN_STATUS_META: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   success: { icon: <CheckCircle2 size={12} />, label: '成功', color: 'text-green-600' },
@@ -44,13 +44,15 @@ function formatTime(iso?: string | null): string {
   } catch { return iso }
 }
 
-function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onToggle: () => void }) {
+function EnabledSwitch({ on, busy, locked, onToggle }: { on: boolean; busy: boolean; locked?: boolean; onToggle: () => void }) {
   return (
     <button
-      role="switch" aria-checked={on} disabled={busy} onClick={onToggle}
+      role="switch" aria-checked={on} disabled={busy || locked} onClick={onToggle}
       className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
-        on ? 'bg-emerald-500' : 'bg-gray-300'} ${busy ? 'opacity-60' : 'cursor-pointer'}`}
-      title={on ? '已启用：任务池调度与联动触发会执行该流水线' : '未启用：任务池调度与联动触发将跳过（仍可手动执行试运行）'}
+        on ? 'bg-emerald-500' : 'bg-gray-300'} ${busy ? 'opacity-60' : locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+      title={locked
+        ? '只有已发布的流水线才能启用——请先在编辑向导中完成发布'
+        : on ? '已启用：任务池调度与联动触发会执行该流水线' : '未启用：任务池调度与联动触发将跳过（仍可手动执行试运行）'}
     >
       <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${on ? 'left-[18px]' : 'left-0.5'}`} />
     </button>
@@ -66,6 +68,7 @@ export default function PipelineListPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState(() => searchParams.get('search') || '')
   const [filterSource, setFilterSource] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
   const [filterEnabled, setFilterEnabled] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
@@ -96,8 +99,10 @@ export default function PipelineListPage() {
     setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: next } : p))
     try {
       await pipelinesApi.setEnabled(pl.id, next)
-    } catch {
+    } catch (e: unknown) {
+      const err = e as { detail?: string; message?: string }
       setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: !next } : p))
+      alert(err?.detail || err?.message || '切换启用状态失败')
     } finally {
       setTogglingId(null)
     }
@@ -110,6 +115,11 @@ export default function PipelineListPage() {
       await pipelinesApi.delete(deleteTarget.id)
       setDeleteTarget(null)
       load()
+    } catch (e: unknown) {
+      // 典型场景：被调度任务引用（后端引用保护 400）
+      const err = e as { detail?: string; message?: string }
+      setDeleteTarget(null)
+      alert(err?.detail || err?.message || '删除失败')
     } finally {
       setDeleting(false)
     }
@@ -118,6 +128,7 @@ export default function PipelineListPage() {
   const filtered = pipelines.filter(p => {
     const source = isN8nPipeline(p) ? 'n8n' : 'canvas'
     if (filterSource && source !== filterSource) return false
+    if (filterStatus && normStatus(p.status) !== filterStatus) return false
     const enabled = p.enabled ?? true
     if (filterEnabled === 'enabled' && !enabled) return false
     if (filterEnabled === 'disabled' && enabled) return false
@@ -156,6 +167,15 @@ export default function PipelineListPage() {
           <option value="n8n">n8n 流水线</option>
         </select>
         <select
+          value={filterStatus}
+          onChange={e => setFilterStatus(e.target.value)}
+          className="border rounded-lg px-3 py-1.5 text-sm"
+        >
+          <option value="">全部发布状态</option>
+          <option value="published">已发布</option>
+          <option value="draft">未发布</option>
+        </select>
+        <select
           value={filterEnabled}
           onChange={e => setFilterEnabled(e.target.value)}
           className="border rounded-lg px-3 py-1.5 text-sm"
@@ -164,9 +184,9 @@ export default function PipelineListPage() {
           <option value="enabled">已启用</option>
           <option value="disabled">未启用</option>
         </select>
-        {(search || filterSource || filterEnabled) && (
+        {(search || filterSource || filterStatus || filterEnabled) && (
           <button
-            onClick={() => { setSearch(''); setFilterSource(''); setFilterEnabled('') }}
+            onClick={() => { setSearch(''); setFilterSource(''); setFilterStatus(''); setFilterEnabled('') }}
             className="text-xs text-gray-500 hover:text-black px-2 py-1"
           >
             清除筛选
@@ -201,16 +221,17 @@ export default function PipelineListPage() {
         </div>
       ) : (
         <div className="border rounded-xl bg-white overflow-x-auto">
-          <table className="w-full min-w-[820px] text-sm table-fixed">
+          <table className="w-full min-w-[920px] text-sm table-fixed">
             <thead className="bg-gray-50 border-b sticky top-0 z-10">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '30%' }}>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '26%' }}>
                   流水线信息
                 </th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>流水线来源</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '12%' }}>启用状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '18%' }}>最近执行结果</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '15%' }}>产物</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>发布状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>启用状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '16%' }}>最近执行结果</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '13%' }}>产物</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '15%' }}>操作</th>
               </tr>
             </thead>
@@ -245,11 +266,22 @@ export default function PipelineListPage() {
                         </span>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] ${STATUS_STYLE[normStatus(pl.status)]}`}
+                        title={normStatus(pl.status) === 'published'
+                          ? '已发布：契约与编排封版，可被任务池挂接'
+                          : '未发布：可自由修改；发布后才能被任务池使用'}
+                      >
+                        {STATUS_LABEL[normStatus(pl.status)]}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="inline-flex items-center gap-2">
                         <EnabledSwitch
                           on={enabled}
                           busy={togglingId === pl.id}
+                          locked={!enabled && normStatus(pl.status) !== 'published'}
                           onToggle={() => handleToggleEnabled(pl)}
                         />
                         <span className={`text-xs whitespace-nowrap ${enabled ? 'text-emerald-600' : 'text-gray-400'}`}>
@@ -312,7 +344,7 @@ export default function PipelineListPage() {
                         <button
                           onClick={() => setEditTarget(pl)}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                          title="编辑名称和描述"
+                          title="编辑流水线：信息 / 执行预览 / 主键组 / 发布"
                         >
                           <Pencil size={14} />
                         </button>

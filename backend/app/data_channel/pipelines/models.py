@@ -21,11 +21,15 @@ class Pipeline(Base):
     column_definitions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     target_curated_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|editing|running|failed|published
+    # 生命周期：draft（草稿，可改）| published（封版，仅名称/描述可改）。
+    # 运行态（running/failed）属于 PipelineRun，不回写此字段；
+    # 历史遗留的 editing/running/failed 值由 migration 0008 归一。
+    status: Mapped[str] = mapped_column(String(20), default="draft")
     # 启用开关：False 时任务池调度与同步链式触发都不执行该流水线；
     # 与 status(published) 正交——发布决定"能否被挂接"，启用决定"当下是否生效"。
+    # 只有已发布才能启用（发布时可选同时启用），新建默认未启用。
     # 手动试运行（dry-run 预览）不受影响，便于停用期间调试。
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     branch: Mapped[str | None] = mapped_column(String(50), nullable=True, default="main")
     version: Mapped[int] = mapped_column(default=1)
     created_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
@@ -40,6 +44,8 @@ class PipelineVersion(Base):
     pipeline_id: Mapped[str] = mapped_column(String, ForeignKey("v2_pipelines.id", ondelete="CASCADE"), nullable=False)
     version: Mapped[int] = mapped_column(nullable=False)
     definition: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 发布那一刻的字段契约快照——契约是封版的核心工件，版本必须能回溯
+    column_definitions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     created_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
