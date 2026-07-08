@@ -51,7 +51,7 @@ const SOURCE_LABEL: Record<string, string> = {
 
 export default function OverviewDashboard({ ontologyId, onGoGroup }: {
   ontologyId: string
-  onGoGroup: (group: string, view?: string) => void
+  onGoGroup: (group: string) => void
 }) {
   const navigate = useNavigate()
 
@@ -87,7 +87,7 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
       {/* 待审批横幅：决策等着人做，永远放最上面 */}
       {ov.runtime.pendingApprovals > 0 && (
         <button
-          onClick={() => onGoGroup('governance', 'gov-console')}
+          onClick={() => onGoGroup('governance')}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-blue-300 bg-blue-50 hover:bg-blue-100 transition-colors text-left"
         >
           <HandMetal size={18} className="text-blue-500 shrink-0" />
@@ -133,7 +133,7 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
           </p>
         </button>
 
-        <button onClick={() => onGoGroup('governance', 'gov-console')}
+        <button onClick={() => onGoGroup('governance')}
           className="group text-left rounded-xl border bg-white p-4 hover:border-emerald-300 hover:shadow-sm transition-all">
           <div className="flex items-center gap-2 text-gray-500 text-xs mb-2">
             <Activity size={14} className="text-emerald-500" /> 运行（近 7 天）
@@ -149,7 +149,7 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
           </p>
         </button>
 
-        <button onClick={() => onGoGroup('governance', 'gov-console')}
+        <button onClick={() => onGoGroup('governance')}
           className="group text-left rounded-xl border bg-white p-4 hover:border-indigo-300 hover:shadow-sm transition-all">
           <div className="flex items-center gap-2 text-gray-500 text-xs mb-2">
             <ScrollText size={14} className="text-indigo-500" /> 事实流
@@ -227,7 +227,7 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
             <Sparkles size={15} className="text-indigo-500" />
             <p className="text-sm font-medium text-gray-700">最近发生了什么</p>
             <span className="text-xs text-gray-400">事实流 · 追加不修改</span>
-            <button onClick={() => onGoGroup('governance', 'gov-console')}
+            <button onClick={() => onGoGroup('governance')}
               className="ml-auto text-xs text-indigo-500 hover:underline">全部 →</button>
           </div>
           {facts.length === 0 ? (

@@ -45,7 +45,7 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
           <p className="text-sm font-medium text-gray-700">对象实体（{ots.length}）</p>
         </div>
         {ots.length === 0 ? (
-          <p className="text-xs text-gray-400 py-3 text-center">还没有对象实体——去图谱编辑器创建，或在「关联数据集」由数据生成。</p>
+          <p className="text-xs text-gray-400 py-3 text-center">还没有对象实体——去图谱编辑器创建，或在「数据映射」由数据生成。</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {ots.map(ot => {

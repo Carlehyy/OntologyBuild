@@ -1023,14 +1023,14 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     health: list[dict] = []
     if not object_types:
         health.append({"level": "info", "message": "还没有对象实体",
-                       "hint": "打开图谱编辑器开始建模，或在「关联数据集」由数据生成类型"})
+                       "hint": "打开图谱编辑器开始建模，或在「数据映射」由数据生成类型"})
     no_pk = [o.display_name or o.name for o in object_types if not o.primary_key]
     if no_pk:
         health.append({"level": "warn", "message": f"{len(no_pk)} 个对象实体未设主键：{', '.join(no_pk[:3])}{'…' if len(no_pk) > 3 else ''}",
                        "hint": "无主键会影响数据灌入去重与动作的实例定位"})
     if object_types and not instances:
         health.append({"level": "info", "message": "模型已就绪但还没有实例数据",
-                       "hint": "到「实例数据 → 关联数据集」把 curated 数据灌进来"})
+                       "hint": "到「数据映射」把 curated 数据灌进来"})
     if mappings_stat["autoCreate"] > 0:
         health.append({"level": "warn", "message": f"{mappings_stat['autoCreate']} 条映射未绑定对象实体（将由数据自建类型）",
                        "hint": "建议在映射维护里显式绑定，防止产生平行类型"})

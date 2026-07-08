@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
 import { Badge } from '@/components/ui/Badge'
 import { LoadingState } from '@/components/ui/LoadingState'
-import FilesTab from './tabs/FilesTab'
 import OverviewDashboard from './tabs/OverviewDashboard'
 import GovernanceTab from './tabs/GovernanceTab'
 import ModelStructureView from './tabs/ModelStructureView'
@@ -15,80 +14,34 @@ import VersionsTab from './tabs/VersionsTab'
 import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
 import {
-  Network, Box,
-  Database, Upload, Shield, ArrowLeft,
+  Network, Database, Shield, ArrowLeft,
   LayoutGrid, History, Download,
-  Boxes, ChevronRight, Sparkles, X, Loader2,
+  Boxes, Layers, Loader2, X,
 } from 'lucide-react'
 
 /* ═════════════════════════════════════════════════════════════
-   信息架构（按用户操作旅程重组）：
-   ① 本体概览    —— 进来先看懂"这本体是什么、健康吗"
-   ② 本体建模    —— 设计/调整对象、属性、链接、规则；主入口=图谱编辑器
-   ③ 实例数据    —— 真实数据进来了吗、长啥样
-   ④ 本体治理    —— 质量、推理、审计、版本
-   关键合并：原 知识图谱 / 建模画布 / GraphV2 四个重复视图统一为
-   一个"图谱编辑器"（Palantir 风格，探索+建模一体）。
+   信息架构（按用户操作旅程重组，五段式）：
+   ① 总览      —— 进来先看懂"这本体是什么、健康吗"
+   ② 本体建模  —— 展示现有本体的对象实体/关系/动作/函数结构；主入口=图谱编辑器
+   ③ 数据映射  —— 把 curated 数据集绑定灌入已有对象实体（先建模、再灌数据）
+   ④ 实例数据  —— 真实数据进来了吗、长啥样（formal 实例的当前态投影）
+   ⑤ 治理与推演 —— 待审批 / 自治等级 / 哨兵 / 事实流 / 版本
+   五段各自直达内容，不再有"分组 → 卡片 → 子视图"的二级跳转。
    ═════════════════════════════════════════════════════════════ */
-
-interface CardDef {
-  key: string
-  label: string
-  description: string
-  icon: React.ElementType
-  primary?: boolean   // 旅程主入口，卡片更大更突出
-  route?: boolean     // 跳转到独立路由（图谱编辑器）
-}
 
 interface GroupDef {
   key: string
   label: string
-  hint: string        // 给用户的"这一步要做什么"引导语
   icon: React.ElementType
-  cards: CardDef[]
 }
 
-/* 信息架构 v2 —— 对齐平台内核（事实流+投影 / 哨兵×动作 / HITL 审批）：
-   ① 总览        驾驶舱：模型/数据/运行/事实流 一屏看懂 + 健康检查
-   ② 本体建模    主入口=图谱编辑器（正规本体唯一编辑面）+ 只读结构速览
-   ③ 实例数据    灌数据（绑定映射）→ 看数据（formal 实例）→ 原始文件
-   ④ 治理与推演  待审批 / 自治等级 / 哨兵 / 事实流 / 版本 */
 const GROUPS: GroupDef[] = [
-  {
-    key: 'overview',
-    label: '总览',
-    hint: '一屏看懂：模型建得怎么样、数据进来了吗、平台在替你做什么',
-    icon: LayoutGrid,
-    cards: [],
-  },
-  {
-    key: 'design',
-    label: '本体建模',
-    hint: '只读速览：查看对象实体、关系、动作与函数的完整结构',
-    icon: Boxes,
-    cards: [],
-  },
-  {
-    key: 'data',
-    label: '实例数据',
-    hint: '先建模、再灌数据：把 curated 数据绑定灌入已有对象实体',
-    icon: Database,
-    cards: [
-      { key: 'curated', label: '关联数据集（灌入本体）', description: '绑定对象实体 → 字段映射 → 一键灌入；支持审核后自动灌入', icon: Database, primary: true },
-      { key: 'instances', label: '实例浏览', description: '正规本体实例的当前态投影，带来源徽章（手工/管道/采集）', icon: Boxes },
-      { key: 'files', label: '文件管理', description: '上传原始文档与数据源，批量导入', icon: Upload },
-    ],
-  },
-  {
-    key: 'governance',
-    label: '治理与推演',
-    hint: '待审批 / 自治等级 / 哨兵 / 事实流 —— 人是最终裁决者',
-    icon: Shield,
-    cards: [],
-  },
+  { key: 'overview', label: '总览', icon: LayoutGrid },
+  { key: 'design', label: '本体建模', icon: Boxes },
+  { key: 'data-mapping', label: '数据映射', icon: Database },
+  { key: 'data', label: '实例数据', icon: Layers },
+  { key: 'governance', label: '治理与推演', icon: Shield },
 ]
-
-type ViewKey = string
 
 export default function OntologyDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -96,7 +49,6 @@ export default function OntologyDetailPage() {
   const { t } = useTranslation()
 
   const [activeGroup, setActiveGroup] = useState<string>('overview')
-  const [activeView, setActiveView] = useState<ViewKey | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportingFormat, setExportingFormat] = useState<string | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
@@ -120,19 +72,6 @@ export default function OntologyDetailPage() {
     enabled: !!id,
   })
 
-  // 「关联数据集」对所有本体可见：先建模、再灌数据是主流程——
-  // 手工建模的本体同样需要把 curated 数据绑定灌入已有对象实体
-  const availableGroups = GROUPS
-
-  const currentGroup = availableGroups.find(g => g.key === activeGroup)
-
-  const openView = (card: CardDef) => {
-    if (card.route) { navigate(`/ontologies/${id}/graph`); return }
-    setActiveView(card.key)
-  }
-  const backToDashboard = () => setActiveView(null)
-  const switchGroup = (key: string) => { setActiveGroup(key); setActiveView(null) }
-
   if (isLoading) return <LoadingState message={t('common.loading')} />
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
@@ -142,21 +81,6 @@ export default function OntologyDetailPage() {
     published: { label: '已发布', variant: 'success' },
   }
   const s = statusMap[ontology.status] || { label: ontology.status, variant: 'outline' }
-
-  const findCard = (key: string) => currentGroup?.cards.find(c => c.key === key)
-
-  const renderView = () => {
-    switch (activeView) {
-      // —— 新内核视图 ——
-      case 'model-structure': return <ModelStructureView ontologyId={id!} />
-      case 'instances': return <FormalInstancesView ontologyId={id!} />
-      case 'gov-console': return <GovernanceTab ontologyId={id!} />
-      case 'curated': return <CuratedDatasetsTab ontologyId={id!} />
-      case 'files': return <FilesTab ontologyId={id!} />
-      case 'versions': return <VersionsTab ontologyId={id!} />
-      default: return null
-    }
-  }
 
   return (
     <div className="onto-glass-root space-y-4">
@@ -171,139 +95,71 @@ export default function OntologyDetailPage() {
             <ArrowLeft size={18} />
           </button>
 
-          {activeView ? (
-            <button onClick={backToDashboard} className="flex items-center gap-1.5 text-sm hover:opacity-80 transition-opacity">
-              <span style={{ color: 'var(--color-text-tertiary)' }}>{currentGroup?.label}</span>
-              <ChevronRight size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-              <span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                {findCard(activeView)?.label}
-              </span>
-            </button>
-          ) : (
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="onto-glass-iconwrap w-9 h-9 flex items-center justify-center shrink-0">
-                <Network size={17} style={{ color: 'var(--color-primary)' }} />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-base font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>{ontology.name}</h1>
-                  <Badge variant={s.variant}>{s.label}</Badge>
-                </div>
-                <p className="text-xs truncate" style={{ color: 'var(--color-text-tertiary)' }}>
-                  {ontology.domain} · {ontology.version}
-                </p>
-              </div>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="onto-glass-iconwrap w-9 h-9 flex items-center justify-center shrink-0">
+              <Network size={17} style={{ color: 'var(--color-primary)' }} />
             </div>
-          )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>{ontology.name}</h1>
+                <Badge variant={s.variant}>{s.label}</Badge>
+              </div>
+              <p className="text-xs truncate" style={{ color: 'var(--color-text-tertiary)' }}>
+                {ontology.domain} · {ontology.version}
+              </p>
+            </div>
+          </div>
         </div>
 
-        {!activeView && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button onClick={() => setShowVersionModal(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="历史版本">
-              <History size={13} /><span className="hidden sm:inline">历史版本</span>
-            </button>
-            <button onClick={() => setExportOpen(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="导出本体结构">
-              <Download size={13} /><span className="hidden sm:inline">导出本体结构</span>
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button onClick={() => setShowVersionModal(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="历史版本">
+            <History size={13} /><span className="hidden sm:inline">历史版本</span>
+          </button>
+          <button onClick={() => setExportOpen(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="导出本体结构">
+            <Download size={13} /><span className="hidden sm:inline">导出本体结构</span>
+          </button>
+        </div>
       </div>
 
       {/* ═══ 主区分段导航（玻璃 segmented）═══ */}
-      {!activeView && (
-        <div className="onto-glass-seg flex items-center overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-          {availableGroups.map(group => {
-            const Icon = group.icon
-            const isActive = activeGroup === group.key
-            return (
-              <button
-                key={group.key}
-                onClick={() => switchGroup(group.key)}
-                data-active={isActive}
-                className="onto-glass-seg-item flex items-center gap-2 px-4 py-2 text-sm font-medium whitespace-nowrap"
-              >
-                <Icon size={15} />
-                {group.label}
-              </button>
-            )
-          })}
-        </div>
-      )}
+      <div className="onto-glass-seg flex items-center overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+        {GROUPS.map(group => {
+          const Icon = group.icon
+          const isActive = activeGroup === group.key
+          return (
+            <button
+              key={group.key}
+              onClick={() => setActiveGroup(group.key)}
+              data-active={isActive}
+              className="onto-glass-seg-item flex items-center gap-2 px-4 py-2 text-sm font-medium whitespace-nowrap"
+            >
+              <Icon size={15} />
+              {group.label}
+            </button>
+          )
+        })}
+      </div>
 
       {/* ═══ 内容 ═══ */}
-      {activeView ? (
-        <div className="onto-glass-card onto-glass-in p-4">
-          {renderView()}
-        </div>
-      ) : activeGroup === 'overview' ? (
+      {activeGroup === 'overview' ? (
         <div className="onto-glass-in">
-          <OverviewDashboard
-            ontologyId={id!}
-            onGoGroup={(group, view) => { setActiveGroup(group); setActiveView(view ?? null) }}
-          />
+          <OverviewDashboard ontologyId={id!} onGoGroup={setActiveGroup} />
         </div>
       ) : activeGroup === 'design' ? (
         <div className="onto-glass-card onto-glass-in p-4">
           <ModelStructureView ontologyId={id!} />
         </div>
-      ) : activeGroup === 'governance' ? (
+      ) : activeGroup === 'data-mapping' ? (
         <div className="onto-glass-card onto-glass-in p-4">
-          <GovernanceTab ontologyId={id!} />
+          <CuratedDatasetsTab ontologyId={id!} />
+        </div>
+      ) : activeGroup === 'data' ? (
+        <div className="onto-glass-card onto-glass-in p-4">
+          <FormalInstancesView ontologyId={id!} />
         </div>
       ) : (
-        <div className="onto-glass-in space-y-3">
-          {/* 旅程引导语 */}
-          <div className="flex items-center gap-2 px-1">
-            <Sparkles size={14} style={{ color: 'var(--color-primary)' }} />
-            <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>{currentGroup?.hint}</p>
-          </div>
-
-          {/* 主入口大卡（如本体建模的图谱编辑器） */}
-          {currentGroup?.cards.filter(c => c.primary).map(card => {
-            const Icon = card.icon
-            return (
-              <button
-                key={card.key}
-                onClick={() => openView(card)}
-                className="onto-glass-card-btn group w-full flex items-center gap-5 p-5 text-left"
-              >
-                <div className="onto-glass-iconwrap w-14 h-14 flex items-center justify-center shrink-0">
-                  <Icon size={24} style={{ color: 'var(--color-primary)' }} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="text-base font-semibold" style={{ color: 'var(--color-text-primary)' }}>{card.label}</p>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: 'var(--color-primary-light)', color: 'var(--color-primary-active)' }}>推荐入口</span>
-                  </div>
-                  <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>{card.description}</p>
-                </div>
-                <ChevronRight size={20} className="shrink-0 transition-transform group-hover:translate-x-1" style={{ color: 'var(--color-primary)' }} />
-              </button>
-            )
-          })}
-
-          {/* 其余功能卡（网格） */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {currentGroup?.cards.filter(c => !c.primary).map(card => {
-              const Icon = card.icon
-              return (
-                <button
-                  key={card.key}
-                  onClick={() => openView(card)}
-                  className="onto-glass-card-btn group flex items-start gap-3.5 p-4 text-left"
-                >
-                  <div className="onto-glass-iconwrap w-10 h-10 flex items-center justify-center shrink-0">
-                    <Icon size={18} style={{ color: 'var(--color-primary)' }} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>{card.label}</p>
-                    <p className="text-xs mt-0.5 leading-relaxed line-clamp-2" style={{ color: 'var(--color-text-tertiary)' }}>{card.description}</p>
-                  </div>
-                  <ChevronRight size={15} className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-all group-hover:translate-x-0.5" style={{ color: 'var(--color-primary)' }} />
-                </button>
-              )
-            })}
-          </div>
+        <div className="onto-glass-card onto-glass-in p-4">
+          <GovernanceTab ontologyId={id!} />
         </div>
       )}
 
