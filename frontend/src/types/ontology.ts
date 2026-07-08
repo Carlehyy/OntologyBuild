@@ -96,6 +96,8 @@ export interface ModelConfig {
   provider: string
   api_base?: string
   has_api_key?: boolean
+  enabled?: boolean
+  is_default?: boolean
   models: string[]
   options?: Record<string, unknown>
   created_by: string

@@ -87,7 +87,9 @@ export const modelApi = {
   get: (id: string) => apiClient.get<ModelConfig>(`/models/${id}`),
   update: (id: string, body: Partial<ModelConfig> & { api_key?: string }) => apiClient.put<ModelConfig>(`/models/${id}`, body),
   delete: (id: string) => apiClient.delete(`/models/${id}`),
-  test: (id: string) => apiClient.post(`/models/${id}/test`),
+  setDefault: (id: string) => apiClient.post<ModelConfig>(`/models/${id}/default`),
+  setEnabled: (id: string, enabled: boolean) => apiClient.post<ModelConfig>(`/models/${id}/enabled`, { enabled }),
+  test: (id: string) => apiClient.post<{ ok: boolean; response: string }>(`/models/${id}/test`),
 }
 
 export const settingsApi = {

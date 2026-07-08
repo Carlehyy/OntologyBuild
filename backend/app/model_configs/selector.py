@@ -59,13 +59,13 @@ def select_llm_model_config(
     owns_db = db is None
     db = db or SessionLocal()
     try:
-        query = db.query(ModelConfig).filter(ModelConfig.config_type == "llm")
+        query = db.query(ModelConfig).filter(ModelConfig.config_type == "llm", ModelConfig.enabled.is_(True))
         if model_id:
             selected = query.filter(ModelConfig.id == model_id).first()
             if selected:
                 return selected
 
-        configs = query.order_by(ModelConfig.updated_at.desc()).all()
+        configs = query.order_by(ModelConfig.is_default.desc(), ModelConfig.updated_at.desc()).all()
         if not configs:
             return None
 

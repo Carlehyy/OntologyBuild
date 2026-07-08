@@ -10,6 +10,8 @@ class ModelConfigCreate(BaseModel):
     api_base: Optional[str] = None
     models: List[str] = []
     options: dict = {}
+    enabled: bool = True
+    is_default: bool = False
 
 class ModelConfigUpdate(BaseModel):
     name: Optional[str] = None
@@ -19,6 +21,8 @@ class ModelConfigUpdate(BaseModel):
     api_base: Optional[str] = None
     models: Optional[List[str]] = None
     options: Optional[dict] = None
+    enabled: Optional[bool] = None
+    is_default: Optional[bool] = None
 
 class ModelConfigOut(BaseModel):
     id: str
@@ -28,6 +32,8 @@ class ModelConfigOut(BaseModel):
     api_base: Optional[str]
     models: List[str]
     options: dict = {}
+    enabled: bool = True
+    is_default: bool = False
     created_by: str
     created_at: datetime
     updated_at: datetime

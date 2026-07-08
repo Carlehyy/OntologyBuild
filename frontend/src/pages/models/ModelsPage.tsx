@@ -114,7 +114,7 @@ function latColor(ms: number): string {
 export default function ModelsPage() {
   const { t } = useTranslation()
   const {
-    models, defaultModelId, setDefault, createModel, updateModel, deleteModel,
+    models, loading, error, defaultModelId, setDefault, createModel, updateModel, deleteModel,
     testConnection, getModelDailyStats,
     isEnabled, toggleEnabled, getModelRunStatus, getModelSummary, getModelHeatCells,
   } = useMockModels()
@@ -172,28 +172,29 @@ export default function ModelsPage() {
 
   const handleImport = useCallback((file: File) => {
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = JSON.parse(e.target?.result as string)
         if (Array.isArray(data)) {
-          data.forEach((item: any) => {
-            if (item.name && item.provider) {
-              createModel({
-                name: item.name,
-                config_type: item.config_type || 'llm',
-                provider: item.provider,
-                api_base: item.api_base || '',
-                models: item.models || [],
-                options: item.options || {},
-              })
-            }
-          })
-          addToast('success', `成功导入 ${data.length} 个模型配置`)
+          const validItems = data.filter((item: any) => item.name && item.provider)
+          for (const item of validItems) {
+            await createModel({
+              name: item.name,
+              config_type: item.config_type || 'llm',
+              provider: item.provider,
+              api_base: item.api_base || '',
+              models: item.models || [],
+              options: item.options || {},
+              enabled: item.enabled !== false,
+              is_default: Boolean(item.is_default),
+            })
+          }
+          addToast('success', `成功导入 ${validItems.length} 个模型配置`)
         } else {
           addToast('error', '导入文件格式不正确，应为JSON数组')
         }
       } catch {
-        addToast('error', '解析JSON文件失败')
+        addToast('error', '导入模型配置失败')
       }
     }
     reader.readAsText(file)
@@ -217,27 +218,37 @@ export default function ModelsPage() {
   })
 
   // Handlers
-  const handleCreate = (data: any) => {
-    createModel(buildPayload(data))
-    setShowCreate(false)
-    reset()
-    addToast('success', `模型 "${data.name}" 创建成功`)
-  }
-
-  const handleUpdate = (data: any) => {
-    if (editTarget) {
-      updateModel(editTarget.id, buildPayload(data, 'update'))
-      setEditTarget(null)
-      addToast('success', '模型更新成功')
+  const handleCreate = async (data: any) => {
+    try {
+      await createModel(buildPayload(data))
+      setShowCreate(false)
+      reset()
+      addToast('success', `模型 "${data.name}" 创建成功`)
+    } catch {
+      addToast('error', `模型 "${data.name}" 创建失败`)
     }
   }
 
-  const handleDelete = () => {
-    if (deleteTarget) {
-      deleteModel(deleteTarget.id)
+  const handleUpdate = async (data: any) => {
+    if (!editTarget) return
+    try {
+      await updateModel(editTarget.id, buildPayload(data, 'update'))
+      setEditTarget(null)
+      addToast('success', '模型更新成功')
+    } catch {
+      addToast('error', '模型更新失败')
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    try {
+      await deleteModel(deleteTarget.id)
       if (detailModel?.id === deleteTarget.id) setDetailModel(null)
       setDeleteTarget(null)
       addToast('success', '模型已删除')
+    } catch {
+      addToast('error', '模型删除失败')
     }
   }
 
@@ -287,21 +298,19 @@ export default function ModelsPage() {
       {/* Toast Container */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
-      {/* 单行工具栏：搜索 + 筛选（左）·  导入 / 导出 / 新建（右） */}
-      <div className="flex items-center gap-3 flex-wrap mb-5">
-        {/* Search */}
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      {/* 搜索、筛选、操作按钮 */}
+      <div className="flex items-center gap-3 bg-white rounded-xl border border-slate-200 px-4 py-3 flex-wrap mb-5 shadow-sm/50">
+        <div className="relative w-full sm:w-80">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="搜索模型名称、Provider..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg text-sm bg-white border border-slate-200 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all"
+            placeholder="搜索模型名称 / Provider..."
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg text-sm border border-slate-200 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all"
           />
         </div>
 
-        {/* Filter Tabs */}
-        <div className="flex items-center gap-1 bg-white rounded-lg border border-slate-200 p-0.5">
+        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
           {[
             { value: 'all', label: '全部', count: models.length },
             { value: 'llm', label: 'LLM', count: typeCount('llm') },
@@ -314,7 +323,7 @@ export default function ModelsPage() {
               className={`relative px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                 filterType === tab.value
                   ? 'bg-slate-800 text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-white'
               }`}
             >
               {tab.label}
@@ -325,7 +334,6 @@ export default function ModelsPage() {
           ))}
         </div>
 
-        {/* 右侧操作按钮 */}
         <div className="ml-auto flex items-center gap-2">
           <input
             ref={fileInputRef}
@@ -336,21 +344,21 @@ export default function ModelsPage() {
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
             title="导入配置"
           >
             <Upload size={14} /> 导入
           </button>
           <button
             onClick={handleExport}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
             title="导出配置"
           >
             <Download size={14} /> 导出
           </button>
           <button
             onClick={() => { setShowCreate(true); reset({ config_type: 'llm', provider: 'openai', ocr_enabled: 'false', ocr_lang: 'ch', ocr_device: 'cpu' }) }}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-slate-800 hover:bg-slate-700 transition-colors shadow-sm"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-white bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
           >
             <Plus size={14} /> {t('model.create')}
           </button>
@@ -358,7 +366,15 @@ export default function ModelsPage() {
       </div>
 
       {/* Content */}
-      {filteredModels.length === 0 ? (
+      {error ? (
+        <div className="bg-white border border-red-100 rounded-xl p-8 text-center text-sm text-red-600">
+          {error}
+        </div>
+      ) : loading ? (
+        <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-sm text-slate-400">
+          加载中...
+        </div>
+      ) : filteredModels.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4">
             <Settings2 size={28} className="text-slate-300" />
@@ -407,7 +423,14 @@ export default function ModelsPage() {
                     </div>
                     {/* 启用 / 停用开关 */}
                     <button
-                      onClick={() => { toggleEnabled(m.id); addToast('info', `"${m.name}" 已${enabled ? '停用' : '启用'}`) }}
+                      onClick={async () => {
+                        try {
+                          await toggleEnabled(m.id)
+                          addToast('info', `"${m.name}" 已${enabled ? '停用' : '启用'}`)
+                        } catch {
+                          addToast('error', `"${m.name}" 状态更新失败`)
+                        }
+                      }}
                       title={enabled ? '点击停用' : '点击启用'}
                       className="relative shrink-0 w-[38px] h-[22px] rounded-full transition-colors"
                       style={{ background: enabled ? '#0d9488' : '#cbd2dc' }}
@@ -494,7 +517,14 @@ export default function ModelsPage() {
                   </button>
                   {!isDefault && (
                     <button
-                      onClick={() => { setDefault(m.id); addToast('success', `"${m.name}" 已设为默认模型`) }}
+                      onClick={async () => {
+                        try {
+                          await setDefault(m.id)
+                          addToast('success', `"${m.name}" 已设为默认模型`)
+                        } catch {
+                          addToast('error', `"${m.name}" 设置默认失败`)
+                        }
+                      }}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
                     >
                       <Star size={11} /> 默认
@@ -658,10 +688,13 @@ export default function ModelsPage() {
         isOpen={!!detailModel}
         onClose={() => setDetailModel(null)}
         isDefault={detailModel?.id === defaultModelId}
-        onSetDefault={() => {
-          if (detailModel) {
-            setDefault(detailModel.id)
+        onSetDefault={async () => {
+          if (!detailModel) return
+          try {
+            await setDefault(detailModel.id)
             addToast('success', `"${detailModel.name}" 已设为默认模型`)
+          } catch {
+            addToast('error', `"${detailModel.name}" 设置默认失败`)
           }
         }}
         testStatus={drawerTestStatus}

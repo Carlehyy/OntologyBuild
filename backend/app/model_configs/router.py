@@ -11,15 +11,32 @@ import uuid
 router = APIRouter()
 
 
+def _set_default(db: Session, config: ModelConfig) -> None:
+    db.query(ModelConfig).filter(ModelConfig.id != config.id).update(
+        {ModelConfig.is_default: False}, synchronize_session=False
+    )
+    config.is_default = True
+
+
+def _ensure_default(db: Session) -> None:
+    if db.query(ModelConfig).filter(ModelConfig.is_default.is_(True)).first():
+        return
+    fallback = db.query(ModelConfig).filter(ModelConfig.enabled.is_(True)).order_by(ModelConfig.updated_at.desc()).first()
+    if fallback:
+        fallback.is_default = True
+
+
 def _model_out(config: ModelConfig) -> dict:
     data = ModelConfigOut.model_validate(config).model_dump()
     data["has_api_key"] = bool(config.api_key_encrypted)
     return data
 
+
 @router.get("")
 def list_models(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    configs = db.query(ModelConfig).all()
+    configs = db.query(ModelConfig).order_by(ModelConfig.updated_at.desc()).all()
     return {"data": [_model_out(c) for c in configs]}
+
 
 @router.post("", status_code=201)
 def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -32,10 +49,19 @@ def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current
         api_key_encrypted=encrypt(body.api_key or ""),
         models=body.models,
         options=body.options or {},
+        enabled=body.enabled,
+        is_default=body.is_default,
         created_by=current_user.id,
     )
-    db.add(config); db.commit(); db.refresh(config)
+    db.add(config)
+    db.flush()
+    if config.is_default:
+        _set_default(db, config)
+    elif not db.query(ModelConfig).filter(ModelConfig.is_default.is_(True)).first():
+        config.is_default = True
+    db.commit(); db.refresh(config)
     return {"data": _model_out(config)}
+
 
 @router.get("/{model_id}")
 def get_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -43,6 +69,7 @@ def get_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curren
     if not c:
         raise HTTPException(404, "Not found")
     return {"data": _model_out(c)}
+
 
 @router.put("/{model_id}")
 def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -63,8 +90,17 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
         c.models = body.models
     if body.options is not None:
         c.options = body.options
+    if body.enabled is not None:
+        c.enabled = body.enabled
+    if body.is_default is True:
+        c.enabled = True
+        _set_default(db, c)
+    elif body.is_default is False and c.is_default:
+        c.is_default = False
+        _ensure_default(db)
     db.commit(); db.refresh(c)
     return {"data": _model_out(c)}
+
 
 @router.delete("/{model_id}", status_code=204)
 def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -74,8 +110,38 @@ def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_cur
     db.query(ExtractionTask).filter(ExtractionTask.model_id == model_id).update(
         {ExtractionTask.model_id: None}, synchronize_session=False
     )
+    was_default = c.is_default
     db.delete(c)
+    if was_default:
+        _ensure_default(db)
     db.commit()
+
+
+@router.post("/{model_id}/default")
+def set_default_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
+    if not c:
+        raise HTTPException(404, "Not found")
+    c.enabled = True
+    _set_default(db, c)
+    db.commit(); db.refresh(c)
+    return {"data": _model_out(c)}
+
+
+@router.post("/{model_id}/enabled")
+def set_model_enabled(model_id: str, body: dict, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
+    if not c:
+        raise HTTPException(404, "Not found")
+    if "enabled" not in body:
+        raise HTTPException(400, "enabled is required")
+    c.enabled = bool(body["enabled"])
+    if not c.enabled and c.is_default:
+        c.is_default = False
+        _ensure_default(db)
+    db.commit(); db.refresh(c)
+    return {"data": _model_out(c)}
+
 
 @router.post("/{model_id}/test")
 def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -83,6 +149,9 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
     if not c:
         raise HTTPException(404, "Not found")
     try:
+        if not c.enabled:
+            return {"data": {"ok": False, "response": "Model config is disabled."}}
+
         if (c.config_type or "llm") == "ocr":
             if c.provider == "easyocr":
                 import os
