@@ -7,8 +7,8 @@ Create Date: 2026-07-08
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0006_pipeline_column_definitions"
-down_revision = "0005_model_call_log"
+revision = "0007_pipeline_column_definitions"
+down_revision = "0006_element_source_lineage"
 branch_labels = None
 depends_on = None
 
