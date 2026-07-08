@@ -20,6 +20,49 @@ export interface DailyStats {
   avgLatency: number
 }
 
+// ── 展示层新增类型 ───────────────────────────────
+export type RunStatus = 'normal' | 'degraded' | 'error' | 'disabled'
+
+export interface HeatCell {
+  color: string
+  title: string
+  status: 'success' | 'timeout' | 'error' | 'none' | 'disabled'
+}
+
+export interface ModelSummary {
+  todayCalls: number
+  availability: string // '99.4' | '—'
+  avgLatency: number   // ms，0 表示无数据
+  lastCall: string     // 相对时间，'—' 表示无
+  successRate: number  // 0~1
+}
+
+// 热力条配色
+const HEAT_EMPTY = '#eceef1'
+const HEAT_GREENS = ['#216e39', '#2d8a4e', '#40c463', '#9be9a8'] // 快 → 慢
+const HEAT_TIMEOUT = '#f0a020'
+const HEAT_ERROR = '#e5484d'
+
+function heatColor(status: CallRecord['status'], latency: number): string {
+  if (status === 'timeout') return HEAT_TIMEOUT
+  if (status === 'error') return HEAT_ERROR
+  if (latency < 1000) return HEAT_GREENS[0]
+  if (latency < 2000) return HEAT_GREENS[1]
+  if (latency < 3000) return HEAT_GREENS[2]
+  return HEAT_GREENS[3]
+}
+
+function relTime(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime()
+  if (diff < 60_000) return '刚刚'
+  const m = Math.floor(diff / 60_000)
+  if (m < 60) return `${m} 分钟前`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h} 小时前`
+  const d = Math.floor(h / 24)
+  return `${d} 天前`
+}
+
 // Mock 模型数据
 const MOCK_MODELS: ModelConfig[] = [
   {
@@ -30,7 +73,7 @@ const MOCK_MODELS: ModelConfig[] = [
     api_base: 'https://api.openai.com/v1',
     has_api_key: true,
     models: ['gpt-4o', 'gpt-4o-mini'],
-    options: { usage_tags: ['VLM提取', '结构化提取'], timeout: 30 },
+    options: { timeout: 30 },
     created_by: 'admin',
     created_at: '2024-01-15T08:30:00Z',
     updated_at: '2024-06-20T14:22:00Z',
@@ -43,7 +86,7 @@ const MOCK_MODELS: ModelConfig[] = [
     api_base: 'https://api.anthropic.com',
     has_api_key: true,
     models: ['claude-3-5-sonnet-20241022'],
-    options: { usage_tags: ['Ontology Mapping', 'NL-to-Cypher'], timeout: 45 },
+    options: { timeout: 45 },
     created_by: 'admin',
     created_at: '2024-02-10T10:15:00Z',
     updated_at: '2024-06-18T09:45:00Z',
@@ -56,7 +99,7 @@ const MOCK_MODELS: ModelConfig[] = [
     api_base: 'https://api.deepseek.com/v1',
     has_api_key: true,
     models: ['deepseek-chat', 'deepseek-coder'],
-    options: { usage_tags: ['宽表分析', '结构化提取'], timeout: 60 },
+    options: { timeout: 60 },
     created_by: 'admin',
     created_at: '2024-03-05T16:40:00Z',
     updated_at: '2024-06-22T11:30:00Z',
@@ -69,7 +112,7 @@ const MOCK_MODELS: ModelConfig[] = [
     api_base: 'http://localhost:8080',
     has_api_key: false,
     models: ['ch_PP-OCRv4'],
-    options: { usage_tags: ['OCR文字提取'], enabled: true, lang: 'ch', device: 'gpu' },
+    options: { enabled: true, lang: 'ch', device: 'gpu' },
     created_by: 'admin',
     created_at: '2024-01-20T09:00:00Z',
     updated_at: '2024-05-15T13:20:00Z',
@@ -82,7 +125,7 @@ const MOCK_MODELS: ModelConfig[] = [
     api_base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     has_api_key: true,
     models: ['qwen-max', 'qwen-plus'],
-    options: { usage_tags: ['VLM提取'], timeout: 30 },
+    options: { timeout: 30 },
     created_by: 'admin',
     created_at: '2024-04-12T11:25:00Z',
     updated_at: '2024-06-21T15:10:00Z',
@@ -95,12 +138,22 @@ const MOCK_MODELS: ModelConfig[] = [
     api_base: 'http://localhost:11434/v1',
     has_api_key: false,
     models: ['llama3:70b', 'llama3:8b'],
-    options: { usage_tags: ['NL-to-Cypher'], timeout: 120 },
+    options: { timeout: 120 },
     created_by: 'admin',
     created_at: '2024-05-01T08:00:00Z',
     updated_at: '2024-06-19T10:45:00Z',
   },
 ]
+
+// 每个模型的健康画像（决定 mock 调用记录的失败率），使不同模型呈现不同运行状态
+const HEALTH_PROFILE: Record<string, number> = {
+  '1': 0.03, // 正常
+  '2': 0.04, // 正常
+  '3': 0.16, // 降级
+  '4': 0.04, // 正常
+  '5': 0.05, // 正常
+  '6': 0.45, // 异常
+}
 
 // 生成30天的调用记录
 function generateCallRecords(): CallRecord[] {
@@ -112,9 +165,10 @@ function generateCallRecords(): CallRecord[] {
     const dateStr = date.toISOString().split('T')[0]
 
     MOCK_MODELS.forEach((model) => {
+      const failRate = HEALTH_PROFILE[model.id] ?? 0.12
       const dailyCalls = Math.floor(Math.random() * 50) + 10
       for (let i = 0; i < dailyCalls; i++) {
-        const isSuccess = Math.random() > 0.15
+        const isSuccess = Math.random() > failRate
         const isTimeout = !isSuccess && Math.random() > 0.5
         records.push({
           id: `${model.id}-${dateStr}-${i}`,
@@ -155,8 +209,19 @@ function generateDailyStats(records: CallRecord[]): DailyStats[] {
 const ALL_CALL_RECORDS = generateCallRecords()
 const ALL_DAILY_STATS = generateDailyStats(ALL_CALL_RECORDS)
 
-// localStorage key
+// localStorage keys
 const DEFAULT_MODEL_KEY = 'default_model_id'
+const ENABLED_MAP_KEY = 'model_enabled_map'
+
+function loadEnabledMap(): Record<string, boolean> {
+  // 默认：本地 Llama3 停用，其余启用
+  const defaults: Record<string, boolean> = { '6': false }
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem(ENABLED_MAP_KEY) || '{}') }
+  } catch {
+    return defaults
+  }
+}
 
 export function useMockModels() {
   const [models, setModels] = useState<ModelConfig[]>(MOCK_MODELS)
@@ -165,10 +230,22 @@ export function useMockModels() {
   const [defaultModelId, setDefaultModelId] = useState<string>(() => {
     return localStorage.getItem(DEFAULT_MODEL_KEY) || MOCK_MODELS[0]?.id || ''
   })
+  const [enabledMap, setEnabledMap] = useState<Record<string, boolean>>(loadEnabledMap)
 
   const setDefault = useCallback((id: string) => {
     setDefaultModelId(id)
     localStorage.setItem(DEFAULT_MODEL_KEY, id)
+  }, [])
+
+  // ── 启用状态 ────────────────────────────────
+  const isEnabled = useCallback((id: string) => enabledMap[id] ?? true, [enabledMap])
+
+  const toggleEnabled = useCallback((id: string) => {
+    setEnabledMap((prev) => {
+      const next = { ...prev, [id]: !(prev[id] ?? true) }
+      localStorage.setItem(ENABLED_MAP_KEY, JSON.stringify(next))
+      return next
+    })
   }, [])
 
   const createModel = useCallback((data: Partial<ModelConfig> & { api_key?: string }) => {
@@ -246,6 +323,83 @@ export function useMockModels() {
     [callRecords]
   )
 
+  // ── 最近 N 次调用（按时间升序） ──────────────
+  const getModelRecentCalls = useCallback(
+    (modelId: string, n = 60) => {
+      return callRecords
+        .filter((r) => r.modelId === modelId)
+        .sort((a, b) => (a.timestamp < b.timestamp ? -1 : 1))
+        .slice(-n)
+    },
+    [callRecords]
+  )
+
+  // ── 历史调用热力条 ─────────────────────────
+  const getModelHeatCells = useCallback(
+    (modelId: string, n = 60): HeatCell[] => {
+      if (!isEnabled(modelId)) {
+        return Array.from({ length: n }, () => ({ color: HEAT_EMPTY, title: '已停用（无调用）', status: 'disabled' as const }))
+      }
+      const recent = getModelRecentCalls(modelId, n)
+      const cells: HeatCell[] = recent.map((r) => ({
+        color: heatColor(r.status, r.latency),
+        title:
+          r.status === 'success'
+            ? `成功 · ${r.latency}ms`
+            : r.status === 'timeout'
+            ? '超时'
+            : '调用失败',
+        status: r.status,
+      }))
+      while (cells.length < n) cells.unshift({ color: HEAT_EMPTY, title: '无调用', status: 'none' })
+      return cells
+    },
+    [isEnabled, getModelRecentCalls]
+  )
+
+  // ── 运行 / 健康状态 ────────────────────────
+  const getModelRunStatus = useCallback(
+    (modelId: string): RunStatus => {
+      if (!isEnabled(modelId)) return 'disabled'
+      const recent = getModelRecentCalls(modelId, 60)
+      if (recent.length === 0) return 'normal'
+      const rate = recent.filter((r) => r.status === 'success').length / recent.length
+      if (rate >= 0.95) return 'normal'
+      if (rate >= 0.82) return 'degraded'
+      return 'error'
+    },
+    [isEnabled, getModelRecentCalls]
+  )
+
+  // ── 卡片指标汇总 ───────────────────────────
+  const getModelSummary = useCallback(
+    (modelId: string): ModelSummary => {
+      if (!isEnabled(modelId)) {
+        return { todayCalls: 0, availability: '—', avgLatency: 0, lastCall: '—', successRate: 0 }
+      }
+      const recs = callRecords.filter((r) => r.modelId === modelId)
+      if (recs.length === 0) {
+        return { todayCalls: 0, availability: '—', avgLatency: 0, lastCall: '—', successRate: 0 }
+      }
+      const latestDate = recs.map((r) => r.timestamp.split('T')[0]).sort().slice(-1)[0]
+      const todayCalls = recs.filter((r) => r.timestamp.startsWith(latestDate)).length
+      const success = recs.filter((r) => r.status === 'success')
+      const availability = ((success.length / recs.length) * 100).toFixed(1)
+      const avgLatency = success.length
+        ? Math.round(success.reduce((s, r) => s + r.latency, 0) / success.length)
+        : 0
+      const last = recs.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))[0]
+      return {
+        todayCalls,
+        availability,
+        avgLatency,
+        lastCall: last ? relTime(last.timestamp) : '—',
+        successRate: success.length / recs.length,
+      }
+    },
+    [isEnabled, callRecords]
+  )
+
   return {
     models,
     defaultModelId,
@@ -258,5 +412,12 @@ export function useMockModels() {
     dailyStats,
     getModelCallRecords,
     getModelDailyStats,
+    // 新增
+    isEnabled,
+    toggleEnabled,
+    getModelRecentCalls,
+    getModelHeatCells,
+    getModelRunStatus,
+    getModelSummary,
   }
 }
