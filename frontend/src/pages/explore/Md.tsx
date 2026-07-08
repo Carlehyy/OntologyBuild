@@ -1,4 +1,4 @@
-import { Children, isValidElement } from 'react'
+import { Children, isValidElement, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import MermaidBlock from '@/components/MermaidBlock'
@@ -8,11 +8,7 @@ const isMermaidEl = (child: unknown) =>
 
 /** Markdown 渲染（与智能助手一致的排版；聊天回答与需求文档预览共用，```mermaid 出图） */
 export default function Md({ text }: { text: string }) {
-  return (
-    <div className="explore-md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
+  const components = useMemo(() => ({
           p: p => <p className="text-sm leading-[1.7] mb-2 last:mb-0" {...p} />,
           strong: p => <strong className="font-semibold text-[var(--color-text-primary)]" {...p} />,
           h1: p => <h2 className="text-base font-semibold mt-4 mb-2" {...p} />,
@@ -42,7 +38,13 @@ export default function Md({ text }: { text: string }) {
           td: p => <td className="px-3 py-1.5 border-b border-[var(--color-border)]" {...p} />,
           a: p => <a className="text-[var(--color-primary)] underline-offset-2 hover:underline" {...p} />,
           blockquote: p => <blockquote className="border-l-2 border-[var(--color-border)] pl-3 my-2 text-[var(--color-text-secondary)]" {...p} />,
-        }}
+        }
+      }), [])
+      return (
+    <div className="explore-md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={components}
       >
         {text}
       </ReactMarkdown>
