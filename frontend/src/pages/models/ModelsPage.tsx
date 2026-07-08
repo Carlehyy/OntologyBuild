@@ -332,7 +332,7 @@ export default function ModelsPage() {
               onClick={() => setFilterType(tab.value)}
               className={`relative px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                 filterType === tab.value
-                  ? 'bg-slate-800 text-white shadow-sm'
+                  ? 'bg-teal-600 text-white shadow-sm'
                   : 'text-slate-500 hover:text-slate-700 hover:bg-white'
               }`}
             >
@@ -393,7 +393,7 @@ export default function ModelsPage() {
           <p className="text-slate-400 text-xs mt-1">点击右上角按钮创建第一个模型</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {sortedModels.map(m => {
             const status = testStatus[m.id] || 'idle'
             const isDefault = m.id === defaultModelId
@@ -471,14 +471,8 @@ export default function ModelsPage() {
                     )}
                   </div>
 
-                  {/* 指标 + 热力条 */}
-                  {summary.todayCalls === 0 && summary.avgLatency === 0 && summary.availability === '—' ? (
-                    <div className="mt-3.5 bg-slate-50 rounded-lg px-3 py-3 text-center">
-                      <p className="text-[11px] text-slate-400">暂无调用数据</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex gap-2 mt-3.5">
+                  {/* 指标 */}
+                  <div className="flex gap-2 mt-3.5">
                         <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
                           <div className="text-[10px] text-slate-400 font-medium">今日调用</div>
                           <div className="text-[16px] font-bold text-slate-800 mt-0.5">{enabled ? summary.todayCalls : '—'}</div>
@@ -504,8 +498,6 @@ export default function ModelsPage() {
                         </div>
                         <ModelHeatStrip cells={cells} />
                       </div>
-                    </>
-                  )}
                 </div>
 
                 {/* Card Actions */}
@@ -686,11 +678,11 @@ export default function ModelsPage() {
                 <textarea {...regEdit('options_json')} rows={3} placeholder='{"timeout": 30}'
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
               </div>
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex justify-center gap-3 pt-2">
                 <button type="button" onClick={() => setEditTarget(null)}
-                  className="px-4 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
+                  className="px-5 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
                 <button type="submit"
-                  className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700 transition-colors">
+                  className="flex items-center gap-1.5 px-5 py-2 bg-teal-600 text-white rounded-lg text-sm hover:bg-teal-700 transition-colors">
                   保存
                 </button>
               </div>
@@ -805,11 +797,11 @@ function ModelFormModal({ title, onClose, onSubmit, register, handleSubmit, conf
             <textarea {...register('options_json')} rows={3} placeholder='{"timeout": 30}'
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
           </div>
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex justify-center gap-3 pt-2">
             <button type="button" onClick={onClose}
               className="px-5 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
             <button type="submit"
-              className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm text-white bg-slate-800 hover:bg-slate-700 transition-colors">
+              className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm text-white bg-teal-600 hover:bg-teal-700 transition-colors">
               保存
             </button>
           </div>
