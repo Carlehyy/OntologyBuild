@@ -61,14 +61,16 @@ function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onT
   )
 }
 
+// 名称列不在此表——它是弹性列（table-fixed 下不设宽即吸收全部剩余空间），
+// 其余列按内容实际尺寸收紧：徽章≈88 / 开关+文案≈80 / 两行时间≈80 / 链接≈84 / 三图标≈92
 const COLUMN_WIDTHS_DEFAULT: Record<string, number> = {
-  name: 280,
-  source: 130,
-  enabled: 120,
-  lastRun: 180,
-  output: 130,
-  actions: 130,
+  source: 120,
+  enabled: 118,
+  lastRun: 136,
+  output: 112,
+  actions: 124,
 }
+const NAME_COL_MIN = 280  // 名称弹性列参与表格 minWidth 的下限
 
 function ResizableTh({
   colKey, label, widths, onResize, className,
@@ -139,7 +141,8 @@ export default function PipelineListPage() {
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  const STORAGE_KEY = 'pipeline_list_col_widths'
+  // v2：默认列宽方案调整（名称改弹性列），换 key 避免旧保存值覆盖新默认
+  const STORAGE_KEY = 'pipeline_list_col_widths_v2'
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -277,11 +280,12 @@ export default function PipelineListPage() {
         </div>
       ) : (
         <div className="border rounded-xl bg-white overflow-x-auto">
-          <table className="w-full text-sm table-fixed" style={{ minWidth: Object.values(colWidths).reduce((a, b) => a + b, 0) }}>
+          <table className="w-full text-sm table-fixed" style={{ minWidth: NAME_COL_MIN + Object.values(colWidths).reduce((a, b) => a + b, 0) }}>
             <thead className="bg-gray-50 border-b sticky top-0 z-10">
               <tr>
-                <th className="text-left px-2.5 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: colWidths.name }}>
-                  <ResizableTh colKey="name" label="流水线名称" widths={colWidths} onResize={handleResize} className="px-1.5" />
+                {/* 名称是弹性列：不设宽度，吸收全部剩余空间（故不可拖拽调宽） */}
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl">
+                  流水线名称
                 </th>
                 <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.source }}>
                   <ResizableTh colKey="source" label="来源" widths={colWidths} onResize={handleResize} className="justify-center" />
@@ -315,7 +319,7 @@ export default function PipelineListPage() {
                   >
                     <td className="px-4 py-3 align-middle">
                       <p className="font-medium text-gray-900">{pl.name}</p>
-                      <p className="text-xs text-gray-400 truncate max-w-[240px]" title={pl.description || pl.id}>
+                      <p className="text-xs text-gray-400 truncate max-w-[480px]" title={pl.description || pl.id}>
                         {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
                       </p>
                     </td>
@@ -339,7 +343,7 @@ export default function PipelineListPage() {
                           busy={togglingId === pl.id}
                           onToggle={() => handleToggleEnabled(pl)}
                         />
-                        <span className={`text-xs ${enabled ? 'text-emerald-600' : 'text-gray-400'}`}>
+                        <span className={`text-xs whitespace-nowrap ${enabled ? 'text-emerald-600' : 'text-gray-400'}`}>
                           {enabled ? '已启用' : '未启用'}
                         </span>
                       </div>
