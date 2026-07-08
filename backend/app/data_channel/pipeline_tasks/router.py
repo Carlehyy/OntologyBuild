@@ -45,6 +45,8 @@ class PipelineTaskUpdate(BaseModel):
 
 
 def _validate(db: Session, body, existing: PipelineTask | None = None) -> None:
+    from app.data_channel.datasets.lake_gate import contract_pk, split_pk
+
     def g(k):
         v = getattr(body, k, None)
         if v is None and existing is not None:
@@ -58,10 +60,20 @@ def _validate(db: Session, body, existing: PipelineTask | None = None) -> None:
     if not pipe:
         raise HTTPException(400, "所选流水线不存在")
     if (pipe.status or "draft") != "published":
-        raise HTTPException(400, f"流水线「{pipe.name}」尚未发布，任务只能调度已发布的流水线。请先在流水线画布中完成发布。")
+        raise HTTPException(400, f"流水线「{pipe.name}」尚未发布，任务只能调度已发布的流水线。请先在流水线编辑向导中完成发布。")
+    # 启用校验只在新建/换绑流水线时做：已有任务的流水线被临时停用时，
+    # 改名等编辑不应被拦（执行时引擎自会跳过停用的流水线）
+    picking_pipeline = existing is None or pipeline_id != existing.pipeline_id
+    if picking_pipeline and pipe.enabled is False:
+        raise HTTPException(400, f"流水线「{pipe.name}」未启用，任务只能挂接已启用的流水线。请先在流水线列表打开启用开关。")
 
-    if g("write_mode") == "upsert" and not (g("primary_key") or "").strip():
-        raise HTTPException(400, "「主键合并」入库方式必须指定主键列")
+    # 主键契约仲裁：流水线契约已声明主键时，任务不能改写（可留空继承）
+    pipe_pk = contract_pk(pipe.column_definitions)
+    task_pk = (g("primary_key") or "").strip()
+    if pipe_pk and task_pk and split_pk(task_pk) != split_pk(pipe_pk):
+        raise HTTPException(400, f"主键已由流水线契约声明为「{pipe_pk}」，任务不能改写；请清空任务主键（自动继承契约）或与契约保持一致。")
+    if g("write_mode") == "upsert" and not task_pk and not pipe_pk:
+        raise HTTPException(400, "「主键合并」入库方式必须指定主键列（或在流水线契约中声明主键）")
 
     schedule_type = g("schedule_type")
     if schedule_type == "CRON":
@@ -214,23 +226,26 @@ def _curated_columns(db: Session, ds, schema: dict) -> list[dict]:
 
 @router.get("/selectable-pipelines")
 def selectable_pipelines(db: Session = Depends(get_db)):
-    """新建任务「选择流水线」阶段的候选：仅已发布 **且已执行产出过数据** 的流水线。
+    """新建任务「选择流水线」阶段的候选：**已发布且已启用** 的流水线。
 
-    每条流水线附带其成品数据集（id/名称/行数/已声明主键/列清单），
-    让前端一次拿齐：可预览的数据、可勾选的主键范围、湖中已锁定的主键契约。
+    每条流水线附带两份信息，前端一次拿齐：
+      - contract：流水线字段契约（发布封版）——列清单与主键，任务侧只读消费
+      - curated_datasets：已产出的成品数据集（id/名称/行数/湖中主键/列清单）
+    有契约的流水线即使还没产出过数据也可选（首次入湖正是任务的职责）；
+    没有契约的旧流水线仍要求已产出数据，否则无从得知列与主键范围。
     """
     from app.models.v2.dataset import Dataset, DatasetVersion
+    from app.data_channel.datasets.lake_gate import contract_pk, normalize_definitions
 
-    pipes = db.query(Pipeline).filter(Pipeline.status == "published").all()
-    # 一次取全部成品数据集的最新版本，避免逐个查询
+    pipes = db.query(Pipeline).filter(
+        Pipeline.status == "published",
+        Pipeline.enabled.isnot(False),  # NULL（老数据）视为启用
+    ).all()
     items: list[dict] = []
     for p in pipes:
-        curated_ids = [cid for cid in (p.target_curated_ids or []) if cid]
-        if not curated_ids:
-            continue
         curated: list[dict] = []
         total_rows = 0
-        for cid in curated_ids:
+        for cid in [c for c in (p.target_curated_ids or []) if c]:
             ds = db.query(Dataset).filter(Dataset.id == cid).first()
             if not ds:
                 continue
@@ -251,8 +266,16 @@ def selectable_pipelines(db: Session = Depends(get_db)):
                 "columns": _curated_columns(db, ds, schema),
             })
             total_rows += rowcount
-        # 「执行并产出过数据」：至少一个成品数据集有数据
-        if not curated:
+
+        defs = normalize_definitions(p.column_definitions)
+        contract = {
+            "primary_key": contract_pk(p.column_definitions),
+            "columns": [{"name": d["field_key"], "type": d["field_type"],
+                         "field_name": d["field_name"]} for d in defs],
+        } if defs else None
+
+        # 既无契约也无已产出数据：无从配置入库方式，不进候选
+        if not curated and not contract:
             continue
         items.append({
             "id": p.id,
@@ -261,6 +284,7 @@ def selectable_pipelines(db: Session = Depends(get_db)):
             "domain": p.domain,
             "status": p.status,
             "total_rows": total_rows,
+            "contract": contract,
             "curated_datasets": curated,
             "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         })

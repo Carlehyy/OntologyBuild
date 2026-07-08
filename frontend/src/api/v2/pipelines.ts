@@ -23,14 +23,18 @@ export interface Pipeline {
   last_run_error?: string
 }
 
-/** 字段定义——流水线产出的列元数据 */
+/** 字段契约——流水线产出列的入湖元数据（发布后封版） */
 export interface ColumnDefinition {
-  field_key: string       // 入湖列名（可 rename）
+  source_key: string      // 原始列名（流水线输出的列，只读）
+  field_key: string       // 入湖列名（字段标识，可改名；须字母/下划线开头）
   field_name: string      // 字段显示名称
-  field_type: string      // string | int | float | bool | datetime
+  field_type: string      // string | integer | float | boolean | timestamp | json
   is_primary_key: boolean // 是否主键
   nullable: boolean       // 是否允许为空
 }
+
+/** 平台类型词表——与资产湖 columns_typed 推断词表一致 */
+export const CONTRACT_FIELD_TYPES = ['string', 'integer', 'float', 'boolean', 'timestamp', 'json'] as const
 
 export interface DryRunOutput {
   dataset_name: string
@@ -60,6 +64,15 @@ export interface CommitResult {
   lake_rows: number
 }
 
+/** 试运行暂存数据的分页读取结果 */
+export interface DryRunRowsPage {
+  total: number
+  page: number
+  page_size: number
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+}
+
 export interface PipelineCreateBody {
   name: string
   domain?: string
@@ -74,6 +87,7 @@ export interface PipelineCreateBody {
 export interface PipelineRunItem {
   id: string
   status: string
+  stats?: Record<string, unknown> | null
   started_at: string | null
   finished_at: string | null
 }
@@ -111,7 +125,8 @@ const pipelinesApi = {
     apiClientV2.get<Pipeline>(`/pipelines/${id}`).then(r => r),
   create: (body: PipelineCreateBody) =>
     apiClientV2.post<Pipeline>('/pipelines', body).then(r => r),
-  update: (id: string, body: Partial<PipelineCreateBody> & { status?: string; enabled?: boolean }) =>
+  // 状态经 publish/unpublish、启用经 setEnabled——update 不再接受 status/enabled
+  update: (id: string, body: Partial<PipelineCreateBody>) =>
     apiClientV2.put<Pipeline>(`/pipelines/${id}`, body).then(r => r),
   delete: (id: string) =>
     apiClientV2.delete(`/pipelines/${id}`).then(r => r),
@@ -119,14 +134,18 @@ const pipelinesApi = {
   /** Validate & Publish */
   validate: (id: string) =>
     apiClientV2.post<ValidateResult>(`/pipelines/${id}/validate`).then(r => r),
-  publish: (id: string) =>
-    apiClientV2.post<{ id: string; status: string; version: number }>(`/pipelines/${id}/publish`).then(r => r),
+  /** 发布（封版）；enable=true 同时启用 */
+  publish: (id: string, enable = false) =>
+    apiClientV2.post<{ id: string; status: string; version: number; enabled: boolean }>(`/pipelines/${id}/publish`, { enable }).then(r => r),
+  /** 撤回发布（仅未被任务引用时允许；自动停用） */
+  unpublish: (id: string) =>
+    apiClientV2.post<Pipeline>(`/pipelines/${id}/unpublish`).then(r => r),
   versions: (id: string) =>
     apiClientV2.get<Array<{ id: string; version: number; status: string; created_at: string | null }>>(`/pipelines/${id}/versions`).then(r => r),
 
-  /** 字段定义校验：校验 column_definitions 与实际产出列及数据是否一致 */
-  validateDefinitions: (id: string, body: ValidateDefinitionsBody, maxRows?: number) =>
-    apiClientV2.post<ValidateDefinitionsResult>(`/pipelines/${id}/validate-definitions`, body, { params: { max_rows: maxRows ?? 100 } }).then(r => r),
+  /** 字段契约校验：基于第 2 步 dry-run 暂存的完整数据做全量校验（不重跑流水线） */
+  validateDefinitions: (id: string, body: ValidateDefinitionsBody, dryRunId: string) =>
+    apiClientV2.post<ValidateDefinitionsResult>(`/pipelines/${id}/validate-definitions`, body, { params: { dry_run_id: dryRunId } }).then(r => r),
 
   /** 启用开关：停用后任务池调度/链式触发不执行（手动试运行不受限） */
   setEnabled: (id: string, enabled: boolean) =>
@@ -135,6 +154,9 @@ const pipelinesApi = {
   /** 试运行：真实执行但不写资产湖，返回产物预览 + 入湖闸门预检 */
   dryRun: (id: string, maxRows?: number) =>
     apiClientV2.post<DryRunResult>(`/pipelines/${id}/dry-run`, null, { params: { max_rows: maxRows ?? 100 } }).then(r => r),
+  /** 分页读取试运行暂存的完整输出（「展开查看全部数据」） */
+  dryRunRows: (id: string, dryRunId: string, params?: { output_index?: number; page?: number; page_size?: number }) =>
+    apiClientV2.get<DryRunRowsPage>(`/pipelines/${id}/dry-run/${dryRunId}/rows`, { params }).then(r => r),
   /** 把试运行输出按原样写入资产湖（不重新执行） */
   commitDryRun: (id: string, dryRunId: string) =>
     apiClientV2.post<CommitResult>(`/pipelines/${id}/dry-run/${dryRunId}/commit`).then(r => r),

@@ -420,7 +420,16 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
     from app.data_channel.datasets.lake_gate import (
         gate_rows, persist_contract, split_pk, validate_upsert_base, infer_columns_typed)
-    gate = gate_rows(curated_ds, data, write_opts, engine_contract_cols=contract_columns)
+    # 流水线字段契约（改名/非空/主键）仅适用于单产物运行：多源/宽表拆分的
+    # 契约粒度是「每个数据集一个」，流水线级契约对不上，跳过并在警告里说明
+    contract_applicable = table_name is None and not multi_source
+    column_defs = pl.column_definitions if contract_applicable else None
+    gate = gate_rows(curated_ds, data, write_opts,
+                     engine_contract_cols=contract_columns,
+                     column_definitions=column_defs)
+    if not contract_applicable and (pl.column_definitions or []):
+        gate["warnings"].append(
+            "该产物来自多源/多表拆分，流水线级字段契约未应用（契约仅适用于单产物流水线）")
     data = gate["rows"]
     effective_pk = gate["pk"]
 
@@ -468,7 +477,8 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
             # 契约字段（primary_key/columns/columns_typed/last_output_columns）由闸门统一维护
             schema = persist_contract(curated_ds, pk=effective_pk,
                                       pk_source=gate["pk_source"],
-                                      lake_rows=lake_rows, output_rows=data)
+                                      lake_rows=lake_rows, output_rows=data,
+                                      column_definitions=column_defs)
             sample = data or lake_rows
             schema["quality_score"] = _compute_quality_score(sample, source["route"], ctx.meta)
             schema["route"] = source["route"]
@@ -641,13 +651,8 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
         else:
             pl.route = pl.route or sources[0]["route"] or "A"
 
-        # 运行结束回写 Pipeline 状态：router 派发前置了 running，
-        # Celery 路径跑完必须复位，否则管道永远显示"运行中"
-        if pl.status == "running":
-            from app.models.v2.pipeline import PipelineVersion
-            has_published = db.query(PipelineVersion).filter(
-                PipelineVersion.pipeline_id == pl.id).first() is not None
-            pl.status = "published" if has_published else "draft"
+        # 生命周期与运行态分离：status 只承载 draft/published（发布须走 publish
+        # 端点），本次运行的成败由 PipelineRun.status 承载，不回写流水线
         db.commit()
 
         run.status = "success"
@@ -689,12 +694,7 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             stats = dict(run.stats or {})
             stats.setdefault("node_status", {})
             run.stats = stats
-            try:
-                pl2 = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
-                if pl2 is not None and pl2.status == "running":
-                    pl2.status = "failed"
-            except Exception:  # noqa: BLE001
-                pass
+            # 运行失败不夺走发布态：failed 属于这次 run，不属于流水线生命周期
             db.commit()
     finally:
         db.close()

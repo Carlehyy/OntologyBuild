@@ -156,17 +156,15 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
     """pipeline_run_task 经 engine_registry 分发到此的 engine=n8n 运行入口。
 
     run 状态机 / 资产湖准入闸门 / 版本化入湖 / 统计记账全部由通用的
-    run_external_pipeline 承担；这里只保留 n8n 特有的三件事：
-    治理校验 + webhook 取数（collector）、审批时固化的期望列（契约）、
-    影子流水线状态复位策略。新引擎照此文件抄作业即可。
+    run_external_pipeline 承担；这里只保留 n8n 特有的两件事：
+    治理校验 + webhook 取数（collector）、审批时固化的期望列（契约）。
+    运行成败不再回写 pipeline.status（发布态由审批流管理），失败详情由
+    run.status/error_log 承载。新引擎照此文件抄作业即可。
     """
     from app.data_channel.pipelines.external_runner import run_external_pipeline
 
-    state: dict = {"rec": None}
-
     def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
-        rec, workflow_id, webhook_path = _resolve_n8n_context(db_, pl_)
-        state["rec"] = rec
+        _rec, workflow_id, webhook_path = _resolve_n8n_context(db_, pl_)
         client = service.get_n8n_client(db_)
         wait_seconds = int(((pl_.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
         rows, exec_meta = trigger_and_collect(client, workflow_id, webhook_path,
@@ -176,20 +174,9 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
             raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
         return rows, exec_meta
 
-    def finalize(pl_, run_) -> None:
-        # 已批准的影子流水线永远保持 published —— 运行失败不取消发布资格
-        # （置 failed 会让任务池的"必须已发布"校验拦掉后续调度）；
-        # 失败详情由 run.status/error_log 承载。
-        rec = state["rec"]
-        if rec is not None and rec.status == STATUS_APPROVED:
-            pl_.status = "published"
-        elif pl_.status == "running":
-            pl_.status = "failed" if run_.status == "failed" else "draft"
-
     contract_cols = ((pl.definition or {}).get("n8n") or {}).get("expected_columns") or None
     run_external_pipeline(db, pl, run, write_opts, engine_name="n8n",
-                          collector=collector, contract_columns=contract_cols,
-                          finalize_status=finalize)
+                          collector=collector, contract_columns=contract_cols)
 
 
 def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None,

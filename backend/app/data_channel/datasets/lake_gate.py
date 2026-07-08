@@ -25,10 +25,13 @@
   2. 映射灌本体读不到任务配置，只能读数据集元数据；
   3. 一条流水线可产出多个 curated 数据集（宽表拆分），主键的正确粒度是
      「每个数据集一个」。
-任务池仍是主键的「录入口」：首次成功入湖时经 resolve_pk 固化到 schema_json。
+契约的录入口在流水线（column_definitions，发布即封版）：单产物流水线入湖时
+经 apply_column_contract 改名/校验，主键按 lake > pipeline > task 仲裁后固化；
+任务的 primary_key 仅作兼容录入（无契约的旧流水线），首次入湖同样固化到湖。
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 
@@ -39,6 +42,133 @@ class LakeGateError(ValueError):
 def split_pk(pk: str | None) -> list[str]:
     """'a, b' → ['a', 'b']。空/None → []。"""
     return [c.strip() for c in str(pk or "").split(",") if c.strip()]
+
+
+# ── 流水线字段契约（Pipeline.column_definitions）──────────────────
+# 契约由流水线编辑向导定义、发布后封版：
+#   [{source_key, field_key, field_name, field_type, is_primary_key, nullable}]
+#   source_key = 流水线原始输出列名；field_key = 入湖列名（湖内权威列名）。
+# 仅适用于单产物流水线；多产物（宽表拆分/多源）契约粒度错位，调用方跳过。
+
+CONTRACT_FIELD_TYPES = ("string", "integer", "float", "boolean", "timestamp", "json")
+
+# 旧数据/前端旧词表的类型别名，统一映射到平台词表（与 infer_columns_typed 一致）
+_LEGACY_TYPE_ALIASES = {
+    "int": "integer", "bool": "boolean", "datetime": "timestamp",
+    "str": "string", "text": "string", "number": "float", "double": "float",
+    "date": "timestamp",
+}
+
+FIELD_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def normalize_field_type(t) -> str:
+    t = str(t or "string").strip().lower()
+    t = _LEGACY_TYPE_ALIASES.get(t, t)
+    return t if t in CONTRACT_FIELD_TYPES else "string"
+
+
+def normalize_definitions(defs: list | None) -> list[dict]:
+    """规整 column_definitions：补 source_key（旧数据只有 field_key）、
+    映射旧类型词、丢弃空项。所有消费方一律经此函数读契约。"""
+    out: list[dict] = []
+    for d in defs or []:
+        if not isinstance(d, dict):
+            continue
+        field_key = str(d.get("field_key") or "").strip()
+        source_key = str(d.get("source_key") or "").strip() or field_key
+        if not source_key:
+            continue
+        out.append({
+            "source_key": source_key,
+            "field_key": field_key or source_key,
+            "field_name": str(d.get("field_name") or "").strip() or (field_key or source_key),
+            "field_type": normalize_field_type(d.get("field_type")),
+            "is_primary_key": bool(d.get("is_primary_key")),
+            "nullable": bool(d.get("nullable", True)),
+        })
+    return out
+
+
+def contract_pk(defs: list | None) -> str:
+    """流水线契约声明的主键（入湖列名 field_key，逗号拼接）。无契约/无主键 → ""。"""
+    return ",".join(d["field_key"] for d in normalize_definitions(defs) if d["is_primary_key"])
+
+
+def _value_type(v) -> str | None:
+    """单值的平台类型（与 infer_columns_typed 同一词表）。空值 → None。"""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, int):
+        return "integer"
+    if isinstance(v, float):
+        return "float"
+    if isinstance(v, (dict, list)):
+        return "json"
+    s = str(v).strip()
+    if not s:
+        return None
+    from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+    try:
+        t = SchemaInferenceStep._infer_type(s)
+    except Exception:  # noqa: BLE001 — 推断失败按 string 处理，不阻断
+        return "string"
+    return None if t == "null" else (t if t in CONTRACT_FIELD_TYPES else "string")
+
+
+_TYPE_CHECK_SAMPLE = 200  # 类型检查采样行数——只产警告，无需全量扫描
+
+
+def apply_column_contract(rows: list[dict], definitions: list | None, *,
+                          dataset_name: str = "") -> tuple[list[dict], list[str]]:
+    """按流水线字段契约处理行数据：source_key→field_key 改名 + 约束校验。
+
+    - 改名：契约声明的原始列统一重命名为入湖列名（湖内只认 field_key）
+    - 非空：nullable=False 的列出现空值 → LakeGateError 硬失败（契约即承诺）
+    - 类型：与契约类型不符 → 警告不阻断（值类型推断本身是模糊的）
+    - 契约外的输出列原样保留：源端加列是常态，交给漂移检测提醒
+    返回 (处理后的行, 警告列表)。
+    """
+    defs = normalize_definitions(definitions)
+    if not defs or not rows:
+        return rows, []
+    rename = {d["source_key"]: d["field_key"] for d in defs
+              if d["source_key"] != d["field_key"]}
+    if rename:
+        rows = [{rename.get(str(k), str(k)): v for k, v in row.items()} for row in rows]
+
+    for d in defs:
+        if d["nullable"]:
+            continue
+        col = d["field_key"]
+        for i, row in enumerate(rows):
+            v = row.get(col)
+            if v is None or (isinstance(v, str) and not v.strip()):
+                raise LakeGateError(
+                    f"数据集「{dataset_name}」第 {i + 1} 行的列「{col}」为空，但流水线契约声明该列不允许为空。"
+                    f"请在流水线中过滤/补全该列，或回到流水线（草稿态）放宽该列的空值约束。")
+
+    warnings: list[str] = []
+    for d in defs:
+        expected = d["field_type"]
+        if expected in ("string", "json"):
+            continue
+        col = d["field_key"]
+        observed: set[str] = set()
+        for row in rows[:_TYPE_CHECK_SAMPLE]:
+            actual = _value_type(row.get(col))
+            if actual is None or actual == expected:
+                continue
+            if expected == "float" and actual == "integer":
+                continue
+            observed.add(actual)
+        if observed:
+            warnings.append(
+                f"列「{col}」契约类型为 {expected}，本次数据出现 {'/'.join(sorted(observed))} 值"
+                f"（采样前 {_TYPE_CHECK_SAMPLE} 行）")
+    return rows, warnings
 
 
 def normalize_rows_for_lake(rows: list[dict], *, dataset_name: str = "") -> list[dict]:
@@ -97,25 +227,37 @@ def validate_pk(rows: list[dict], pk_cols: list[str], *,
         seen[key] = i
 
 
-def resolve_pk(task_pk: str | None, declared_pk: str | None, *,
+def resolve_pk(task_pk: str | None, declared_pk: str | None,
+               pipeline_pk: str | None = None, *,
                dataset_name: str = "") -> tuple[str, str]:
-    """仲裁主键声明：任务传入 vs 湖中已固化。
+    """仲裁主键声明：湖中已固化 > 流水线契约 > 任务配置。
 
-    返回 (生效主键, 来源)。来源 ∈ "task"(首次声明) | "lake"(沿用湖中契约) | ""。
-    两边都有且不一致 → 硬失败：改主键 = 全部实例身份重算，必须显式操作
-    （先清除湖中声明或用 overwrite 重建资产），不允许由任务配置静默改写。
+    返回 (生效主键, 来源)。来源 ∈ "lake" | "pipeline" | "task" | ""。
+    任意两方同时声明且不一致 → 硬失败：改主键 = 全部实例身份重算，必须显式
+    操作（以 overwrite 重建资产清除湖中声明，或修改契约/任务配置对齐），
+    不允许被静默改写。
     """
     task_cols = split_pk(task_pk)
     lake_cols = split_pk(declared_pk)
-    if task_cols and lake_cols:
-        if task_cols != lake_cols:
-            raise LakeGateError(
-                f"数据集「{dataset_name}」已声明主键 {lake_cols}，与任务配置的 {task_cols} 不一致。"
-                f"主键是该资产的身份契约，不能由任务静默改写；若确需变更，请先以 overwrite 方式"
-                f"重建该资产（重建会清除旧声明），或修改任务主键与湖中声明保持一致。")
-        return ",".join(lake_cols), "lake"
+    pipe_cols = split_pk(pipeline_pk)
+    if lake_cols and pipe_cols and lake_cols != pipe_cols:
+        raise LakeGateError(
+            f"数据集「{dataset_name}」湖中已声明主键 {lake_cols}，与流水线契约的 {pipe_cols} 不一致。"
+            f"主键是该资产的身份契约；若确需变更，请先以 overwrite 方式重建该资产"
+            f"（重建会清除旧声明），或修改流水线契约与湖中声明保持一致。")
+    if lake_cols and task_cols and lake_cols != task_cols:
+        raise LakeGateError(
+            f"数据集「{dataset_name}」已声明主键 {lake_cols}，与任务配置的 {task_cols} 不一致。"
+            f"主键是该资产的身份契约，不能由任务静默改写；若确需变更，请先以 overwrite 方式"
+            f"重建该资产（重建会清除旧声明），或修改任务主键与湖中声明保持一致。")
+    if pipe_cols and task_cols and pipe_cols != task_cols:
+        raise LakeGateError(
+            f"数据集「{dataset_name}」的流水线契约已声明主键 {pipe_cols}，与任务配置的 {task_cols} 不一致。"
+            f"主键已上收至流水线契约管理，请清空任务的主键配置或与契约保持一致。")
     if lake_cols:
         return ",".join(lake_cols), "lake"
+    if pipe_cols:
+        return ",".join(pipe_cols), "pipeline"
     if task_cols:
         return ",".join(task_cols), "task"
     return "", ""
@@ -171,21 +313,27 @@ def infer_columns_typed(rows: list[dict], sample_size: int = 50) -> list[dict]:
 
 
 def gate_rows(curated_ds, rows: list[dict], write_opts: dict | None,
-              engine_contract_cols: list[str] | None = None) -> dict:
+              engine_contract_cols: list[str] | None = None,
+              column_definitions: list | None = None) -> dict:
     """入湖前置校验（合并前）。返回 gate 结果，供调用方合并/落盘/记账。
 
-    返回 {rows, pk, pk_source, drift, warnings}。主键违规抛 LakeGateError。
+    column_definitions：流水线字段契约（仅单产物流水线传入）——先改名/校验
+    约束，其主键声明参与仲裁（lake > pipeline > task）。
+    返回 {rows, pk, pk_source, drift, warnings}。主键/非空违规抛 LakeGateError。
     """
     name = getattr(curated_ds, "name", "") or ""
     schema = dict(getattr(curated_ds, "schema_json", None) or {})
     rows = normalize_rows_for_lake(rows, dataset_name=name)
+    rows, contract_warnings = apply_column_contract(
+        rows, column_definitions, dataset_name=name)
 
     pk, pk_source = resolve_pk((write_opts or {}).get("primary_key"),
-                               schema.get("primary_key"), dataset_name=name)
+                               schema.get("primary_key"),
+                               contract_pk(column_definitions), dataset_name=name)
     if pk and rows:
         validate_pk(rows, split_pk(pk), dataset_name=name, scope="本次输出")
 
-    warnings: list[str] = []
+    warnings: list[str] = list(contract_warnings)
     new_cols = [c["name"] for c in infer_columns_typed(rows)] if rows else []
     # 漂移基线用「上次运行的输出列」：append 等合并模式下湖中列是历史并集，
     # 拿它当基线会让正常的追加运行每次误报"缺失列"
@@ -223,12 +371,15 @@ def validate_upsert_base(old_rows: list[dict], pk_cols: list[str], *,
 
 
 def persist_contract(curated_ds, *, pk: str, pk_source: str,
-                     lake_rows: list[dict], output_rows: list[dict] | None = None) -> dict:
+                     lake_rows: list[dict], output_rows: list[dict] | None = None,
+                     column_definitions: list | None = None) -> dict:
     """把契约固化/更新到 schema_json（返回新 schema dict，调用方负责赋值提交）。
 
-    - primary_key：首次声明（pk_source=="task"）时写入；已有声明保持不动
+    - primary_key：首次声明时写入（来源 task/pipeline）；已有声明保持不动
     - columns / columns_typed：每次成功入湖都刷新为湖中本版实际列（合并后）
     - last_output_columns：本次流水线输出的列（合并前），下次漂移检测的基线
+    - field_names / contract_definitions：流水线契约的显示名与完整定义快照，
+      供资产湖展示与审计（每次入湖随契约刷新）
     """
     schema = dict(getattr(curated_ds, "schema_json", None) or {})
     typed = infer_columns_typed(lake_rows)
@@ -237,6 +388,10 @@ def persist_contract(curated_ds, *, pk: str, pk_source: str,
     if output_rows:
         schema["last_output_columns"] = [
             c["name"] for c in infer_columns_typed(output_rows)]
+    defs = normalize_definitions(column_definitions)
+    if defs:
+        schema["field_names"] = {d["field_key"]: d["field_name"] for d in defs}
+        schema["contract_definitions"] = defs
     if pk and not schema.get("primary_key"):
         schema["primary_key"] = pk
         schema["contract"] = {
