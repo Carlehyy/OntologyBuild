@@ -169,9 +169,19 @@ class StorageService:
         return url
 
     def delete_object(self, uri: str) -> None:
-        """删除对象。"""
+        """删除对象。对象已不存在视为成功；MinIO 未连接时回退本地文件。"""
         bucket, key = self._parse_uri(uri)
-        self._client.remove_object(bucket, key)
+        if self._available and self._client:
+            try:
+                self._client.remove_object(bucket, key)
+            except S3Error as e:
+                if getattr(e, "code", "") not in ("NoSuchKey", "NoSuchBucket"):
+                    raise
+            return
+        # 本地回退（不走 _local_path，删除不该顺手建目录）
+        local = os.path.join(self._LOCAL_BASE, bucket, key)
+        if os.path.exists(local):
+            os.remove(local)
 
     def list_prefix(self, bucket: str, prefix: str) -> list[str]:
         """返回 prefix 下的对象键列表。"""

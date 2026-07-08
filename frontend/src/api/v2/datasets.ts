@@ -14,6 +14,8 @@ export interface DatasetOverviewItem {
   name: string
   raw_name: string
   kind: string
+  /** 已声明的主键契约（逗号分隔复合主键），空串 = 未声明 */
+  primary_key: string
   source: 'sync' | 'upload'
   connection_name: string
   version_count: number
@@ -22,6 +24,20 @@ export interface DatasetOverviewItem {
   consumers: DatasetConsumer[]
   created_at: string | null
   updated_at: string | null
+}
+
+export interface RowEditOp {
+  key?: Record<string, string>
+  values?: Record<string, unknown>
+}
+
+export interface RowEditsResult {
+  dataset_id: string
+  version_no: number
+  rowcount: number
+  updated: number
+  inserted: number
+  deleted: number
 }
 
 export interface DatasetVersionItem {
@@ -87,8 +103,8 @@ const datasetsApi = {
   schema: (datasetId: string): Promise<{ dataset_id: string; columns: DatasetSchemaColumn[] }> =>
     apiClientV2.get(`/datasets/${datasetId}/schema`),
 
-  /** 最新版本数据预览 */
-  previewLatest: (datasetId: string, limit = 20): Promise<{
+  /** 最新版本数据预览（支持 offset 分页） */
+  previewLatest: (datasetId: string, limit = 20, offset = 0): Promise<{
     dataset_id: string
     dataset_name?: string
     version_no?: number
@@ -96,7 +112,24 @@ const datasetsApi = {
     columns: string[]
     rows: Record<string, unknown>[]
   }> =>
-    apiClientV2.get(`/datasets/${datasetId}/preview`, { params: { limit } }),
+    apiClientV2.get(`/datasets/${datasetId}/preview`, { params: { limit, offset } }),
+
+  /** 声明主键契约（存在·非空·唯一三校验；被映射绑定后锁定） */
+  declareContract: (datasetId: string, primaryKey: string): Promise<{
+    dataset_id: string
+    primary_key: string
+    rows_validated: number
+  }> =>
+    apiClientV2.put(`/datasets/${datasetId}/contract`, { primary_key: primaryKey }),
+
+  /** 在线维护：改单元格/增删行 → 生成新版本；base 版本不一致返回 409 */
+  editRows: (datasetId: string, payload: {
+    base_version_no: number
+    updates?: RowEditOp[]
+    inserts?: RowEditOp[]
+    deletes?: RowEditOp[]
+  }): Promise<RowEditsResult> =>
+    apiClientV2.post(`/datasets/${datasetId}/rows/edit`, payload),
 }
 
 export default datasetsApi

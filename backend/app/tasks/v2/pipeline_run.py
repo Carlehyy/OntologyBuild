@@ -407,7 +407,22 @@ def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None =
 
 
 def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> dict:
+    """入湖是「读湖中全量→内存合并→写新版本」的读改写，全程持数据集写锁。
+
+    任务调度与手动运行并发落同一 curated 数据集时后到者等待；不锁则双方
+    各自基于旧版本合并，先提交的增量被后提交者静默覆盖。锁键按产物名，
+    get-or-create 也在锁内，同名数据集的创建竞争一并串行化。
+    """
+    from app.data_channel.datasets.lock import dataset_write_lock
+
     ds_name = _curated_name(pl, source, multi_source, table_name)
+    with dataset_write_lock(f"curated::{ds_name}", bind=db.get_bind()):
+        return _save_curated_dataset_in_lock(
+            db, svc, pl, source, data, ctx, multi_source, table_name,
+            write_opts, contract_columns, ds_name)
+
+
+def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str) -> dict:
     # 复用既有 curated 数据集追加版本：同一管道反复运行不再无限增殖新数据集，
     # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本
     from app.models.v2.dataset import Dataset as _DS
