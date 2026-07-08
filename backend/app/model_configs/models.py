@@ -15,7 +15,7 @@ class ModelConfig(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=False)  # llm: openai|anthropic|compatible; ocr: paddleocr|tesseract|external_api
     models: Mapped[dict] = mapped_column(JSON, default=list)
     options: Mapped[dict] = mapped_column(JSON, default=dict)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
