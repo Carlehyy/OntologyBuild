@@ -107,8 +107,10 @@ function ResizableTh({
   }, [colKey, widths, onResize])
 
   return (
-    <div className={`relative flex items-center ${className || ''}`}
-      style={{ width: widths[colKey] || 150, minWidth: 60 }}
+    // 宽度撑满 th：列的实际宽度由 th 的 width 样式驱动（table-fixed 下视口变宽
+    // 会按比例拉伸），内层若钉死像素宽会导致表头文字与单元格内容错位
+    <div className={`relative flex items-center w-full ${className || ''}`}
+      style={{ minWidth: 60 }}
     >
       <span className="truncate">{label}</span>
       <div
@@ -204,12 +206,6 @@ export default function PipelineListPage() {
 
   return (
     <div className="space-y-3">
-      {/* 页头 */}
-      <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-        <GitBranch size={20} className="text-[var(--color-nav-bg)]" />
-        数据流水线
-      </h1>
-
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex items-center gap-3 bg-white rounded-xl border px-4 py-3 flex-wrap">
         <div className="relative w-72">
