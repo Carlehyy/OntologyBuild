@@ -10,7 +10,7 @@ class ModelConfigCreate(BaseModel):
     api_base: Optional[str] = None
     models: List[str] = []
     options: dict = {}
-    enabled: bool = True
+    enabled: bool = False
     is_default: bool = False
 
 class ModelConfigUpdate(BaseModel):
@@ -32,7 +32,7 @@ class ModelConfigOut(BaseModel):
     api_base: Optional[str]
     models: List[str]
     options: dict = {}
-    enabled: bool = True
+    enabled: bool = False
     is_default: bool = False
     created_by: str
     created_at: datetime
