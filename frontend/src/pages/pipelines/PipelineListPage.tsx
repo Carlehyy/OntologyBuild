@@ -204,11 +204,11 @@ export default function PipelineListPage() {
             <thead className="bg-gray-50 border-b sticky top-0 z-10">
               <tr>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '30%' }}>
-                  流水线名称
+                  流水线信息
                 </th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>流水线来源</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '12%' }}>启用状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '18%' }}>最近运行</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '18%' }}>最近执行结果</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '15%' }}>产物</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '15%' }}>操作</th>
               </tr>
@@ -227,9 +227,9 @@ export default function PipelineListPage() {
                   >
                     <td className="px-4 py-3 align-middle">
                       <p className="font-medium text-gray-900 truncate" title={pl.name}>{pl.name}</p>
-                      {pl.description && (
-                        <p className="text-xs text-gray-400 truncate" title={pl.description}>{pl.description}</p>
-                      )}
+                      <p className="text-xs text-gray-400 truncate" title={pl.description || undefined}>
+                        {pl.description || '暂未设置描述信息'}
+                      </p>
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
