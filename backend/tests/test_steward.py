@@ -268,7 +268,13 @@ def test_shadow_pipeline_guards(pipelines_client, client, auth_headers, db, fake
     db.refresh(draft_record)
     pid = draft_record.pipeline_id
 
+    # 名称/描述/契约平台侧放行（0008 生命周期收敛后的新行为），且回同步管家记录
     r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"name": "改名"})
+    assert r.status_code == 200
+    db.refresh(draft_record)
+    assert draft_record.name == "改名"
+    # 编排字段仍归数据管家托管
+    r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"definition": {"nodes": []}})
     assert r.status_code == 400
     r = client.post(f"/api/v2/pipelines/{pid}/publish", headers=auth_headers)
     assert r.status_code == 400
