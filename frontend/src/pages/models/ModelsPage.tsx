@@ -52,8 +52,17 @@ function parseOptions(text?: string) {
   }
 }
 
+function parseTokenLimit(value: any): number | undefined {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined
+}
+
 function buildPayload(data: any, mode: 'create' | 'update' = 'create') {
-  const options = {
+  const isLlm = (data.config_type || 'llm') === 'llm'
+  const maxContext = isLlm ? parseTokenLimit(data.max_context_tokens) : undefined
+  const maxOutput = isLlm ? parseTokenLimit(data.max_output_tokens) : undefined
+  const options: Record<string, any> = {
     ...parseOptions(data.options_json),
     ...(data.config_type === 'ocr' ? {
       enabled: data.ocr_enabled === 'true',
@@ -61,6 +70,10 @@ function buildPayload(data: any, mode: 'create' | 'update' = 'create') {
       device: data.ocr_device || 'cpu',
     } : {}),
   }
+  if (maxContext !== undefined) options.max_context_tokens = maxContext
+  else delete options.max_context_tokens
+  if (maxOutput !== undefined) options.max_output_tokens = maxOutput
+  else delete options.max_output_tokens
   const payload: any = {
     name: data.name,
     config_type: data.config_type || 'llm',
@@ -313,8 +326,10 @@ export default function ModelsPage() {
     setValue('ocr_enabled', options.enabled ? 'true' : 'false')
     setValue('ocr_lang', String(options.lang || 'ch'))
     setValue('ocr_device', String(options.device || 'cpu'))
+    setValue('max_context_tokens', options.max_context_tokens != null ? String(options.max_context_tokens) : '')
+    setValue('max_output_tokens', options.max_output_tokens != null ? String(options.max_output_tokens) : '')
     setValue('options_json', JSON.stringify(
-      Object.fromEntries(Object.entries(options).filter(([k]) => !['lang', 'device', 'enabled'].includes(k))),
+      Object.fromEntries(Object.entries(options).filter(([k]) => !['lang', 'device', 'enabled', 'max_context_tokens', 'max_output_tokens'].includes(k))),
       null, 2,
     ))
   }
@@ -683,6 +698,22 @@ export default function ModelsPage() {
                 <textarea {...regEdit('models_str')} rows={3} placeholder="gpt-4o&#10;gpt-4o-mini"
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
               </div>
+              {(watchEdit('config_type') || 'llm') === 'llm' && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">最大上下文（tokens）</label>
+                    <input {...regEdit('max_context_tokens')} type="number" min={1} placeholder="如：128000"
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                    <p className="text-[11px] text-slate-400 mt-1">模型可接受的最大输入上下文，留空则不限制</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">最大输出（tokens）</label>
+                    <input {...regEdit('max_output_tokens')} type="number" min={1} placeholder="如：4096"
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                    <p className="text-[11px] text-slate-400 mt-1">单次调用最大生成 tokens，留空用默认值</p>
+                  </div>
+                </div>
+              )}
               {(watchEdit('config_type') || 'llm') === 'ocr' && (
                 <div className="grid grid-cols-3 gap-4">
                   <div>
@@ -802,6 +833,22 @@ function ModelFormModal({ title, onClose, onSubmit, register, handleSubmit, conf
             <textarea {...register('models_str')} rows={3} placeholder="gpt-4o&#10;gpt-4o-mini"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
           </div>
+          {configType === 'llm' && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">最大上下文（tokens）</label>
+                <input {...register('max_context_tokens')} type="number" min={1} placeholder="如：128000"
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                <p className="text-[11px] text-slate-400 mt-1">模型可接受的最大输入上下文，留空则不限制</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">最大输出（tokens）</label>
+                <input {...register('max_output_tokens')} type="number" min={1} placeholder="如：4096"
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                <p className="text-[11px] text-slate-400 mt-1">单次调用最大生成 tokens，留空用默认值</p>
+              </div>
+            </div>
+          )}
           {configType === 'ocr' && (
             <div className="grid grid-cols-3 gap-4">
               <div>

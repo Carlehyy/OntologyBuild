@@ -114,6 +114,9 @@ def _chat_openai(kw: dict, messages: list[dict], tools: list[dict]) -> dict:
             oai_msgs.append({"role": m["role"], "content": m.get("content") or ""})
 
     create_kwargs: dict = {"model": kw["model"], "messages": oai_msgs, "temperature": 0.2}
+    max_output = kw.get("max_output_tokens")
+    if max_output:  # 用户在模型配置中设置的最大输出上限
+        create_kwargs["max_tokens"] = int(max_output)
     if tools:  # 空 tools 列表部分 provider 会直接报错，纯文本调用时省略
         create_kwargs["tools"] = [{"type": "function",
                                    "function": {"name": t["name"], "description": t["description"],
@@ -165,7 +168,8 @@ def _chat_anthropic(kw: dict, messages: list[dict], tools: list[dict]) -> dict:
         else:
             aa_msgs.append({"role": "user", "content": m.get("content") or ""})
 
-    create_kwargs: dict = {"model": kw["model"], "max_tokens": 4096, "temperature": 0.2,
+    max_output = int(kw.get("max_output_tokens") or 4096)  # Anthropic 必填，默认 4096
+    create_kwargs: dict = {"model": kw["model"], "max_tokens": max_output, "temperature": 0.2,
                            "system": system, "messages": aa_msgs}
     if tools:  # 纯文本调用时省略 tools
         create_kwargs["tools"] = [{"name": t["name"], "description": t["description"],

@@ -144,6 +144,26 @@ export default function ModelDetailDrawer({
                   {new Date(model.updated_at).toLocaleString('zh-CN')}
                 </p>
               </div>
+              {model.config_type === 'llm' && (
+                <>
+                  <div>
+                    <p className="text-[11px] text-slate-400 mb-0.5">最大上下文</p>
+                    <p className="text-sm text-slate-700 font-medium">
+                      {model.options?.max_context_tokens
+                        ? `${Number(model.options.max_context_tokens).toLocaleString()} tokens`
+                        : '未限制'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-slate-400 mb-0.5">最大输出</p>
+                    <p className="text-sm text-slate-700 font-medium">
+                      {model.options?.max_output_tokens
+                        ? `${Number(model.options.max_output_tokens).toLocaleString()} tokens`
+                        : '默认'}
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* 模型列表 */}
@@ -181,18 +201,21 @@ export default function ModelDetailDrawer({
             )}
 
             {/* 高级参数 */}
-            {model.options && Object.keys(model.options).filter((k) => k !== 'usage_tags').length > 0 && (
-              <div className="mt-4 pt-4 border-t border-slate-100">
-                <p className="text-[11px] text-slate-400 mb-2">高级参数</p>
-                <div className="bg-slate-50 rounded-lg p-3 font-mono text-xs text-slate-600 overflow-x-auto">
-                  <pre>{JSON.stringify(
-                    Object.fromEntries(Object.entries(model.options).filter(([k]) => k !== 'usage_tags')),
-                    null,
-                    2
-                  )}</pre>
+            {(() => {
+              const HIDDEN_KEYS = ['usage_tags', 'max_context_tokens', 'max_output_tokens']
+              const extra = model.options
+                ? Object.entries(model.options).filter(([k]) => !HIDDEN_KEYS.includes(k))
+                : []
+              if (extra.length === 0) return null
+              return (
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <p className="text-[11px] text-slate-400 mb-2">高级参数</p>
+                  <div className="bg-slate-50 rounded-lg p-3 font-mono text-xs text-slate-600 overflow-x-auto">
+                    <pre>{JSON.stringify(Object.fromEntries(extra), null, 2)}</pre>
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </div>
 
           {/* 统计数据 */}

@@ -106,10 +106,30 @@ def llm_call_kwargs(model_config) -> dict | None:
                 f"模型配置「{name}」的 API Key 无法解密，可能是本地加密密钥变更导致。"
                 "请到「模型配置」重新填写并保存 API Key。"
             ) from exc
-    return {
+
+    options = getattr(model_config, "options", None) or {}
+    kwargs = {
         "model_config_id": getattr(model_config, "id", None),
         "provider": getattr(model_config, "provider", None),
         "api_key": api_key,
         "api_base": getattr(model_config, "api_base", None),
         "model": model_name,
     }
+    max_output = _positive_int(options.get("max_output_tokens"))
+    if max_output:
+        kwargs["max_output_tokens"] = max_output
+    max_context = _positive_int(options.get("max_context_tokens"))
+    if max_context:
+        kwargs["max_context_tokens"] = max_context
+    return kwargs
+
+
+def _positive_int(value) -> int | None:
+    """将 options 中的 token 上限解析为正整数，非法值返回 None。"""
+    if value is None or value == "":
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
