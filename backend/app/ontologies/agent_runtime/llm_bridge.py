@@ -31,8 +31,10 @@ def chat(call_kwargs: dict, messages: list[dict], tools: list[dict]) -> dict[str
     error_msg = None
     try:
         if provider == "anthropic":
-            return _chat_anthropic(call_kwargs, messages, tools)
-        return _chat_openai(call_kwargs, messages, tools)
+            result = _chat_anthropic(call_kwargs, messages, tools)
+        else:
+            result = _chat_openai(call_kwargs, messages, tools)
+        return _strip_think(result)
     except LLMError as e:
         status = "error"
         error_msg = str(e)
@@ -69,6 +71,20 @@ def _record_call(model_config_id: str, model_name: str, provider: str,
         db.commit()
     finally:
         db.close()
+
+
+def _strip_think(result: dict) -> dict:
+    """清洗模型返回的 <think>...</think> 标签（MiniMax / DeepSeek-R1 等推理模型）。
+
+    模型有时会在正文前附加思考过程，形如：
+      <think>用户说 ping，我应该回 pong</think> Pong! ...
+
+    这里提取 </think> 之后的纯文本作为实际回复。
+    """
+    content = result.get("content")
+    if content and isinstance(content, str) and "</think>" in content:
+        result["content"] = content.split("</think>", 1)[1].strip()
+    return result
 
 
 def _chat_openai(kw: dict, messages: list[dict], tools: list[dict]) -> dict:

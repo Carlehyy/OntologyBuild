@@ -175,10 +175,13 @@ export function useMockModels() {
   const getModelHeatCells = useCallback((modelId: string, n = 60): HeatCell[] => {
     const model = models.find(m => m.id === modelId)
     const s = modelStats[modelId]
+    // 后端始终返回60格；仅 API 异常时才 fallback 到空占位
     if (!s || s.heatCells.length === 0) {
       return emptyHeatCells(model, n)
     }
-    return s.heatCells as HeatCell[]
+    const cells = s.heatCells as HeatCell[]
+    // 后端已补满60格，直接返回
+    return cells.length === n ? cells : cells.slice(0, n)
   }, [models, modelStats])
 
   const getModelRunStatus = useCallback((modelId: string): RunStatus => {
