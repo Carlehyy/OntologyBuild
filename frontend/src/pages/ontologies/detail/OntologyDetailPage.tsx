@@ -10,23 +10,17 @@ import OverviewDashboard from './tabs/OverviewDashboard'
 import GovernanceTab from './tabs/GovernanceTab'
 import ModelStructureView from './tabs/ModelStructureView'
 import FormalInstancesView from './tabs/FormalInstancesView'
-import EntitiesTab from './tabs/EntitiesTab'
-import LogicTab from './tabs/LogicTab'
-import ActionsTab from './tabs/ActionsTab'
-import AuditTab from './tabs/AuditTab'
 import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
 import VersionsTab from './tabs/VersionsTab'
 import './ontology-glass.css'
 import {
-  Network, Box, Tags, Zap, Activity, BookOpen,
-  Brain, Database, Upload, Shield, ArrowLeft,
-  LayoutGrid, Play, History, Download, GitBranch,
+  Network, Box, BookOpen,
+  Database, Upload, Shield, ArrowLeft,
+  LayoutGrid, History, Download, GitBranch,
   Boxes, ChevronRight, Sparkles, X, Loader2,
 } from 'lucide-react'
 
-const AttributeSchemaTab = lazy(() => import('./tabs/AttributeSchemaTab'))
 const VocabularyTab = lazy(() => import('./tabs/VocabularyTab'))
-const InferenceResultsTab = lazy(() => import('./tabs/InferenceResultsTab'))
 
 /* ═════════════════════════════════════════════════════════════
    信息架构（按用户操作旅程重组）：
@@ -59,8 +53,7 @@ interface GroupDef {
    ① 总览        驾驶舱：模型/数据/运行/事实流 一屏看懂 + 健康检查
    ② 本体建模    主入口=图谱编辑器（正规本体唯一编辑面）+ 只读结构速览
    ③ 实例数据    灌数据（绑定映射）→ 看数据（formal 实例）→ 原始文件
-   ④ 治理与推演  待审批 / 自治等级 / 哨兵 / 事实流 / 版本
-   ⑤ 旧版工具    旧扁平模型的历史页面，仅供查看存量数据 */
+   ④ 治理与推演  待审批 / 自治等级 / 哨兵 / 事实流 / 版本 */
 const GROUPS: GroupDef[] = [
   {
     key: 'overview',
@@ -99,20 +92,6 @@ const GROUPS: GroupDef[] = [
     cards: [
       { key: 'gov-console', label: '治理驾驶舱', description: '待审批（批准/拒绝）· 自治等级（影子→人审→自动）· 哨兵触发 · 事实流', icon: Shield, primary: true },
       { key: 'versions', label: '版本记录', description: '模型版本快照与变更日志，支持回滚对比', icon: History },
-    ],
-  },
-  {
-    key: 'legacy',
-    label: '旧版工具',
-    hint: '旧扁平模型（entities/logic/actions）的历史页面，仅供查看存量数据；新建模请一律用图谱编辑器',
-    icon: History,
-    cards: [
-      { key: 'entities', label: '对象类型（旧）', description: '旧扁平模型的实体列表', icon: Box },
-      { key: 'schemas', label: '属性模式（旧）', description: '旧字段与约束配置', icon: Tags },
-      { key: 'logic', label: '逻辑规则（旧）', description: '旧校验与推理规则', icon: Zap },
-      { key: 'actions', label: '可执行动作（旧）', description: '旧动作定义', icon: Activity },
-      { key: 'audit', label: '质量审查（旧）', description: 'AI 多步审查：孤立实体、断链等', icon: Shield },
-      { key: 'inference', label: '推理结果（旧）', description: '旧推理查询与影子运行', icon: Brain },
     ],
   },
 ]
@@ -183,13 +162,6 @@ export default function OntologyDetailPage() {
       case 'files': return <FilesTab ontologyId={id!} />
       case 'versions': return <VersionsTab ontologyId={id!} />
       case 'vocabulary': return <Suspense fallback={<LoadingState />}><VocabularyTab ontologyId={id!} /></Suspense>
-      // —— 旧版工具（历史数据查看）——
-      case 'entities': return <EntitiesTab ontologyId={id!} />
-      case 'schemas': return <Suspense fallback={<LoadingState />}><AttributeSchemaTab ontologyId={id!} /></Suspense>
-      case 'logic': return <LogicTab ontologyId={id!} />
-      case 'actions': return <ActionsTab ontologyId={id!} />
-      case 'audit': return <AuditTab ontologyId={id!} />
-      case 'inference': return <Suspense fallback={<LoadingState />}><InferenceResultsTab ontologyId={id!} /></Suspense>
       default: return null
     }
   }
