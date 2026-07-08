@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from app.database import SessionLocal
 from app.deps import get_current_user
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
+from app.data_channel.steward.models import N8nPipeline
 # 确保 Dataset 模型先导入以解析 FK
 import app.models.v2.dataset  # noqa: F401
 
@@ -137,6 +138,15 @@ def list_pipelines(
     results = []
     for pl in q:
         d = _format_pipeline(pl)
+        # n8n 流水线：附加 n8n_workflow_id 供前端拼接跳转地址
+        if _is_n8n_pipeline(pl):
+            n8n_def = (pl.definition or {}).get("n8n") or {}
+            steward_id = n8n_def.get("steward_id")
+            if steward_id:
+                n8n_rec = db.query(N8nPipeline).filter(N8nPipeline.id == steward_id).first()
+                if n8n_rec:
+                    d["definition"] = dict(d.get("definition") or {})
+                    d["definition"]["n8n"] = {**n8n_def, "n8n_workflow_id": n8n_rec.n8n_workflow_id}
         # 添加最近运行信息
         last_run = db.query(PipelineRun).filter(
             PipelineRun.pipeline_id == pl.id

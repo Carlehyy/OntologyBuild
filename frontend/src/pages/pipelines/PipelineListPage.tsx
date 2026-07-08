@@ -34,11 +34,6 @@ function isN8nPipeline(pl: Pipeline): boolean {
   return (pl.definition as { engine?: string } | null)?.engine === 'n8n'
 }
 
-function stewardUrl(pl: Pipeline): string {
-  const rid = (pl.definition as { n8n?: { steward_id?: string } } | null)?.n8n?.steward_id
-  return rid ? `/data/pipelines/steward?record=${encodeURIComponent(rid)}` : '/data/pipelines/steward'
-}
-
 function formatTime(iso?: string | null): string {
   if (!iso) return '—'
   try {
@@ -75,6 +70,7 @@ export default function PipelineListPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
   const [editTarget, setEditTarget] = useState<Pipeline | null>(null)
+  const [n8nApiUrl, setN8nApiUrl] = useState('')
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -88,6 +84,10 @@ export default function PipelineListPage() {
   }
 
   useEffect(() => { load() }, [search])
+
+  useEffect(() => {
+    stewardApi.status().then(s => setN8nApiUrl(s.n8n.api_url)).catch(() => {})
+  }, [])
 
   const handleToggleEnabled = async (pl: Pipeline) => {
     const next = !(pl.enabled ?? true)
@@ -206,7 +206,7 @@ export default function PipelineListPage() {
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '30%' }}>
                   流水线名称
                 </th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>来源</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>流水线来源</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '12%' }}>启用状态</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '18%' }}>最近运行</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '15%' }}>产物</th>
@@ -227,9 +227,9 @@ export default function PipelineListPage() {
                   >
                     <td className="px-4 py-3 align-middle">
                       <p className="font-medium text-gray-900 truncate" title={pl.name}>{pl.name}</p>
-                      <p className="text-xs text-gray-400 truncate" title={pl.description || pl.id}>
-                        {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
-                      </p>
+                      {pl.description && (
+                        <p className="text-xs text-gray-400 truncate" title={pl.description}>{pl.description}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
@@ -258,7 +258,7 @@ export default function PipelineListPage() {
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {runMeta ? (
-                        <div className={`relative inline-flex flex-col items-center ${runFailed ? 'cursor-help group/err' : ''}`}>
+                        <div className={`relative inline-flex items-center gap-1.5 ${runFailed ? 'cursor-help group/err' : ''}`}>
                           <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color} ${
                             runFailed ? 'border-b border-dashed border-red-300' : ''}`}>
                             {runMeta.icon}{runMeta.label}
@@ -292,7 +292,17 @@ export default function PipelineListPage() {
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-center">
                         <button
-                          onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
+                          onClick={() => {
+                            if (n8n) {
+                              const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
+                              const workflowId = wfId?.n8n_workflow_id as string | undefined
+                              if (workflowId && n8nApiUrl) {
+                                window.open(`${n8nApiUrl}/workflow/${workflowId}`, '_blank')
+                              }
+                            } else {
+                              navigate(`/data/pipelines/${pl.id}`)
+                            }
+                          }}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
                           title={n8n ? '跳转 n8n 工作流' : '跳转画布编排'}
                         >
