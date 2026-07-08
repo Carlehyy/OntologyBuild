@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil,
@@ -61,70 +61,9 @@ function EnabledSwitch({ on, busy, onToggle }: { on: boolean; busy: boolean; onT
   )
 }
 
-// 名称列不在此表——它是弹性列（table-fixed 下不设宽即吸收全部剩余空间），
-// 其余列按内容实际尺寸收紧：徽章≈88 / 开关+文案≈80 / 两行时间≈80 / 链接≈84 / 三图标≈92
-const COLUMN_WIDTHS_DEFAULT: Record<string, number> = {
-  source: 120,
-  enabled: 118,
-  lastRun: 136,
-  output: 112,
-  actions: 124,
-}
-const NAME_COL_MIN = 280  // 名称弹性列参与表格 minWidth 的下限
-
-function ResizableTh({
-  colKey, label, widths, onResize, className,
-}: {
-  colKey: string; label: string; widths: Record<string, number>;
-  onResize: (key: string, delta: number) => void; className?: string;
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const dragging = useRef(false)
-  const startX = useRef(0)
-  const startW = useRef(0)
-
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragging.current = true
-    startX.current = e.clientX
-    startW.current = widths[colKey] || 150
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return
-      const delta = ev.clientX - startX.current
-      onResize(colKey, startW.current + delta)
-    }
-    const onUp = () => {
-      dragging.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [colKey, widths, onResize])
-
-  return (
-    // 宽度撑满 th：列的实际宽度由 th 的 width 样式驱动（table-fixed 下视口变宽
-    // 会按比例拉伸），内层若钉死像素宽会导致表头文字与单元格内容错位
-    <div className={`relative flex items-center w-full ${className || ''}`}
-      style={{ minWidth: 60 }}
-    >
-      <span className="truncate">{label}</span>
-      <div
-        ref={ref}
-        onMouseDown={onMouseDown}
-        className="absolute right-0 top-0 bottom-0 w-4 cursor-col-resize z-10 flex items-center justify-center hover:bg-blue-100/60"
-      >
-        <div className="w-0.5 h-4 rounded bg-gray-300 hover:bg-blue-400" />
-      </div>
-    </div>
-  )
-}
+/** 自适应列宽约定：名称 th 用 w-full 吃掉全部剩余空间（td 配 max-w-0 让长文
+ * 走 truncate 而不是撑破布局）；其余列不设宽、内容 nowrap → 自动收缩到内容宽。
+ * 全程零像素常数，任何视口下表头与内容天然对齐。 */
 
 export default function PipelineListPage() {
   const navigate = useNavigate()
@@ -140,24 +79,6 @@ export default function PipelineListPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
-
-  // v2：默认列宽方案调整（名称改弹性列），换 key 避免旧保存值覆盖新默认
-  const STORAGE_KEY = 'pipeline_list_col_widths_v2'
-  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      return saved ? { ...COLUMN_WIDTHS_DEFAULT, ...JSON.parse(saved) } : COLUMN_WIDTHS_DEFAULT
-    } catch { return COLUMN_WIDTHS_DEFAULT }
-  })
-
-  const handleResize = useCallback((key: string, w: number) => {
-    const clamped = Math.max(60, Math.min(600, w))
-    setColWidths(prev => {
-      const next = { ...prev, [key]: clamped }
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)) } catch {}
-      return next
-    })
-  }, [])
 
   const load = () => {
     setLoading(true)
@@ -280,28 +201,18 @@ export default function PipelineListPage() {
         </div>
       ) : (
         <div className="border rounded-xl bg-white overflow-x-auto">
-          <table className="w-full text-sm table-fixed" style={{ minWidth: NAME_COL_MIN + Object.values(colWidths).reduce((a, b) => a + b, 0) }}>
+          <table className="w-full min-w-[820px] text-sm">
             <thead className="bg-gray-50 border-b sticky top-0 z-10">
               <tr>
-                {/* 名称是弹性列：不设宽度，吸收全部剩余空间（故不可拖拽调宽） */}
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl">
+                {/* w-full：名称列吸收全部剩余空间；其余列 nowrap 自动收缩到内容宽 */}
+                <th className="w-full text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl">
                   流水线名称
                 </th>
-                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.source }}>
-                  <ResizableTh colKey="source" label="来源" widths={colWidths} onResize={handleResize} className="justify-center" />
-                </th>
-                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.enabled }}>
-                  <ResizableTh colKey="enabled" label="启用状态" widths={colWidths} onResize={handleResize} className="justify-center" />
-                </th>
-                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.lastRun }}>
-                  <ResizableTh colKey="lastRun" label="最近运行" widths={colWidths} onResize={handleResize} className="justify-center" />
-                </th>
-                <th className="text-center py-2.5 font-medium text-gray-600 text-xs" style={{ width: colWidths.output }}>
-                  <ResizableTh colKey="output" label="产物" widths={colWidths} onResize={handleResize} className="justify-center" />
-                </th>
-                <th className="text-center py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: colWidths.actions }}>
-                  <span className="px-1.5">操作</span>
-                </th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs whitespace-nowrap">来源</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs whitespace-nowrap">启用状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs whitespace-nowrap">最近运行</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs whitespace-nowrap">产物</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs whitespace-nowrap rounded-tr-xl">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -317,13 +228,14 @@ export default function PipelineListPage() {
                     className={`hover:bg-gray-50 transition-colors cursor-pointer ${enabled ? '' : 'opacity-60'}`}
                     onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
                   >
-                    <td className="px-4 py-3 align-middle">
-                      <p className="font-medium text-gray-900">{pl.name}</p>
-                      <p className="text-xs text-gray-400 truncate max-w-[480px]" title={pl.description || pl.id}>
+                    {/* max-w-0 配合 th 的 w-full：长名称/描述走 truncate，不撑破自适应布局 */}
+                    <td className="w-full max-w-0 px-4 py-3 align-middle">
+                      <p className="font-medium text-gray-900 truncate" title={pl.name}>{pl.name}</p>
+                      <p className="text-xs text-gray-400 truncate" title={pl.description || pl.id}>
                         {pl.description || <span className="font-mono">{pl.id.slice(0, 8)}</span>}
                       </p>
                     </td>
-                    <td className="px-4 py-3 text-center align-middle">
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
                         <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-600"
                           title="由数据管家托管的 n8n 流水线，编辑与审批在数据管家">
@@ -336,7 +248,7 @@ export default function PipelineListPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center align-middle" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="inline-flex items-center gap-2">
                         <EnabledSwitch
                           on={enabled}
@@ -348,7 +260,7 @@ export default function PipelineListPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-center align-middle">
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {runMeta ? (
                         <div className={`relative inline-flex flex-col items-center ${runFailed ? 'cursor-help group/err' : ''}`}>
                           <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color} ${
@@ -368,7 +280,7 @@ export default function PipelineListPage() {
                         <span className="text-xs text-gray-300">从未运行</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center align-middle" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {curatedCount > 0 ? (
                         <button
                           onClick={() => navigate(`/data/structured?pipeline=${encodeURIComponent(pl.name)}`)}
@@ -381,7 +293,7 @@ export default function PipelineListPage() {
                         <span className="text-xs text-gray-300">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center align-middle" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-center">
                         <button
                           onClick={() => navigate(n8n ? stewardUrl(pl) : `/data/pipelines/${pl.id}`)}
