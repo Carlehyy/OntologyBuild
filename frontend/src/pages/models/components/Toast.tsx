@@ -75,7 +75,7 @@ function ToastItemComponent({ toast, onRemove }: { toast: ToastItem; onRemove: (
 
   return (
     <div
-      className={`relative flex items-center gap-3 px-5 py-4 rounded-xl border shadow-lg backdrop-blur-sm min-w-[320px] max-w-[480px] ${colors.bg} ${colors.border} animate-slide-up`}
+      className={`relative flex items-center gap-3 px-5 py-4 rounded-xl border shadow-lg overflow-hidden min-w-[320px] max-w-[480px] ${colors.bg} ${colors.border} animate-slide-up`}
       style={{
         animation: 'slideUp 0.3s ease-out, fadeIn 0.3s ease-out',
       }}
