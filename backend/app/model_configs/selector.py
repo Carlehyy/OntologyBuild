@@ -107,6 +107,7 @@ def llm_call_kwargs(model_config) -> dict | None:
                 "请到「模型配置」重新填写并保存 API Key。"
             ) from exc
     return {
+        "model_config_id": getattr(model_config, "id", None),
         "provider": getattr(model_config, "provider", None),
         "api_key": api_key,
         "api_base": getattr(model_config, "api_base", None),

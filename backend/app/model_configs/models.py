@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Boolean
+from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Boolean, Integer, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -20,3 +20,17 @@ class ModelConfig(Base):
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ModelCallLog(Base):
+    """每次 LLM 调用的轻量统计记录 — 不保存调用内容，仅保存指标。"""
+    __tablename__ = "model_call_logs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    model_config_id: Mapped[str] = mapped_column(String, ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False, index=True)
+    model_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # success | error | timeout
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

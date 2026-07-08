@@ -37,6 +37,15 @@ export interface ModelSummary {
   successRate: number
 }
 
+interface ModelStatsData {
+  todayCalls: number
+  availability: string | null
+  avgLatency: number | null
+  lastCall: string | null
+  successRate: number | null
+  heatCells: Array<{ color: string; title: string; status: string }>
+}
+
 const HEAT_EMPTY = '#eceef1'
 
 function emptyHeatCells(model: ModelConfig | undefined, n: number): HeatCell[] {
@@ -44,7 +53,7 @@ function emptyHeatCells(model: ModelConfig | undefined, n: number): HeatCell[] {
   return Array.from({ length: n }, () => ({
     color: HEAT_EMPTY,
     title: disabled ? '已停用（无调用）' : '暂无调用记录',
-    status: disabled ? 'disabled' : 'none',
+    status: (disabled ? 'disabled' : 'none') as HeatCell['status'],
   }))
 }
 
@@ -55,19 +64,43 @@ function emptySummary(model: ModelConfig | undefined): ModelSummary {
   return { todayCalls: 0, availability: '—', avgLatency: 0, lastCall: '—', successRate: 1 }
 }
 
+function formatLastCall(iso: string | null): string {
+  if (!iso) return '—'
+  const then = new Date(iso).getTime()
+  const now = Date.now()
+  const sec = Math.floor((now - then) / 1000)
+  if (sec < 60) return '刚刚'
+  if (sec < 3600) return `${Math.floor(sec / 60)}分钟前`
+  if (sec < 86400) return `${Math.floor(sec / 3600)}小时前`
+  return `${Math.floor(sec / 86400)}天前`
+}
+
 export function useMockModels() {
   const [models, setModels] = useState<ModelConfig[]>([])
+  const [modelStats, setModelStats] = useState<Record<string, ModelStatsData>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [callRecords] = useState<CallRecord[]>([])
-  const [dailyStats] = useState<DailyStats[]>([])
 
   const loadModels = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const data = await modelApi.list()
-      setModels(Array.isArray(data) ? data : [])
+      const list = Array.isArray(data) ? data : []
+      setModels(list)
+      // 并行加载所有模型的统计数据
+      const statsMap: Record<string, ModelStatsData> = {}
+      await Promise.all(list.map(async (m) => {
+        try {
+          statsMap[m.id] = await modelApi.stats(m.id)
+        } catch {
+          statsMap[m.id] = {
+            todayCalls: 0, availability: null, avgLatency: null,
+            lastCall: null, successRate: null, heatCells: [],
+          }
+        }
+      }))
+      setModelStats(statsMap)
     } catch (err) {
       setError(err instanceof Error ? err.message : '模型配置加载失败')
       setModels([])
@@ -123,6 +156,11 @@ export function useMockModels() {
   const testConnection = useCallback(async (id: string): Promise<{ ok: boolean; message: string }> => {
     try {
       const result = await modelApi.test(id)
+      // 测试后刷新该模型的统计
+      try {
+        const s = await modelApi.stats(id)
+        setModelStats(prev => ({ ...prev, [id]: s }))
+      } catch { /* ignore */ }
       return { ok: Boolean(result.ok), message: result.response || (result.ok ? '连接成功，响应正常' : '连接失败') }
     } catch (err: any) {
       const detail = err?.detail || err?.message || '连接失败'
@@ -130,29 +168,43 @@ export function useMockModels() {
     }
   }, [])
 
-  const getModelCallRecords = useCallback((modelId: string) => {
-    return callRecords.filter(r => r.modelId === modelId)
-  }, [callRecords])
-
-  const getModelDailyStats = useCallback((modelId: string) => {
-    return dailyStats.filter(s => s.date && modelId)
-  }, [dailyStats])
-
-  const getModelRecentCalls = useCallback((modelId: string, n = 60) => {
-    return callRecords.filter(r => r.modelId === modelId).slice(-n)
-  }, [callRecords])
+  const getModelDailyStats = useCallback((_modelId: string): DailyStats[] => {
+    return []  // 详情抽屉暂未对接真实统计，保留接口
+  }, [])
 
   const getModelHeatCells = useCallback((modelId: string, n = 60): HeatCell[] => {
-    return emptyHeatCells(models.find(m => m.id === modelId), n)
-  }, [models])
+    const model = models.find(m => m.id === modelId)
+    const s = modelStats[modelId]
+    if (!s || s.heatCells.length === 0) {
+      return emptyHeatCells(model, n)
+    }
+    return s.heatCells as HeatCell[]
+  }, [models, modelStats])
 
   const getModelRunStatus = useCallback((modelId: string): RunStatus => {
-    return isEnabled(modelId) ? 'normal' : 'disabled'
-  }, [isEnabled])
+    if (!isEnabled(modelId)) return 'disabled'
+    const s = modelStats[modelId]
+    if (!s || s.availability === null) return 'normal'
+    const avail = parseFloat(s.availability)
+    if (avail < 80) return 'error'
+    if (avail < 95) return 'degraded'
+    return 'normal'
+  }, [isEnabled, modelStats])
 
   const getModelSummary = useCallback((modelId: string): ModelSummary => {
-    return emptySummary(models.find(m => m.id === modelId))
-  }, [models])
+    const model = models.find(m => m.id === modelId)
+    const s = modelStats[modelId]
+    if (!s || (s.todayCalls === 0 && s.avgLatency === null && s.availability === null)) {
+      return emptySummary(model)
+    }
+    return {
+      todayCalls: s.todayCalls,
+      availability: s.availability ?? '—',
+      avgLatency: s.avgLatency ?? 0,
+      lastCall: formatLastCall(s.lastCall),
+      successRate: s.successRate ?? 0,
+    }
+  }, [models, modelStats])
 
   return {
     models,
@@ -164,16 +216,12 @@ export function useMockModels() {
     deleteModel,
     setDefault,
     testConnection,
-    callRecords,
-    dailyStats,
-    getModelCallRecords,
-    getModelDailyStats,
-    getModelRecentCalls,
-    isEnabled,
-    toggleEnabled,
     getModelHeatCells,
     getModelRunStatus,
     getModelSummary,
+    getModelDailyStats,
+    isEnabled,
+    toggleEnabled,
     reload: loadModels,
   }
 }

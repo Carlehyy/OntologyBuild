@@ -23,6 +23,8 @@ const PROVIDERS: Record<string, Array<{ value: string; label: string }>> = {
     { value: 'openai', label: 'OpenAI' },
     { value: 'anthropic', label: 'Anthropic' },
     { value: 'compatible', label: 'OpenAI-Compatible' },
+    { value: 'minimax', label: 'MiniMax' },
+    { value: 'deepseek', label: 'DeepSeek' },
   ],
   ocr: [
     { value: 'easyocr', label: 'EasyOCR' },
@@ -81,6 +83,8 @@ function providerColor(provider: string): string {
     openai: 'bg-emerald-50 text-emerald-600 border-emerald-200',
     anthropic: 'bg-purple-50 text-purple-600 border-purple-200',
     compatible: 'bg-blue-50 text-blue-600 border-blue-200',
+    minimax: 'bg-rose-50 text-rose-600 border-rose-200',
+    deepseek: 'bg-sky-50 text-sky-600 border-sky-200',
     easyocr: 'bg-orange-50 text-orange-600 border-orange-200',
     paddleocr: 'bg-cyan-50 text-cyan-600 border-cyan-200',
     tesseract: 'bg-pink-50 text-pink-600 border-pink-200',
@@ -208,13 +212,19 @@ export default function ModelsPage() {
   })
   const { register: regEdit, handleSubmit: handleEditSubmit, setValue, watch: watchEdit } = useForm<any>()
 
-  // Filtered models
+  // Filtered + sorted models: default first, then by created_at ascending
   const filteredModels = models.filter(m => {
     const matchSearch = !searchQuery ||
       m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.provider.toLowerCase().includes(searchQuery.toLowerCase())
     const matchType = filterType === 'all' || m.config_type === filterType
     return matchSearch && matchType
+  })
+
+  const sortedModels = [...filteredModels].sort((a, b) => {
+    if (a.is_default && !b.is_default) return -1
+    if (!a.is_default && b.is_default) return 1
+    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   })
 
   // Handlers
@@ -374,7 +384,7 @@ export default function ModelsPage() {
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-sm text-slate-400">
           加载中...
         </div>
-      ) : filteredModels.length === 0 ? (
+      ) : sortedModels.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4">
             <Settings2 size={28} className="text-slate-300" />
@@ -384,7 +394,7 @@ export default function ModelsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filteredModels.map(m => {
+          {sortedModels.map(m => {
             const status = testStatus[m.id] || 'idle'
             const isDefault = m.id === defaultModelId
             const enabled = isEnabled(m.id)
@@ -461,38 +471,45 @@ export default function ModelsPage() {
                     )}
                   </div>
 
-                  {/* 指标 */}
-                  <div className="flex gap-2 mt-3.5">
-                    <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
-                      <div className="text-[10px] text-slate-400 font-medium">今日调用</div>
-                      <div className="text-[16px] font-bold text-slate-800 mt-0.5">{enabled ? summary.todayCalls : '—'}</div>
+                  {/* 指标 + 热力条 */}
+                  {summary.todayCalls === 0 && summary.avgLatency === 0 && summary.availability === '—' ? (
+                    <div className="mt-3.5 bg-slate-50 rounded-lg px-3 py-3 text-center">
+                      <p className="text-[11px] text-slate-400">暂无调用数据</p>
                     </div>
-                    <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
-                      <div className="text-[10px] text-slate-400 font-medium">30天可用率</div>
-                      <div className="text-[16px] font-bold mt-0.5" style={{ color: availColor(summary.availability) }}>
-                        {summary.availability === '—' ? '—' : `${summary.availability}%`}
+                  ) : (
+                    <>
+                      <div className="flex gap-2 mt-3.5">
+                        <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
+                          <div className="text-[10px] text-slate-400 font-medium">今日调用</div>
+                          <div className="text-[16px] font-bold text-slate-800 mt-0.5">{enabled ? summary.todayCalls : '—'}</div>
+                        </div>
+                        <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
+                          <div className="text-[10px] text-slate-400 font-medium">30天可用率</div>
+                          <div className="text-[16px] font-bold mt-0.5" style={{ color: availColor(summary.availability) }}>
+                            {summary.availability === '—' ? '—' : `${summary.availability}%`}
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
+                          <div className="text-[10px] text-slate-400 font-medium">平均延迟</div>
+                          <div className="text-[16px] font-bold mt-0.5" style={{ color: latColor(summary.avgLatency) }}>
+                            {enabled && summary.avgLatency ? `${summary.avgLatency}ms` : '—'}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
-                      <div className="text-[10px] text-slate-400 font-medium">平均延迟</div>
-                      <div className="text-[16px] font-bold mt-0.5" style={{ color: latColor(summary.avgLatency) }}>
-                        {enabled && summary.avgLatency ? `${summary.avgLatency}ms` : '—'}
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* 历史调用热力条 */}
-                  <div className="mt-3.5">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[11px] font-semibold text-slate-500">近 60 次调用</span>
-                      <span className="text-[10px] text-slate-300">← 早 · 近 →</span>
-                    </div>
-                    <ModelHeatStrip cells={cells} />
-                  </div>
+                      <div className="mt-3.5">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[11px] font-semibold text-slate-500">近 60 次调用</span>
+                          <span className="text-[10px] text-slate-300">← 早 · 近 →</span>
+                        </div>
+                        <ModelHeatStrip cells={cells} />
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Card Actions */}
-                <div className="px-4 py-2.5 border-t border-slate-100 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="px-4 py-2.5 border-t border-slate-100 flex items-center gap-1.5 transition-opacity">
                   <button
                     onClick={() => handleTest(m.id)}
                     disabled={status === 'testing'}
@@ -558,7 +575,7 @@ export default function ModelsPage() {
       )}
 
       {/* 图例 */}
-      {filteredModels.length > 0 && (
+      {sortedModels.length > 0 && (
         <div className="flex items-center gap-4 flex-wrap mt-5 px-4 py-3 bg-white border border-slate-200 rounded-xl">
           <span className="text-[11px] font-semibold text-slate-500">调用热力条图例</span>
           <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
