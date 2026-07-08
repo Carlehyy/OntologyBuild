@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense } from 'react'
+import React, { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -14,13 +14,11 @@ import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
 import VersionsTab from './tabs/VersionsTab'
 import './ontology-glass.css'
 import {
-  Network, Box, BookOpen,
+  Network, Box,
   Database, Upload, Shield, ArrowLeft,
-  LayoutGrid, History, Download, GitBranch,
+  LayoutGrid, History, Download,
   Boxes, ChevronRight, Sparkles, X, Loader2,
 } from 'lucide-react'
-
-const VocabularyTab = lazy(() => import('./tabs/VocabularyTab'))
 
 /* ═════════════════════════════════════════════════════════════
    信息架构（按用户操作旅程重组）：
@@ -65,13 +63,9 @@ const GROUPS: GroupDef[] = [
   {
     key: 'design',
     label: '本体建模',
-    hint: '图谱编辑器是唯一的建模面：对象、关系、动作、函数、哨兵都在画布上',
+    hint: '只读速览：查看对象实体、关系、动作与函数的完整结构',
     icon: Boxes,
-    cards: [
-      { key: 'graph-editor', label: '图谱编辑器', description: '建模+运行一体：对象/关系/动作(含审批闸门)/函数/哨兵，保存即触发哨兵评估', icon: GitBranch, primary: true, route: true },
-      { key: 'model-structure', label: '模型结构速览', description: '只读清单：每个实体的属性/主键/派生、关系基数、动作与函数', icon: Box },
-      { key: 'vocabulary', label: '术语词表', description: '领域术语、同义词与标准化映射', icon: BookOpen },
-    ],
+    cards: [],
   },
   {
     key: 'data',
@@ -161,7 +155,6 @@ export default function OntologyDetailPage() {
       case 'curated': return <CuratedDatasetsTab ontologyId={id!} />
       case 'files': return <FilesTab ontologyId={id!} />
       case 'versions': return <VersionsTab ontologyId={id!} />
-      case 'vocabulary': return <Suspense fallback={<LoadingState />}><VocabularyTab ontologyId={id!} /></Suspense>
       default: return null
     }
   }
@@ -207,9 +200,6 @@ export default function OntologyDetailPage() {
 
         {!activeView && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <button onClick={() => { setActiveGroup('design'); navigate(`/ontologies/${id}/graph`) }} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium">
-              <GitBranch size={13} /><span className="hidden sm:inline">打开图谱编辑器</span>
-            </button>
             <button onClick={() => setExportOpen(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="导出本体结构">
               <Download size={13} /><span className="hidden sm:inline">导出本体结构</span>
             </button>
@@ -249,6 +239,10 @@ export default function OntologyDetailPage() {
             ontologyId={id!}
             onGoGroup={(group, view) => { setActiveGroup(group); setActiveView(view ?? null) }}
           />
+        </div>
+      ) : activeGroup === 'design' ? (
+        <div className="onto-glass-card onto-glass-in p-4">
+          <ModelStructureView ontologyId={id!} />
         </div>
       ) : (
         <div className="onto-glass-in space-y-3">
