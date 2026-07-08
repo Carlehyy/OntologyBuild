@@ -243,7 +243,7 @@ def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_
         ModelCallLog.model_config_id == model_id,
     ).order_by(ModelCallLog.created_at.desc()).first()
 
-    # 近60次调用（热力条）
+    # 近60次调用（热力条）— 始终返回 60 格，不足的用灰色填充
     recent_60 = db.query(ModelCallLog).filter(
         ModelCallLog.model_config_id == model_id,
     ).order_by(ModelCallLog.created_at.desc()).limit(60).all()
@@ -274,6 +274,15 @@ def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_
             "color": color,
             "title": title,
             "status": cell_status,
+        })
+
+    # 不足60格时，左侧（更早的位置）补灰色空位
+    empty_slots = 60 - len(heat_cells)
+    for _ in range(empty_slots):
+        heat_cells.insert(0, {
+            "color": "#eceef1",
+            "title": "暂无调用记录",
+            "status": "none",
         })
 
     return {
