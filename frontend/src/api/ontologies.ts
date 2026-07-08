@@ -90,6 +90,11 @@ export const modelApi = {
   setDefault: (id: string) => apiClient.post<ModelConfig>(`/models/${id}/default`),
   setEnabled: (id: string, enabled: boolean) => apiClient.post<ModelConfig>(`/models/${id}/enabled`, { enabled }),
   test: (id: string) => apiClient.post<{ ok: boolean; response: string }>(`/models/${id}/test`),
+  stats: (id: string) => apiClient.get<{
+    todayCalls: number; availability: string | null; avgLatency: number | null;
+    lastCall: string | null; successRate: number | null;
+    heatCells: Array<{ color: string; title: string; status: string }>;
+  }>(`/models/${id}/stats`),
 }
 
 export const settingsApi = {

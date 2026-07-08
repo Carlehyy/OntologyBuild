@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime, timedelta, timezone
 from app.deps import get_db, get_current_user
 from app.models.model_config import ModelConfig
 from app.models.extraction_task import ExtractionTask
@@ -181,24 +183,106 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
             return {"data": {"ok": True, "response": f"Config type configured: {c.config_type}"}}
 
         from app.services.model_config_selector import llm_call_kwargs
+        from app.ontologies.agent_runtime.llm_bridge import chat as llm_chat, LLMError
+
         call_kwargs = llm_call_kwargs(c)
         if not call_kwargs:
             raise ValueError("Model config must include at least one model name")
-        api_key = call_kwargs["api_key"]
-        if c.provider == "anthropic":
-            import anthropic
-            client = anthropic.Anthropic(api_key=api_key)
-            model = call_kwargs["model"]
-            resp = client.messages.create(model=model, max_tokens=10, messages=[{"role": "user", "content": "ping"}])
-            return {"data": {"ok": True, "response": resp.content[0].text}}
-        else:
-            import openai
-            kwargs = {"api_key": api_key}
-            if call_kwargs["api_base"]:
-                kwargs["base_url"] = call_kwargs["api_base"]
-            client = openai.OpenAI(**kwargs)
-            model = call_kwargs["model"]
-            resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": "ping"}], max_tokens=10)
-            return {"data": {"ok": True, "response": resp.choices[0].message.content}}
+        resp = llm_chat(call_kwargs, [{"role": "user", "content": "ping"}], [])
+        return {"data": {"ok": True, "response": resp.get("content", "")}}
+    except LLMError as e:
+        raise HTTPException(400, f"Connection failed: {e}")
     except Exception as e:
         raise HTTPException(400, f"Connection failed: {e}")
+
+
+@router.get("/{model_id}/stats")
+def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """返回模型调用统计 — 用于模型卡片展示。"""
+    from app.model_configs.models import ModelCallLog
+
+    c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
+    if not c:
+        raise HTTPException(404, "Not found")
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    thirty_days_ago = now - timedelta(days=30)
+
+    # 今日调用数
+    today_calls = db.query(func.count(ModelCallLog.id)).filter(
+        ModelCallLog.model_config_id == model_id,
+        ModelCallLog.created_at >= today_start,
+    ).scalar() or 0
+
+    # 30天总调用
+    total_30d = db.query(func.count(ModelCallLog.id)).filter(
+        ModelCallLog.model_config_id == model_id,
+        ModelCallLog.created_at >= thirty_days_ago,
+    ).scalar() or 0
+
+    # 30天成功数
+    success_30d = db.query(func.count(ModelCallLog.id)).filter(
+        ModelCallLog.model_config_id == model_id,
+        ModelCallLog.created_at >= thirty_days_ago,
+        ModelCallLog.status == "success",
+    ).scalar() or 0
+
+    # 可用率
+    availability = round(success_30d / total_30d * 100, 1) if total_30d > 0 else None
+
+    # 平均延迟（30天）
+    avg_latency = db.query(func.avg(ModelCallLog.latency_ms)).filter(
+        ModelCallLog.model_config_id == model_id,
+        ModelCallLog.created_at >= thirty_days_ago,
+    ).scalar()
+    avg_latency = round(avg_latency, 1) if avg_latency else None
+
+    # 最近调用
+    last_call = db.query(ModelCallLog).filter(
+        ModelCallLog.model_config_id == model_id,
+    ).order_by(ModelCallLog.created_at.desc()).first()
+
+    # 近60次调用（热力条）
+    recent_60 = db.query(ModelCallLog).filter(
+        ModelCallLog.model_config_id == model_id,
+    ).order_by(ModelCallLog.created_at.desc()).limit(60).all()
+    recent_60.reverse()  # 正序：早 → 近
+
+    heat_cells = []
+    for log in recent_60:
+        if log.status == "success":
+            if log.latency_ms < 500:
+                color = "#216e39"
+            elif log.latency_ms < 1000:
+                color = "#2d8a4e"
+            elif log.latency_ms < 3000:
+                color = "#40c463"
+            else:
+                color = "#9be9a8"
+            cell_status = "success"
+            title = f"成功 {log.latency_ms}ms"
+        elif log.status == "error":
+            color = "#e5484d"
+            cell_status = "error"
+            title = f"异常: {log.error_message or '未知错误'}"
+        else:
+            color = "#f0a020"
+            cell_status = "timeout"
+            title = f"超时 {log.latency_ms}ms"
+        heat_cells.append({
+            "color": color,
+            "title": title,
+            "status": cell_status,
+        })
+
+    return {
+        "data": {
+            "todayCalls": today_calls,
+            "availability": f"{availability}" if availability is not None else None,
+            "avgLatency": avg_latency,
+            "lastCall": last_call.created_at.isoformat() if last_call else None,
+            "successRate": round(success_30d / total_30d * 100, 1) if total_30d > 0 else None,
+            "heatCells": heat_cells,
+        }
+    }
