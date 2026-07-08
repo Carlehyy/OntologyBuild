@@ -71,7 +71,7 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
         <div className="border-2 border-dashed rounded-xl py-14 text-center text-gray-400">
           <Boxes size={30} className="mx-auto mb-2 opacity-30" />
           <p className="text-sm">还没有实例数据</p>
-          <p className="text-xs mt-1">到「关联数据集」灌入 curated 数据，或在图谱编辑器手工录入</p>
+          <p className="text-xs mt-1">到「数据映射」灌入 curated 数据，或在图谱编辑器手工录入</p>
         </div>
       ) : (
         <div className="rounded-xl border bg-white overflow-x-auto">

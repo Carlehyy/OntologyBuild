@@ -54,6 +54,18 @@
       "runtimeExecutable": "env",
       "runtimeArgs": ["VITE_API_PROXY_TARGET=http://127.0.0.1:8002", "npm", "--prefix", "/Users/carle/Desktop/OntologyBuild/frontend", "run", "dev", "--", "--port", "5474", "--strictPort"],
       "port": 5474
+    },
+    {
+      "name": "backend-ab",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["SECRET_KEY=3eaf458cb2155e9b16df05a9f6896d85", "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8010", "--app-dir", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/agitated-bun-740a71/backend"],
+      "port": 8010
+    },
+    {
+      "name": "frontend-ab",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["VITE_API_PROXY_TARGET=http://127.0.0.1:8010", "npm", "--prefix", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/agitated-bun-740a71/frontend", "run", "dev", "--", "--port", "5510", "--strictPort"],
+      "port": 5510
     }
   ]
 }
