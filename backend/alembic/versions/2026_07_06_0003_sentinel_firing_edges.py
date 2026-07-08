@@ -6,6 +6,7 @@ Create Date: 2026-07-06
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect as sa_inspect
 
 
 revision = "0003_sentinel_firing_edges"
@@ -14,17 +15,27 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table: str, column: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa_inspect(conn)
+    return column in [c["name"] for c in inspector.get_columns(table)]
+
+
 def upgrade() -> None:
-    op.add_column(
-        "sentinel_firings",
-        sa.Column("entered", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
-    )
-    op.add_column(
-        "sentinel_firings",
-        sa.Column("left", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
-    )
+    if not _column_exists("sentinel_firings", "entered"):
+        op.add_column(
+            "sentinel_firings",
+            sa.Column("entered", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
+        )
+    if not _column_exists("sentinel_firings", "left"):
+        op.add_column(
+            "sentinel_firings",
+            sa.Column("left", sa.JSON(), nullable=False, server_default=sa.text("'[]'::json")),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("sentinel_firings", "left")
-    op.drop_column("sentinel_firings", "entered")
+    if _column_exists("sentinel_firings", "left"):
+        op.drop_column("sentinel_firings", "left")
+    if _column_exists("sentinel_firings", "entered"):
+        op.drop_column("sentinel_firings", "entered")
