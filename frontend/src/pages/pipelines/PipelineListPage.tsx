@@ -9,6 +9,7 @@ import type { Pipeline } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import RunPreviewModal from './RunPreviewModal'
+import PipelineEditWizard from './PipelineEditWizard'
 
 const STATUS_STYLE: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-600 border-gray-200',
@@ -348,9 +349,9 @@ export default function PipelineListPage() {
         />
       )}
 
-      {/* 编辑弹窗 */}
+      {/* 编辑向导 */}
       {editTarget && (
-        <PipelineCreateModal
+        <PipelineEditWizard
           pipeline={editTarget}
           onClose={() => setEditTarget(null)}
           onSaved={() => { setEditTarget(null); load() }}

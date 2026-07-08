@@ -9,6 +9,7 @@ export interface Pipeline {
   route?: string | null
   spec?: Record<string, unknown>
   definition?: { nodes: unknown[]; edges: unknown[] } | null
+  column_definitions?: ColumnDefinition[] | null  // [{field_key, field_name, field_type, is_primary_key, nullable}]
   status: string
   engine?: string          // canvas=系统自定义 / n8n=数据管家托管
   enabled?: boolean        // 启用开关：停用后任务池/链式触发不执行
@@ -20,6 +21,15 @@ export interface Pipeline {
   last_run_status?: string
   last_run_at?: string | null
   last_run_error?: string
+}
+
+/** 字段定义——流水线产出的列元数据 */
+export interface ColumnDefinition {
+  field_key: string       // 入湖列名（可 rename）
+  field_name: string      // 字段显示名称
+  field_type: string      // string | int | float | bool | datetime
+  is_primary_key: boolean // 是否主键
+  nullable: boolean       // 是否允许为空
 }
 
 export interface DryRunOutput {
@@ -58,6 +68,7 @@ export interface PipelineCreateBody {
   route?: string | null
   spec?: Record<string, unknown>
   definition?: { nodes: unknown[]; edges: unknown[] } | null
+  column_definitions?: ColumnDefinition[] | null
 }
 
 export interface PipelineRunItem {
@@ -82,6 +93,16 @@ export interface ValidateResult {
   warnings: Array<{ node_id: string; severity: string; message: string }>
 }
 
+/** 字段定义校验 */
+export interface ValidateDefinitionsBody {
+  column_definitions: ColumnDefinition[]
+}
+
+export interface ValidateDefinitionsResult {
+  valid: boolean
+  errors: Array<{ field_key: string; message: string; severity: string }>
+}
+
 const pipelinesApi = {
   /** Pipeline CRUD */
   list: (params?: { search?: string; domain?: string; status?: string }) =>
@@ -90,7 +111,7 @@ const pipelinesApi = {
     apiClientV2.get<Pipeline>(`/pipelines/${id}`).then(r => r),
   create: (body: PipelineCreateBody) =>
     apiClientV2.post<Pipeline>('/pipelines', body).then(r => r),
-  update: (id: string, body: Partial<PipelineCreateBody> & { status?: string }) =>
+  update: (id: string, body: Partial<PipelineCreateBody> & { status?: string; enabled?: boolean }) =>
     apiClientV2.put<Pipeline>(`/pipelines/${id}`, body).then(r => r),
   delete: (id: string) =>
     apiClientV2.delete(`/pipelines/${id}`).then(r => r),
@@ -103,13 +124,17 @@ const pipelinesApi = {
   versions: (id: string) =>
     apiClientV2.get<Array<{ id: string; version: number; status: string; created_at: string | null }>>(`/pipelines/${id}/versions`).then(r => r),
 
+  /** 字段定义校验：校验 column_definitions 与实际产出列及数据是否一致 */
+  validateDefinitions: (id: string, body: ValidateDefinitionsBody, maxRows?: number) =>
+    apiClientV2.post<ValidateDefinitionsResult>(`/pipelines/${id}/validate-definitions`, body, { params: { max_rows: maxRows ?? 100 } }).then(r => r),
+
   /** 启用开关：停用后任务池调度/链式触发不执行（手动试运行不受限） */
   setEnabled: (id: string, enabled: boolean) =>
     apiClientV2.patch<Pipeline>(`/pipelines/${id}/enabled`, { enabled }).then(r => r),
 
   /** 试运行：真实执行但不写资产湖，返回产物预览 + 入湖闸门预检 */
-  dryRun: (id: string) =>
-    apiClientV2.post<DryRunResult>(`/pipelines/${id}/dry-run`).then(r => r),
+  dryRun: (id: string, maxRows?: number) =>
+    apiClientV2.post<DryRunResult>(`/pipelines/${id}/dry-run`, null, { params: { max_rows: maxRows ?? 100 } }).then(r => r),
   /** 把试运行输出按原样写入资产湖（不重新执行） */
   commitDryRun: (id: string, dryRunId: string) =>
     apiClientV2.post<CommitResult>(`/pipelines/${id}/dry-run/${dryRunId}/commit`).then(r => r),
