@@ -12,6 +12,7 @@ import ModelStructureView from './tabs/ModelStructureView'
 import FormalInstancesView from './tabs/FormalInstancesView'
 import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
 import VersionsTab from './tabs/VersionsTab'
+import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
 import {
   Network, Box,
@@ -81,12 +82,9 @@ const GROUPS: GroupDef[] = [
   {
     key: 'governance',
     label: '治理与推演',
-    hint: '人是最终裁决者：审批挂起的动作、按批准率放权、盯住哨兵与事实流',
+    hint: '待审批 / 自治等级 / 哨兵 / 事实流 —— 人是最终裁决者',
     icon: Shield,
-    cards: [
-      { key: 'gov-console', label: '治理驾驶舱', description: '待审批（批准/拒绝）· 自治等级（影子→人审→自动）· 哨兵触发 · 事实流', icon: Shield, primary: true },
-      { key: 'versions', label: '版本记录', description: '模型版本快照与变更日志，支持回滚对比', icon: History },
-    ],
+    cards: [],
   },
 ]
 
@@ -102,6 +100,7 @@ export default function OntologyDetailPage() {
   const [exportOpen, setExportOpen] = useState(false)
   const [exportingFormat, setExportingFormat] = useState<string | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [showVersionModal, setShowVersionModal] = useState(false)
 
   const handleExport = async (format: string) => {
     setExportError(null)
@@ -200,6 +199,9 @@ export default function OntologyDetailPage() {
 
         {!activeView && (
           <div className="flex items-center gap-1.5 shrink-0">
+            <button onClick={() => setShowVersionModal(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="历史版本">
+              <History size={13} /><span className="hidden sm:inline">历史版本</span>
+            </button>
             <button onClick={() => setExportOpen(true)} className="onto-glass-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium" title="导出本体结构">
               <Download size={13} /><span className="hidden sm:inline">导出本体结构</span>
             </button>
@@ -243,6 +245,10 @@ export default function OntologyDetailPage() {
       ) : activeGroup === 'design' ? (
         <div className="onto-glass-card onto-glass-in p-4">
           <ModelStructureView ontologyId={id!} />
+        </div>
+      ) : activeGroup === 'governance' ? (
+        <div className="onto-glass-card onto-glass-in p-4">
+          <GovernanceTab ontologyId={id!} />
         </div>
       ) : (
         <div className="onto-glass-in space-y-3">
@@ -351,6 +357,11 @@ export default function OntologyDetailPage() {
           </div>
         </div>
       )}
+
+      {/* ═══ 历史版本弹窗 ═══ */}
+      <Modal open={showVersionModal} onClose={() => setShowVersionModal(false)} title="历史版本" size="3xl">
+        <VersionsTab ontologyId={id!} />
+      </Modal>
     </div>
   )
 }
