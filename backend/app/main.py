@@ -155,6 +155,12 @@ def _seed_db():
                 "ALTER TABLE v2_n8n_pipelines ADD COLUMN last_test_result JSON",
                 # —— 流水线启用开关：停用后任务池/链式触发不执行 ——
                 "ALTER TABLE v2_pipelines ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
+                # —— 本体元素血缘出处（业务探索草稿落地时写入，Schema 也是事实）——
+                "ALTER TABLE fo_object_types ADD COLUMN source JSON",
+                "ALTER TABLE fo_link_types ADD COLUMN source JSON",
+                "ALTER TABLE fo_action_types ADD COLUMN source JSON",
+                "ALTER TABLE fo_functions ADD COLUMN source JSON",
+                "ALTER TABLE sentinels ADD COLUMN source JSON",
                 # —— 回填历史 NULL latest_version_id（create_version 旧 bug：flush 前取 id）——
                 "UPDATE v2_datasets SET latest_version_id = ("
                 " SELECT v.id FROM v2_dataset_versions v WHERE v.dataset_id = v2_datasets.id"

@@ -75,6 +75,10 @@ class Sentinel(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")    # draft | published
 
+    # 血缘出处（Schema 也是事实）：如业务探索草稿生成的影子哨兵
+    # {"kind": "business_exploration", "sessionId", "documentId", "draftId", "draftKey", "sourceRefs"}
+    source: Mapped[dict] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

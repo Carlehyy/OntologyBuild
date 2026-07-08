@@ -73,6 +73,7 @@ def _dict(s: Sentinel) -> dict[str, Any]:
         "triggerMode": s.trigger_mode, "muted": s.muted,
         "lastScannedAt": s.last_scanned_at.isoformat() if s.last_scanned_at else None,
         "enabled": s.enabled, "status": s.status,
+        "source": s.source,
         "createdAt": s.created_at.isoformat() if s.created_at else None,
         "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
     }

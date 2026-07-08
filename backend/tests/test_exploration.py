@@ -5,9 +5,13 @@
      非法元素被 pydantic 拒绝并把错误回填给 LLM（对话期修复回路）
   3. 需求文档：确定性章节永远生成，LLM 缺席时叙述节降级占位；版本递增
   4. 转化管线（纯确定性，不依赖 LLM）：类型映射 / 主键回退 / 悬空关系剔除 /
-     规则挂载(disabled) / 审批传播 / 主体合并 / 场景覆盖检查
-  5. 落地：新建本体后 fo_* 表可查、草稿只允许应用一次；
-     保守合并——同名对象跳过、链接端点可绑定到目标本体既有类型
+     规则挂载(disabled) / 审批传播 / 主体合并 / 场景覆盖检查 /
+     derivation→激活函数草稿(enabled=false) / alert+事件→哨兵草稿(muted 影子) /
+     未命中行为的 approval 规则必须产生警告（不得静默丢失）
+  5. 落地：新建本体后 fo_* 表可查；函数/哨兵带三重闸门落地（enabled=false/muted/draft）；
+     五类元素写 source 血缘（session/document/draft/draftKey/sourceRefs）；
+     草稿可重复应用（同名跳过幂等，部分勾选后剩余元素可二次落地）；
+     废弃后不可应用；保守合并——同名对象跳过、链接端点可绑定到目标本体既有类型
 """
 import uuid
 
@@ -68,11 +72,15 @@ def _demo_canvas() -> dict:
         {"name": "amount_positive", "kind": "validation", "appliesTo": "mark_paid",
          "statement": "金额必须为正数", "errorMessage": "金额必须大于 0"},
         {"name": "orphan_rule", "kind": "alert", "appliesTo": "Warehouse",
-         "statement": "库存低于安全线告警"},
+         "statement": "库存低于安全线告警"},          # 目标未定义 → 哨兵草稿不绑对象
+        {"name": "total_calc", "displayName": "订单总额计算", "kind": "derivation",
+         "appliesTo": "Order", "statement": "总额 = 明细金额之和"},
     ])
     cv, _, _ = C.upsert_elements(cv, "event", [
         {"name": "order_paid", "displayName": "订单已支付", "source": "mark_paid",
-         "consequences": ["通知供应商发货"]},
+         "payload": ["order_no", "amount"], "consequences": ["通知供应商发货"]},
+        {"name": "daily_check", "displayName": "每日对账", "source": "time",
+         "consequences": ["生成对账单"]},              # time 来源 → 定期扫描哨兵
     ])
     cv, _, _ = C.upsert_elements(cv, "scenario", [
         {"name": "pay_flow", "displayName": "支付流程", "goal": "完成订单支付",
@@ -238,13 +246,47 @@ def test_converter_deterministic_mapping():
     assert act["parameters"][0]["name"] == "note"
     assert "订单已支付" in act["description"]         # 事件并入动作描述
 
-    # 无法映射的对象级/告警规则 → 警告而非丢失
-    assert any("orphan_rule" in w for w in report["warnings"])
+    # derivation 规则 → 激活函数草稿（enabled=false，绑定作用对象）
+    fns = draft["functions"]
+    assert len(fns) == 1
+    fn = fns[0]
+    assert fn["name"] == "total_calc" and fn["enabled"] is False
+    assert fn["displayName"].startswith("待形式化")
+    assert fn["functionType"] == "object" and fn["targetObjectTypeKey"] == "obj:order"
+    assert fn["language"] == "expression" and fn["body"] == ""
+    assert "总额" in fn["description"]
+
+    # alert 规则 + 事件 → 哨兵草稿（muted 影子 + enabled=false + status=draft）
+    sens = {s["name"]: s for s in draft["sentinels"]}
+    assert set(sens) == {"orphan_rule", "order_paid", "daily_check"}
+    assert all(s["muted"] is True and s["enabled"] is False and s["status"] == "draft"
+               and s["displayName"].startswith("待形式化") for s in sens.values())
+    # 事件来源=行为 → 绑定行为的作用对象，变化驱动
+    assert sens["order_paid"]["bindingObjectKey"] == "obj:order"
+    assert sens["order_paid"]["onChange"] is True and sens["order_paid"]["onSchedule"] is False
+    assert "order_no" in sens["order_paid"]["description"]     # 事件载荷不再丢弃
+    # 事件来源=time → 定期扫描
+    assert sens["daily_check"]["onSchedule"] is True and sens["daily_check"]["onChange"] is False
+    # 告警目标未定义 → 不绑对象 + 警告提示补绑定
+    assert sens["orphan_rule"]["bindingObjectKey"] is None
+    assert any("orphan_rule" in w and "绑定" in w for w in report["warnings"])
+
     # 场景覆盖检查：Invoice / refund 缺失
     cov = report["scenarioCoverage"]
     assert cov and cov[0]["missingObjects"] == ["Invoice"] \
         and cov[0]["missingBehaviors"] == ["refund"]
     assert report["llmRefined"] is False
+
+
+def test_converter_approval_unmatched_not_silent():
+    """approval 规则未命中任何行为时必须产生警告（修复此前的静默丢失）。"""
+    cv = C.empty_canvas()
+    cv, _, _ = C.upsert_elements(cv, "rule", [
+        {"name": "ghost_approval", "displayName": "幽灵审批", "kind": "approval",
+         "appliesTo": "not_exist_behavior", "statement": "需要审批"},
+    ])
+    _, report = CV.build_draft(cv)
+    assert any("ghost_approval" in w and "审批" in w for w in report["warnings"])
 
 
 def test_converter_llm_refine_discarded_on_bad_json(monkeypatch):
@@ -306,7 +348,8 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
     assert r.status_code == 200, r.text
     result = r.json()["data"]
     oid = result["ontologyId"]
-    assert result["created"] == {"objectTypes": 3, "linkTypes": 1, "actions": 1}
+    assert result["created"] == {"objectTypes": 3, "linkTypes": 1, "actions": 1,
+                                 "functions": 1, "sentinels": 3}
 
     # 图谱编辑器数据通道可见（与编辑器同一 /full 端点）
     r = client.get(f"/api/v2/formal/ontologies/{oid}/full", headers=auth_headers)
@@ -320,9 +363,76 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
     assert action["requiresApproval"] is True
     assert action["objectTypeId"] == order["id"]      # 名称引用被解析成真实 id
 
-    # 草稿只允许应用一次
+    # 激活函数落地：enabled=false 休眠、绑定解析成真实对象 id、待形式化标记
+    fns = full["functions"]
+    assert len(fns) == 1
+    assert fns[0]["enabled"] is False and fns[0]["functionType"] == "object"
+    assert fns[0]["targetObjectTypeId"] == order["id"]
+    assert fns[0]["displayName"].startswith("待形式化")
+
+    # 哨兵落地：三重闸门（muted + enabled=false + status=draft），不进执行链路
+    from app.ontologies.sentinels.models import Sentinel
+    sens = {s.name: s for s in db.query(Sentinel).filter(Sentinel.ontology_id == oid)}
+    assert set(sens) == {"orphan_rule", "order_paid", "daily_check"}
+    assert all(s.muted and not s.enabled and s.status == "draft" for s in sens.values())
+    assert sens["order_paid"].bindings[0]["objectTypeId"] == order["id"]
+    assert sens["order_paid"].primary_alias == "a" and sens["order_paid"].on_change
+    assert sens["daily_check"].on_schedule and not sens["daily_check"].on_change
+    assert sens["orphan_rule"].bindings == [] and sens["orphan_rule"].primary_alias is None
+
+    # 血缘：五类元素都带 source（session/document/draft/draftKey/sourceRefs）
+    from app.ontologies.formal_modeling.models import (ActionType, LinkType,
+                                                       ObjectType, OntologyFunction)
+    for model in (ObjectType, LinkType, ActionType, OntologyFunction, Sentinel):
+        rows = db.query(model).filter(model.ontology_id == oid).all()
+        assert rows and all(
+            (x.source or {}).get("kind") == "business_exploration"
+            and x.source.get("draftId") == draft["id"]
+            and x.source.get("sessionId") == session["id"]
+            and x.source.get("draftKey") and x.source.get("sourceRefs")
+            for x in rows), f"{model.__name__} 血缘缺失"
+
+
+def test_draft_reapply_partial_then_rest(client, auth_headers, session, db):
+    """部分勾选落地后，剩余元素可二次落地到同一本体；重复应用同名跳过（幂等）。"""
+    draft = _make_draft(client, auth_headers, session["id"], db)
+
     r = client.post(f"{BASE}/drafts/{draft['id']}/apply", headers=auth_headers,
-                    json={"newOntology": {"name": "另一个"}})
+                    json={"selectedKeys": ["obj:order"],
+                          "newOntology": {"name": "分批落地本体"}})
+    assert r.status_code == 200, r.text
+    first = r.json()["data"]
+    assert first["created"]["objectTypes"] == 1 and first["created"]["sentinels"] == 0
+
+    # 二次应用（全选）：不再 409，固定合并进首次的本体；已落地的 Order 同名跳过
+    r = client.post(f"{BASE}/drafts/{draft['id']}/apply", headers=auth_headers, json={})
+    assert r.status_code == 200, r.text
+    second = r.json()["data"]
+    assert second["ontologyId"] == first["ontologyId"]
+    assert second["created"]["objectTypes"] == 2          # Supplier + Finance
+    assert second["created"]["linkTypes"] == 1            # 端点绑到首批落地的 Order
+    assert second["created"]["functions"] == 1 and second["created"]["sentinels"] == 3
+    assert any(s["key"] == "obj:order" for s in second["skipped"])
+
+    # 三次应用：全部同名跳过，零新建（幂等收敛）
+    r = client.post(f"{BASE}/drafts/{draft['id']}/apply", headers=auth_headers, json={})
+    third = r.json()["data"]
+    assert third["ontologyId"] == first["ontologyId"]
+    assert all(v == 0 for v in third["created"].values())
+
+
+def test_draft_discard(client, auth_headers, session, db):
+    """废弃草稿：幂等；废弃后不可应用。"""
+    draft = _make_draft(client, auth_headers, session["id"], db)
+
+    r = client.post(f"{BASE}/drafts/{draft['id']}/discard", headers=auth_headers)
+    assert r.status_code == 200 and r.json()["data"]["status"] == "discarded"
+    # 幂等
+    r = client.post(f"{BASE}/drafts/{draft['id']}/discard", headers=auth_headers)
+    assert r.status_code == 200 and r.json()["data"]["status"] == "discarded"
+
+    r = client.post(f"{BASE}/drafts/{draft['id']}/apply", headers=auth_headers,
+                    json={"newOntology": {"name": "不该被创建"}})
     assert r.status_code == 409
 
 

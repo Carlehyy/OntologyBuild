@@ -15,7 +15,8 @@
   GET    /documents/{id}                 文档详情
   POST   /documents/{id}/drafts          需求文档 → 本体草稿（转化管线）
   GET    /drafts/{id}
-  POST   /drafts/{id}/apply              人审勾选后落地（新建本体或保守合并）
+  POST   /drafts/{id}/apply              人审勾选后落地（新建本体或保守合并；可重复应用）
+  POST   /drafts/{id}/discard            废弃草稿（幂等；废弃后不可应用）
 """
 import json
 import logging
@@ -378,19 +379,28 @@ def get_draft(draft_id: str, db: Session = Depends(get_db),
 @router.post("/drafts/{draft_id}/apply")
 def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
                 db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """人审勾选后的真实落地。草稿→本体是唯一写路径，且保守合并（同名跳过）。"""
+    """人审勾选后的真实落地。草稿→本体是唯一写路径，且保守合并（同名跳过）。
+
+    可重复应用（同名跳过使其幂等）：部分勾选落地后，剩余元素可再次勾选落地；
+    首次落地后再次应用固定合并进首次的目标本体，不再新建。废弃的草稿不可应用。
+    """
     r = _require_draft(db, draft_id, current_user)
-    if r.status == "applied":
-        raise HTTPException(409, "该草稿已应用过；如需再次落地请重新生成草稿")
+    if r.status == "discarded":
+        raise HTTPException(409, "该草稿已废弃，不可应用；如需落地请重新生成草稿")
     if body.selected_keys is not None and len(body.selected_keys) == 0:
         raise HTTPException(422, "未勾选任何草稿元素")
 
-    if r.target_ontology_id:
+    project = None
+    if r.applied_ontology_id:
+        # 再次应用：固定回到首次落地的本体（该本体被删则回退常规目标解析）
+        project = db.query(OntologyProject).filter(
+            OntologyProject.id == r.applied_ontology_id).first()
+    if project is None and r.target_ontology_id:
         project = db.query(OntologyProject).filter(
             OntologyProject.id == r.target_ontology_id).first()
         if not project:
             raise HTTPException(404, "目标本体不存在（可能已被删除）")
-    else:
+    if project is None:
         if not body.new_ontology or not (body.new_ontology.name or "").strip():
             raise HTTPException(422, "该草稿目标为新建本体，请提供 newOntology.name")
         name = body.new_ontology.name.strip()
@@ -404,8 +414,22 @@ def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
         db.add(project)
         db.flush()
 
-    result = converter.apply_draft(db, r.draft or {}, body.selected_keys, project.id)
+    result = converter.apply_draft(
+        db, r.draft or {}, body.selected_keys, project.id,
+        lineage={"sessionId": r.session_id, "documentId": r.document_id, "draftId": r.id})
     r.status = "applied"
     r.applied_ontology_id = project.id
     db.commit()
     return _ok({"ontologyId": project.id, "ontologyName": project.name, **result})
+
+
+@router.post("/drafts/{draft_id}/discard")
+def discard_draft(draft_id: str, db: Session = Depends(get_db),
+                  current_user=Depends(get_current_user)):
+    """废弃草稿（幂等）：废弃后不可再应用；记录保留在列表中可追溯。"""
+    r = _require_draft(db, draft_id, current_user)
+    if r.status != "discarded":
+        r.status = "discarded"
+        db.commit()
+        db.refresh(r)
+    return _ok(S.DraftOut.model_validate(r).model_dump(by_alias=True))

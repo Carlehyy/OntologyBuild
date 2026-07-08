@@ -2,7 +2,10 @@
 
 三步管线，确定性优先：
   1. 确定性映射：对象→ObjectType、关系→LinkType、行为→ActionType、
-     规则→validation 规则（默认 disabled，待人工形式化）/ requiresApproval。
+     规则(constraint|validation)→validation 规则（默认 disabled，待人工形式化）、
+     规则(approval)→requiresApproval、规则(derivation)→激活函数草稿（enabled=false）、
+     规则(alert)+事件→哨兵草稿（muted 影子 + enabled=false + status=draft，
+     event.source=time→定期扫描 / source=行为→变化驱动，绑定行为作用对象）。
      骨架完全由代码生成，LLM 永不生成 id —— 引用一律按名称解析。
   2. LLM 补缺（可选）：仅允许补 描述/显示名/属性类型/基数/主键 这几个白名单
      字段，pydantic 校验失败带错误回炉 ≤2 轮，仍失败则整体丢弃补丁只用第 1 步结果。
@@ -11,7 +14,10 @@
      叠加与目标本体的同名冲突标记（保守合并：冲突项应用时跳过）、
      场景可表达性检查（场景引用的对象/行为是否都在草稿+目标本体中）。
 
-草稿永不直写本体 —— apply_draft 只落用户勾选且无冲突的元素。
+草稿永不直写本体 —— apply_draft 只落用户勾选且无冲突的元素，且转出的
+函数/哨兵带三重闸门（enabled=false / muted / status=draft），落地即休眠待人工形式化。
+落库元素写 source 血缘列（sessionId/documentId/draftId/draftKey/sourceRefs），
+元素级可回溯到探索会话与画布卡片。
 """
 from __future__ import annotations
 
@@ -25,7 +31,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.ontologies.agent_runtime import llm_bridge
-from app.ontologies.formal_modeling.models import ActionType, LinkType, ObjectType
+from app.ontologies.formal_modeling.models import ActionType, LinkType, ObjectType, OntologyFunction
+from app.ontologies.sentinels.models import Sentinel
 from app.exploration import canvas as C
 from app.exploration.canvas import norm_name
 
@@ -253,15 +260,140 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
             "sourceRefs": [x for x in [b.get("id")] if x],
         })
 
-    # 未挂到任何行为的规则 → 报告备注（进文档；哨兵/派生留待后续能力）
+    # 作用目标 → 对象 key 解析（直接命中对象；或命中行为则归到行为的作用对象）
+    behavior_object: dict[str, str] = {
+        norm_name(b.get("name", "")): (b.get("object") or "") for b in behaviors}
+
+    def resolve_target_obj(target: str) -> Optional[str]:
+        t = norm_name(target or "")
+        if t in obj_key_by_name:
+            return obj_key_by_name[t]
+        if t in behavior_object:
+            return obj_key_by_name.get(norm_name(behavior_object[t]))
+        return None
+
+    # 派生规则 → 激活函数草稿（enabled=false，条件/函数体留待人工形式化）
+    draft_functions: list[dict] = []
+    seen_fn_names: set[str] = set()
+    for r in rules:
+        if (r.get("kind") or "constraint") != "derivation":
+            continue
+        rname = r.get("name", "")
+        base = _slug(rname, f"function{len(draft_functions) + 1}")
+        fname, n = base, 2
+        while norm_name(fname) in seen_fn_names:
+            fname = f"{base}_{n}"
+            n += 1
+        seen_fn_names.add(norm_name(fname))
+        obj_key = resolve_target_obj(r.get("applies_to") or "")
+        desc = r.get("statement") or r.get("description") or ""
+        if r.get("error_message"):
+            desc += f"；违规提示: {r['error_message']}"
+        if not obj_key:
+            warnings.append(f"派生规则「{rname}」作用的「{r.get('applies_to') or '未指定'}」"
+                            f"未解析到对象，函数草稿未绑定对象类型（落地后请在编辑器中补绑定）")
+        draft_functions.append({
+            "key": f"fn:{norm_name(fname)}", "name": fname,
+            "displayName": f"待形式化: {r.get('display_name') or rname}",
+            "description": desc,
+            "functionType": "object" if obj_key else "query",
+            "language": "expression", "returnType": "string", "body": "",
+            "enabled": False,
+            "targetObjectTypeKey": obj_key,
+            "targetObjectTypeName": r.get("applies_to") or "",
+            "sourceRefs": [x for x in [r.get("id")] if x],
+        })
+    if draft_functions:
+        warnings.append(f"生成 {len(draft_functions)} 个激活函数草稿"
+                        f"（enabled=false，请在编辑器中补函数体后启用）")
+
+    # 告警规则 + 事件 → 哨兵草稿（muted 影子 + enabled=false，条件留待人工形式化）
+    draft_sentinels: list[dict] = []
+    seen_sen_names: set[str] = set()
+
+    def add_sentinel(name: str, display_name: str, description: str,
+                     bind_key: Optional[str], bind_name: str,
+                     on_change: bool, on_schedule: bool, interval: int,
+                     origin_kind: str, source_ref: Optional[str]) -> None:
+        base = _slug(name, f"sentinel{len(draft_sentinels) + 1}")
+        sname, n = base, 2
+        while norm_name(sname) in seen_sen_names:
+            sname = f"{base}_{n}"
+            n += 1
+        seen_sen_names.add(norm_name(sname))
+        draft_sentinels.append({
+            "key": f"sen:{norm_name(sname)}", "name": sname,
+            "displayName": f"待形式化: {display_name or name}",
+            "description": description,
+            "bindingObjectKey": bind_key, "bindingObjectName": bind_name,
+            "onChange": on_change, "onSchedule": on_schedule,
+            "scanIntervalSeconds": interval,
+            "muted": True, "enabled": False, "status": "draft",
+            "originKind": origin_kind,
+            "sourceRefs": [x for x in [source_ref] if x],
+        })
+
+    for r in rules:
+        if (r.get("kind") or "constraint") != "alert":
+            continue
+        tgt = r.get("applies_to") or ""
+        bind_key = resolve_target_obj(tgt)
+        if not bind_key:
+            warnings.append(f"告警规则「{r.get('name')}」作用的「{tgt or '未指定'}」"
+                            f"未解析到对象，哨兵草稿未绑定监听对象（落地后请在编辑器中补绑定）")
+        desc = r.get("statement") or r.get("description") or ""
+        if r.get("error_message"):
+            desc += f"；告警提示: {r['error_message']}"
+        add_sentinel(r.get("name", ""), r.get("display_name") or r.get("name", ""), desc,
+                     bind_key, tgt, on_change=True, on_schedule=False, interval=300,
+                     origin_kind="rule", source_ref=r.get("id"))
+
+    for e in events:
+        src = (e.get("source") or "").strip()
+        is_time = norm_name(src) == "time"
+        bind_key = None
+        bind_name = ""
+        if src and not is_time and norm_name(src) != "external":
+            bind_name = behavior_object.get(norm_name(src)) or ""
+            bind_key = obj_key_by_name.get(norm_name(bind_name)) if bind_name else None
+            if not bind_key:
+                warnings.append(f"事件「{e.get('name')}」的来源「{src}」未解析到行为的作用对象，"
+                                f"哨兵草稿未绑定监听对象（落地后请在编辑器中补绑定）")
+        parts = [e.get("description") or ""]
+        if e.get("payload"):
+            parts.append("载荷: " + "、".join(e["payload"]))
+        if e.get("consequences"):
+            parts.append("后果: " + "、".join(e["consequences"]))
+        parts.append(f"来源: {src or '未指定'}")
+        add_sentinel(e.get("name", ""), e.get("display_name") or e.get("name", ""),
+                     "。".join(p for p in parts if p),
+                     bind_key, bind_name,
+                     on_change=not is_time, on_schedule=is_time,
+                     interval=3600 if is_time else 300,
+                     origin_kind="event", source_ref=e.get("id"))
+    if draft_sentinels:
+        warnings.append(f"生成 {len(draft_sentinels)} 个哨兵草稿"
+                        f"（muted 影子 + 停用，请在编辑器中补条件表达式后发布）")
+
+    # 未挂到任何行为的 constraint/validation/approval 规则 → 报告备注（不再静默丢失）
     mapped_targets = {norm_name(b.get("name", "")) for b in behaviors}
     for r in rules:
+        kind = r.get("kind") or "constraint"
+        if kind in ("derivation", "alert"):
+            continue  # 已分别转化为函数/哨兵草稿
         tgt = norm_name(r.get("applies_to") or "")
-        if tgt not in mapped_targets and (r.get("kind") or "") != "approval":
+        if tgt in mapped_targets:
+            continue
+        if kind == "approval":
+            warnings.append(f"审批规则「{r.get('name')}」作用于「{r.get('applies_to') or '未指定'}」"
+                            f"未命中任何行为，requiresApproval 未能挂载——请确认作用目标"
+                            f"或落地后在编辑器中手工开启审批")
+        else:
             warnings.append(f"规则「{r.get('name')}」作用于「{r.get('applies_to') or '未指定'}」，"
-                            f"暂无法映射为动作校验（对象级/告警类规则请后续用哨兵或函数实现）")
+                            f"暂无法映射为动作校验（对象级校验请后续在编辑器中形式化）")
 
-    return {"objectTypes": draft_objects, "linkTypes": draft_links, "actions": draft_actions}
+    return {"objectTypes": draft_objects, "linkTypes": draft_links, "actions": draft_actions,
+            "functions": draft_functions, "sentinels": draft_sentinels}
 
 
 # ---------------------------------------------------------------- 第 2 步：LLM 补缺
@@ -290,6 +422,8 @@ class _Patch(BaseModel):
     objectTypes: list[_PatchItem] = Field(default_factory=list)
     linkTypes: list[_PatchItem] = Field(default_factory=list)
     actions: list[_PatchItem] = Field(default_factory=list)
+    functions: list[_PatchItem] = Field(default_factory=list)
+    sentinels: list[_PatchItem] = Field(default_factory=list)
 
 
 def _strip_fence(text: str) -> str:
@@ -299,11 +433,14 @@ def _strip_fence(text: str) -> str:
 
 
 def _merge_patch(draft: dict, patch: _Patch, warnings: list[str]) -> None:
-    """白名单合并：只接受 描述/显示名/属性类型/基数/主键；非法值忽略并记警告。"""
-    by_key = {"objectTypes": {x["key"]: x for x in draft["objectTypes"]},
-              "linkTypes": {x["key"]: x for x in draft["linkTypes"]},
-              "actions": {x["key"]: x for x in draft["actions"]}}
-    for coll in ("objectTypes", "linkTypes", "actions"):
+    """白名单合并：只接受 描述/显示名/属性类型/基数/主键；非法值忽略并记警告。
+
+    函数/哨兵草稿只接受 描述/显示名 润色——functionType/绑定/触发方式等
+    结构字段全部确定性生成，LLM 不可改。
+    """
+    by_key = {coll: {x["key"]: x for x in draft.get(coll) or []}
+              for coll in ("objectTypes", "linkTypes", "actions", "functions", "sentinels")}
+    for coll in ("objectTypes", "linkTypes", "actions", "functions", "sentinels"):
         for item in getattr(patch, coll):
             target = by_key[coll].get(item.key)
             if not target:
@@ -312,6 +449,10 @@ def _merge_patch(draft: dict, patch: _Patch, warnings: list[str]) -> None:
                 target["description"] = item.description
             if item.displayName:
                 target["displayName"] = item.displayName
+                # 函数/哨兵草稿的「待形式化」标记不可被润色抹掉
+                if coll in ("functions", "sentinels") \
+                        and not target["displayName"].startswith("待形式化"):
+                    target["displayName"] = f"待形式化: {target['displayName']}"
             if coll == "linkTypes" and item.cardinality:
                 if item.cardinality in CARDINALITIES:
                     target["cardinality"] = item.cardinality
@@ -351,7 +492,9 @@ def refine_draft(draft: dict, canvas: dict, call_kwargs: Optional[dict],
 只输出 JSON（不要解释、不要代码块），结构：
 {{"objectTypes": [{{"key", "displayName"?, "description"?, "primaryKey"?, "properties": [{{"name", "type"?, "displayName"?, "description"?}}]}}],
  "linkTypes": [{{"key", "displayName"?, "description"?, "cardinality"?}}],
- "actions": [{{"key", "displayName"?, "description"?}}]}}
+ "actions": [{{"key", "displayName"?, "description"?}}],
+ "functions": [{{"key", "displayName"?, "description"?}}],
+ "sentinels": [{{"key", "displayName"?, "description"?}}]}}
 只引用骨架中已有的 key 和属性 name，不要新增/删除任何元素或属性。
 
 # 业务画布
@@ -387,9 +530,10 @@ def refine_draft(draft: dict, canvas: dict, call_kwargs: Optional[dict],
 
 
 def _lint(draft: dict, warnings: list[str]) -> None:
-    for coll, label in (("objectTypes", "对象类型"), ("linkTypes", "链接类型"), ("actions", "动作")):
+    for coll, label in (("objectTypes", "对象类型"), ("linkTypes", "链接类型"), ("actions", "动作"),
+                        ("functions", "激活函数"), ("sentinels", "哨兵")):
         seen: set[str] = set()
-        for item in draft[coll]:
+        for item in draft.get(coll) or []:
             base = item["name"]
             n = 2
             while norm_name(item["name"]) in seen:
@@ -418,9 +562,10 @@ def _lint(draft: dict, warnings: list[str]) -> None:
 
 def _mark_conflicts(draft: dict, existing: Optional[dict[str, set[str]]],
                     conflicts: list[str]) -> None:
-    ex = existing or {"objectTypes": set(), "linkTypes": set(), "actions": set()}
-    for coll, label in (("objectTypes", "对象类型"), ("linkTypes", "链接类型"), ("actions", "动作")):
-        for item in draft[coll]:
+    ex = existing or {}
+    for coll, label in (("objectTypes", "对象类型"), ("linkTypes", "链接类型"), ("actions", "动作"),
+                        ("functions", "激活函数"), ("sentinels", "哨兵")):
+        for item in draft.get(coll) or []:
             item["conflict"] = norm_name(item["name"]) in ex.get(coll, set())
             if item["conflict"]:
                 conflicts.append(f"{label}「{item['displayName']}（{item['name']}）」"
@@ -455,6 +600,10 @@ def existing_name_sets(db: Session, ontology_id: str) -> dict[str, set[str]]:
                       .filter(LinkType.ontology_id == ontology_id)},
         "actions": {norm_name(x.name) for x in db.query(ActionType.name)
                     .filter(ActionType.ontology_id == ontology_id)},
+        "functions": {norm_name(x.name) for x in db.query(OntologyFunction.name)
+                      .filter(OntologyFunction.ontology_id == ontology_id)},
+        "sentinels": {norm_name(x.name) for x in db.query(Sentinel.name)
+                      .filter(Sentinel.ontology_id == ontology_id)},
     }
 
 
@@ -474,20 +623,29 @@ def build_draft(canvas: dict, existing: Optional[dict[str, set[str]]] = None,
 
 
 def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]],
-                ontology_id: str) -> dict:
+                ontology_id: str, lineage: Optional[dict] = None) -> dict:
     """把勾选且无冲突的草稿元素落入本体（保守合并：同名一律跳过）。
 
     链接端点/动作绑定解析顺序：本次落地的新对象 → 目标本体已有同名对象 → 跳过。
+    同名跳过使重复 apply 天然幂等——已落地元素再次应用只会进 skipped。
+    lineage（sessionId/documentId/draftId）与元素的 draftKey/sourceRefs 一起
+    写入 source 血缘列，落地后可回溯到探索会话与画布卡片。
     """
     selected = set(selected_keys) if selected_keys is not None else None
 
     def picked(item: dict) -> bool:
         return selected is None or item["key"] in selected
 
+    def src_of(item: dict) -> Optional[dict]:
+        if not lineage:
+            return None
+        return {"kind": "business_exploration", **lineage,
+                "draftKey": item.get("key"), "sourceRefs": item.get("sourceRefs") or []}
+
     existing = existing_name_sets(db, ontology_id)
     existing_obj_ids = {norm_name(x.name): x.id for x in
                         db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id)}
-    created = {"objectTypes": 0, "linkTypes": 0, "actions": 0}
+    created = {"objectTypes": 0, "linkTypes": 0, "actions": 0, "functions": 0, "sentinels": 0}
     skipped: list[dict] = []
     key2id: dict[str, str] = {}
 
@@ -506,6 +664,7 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
             color=item.get("color"), primary_key=item.get("primaryKey"),
             properties=item.get("properties") or [], interfaces=[],
             position_x=120 + (idx % 4) * 340, position_y=120 + (idx // 4) * 260,
+            source=src_of(item),
         ))
         key2id[item["key"]] = oid
         existing["objectTypes"].add(norm_name(item["name"]))
@@ -534,6 +693,7 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
             source_object_type_id=src, target_object_type_id=tgt,
             cardinality=item.get("cardinality") or "one-to-many",
             properties=[],
+            source=src_of(item),
         ))
         existing["linkTypes"].add(norm_name(item["name"]))
         created["linkTypes"] += 1
@@ -556,9 +716,55 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
             object_type_id=obj_id, parameters=item.get("parameters") or [],
             rules=item.get("rules") or [],
             requires_approval=bool(item.get("requiresApproval")),
+            source=src_of(item),
         ))
         existing["actions"].add(norm_name(item["name"]))
         created["actions"] += 1
+
+    # 激活函数草稿 → OntologyFunction（enabled=false，函数体待人工形式化后启用）
+    for item in draft_data.get("functions", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing.get("functions", set()):
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名函数「{item['name']}」"})
+            continue
+        target_id = resolve_obj(item.get("targetObjectTypeKey"),
+                                item.get("targetObjectTypeName", ""))
+        db.add(OntologyFunction(
+            id=str(uuid.uuid4()), ontology_id=ontology_id, name=item["name"],
+            display_name=item["displayName"], description=item.get("description"),
+            function_type=(item.get("functionType") or "query") if target_id else "query",
+            language="expression", target_object_type_id=target_id,
+            parameters=[], return_type=item.get("returnType") or "string",
+            body=item.get("body") or "", enabled=False,
+            source=src_of(item),
+        ))
+        existing.setdefault("functions", set()).add(norm_name(item["name"]))
+        created["functions"] += 1
+
+    # 哨兵草稿 → Sentinel（muted 影子 + enabled=false + status=draft，三重闸门确保不进执行链路）
+    for item in draft_data.get("sentinels", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing.get("sentinels", set()):
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名哨兵「{item['name']}」"})
+            continue
+        bind_id = resolve_obj(item.get("bindingObjectKey"), item.get("bindingObjectName", ""))
+        bindings = [{"alias": "a", "objectTypeId": bind_id, "filter": None}] if bind_id else []
+        db.add(Sentinel(
+            id=str(uuid.uuid4()), ontology_id=ontology_id, name=item["name"],
+            display_name=item["displayName"], description=item.get("description"),
+            bindings=bindings, links=[], condition=None,
+            condition_rows=[], condition_logic="and",
+            primary_alias="a" if bindings else None, action_ids=[],
+            on_change=bool(item.get("onChange", True)),
+            on_schedule=bool(item.get("onSchedule")),
+            scan_interval_seconds=int(item.get("scanIntervalSeconds") or 300),
+            trigger_mode="on_enter", muted=True, enabled=False, status="draft",
+            source=src_of(item),
+        ))
+        existing.setdefault("sentinels", set()).add(norm_name(item["name"]))
+        created["sentinels"] += 1
 
     db.flush()
     return {"created": created, "skipped": skipped}

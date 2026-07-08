@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   X, Box, GitBranch, Play, CircleAlert, TriangleAlert, Loader2, CheckCircle2, ShieldCheck,
+  SquareFunction, ShieldAlert, Trash2,
 } from 'lucide-react'
 import {
   explorationApi, type ApplyDraftResult, type BxDraft,
@@ -11,15 +12,20 @@ const CARDINALITY_LABEL: Record<string, string> = {
   'one-to-one': '1:1', 'one-to-many': '1:N', 'many-to-one': 'N:1', 'many-to-many': 'N:N',
 }
 
-/** 本体草稿人审抽屉：分组预览 + 逐项勾选 + 报告，应用后跳图谱编辑器 */
-export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
+/** 本体草稿人审抽屉：分组预览 + 逐项勾选 + 报告，应用后跳图谱编辑器。
+ *  草稿可重复应用（同名跳过幂等）：部分勾选落地后可再次打开勾选剩余元素。 */
+export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscarded }: {
   draft: BxDraft
   onClose: () => void
   onApplied?: (result: ApplyDraftResult) => void
+  onDiscarded?: () => void
 }) {
+  const functions = draft.draft.functions ?? []
+  const sentinels = draft.draft.sentinels ?? []
   const allItems = useMemo(() => [
     ...draft.draft.objectTypes, ...draft.draft.linkTypes, ...draft.draft.actions,
-  ], [draft])
+    ...functions, ...sentinels,
+  ], [draft])  // eslint-disable-line react-hooks/exhaustive-deps
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(allItems.filter(i => !i.conflict).map(i => i.key)))
   const [newName, setNewName] = useState('')
@@ -27,6 +33,7 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<ApplyDraftResult | null>(null)
+  const discarded = draft.status === 'discarded'
 
   const toggle = (key: string, conflict?: boolean) => {
     if (conflict || result) return
@@ -38,21 +45,40 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
     })
   }
 
+  // 已落地过的草稿再次应用：固定合并进首次的目标本体，无需再填新本体名
+  const needsNewName = !draft.targetOntologyId && !draft.appliedOntologyId
+
   const apply = async () => {
     setError('')
     if (selected.size === 0) { setError('请至少勾选一个草稿元素'); return }
-    if (!draft.targetOntologyId && !newName.trim()) { setError('请填写新本体名称'); return }
+    if (needsNewName && !newName.trim()) { setError('请填写新本体名称'); return }
     setBusy(true)
     try {
       const res = await explorationApi.applyDraft(draft.id, {
         selectedKeys: [...selected],
-        newOntology: draft.targetOntologyId ? undefined
-          : { name: newName.trim(), domain: newDomain.trim() || '业务探索' },
+        newOntology: needsNewName
+          ? { name: newName.trim(), domain: newDomain.trim() || '业务探索' }
+          : undefined,
       })
       setResult(res)
       onApplied?.(res)
     } catch (e: any) {
       setError(e?.detail || e?.message || '应用失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const discard = async () => {
+    if (!window.confirm('废弃此草稿？废弃后不可再应用（可重新生成草稿）。')) return
+    setError('')
+    setBusy(true)
+    try {
+      await explorationApi.discardDraft(draft.id)
+      onDiscarded?.()
+      onClose()
+    } catch (e: any) {
+      setError(e?.detail || e?.message || '废弃失败')
     } finally {
       setBusy(false)
     }
@@ -82,8 +108,10 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
           <div>
             <div className="text-sm font-semibold text-[var(--color-text-primary)]">本体草稿审阅</div>
             <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
-              {draft.targetOntologyId ? '保守合并到已有本体（只新增，同名跳过）' : '应用时将新建本体'}
+              {draft.appliedOntologyId ? '已落地过 · 再次应用将合并进同一本体（同名跳过）'
+                : draft.targetOntologyId ? '保守合并到已有本体（只新增，同名跳过）' : '应用时将新建本体'}
               {report.llmRefined ? ' · LLM 已补缺' : ' · 纯确定性映射'}
+              {discarded && ' · 已废弃'}
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-md hover:bg-[var(--color-bg-hover)] text-[var(--color-text-tertiary)]">
@@ -99,6 +127,8 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
               </div>
               <div className="text-xs text-emerald-800/80 mt-1.5">
                 新建 对象类型 {result.created.objectTypes} · 链接 {result.created.linkTypes} · 动作 {result.created.actions}
+                {(result.created.functions ?? 0) > 0 && ` · 函数 ${result.created.functions}（停用待形式化）`}
+                {(result.created.sentinels ?? 0) > 0 && ` · 哨兵 ${result.created.sentinels}（影子待形式化）`}
                 {result.skipped.length > 0 && ` · 跳过 ${result.skipped.length} 项`}
               </div>
               {result.skipped.length > 0 && (
@@ -239,11 +269,75 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
               )}
             </div>
           </section>
+
+          {/* 激活函数草稿（derivation 规则转出，enabled=false 落地） */}
+          {functions.length > 0 && (
+            <section>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] mb-2">
+                <SquareFunction size={13} className="text-pink-600" /> 激活函数（{functions.length}）
+                <span className="font-normal text-[10px] text-[var(--color-text-tertiary)]">派生规则转出 · 停用落地，补函数体后启用</span>
+              </div>
+              <div className="space-y-2">
+                {functions.map(fn => (
+                  <label key={fn.key} className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)]/50">
+                    {checkbox(fn.key, fn.conflict)}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-medium text-[var(--color-text-primary)]">{fn.displayName}</span>
+                        <span className="text-[11px] font-mono text-[var(--color-text-tertiary)]">{fn.name}</span>
+                        <span className="text-[10px] px-1.5 py-px rounded bg-pink-50 text-pink-600">停用 · 待形式化</span>
+                        {fn.conflict && conflictTag}
+                      </div>
+                      <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">
+                        {fn.functionType === 'object'
+                          ? `派生属性 · 挂载对象: ${fn.targetObjectTypeName || '待绑定'}`
+                          : '独立查询函数（未解析到对象，落地后请补绑定）'}
+                        {fn.description && <span className="line-clamp-2"> · {fn.description}</span>}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 哨兵草稿（alert 规则/事件转出，muted 影子落地） */}
+          {sentinels.length > 0 && (
+            <section>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] mb-2">
+                <ShieldAlert size={13} className="text-indigo-600" /> 哨兵（{sentinels.length}）
+                <span className="font-normal text-[10px] text-[var(--color-text-tertiary)]">告警规则/事件转出 · 影子落地，补条件后发布</span>
+              </div>
+              <div className="space-y-2">
+                {sentinels.map(sn => (
+                  <label key={sn.key} className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)]/50">
+                    {checkbox(sn.key, sn.conflict)}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-medium text-[var(--color-text-primary)]">{sn.displayName}</span>
+                        <span className="text-[11px] font-mono text-[var(--color-text-tertiary)]">{sn.name}</span>
+                        <span className="text-[10px] px-1.5 py-px rounded bg-indigo-50 text-indigo-600">影子 · 不执行动作</span>
+                        <span className="text-[10px] px-1.5 py-px rounded bg-slate-100 text-slate-500">
+                          {sn.originKind === 'event' ? '来自事件模型' : '来自规则模型'}
+                        </span>
+                        {sn.conflict && conflictTag}
+                      </div>
+                      <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">
+                        {sn.onSchedule ? '定期扫描' : '变化驱动'}
+                        {' · 监听: '}{sn.bindingObjectName || '待绑定'}
+                        {sn.description && <span className="line-clamp-2"> · {sn.description}</span>}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
 
         {!result && (
           <div className="border-t border-[var(--color-border)] px-5 py-3.5 space-y-2.5">
-            {!draft.targetOntologyId && (
+            {needsNewName && !discarded && (
               <div className="flex gap-2">
                 <input
                   value={newName}
@@ -260,18 +354,31 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied }: {
               </div>
             )}
             {error && <div className="text-xs text-[var(--color-danger)]">{error}</div>}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <span className="text-[11px] text-[var(--color-text-tertiary)]">
-                已勾选 {selected.size} / {allItems.length} 项（冲突项不可选，应用时自动跳过）
+                {discarded ? '该草稿已废弃，不可应用（可重新生成草稿）'
+                  : `已勾选 ${selected.size} / ${allItems.length} 项（冲突项不可选，应用时自动跳过）`}
               </span>
-              <button
-                onClick={apply}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50"
-              >
-                {busy && <Loader2 size={12} className="animate-spin" />}
-                {draft.targetOntologyId ? '应用到本体' : '新建本体并应用'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {!discarded && (
+                  <button
+                    onClick={discard}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-xs text-[var(--color-text-tertiary)] hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                  >
+                    <Trash2 size={12} /> 废弃
+                  </button>
+                )}
+                <button
+                  onClick={apply}
+                  disabled={busy || discarded}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50"
+                >
+                  {busy && <Loader2 size={12} className="animate-spin" />}
+                  {draft.appliedOntologyId ? '再次应用（合并进同一本体）'
+                    : draft.targetOntologyId ? '应用到本体' : '新建本体并应用'}
+                </button>
+              </div>
             </div>
           </div>
         )}

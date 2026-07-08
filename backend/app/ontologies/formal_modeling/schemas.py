@@ -56,6 +56,7 @@ class ObjectTypeUpdate(CamelModel):
 
 class ObjectTypeOut(ObjectTypeBase):
     id: str
+    source: Optional[dict[str, Any]] = None  # 血缘出处（如业务探索草稿）
     created_at: datetime
     updated_at: datetime
 
@@ -91,6 +92,7 @@ class LinkTypeUpdate(CamelModel):
 
 class LinkTypeOut(LinkTypeBase):
     id: str
+    source: Optional[dict[str, Any]] = None  # 血缘出处（如业务探索草稿）
     created_at: datetime
     updated_at: datetime
 
@@ -125,6 +127,7 @@ class ActionTypeUpdate(CamelModel):
 
 class ActionTypeOut(ActionTypeBase):
     id: str
+    source: Optional[dict[str, Any]] = None  # 血缘出处（如业务探索草稿）
     created_at: datetime
     updated_at: datetime
 
@@ -168,6 +171,7 @@ class FunctionUpdate(CamelModel):
 
 class FunctionOut(FunctionBase):
     id: str
+    source: Optional[dict[str, Any]] = None  # 血缘出处（如业务探索草稿）
     created_at: datetime
     updated_at: datetime
 

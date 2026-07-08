@@ -58,6 +58,11 @@ class ObjectType(Base):
     position_x: Mapped[float] = mapped_column(default=0.0)
     position_y: Mapped[float] = mapped_column(default=0.0)
 
+    # 血缘出处（Schema 也是事实）：非手工创建的元素记录来源指针，
+    # 如 {"kind": "business_exploration", "sessionId", "documentId", "draftId", "draftKey", "sourceRefs"}
+    # 编辑器保存走 FIELDS_* 白名单，不会清洗此列
+    source: Mapped[dict] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -82,6 +87,9 @@ class LinkType(Base):
 
     properties: Mapped[list] = mapped_column(JSON, default=list)
 
+    # 血缘出处（同 ObjectType.source）
+    source: Mapped[dict] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
@@ -105,6 +113,9 @@ class ActionType(Base):
     validation_function_id: Mapped[str] = mapped_column(String, nullable=True)
     # HITL 审批闸门：true 时真实执行先落 pending 日志，等人批准/拒绝（决策本身记为 Fact）
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+
+    # 血缘出处（同 ObjectType.source）
+    source: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -136,6 +147,9 @@ class OntologyFunction(Base):
     cache_strategy: Mapped[str] = mapped_column(String(20), nullable=True)     # none | ttl | materialized
     cache_ttl: Mapped[int] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # 血缘出处（同 ObjectType.source）
+    source: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

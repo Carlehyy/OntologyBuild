@@ -7,8 +7,10 @@
   object   → objects     业务对象（→ ObjectType + 属性 + 关系→LinkType）
   actor    → actors      业务主体（参与方，为动作提供归属/审批语境）
   behavior → behaviors   业务行为（→ ActionType）
-  event    → events      业务事件（进文档 + 动作描述）
-  rule     → rules       业务规则（→ validation 规则 / requiresApproval）
+  event    → events      业务事件（→ 哨兵草稿 muted 影子 + 动作描述 + 文档）
+  rule     → rules       业务规则（constraint|validation → disabled 校验规则；
+                         approval → requiresApproval；derivation → 激活函数草稿；
+                         alert → 哨兵草稿）
   scenario → scenarios   业务场景（不进本体，作为草稿的可表达性验收器）
 """
 from __future__ import annotations

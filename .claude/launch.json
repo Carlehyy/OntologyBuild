@@ -20,6 +20,18 @@
       "port": 5273
     },
     {
+      "name": "backend-p0",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["DATABASE_URL=sqlite:////tmp/ontoprompt-p0.db", "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8003", "--app-dir", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/nervous-liskov-7214c2/backend"],
+      "port": 8003
+    },
+    {
+      "name": "frontend-p0",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["VITE_API_PROXY_TARGET=http://127.0.0.1:8003", "npm", "--prefix", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/nervous-liskov-7214c2/frontend", "run", "dev", "--", "--port", "5476", "--strictPort"],
+      "port": 5476
+    },
+    {
       "name": "backend-bx",
       "runtimeExecutable": "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python",
       "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8001", "--app-dir", "/Users/carle/Desktop/OntologyBuild/backend"],

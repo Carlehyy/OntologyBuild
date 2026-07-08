@@ -132,6 +132,40 @@ export interface DraftAction {
   conflict?: boolean
 }
 
+/** 激活函数草稿：derivation 规则转出，enabled=false 落地待人工补函数体 */
+export interface DraftFunction {
+  key: string
+  name: string
+  displayName: string
+  description?: string
+  functionType: 'object' | 'query'
+  language: string
+  returnType: string
+  body: string
+  enabled: boolean
+  targetObjectTypeKey?: string | null
+  targetObjectTypeName?: string | null
+  conflict?: boolean
+}
+
+/** 哨兵草稿：alert 规则/事件转出，muted 影子 + enabled=false + status=draft 三重闸门 */
+export interface DraftSentinel {
+  key: string
+  name: string
+  displayName: string
+  description?: string
+  bindingObjectKey?: string | null
+  bindingObjectName?: string | null
+  onChange: boolean
+  onSchedule: boolean
+  scanIntervalSeconds?: number
+  muted: boolean
+  enabled: boolean
+  status: string
+  originKind?: 'rule' | 'event'
+  conflict?: boolean
+}
+
 export interface DraftReport {
   warnings: string[]
   conflicts: string[]
@@ -144,7 +178,13 @@ export interface BxDraft {
   sessionId: string
   documentId: string
   targetOntologyId: string | null
-  draft: { objectTypes: DraftObjectType[]; linkTypes: DraftLinkType[]; actions: DraftAction[] }
+  draft: {
+    objectTypes: DraftObjectType[]
+    linkTypes: DraftLinkType[]
+    actions: DraftAction[]
+    functions?: DraftFunction[]     // 旧草稿无此键
+    sentinels?: DraftSentinel[]
+  }
   report: DraftReport
   status: 'draft' | 'applied' | 'discarded'
   appliedOntologyId: string | null
@@ -155,7 +195,7 @@ export interface BxDraft {
 export interface ApplyDraftResult {
   ontologyId: string
   ontologyName: string
-  created: { objectTypes: number; linkTypes: number; actions: number }
+  created: { objectTypes: number; linkTypes: number; actions: number; functions: number; sentinels: number }
   skipped: { key: string; reason: string }[]
 }
 
@@ -216,6 +256,8 @@ export const explorationApi = {
     selectedKeys?: string[] | null
     newOntology?: { name: string; domain?: string; description?: string }
   }) => apiClientV2.post<ApplyDraftResult>(`/exploration/drafts/${draftId}/apply`, body),
+  discardDraft: (draftId: string) =>
+    apiClientV2.post<BxDraft>(`/exploration/drafts/${draftId}/discard`),
 }
 
 // ---------- SSE 流式 chat ----------
