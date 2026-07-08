@@ -52,7 +52,7 @@ log "running database migrations"
 # 先 stamp 到已知已应用的基准版本（跳过可能已手动执行但未记录的 migration），
 # 再 upgrade head 应用新的 migration。stamp 失败（如已是最新）不阻塞部署。
 log "  stamping to base revision (ignore errors if already stamped)"
-compose run --rm backend alembic stamp 0005_model_call_log 2>&1 || true
+compose run --rm backend alembic stamp 0006_element_source_lineage 2>&1 || true
 log "  upgrading to head"
 run_with_retry compose run --rm backend alembic upgrade head
 log "starting services"
