@@ -42,7 +42,14 @@ export default function MermaidBlock({ chart }: { chart: string }) {
     loadMermaid()
       .then(mermaid => mermaid.render(`mmd-${reactId}-${mySeq}`, chart, container))
       .then(({ svg: out }) => { if (seq.current === mySeq) setSvg(out) })
-      .catch(e => { if (seq.current === mySeq) setError(String(e?.message || e)) })
+      .catch(e => {
+        const message = String(e?.message || e)
+        if (/Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(message)) {
+          const reloading = (window as any).__openOntologyReloadForAssets?.()
+          if (reloading) return
+        }
+        if (seq.current === mySeq) setError(message)
+      })
 
     return () => {
       if (container) container.innerHTML = ''

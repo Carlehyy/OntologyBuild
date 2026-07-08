@@ -14,6 +14,31 @@ window.addEventListener('error', (event) => {
   }
 })
 
+function reloadForUpdatedAssets() {
+  const key = 'openontology:last-asset-reload'
+  const now = Date.now()
+  const last = Number(sessionStorage.getItem(key) || 0)
+  if (now - last < 10_000) return false
+  sessionStorage.setItem(key, String(now))
+  window.location.reload()
+  return true
+}
+
+(window as any).__openOntologyReloadForAssets = reloadForUpdatedAssets
+
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  reloadForUpdatedAssets()
+})
+
+window.addEventListener('unhandledrejection', (event) => {
+  const message = String((event.reason as any)?.message || event.reason || '')
+  if (/Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(message)) {
+    event.preventDefault()
+    reloadForUpdatedAssets()
+  }
+})
+
 // 开发便利：支持通过 URL 注入登录态（沙箱/隧道环境冒烟测试用）
 // 例如  https://host/?token=JWT#/ontologies/<id>/graph
 try {

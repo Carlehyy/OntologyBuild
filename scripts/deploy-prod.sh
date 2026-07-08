@@ -30,6 +30,50 @@ compose() {
     return 1
   fi
 }
+assert_asset() {
+  local url="$1"
+  local expected="$2"
+  local headers
+  headers="$(mktemp)"
+  if ! curl -fsS --connect-timeout 5 --max-time 20 -D "$headers" -o /dev/null "$url"; then
+    rm -f "$headers"
+    return 1
+  fi
+  if ! grep -Eiq "^content-type:.*${expected}" "$headers"; then
+    log "asset content type mismatch: $url"
+    tr -d '\r' < "$headers" | awk 'BEGIN{IGNORECASE=1}/^HTTP|^Content-Type|^Content-Length/{print "  " $0}' >&2
+    rm -f "$headers"
+    return 1
+  fi
+  rm -f "$headers"
+}
+check_frontend_assets() {
+  local base="${HEALTH_URL%/}"
+  local index_file main_file
+  local entry css asset expected
+  index_file="$(mktemp)"
+  main_file="$(mktemp)"
+  curl -fsS --connect-timeout 5 --max-time 20 "$base/" -o "$index_file"
+
+  entry="$(grep -oE 'src="/assets/[^"]+\.js"' "$index_file" | head -n1 | sed -E 's/src="([^"]+)"/\1/')"
+  css="$(grep -oE 'href="/assets/[^"]+\.css"' "$index_file" | head -n1 | sed -E 's/href="([^"]+)"/\1/')"
+  [ -n "$entry" ] || { log "frontend entry script not found in index.html"; rm -f "$index_file" "$main_file"; return 1; }
+
+  assert_asset "$base$entry" "javascript"
+  [ -z "$css" ] || assert_asset "$base$css" "text/css"
+  curl -fsS --connect-timeout 5 --max-time 30 "$base$entry" -o "$main_file"
+
+  grep -aoE 'assets/[-A-Za-z0-9_./]+\.(js|css)' "$main_file" | sort -u | while read -r asset; do
+    case "$asset" in
+      *.js) expected="javascript" ;;
+      *.css) expected="text/css" ;;
+      *) continue ;;
+    esac
+    assert_asset "$base/$asset" "$expected"
+  done
+
+  rm -f "$index_file" "$main_file"
+}
 command -v docker >/dev/null 2>&1 || { log "docker is not installed"; exit 1; }
 if [ "${SKIP_GIT:-0}" != "1" ]; then
   command -v git >/dev/null 2>&1 || { log "git is not installed"; exit 1; }
@@ -59,7 +103,7 @@ log "starting services"
 run_with_retry compose up -d --remove-orphans
 log "waiting for public health endpoint: ${HEALTH_URL}"
 for i in $(seq 1 30); do
-  if curl -fsS --connect-timeout 5 --max-time 10 "$HEALTH_URL" >/dev/null; then
+  if curl -fsS --connect-timeout 5 --max-time 10 "$HEALTH_URL" >/dev/null && check_frontend_assets; then
     log "deployment succeeded"
     compose ps
     exit 0
