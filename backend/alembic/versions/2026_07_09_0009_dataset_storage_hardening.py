@@ -1,15 +1,15 @@
 """dataset storage hardening: 写锁表 + 版本号/成品名唯一约束（先修复存量重复）
 
-Revision ID: 0008_dataset_storage_hardening
-Revises: 0007_pipeline_column_definitions
+Revision ID: 0009_dataset_storage_hardening
+Revises: 0008_pipeline_lifecycle_contract（同日并行开发，合并后重链避免双 head）
 Create Date: 2026-07-09
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect as sa_inspect
 
-revision = "0008_dataset_storage_hardening"
-down_revision = "0007_pipeline_column_definitions"
+revision = "0009_dataset_storage_hardening"
+down_revision = "0008_pipeline_lifecycle_contract"
 branch_labels = None
 depends_on = None
 

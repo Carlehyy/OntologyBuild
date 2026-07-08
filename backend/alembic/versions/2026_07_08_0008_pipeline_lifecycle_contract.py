@@ -13,6 +13,7 @@ Create Date: 2026-07-08
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect as sa_inspect
 
 revision = "0008_pipeline_lifecycle_contract"
 down_revision = "0007_pipeline_column_definitions"
@@ -20,11 +21,20 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table: str, column: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa_inspect(conn)
+    return column in [c["name"] for c in inspector.get_columns(table)]
+
+
 def upgrade() -> None:
-    op.add_column(
-        "v2_pipeline_versions",
-        sa.Column("column_definitions", sa.JSON(), nullable=True),
-    )
+    # 部署脚本每次 stamp 回 0006 再 upgrade，本迁移会被反复执行——
+    # add_column 必须带存在性检查（项目惯例，见 0007/3ba41a0）
+    if not _column_exists("v2_pipeline_versions", "column_definitions"):
+        op.add_column(
+            "v2_pipeline_versions",
+            sa.Column("column_definitions", sa.JSON(), nullable=True),
+        )
     # 有已发布版本快照的 → published；其余脏值 → draft
     op.execute(
         "UPDATE v2_pipelines SET status='published' "
