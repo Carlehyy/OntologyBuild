@@ -259,8 +259,7 @@ export default function PipelineListPage() {
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {runMeta ? (
                         <div className={`relative inline-flex items-center gap-1.5 ${runFailed ? 'cursor-help group/err' : ''}`}>
-                          <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color} ${
-                            runFailed ? 'border-b border-dashed border-red-300' : ''}`}>
+                          <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color}`}>
                             {runMeta.icon}{runMeta.label}
                           </span>
                           <span className="text-xs text-gray-400">{formatTime(pl.last_run_at)}</span>
@@ -297,7 +296,8 @@ export default function PipelineListPage() {
                               const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
                               const workflowId = wfId?.n8n_workflow_id as string | undefined
                               if (workflowId && n8nApiUrl) {
-                                window.open(`${n8nApiUrl}/workflow/${workflowId}`, '_blank')
+                                const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '')
+                                window.open(`${webUrl}/workflow/${workflowId}`, '_blank')
                               }
                             } else {
                               navigate(`/data/pipelines/${pl.id}`)
@@ -478,7 +478,7 @@ function PipelineCreateModal({
             <input
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 focus:outline-none transition-colors"
               placeholder="例：供应链数据清洗"
               autoFocus
             />
@@ -488,14 +488,14 @@ function PipelineCreateModal({
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 focus:outline-none transition-colors"
               rows={3}
               placeholder="流水线用途说明"
             />
           </div>
           {error && <p className="text-red-500 text-xs">{error}</p>}
         </div>
-        <div className="flex items-end justify-between mt-4">
+        <div className="flex items-center justify-between mt-4">
           <p className="text-xs text-gray-400 max-w-[60%] leading-relaxed">
             {isEdit
               ? '仅可修改名称和描述，创建方式不可切换。'
