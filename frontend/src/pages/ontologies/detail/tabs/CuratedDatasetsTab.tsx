@@ -32,6 +32,14 @@ interface CuratedDataset {
   quality_score: number | null
 }
 
+/** 资产湖人工数据集（已声明主键契约的才可灌入本体） */
+interface ManualDataset {
+  id: string
+  name: string
+  rowcount: number | null
+  primary_key: string
+}
+
 interface FormalObjectType {
   id: string
   name: string
@@ -273,6 +281,20 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
   })
   const approvedDatasets = (datasets as CuratedDataset[]).filter(d => d.status === 'approved')
 
+  // 人工数据集：已声明主键契约的可直接灌入（无主键则实例身份不稳定，后端会拦截）
+  const { data: manualOverview } = useQuery<{ items: Array<Record<string, unknown>> }>({
+    queryKey: ['manual-datasets-overview'],
+    queryFn: () => apiClientV2.get('/datasets/overview') as any,
+  })
+  const manualDatasets: ManualDataset[] = ((manualOverview?.items ?? []) as Array<Record<string, unknown>>)
+    .filter(d => d.source === 'upload' && d.primary_key)
+    .map(d => ({
+      id: String(d.id), name: String(d.name),
+      rowcount: (d.rowcount as number | null) ?? null,
+      primary_key: String(d.primary_key),
+    }))
+  const selectedManual = manualDatasets.find(d => d.id === selectedId) || null
+
   const boundType = useMemo(
     () => objectTypes.find(ot => ot.id === targetTypeId) || null,
     [objectTypes, targetTypeId])
@@ -295,18 +317,26 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
     setSuggestion(null)
     setDoneMsg(null)
     try {
-      const ds = approvedDatasets.find(d => d.id === selectedId)
-      const preview: any = await apiClientV2.get(`/curated/${selectedId}/preview?limit=5`)
-      const cols: string[] = preview.rows?.length > 0 ? Object.keys(preview.rows[0]) : []
+      const dsName = selectedManual?.name ?? approvedDatasets.find(d => d.id === selectedId)?.name ?? ''
+      // 人工数据集走 datasets 预览端点，成品走 curated 端点
+      const preview: any = await apiClientV2.get(selectedManual
+        ? `/datasets/${selectedId}/preview?limit=5`
+        : `/curated/${selectedId}/preview?limit=5`)
+      const cols: string[] = (preview.columns?.length
+        ? preview.columns
+        : (preview.rows?.length > 0 ? Object.keys(preview.rows[0]) : []))
       const res: any = await apiClientV2.post(`/ontologies/${ontologyId}/mappings/suggest`, {
-        dataset_name: ds?.name ?? '',
+        dataset_name: dsName,
         columns: cols,
         sample_rows: preview.rows?.slice(0, 3) ?? [],
         ontology_domain: '',
       })
       setSuggestion(res)
       setColumns(cols)
-      setPkColumn(res.primary_key_column || cols[0] || '')
+      // 人工数据集：湖中声明的单列主键优先并锁定（复合主键暂走启发式建议）
+      const declaredPk = selectedManual && !selectedManual.primary_key.includes(',')
+        && cols.includes(selectedManual.primary_key) ? selectedManual.primary_key : ''
+      setPkColumn(declaredPk || res.primary_key_column || cols[0] || '')
       // 初始字段映射 = LLM 建议
       const init: Record<string, string> = {}
       for (const fm of res.field_mappings ?? []) init[fm.column_name] = fm.property_name
@@ -417,8 +447,10 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
 
       {isLoading ? (
         <p className="text-xs text-gray-400">加载中...</p>
-      ) : approvedDatasets.length === 0 ? (
-        <p className="text-xs text-gray-400">暂无已审批的 Curated Dataset。请先在 数据 → 管道 → Curated 中完成审批。</p>
+      ) : approvedDatasets.length === 0 && manualDatasets.length === 0 ? (
+        <p className="text-xs text-gray-400">
+          暂无可关联的数据集：可在资产湖审批成品数据集，或在「人工数据集」上传表格并声明主键后灌入。
+        </p>
       ) : (
         <>
           {/* ① 选数据集 */}
@@ -429,12 +461,25 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
               onChange={e => { setSelectedId(e.target.value); setSuggestion(null); setDoneMsg(null) }}
               className="flex-1 border rounded-lg px-3 py-2 text-sm"
             >
-              <option value="">选择已审批的 Curated 数据集...</option>
-              {approvedDatasets.map(d => (
-                <option key={d.id} value={d.id}>
-                  {d.name}{d.row_count != null ? ` (${d.row_count.toLocaleString()} 行)` : ''}
-                </option>
-              ))}
+              <option value="">选择数据集（成品 / 人工）...</option>
+              {approvedDatasets.length > 0 && (
+                <optgroup label="成品数据集（已审批）">
+                  {approvedDatasets.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}{d.row_count != null ? ` (${d.row_count.toLocaleString()} 行)` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {manualDatasets.length > 0 && (
+                <optgroup label="人工数据集（已声明主键）">
+                  {manualDatasets.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}{d.rowcount != null ? ` (${d.rowcount.toLocaleString()} 行)` : ''} · 主键 {d.primary_key}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {selectedId && !suggestion && (
               <button
@@ -534,9 +579,15 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
                 <label className="flex items-center gap-1.5 text-gray-600">
                   主键列（去重键）：
                   <select value={pkColumn} onChange={e => setPkColumn(e.target.value)}
-                    className="border rounded px-2 py-1 text-xs">
+                    disabled={!!selectedManual && pkColumn === selectedManual.primary_key}
+                    title={selectedManual && pkColumn === selectedManual.primary_key
+                      ? '人工数据集的主键由资产湖契约锁定（在资产湖「维护数据」中管理）' : undefined}
+                    className="border rounded px-2 py-1 text-xs disabled:bg-violet-50 disabled:text-violet-700">
                     {columns.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
+                  {selectedManual && pkColumn === selectedManual.primary_key && (
+                    <span className="text-[10px] text-violet-600 bg-violet-50 border border-violet-200 rounded px-1 py-0.5">湖中契约锁定</span>
+                  )}
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-gray-600 cursor-pointer">
                   <input type="checkbox" checked={autoApply} onChange={e => setAutoApply(e.target.checked)}
@@ -608,7 +659,7 @@ export default function CuratedDatasetsTab({ ontologyId }: { ontologyId: string 
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          把已审批的 Curated 数据灌入本体：优先<b>绑定图谱中已有的对象实体</b>（先建模、再灌数据），也可由数据自动生成类型。
+          把已审批的成品数据或已声明主键的<b>人工数据集</b>灌入本体：优先<b>绑定图谱中已有的对象实体</b>（先建模、再灌数据），也可由数据自动生成类型。
         </p>
         <button
           onClick={() => setShowLink(v => !v)}

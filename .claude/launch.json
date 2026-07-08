@@ -44,6 +44,18 @@
       "port": 5375
     },
     {
+      "name": "backend-fh",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["DATABASE_URL=sqlite:////tmp/ontoprompt-fh.db", "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8004", "--app-dir", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/fervent-hawking-5d81ad/backend"],
+      "port": 8004
+    },
+    {
+      "name": "frontend-fh",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["VITE_API_PROXY_TARGET=http://127.0.0.1:8004", "npm", "--prefix", "/Users/carle/Desktop/OntologyBuild/.claude/worktrees/fervent-hawking-5d81ad/frontend", "run", "dev", "--", "--port", "5478", "--strictPort"],
+      "port": 5478
+    },
+    {
       "name": "backend-dc",
       "runtimeExecutable": "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python",
       "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8002", "--app-dir", "/Users/carle/Desktop/OntologyBuild/backend"],

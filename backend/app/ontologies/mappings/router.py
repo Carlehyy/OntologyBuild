@@ -86,6 +86,18 @@ def _validate_target_type(db: Session, ontology_id: str, type_id: Optional[str])
 def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db)):
     from app.services.v2.mapping.mapping_service import MappingService
     _validate_target_type(db, ontology_id, body.target_object_type_id)
+
+    # 人工数据集（非 curated）可直接灌入本体，但必须先声明主键契约——
+    # 无主键时实例身份退化为整行哈希，字段一变就堆积新实例
+    from app.models.v2.dataset import Dataset
+    ds = db.query(Dataset).filter(Dataset.id == body.curated_dataset_id).first()
+    if ds is not None and ds.kind != "curated":
+        declared_pk = str((ds.schema_json or {}).get("primary_key") or "").strip()
+        if not declared_pk:
+            raise HTTPException(400,
+                f"人工数据集「{ds.name}」尚未声明主键契约，无法灌入本体。"
+                f"请先到 数据资产湖 → 人工数据集 → 维护数据 中声明主键")
+
     svc = MappingService(db)
     field_mapping = dict(body.field_mapping or {})
     if body.property_mappings:

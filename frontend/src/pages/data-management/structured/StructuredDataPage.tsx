@@ -75,7 +75,7 @@ export default function StructuredDataPage() {
           数据资产湖
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          数据通道产出的全部数据资产：<b>原始数据集</b>（文件上传 / 同步任务落地的源数据）与<b>成品数据集</b>（流水线加工后的产物，审核通过后可作为本体对象的数据来源）
+          两类一等数据资产：<b>成品数据集</b>（流水线加工后的产物：手动执行与任务池调度都沉淀于此）与<b>人工数据集</b>（用户上传并持续维护的表格，声明主键后可直接作为本体对象的数据来源）
         </p>
       </div>
 
@@ -83,7 +83,7 @@ export default function StructuredDataPage() {
       <div className="flex items-center gap-1 border-b border-gray-200">
         {([
           ['curated', '成品数据集', <Table2 size={13} key="i" />],
-          ['raw', '原始数据集', <Database size={13} key="i" />],
+          ['raw', '人工数据集', <Database size={13} key="i" />],
         ] as [LakeTab, string, React.ReactNode][]).map(([key, label, icon]) => (
           <button
             key={key}
@@ -100,7 +100,7 @@ export default function StructuredDataPage() {
         <span className="ml-auto text-xs text-gray-400 pb-2">
           {activeTab === 'curated'
             ? '流水线每次运行会把产物追加为新版本；在本体管理中可绑定已审核的成品数据集灌入实例数据'
-            : '上传新版本即可更新数据，流水线绑定保持不变'}
+            : '上传或在线编辑即可更新数据（每次保存生成新版本）；声明主键后可直接被本体映射灌入'}
         </span>
       </div>
 

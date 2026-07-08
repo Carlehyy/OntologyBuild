@@ -21,6 +21,31 @@ class DatasetReadError(RuntimeError):
     """
 
 
+def rows_to_csv_bytes(rows: list[dict], columns: list[str]) -> bytes:
+    """行列表 → CSV bytes（人工数据集在线编辑的写回路径）。
+
+    列序由调用方给定（保持编辑前的展示顺序）；None → 空串，嵌套结构压 JSON。
+    """
+    import csv
+    import io
+
+    def _cell(v) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    if not rows:
+        return b""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore", restval="")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({c: _cell(row.get(c)) for c in columns})
+    return buf.getvalue().encode("utf-8")
+
+
 def _parse_stored_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[dict]:
     """把存储对象解析成行列表（JSON / Excel / CSV 自动检测）。
 

@@ -130,6 +130,20 @@ async def upload_dataset_version(
     content = await file.read()
     ext = _check_upload_file(file.filename, content)
 
+    # 已声明主键契约的数据集：新文件先过三校验，坏身份的数据不落盘
+    declared_pk = str((ds.schema_json or {}).get("primary_key") or "").strip()
+    if declared_pk:
+        from app.data_channel.datasets.lake_gate import LakeGateError, split_pk, validate_pk
+        from app.data_channel.datasets.service import _parse_stored_rows
+        try:
+            new_rows = _parse_stored_rows(content, limit=None)
+        except Exception as e:
+            raise HTTPException(400, f"文件解析失败，无法校验主键契约：{e}")
+        try:
+            validate_pk(new_rows, split_pk(declared_pk), dataset_name=ds.name, scope="上传的新版本")
+        except LakeGateError as e:
+            raise HTTPException(400, str(e))
+
     # 记录旧列，供列变化提示
     old_rows = svc.preview(dataset_id, None, limit=1)
     old_cols = set(old_rows[0].keys()) if old_rows else set()
@@ -149,6 +163,193 @@ async def upload_dataset_version(
         "columns_added": columns_added,
         "columns_removed": columns_removed,
         "consumers": _dataset_consumers(db, dataset_id),
+    }
+
+
+class ContractRequest(BaseModel):
+    primary_key: str  # 逗号分隔支持复合主键
+
+
+def _require_manual_dataset(ds, action: str):
+    """人工维护类操作的准入：成品/同步数据集各有自己的维护通道。"""
+    if ds.kind == "curated":
+        raise HTTPException(400, f"成品数据集不支持{action}：主键契约由入湖闸门维护，行级修正请走审核编辑")
+    if ds.name.startswith("SYNC::") or ds.source_connection_id:
+        raise HTTPException(400, f"该数据集由同步任务维护，不支持{action}——人工改动会在下次同步时被覆盖")
+
+
+@router.put("/{dataset_id}/contract")
+def declare_contract(dataset_id: str, body: ContractRequest, db: Session = Depends(get_db)):
+    """声明人工数据集的主键契约（存在·非空·唯一三校验，全量数据上验证）。
+
+    声明后：上传新版本/在线编辑都会校验主键；本体映射可直接绑定该数据集，
+    实例身份 = 主键值（否则退化为整行哈希，字段一变就堆积新实例）。
+    已被本体映射绑定后主键锁定——改主键 = 整批实例身份作废。
+    """
+    from app.data_channel.datasets.lake_gate import (
+        LakeGateError, infer_columns_typed, split_pk, validate_pk)
+    from app.services.v2.dataset_service import DatasetReadError
+
+    svc = DatasetService(db)
+    ds = svc.get_dataset(dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    _require_manual_dataset(ds, "主键契约声明")
+
+    pk_cols = split_pk(body.primary_key)
+    if not pk_cols:
+        raise HTTPException(400, "主键不能为空（支持逗号分隔的复合主键）")
+    new_pk = ",".join(pk_cols)
+
+    schema = dict(ds.schema_json or {})
+    old_pk = str(schema.get("primary_key") or "").strip()
+    if old_pk and old_pk != new_pk:
+        from app.models.v2.mapping import OntologyMapping
+        bound = db.query(OntologyMapping).filter(
+            OntologyMapping.curated_dataset_id == dataset_id).count()
+        if bound:
+            raise HTTPException(400,
+                f"该数据集已被 {bound} 条本体映射绑定，主键已锁定（改主键会让整批实例身份作废）。"
+                f"如确需变更，请先删除相关映射")
+
+    try:
+        rows = svc.load_all_rows(dataset_id)
+    except DatasetReadError as e:
+        raise HTTPException(502, str(e))
+    if rows:
+        try:
+            validate_pk(rows, pk_cols, dataset_name=ds.name, scope="现有数据")
+        except LakeGateError as e:
+            raise HTTPException(400, str(e))
+        schema["columns"] = list(rows[0].keys())
+        schema["columns_typed"] = infer_columns_typed(rows)
+
+    schema["primary_key"] = new_pk
+    schema["pk_source"] = "manual"
+    ds.schema_json = schema  # 赋新 dict, 原地改 JSON 列不会被 SQLAlchemy 跟踪
+    db.commit()
+    return {"dataset_id": dataset_id, "primary_key": new_pk, "rows_validated": len(rows)}
+
+
+class RowEditOp(BaseModel):
+    key: dict | None = None     # 主键列→值（update/delete 用加载时的原值定位）
+    values: dict | None = None  # update/insert 的列值
+
+
+class RowEditsRequest(BaseModel):
+    base_version_no: int  # 乐观并发：客户端所见的最新版本号
+    updates: list[RowEditOp] = []
+    inserts: list[RowEditOp] = []
+    deletes: list[RowEditOp] = []
+
+
+@router.post("/{dataset_id}/rows/edit")
+def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_db)):
+    """人工数据集在线维护：改单元格 / 新增行 / 删除行，整体生成一个新版本。
+
+    update/delete 按声明的主键定位行（未声明主键只能追加）；编辑后的全量
+    数据重新过主键三校验，坏身份的数据不落盘。base_version_no 不等于当前
+    最新版本时返回 409——说明期间有人上传/编辑过，客户端须刷新重做。
+    """
+    from app.data_channel.datasets.lake_gate import LakeGateError, infer_columns_typed, split_pk, validate_pk
+    from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
+    from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
+    from app.models.v2.dataset import DatasetVersion
+
+    svc = DatasetService(db)
+    ds = svc.get_dataset(dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    _require_manual_dataset(ds, "在线编辑")
+    if not (body.updates or body.inserts or body.deletes):
+        raise HTTPException(400, "没有任何修改")
+
+    schema = dict(ds.schema_json or {})
+    pk_cols = split_pk(schema.get("primary_key"))
+    if (body.updates or body.deletes) and not pk_cols:
+        raise HTTPException(400, "修改/删除行需要先声明主键契约（用于定位行并保证身份稳定）；未声明主键时仅支持新增行")
+
+    try:
+        with dataset_write_lock(f"dataset::{dataset_id}", bind=db.get_bind(), wait_timeout=30):
+            latest = db.query(DatasetVersion).filter(
+                DatasetVersion.dataset_id == dataset_id).order_by(DatasetVersion.version_no.desc()).first()
+            latest_no = latest.version_no if latest else 0
+            if body.base_version_no != latest_no:
+                raise HTTPException(409, detail={
+                    "message": f"数据已更新到 v{latest_no}（你正在编辑的是 v{body.base_version_no}），请刷新后重新修改",
+                    "current_version_no": latest_no,
+                })
+
+            try:
+                rows = svc.load_all_rows(dataset_id)
+            except DatasetReadError as e:
+                raise HTTPException(502, str(e))
+
+            columns = list(rows[0].keys()) if rows else list(schema.get("columns") or [])
+            if not columns:
+                # 空数据集首次插入：列 = 全部插入行值键的并集（保持出现顺序）
+                for op in body.inserts:
+                    for k in (op.values or {}).keys():
+                        if k not in columns:
+                            columns.append(k)
+            if not columns:
+                raise HTTPException(400, "无法确定列结构：数据集为空且插入行未携带任何列")
+
+            def check_known_cols(values: dict, what: str):
+                unknown = [k for k in values.keys() if k not in columns]
+                if unknown:
+                    raise HTTPException(400, f"{what}包含不存在的列 {unknown}（在线编辑不支持加列，请通过上传新版本调整列结构）")
+
+            # 主键 → 行号 索引（用编辑前的快照定位，key 是客户端加载时的原值）
+            pk_index: dict[tuple, int] = {}
+            for i, r in enumerate(rows):
+                kt = tuple(str(r.get(c, "") or "").strip() for c in pk_cols) if pk_cols else (i,)
+                if pk_cols:
+                    pk_index[kt] = i
+
+            def locate(op: RowEditOp, what: str) -> int:
+                key = op.key or {}
+                missing = [c for c in pk_cols if str(key.get(c, "") or "").strip() == ""]
+                if missing:
+                    raise HTTPException(400, f"{what}缺少主键列 {missing} 的定位值")
+                kt = tuple(str(key.get(c, "")).strip() for c in pk_cols)
+                idx = pk_index.get(kt)
+                if idx is None:
+                    raise HTTPException(400, f"{what}未找到主键为 {dict(zip(pk_cols, kt))} 的行（可能已被删除，请刷新）")
+                return idx
+
+            work = [dict(r) for r in rows]
+            for op in body.updates:
+                check_known_cols(op.values or {}, "修改的行")
+                work[locate(op, "修改")].update(op.values or {})
+            tombstones = {locate(op, "删除") for op in body.deletes}
+            new_rows = [r for i, r in enumerate(work) if i not in tombstones]
+            for op in body.inserts:
+                check_known_cols(op.values or {}, "新增的行")
+                new_rows.append({c: (op.values or {}).get(c, "") for c in columns})
+
+            if pk_cols:
+                try:
+                    validate_pk(new_rows, pk_cols, dataset_name=ds.name, scope="编辑后的数据")
+                except LakeGateError as e:
+                    raise HTTPException(400, str(e))
+
+            ver = svc.create_version(dataset_id, rows_to_csv_bytes(new_rows, columns), rowcount=len(new_rows))
+            if new_rows:
+                schema["columns"] = columns
+                schema["columns_typed"] = infer_columns_typed(new_rows)
+                ds.schema_json = schema
+            db.commit()
+    except DatasetLockTimeout as e:
+        raise HTTPException(423, str(e))
+
+    return {
+        "dataset_id": dataset_id,
+        "version_no": ver.version_no,
+        "rowcount": len(new_rows),
+        "updated": len(body.updates),
+        "inserted": len(body.inserts),
+        "deleted": len(body.deletes),
     }
 
 
@@ -178,6 +379,7 @@ def datasets_overview(db: Session = Depends(get_db)):
             "name": ds.name.removeprefix("SYNC::"),
             "raw_name": ds.name,
             "kind": ds.kind,
+            "primary_key": str((ds.schema_json or {}).get("primary_key") or ""),
             "source": "sync" if is_sync else "upload",
             "connection_name": conn_names.get(ds.source_connection_id or "", ""),
             "version_count": len(vers),
