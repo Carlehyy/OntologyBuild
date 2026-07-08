@@ -13,6 +13,8 @@ class Settings(BaseSettings):
 
     max_upload_mb: int = 200
     allowed_upload_extensions: str = "csv,xlsx,xls,json,xml,pdf,docx,doc,pptx,ppt,md,txt"
+    # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理
+    dataset_version_keep: int = 20
 
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"

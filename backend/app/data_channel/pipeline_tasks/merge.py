@@ -15,13 +15,15 @@ from typing import Any
 
 
 def load_latest_rows(db, dataset_id: str) -> list[dict]:
-    """加载资产湖中该数据集最新版本的全部行"""
+    """加载资产湖中该数据集最新版本的全部行（合并基座）。
+
+    必须全量、读失败必须抛错（DatasetReadError → 本次运行失败）：
+    截断或把读失败当空列表，都会让 append/upsert 基于残缺基座合并，
+    湖中存量在新版本里静默消失、且运行状态还是成功。
+    数据集尚无数据时返回 []，属合法初始状态。
+    """
     from app.services.v2.dataset_service import DatasetService
-    svc = DatasetService(db)
-    try:
-        return svc.preview(dataset_id, None, limit=1_000_000)
-    except Exception:
-        return []
+    return DatasetService(db).load_all_rows(dataset_id)
 
 
 def _row_signature(row: dict) -> str:
