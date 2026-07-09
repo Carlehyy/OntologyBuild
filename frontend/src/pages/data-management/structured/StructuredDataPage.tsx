@@ -226,7 +226,7 @@ export default function StructuredDataPage() {
                 key={key}
                 data-tab-value={key}
                 onClick={() => switchTab(key)}
-                className={`relative z-10 px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors duration-200 ${
+                className={`relative z-10 px-5 py-2 text-sm font-medium rounded-md transition-colors duration-200 ${
                   activeTab === key ? 'text-white' : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
