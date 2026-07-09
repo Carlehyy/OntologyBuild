@@ -29,7 +29,7 @@ import {
 } from '@/api/agent'
 import { ProposalCard } from './ProposalCard'
 import { BoundaryDrawer } from './BoundaryDrawer'
-import { ChartBlock } from './AgentChart'
+import { ChartBlock, AgentChart, type ChartSpec } from './AgentChart'
 import { useOntologyStore } from '../../palantir-graph/store/ontologyStore'
 import type {
   Action,
@@ -257,6 +257,45 @@ function StepTrace({ steps, running }: { steps: AgentStep[]; running?: boolean }
           </span>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------- 从工具轨迹派生的输出增强（确定性图表 / 出处条） ----------
+
+/** 收集 aggregate_objects 步骤里后端确定性生成的图表（数字来自真实结果，非 LLM 手写） */
+function collectCharts(steps: AgentStep[]): ChartSpec[] {
+  const out: ChartSpec[] = []
+  for (const s of steps) {
+    const chart = (s.result as any)?.chart
+    if (chart && typeof chart === 'object' && Array.isArray(chart.data)) out.push(chart as ChartSpec)
+  }
+  return out
+}
+
+/** 「出处条」：从已持久化的 steps + citations 统计跑了什么、看了多少、耗时多少 */
+function ProvenanceBar({ steps, cited }: { steps: AgentStep[]; cited: number }) {
+  if (!steps.length) return null
+  let scanned = 0
+  let durationMs = 0
+  for (const s of steps) {
+    if (typeof s.durationMs === 'number') durationMs += s.durationMs
+    const r = s.result as any
+    if (r && typeof r === 'object' && !r._truncated) {
+      const n = r.scanned ?? r.total ?? r.returned
+      if (typeof n === 'number') scanned += n
+    }
+  }
+  const bits = [
+    `${steps.length} 次工具调用`,
+    scanned > 0 ? `扫描 ${scanned.toLocaleString('zh-CN')} 行` : null,
+    cited > 0 ? `引用 ${cited} 个对象` : null,
+    durationMs > 0 ? `耗时 ${durationMs} ms` : null,
+  ].filter(Boolean)
+  return (
+    <div className="mt-2 flex items-center gap-1.5 text-[10.5px] text-[var(--color-text-tertiary)]">
+      <FileSearch size={11} className="shrink-0 opacity-70" />
+      <span>{bits.join(' · ')}</span>
     </div>
   )
 }
@@ -1288,11 +1327,16 @@ export default function AgentWorkbenchPage() {
                           <Md text={msg.content} />
                         </div>
                       ) : null}
+                      {/* 确定性图表：数字来自工具真实结果，前端渲染，非 LLM 手写 */}
+                      {collectCharts(msg.steps).map((c, i) => <AgentChart key={i} spec={c} />)}
                       {msg.citations.length > 0 && (
                         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                           <span className="text-[10px] text-[var(--color-text-tertiary)]">引用</span>
                           {msg.citations.map(c => (
-                            <span key={c.instanceId} title={c.instanceId}
+                            <span key={c.instanceId}
+                              title={c.snippet
+                                ? `${c.sourceLabel || `${c.objectType} · ${c.label}`} — ${c.snippet}`
+                                : (c.sourceLabel || c.instanceId)}
                               className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]">
                               <span className="text-[var(--color-text-tertiary)]">{c.objectType}</span>
                               <span className="font-medium text-[var(--color-text-primary)]">{c.label}</span>
@@ -1303,6 +1347,7 @@ export default function AgentWorkbenchPage() {
                       {msg.proposals.map(p => (
                         <ProposalCard key={p.proposalId} oid={oid} proposal={p} />
                       ))}
+                      {!msg.loading && !msg.error && <ProvenanceBar steps={msg.steps} cited={msg.citations.length} />}
                     </div>
                   </div>
                 ))}

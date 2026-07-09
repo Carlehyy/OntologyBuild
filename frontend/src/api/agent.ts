@@ -62,6 +62,10 @@ export interface AgentCitation {
   instanceId: string
   objectType: string
   label: string
+  /** 统一引用契约：展示就绪串（objectType · label） */
+  sourceLabel?: string
+  /** 属性摘要，引用卡片副文本 / 悬浮显示 */
+  snippet?: string
 }
 
 export interface AgentProposal {

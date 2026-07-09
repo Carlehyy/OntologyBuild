@@ -31,6 +31,8 @@ from app.ontologies.formal_modeling.facts import fact_order_clause
 _SCAN_CAP = 5000          # 单次工具最多扫描的实例行数（演示规模防护）
 _VALUE_TRUNC = 200        # 单个属性值的输出截断长度
 _CITATION_CAP = 20        # 一次回答最多引用的实例数
+_CHART_POINT_CAP = 20     # 聚合图表最多展示的数据点（已按值降序取前 N）
+_SNIPPET_FIELDS = 3       # 引用卡片附带的属性摘要字段数
 
 
 # ---------------------------------------------------------------- 工具定义
@@ -220,6 +222,67 @@ def _label(scope: AgentScope, inst: ObjectInstance) -> str:
     return inst.id[:8]
 
 
+_TEMPORAL_HINTS = ("date", "time", "day", "week", "month", "year", "quarter", "ts",
+                   "时间", "日期", "年", "月", "日", "季", "周")
+_METRIC_LABELS = {"count": "数量", "sum": "合计", "avg": "平均值", "min": "最小值", "max": "最大值"}
+
+
+def _is_temporal(name: str) -> bool:
+    n = (name or "").lower()
+    return any(h in n for h in _TEMPORAL_HINTS)
+
+
+def _build_aggregate_chart(ot_display: str, metric: str, metric_prop: Optional[str],
+                           group_by: str, groups: list[dict]) -> Optional[dict]:
+    """从聚合分组结果确定性地生成图表 spec —— 数字全部来自真实结果，零幻觉。
+
+    仅在「分组 + ≥2 个有效数据点」时出图；单值聚合只是一个统计量，不出图。
+    类型推断：时间维→折线(line)；计数且类别很少→饼图(pie，看占比)；否则柱状(bar，做对比)。
+    图表 spec 与前端 ```chart 块同构，直接交给 AgentChart 渲染。
+    """
+    points = [{"label": str(g.get("group")), "value": g.get("value")}
+              for g in groups if g.get("value") is not None][:_CHART_POINT_CAP]
+    if len(points) < 2:
+        return None
+    metric_label = _METRIC_LABELS.get(metric, metric)
+    if _is_temporal(group_by):
+        ctype = "line"
+    elif metric == "count" and len(points) <= 6:
+        ctype = "pie"
+    else:
+        ctype = "bar"
+    y_label = metric_label if metric == "count" else f"{metric_label}({metric_prop})"
+    return {
+        "type": ctype,
+        "title": f"{ot_display}：按{group_by}{metric_label}",
+        "xLabel": group_by,
+        "yLabel": y_label,
+        "data": points,
+    }
+
+
+def _snippet(scope: AgentScope, inst: ObjectInstance, max_fields: int = _SNIPPET_FIELDS) -> str:
+    """引用实例的一句话属性摘要（跳过与标签重复的值）——让引用卡片不只有一个名字。"""
+    ot = scope.object_types.get(inst.object_type_id)
+    prop_defs = {p.get("name"): p for p in (ot.properties or [])
+                 if isinstance(p, dict)} if ot else {}
+    label = _label(scope, inst)
+    parts: list[str] = []
+    for k, v in (inst.properties or {}).items():
+        if len(parts) >= max_fields:
+            break
+        if v in (None, "") or isinstance(v, (list, dict)):
+            continue
+        sval = str(v).strip()
+        if not sval or sval == label:
+            continue
+        if len(sval) > 24:
+            sval = sval[:24] + "…"
+        disp = (prop_defs.get(k) or {}).get("displayName") or k
+        parts.append(f"{disp}: {sval}")
+    return " · ".join(parts)
+
+
 class ToolRunner:
     """把 scope 装进闭包，给 orchestrator 一个统一的 run(name, args) 入口。
     顺带收集引用（citations）——回答里出现过的实例都可追溯。"""
@@ -235,11 +298,16 @@ class ToolRunner:
         if inst.id in self._cited or len(self.citations) >= _CITATION_CAP:
             return
         ot = self.scope.object_types.get(inst.object_type_id)
+        ot_name = ot.display_name if ot else inst.object_type_id
+        label = _label(self.scope, inst)
         self._cited.add(inst.id)
         self.citations.append({
             "instanceId": inst.id,
-            "objectType": ot.display_name if ot else inst.object_type_id,
-            "label": _label(self.scope, inst),
+            "objectType": ot_name,
+            "label": label,
+            # 统一引用契约：预拼展示串 + 属性摘要，前端直接用
+            "sourceLabel": f"{ot_name} · {label}",
+            "snippet": _snippet(self.scope, inst),
         })
 
     def run(self, name: str, args: dict) -> dict:
@@ -399,10 +467,17 @@ class ToolRunner:
             groups.setdefault(key, []).append(inst)
         result = [{"group": k, "value": compute(v), "count": len(v)} for k, v in groups.items()]
         result.sort(key=lambda x: (x["value"] is None, -(x["value"] or 0)))
-        return {"objectType": ot.display_name, "metric": metric,
-                "metricProperty": metric_prop, "groupBy": group_by,
-                "scanned": len(rows), "groups": result[:50],
-                "truncated": len(result) > 50}
+        groups_out = result[:50]
+        out = {"objectType": ot.display_name, "metric": metric,
+               "metricProperty": metric_prop, "groupBy": group_by,
+               "scanned": len(rows), "groups": groups_out,
+               "truncated": len(result) > 50}
+        # 确定性图表：直接从真实分组值生成，前端渲染，无需 LLM 再吐 chart
+        chart = _build_aggregate_chart(ot.display_name, metric, metric_prop, group_by, groups_out)
+        if chart:
+            out["chart"] = chart
+            out["chartRendered"] = True
+        return out
 
     def _tool_get_object_history(self, args: dict) -> dict:
         inst = self.scope.visible_instance(
