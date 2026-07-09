@@ -609,11 +609,12 @@ def existing_name_sets(db: Session, ontology_id: str) -> dict[str, set[str]]:
 
 def build_draft(canvas: dict, existing: Optional[dict[str, set[str]]] = None,
                 call_kwargs: Optional[dict] = None) -> tuple[dict, dict]:
-    """完整管线：确定性映射 → LLM 补缺（可选）→ lint → 冲突标记 → 场景覆盖。"""
+    """完整管线：确定性映射 → lint → 冲突标记 → 场景覆盖。
+    LLM 补缺已移除 —— 确定性映射依靠 map_type_hint() 推断属性类型，已足够。"""
     warnings: list[str] = []
     conflicts: list[str] = []
     draft = _deterministic_draft(canvas, warnings)
-    refined = refine_draft(draft, canvas, call_kwargs, warnings)
+    refined = False  # LLM 补缺已跳过，确定性映射已满足需求
     _lint(draft, warnings)
     _mark_conflicts(draft, existing, conflicts)
     coverage = _scenario_coverage(canvas, draft, existing)
