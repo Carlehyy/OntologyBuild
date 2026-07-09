@@ -20,7 +20,8 @@ import {
 } from 'lucide-react'
 import type { BusinessCanvas, CanvasElement } from '@/api/exploration'
 
-type CanvasKey = keyof BusinessCanvas
+// 仅画布可展示的类别（不含 questions 等辅助字段）
+type CanvasKey = 'objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'scenarios'
 
 interface KindStyle {
   label: string
@@ -535,12 +536,15 @@ export default function ElementDetailModal({ sectionKey, el, canvas, onClose, on
     const keys: CanvasKey[] = ['objects', 'actors', 'behaviors', 'events', 'rules', 'scenarios']
     if (canvas) {
       for (const key of keys) {
-        for (const e of canvas[key] || []) {
-          for (const nm of [e.name, str(e.display_name)]) {
+        const list = canvas[key]
+        if (!Array.isArray(list)) continue
+        for (const e of list) {
+          const el = e as CanvasElement
+          for (const nm of [el.name, str(el.display_name)]) {
             const kk = norm(nm)
             if (!kk) continue
             const arr = m.get(kk) || []
-            arr.push({ key, el: e })
+            arr.push({ key, el })
             m.set(kk, arr)
           }
         }
