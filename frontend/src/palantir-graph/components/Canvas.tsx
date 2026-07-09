@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow,
   Background,
-  Controls,
   MiniMap,
   useNodesState,
   useEdgesState,
@@ -341,10 +340,6 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
           gap={24}
           size={1}
           color="rgba(99, 102, 241, 0.15)"
-        />
-        <Controls 
-          className="!bottom-6 !left-6"
-          showInteractive={false}
         />
         {!readOnly && (
           <MiniMap
