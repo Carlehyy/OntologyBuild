@@ -6,8 +6,10 @@
      登记为未发布流水线（等价于流水线列表「新建 n8n 流水线」），不激活。
   2. 辅助编排：update_workflow 只能改「未发布 且 未启用」的流水线定义。
 
-其余工具都是只读支撑（查看/体检/探测数据源/节点目录），不改变流水线的生命
-周期与激活状态。治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
+其余工具全是只读支撑，只服务编排质量、绝不改流水线生命周期与激活状态：查看/
+列表、节点目录与深挖(describe_node)、表达式&模式参考(n8n_reference)、静态体检
+(check_workflow)、探测数据源(probe_url)、只读执行诊断(inspect_runs)、凭据缺口
+检查(check_credentials)。治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
   - 创建的 workflow 一律不激活；激活只发生在用户于流水线编辑向导「发布」时
     ——发布是生命周期的唯一入口，工具集里没有这个动词。
   - 已发布或已启用的流水线：编排一律拒绝（须先在编辑向导撤回发布 / 在 n8n 停用）。
@@ -29,10 +31,13 @@ from sqlalchemy.orm import Session
 from app.settings.workflows.n8n_client import N8nApiError, N8nClient
 from app.data_channel.steward import service
 from app.data_channel.steward.models import N8nPipeline, STATUS_ARCHIVED
-from app.data_channel.steward.node_catalog import CATEGORIES, find_nodes
+from app.data_channel.steward.node_catalog import CATEGORIES, describe_node, find_nodes
+from app.data_channel.steward.references import reference
 from app.data_channel.steward.service import StewardError
 
 logger = logging.getLogger(__name__)
+
+_EXEC_SAMPLE_ROWS = 5   # inspect_runs 回填给 LLM 的末节点样例行数
 
 
 TOOL_DEFS: list[dict] = [
@@ -105,6 +110,27 @@ TOOL_DEFS: list[dict] = [
         },
     },
     {
+        "name": "inspect_runs",
+        "description": "只读诊断一条受管流水线最近的 n8n 执行：状态、报错、各节点产出行数、末节点样例数据。用户说「跑出来不对 / 为什么失败」时用它定位要改哪个节点。未发布流水线不会被平台调度，若无执行记录会提示用户先在 n8n 手动跑一次。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_id": {"type": "string"},
+                "limit": {"type": "integer", "description": "取最近几次执行（默认 5）"},
+            },
+            "required": ["record_id"],
+        },
+    },
+    {
+        "name": "check_credentials",
+        "description": "只读检查一条受管流水线的凭据缺口：列出各节点引用的凭据，比对实例已配置的凭据（只看名字/类型，不碰密文），标出缺哪些。管家不能建凭据，只能明确告诉用户去 n8n 界面配好哪些、以及可复用哪个已有凭据。",
+        "parameters": {
+            "type": "object",
+            "properties": {"record_id": {"type": "string"}},
+            "required": ["record_id"],
+        },
+    },
+    {
         "name": "list_node_types",
         "description": f"查平台维护的 n8n 常用节点目录（type/typeVersion/关键参数模板）。拼节点前不确定类型或版本时先查这里。category 可选：{', '.join(CATEGORIES)}。",
         "parameters": {
@@ -113,6 +139,28 @@ TOOL_DEFS: list[dict] = [
                 "category": {"type": "string", "enum": list(CATEGORIES)},
                 "keyword": {"type": "string"},
             },
+        },
+    },
+    {
+        "name": "describe_node",
+        "description": "查一个 n8n 节点的完整编排知识：typeVersion + 参数说明 + 可直接抄的 worked example + 常见坑。配 HTTP 认证 / Set 赋值 / Code / 数据库 这类节点前先查，别凭记忆拼参数。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "node_type": {"type": "string", "description": "节点类型：全名 n8n-nodes-base.httpRequest、短名 httpRequest、或关键字 http 都行"},
+            },
+            "required": ["node_type"],
+        },
+    },
+    {
+        "name": "n8n_reference",
+        "description": "查编排参考：expressions（{{ }} 表达式语法与坑）/ code（Code 节点写法与返回契约）/ patterns（可复用的数据流水线骨架，直接抄 nodes/connections 再改）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "enum": ["expressions", "code", "patterns"]},
+            },
+            "required": ["topic"],
         },
     },
     {
@@ -190,6 +238,16 @@ def _validate_connections(nodes: list[dict], connections: dict) -> None:
                     tgt = (target or {}).get("node")
                     if tgt not in names:
                         raise StewardError(f"connections 引用了不存在的目标节点「{tgt}」。现有节点：{sorted(names)}")
+
+
+def _execution_brief(e: dict) -> dict:
+    return {
+        "id": e.get("id"),
+        "status": e.get("status"),
+        "startedAt": e.get("startedAt"),
+        "stoppedAt": e.get("stoppedAt"),
+        "mode": e.get("mode"),
+    }
 
 
 class ToolRunner:
@@ -283,6 +341,12 @@ class ToolRunner:
     def tool_list_node_types(self, category: str | None = None, keyword: str | None = None) -> dict:
         nodes = find_nodes(category=category, keyword=keyword)
         return {"nodes": nodes, "hint": "不在目录里的 n8n 节点也可以使用，但请优先用目录内节点以保证类型/版本正确。"}
+
+    def tool_describe_node(self, node_type: str) -> dict:
+        return describe_node(node_type)
+
+    def tool_n8n_reference(self, topic: str) -> dict:
+        return reference(topic)
 
     def tool_probe_url(self, url: str, headers: dict | None = None) -> dict:
         url = (url or "").strip()
@@ -459,3 +523,82 @@ class ToolRunner:
         ok = not any(i["level"] == "error" for i in issues)
         self._touch(rec.id)
         return {"ok": ok, "issues": issues, "summary": summary}
+
+    # ── 只读诊断（服务编排质量，无副作用） ────────────────────────────
+
+    def tool_inspect_runs(self, record_id: str, limit: int | None = None) -> dict:
+        rec = service.require_record(self.db, record_id)
+        execs = self.client.list_executions(workflow_id=rec.n8n_workflow_id, limit=limit or 5)
+        out: dict[str, Any] = {"pipeline": rec.name,
+                               "executions": [_execution_brief(e) for e in execs]}
+        if not execs:
+            out["note"] = ("这条流水线还没有执行记录（未发布不会被平台调度）。"
+                           "想诊断可在 n8n 界面手动执行它一次，再回来看。")
+            return out
+        # 展开最近一次的细节：报错 / 各节点行数 / 末节点样例
+        latest = self.client.get_execution(str(execs[0].get("id")), include_data=True)
+        result_data = (latest.get("data") or {}).get("resultData") or {}
+        detail: dict[str, Any] = {"lastNode": result_data.get("lastNodeExecuted")}
+        err = result_data.get("error") or {}
+        if err:
+            node = err.get("node")
+            detail["error"] = {
+                "message": str(err.get("message", ""))[:400],
+                "node": node.get("name") if isinstance(node, dict) else node,
+                "description": str(err.get("description", ""))[:400],
+            }
+        run_data = result_data.get("runData") or {}
+        counts: dict[str, Any] = {}
+        for node_name, runs in run_data.items():
+            try:
+                items = ((runs[-1].get("data") or {}).get("main") or [[]])[0] or []
+                counts[node_name] = len(items)
+            except Exception:  # noqa: BLE001
+                counts[node_name] = None
+        detail["nodeItemCounts"] = counts
+        last = detail.get("lastNode")
+        if last and last in run_data:
+            try:
+                items = ((run_data[last][-1].get("data") or {}).get("main") or [[]])[0] or []
+                detail["lastNodeSample"] = [it.get("json") for it in items[:_EXEC_SAMPLE_ROWS]]
+            except Exception:  # noqa: BLE001
+                pass
+        out["latest"] = detail
+        return out
+
+    def tool_check_credentials(self, record_id: str) -> dict:
+        rec = service.require_record(self.db, record_id)
+        workflow = self.client.get_workflow(rec.n8n_workflow_id)
+        rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
+        self.db.commit()
+
+        referenced = []
+        for node in workflow.get("nodes") or []:
+            for cred_type, ref in (node.get("credentials") or {}).items():
+                ref = ref or {}
+                referenced.append({"node": node.get("name"), "type": cred_type,
+                                   "name": ref.get("name"), "id": ref.get("id")})
+
+        out: dict[str, Any] = {"pipeline": rec.name, "referenced": referenced}
+        try:
+            available = [{"id": c.get("id"), "name": c.get("name"), "type": c.get("type")}
+                         for c in self.client.list_credentials(limit=200)]
+        except Exception as e:  # noqa: BLE001 — 部分 n8n 版本不支持列凭据，降级
+            out["availableError"] = str(e)[:200]
+            out["note"] = ("无法列出实例凭据（可能该 n8n 版本不支持）。"
+                           "请让用户确认这些被引用的凭据已在 n8n 界面配置好。")
+            return out
+
+        avail_ids = {c["id"] for c in available if c.get("id")}
+        avail_pairs = {(c["type"], c["name"]) for c in available}
+        missing = [r for r in referenced
+                   if not (r.get("id") in avail_ids or (r["type"], r.get("name")) in avail_pairs)]
+        out["available"] = available
+        out["missing"] = missing
+        if not referenced:
+            out["note"] = "这条流水线没有任何节点引用凭据。"
+        elif missing:
+            out["note"] = "有被引用的凭据在实例上找不到，请让用户去 n8n 界面配好（API 不能代建凭据）。"
+        else:
+            out["note"] = "所有被引用的凭据在实例上都已配置。"
+        return out

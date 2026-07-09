@@ -95,6 +95,110 @@ NODE_CATALOG: list[dict] = [
 ]
 
 
+# 高价值节点的深挖详情 — describe_node 返回：完整参数说明 + 可抄的 worked example + 坑。
+# 只维护数据流水线最常用的一批；不在此表的节点回退 key_params 模板。
+NODE_DETAIL: dict[str, dict] = {
+    "n8n-nodes-base.webhook": {
+        "params": {
+            "httpMethod": "平台调度固定用 POST",
+            "path": "webhook 路径，平台约定前缀 ob-；同实例内唯一",
+            "responseMode": "lastNode=执行完把末节点数据作为响应（平台入湖用这个）；responseNode=由 Respond to Webhook 节点自定义",
+        },
+        "example": {"httpMethod": "POST", "path": "ob-orders", "responseMode": "lastNode"},
+        "notes": "平台运行流水线 = POST 这个 webhook 取末节点 items。未发布/未激活时生产 webhook 不注册，别指望能直接打通。",
+    },
+    "n8n-nodes-base.scheduleTrigger": {
+        "params": {"rule.interval": "定时规则数组，field=seconds/minutes/hours/days/weeks/months + 对应 Interval"},
+        "example": {"rule": {"interval": [{"field": "hours", "hoursInterval": 6}]}},
+        "notes": "n8n 内部自跑触发器。自跑产物只有经平台触发的运行才自动入湖；要自跑回传需加 HTTP Request 回调平台 API + Token。",
+    },
+    "n8n-nodes-base.httpRequest": {
+        "params": {
+            "method": "GET / POST / PUT / DELETE",
+            "url": "完整 URL，可用表达式 ={{ }}",
+            "authentication": "none | genericCredentialType(+genericAuthType: httpHeaderAuth/httpBasicAuth/httpQueryAuth/oAuth2Api) | predefinedCredentialType",
+            "sendQuery + queryParameters": "查询串：{parameters:[{name,value}]}",
+            "sendHeaders + headerParameters": "自定义请求头（同上结构）",
+            "sendBody + contentType + jsonBody/bodyParameters": "POST 体：contentType=json 时 specifyBody=json 配 jsonBody",
+            "options.pagination": "内置分页，见 n8n_reference('patterns') 的 paginated_api",
+        },
+        "example": {"method": "GET", "url": "https://api.example.com/items",
+                    "sendQuery": True,
+                    "queryParameters": {"parameters": [{"name": "limit", "value": "100"}]}},
+        "notes": "需认证时优先让用户在 n8n 配好凭据，再 authentication=genericCredentialType 引用 credentials；别把密钥明文写进 header。",
+    },
+    "n8n-nodes-base.set": {
+        "params": {
+            "mode": "manual（推荐，逐字段赋值）",
+            "assignments.assignments": "赋值数组：每项 {id, name, type(string/number/boolean/array/object), value}",
+            "value": "动态值必须写成 ={{ $json.x }}；字面量直接写",
+            "options.include": "是否保留其它未列字段（默认只留声明的）",
+        },
+        "example": {"mode": "manual", "assignments": {"assignments": [
+            {"id": "f1", "name": "id", "type": "string", "value": "={{ $json.id }}"},
+            {"id": "f2", "name": "价格", "type": "number", "value": "={{ $json.price }}"}]}},
+        "notes": "typeVersion 3.x 用 assignments 结构（不是老的 values）。这是把输出整形成“扁平列”的首选节点。",
+    },
+    "n8n-nodes-base.code": {
+        "params": {
+            "mode": "runOnceForAllItems（默认，拿 items 数组）/ runOnceForEachItem",
+            "language": "javaScript（默认）/ python(beta)",
+            "jsCode / pythonCode": "代码体，见 n8n_reference('code') 的返回契约",
+        },
+        "example": {"mode": "runOnceForAllItems",
+                    "jsCode": "return items.map(i => ({ json: { id: i.json.id, name: i.json.title } }));"},
+        "notes": "必须 return [{json:{…}}] 数组；末节点用 Code 时输出要“一行一 item、字段扁平”。",
+    },
+    "n8n-nodes-base.if": {
+        "params": {
+            "conditions.combinator": "and / or",
+            "conditions.conditions": "条件数组：{leftValue: ={{ $json.x }}, rightValue, operator:{type, operation}}",
+        },
+        "example": {"conditions": {"combinator": "and", "conditions": [
+            {"leftValue": "={{ $json.status }}", "rightValue": "active",
+             "operator": {"type": "string", "operation": "equals"}}]}},
+        "notes": "typeVersion 2.x 的条件结构带 operator.type（string/number/boolean/dateTime）。输出两路：true / false。",
+    },
+    "n8n-nodes-base.filter": {
+        "params": {"conditions": "同 IF 的 conditions 结构，命中条件的行通过"},
+        "example": {"conditions": {"combinator": "and", "conditions": [
+            {"leftValue": "={{ $json.amount }}", "rightValue": 0,
+             "operator": {"type": "number", "operation": "gt"}}]}},
+        "notes": "只留满足条件的行；比 IF 简单（单路输出）。",
+    },
+    "n8n-nodes-base.html": {
+        "params": {
+            "operation": "extractHtmlContent",
+            "extractionValues.values": "提取数组：{key, cssSelector, returnValue(text/html/attribute), attribute?, returnArray?}",
+        },
+        "example": {"operation": "extractHtmlContent", "extractionValues": {"values": [
+            {"key": "标题", "cssSelector": "h2.title"},
+            {"key": "链接", "cssSelector": "a", "returnValue": "attribute", "attribute": "href"}]}},
+        "notes": "配合 HTTP Request 抓到的 HTML 用；先 probe_url 看页面结构再定选择器。",
+    },
+    "n8n-nodes-base.postgres": {
+        "params": {"operation": "executeQuery / insert / update", "query": "SQL，支持 $1 占位或表达式"},
+        "example": {"operation": "executeQuery", "query": "SELECT id, name FROM orders WHERE created_at > now() - interval '1 day'"},
+        "notes": "必须引用一个 Postgres 凭据。用 check_credentials 看实例有没有；没有就让用户去 n8n 配，API 建不了凭据。",
+    },
+    "n8n-nodes-base.extractFromFile": {
+        "params": {"operation": "csv / fromJson / xlsx / xml", "binaryPropertyName": "上游二进制字段名（默认 data）"},
+        "example": {"operation": "csv", "options": {}},
+        "notes": "把上游 HTTP/读取到的二进制文件解析成行；常接在 HTTP Request(下载文件) 之后。",
+    },
+    "n8n-nodes-base.splitInBatches": {
+        "params": {"batchSize": "每批条数", "options": {}},
+        "example": {"batchSize": 100},
+        "notes": "配合回路做分批循环（如逐页/逐条调用）；循环出口回连到自身。分页优先用 HTTP Request 内置 pagination。",
+    },
+    "n8n-nodes-base.respondToWebhook": {
+        "params": {"respondWith": "allIncomingItems / json / text / noData", "responseBody": "respondWith=json 时的体"},
+        "example": {"respondWith": "allIncomingItems"},
+        "notes": "仅当 Webhook responseMode=responseNode 时才需要它自定义响应；平台常规入湖用 lastNode 就够，不必加。",
+    },
+}
+
+
 def catalog_digest() -> str:
     """注入系统提示的单行式速查表。"""
     lines = []
@@ -112,3 +216,36 @@ def find_nodes(category: str | None = None, keyword: str | None = None) -> list[
         result = [n for n in result
                   if kw in n["type"].lower() or kw in n["name"].lower() or kw in n["usage"].lower()]
     return result
+
+
+def _resolve_node(node_type: str) -> dict | None:
+    """把用户/LLM 给的类型解析到目录条目：全名 / 短名(httpRequest) / 名称关键字都认。"""
+    q = (node_type or "").strip().lower()
+    if not q:
+        return None
+    for n in NODE_CATALOG:  # 1) 精确全名
+        if n["type"].lower() == q:
+            return n
+    for n in NODE_CATALOG:  # 2) 短名（type 后缀）
+        if n["type"].lower().rsplit(".", 1)[-1] == q:
+            return n
+    hits = [n for n in NODE_CATALOG  # 3) 名称/用途关键字
+            if q in n["type"].lower() or q in n["name"].lower() or q in n["usage"].lower()]
+    return hits[0] if len(hits) == 1 else (hits[0] if hits else None)
+
+
+def describe_node(node_type: str) -> dict:
+    """返回一个节点的完整编排知识：type/typeVersion/用途 + 参数说明 + worked example + 坑。"""
+    n = _resolve_node(node_type)
+    if n is None:
+        return {"error": f"目录里没有匹配「{node_type}」的节点。",
+                "hint": "不在目录的 n8n 节点也能用，但请自行确认 type 与 typeVersion 正确；"
+                        "或用 list_node_types 看目录、n8n_reference('patterns') 找骨架。"}
+    out = {"type": n["type"], "typeVersion": n["typeVersion"], "name": n["name"],
+           "usage": n["usage"], "category": n["category"], "key_params": n.get("key_params", {})}
+    detail = NODE_DETAIL.get(n["type"])
+    if detail:
+        out["detail"] = detail
+    else:
+        out["detail_note"] = "该节点暂无深挖详情，参照 key_params 模板拼参数即可。"
+    return out

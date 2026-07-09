@@ -134,6 +134,13 @@ class N8nClient:
         params = {"includeData": "true"} if include_data else None
         return self.get(f"/executions/{execution_id}", params=params)
 
+    def list_credentials(self, *, limit: int = 100) -> list[dict]:
+        """列出实例已配置的凭据（仅元信息 id/name/type，公共 API 不回密文）。
+
+        部分 n8n 版本的公共 API 不支持 GET /credentials —— 由调用方兜异常降级。"""
+        data = self.get("/credentials", params={"limit": max(1, min(limit, 250))})
+        return data.get("data", []) if isinstance(data, dict) else []
+
     # ── Webhook 触发（平台调度 n8n 流水线的入口） ─────────────────────
 
     @property

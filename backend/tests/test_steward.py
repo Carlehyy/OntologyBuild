@@ -27,6 +27,7 @@ class FakeN8nClient:
         self.workflows: dict[str, dict] = {}
         self.calls: list[str] = []
         self._executions: list = []
+        self.credentials: list = []
 
     @staticmethod
     def sanitize_workflow(payload: dict) -> dict:
@@ -75,6 +76,9 @@ class FakeN8nClient:
             if str(e["id"]) == str(execution_id):
                 return e
         return {"id": execution_id, "status": "success"}
+
+    def list_credentials(self, **kwargs):
+        return list(self.credentials)
 
     # 试跑路径：trigger_webhook 即"产生"一次成功执行（末节点 2 行）
     def trigger_webhook(self, webhook_path, payload=None, timeout_seconds=None):
@@ -366,6 +370,67 @@ def test_update_normalizes_nodes(db, fake_n8n, draft_record):
     wf = fake_n8n.workflows[draft_record.n8n_workflow_id]
     node = wf["nodes"][0]
     assert node["id"] and node["position"] and node["typeVersion"] == 1
+
+
+# ── 只读编排辅助工具（作者增强 / 调错，无副作用） ─────────────────
+
+def test_describe_node_and_reference(db, fake_n8n):
+    """describe_node 返回节点深挖详情；n8n_reference 返回表达式/Code/模式骨架。"""
+    runner = ToolRunner(db, None, None)
+    d = runner.run("describe_node", {"node_type": "httpRequest"})  # 短名可解析
+    assert d["type"] == "n8n-nodes-base.httpRequest"
+    assert "detail" in d and "example" in d["detail"]
+    assert "error" in runner.run("describe_node", {"node_type": "根本不存在xyz"})
+
+    assert "text" in runner.run("n8n_reference", {"topic": "expressions"})
+    assert "text" in runner.run("n8n_reference", {"topic": "code"})
+    pats = runner.run("n8n_reference", {"topic": "patterns"})
+    assert len(pats["patterns"]) >= 3 and "nodes" in pats["patterns"][0]
+    assert "error" in runner.run("n8n_reference", {"topic": "乱写"})
+
+
+def test_inspect_runs_reads_latest_execution(db, fake_n8n, draft_record):
+    """只读诊断：无记录给提示；有记录展开最近一次的报错/节点行数/末节点样例。"""
+    runner = ToolRunner(db, None, None)
+    empty = runner.run("inspect_runs", {"record_id": draft_record.id})
+    assert empty["executions"] == [] and "手动执行" in empty["note"]
+
+    fake_n8n._executions = [{
+        "id": "e1", "status": "error", "startedAt": "t1", "stoppedAt": "t2",
+        "data": {"resultData": {
+            "lastNodeExecuted": "整理字段",
+            "error": {"message": "boom", "node": {"name": "拉取"}},
+            "runData": {"整理字段": [{"data": {"main": [[
+                {"json": {"a": 1}}, {"json": {"a": 2}}]]}}]},
+        }},
+    }]
+    out = runner.run("inspect_runs", {"record_id": draft_record.id})
+    assert len(out["executions"]) == 1
+    assert out["latest"]["error"]["message"] == "boom" and out["latest"]["error"]["node"] == "拉取"
+    assert out["latest"]["nodeItemCounts"]["整理字段"] == 2
+    assert out["latest"]["lastNodeSample"] == [{"a": 1}, {"a": 2}]
+
+
+def test_check_credentials_flags_missing_and_present(db, fake_n8n, draft_record):
+    """凭据缺口：比对工作流引用 vs 实例已配置，标出缺失；配齐后 note 变‘都已配置’。"""
+    runner = ToolRunner(db, None, None)
+    nodes = WEBHOOK_NODES + [{
+        "name": "查询", "type": "n8n-nodes-base.postgres", "typeVersion": 2.5,
+        "parameters": {"operation": "executeQuery", "query": "SELECT 1"},
+        "credentials": {"postgres": {"id": "cred-x", "name": "prod-db"}},
+    }]
+    conns = {**WEBHOOK_CONNS, "整理字段": {"main": [[{"node": "查询", "type": "main", "index": 0}]]}}
+    assert "error" not in runner.run("update_workflow", {
+        "record_id": draft_record.id, "nodes": nodes, "connections": conns})
+
+    fake_n8n.credentials = []  # 实例没配 → 缺
+    out = runner.run("check_credentials", {"record_id": draft_record.id})
+    assert len(out["referenced"]) == 1 and out["referenced"][0]["type"] == "postgres"
+    assert len(out["missing"]) == 1
+
+    fake_n8n.credentials = [{"id": "c9", "name": "prod-db", "type": "postgres"}]  # 同名同类型 → 齐
+    out2 = runner.run("check_credentials", {"record_id": draft_record.id})
+    assert out2["missing"] == [] and "都已配置" in out2["note"]
 
 
 # ── runner 行数据规整 ─────────────────────────────────────────────

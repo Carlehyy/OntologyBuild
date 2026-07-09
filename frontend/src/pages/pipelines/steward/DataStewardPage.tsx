@@ -11,8 +11,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  AlertTriangle, ArrowLeft, Bot, ChevronDown, ChevronRight,
-  ClipboardCheck, Eye, GitBranch, Globe, History, Loader2,
+  Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
+  ClipboardCheck, Eye, GitBranch, Globe, History, KeyRound, Library, Loader2,
   Plus, RefreshCw, Rocket, Search, Send, Settings, Sparkles, Trash2,
   User, Workflow, X, Zap,
 } from 'lucide-react'
@@ -36,7 +36,11 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   create_pipeline:     { label: '新建流水线', icon: Plus },
   update_workflow:     { label: '编排工作流', icon: Workflow },
   check_workflow:      { label: '体检', icon: ClipboardCheck },
+  inspect_runs:        { label: '诊断执行', icon: Activity },
+  check_credentials:   { label: '凭据检查', icon: KeyRound },
   list_node_types:     { label: '查节点目录', icon: Zap },
+  describe_node:       { label: '查节点详情', icon: BookOpen },
+  n8n_reference:       { label: '查编排参考', icon: Library },
   probe_url:           { label: '探测数据源', icon: Globe },
 }
 
