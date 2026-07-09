@@ -267,7 +267,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               编辑流水线「{pipeline.name}」
               {isN8n ? (
                 <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[11px] font-normal text-violet-600">
-                  <Sparkles size={10} /> n8n
+                  <Sparkles size={10} /> n8n流水线
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] font-normal text-blue-600">
