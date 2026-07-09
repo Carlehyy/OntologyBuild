@@ -1,9 +1,10 @@
 """数据管家（steward）的治理与集成测试：
 
-  1. 治理状态机：创建即草稿（不激活）→ 提交 → 批准（激活 + 注册 published 影子
-     流水线）→ agent 修改自动降级停用 → 重审批 → 转回草稿 / 拒绝 / 归档
-  2. 影子流水线守卫：engine=n8n 的 v2_pipelines 记录禁止画布式 update/publish/
-     delete；validate 跟随审批状态
+  1. 生命周期（发布唯一入口 = 流水线编辑向导的 publish/unpublish 端点）：
+     创建即未发布（不激活）→ publish 激活 + 封版 + 固化 definition →
+     已发布编排封版（数据管家修改被拒）→ unpublish 停用回草稿可继续编排
+  2. 影子流水线守卫：engine=n8n 的 v2_pipelines 记录禁止画布式 definition
+     修改；删除 = 归档治理记录（workflow 停用、n8n 侧保留）
   3. 工具边界：connections 引用缺失节点报错回给 LLM；同名去重；节点字段补全
   4. runner 行数据规整：webhook 响应体 / 执行末节点 items → list[dict]
 """
@@ -15,7 +16,7 @@ from app.data_channel.steward import service
 from app.data_channel.steward.models import N8nPipeline
 from app.data_channel.steward.runner import normalize_rows, _extract_execution_rows
 from app.data_channel.steward.toolkit import ToolRunner
-from app.models.v2.pipeline import Pipeline
+from app.models.v2.pipeline import Pipeline, PipelineVersion
 
 
 # ── 假 n8n 客户端 ──────────────────────────────────────────────────
@@ -124,7 +125,7 @@ def pipelines_client(client, db):
 
 @pytest.fixture
 def draft_record(db, fake_n8n):
-    """经工具集创建的草稿记录（等价于 agent 在对话里创建）。"""
+    """经工具集创建的未发布记录（等价于 agent 在对话里创建）。"""
     runner = ToolRunner(db, user_id="u-test", conversation_id="c-test")
     out = runner.run("create_workflow", {
         "name": "订单同步流水线", "description": "测试用",
@@ -135,14 +136,18 @@ def draft_record(db, fake_n8n):
     return rec
 
 
-# ── 治理状态机 ────────────────────────────────────────────────────
+def _publish(client, auth_headers, pipeline_id: str, enable: bool = False):
+    return client.post(f"/api/v2/pipelines/{pipeline_id}/publish",
+                       headers=auth_headers, json={"enable": enable})
+
+
+# ── 生命周期：创建 → 发布 → 封版 → 撤回 ───────────────────────────
 
 def test_create_is_inactive_draft(db, fake_n8n, draft_record):
     assert draft_record.status == "draft"
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
-    # 创建即登记影子流水线（draft）——流水线列表立即可见；审批只决定能否被调度
+    # 创建即登记影子流水线（draft）——流水线列表立即可见；发布决定能否被调度
     assert draft_record.pipeline_id is not None
-    from app.models.v2.pipeline import Pipeline
     shadow = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
     assert shadow is not None
     assert shadow.status == "draft"
@@ -154,121 +159,124 @@ def test_create_is_inactive_draft(db, fake_n8n, draft_record):
     assert "error" in dup and "同名" in dup["error"]
 
 
-def test_approve_activates_and_registers_published_pipeline(pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
-    rid = draft_record.id
-    # 未提交不能批准
-    r = client.post(f"/api/v2/steward/pipelines/{rid}/approve", headers=auth_headers)
+def test_publish_activates_and_seals(pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """发布唯一入口 = 编辑向导的 publish 端点：激活 workflow + 封版 + 固化 definition。"""
+    pid = draft_record.pipeline_id
+
+    # 未发布时 validate 也必须通过——否则发布流程死锁
+    r = client.post(f"/api/v2/pipelines/{pid}/validate", headers=auth_headers)
+    assert r.status_code == 200 and r.json()["valid"] is True, r.text
+
+    r = _publish(client, auth_headers, pid, enable=True)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "published" and body["enabled"] is True
+
+    # n8n 侧被激活
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
+
+    db.expire_all()
+    pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
+    assert pl.status == "published" and pl.enabled is True
+    assert pl.definition["engine"] == "n8n"
+    assert pl.definition["n8n"]["steward_id"] == draft_record.id
+    assert pl.definition["n8n"]["webhook_path"] == "ob-test"
+    # 版本快照与发布同一事务
+    snaps = db.query(PipelineVersion).filter(
+        PipelineVersion.pipeline_id == pid, PipelineVersion.status == "published").all()
+    assert len(snaps) == 1
+
+    # 重复发布被拒
+    r = _publish(client, auth_headers, pid)
     assert r.status_code == 400
 
-    r = client.post(f"/api/v2/steward/pipelines/{rid}/submit", headers=auth_headers)
-    assert r.status_code == 200
-    r = client.post(f"/api/v2/steward/pipelines/{rid}/approve", headers=auth_headers)
+
+def test_publish_fixes_expected_columns_from_test_run(
+        pipelines_client, client, auth_headers, db, monkeypatch, fake_n8n, draft_record):
+    """发布固化最近一次试跑的列集合为期望列契约（运行期漂移检测基线）。"""
+    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+    runner = ToolRunner(db, None, None)
+    out = runner.run("test_run", {"record_id": draft_record.id})
+    assert out.get("error") is None, out
+
+    r = _publish(client, auth_headers, draft_record.pipeline_id)
     assert r.status_code == 200, r.text
-    db.refresh(draft_record)
-
-    assert draft_record.status == "approved"
-    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
-    assert draft_record.approved_snapshot is not None
-
+    db.expire_all()
     pl = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
-    assert pl is not None and pl.status == "published"
-    assert pl.definition["engine"] == "n8n"
-    assert pl.definition["n8n"]["steward_id"] == rid
-    assert pl.definition["n8n"]["webhook_path"] == "ob-test"
-
-    # validate：已批准 → 合法
-    r = client.post(f"/api/v2/pipelines/{pl.id}/validate", headers=auth_headers)
-    assert r.status_code == 200 and r.json()["valid"] is True
+    assert pl.definition["n8n"]["expected_columns"] == ["currency", "rate"]
 
 
-def test_agent_edit_demotes_approved(pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
-    rid = draft_record.id
-    client.post(f"/api/v2/steward/pipelines/{rid}/submit", headers=auth_headers)
-    client.post(f"/api/v2/steward/pipelines/{rid}/approve", headers=auth_headers)
-    db.refresh(draft_record)
-    assert draft_record.status == "approved"
+def test_published_is_sealed_for_steward_edit(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """已发布 = 编排封版：数据管家修改被拒，n8n 侧保持激活。"""
+    pid = draft_record.pipeline_id
+    assert _publish(client, auth_headers, pid).status_code == 200
 
     runner = ToolRunner(db, None, None)
     out = runner.run("update_workflow", {
-        "record_id": rid,
+        "record_id": draft_record.id,
+        "nodes": WEBHOOK_NODES + [{"name": "过滤", "type": "n8n-nodes-base.filter",
+                                   "typeVersion": 2.2, "parameters": {}}],
+    })
+    assert "error" in out and "撤回发布" in out["error"]
+    # 封版未被破坏：workflow 仍激活、影子仍 published、节点未变
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
+    assert len(fake_n8n.workflows[draft_record.n8n_workflow_id]["nodes"]) == 2
+    db.expire_all()
+    pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
+    assert pl.status == "published"
+
+
+def test_unpublish_deactivates_and_reopens_editing(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """撤回发布：停用 workflow + 回草稿 + 停用启用开关，之后可继续编排。"""
+    pid = draft_record.pipeline_id
+    assert _publish(client, auth_headers, pid, enable=True).status_code == 200
+
+    r = client.post(f"/api/v2/pipelines/{pid}/unpublish", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    db.expire_all()
+    pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
+    assert pl.status == "draft" and pl.enabled is False
+
+    # 回草稿后编排恢复可写
+    runner = ToolRunner(db, None, None)
+    out = runner.run("update_workflow", {
+        "record_id": draft_record.id,
         "nodes": WEBHOOK_NODES + [{"name": "过滤", "type": "n8n-nodes-base.filter",
                                    "typeVersion": 2.2, "parameters": {}}],
     })
     assert "error" not in out, out
-    assert "退回草稿" in out.get("notice", "")
-    db.refresh(draft_record)
-    assert draft_record.status == "draft"
-    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
-    # 影子流水线降级为 draft → 任务池"必须已发布"校验自然拦截
-    pl = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
-    assert pl.status == "draft"
-    # validate 此时报未批准
-    r = client.post(f"/api/v2/pipelines/{pl.id}/validate", headers=auth_headers)
-    assert r.json()["valid"] is False
 
-
-def test_reject_revoke_archive_flow(client, auth_headers, db, fake_n8n, draft_record):
-    rid = draft_record.id
-    client.post(f"/api/v2/steward/pipelines/{rid}/submit", headers=auth_headers)
-    r = client.post(f"/api/v2/steward/pipelines/{rid}/reject", headers=auth_headers,
-                    json={"reason": "字段不完整"})
-    assert r.status_code == 200
-    db.refresh(draft_record)
-    assert draft_record.status == "rejected"
-    assert draft_record.reject_reason == "字段不完整"
-
-    # 被拒绝后可重新提交并批准
-    client.post(f"/api/v2/steward/pipelines/{rid}/submit", headers=auth_headers)
-    client.post(f"/api/v2/steward/pipelines/{rid}/approve", headers=auth_headers)
-    db.refresh(draft_record)
-    assert draft_record.status == "approved"
-
-    # 已批准不能直接归档
-    r = client.delete(f"/api/v2/steward/pipelines/{rid}", headers=auth_headers)
-    assert r.status_code == 400
-
-    # 转回草稿：停用 + 影子降级
-    r = client.post(f"/api/v2/steward/pipelines/{rid}/revoke", headers=auth_headers)
-    assert r.status_code == 200
-    db.refresh(draft_record)
-    assert draft_record.status == "draft"
-    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
-
-    # 归档后从面板消失，影子流水线一并从列表移除
-    shadow_id = draft_record.pipeline_id
-    r = client.delete(f"/api/v2/steward/pipelines/{rid}", headers=auth_headers)
-    assert r.status_code == 200
-    r = client.get("/api/v2/steward/pipelines", headers=auth_headers)
-    assert all(item["id"] != rid for item in r.json()["data"])
-    from app.models.v2.pipeline import Pipeline
+    # 再次发布：版本号语义 = 已发布快照序号，第二次发布才递增
+    assert _publish(client, auth_headers, pid).status_code == 200
     db.expire_all()
-    assert db.query(Pipeline).filter(Pipeline.id == shadow_id).first() is None
-    db.refresh(draft_record)
-    assert draft_record.pipeline_id is None
+    pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
+    assert pl.version == 2
 
 
-def test_submit_requires_trigger(db, fake_n8n):
+def test_publish_requires_trigger(pipelines_client, client, auth_headers, db, fake_n8n):
+    """无触发器的工作流不能发布（不可调度的发布没有意义）。"""
     runner = ToolRunner(db, None, None)
     out = runner.run("create_workflow", {
         "name": "无触发器流水线",
         "nodes": [{"name": "整理", "type": "n8n-nodes-base.set", "parameters": {}}],
         "connections": {},
     })
-    rec_id = out["record"]["id"]
-    res = runner.run("submit_for_approval", {"record_id": rec_id})
-    assert "error" in res and "触发器" in res["error"]
+    rec = db.query(N8nPipeline).filter(N8nPipeline.id == out["record"]["id"]).first()
+    r = _publish(client, auth_headers, rec.pipeline_id)
+    assert r.status_code == 400 and "触发器" in r.json()["detail"]
+    assert fake_n8n.workflows[rec.n8n_workflow_id]["active"] is False
 
 
 # ── 影子流水线的画布路径守卫 ──────────────────────────────────────
 
 def test_shadow_pipeline_guards(pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
-    rid = draft_record.id
-    client.post(f"/api/v2/steward/pipelines/{rid}/submit", headers=auth_headers)
-    client.post(f"/api/v2/steward/pipelines/{rid}/approve", headers=auth_headers)
-    db.refresh(draft_record)
     pid = draft_record.pipeline_id
+    assert _publish(client, auth_headers, pid).status_code == 200
 
-    # 名称/描述/契约平台侧放行（0008 生命周期收敛后的新行为），且回同步管家记录
+    # 名称/描述/契约平台侧放行，且回同步管家记录
     r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"name": "改名"})
     assert r.status_code == 200
     db.refresh(draft_record)
@@ -276,13 +284,42 @@ def test_shadow_pipeline_guards(pipelines_client, client, auth_headers, db, fake
     # 编排字段仍归数据管家托管
     r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"definition": {"nodes": []}})
     assert r.status_code == 400
-    r = client.post(f"/api/v2/pipelines/{pid}/publish", headers=auth_headers)
-    assert r.status_code == 400
-    r = client.delete(f"/api/v2/pipelines/{pid}", headers=auth_headers)
-    assert r.status_code == 400
     # 列表里可见（published）
     r = client.get("/api/v2/pipelines", headers=auth_headers)
     assert any(p["id"] == pid for p in r.json())
+
+
+def test_delete_pipeline_archives_record(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """流水线列表删除 n8n 流水线 = 归档治理记录：停用 workflow、影子行移除、
+    n8n 侧工作流保留（可重新纳管）。"""
+    pid = draft_record.pipeline_id
+    rid = draft_record.id
+    assert _publish(client, auth_headers, pid).status_code == 200
+
+    r = client.delete(f"/api/v2/pipelines/{pid}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    assert db.query(Pipeline).filter(Pipeline.id == pid).first() is None
+    db.refresh(draft_record)
+    assert draft_record.status == "archived"
+    assert draft_record.pipeline_id is None
+    # n8n 侧：停用但保留
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    # 数据管家面板不再展示
+    r = client.get("/api/v2/steward/pipelines", headers=auth_headers)
+    assert all(item["id"] != rid for item in r.json()["data"])
+
+
+def test_steward_archive_endpoint(client, auth_headers, db, fake_n8n, draft_record):
+    """数据管家面板归档：与流水线列表删除同一条路径。"""
+    shadow_id = draft_record.pipeline_id
+    r = client.delete(f"/api/v2/steward/pipelines/{draft_record.id}", headers=auth_headers)
+    assert r.status_code == 200
+    db.expire_all()
+    assert db.query(Pipeline).filter(Pipeline.id == shadow_id).first() is None
+    db.refresh(draft_record)
+    assert draft_record.status == "archived" and draft_record.pipeline_id is None
 
 
 # ── 工具边界 ──────────────────────────────────────────────────────
@@ -331,9 +368,9 @@ def test_tool_test_run(monkeypatch, db, fake_n8n, draft_record):
     assert out["rows"] == 2
     assert out["columns"] == ["currency", "rate"]
     assert out["sample"][0]["currency"] == "USD"
-    # 试跑不改变治理状态，也不写湖：草稿仍是草稿、结束后停用还原
+    # 试跑不改变发布状态，也不写湖：未发布仍未发布、结束后停用还原
     db.refresh(draft_record)
-    assert draft_record.status == "draft"
+    assert service.shadow_status(db, draft_record) == "draft"
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
 
 

@@ -80,7 +80,8 @@ class ValidateResult(BaseModel):
 
 
 def _is_n8n_pipeline(pl: Pipeline) -> bool:
-    """数据管家托管的 n8n 影子流水线 — 生命周期由审批流管理，画布路径绕行。"""
+    """数据管家托管的 n8n 影子流水线 — 编排在数据管家，画布路径绕行；
+    生命周期（发布/撤回/删除）与画布流水线同走本路由。"""
     return ((pl.definition or {}).get("engine") == "n8n")
 
 
@@ -201,8 +202,8 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # ── n8n 影子流水线：编排与生命周期归数据管家审批流；平台侧放行文案与
-    #    字段契约（契约仍受下面的发布封版保护，已批准即已发布 → 不可改）──
+    # ── n8n 影子流水线：编排（definition 等）归数据管家对话；平台侧放行
+    #    文案与字段契约（契约仍受下面的发布封版保护，已发布 → 不可改）──
     N8N_ALLOWED = {"name", "description", "domain", "column_definitions"}
     if _is_n8n_pipeline(pl):
         blocked = sorted(set(update_data) - N8N_ALLOWED)
@@ -210,7 +211,7 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
             raise HTTPException(
                 400,
                 f"该流水线由数据管家托管（n8n 引擎），字段 {', '.join(blocked)} "
-                f"请在数据管家对话中修改，或在审批面板管理其状态。")
+                f"请在数据管家对话中修改。")
 
     # ── 已发布封版：definition / column_definitions / spec 不可修改 ──
     # 按 key 存在性判断而非值非空——显式传 null 同样是修改（会把封版字段清空）
@@ -263,8 +264,28 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
+
+    # ── n8n：删除 = 归档治理记录（停用 workflow + 影子行移除；n8n 侧
+    #    工作流保留，可在数据管家重新纳管）。引用保护在 archive 内统一做。──
     if _is_n8n_pipeline(pl):
-        raise HTTPException(400, "该流水线由数据管家托管（n8n 引擎），请到数据管家审批面板先转回草稿再归档。")
+        from app.data_channel.steward import service as steward_service
+
+        rec = steward_service.record_for_pipeline(db, pl)
+        if rec is None:
+            # 治理记录丢失的孤儿影子行：按普通流水线清理，别把删除堵死
+            pass
+        else:
+            client = None
+            try:
+                client = steward_service.get_n8n_client(db)
+            except steward_service.StewardError:
+                pass  # n8n 未配置也允许删除平台侧记录
+            try:
+                steward_service.archive(db, rec, client)
+            except steward_service.StewardError as e:
+                raise HTTPException(400, str(e))
+            return {"status": "deleted", "id": pipeline_id}
+
     # 引用保护：被调度任务引用的流水线不可删——删了任务会静默失效
     from app.data_channel.pipeline_tasks.models import PipelineTask
     refs = db.query(PipelineTask).filter(PipelineTask.pipeline_id == pipeline_id).all()
@@ -298,20 +319,17 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     warnings = []
     definition = pl.definition
 
-    # ── n8n 引擎（数据管家托管）────────────────────────────
+    # ── n8n 引擎（数据管家托管）：校验绑定完整性，发布资格不在此处
+    #    （发布与否由本路由的 publish/unpublish 管理，validate 需在
+    #    未发布时也通过，否则发布流程死锁）────────────────────
     if _is_n8n_pipeline(pl):
-        from app.data_channel.steward.models import N8nPipeline, STATUS_APPROVED
-        from app.data_channel.steward.service import find_webhook_path
+        from app.data_channel.steward.service import find_webhook_path, record_for_pipeline
 
         n8n_def = (definition or {}).get("n8n") or {}
-        rec = db.query(N8nPipeline).filter(
-            N8nPipeline.id == n8n_def.get("steward_id")).first() if n8n_def.get("steward_id") else None
+        rec = record_for_pipeline(db, pl)
         if rec is None:
             errors.append({"node_id": "", "severity": "error",
-                           "message": "缺少数据管家治理记录，无法运行。请到数据管家页面重新审批注册。"})
-        elif rec.status != STATUS_APPROVED:
-            errors.append({"node_id": "", "severity": "error",
-                           "message": f"该 n8n 流水线未获批准（当前状态 {rec.status}），请先在数据管家中完成审批。"})
+                           "message": "缺少数据管家治理记录，无法运行。请在数据管家中重新纳管该工作流。"})
         elif not (n8n_def.get("webhook_path") or find_webhook_path(rec.workflow_snapshot)):
             warnings.append({"node_id": "", "severity": "warning",
                              "message": "工作流没有 Webhook 触发器，平台无法主动调度（仅能由 n8n 内部定时自跑，产物不会自动入湖）。"})
@@ -654,12 +672,14 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
                      db: Session = Depends(get_db)):
     """发布 Pipeline：封版编排与字段契约，此后仅名称/描述可修改。
 
-    发布前校验：definition 结构 + 契约结构（字段标识命名/唯一，与数据管家
-    审批共用 validate_contract_structure）。契约与数据的一致性校验（全量
-    非空/唯一/类型）在向导第 3 步完成——发布不重跑流水线（n8n 试运行会
-    真实触发生产 workflow）。契约主键与湖中已固化主键不一致不再拦发布：
-    「全量覆盖」运行会按新契约重写湖中声明（变更主键的受控通道），
-    增量/合并运行则会在准入闸门硬失败——差异以 warnings 随响应返回。
+    发布是所有引擎共同的生命周期唯一入口（画布与 n8n 一致）。n8n 引擎
+    发布时附加：校验触发器 → 激活 n8n workflow → 固化 webhook/期望列。
+    发布前校验：definition 结构 + 契约结构（字段标识命名/唯一）。契约与
+    数据的一致性校验（全量非空/唯一/类型）在向导第 3 步完成——发布不重
+    跑流水线（n8n 试运行会真实触发生产 workflow）。契约主键与湖中已固化
+    主键不一致不拦发布：「全量覆盖」运行会按新契约重写湖中声明（变更主
+    键的受控通道），增量/合并运行则会在准入闸门硬失败——差异以 warnings
+    随响应返回。
     """
     from app.data_channel.datasets.lake_gate import (
         contract_pk, split_pk, validate_contract_structure)
@@ -668,8 +688,6 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
-    if _is_n8n_pipeline(pl):
-        raise HTTPException(400, "n8n 流水线的发布由数据管家审批流程管理：请在数据管家页面提交审批并由用户批准。")
     if (pl.status or "") == "published":
         raise HTTPException(400, "流水线已是已发布状态。")
 
@@ -678,11 +696,28 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
     if not validation.valid:
         raise HTTPException(400, f"Pipeline 校验失败，无法发布: {validation.errors}")
 
-    # 契约结构校验：命名合法 + 唯一（与 n8n 审批路径同一套）
+    # 契约结构校验：命名合法 + 唯一（画布与 n8n 同一套）
     structure_errors = validate_contract_structure(pl.column_definitions)
     if structure_errors:
         raise HTTPException(
             400, f"字段契约结构非法：{'；'.join(structure_errors)}。请回到「设置主键组」修正。")
+
+    # ── n8n：发布 = 激活 workflow + 固化 definition（webhook/期望列）。
+    #    激活放在状态翻转之前——激活失败发布必须中止；反向顺序会留下
+    #    「平台已发布、n8n 未激活」的必失败组合 ──
+    if _is_n8n_pipeline(pl):
+        from app.data_channel.steward import service as steward_service
+
+        rec = steward_service.record_for_pipeline(db, pl)
+        if rec is None:
+            raise HTTPException(400, "缺少数据管家治理记录，无法发布。请在数据管家中重新纳管该工作流。")
+        try:
+            client = steward_service.get_n8n_client(db)
+            steward_service.activate_for_publish(db, rec, client)
+        except steward_service.StewardError as e:
+            raise HTTPException(400, str(e))
+        # 刷新影子 definition：固化 webhook_path 与试跑列（运行期漂移检测基线）
+        steward_service.ensure_shadow_pipeline(db, rec)
 
     # 契约主键 vs 湖中已固化主键：不一致 → 警告随响应返回（不再拦截）
     warnings: list[str] = []
@@ -730,14 +765,13 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     """撤回发布（封版的受控逃生通道）：仅允许未被任何调度任务引用的流水线。
 
     撤回后回到草稿态并自动停用，维持「只有已发布才能启用」的不变量。
+    n8n 引擎同走此口（同时停用 n8n workflow）——撤回后即可回数据管家继续编排。
     """
     from app.data_channel.pipeline_tasks.models import PipelineTask
 
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
-    if _is_n8n_pipeline(pl):
-        raise HTTPException(400, "n8n 流水线的生命周期由数据管家审批流管理：请在审批面板撤回批准（会自动降回草稿）。")
     if (pl.status or "") != "published":
         raise HTTPException(400, "流水线未发布，无需撤回。")
     refs = db.query(PipelineTask).filter(PipelineTask.pipeline_id == pipeline_id).all()
@@ -748,6 +782,19 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             f"流水线已被 {len(refs)} 个调度任务引用（{names}{'…' if len(refs) > 3 else ''}），不能撤回发布。"
             f"请先在数据任务池删除或改绑这些任务。")
     _reject_if_sync_chain_refs(db, pipeline_id, action="撤回发布")
+
+    # n8n：撤回发布同时停用 workflow（n8n 侧已删/本就停用时不阻塞）
+    if _is_n8n_pipeline(pl):
+        from app.data_channel.steward import service as steward_service
+
+        rec = steward_service.record_for_pipeline(db, pl)
+        if rec is not None:
+            try:
+                client = steward_service.get_n8n_client(db)
+            except steward_service.StewardError as e:
+                raise HTTPException(400, f"撤回发布需要停用 n8n 工作流：{e}")
+            steward_service.deactivate_on_unpublish(rec, client)
+
     pl.status = "draft"
     pl.enabled = False
     pl.updated_at = datetime.now(timezone.utc)
@@ -883,14 +930,13 @@ class EnabledBody(BaseModel):
 def set_pipeline_enabled(pipeline_id: str, body: EnabledBody, db: Session = Depends(get_db)):
     """启用/停用流水线：停用后任务池调度与同步链式触发都不执行。
 
-    只有已发布的流水线才能启用（n8n 经数据管家批准后即为已发布，同样适用）；
-    停用任何状态都允许。
+    只有已发布的流水线才能启用（画布与 n8n 同一规则）；停用任何状态都允许。
     """
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
     if body.enabled and (pl.status or "") != "published":
-        raise HTTPException(400, "只有已发布的流水线才能启用。请先完成发布（n8n 流水线经数据管家审批后自动发布）。")
+        raise HTTPException(400, "只有已发布的流水线才能启用。请先在编辑向导中完成发布。")
     pl.enabled = bool(body.enabled)
     pl.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -932,23 +978,21 @@ def dry_run_pipeline(
     engine_meta: dict = {}
     try:
         if _is_n8n_pipeline(pl):
-            from app.data_channel.steward.models import STATUS_APPROVED
             from app.data_channel.steward.runner import (
                 collect_n8n_rows, collect_test_rows, persist_test_result)
+            from app.data_channel.steward.service import record_for_pipeline
             from app.tasks.v2.pipeline_run import _strip_content
-            n8n_def = (pl.definition or {}).get("n8n") or {}
-            rec = db.query(N8nPipeline).filter(
-                N8nPipeline.id == n8n_def.get("steward_id")).first() if n8n_def.get("steward_id") else None
-            if rec is not None and rec.status != STATUS_APPROVED:
-                # 未批准的 workflow 未激活、生产 webhook 未注册——走数据管家的
-                # 审批前试跑通道（临时激活→触发→恢复），否则向导第 2 步必失败，
-                # 草稿 n8n 永远设不了字段契约（先设契约、后送审批的流程死锁）
+            rec = record_for_pipeline(db, pl)
+            if rec is not None and (pl.status or "") != "published":
+                # 未发布的 workflow 未激活、生产 webhook 未注册——走数据管家的
+                # 试跑通道（临时激活→触发→恢复），否则向导第 2 步必失败，
+                # 未发布 n8n 永远设不了字段契约（先设契约、后发布的流程死锁）
                 rows, engine_meta = collect_test_rows(db, rec)
                 if engine_meta.get("error"):
                     raise RuntimeError(f"n8n 执行失败：{engine_meta['error']}")
                 persist_test_result(db, rec, rows, engine_meta)
             else:
-                # 已批准（或治理记录缺失时让 collect_n8n_rows 给出准确报错）
+                # 已发布（或治理记录缺失时让 collect_n8n_rows 给出准确报错）
                 rows, engine_meta = collect_n8n_rows(db, pl)
             outputs = [{
                 "source": {"dataset_id": None, "filename": pl.name, "route": "A", "kind": "n8n"},
@@ -1128,15 +1172,12 @@ def commit_dry_run(pipeline_id: str, dry_run_id: str, db: Session = Depends(get_
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
-    # 治理边界：未批准的 n8n 流水线平台侧保持草稿——临时激活试跑出来的
-    # 数据只供预览与契约校验，不允许经「确认入湖」流入正式资产
-    if _is_n8n_pipeline(pl):
-        from app.data_channel.steward.models import STATUS_APPROVED
-        sid = ((pl.definition or {}).get("n8n") or {}).get("steward_id")
-        rec = db.query(N8nPipeline).filter(N8nPipeline.id == sid).first() if sid else None
-        if rec is None or rec.status != STATUS_APPROVED:
-            raise HTTPException(
-                400, "该 n8n 流水线未获批准，试跑数据不能写入资产湖。请先在数据管家完成审批，批准后即可正常入湖。")
+    # 治理边界：未发布的 n8n 流水线——临时激活试跑出来的数据只供预览与
+    # 契约校验，不允许经「确认入湖」流入正式资产
+    if _is_n8n_pipeline(pl) and (pl.status or "") != "published":
+        raise HTTPException(
+            400, "该 n8n 流水线尚未发布，试跑数据不能写入资产湖。"
+                 "请先在编辑向导中「发布并启用」，之后即可正常入湖。")
     try:
         from app.services.storage_service import get_storage_service
         raw = get_storage_service().get_object(_dry_run_uri(pipeline_id, dry_run_id))

@@ -661,7 +661,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 </div>
               )}
 
-              {!isPublished && !isN8n && (
+              {!isPublished && (
                 <label className="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
                   <input
                     type="checkbox"
@@ -680,8 +680,8 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 <div className="bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 text-xs text-violet-700 flex items-start gap-1.5">
                   <Sparkles size={13} className="mt-0.5 shrink-0" />
                   <span>
-                    n8n 流水线的发布由数据管家审批流管理：这里保存草稿（含字段契约）后，
-                    到数据管家提交审批，批准即自动发布并启用。
+                    发布 n8n 流水线会激活 n8n 侧工作流并封版字段契约；发布后编排只读，
+                    如需修改可随时撤回发布，再回数据管家继续编排。
                   </span>
                 </div>
               )}
@@ -689,22 +689,20 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               {isPublished && (
                 <div className="flex items-start justify-between gap-3 border border-gray-100 rounded-lg px-3 py-2.5 bg-gray-50/60">
                   <p className="text-xs text-gray-500 leading-relaxed">
-                    已发布（封版）：契约与编排不可修改。仅当没有任务引用时可撤回发布回到草稿态（会自动停用）。
+                    已发布（封版）：契约与编排不可修改。仅当没有任务引用时可撤回发布回到草稿态（会自动停用{isN8n ? '，并停用 n8n 侧工作流' : ''}）。
                   </p>
-                  {!isN8n && (
-                    <button
-                      onClick={() => confirmUnpublish ? handleUnpublish() : setConfirmUnpublish(true)}
-                      disabled={unpublishing}
-                      className={`shrink-0 flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border transition-colors ${
-                        confirmUnpublish
-                          ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100'
-                          : 'border-gray-200 text-gray-500 hover:text-red-600 hover:border-red-200'
-                      }`}
-                    >
-                      {unpublishing ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />}
-                      {confirmUnpublish ? '确认撤回发布？' : '撤回发布'}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => confirmUnpublish ? handleUnpublish() : setConfirmUnpublish(true)}
+                    disabled={unpublishing}
+                    className={`shrink-0 flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border transition-colors ${
+                      confirmUnpublish
+                        ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100'
+                        : 'border-gray-200 text-gray-500 hover:text-red-600 hover:border-red-200'
+                    }`}
+                  >
+                    {unpublishing ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />}
+                    {confirmUnpublish ? '确认撤回发布？' : '撤回发布'}
+                  </button>
                 </div>
               )}
 
@@ -775,16 +773,14 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                   保存草稿
                 </button>
-                {!isN8n && (
-                  <button
-                    onClick={handlePublish}
-                    disabled={publishing || saving}
-                    className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg font-medium bg-[var(--color-nav-bg)] text-white hover:opacity-90 disabled:opacity-60"
-                  >
-                    {publishing ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
-                    {publishEnable ? '发布并启用' : '发布'}
-                  </button>
-                )}
+                <button
+                  onClick={handlePublish}
+                  disabled={publishing || saving}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg font-medium bg-[var(--color-nav-bg)] text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  {publishing ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
+                  {publishEnable ? '发布并启用' : '发布'}
+                </button>
               </>
             )}
             {step === 4 && isPublished && (

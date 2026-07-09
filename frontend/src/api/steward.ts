@@ -8,8 +8,8 @@ import { apiClientV2 } from './client'
 
 // ---------- 类型 ----------
 
-export type StewardPipelineStatus =
-  | 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'archived'
+/** 治理记录自身状态：在管 / 已归档。发布状态见 pipelineStatus（影子流水线） */
+export type StewardPipelineStatus = 'draft' | 'archived'
 
 export interface StewardWorkflowSummary {
   node_count: number
@@ -25,12 +25,10 @@ export interface StewardPipeline {
   n8nWorkflowId: string
   status: StewardPipelineStatus
   pipelineId: string | null
+  /** 发布状态（生命周期唯一真源=影子流水线）：发布/撤回只在流水线编辑向导 */
+  pipelineStatus: 'draft' | 'published'
   conversationId: string | null
   summary: StewardWorkflowSummary
-  submittedAt: string | null
-  approvedBy: string | null
-  approvedAt: string | null
-  rejectReason: string | null
   createdAt: string | null
   updatedAt: string | null
   active?: boolean | null
@@ -101,14 +99,9 @@ export const stewardApi = {
 
   pipelines: () => apiClientV2.get<StewardPipeline[]>('/steward/pipelines'),
   pipeline: (id: string) => apiClientV2.get<StewardPipelineDetail>(`/steward/pipelines/${id}`),
-  /** 列表页新建 n8n 流水线：后台自动在 n8n 创建骨架工作流并纳管为草稿 */
+  /** 列表页新建 n8n 流水线：后台自动在 n8n 创建骨架工作流并纳管（未发布） */
   bootstrap: (name: string, description = '') =>
     apiClientV2.post<{ record: StewardPipeline }>('/steward/pipelines/bootstrap', { name, description }),
-  submit: (id: string) => apiClientV2.post<StewardPipeline>(`/steward/pipelines/${id}/submit`),
-  approve: (id: string) => apiClientV2.post<StewardPipeline>(`/steward/pipelines/${id}/approve`),
-  reject: (id: string, reason?: string) =>
-    apiClientV2.post<StewardPipeline>(`/steward/pipelines/${id}/reject`, { reason }),
-  revoke: (id: string) => apiClientV2.post<StewardPipeline>(`/steward/pipelines/${id}/revoke`),
   testRun: (id: string, payload?: Record<string, unknown>) =>
     apiClientV2.post<TestRunResult>(`/steward/pipelines/${id}/test-run`, { payload }),
   archive: (id: string, deleteWorkflow = false) =>

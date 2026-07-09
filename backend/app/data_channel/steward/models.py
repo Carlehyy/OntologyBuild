@@ -1,20 +1,19 @@
 """
 数据管家 (Data Steward) — 数据模型
 
-对话式编排 n8n 数据流水线的治理层。与手工画布流水线并行的第二种来源：
-LLM 在授权工具边界内创建/编辑 n8n workflow，**平台侧永远保持草稿态
-（workflow 不激活、不注册进流水线体系），直到用户在审批面板批准**。
+对话式编排 n8n 数据流水线的编排辅助层。与手工画布并行的第二种流水线来源：
+LLM 在授权工具边界内创建/编辑 n8n workflow。**数据管家只负责创建/录入与
+编排（n8n 侧不激活）**；一条流水线能否发布，唯一入口在流水线列表的编辑
+向导——发布时激活 workflow 并封版，与画布流水线同一生命周期。
 
 三张表：
-  - N8nPipeline          n8n 工作流的平台治理记录（草稿/审批状态机 + 快照）
+  - N8nPipeline          n8n 工作流的平台绑定记录（workflow 身份 + 快照 + 试跑样本）
   - StewardConversation  数据管家对话
   - StewardMessage       消息（含工具调用轨迹，全程可审计）
 
-状态机：
-  draft ──submit──▶ pending_approval ──approve──▶ approved
-    ▲                     │ reject                    │ revoke / agent 修改
-    └─────────────────────┴───────────────────────────┘
-  （approved 被修改 → 自动停用 n8n workflow 并降回 draft，需重新审批）
+生命周期：发布状态的唯一真源是影子流水线 v2_pipelines.status（draft/published），
+本表 status 只区分「在管 draft / 已归档 archived」——归档即从流水线列表移除，
+记录本身留档可审计。
 """
 import uuid
 from datetime import datetime, timezone
@@ -31,20 +30,17 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# 状态常量 — 所有状态迁移都经由 service 层的显式函数，禁止散落赋值
+# 状态常量 — 迁移都经由 service 层的显式函数，禁止散落赋值
 STATUS_DRAFT = "draft"
-STATUS_PENDING = "pending_approval"
-STATUS_APPROVED = "approved"
-STATUS_REJECTED = "rejected"
 STATUS_ARCHIVED = "archived"
 
 
 class N8nPipeline(Base):
-    """一个受管 n8n 工作流的平台治理记录。
+    """一个受管 n8n 工作流的平台绑定记录。
 
-    n8n 侧的 workflow JSON 是真身；本表记录它在平台内的身份与审批状态。
-    approved 后注册/更新一条 v2_pipelines 记录（definition.engine="n8n"，
-    status=published），从而进入流水线列表并可被任务池调度。
+    n8n 侧的 workflow JSON 是真身；本表记录它在平台内的身份。创建/纳管即
+    注册一条 v2_pipelines 影子行（definition.engine="n8n"，status=draft），
+    发布与否由影子行状态决定（编辑向导 publish 时激活 workflow）。
     """
     __tablename__ = "v2_n8n_pipelines"
 
@@ -57,22 +53,16 @@ class N8nPipeline(Base):
 
     # 最近一次从 n8n 同步/写入的 workflow JSON（nodes/connections/settings）
     workflow_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # 批准那一刻的 workflow JSON — 审计基线，用于对比"批准后是否被改过"
-    approved_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # 最近一次试跑结果 {rows, columns, sample, at} — 审批的判断依据；
-    # 批准时其 columns 固化为影子流水线的期望列契约（运行期做漂移检测）
+    # 最近一次试跑结果 {rows, columns, sample, at} — 发布时其 columns 固化为
+    # 影子流水线的期望列契约（运行期做漂移检测）
     last_test_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # 批准后注册的 v2_pipelines.id（engine=n8n 的影子流水线）
+    # 对应的 v2_pipelines.id（engine=n8n 的影子流水线，创建即登记）
     pipeline_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     # 创建它的数据管家会话（血缘：这条流水线是哪段对话产出的）
     conversation_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -101,7 +91,7 @@ class StewardMessage(Base):
 
     # [{tool, arguments, resultSummary, durationMs, error?}]
     steps: Mapped[list] = mapped_column(JSON, default=list)
-    # 本回合触达的 N8nPipeline 记录 id 列表（前端据此刷新审批面板）
+    # 本回合触达的 N8nPipeline 记录 id 列表（前端据此刷新受管流水线面板）
     touched_pipeline_ids: Mapped[list] = mapped_column(JSON, default=list)
 
     model: Mapped[str | None] = mapped_column(String(200), nullable=True)

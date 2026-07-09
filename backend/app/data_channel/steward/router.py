@@ -6,17 +6,14 @@
   GET    /conversations              当前用户的会话列表
   GET    /conversations/{id}         会话详情（含完整工具轨迹，审计视图）
   DELETE /conversations/{id}
-  GET    /pipelines                  受管流水线记录列表（审批面板）
+  GET    /pipelines                  受管流水线记录列表（受管流水线面板）
   GET    /pipelines/{id}             记录详情（workflow 摘要 + 最近执行）
-  POST   /pipelines/{id}/submit      草稿 → 待审批
-  POST   /pipelines/{id}/approve     批准：激活 workflow + 注册 published 影子流水线
-  POST   /pipelines/{id}/reject      拒绝（附原因）
-  POST   /pipelines/{id}/revoke      已批准 → 转回草稿（停用 + 影子降级）
-  POST   /pipelines/{id}/test-run    审批前试跑（临时激活，不写资产湖）
+  POST   /pipelines/bootstrap        流水线列表「新建 n8n 流水线」：骨架工作流纳管
+  POST   /pipelines/{id}/test-run    试跑（临时激活，不写资产湖）
   DELETE /pipelines/{id}             归档（可选连带删除 n8n workflow）
 
-治理不变式：批准/拒绝/转草稿/归档只存在于这里（用户亲手操作），
-对话工具集最多走到 submit —— agent 干活，人签字。
+生命周期不变式：发布/撤回发布只存在于流水线编辑向导（pipelines 的
+publish/unpublish 端点）——数据管家只负责创建/纳管与编排，不背生命周期。
 """
 from __future__ import annotations
 
@@ -71,9 +68,11 @@ def steward_status(db: Session = Depends(get_db), _=Depends(get_current_user)):
             n8n["error"] = str(e)[:300]
     llm_ready = select_llm_model_config(db) is not None
 
+    # 统计按发布状态（影子流水线是生命周期唯一真源）：draft / published
     counts: dict[str, int] = {}
     for rec in db.query(N8nPipeline).filter(N8nPipeline.status != STATUS_ARCHIVED).all():
-        counts[rec.status] = counts.get(rec.status, 0) + 1
+        pub = service.shadow_status(db, rec)
+        counts[pub] = counts.get(pub, 0) + 1
     return _ok({"n8n": n8n, "llmReady": llm_ready, "pipelineCounts": counts})
 
 
@@ -185,7 +184,7 @@ def delete_conversation(conversation_id: str, db: Session = Depends(get_db),
     db.commit()
 
 
-# ── 流水线治理（审批面板） ────────────────────────────────────────
+# ── 受管流水线面板 ────────────────────────────────────────────────
 
 @router.get("/pipelines")
 def list_pipeline_records(include_archived: bool = Query(False),
@@ -203,7 +202,7 @@ def list_pipeline_records(include_archived: bool = Query(False),
             active_map[str(wf.get("id"))] = bool(wf.get("active"))
     except Exception:  # noqa: BLE001
         pass
-    return _ok([service.record_out(r, active=active_map.get(r.n8n_workflow_id))
+    return _ok([service.record_out(db, r, active=active_map.get(r.n8n_workflow_id))
                 for r in records])
 
 
@@ -217,8 +216,9 @@ def bootstrap_pipeline(body: BootstrapBody, db: Session = Depends(get_db),
                        current_user=Depends(get_current_user)):
     """流水线列表「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流（草稿纳管）。
 
-    与对话工具 create_workflow 同源治理：创建即草稿、n8n 侧不激活，
-    完善与审批仍在数据管家页面完成。返回治理记录供前端深链跳转。
+    与对话工具 create_workflow 同源治理：创建即未发布、n8n 侧不激活；
+    编排完善在数据管家对话完成，发布在流水线编辑向导完成。
+    返回治理记录供前端深链跳转。
     """
     try:
         rec = service.bootstrap_blank_workflow(
@@ -226,7 +226,7 @@ def bootstrap_pipeline(body: BootstrapBody, db: Session = Depends(get_db),
             user_id=getattr(current_user, "id", None))
     except Exception as e:  # noqa: BLE001
         raise _handle(e)
-    return _ok({"record": service.record_out(rec, active=False)})
+    return _ok({"record": service.record_out(db, rec, active=False)})
 
 
 @router.get("/pipelines/{record_id}")
@@ -237,7 +237,7 @@ def get_pipeline_record(record_id: str, db: Session = Depends(get_db),
     except StewardError as e:
         raise HTTPException(404, str(e))
 
-    out = service.record_out(rec)
+    out = service.record_out(db, rec)
     out["workflow"] = rec.workflow_snapshot
     try:
         client = service.get_n8n_client(db)
@@ -256,68 +256,18 @@ def get_pipeline_record(record_id: str, db: Session = Depends(get_db),
     return _ok(out)
 
 
-class RejectBody(BaseModel):
-    reason: Optional[str] = None
-
-
 class TestRunBody(BaseModel):
     payload: Optional[dict] = None
-
-
-@router.post("/pipelines/{record_id}/submit")
-def submit_record(record_id: str, db: Session = Depends(get_db),
-                  _=Depends(get_current_user)):
-    try:
-        rec = service.require_record(db, record_id)
-        service.submit_for_approval(db, rec)
-    except Exception as e:  # noqa: BLE001
-        raise _handle(e)
-    return _ok(service.record_out(rec))
-
-
-@router.post("/pipelines/{record_id}/approve")
-def approve_record(record_id: str, db: Session = Depends(get_db),
-                   current_user=Depends(get_current_user)):
-    try:
-        rec = service.require_record(db, record_id)
-        client = service.get_n8n_client(db)
-        service.approve(db, rec, client, getattr(current_user, "id", None))
-    except Exception as e:  # noqa: BLE001
-        raise _handle(e)
-    return _ok(service.record_out(rec, active=True))
-
-
-@router.post("/pipelines/{record_id}/reject")
-def reject_record(record_id: str, body: RejectBody = RejectBody(),
-                  db: Session = Depends(get_db), _=Depends(get_current_user)):
-    try:
-        rec = service.require_record(db, record_id)
-        service.reject(db, rec, body.reason)
-    except Exception as e:  # noqa: BLE001
-        raise _handle(e)
-    return _ok(service.record_out(rec))
-
-
-@router.post("/pipelines/{record_id}/revoke")
-def revoke_record(record_id: str, db: Session = Depends(get_db),
-                  _=Depends(get_current_user)):
-    try:
-        rec = service.require_record(db, record_id)
-        client = service.get_n8n_client(db)
-        service.revoke(db, rec, client)
-    except Exception as e:  # noqa: BLE001
-        raise _handle(e)
-    return _ok(service.record_out(rec, active=False))
 
 
 @router.post("/pipelines/{record_id}/test-run")
 def test_run_record(record_id: str, body: TestRunBody = TestRunBody(),
                     db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """审批前试跑：临时激活 → 触发 webhook → 返回样例数据 → 恢复。不写资产湖。"""
+    """试跑：临时激活 → 触发 webhook → 返回样例数据 → 恢复。不写资产湖。"""
     try:
         rec = service.require_record(db, record_id)
         # 试跑成功即持久化列样本（test_run_workflow 内统一处理）：
-        # 审批时固化为影子流水线的期望列契约
+        # 发布时固化为影子流水线的期望列契约
         result = test_run_workflow(db, rec, payload=body.payload)
     except Exception as e:  # noqa: BLE001
         raise _handle(e)

@@ -39,18 +39,19 @@ def _system_prompt(db: Session) -> str:
                .filter(N8nPipeline.status != STATUS_ARCHIVED)
                .order_by(N8nPipeline.updated_at.desc()).limit(20).all())
     if records:
-        lines = [f"- {r.name}（记录 {r.id}，状态 {r.status}）" for r in records]
+        lines = [f"- {r.name}（记录 {r.id}，{'已发布' if service.shadow_status(db, r) == 'published' else '未发布'}）"
+                 for r in records]
         inventory = "当前受管流水线：\n" + "\n".join(lines)
     else:
         inventory = "当前还没有受管流水线。"
 
-    return f"""你是 OntoPrompt 平台的「数据管家」——通过对话帮用户创建、编辑、管理基于 n8n 的数据流水线，替代手工画布编排。
+    return f"""你是 OntoPrompt 平台的「数据管家」——通过对话帮用户创建、编排基于 n8n 的数据流水线，替代手工画布编排。
 
 # 你的世界观
-平台把 n8n 作为数据流水线的执行引擎。你通过受限工具集操作 n8n 工作流；每个受管工作流在平台有一条治理记录，走「草稿 → 提交审批 → 用户批准」的流程：
-- 你创建/修改的工作流一律是**草稿**（n8n 侧不激活）——草稿不会被平台调度，也不进入流水线列表。
-- 只有用户在界面上**批准**后，工作流才被激活、注册为平台流水线（可被任务池调度、产物入资产湖）。你自己永远无法批准。
-- 修改已批准的流水线会自动将其停用并退回草稿，需重新审批——动手前必须明确提醒用户这一后果并获得同意。
+平台把 n8n 作为数据流水线的执行引擎。你通过受限工具集操作 n8n 工作流；每个受管工作流对应流水线列表里的一条 n8n 流水线，生命周期只有「未发布 / 已发布」两态：
+- 你负责两件事：**创建/纳管** n8n 工作流（录入为平台流水线，n8n 侧不激活），以及**编排完善未发布的流水线**。未发布的流水线不会被平台调度。
+- **发布是用户的动作，且只发生在流水线列表的编辑向导里**（发布时激活 n8n 工作流、封版字段契约，此后可被任务池调度、产物入资产湖）。你没有发布/撤回发布的工具，绝不能声称流水线"已发布/已生效/已激活"。
+- 已发布的流水线**编排封版**：你的修改会被拒绝。用户想改时，先引导 TA 在编辑向导中「撤回发布」，改完再重新发布。
 
 {inventory}
 
@@ -68,8 +69,8 @@ def _system_prompt(db: Session) -> str:
 2. 设计先行：创建/大改前，用一段简洁文字（可用列表描述节点链路）向用户确认设计，用户同意后再调工具落地。
 3. 小步透明：每次工具调用后向用户说明做了什么、下一步是什么。工具报错时读错误信息自我修正，同一错误不要重复第三次。
 4. 测试用 test_run：用户说「测一下 / 看看数据对不对 / 跑跑看」就直接调 test_run（它会临时激活工作流、POST 生产 Webhook、取回真实行数据再还原，不写资产湖）。**绝不要**用 probe_url 去打 Webhook，也**绝不要**让用户自己去 n8n 界面点 Execute 或手动 curl——那是你能自己做的事。试跑失败就用 get_execution 查执行详情定位原因，改好再试。
-5. 治理红线：submit_for_approval 必须经用户明确同意；绝不能声称流水线"已生效/已激活"——那只发生在用户批准之后。
-6. 诚实边界：你不能创建凭据、不能批准、不能删除记录（归档/删除在审批面板由用户操作）。做不到的事直说。
+5. 收尾引导：编排完善、体检与试跑都通过后，明确告诉用户「到流水线列表，点这条流水线的编辑向导完成发布并启用」——发布不是你的动作，别揽也别漏。
+6. 诚实边界：你不能创建凭据、不能发布/撤回发布、不能删除记录（归档/删除在界面由用户操作）。做不到的事直说。
 7. 用中文回答，简洁、结构化。"""
 
 
@@ -90,18 +91,16 @@ def _summarize(name: str, result: dict) -> str:
         return f"{(result.get('workflow') or {}).get('name', '')} · {s.get('node_count', 0)} 个节点"
     if name == "create_workflow":
         r = result.get("record") or {}
-        return f"已创建草稿「{r.get('name', '')}」（{(r.get('summary') or {}).get('node_count', 0)} 个节点）"
+        return f"已创建「{r.get('name', '')}」（{(r.get('summary') or {}).get('node_count', 0)} 个节点，未发布）"
     if name == "update_workflow":
         r = result.get("record") or {}
-        return f"已更新「{r.get('name', '')}」" + ("（已退回草稿）" if result.get("notice") else "")
+        return f"已更新「{r.get('name', '')}」"
     if name == "adopt_workflow":
         return f"已纳管「{(result.get('record') or {}).get('name', '')}」"
     if name == "check_workflow":
         issues = result.get("issues", [])
         errs = sum(1 for i in issues if i.get("level") == "error")
         return f"体检{'通过' if result.get('ok') else '未通过'}（{errs} 个错误 / {len(issues)} 项发现）"
-    if name == "submit_for_approval":
-        return f"「{(result.get('record') or {}).get('name', '')}」已提交审批"
     if name == "test_run":
         cols = result.get("columns") or []
         return f"试跑成功 · {result.get('rows', 0)} 行" + (f" · 列 {len(cols)} 个" if cols else "")

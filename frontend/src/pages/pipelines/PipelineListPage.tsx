@@ -197,7 +197,7 @@ export default function PipelineListPage() {
           <button
             onClick={() => navigate('/data/pipelines/steward')}
             className="flex items-center gap-1.5 px-3.5 py-2 border border-violet-300 bg-violet-50 text-violet-700 text-sm font-medium rounded-lg hover:bg-violet-100"
-            title="用对话创建和管理基于 n8n 的数据流水线（草稿需审批后生效）"
+            title="用对话创建与编排基于 n8n 的数据流水线（发布在本列表的编辑向导完成）"
           >
             <Sparkles size={15} /> 数据管家
           </button>
@@ -256,7 +256,7 @@ export default function PipelineListPage() {
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
                         <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-600"
-                          title="由数据管家托管的 n8n 流水线，编辑与审批在数据管家">
+                          title="由数据管家托管的 n8n 流水线：编排在数据管家，发布与启用在本列表的编辑向导">
                           <Sparkles size={10} /> n8n 流水线
                         </span>
                       ) : (
@@ -399,8 +399,8 @@ export default function PipelineListPage() {
             load()
           }}
           onN8nCreated={() => {
-            // 创建即在列表登记为草稿——留在列表让用户看到新行；
-            // 点击该行可随时进数据管家继续完善与审批
+            // 创建即在列表登记为未发布——留在列表让用户看到新行；
+            // 编排完善随时进数据管家，发布在本列表的编辑向导
             setShowCreate(false)
             load()
           }}

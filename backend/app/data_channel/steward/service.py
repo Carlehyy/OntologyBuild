@@ -3,8 +3,9 @@
 
 集中三件事，router / toolkit / runner 都只经这里触碰状态：
   1. 从系统设置加载 n8n 客户端（解密 API Key，未配置给出可操作的报错）
-  2. 治理状态机的所有迁移（submit / approve / reject / revoke / demote / archive）
-  3. approved ⇄ v2_pipelines 影子流水线的注册与同步
+  2. 受管记录的生命周期辅助（创建/纳管登记影子行、归档、发布封版守卫）
+  3. 发布/撤回发布时的 n8n 激活与停用（被 pipelines 的 publish/unpublish
+     端点调用——发布唯一入口在流水线编辑向导，数据管家只编排不发布）
 """
 from __future__ import annotations
 
@@ -16,10 +17,7 @@ from sqlalchemy.orm import Session
 from app.models.workflow_config import WorkflowConfig
 from app.settings.workflows.n8n_client import N8nClient
 from app.shared.encryption import decrypt
-from app.data_channel.steward.models import (
-    N8nPipeline,
-    STATUS_APPROVED, STATUS_ARCHIVED, STATUS_DRAFT, STATUS_PENDING, STATUS_REJECTED,
-)
+from app.data_channel.steward.models import N8nPipeline, STATUS_ARCHIVED, STATUS_DRAFT
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +63,8 @@ def bootstrap_blank_workflow(db: Session, name: str, description: str = "",
     """流水线列表「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流并纳管为草稿。
 
     骨架 = Webhook 触发器（平台调度约定：path=ob-*、POST、responseMode=lastNode）
-    → NoOp 输出节点。用户随后在数据管家对话中完善取数逻辑，审批后才可被调度。
+    → NoOp 输出节点。用户随后在数据管家对话中完善取数逻辑，在编辑向导中
+    发布后才可被调度。
     """
     import re
     import uuid as _uuid
@@ -108,7 +107,7 @@ def bootstrap_blank_workflow(db: Session, name: str, description: str = "",
     )
     db.add(rec)
     db.flush()
-    # 创建即在流水线列表可见（draft 影子行）；审批只负责升级为 published
+    # 创建即在流水线列表可见（draft 影子行）；发布在编辑向导完成
     ensure_shadow_pipeline(db, rec)
     db.commit()
     db.refresh(rec)
@@ -145,8 +144,9 @@ def summarize_workflow(workflow: dict | None) -> dict:
     }
 
 
-def record_out(rec: N8nPipeline, *, active: bool | None = None) -> dict:
-    """记录的 API/工具统一出参。active 需调 n8n 才知道，可选传入。"""
+def record_out(db: Session, rec: N8nPipeline, *, active: bool | None = None) -> dict:
+    """记录的 API/工具统一出参。发布状态取自影子流水线（生命周期唯一真源）；
+    active 需调 n8n 才知道，可选传入。"""
     out = {
         "id": rec.id,
         "name": rec.name,
@@ -154,12 +154,9 @@ def record_out(rec: N8nPipeline, *, active: bool | None = None) -> dict:
         "n8nWorkflowId": rec.n8n_workflow_id,
         "status": rec.status,
         "pipelineId": rec.pipeline_id,
+        "pipelineStatus": shadow_status(db, rec),
         "conversationId": rec.conversation_id,
         "summary": summarize_workflow(rec.workflow_snapshot),
-        "submittedAt": rec.submitted_at.isoformat() if rec.submitted_at else None,
-        "approvedBy": rec.approved_by,
-        "approvedAt": rec.approved_at.isoformat() if rec.approved_at else None,
-        "rejectReason": rec.reject_reason,
         "createdAt": rec.created_at.isoformat() if rec.created_at else None,
         "updatedAt": rec.updated_at.isoformat() if rec.updated_at else None,
     }
@@ -176,101 +173,68 @@ def require_record(db: Session, record_id: str) -> N8nPipeline:
     return rec
 
 
-# ── 状态机迁移 ────────────────────────────────────────────────────
-
-def submit_for_approval(db: Session, rec: N8nPipeline) -> N8nPipeline:
-    if rec.status not in (STATUS_DRAFT, STATUS_REJECTED):
-        raise StewardError(f"当前状态为 {rec.status}，只有草稿或被拒绝的记录可以提交审批。")
-    summary = summarize_workflow(rec.workflow_snapshot)
-    if not summary["has_trigger"]:
-        raise StewardError("工作流没有任何触发器节点（Webhook / Schedule Trigger），无法提交审批。")
-    rec.status = STATUS_PENDING
-    rec.submitted_at = _now()
-    rec.reject_reason = None
-    db.commit()
-    return rec
+def record_for_pipeline(db: Session, pl) -> N8nPipeline | None:
+    """从影子流水线（v2_pipelines, engine=n8n）反查治理记录。"""
+    sid = ((pl.definition or {}).get("n8n") or {}).get("steward_id")
+    return db.query(N8nPipeline).filter(N8nPipeline.id == sid).first() if sid else None
 
 
-def approve(db: Session, rec: N8nPipeline, client: N8nClient, approver_id: str | None) -> N8nPipeline:
-    """批准：拉最新 workflow 快照 → 激活 → 注册/更新影子流水线（published）。"""
-    if rec.status != STATUS_PENDING:
-        raise StewardError(f"当前状态为 {rec.status}，只有待审批的记录可以批准。")
+# ── 发布封版守卫（生命周期唯一真源 = 影子流水线 status） ──────────
 
-    # 批准即发布：与画布 publish 端点共用契约结构校验——结构性坏契约
-    # （重复 field_key 会让入湖改名时两列互相覆盖）不能因为走审批路径而漏拦
-    from app.data_channel.datasets.lake_gate import validate_contract_structure
+def shadow_pipeline(db: Session, rec: N8nPipeline):
+    if not rec.pipeline_id:
+        return None
     from app.models.v2.pipeline import Pipeline
 
-    shadow = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first() if rec.pipeline_id else None
-    structure_errors = validate_contract_structure(shadow.column_definitions) if shadow else []
-    if structure_errors:
-        raise StewardError(
-            f"影子流水线的字段契约结构非法，无法批准：{'；'.join(structure_errors)}。"
-            f"请在流水线编辑向导「设置主键组」修正后重新提交。")
+    return db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first()
 
+
+def shadow_status(db: Session, rec: N8nPipeline) -> str:
+    pl = shadow_pipeline(db, rec)
+    return (pl.status or "draft") if pl is not None else "draft"
+
+
+def require_unpublished(db: Session, rec: N8nPipeline) -> None:
+    """编排守卫：已发布的流水线封版，编排前必须先在编辑向导撤回发布。"""
+    if shadow_status(db, rec) == "published":
+        raise StewardError(
+            f"流水线「{rec.name}」已发布（封版），不能修改编排。"
+            f"请先在流水线列表的编辑向导中「撤回发布」，再回来继续编排。")
+
+
+# ── 发布 / 撤回发布的 n8n 侧动作（被 pipelines publish/unpublish 调用） ──
+
+def activate_for_publish(db: Session, rec: N8nPipeline, client: N8nClient) -> None:
+    """发布 n8n 流水线：拉最新快照 → 校验触发器 → 激活 workflow。
+
+    状态翻转/版本快照由 publish 端点的通用封版逻辑承担；这里只做 n8n
+    特有的部分。激活失败原样抛出，发布随之中止。
+    """
     workflow = client.get_workflow(rec.n8n_workflow_id)
+    rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
+    summary = summarize_workflow(rec.workflow_snapshot)
+    if not summary["has_trigger"]:
+        raise StewardError("工作流没有任何触发器节点（Webhook / Schedule Trigger），无法发布。"
+                           "请先在数据管家中补全编排。")
     try:
         client.activate_workflow(rec.n8n_workflow_id)
-    except Exception as exc:  # noqa: BLE001 — 无触发器等激活失败原样透出
+    except Exception as exc:  # noqa: BLE001 — 激活失败原样透出
         raise StewardError(f"激活 n8n 工作流失败：{exc}") from exc
 
-    rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
-    rec.approved_snapshot = rec.workflow_snapshot
-    rec.status = STATUS_APPROVED
-    rec.approved_by = approver_id
-    rec.approved_at = _now()
-    rec.reject_reason = None
-    _register_shadow_pipeline(db, rec)
-    db.commit()
-    return rec
 
-
-def reject(db: Session, rec: N8nPipeline, reason: str | None) -> N8nPipeline:
-    if rec.status != STATUS_PENDING:
-        raise StewardError(f"当前状态为 {rec.status}，只有待审批的记录可以拒绝。")
-    rec.status = STATUS_REJECTED
-    rec.reject_reason = (reason or "").strip() or None
-    _demote_shadow_pipeline(db, rec)
-    db.commit()
-    return rec
-
-
-def revoke(db: Session, rec: N8nPipeline, client: N8nClient) -> N8nPipeline:
-    """已批准 → 转回草稿：停用 workflow + 影子流水线降级，需重新审批。"""
-    if rec.status != STATUS_APPROVED:
-        raise StewardError(f"当前状态为 {rec.status}，只有已批准的记录可以转回草稿。")
+def deactivate_on_unpublish(rec: N8nPipeline, client: N8nClient) -> None:
+    """撤回发布：停用 n8n workflow（本就未激活/已删除时不阻塞撤回）。"""
     _safe_deactivate(client, rec.n8n_workflow_id)
-    rec.status = STATUS_DRAFT
-    rec.approved_by = None
-    rec.approved_at = None
-    _demote_shadow_pipeline(db, rec)
-    db.commit()
-    return rec
-
-
-def demote_on_edit(db: Session, rec: N8nPipeline, client: N8nClient) -> bool:
-    """agent 修改了已批准/待审批的工作流 → 自动退回草稿（治理硬规则）。
-
-    返回是否发生了降级，供工具结果向 LLM/用户明示。
-    """
-    if rec.status == STATUS_APPROVED:
-        _safe_deactivate(client, rec.n8n_workflow_id)
-        rec.status = STATUS_DRAFT
-        rec.approved_by = None
-        rec.approved_at = None
-        _demote_shadow_pipeline(db, rec)
-        return True
-    if rec.status == STATUS_PENDING:
-        rec.status = STATUS_DRAFT
-        rec.submitted_at = None
-        return True
-    return False
 
 
 def archive(db: Session, rec: N8nPipeline, client: N8nClient | None,
             delete_workflow: bool = False) -> N8nPipeline:
-    if rec.status == STATUS_APPROVED:
-        raise StewardError("已批准的流水线不能直接归档，请先「转回草稿」。")
+    """归档 = 退出平台管理：停用 workflow + 影子行从流水线列表移除。
+
+    两个入口（数据管家面板「归档」、流水线列表「删除」）共用；被调度任务
+    或同步链引用时拒绝——删了任务会静默失效。
+    """
+    _reject_if_shadow_referenced(db, rec)
     if client is not None:
         _safe_deactivate(client, rec.n8n_workflow_id)
         if delete_workflow:
@@ -282,6 +246,26 @@ def archive(db: Session, rec: N8nPipeline, client: N8nClient | None,
     _remove_shadow_pipeline(db, rec)
     db.commit()
     return rec
+
+
+def _reject_if_shadow_referenced(db: Session, rec: N8nPipeline) -> None:
+    if not rec.pipeline_id:
+        return
+    from app.data_channel.pipeline_tasks.models import PipelineTask
+
+    refs = db.query(PipelineTask).filter(PipelineTask.pipeline_id == rec.pipeline_id).all()
+    if refs:
+        names = "、".join(t.name for t in refs[:3])
+        raise StewardError(
+            f"流水线已被 {len(refs)} 个调度任务引用（{names}{'…' if len(refs) > 3 else ''}），"
+            f"请先在数据任务池删除或改绑这些任务。")
+    from app.data_channel.pipelines.router import _reject_if_sync_chain_refs
+    from fastapi import HTTPException
+
+    try:
+        _reject_if_sync_chain_refs(db, rec.pipeline_id, action="归档")
+    except HTTPException as exc:
+        raise StewardError(str(exc.detail)) from exc
 
 
 def _safe_deactivate(client: N8nClient, workflow_id: str) -> None:
@@ -303,19 +287,19 @@ def _shadow_definition(rec: N8nPipeline) -> dict:
             "steward_id": rec.id,
             "workflow_id": rec.n8n_workflow_id,
             "webhook_path": find_webhook_path(rec.workflow_snapshot),
-            # 审批契约：以最近一次试跑的列集合为期望列，运行期资产湖闸门
+            # 发布契约：以最近一次试跑的列集合为期望列，运行期资产湖闸门
             # 据此做漂移检测（警告不阻断——湖中主键契约才是硬校验）
             "expected_columns": (rec.last_test_result or {}).get("columns") or None,
         },
     }
 
 
-def ensure_shadow_pipeline(db: Session, rec: N8nPipeline, *, status: str | None = None):
+def ensure_shadow_pipeline(db: Session, rec: N8nPipeline):
     """确保治理记录有对应的 v2_pipelines 影子行，并同步名称/定义。
 
     创建即登记（draft）——n8n 流水线从诞生起就出现在流水线列表里；
-    数据管家只是 AI 编排工具，审批决定的是「能否被调度」（published），
-    不是「存不存在」。status=None 时保持现状（新建默认 draft）。
+    数据管家只是 AI 编排工具，发布与否由编辑向导的 publish 决定
+    （published 表示「可被调度」）。本函数不触碰影子行的 status。
     """
     from app.models.v2.pipeline import Pipeline
 
@@ -335,61 +319,21 @@ def ensure_shadow_pipeline(db: Session, rec: N8nPipeline, *, status: str | None 
     pl.name = rec.name
     pl.description = rec.description or pl.description
     pl.definition = _shadow_definition(rec)
-    if status is not None:
-        pl.status = status
     pl.updated_at = _now()
     return pl
 
 
-def _register_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
-    """approved → 可被任务池调度：status=published + 启用 + 版本快照。
-
-    批准即启用：审批是 n8n 流水线的发布动作，保持「批准后立即可被任务
-    调度」的既有体验；如需暂停调度，在流水线列表关启用开关即可。
-    """
-    from app.models.v2.pipeline import PipelineVersion
-
-    pl = ensure_shadow_pipeline(db, rec, status="published")
-    pl.enabled = True
-    # 版本号语义 = 已发布快照序号：首次批准保持当前号，再次批准才递增
-    # （与画布 publish 端点同一口径）
-    has_prior_published = db.query(PipelineVersion).filter(
-        PipelineVersion.pipeline_id == pl.id,
-        PipelineVersion.status == "published").count() > 0
-    pl.version = (pl.version or 1) + (1 if has_prior_published else 0)
-    db.add(PipelineVersion(pipeline_id=pl.id, version=pl.version,
-                           definition=pl.definition,
-                           column_definitions=pl.column_definitions,
-                           status="published"))
-
-
-def _demote_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
-    """失去 approved 资格 → 影子流水线退回 draft 并停用。
-
-    停用维持「只有已发布才能启用」不变量（任务池发布校验也会拦，但状态
-    组合本身不允许出现草稿+已启用）。
-    """
-    if not rec.pipeline_id:
-        return
-    from app.models.v2.pipeline import Pipeline
-
-    pl = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first()
-    if pl is not None:
-        pl.definition = _shadow_definition(rec)
-        pl.status = "draft"
-        pl.enabled = False
-        pl.updated_at = _now()
-
-
 def _remove_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
-    """归档 → 影子流水线从列表移除（运行记录/版本随外键级联清理）。
+    """归档 → 影子流水线从列表移除（runs/versions 手动级联，与画布删除同一口径）。
 
     治理记录本身保留（status=archived）作为审计痕迹。
     """
     if not rec.pipeline_id:
         return
-    from app.models.v2.pipeline import Pipeline
+    from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 
+    db.query(PipelineRun).filter(PipelineRun.pipeline_id == rec.pipeline_id).delete()
+    db.query(PipelineVersion).filter(PipelineVersion.pipeline_id == rec.pipeline_id).delete()
     pl = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first()
     if pl is not None:
         db.delete(pl)

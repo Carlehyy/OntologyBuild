@@ -1,8 +1,9 @@
 /**
  * 数据管家 — 对话式编排 n8n 数据流水线
  *
- * 左侧：与数据管家对话（创建/编辑/诊断 n8n 工作流，全程草稿态）
- * 右侧：流水线审批面板（草稿 → 提交审批 → 用户批准后激活并注册为平台流水线）
+ * 左侧：与数据管家对话（创建/纳管 n8n 工作流、编排完善未发布的流水线）
+ * 右侧：受管流水线面板（查看状态与试跑；发布/撤回发布的唯一入口在
+ *       流水线列表的编辑向导——发布时激活 n8n 工作流并封版契约）
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -11,8 +12,8 @@ import remarkGfm from 'remark-gfm'
 import {
   AlertTriangle, ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight,
   ClipboardCheck, Eye, FlaskConical, GitBranch, Globe, History, Inbox, Loader2,
-  Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2,
-  Undo2, User, Workflow, X, XCircle, Zap,
+  Plus, RefreshCw, Rocket, Search, Send, Settings, Sparkles, Trash2,
+  User, Workflow, X, XCircle, Zap,
 } from 'lucide-react'
 import {
   stewardApi, streamStewardChat,
@@ -21,13 +22,11 @@ import {
 } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
-// ---------- 状态样式 ----------
+// ---------- 状态样式（发布状态 = 影子流水线，与流水线列表同一口径） ----------
 
-const STATUS_META: Record<string, { label: string; cls: string }> = {
-  draft:            { label: '草稿',   cls: 'bg-gray-100 text-gray-600 border-gray-200' },
-  pending_approval: { label: '待审批', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  approved:         { label: '已批准', cls: 'bg-green-50 text-green-700 border-green-200' },
-  rejected:         { label: '已拒绝', cls: 'bg-red-50 text-red-600 border-red-200' },
+const PUBLISH_META: Record<string, { label: string; cls: string }> = {
+  draft:     { label: '未发布', cls: 'bg-gray-100 text-gray-600 border-gray-200' },
+  published: { label: '已发布', cls: 'bg-green-50 text-green-600 border-green-200' },
 }
 
 const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
@@ -39,7 +38,6 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   adopt_workflow:      { label: '纳管工作流', icon: Inbox },
   check_workflow:      { label: '体检', icon: ClipboardCheck },
   test_run:            { label: '试跑', icon: FlaskConical },
-  submit_for_approval: { label: '提交审批', icon: ShieldCheck },
   list_executions:     { label: '执行记录', icon: History },
   get_execution:       { label: '执行详情', icon: Search },
   list_node_types:     { label: '查节点目录', icon: Zap },
@@ -265,7 +263,7 @@ export default function DataStewardPage() {
       patchBot({ loading: false })
       setBusy(false)
       loadConversations()
-      // 本回合动过流水线 → 刷新审批面板并展开最近触达的一条
+      // 本回合动过流水线 → 刷新受管流水线面板并展开最近触达的一条
       if (touched.length > 0) {
         loadRecords()
         setExpandedId(touched[touched.length - 1])
@@ -336,8 +334,8 @@ export default function DataStewardPage() {
                 </div>
                 <h2 className="text-base font-semibold text-gray-900">让数据管家替你编排流水线</h2>
                 <p className="mt-1.5 max-w-md text-sm leading-relaxed text-gray-500">
-                  描述数据从哪来、怎么加工、多久跑一次——数据管家会在 n8n 里搭好工作流。
-                  一切改动都是草稿，经你在右侧面板批准后才会生效。
+                  描述数据从哪来、怎么加工、多久跑一次——数据管家会在 n8n 里搭好工作流并录入流水线列表。
+                  编排满意后，到流水线列表的编辑向导中发布并启用。
                 </p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
                   {SUGGESTED.map(q => (
@@ -399,12 +397,12 @@ export default function DataStewardPage() {
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-gray-400">
-              管家只产出草稿：激活与进入平台流水线体系需要你在右侧面板批准
+              管家只负责创建与编排：发布并启用在流水线列表的编辑向导中完成（发布后编排封版）
             </p>
           </div>
         </section>
 
-        {/* 拖拽分隔条（仅宽屏，拖动调整对话区与审批面板宽度） */}
+        {/* 拖拽分隔条（仅宽屏，拖动调整对话区与受管流水线面板宽度） */}
         <div
           onMouseDown={startResize}
           className="hidden xl:flex w-1.5 shrink-0 cursor-col-resize items-center justify-center group"
@@ -412,8 +410,8 @@ export default function DataStewardPage() {
           <div className="h-8 w-px rounded-full bg-gray-200 group-hover:h-12 group-hover:bg-violet-400 transition-all" />
         </div>
 
-        {/* 审批面板 */}
-        <ApprovalPanel
+        {/* 受管流水线面板 */}
+        <ManagedPipelinesPanel
           records={records}
           loading={recordsLoading}
           expandedId={expandedId}
@@ -459,9 +457,9 @@ export default function DataStewardPage() {
   )
 }
 
-// ---------- 审批面板 ----------
+// ---------- 受管流水线面板 ----------
 
-function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
+function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged }: {
   records: StewardPipeline[]
   loading: boolean
   expandedId: string | null
@@ -469,10 +467,7 @@ function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
   onChanged: () => void
 }) {
   const [actionErr, setActionErr] = useState('')
-  const [approveTarget, setApproveTarget] = useState<StewardPipeline | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<StewardPipeline | null>(null)
-  const [rejectTarget, setRejectTarget] = useState<StewardPipeline | null>(null)
-  const [rejectReason, setRejectReason] = useState('')
   const [pendingAction, setPendingAction] = useState<string | null>(null)
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
@@ -490,17 +485,15 @@ function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
   }
 
   const grouped = {
-    pending_approval: records.filter(r => r.status === 'pending_approval'),
-    draft: records.filter(r => r.status === 'draft'),
-    approved: records.filter(r => r.status === 'approved'),
-    rejected: records.filter(r => r.status === 'rejected'),
+    draft: records.filter(r => r.pipelineStatus !== 'published'),
+    published: records.filter(r => r.pipelineStatus === 'published'),
   }
 
   return (
     <aside className="flex xl:flex-1 xl:min-w-0 shrink-0 flex-col bg-white border overflow-hidden max-xl:max-h-[42%] max-xl:min-h-[180px]">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-800">
-          <ShieldCheck size={15} className="text-violet-600" /> 流水线审批
+          <Workflow size={15} className="text-violet-600" /> 受管流水线
         </h2>
         <button onClick={onChanged} title="刷新"
           className="flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700">
@@ -527,10 +520,8 @@ function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
           </div>
         ) : (
           ([
-            ['pending_approval', '待你审批'],
-            ['draft', '草稿'],
-            ['approved', '已批准（运行中）'],
-            ['rejected', '已拒绝'],
+            ['draft', '未发布（编排中）'],
+            ['published', '已发布（编排封版）'],
           ] as const).map(([key, title]) => grouped[key].length > 0 && (
             <div key={key}>
               <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">{title} · {grouped[key].length}</p>
@@ -541,10 +532,6 @@ function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
                     expanded={expandedId === r.id}
                     onToggle={() => onExpand(expandedId === r.id ? null : r.id)}
                     pendingAction={pendingAction}
-                    onSubmit={() => act(`submit:${r.id}`, () => stewardApi.submit(r.id))}
-                    onApprove={() => setApproveTarget(r)}
-                    onReject={() => { setRejectTarget(r); setRejectReason('') }}
-                    onRevoke={() => act(`revoke:${r.id}`, () => stewardApi.revoke(r.id))}
                     onArchive={() => setArchiveTarget(r)}
                   />
                 ))}
@@ -554,25 +541,11 @@ function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
         )}
       </div>
 
-      {/* 批准确认 */}
-      <ConfirmDialog
-        open={!!approveTarget}
-        title="批准流水线"
-        message={`批准「${approveTarget?.name}」后：n8n 工作流将被激活，并注册为已发布的平台流水线（可被任务池调度、产物入资产湖）。确认批准？`}
-        confirmLabel={pendingAction?.startsWith('approve') ? '批准中…' : '确认批准'}
-        onConfirm={async () => {
-          if (!approveTarget) return
-          await act(`approve:${approveTarget.id}`, () => stewardApi.approve(approveTarget.id))
-          setApproveTarget(null)
-        }}
-        onCancel={() => setApproveTarget(null)}
-      />
-
       {/* 归档确认 */}
       <ConfirmDialog
         open={!!archiveTarget}
         title="归档流水线"
-        message={`归档「${archiveTarget?.name}」后它将从数据管家面板消失；n8n 侧的工作流会被停用但保留，可随时在 n8n 中找回。确认归档？`}
+        message={`归档「${archiveTarget?.name}」后它将从数据管家与流水线列表消失；n8n 侧的工作流会被停用但保留，可随时重新纳管。确认归档？`}
         confirmLabel={pendingAction?.startsWith('archive') ? '归档中…' : '确认归档'}
         onConfirm={async () => {
           if (!archiveTarget) return
@@ -581,54 +554,22 @@ function ApprovalPanel({ records, loading, expandedId, onExpand, onChanged }: {
         }}
         onCancel={() => setArchiveTarget(null)}
       />
-
-      {/* 拒绝弹窗（带原因） */}
-      {rejectTarget && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setRejectTarget(null)}>
-          <div className="bg-white rounded-xl shadow-lg p-5 w-[420px]" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold mb-1">拒绝流水线</h3>
-            <p className="text-sm text-gray-500 mb-3">「{rejectTarget.name}」将退回，保持未激活。可填写拒绝原因供后续修改参考：</p>
-            <textarea
-              value={rejectReason}
-              onChange={e => setRejectReason(e.target.value)}
-              rows={3}
-              placeholder="例：输出字段不完整 / Webhook 路径命名不规范…"
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              autoFocus
-            />
-            <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => setRejectTarget(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">取消</button>
-              <button
-                onClick={async () => {
-                  await act(`reject:${rejectTarget.id}`, () => stewardApi.reject(rejectTarget.id, rejectReason))
-                  setRejectTarget(null)
-                }}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">
-                确认拒绝
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </aside>
   )
 }
 
 // ---------- 单条记录卡片 ----------
 
-function RecordCard({ record: r, expanded, onToggle, pendingAction, onSubmit, onApprove, onReject, onRevoke, onArchive }: {
+function RecordCard({ record: r, expanded, onToggle, pendingAction, onArchive }: {
   record: StewardPipeline
   expanded: boolean
   onToggle: () => void
   pendingAction: string | null
-  onSubmit: () => void
-  onApprove: () => void
-  onReject: () => void
-  onRevoke: () => void
   onArchive: () => void
 }) {
   const navigate = useNavigate()
-  const meta = STATUS_META[r.status] || STATUS_META.draft
+  const published = r.pipelineStatus === 'published'
+  const meta = PUBLISH_META[published ? 'published' : 'draft']
   const [detail, setDetail] = useState<StewardPipelineDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [testResult, setTestResult] = useState<TestRunResult | null>(null)
@@ -642,8 +583,8 @@ function RecordCard({ record: r, expanded, onToggle, pendingAction, onSubmit, on
     }
   }, [expanded, detail, detailLoading, r.id])
 
-  // 记录状态变化后（如批准/拒绝）重置已缓存的详情
-  useEffect(() => { setDetail(null) }, [r.status, r.updatedAt])
+  // 记录变化后（如发布/撤回/编排更新）重置已缓存的详情
+  useEffect(() => { setDetail(null) }, [r.pipelineStatus, r.updatedAt])
 
   const runTest = async () => {
     setTesting(true)
@@ -660,7 +601,6 @@ function RecordCard({ record: r, expanded, onToggle, pendingAction, onSubmit, on
   }
 
   const btn = 'flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-40'
-  const busy = (key: string) => pendingAction === `${key}:${r.id}`
 
   return (
     <div className={`rounded-lg border transition-shadow ${expanded ? 'shadow-sm border-violet-200' : 'hover:border-gray-300'}`}>
@@ -682,9 +622,6 @@ function RecordCard({ record: r, expanded, onToggle, pendingAction, onSubmit, on
       {expanded && (
         <div className="border-t px-3 py-2.5 space-y-2.5">
           {r.description && <p className="text-xs leading-relaxed text-gray-500">{r.description}</p>}
-          {r.rejectReason && (
-            <p className="rounded-md bg-red-50 border border-red-100 px-2 py-1.5 text-xs text-red-600">拒绝原因：{r.rejectReason}</p>
-          )}
 
           {/* 节点链路 */}
           {(r.summary?.nodes?.length ?? 0) > 0 && (
@@ -730,45 +667,28 @@ function RecordCard({ record: r, expanded, onToggle, pendingAction, onSubmit, on
             </div>
           )}
 
-          {/* 操作 */}
+          {/* 操作：发布/撤回发布不在这里——唯一入口是流水线列表的编辑向导 */}
           <div className="flex flex-wrap gap-1.5 pt-0.5">
-            {(r.status === 'draft' || r.status === 'rejected') && (
+            {!published ? (
               <>
-                <button onClick={onSubmit} disabled={!!pendingAction} className={`${btn} border-violet-200 text-violet-700 hover:bg-violet-50`}>
-                  {busy('submit') ? <Loader2 size={11} className="animate-spin" /> : <ShieldCheck size={11} />} 提交审批
-                </button>
                 <button onClick={runTest} disabled={testing} className={`${btn} text-gray-600 hover:bg-gray-50`}>
                   {testing ? <Loader2 size={11} className="animate-spin" /> : <FlaskConical size={11} />} 试跑
+                </button>
+                <button onClick={() => navigate('/data/pipelines')}
+                  title="到流水线列表打开这条流水线的编辑向导，确认契约后发布并启用"
+                  className={`${btn} border-violet-200 text-violet-700 hover:bg-violet-50`}>
+                  <Rocket size={11} /> 去发布
                 </button>
                 <button onClick={onArchive} disabled={!!pendingAction} className={`${btn} text-gray-400 hover:bg-red-50 hover:text-red-500`}>
                   <Trash2 size={11} /> 归档
                 </button>
               </>
-            )}
-            {r.status === 'pending_approval' && (
-              <>
-                <button onClick={runTest} disabled={testing} className={`${btn} text-gray-600 hover:bg-gray-50`}>
-                  {testing ? <Loader2 size={11} className="animate-spin" /> : <FlaskConical size={11} />} 试跑
-                </button>
-                <button onClick={onApprove} disabled={!!pendingAction} className={`${btn} border-green-300 bg-green-600 text-white hover:bg-green-700`}>
-                  {busy('approve') ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} 批准
-                </button>
-                <button onClick={onReject} disabled={!!pendingAction} className={`${btn} border-red-200 text-red-600 hover:bg-red-50`}>
-                  <XCircle size={11} /> 拒绝
-                </button>
-              </>
-            )}
-            {r.status === 'approved' && (
-              <>
-                {r.pipelineId && (
-                  <button onClick={() => navigate('/data/pipelines')} className={`${btn} text-gray-600 hover:bg-gray-50`}>
-                    <GitBranch size={11} /> 在流水线列表查看
-                  </button>
-                )}
-                <button onClick={onRevoke} disabled={!!pendingAction} className={`${btn} border-amber-200 text-amber-700 hover:bg-amber-50`}>
-                  {busy('revoke') ? <Loader2 size={11} className="animate-spin" /> : <Undo2 size={11} />} 转回草稿
-                </button>
-              </>
+            ) : (
+              <button onClick={() => navigate('/data/pipelines')}
+                title="已发布流水线的撤回发布、启用开关都在流水线列表"
+                className={`${btn} text-gray-600 hover:bg-gray-50`}>
+                <GitBranch size={11} /> 在流水线列表管理
+              </button>
             )}
           </div>
         </div>

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.settings.workflows.n8n_client import N8nClient
 from app.data_channel.steward import service
-from app.data_channel.steward.models import N8nPipeline, STATUS_APPROVED
+from app.data_channel.steward.models import N8nPipeline
 from app.data_channel.steward.service import StewardError
 
 logger = logging.getLogger(__name__)
@@ -123,12 +123,11 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
 
 def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str]:
     n8n_def = (pl.definition or {}).get("n8n") or {}
-    steward_id = n8n_def.get("steward_id")
-    rec = db.query(N8nPipeline).filter(N8nPipeline.id == steward_id).first() if steward_id else None
+    rec = service.record_for_pipeline(db, pl)
     if rec is None:
-        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请到数据管家页面重新审批注册。")
-    if rec.status != STATUS_APPROVED:
-        raise StewardError(f"该 n8n 流水线当前状态为 {rec.status}（未批准），不能运行。请先在数据管家中完成审批。")
+        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请在数据管家中重新纳管该工作流。")
+    if (pl.status or "") != "published":
+        raise StewardError("该 n8n 流水线尚未发布，不能被调度运行。请先在流水线列表的编辑向导中完成发布。")
     webhook_path = n8n_def.get("webhook_path") or service.find_webhook_path(rec.workflow_snapshot)
     if not webhook_path:
         raise StewardError("该工作流没有 Webhook 触发器，平台无法主动调度（它只能由 n8n 内部定时自跑）。")
@@ -157,8 +156,8 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
 
     run 状态机 / 资产湖准入闸门 / 版本化入湖 / 统计记账全部由通用的
     run_external_pipeline 承担；这里只保留 n8n 特有的两件事：
-    治理校验 + webhook 取数（collector）、审批时固化的期望列（契约）。
-    运行成败不再回写 pipeline.status（发布态由审批流管理），失败详情由
+    发布校验 + webhook 取数（collector）、发布时固化的期望列（契约）。
+    运行成败不再回写 pipeline.status（发布态由编辑向导管理），失败详情由
     run.status/error_log 承载。新引擎照此文件抄作业即可。
     """
     from app.data_channel.pipelines.external_runner import run_external_pipeline
@@ -181,10 +180,10 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
 
 def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None,
                       wait_seconds: int = 60) -> tuple[list[dict], dict]:
-    """未批准 workflow 的取数通道：临时激活 → 触发 → 收集完整行 → 恢复原激活状态。
+    """未发布 workflow 的取数通道：临时激活 → 触发 → 收集完整行 → 恢复原激活状态。
 
-    不写资产湖。数据管家审批前试跑与流水线编辑向导（草稿 n8n 的执行预览）
-    共用——草稿 n8n 的生产 webhook 未注册，走 collect_n8n_rows 必 404。
+    不写资产湖。数据管家试跑与流水线编辑向导（未发布 n8n 的执行预览）
+    共用——未发布 n8n 的生产 webhook 未注册，走 collect_n8n_rows 必 404。
     """
     client = service.get_n8n_client(db)
     workflow = client.get_workflow(rec.n8n_workflow_id)
@@ -214,9 +213,9 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
 
 
 def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_meta: dict) -> None:
-    """试跑成功即持久化列样本：审批时固化为影子流水线的期望列契约。
+    """试跑成功即持久化列样本：发布时固化为影子流水线的期望列契约。
 
-    审批面板与编辑向导两条试跑入口共用同一持久化口径。"""
+    数据管家面板与编辑向导两条试跑入口共用同一持久化口径。"""
     if exec_meta.get("error"):
         return
     from datetime import datetime, timezone
@@ -236,10 +235,10 @@ def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_me
 
 def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None,
                       wait_seconds: int = 60) -> dict:
-    """审批前试跑：临时激活 → 触发 → 取样 → 恢复原激活状态。不写资产湖。
+    """试跑：临时激活 → 触发 → 取样 → 恢复原激活状态。不写资产湖。
 
-    成功即持久化列样本（persist_test_result）——审批面板、数据管家对话工具、
-    编辑向导三条试跑入口都走这里，审批契约的判断依据保持最新。"""
+    成功即持久化列样本（persist_test_result）——数据管家面板、对话工具、
+    编辑向导三条试跑入口都走这里，发布契约的判断依据保持最新。"""
     rows, exec_meta = collect_test_rows(db, rec, payload=payload, wait_seconds=wait_seconds)
     persist_test_result(db, rec, rows, exec_meta)
 

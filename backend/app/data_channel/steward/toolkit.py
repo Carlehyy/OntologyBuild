@@ -2,10 +2,10 @@
 数据管家受限工具集 — LLM 与 n8n 交互的全部动词
 
 治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
-  - 创建的 workflow 一律不激活；激活只发生在用户批准（approve）时
-  - 修改已批准/待审批的 workflow → 自动停用并退回草稿（demote_on_edit）
-  - 提交审批(submit_for_approval)是 agent 可代办的最远一步；批准/拒绝/
-    归档/删除只存在于审批面板，工具集里没有这些动词
+  - 创建/纳管的 workflow 一律不激活；激活只发生在用户于流水线编辑向导
+    「发布」时——发布是流水线生命周期的唯一入口，工具集里没有这个动词
+  - 已发布的流水线封版：修改编排一律拒绝，须用户先在编辑向导「撤回发布」
+  - 归档/删除只存在于界面按钮，工具集里没有这些动词
   - 凭据(credentials)无法经 API 创建 — 工具只能引用用户在 n8n 界面配好的凭据
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "list_pipelines",
-        "description": "列出受管的 n8n 数据流水线记录（含审批状态），以及 n8n 实例上尚未纳管的工作流。",
+        "description": "列出受管的 n8n 数据流水线记录（含发布状态），以及 n8n 实例上尚未纳管的工作流。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -82,7 +82,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "update_workflow",
-        "description": "修改受管流水线的 workflow 定义（整体替换 nodes/connections，先 get_workflow 取当前值改后回传）。注意：修改已批准的流水线会自动停用并退回草稿，需重新审批 — 动手前必须提醒用户。",
+        "description": "修改受管流水线的 workflow 定义（整体替换 nodes/connections，先 get_workflow 取当前值改后回传）。只能修改未发布的流水线；已发布的会被拒绝，需引导用户先在流水线列表的编辑向导中「撤回发布」。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -110,16 +110,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "check_workflow",
-        "description": "按平台约定体检一条受管流水线：触发器、连接完整性、Webhook 约定、凭据引用。提交审批前先跑一遍并修复 error 级问题。",
-        "parameters": {
-            "type": "object",
-            "properties": {"record_id": {"type": "string"}},
-            "required": ["record_id"],
-        },
-    },
-    {
-        "name": "submit_for_approval",
-        "description": "把草稿流水线提交给用户审批（批准后才会激活并进入平台流水线体系）。只有用户明确同意后才能调用。",
+        "description": "按平台约定体检一条受管流水线：触发器、连接完整性、Webhook 约定、凭据引用。建议用户去发布前先跑一遍并修复 error 级问题。",
         "parameters": {
             "type": "object",
             "properties": {"record_id": {"type": "string"}},
@@ -309,12 +300,16 @@ class ToolRunner:
                    .filter(N8nPipeline.status != STATUS_ARCHIVED)
                    .order_by(N8nPipeline.updated_at.desc()).all())
         by_status: dict[str, int] = {}
+        recent = []
         for r in records:
-            by_status[r.status] = by_status.get(r.status, 0) + 1
+            pub = service.shadow_status(self.db, r)
+            by_status[pub] = by_status.get(pub, 0) + 1
+            if len(recent) < 10:
+                recent.append({"id": r.id, "name": r.name, "pipelineStatus": pub})
         overview["pipelines"] = {
             "total": len(records),
-            "byStatus": by_status,
-            "recent": [{"id": r.id, "name": r.name, "status": r.status} for r in records[:10]],
+            "byStatus": by_status,   # published=已发布可调度 / draft=未发布
+            "recent": recent,
         }
         return overview
 
@@ -326,7 +321,7 @@ class ToolRunner:
             kw = keyword.lower()
             records = [r for r in records if kw in (r.name or "").lower()]
         managed_ids = {r.n8n_workflow_id for r in records}
-        managed = [service.record_out(r) for r in records]
+        managed = [service.record_out(self.db, r) for r in records]
 
         unmanaged = []
         try:
@@ -348,7 +343,7 @@ class ToolRunner:
         rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
         self.db.commit()
         return {
-            "record": service.record_out(rec, active=bool(workflow.get("active"))),
+            "record": service.record_out(self.db, rec, active=bool(workflow.get("active"))),
             "workflow": {
                 "name": workflow.get("name"),
                 "nodes": workflow.get("nodes"),
@@ -462,8 +457,8 @@ class ToolRunner:
         self.db.commit()
         self._touch(rec.id)
         return {
-            "record": service.record_out(rec, active=False),
-            "notice": "已创建为草稿（n8n 侧未激活），流水线列表中已可见。完善后请用 check_workflow 体检，经用户同意再 submit_for_approval。",
+            "record": service.record_out(self.db, rec, active=False),
+            "notice": "已创建为未发布流水线（n8n 侧未激活），流水线列表中已可见。完善后请用 check_workflow 体检、test_run 试跑；确认无误后提醒用户到流水线列表的编辑向导中「发布并启用」。",
         }
 
     def tool_update_workflow(self, record_id: str, name: str | None = None,
@@ -489,23 +484,20 @@ class ToolRunner:
             old_conns = (rec.workflow_snapshot or {}).get("connections") or {}
             _validate_connections(payload["nodes"], old_conns)
 
-        demoted = False
         if payload:
+            # 发布封版守卫：写 n8n 之前拦——已发布流水线的编排一律只读
+            service.require_unpublished(self.db, rec)
             updated = self.client.update_workflow(rec.n8n_workflow_id, payload)
-            demoted = service.demote_on_edit(self.db, rec, self.client)
             rec.workflow_snapshot = N8nClient.sanitize_workflow(updated)
             if payload.get("name"):
                 rec.name = payload["name"]
         if description is not None:
             rec.description = description.strip()
-        # 名称/定义同步到影子行（状态由 demote_on_edit 负责，此处不动）
+        # 名称/定义同步到影子行（不触碰发布状态）
         service.ensure_shadow_pipeline(self.db, rec)
         self.db.commit()
         self._touch(rec.id)
-        out = {"record": service.record_out(rec)}
-        if demoted:
-            out["notice"] = "该流水线原本已批准/待审批：修改后已自动停用并退回草稿，需要重新提交审批。"
-        return out
+        return {"record": service.record_out(self.db, rec)}
 
     def tool_adopt_workflow(self, workflow_id: str, description: str | None = None) -> dict:
         existing = (self.db.query(N8nPipeline)
@@ -527,9 +519,10 @@ class ToolRunner:
         service.ensure_shadow_pipeline(self.db, rec)  # 纳管即出现在流水线列表（draft）
         self.db.commit()
         self._touch(rec.id)
-        out = {"record": service.record_out(rec, active=bool(workflow.get("active")))}
+        out = {"record": service.record_out(self.db, rec, active=bool(workflow.get("active")))}
         if workflow.get("active"):
-            out["notice"] = "注意：该工作流当前在 n8n 侧处于激活状态，但平台记录是草稿（未经审批）。建议尽快提交审批，或提醒用户在 n8n 中停用。"
+            out["notice"] = ("注意：该工作流当前在 n8n 侧处于激活状态，但平台记录是未发布流水线。"
+                             "建议提醒用户到流水线列表的编辑向导中「发布并启用」使两侧对齐，或在 n8n 中先停用它。")
         return out
 
     def tool_check_workflow(self, record_id: str) -> dict:
@@ -547,7 +540,7 @@ class ToolRunner:
         if not nodes:
             issues.append({"level": "error", "message": "工作流没有任何节点。"})
         if not summary["has_trigger"]:
-            issues.append({"level": "error", "message": "缺少触发器节点（Webhook 或 Schedule Trigger），无法提交审批。"})
+            issues.append({"level": "error", "message": "缺少触发器节点（Webhook 或 Schedule Trigger），无法发布。"})
 
         try:
             _validate_connections([{"name": n.get("name")} for n in nodes], connections)
@@ -592,13 +585,6 @@ class ToolRunner:
         ok = not any(i["level"] == "error" for i in issues)
         self._touch(rec.id)
         return {"ok": ok, "issues": issues, "summary": summary}
-
-    def tool_submit_for_approval(self, record_id: str) -> dict:
-        rec = service.require_record(self.db, record_id)
-        service.submit_for_approval(self.db, rec)
-        self._touch(rec.id)
-        return {"record": service.record_out(rec),
-                "notice": "已提交审批。请用户在右侧「流水线审批」面板查看并批准/拒绝——批准后才会激活并进入平台流水线列表。"}
 
     # ── 执行观测 ──────────────────────────────────────────────────
 
