@@ -359,6 +359,83 @@ def infer_columns_typed(rows: list[dict], sample_size: int = 50) -> list[dict]:
     return typed
 
 
+FIELD_TYPE_LABELS = {"string": "文本", "integer": "整数", "float": "小数",
+                     "boolean": "布尔", "timestamp": "时间", "json": "JSON"}
+
+
+def _cell_type_ok(v, expected: str) -> bool:
+    """单元格值是否可按声明类型解析（宽松 coercion，只拦明显矛盾的值）。
+
+    空值一律放行——非空是主键契约的职责，不是类型的。boolean 词表与
+    SchemaInferenceStep._infer_type 保持一致；"1"/"0" 在 integer 列同样放行
+    （推断器会把它们判成 boolean，但作为整数录入是完全合法的）。
+    """
+    if expected in ("string", "json"):
+        return True
+    if v is None:
+        return True
+    if isinstance(v, (dict, list)):
+        return False
+    s = str(v).strip()
+    if not s:
+        return True
+    if expected == "integer":
+        if isinstance(v, bool):
+            return False
+        try:
+            int(s.replace(",", ""))
+            return True
+        except ValueError:
+            return False
+    if expected == "float":
+        if isinstance(v, bool):
+            return False
+        try:
+            float(s.replace(",", ""))
+            return True
+        except ValueError:
+            return False
+    if expected == "boolean":
+        return isinstance(v, bool) or s.lower() in ("true", "false", "yes", "no", "1", "0")
+    if expected == "timestamp":
+        from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+        try:
+            return SchemaInferenceStep._infer_type(s) == "timestamp"
+        except Exception:  # noqa: BLE001 — 推断器异常不应把校验变成误杀
+            return False
+    return True
+
+
+def validate_declared_types(ops_values: list[dict], columns_typed: list | None, *,
+                            dataset_name: str = "") -> None:
+    """人工数据集声明类型的写入校验：本次写入的值必须能按声明类型解析。
+
+    只校验调用方传入的「本次修改的值」（在线编辑是交互式录入，错值当场拦下）；
+    文件上传等批量路径不走此校验，与入湖闸门「类型不符仅警告」的哲学一致。
+    任一违规抛 LakeGateError，攒齐前几条一次性报出，避免用户逐个试错。
+    """
+    types = {str(c.get("name")): normalize_field_type(c.get("type"))
+             for c in (columns_typed or []) if isinstance(c, dict) and c.get("name")}
+    if not types:
+        return
+    problems: list[str] = []
+    for values in ops_values:
+        for col, v in (values or {}).items():
+            expected = types.get(col)
+            if not expected or _cell_type_ok(v, expected):
+                continue
+            problems.append(
+                f"列「{col}」的值「{v}」不符合声明类型 {expected}"
+                f"（{FIELD_TYPE_LABELS.get(expected, expected)}）")
+            if len(problems) >= 5:
+                break
+        if len(problems) >= 5:
+            break
+    if problems:
+        raise LakeGateError(
+            f"数据集「{dataset_name}」类型校验未通过：{'；'.join(problems)}。请修正后再保存")
+
+
 def gate_rows(curated_ds, rows: list[dict], write_opts: dict | None,
               engine_contract_cols: list[str] | None = None,
               column_definitions: list | None = None) -> dict:

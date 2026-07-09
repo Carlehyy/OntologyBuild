@@ -3,7 +3,7 @@ import {
   X, Loader2, KeyRound, Plus, Trash2, Undo2, Save,
   ChevronLeft, ChevronRight, CheckCircle2, XCircle, Pencil,
 } from 'lucide-react'
-import datasetsApi, { type DatasetOverviewItem } from '@/api/v2/datasets'
+import datasetsApi, { FIELD_TYPE_LABELS, type DatasetOverviewItem } from '@/api/v2/datasets'
 
 const PAGE_SIZE = 50
 
@@ -26,6 +26,7 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   const pkCols = useMemo(() => pk.split(',').map(s => s.trim()).filter(Boolean), [pk])
 
   const [columns, setColumns] = useState<string[]>([])
+  const [colTypes, setColTypes] = useState<Record<string, string>>({})
   const [rows, setRows] = useState<EditableRow[]>([])
   const [inserts, setInserts] = useState<CellMap[]>([])
   const [versionNo, setVersionNo] = useState(0)
@@ -71,6 +72,10 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   useEffect(() => {
     loadPage(0)
     if (!dataset.primary_key) setPkPanelOpen(true)
+    // 列类型提示：在线建表返回声明类型，上传的数据集返回按数据推断的类型
+    datasetsApi.schema(dataset.id)
+      .then(r => setColTypes(Object.fromEntries((r.columns ?? []).map(c => [c.name, c.type]))))
+      .catch(() => setColTypes({}))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset.id])
 
@@ -259,6 +264,12 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                     <th key={c} className="bg-gray-50 border-b px-3 py-1.5 text-left font-medium text-gray-600 whitespace-nowrap">
                       {c}
                       {pkCols.includes(c) && <KeyRound size={9} className="inline ml-1 text-amber-500" />}
+                      {colTypes[c] && colTypes[c] !== 'string' && (
+                        <span className="ml-1 px-1 py-px bg-gray-100 rounded text-[10px] text-gray-400 font-normal"
+                          title={`该列类型：${colTypes[c]}（${FIELD_TYPE_LABELS[colTypes[c]] ?? colTypes[c]}）`}>
+                          {FIELD_TYPE_LABELS[colTypes[c]] ?? colTypes[c]}
+                        </span>
+                      )}
                     </th>
                   ))}
                   <th className="bg-gray-50 border-b px-2 py-1.5 w-10" />

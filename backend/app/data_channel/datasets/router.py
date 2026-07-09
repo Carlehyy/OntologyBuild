@@ -112,6 +112,80 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
     return {"data": {"id": ds.id, "name": ds.name, "kind": ds.kind, "dataset_type": "raw_dataset", "schema_type": "tabular"}}
 
 
+class TableColumnDef(BaseModel):
+    name: str
+    type: str = "string"  # CONTRACT_FIELD_TYPES 平台词表，非法值回落 string
+
+
+class CreateTableRequest(BaseModel):
+    name: str
+    columns: list[TableColumnDef]
+    primary_key: str = ""  # 逗号分隔支持复合主键，可为空（之后仍可声明契约）
+
+
+@router.post("/create-table", status_code=201)
+def create_online_table(body: CreateTableRequest, db: Session = Depends(get_db)):
+    """在线新建空表格（人工数据集）：定义列名/类型/主键，无需上传文件。
+
+    与上传创建的数据集能力完全一致：在「维护数据」中逐行录入（每次保存
+    生成新版本）、声明主键后可被本体映射灌入、可作为流水线数据源、也可
+    上传文件批量补数。列类型由用户声明（types_source=declared），在线编辑
+    时按声明校验，不再随数据重新推断。
+    """
+    from app.data_channel.datasets.lake_gate import normalize_field_type, split_pk
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "表格名称不能为空")
+    if len(name) > 200:
+        raise HTTPException(400, "表格名称过长（最多 200 字）")
+
+    columns: list[dict] = []
+    seen: set[str] = set()
+    for c in body.columns:
+        col = c.name.strip()
+        if not col:
+            continue
+        if col in seen:
+            raise HTTPException(400, f"列名「{col}」重复，请修改后重试")
+        seen.add(col)
+        columns.append({"name": col, "type": normalize_field_type(c.type)})
+    if not columns:
+        raise HTTPException(400, "至少需要定义一列（空白列名会被忽略）")
+
+    pk_cols = split_pk(body.primary_key)
+    unknown_pk = [c for c in pk_cols if c not in seen]
+    if unknown_pk:
+        raise HTTPException(400, f"主键列 {unknown_pk} 不在列定义中")
+
+    schema: dict = {
+        "columns": [c["name"] for c in columns],
+        "columns_typed": columns,
+        "types_source": "declared",
+        "origin": "manual",  # 资产湖总览据此标记「在线创建」来源
+    }
+    if pk_cols:
+        schema["primary_key"] = ",".join(pk_cols)
+        schema["pk_source"] = "manual"
+
+    svc = DatasetService(db)
+    ds = svc.create_dataset(name=name, kind="structured", schema_json=schema)
+
+    # 初始版本 = 只有表头的空表：保持「数据集至少有一个版本」的不变式，
+    # 存储对象自描述列结构（解析后 0 行，是合法的空数据集状态）
+    import csv
+    import io
+    buf = io.StringIO()
+    csv.writer(buf).writerow(schema["columns"])
+    ver = svc.create_version(ds.id, buf.getvalue().encode("utf-8"), rowcount=0)
+
+    return {"data": {
+        "id": ds.id, "name": ds.name, "kind": ds.kind,
+        "columns": schema["columns"], "primary_key": schema.get("primary_key", ""),
+        "version_no": ver.version_no,
+    }}
+
+
 @router.post("/{dataset_id}/upload", status_code=201)
 async def upload_dataset_version(
     dataset_id: str,
@@ -130,23 +204,34 @@ async def upload_dataset_version(
     content = await file.read()
     ext = _check_upload_file(file.filename, content)
 
-    # 已声明主键契约的数据集：新文件先过三校验，坏身份的数据不落盘
-    declared_pk = str((ds.schema_json or {}).get("primary_key") or "").strip()
-    if declared_pk:
-        from app.data_channel.datasets.lake_gate import LakeGateError, split_pk, validate_pk
+    # 契约管理的数据集（声明过主键 / 在线建表 / 编辑过）需要全量行做校验与列刷新
+    schema = dict(ds.schema_json or {})
+    declared_pk = str(schema.get("primary_key") or "").strip()
+    full_rows: list[dict] | None = None
+    if declared_pk or schema.get("columns"):
         from app.data_channel.datasets.service import _parse_stored_rows
         try:
-            new_rows = _parse_stored_rows(content, limit=None)
+            full_rows = _parse_stored_rows(content, limit=None)
         except Exception as e:
-            raise HTTPException(400, f"文件解析失败，无法校验主键契约：{e}")
+            # 主键契约必须在解析后的行上校验，解析不了就不允许落盘；
+            # 仅为刷新列结构的解析失败则放行（不阻断上传，只是不刷新）
+            if declared_pk:
+                raise HTTPException(400, f"文件解析失败，无法校验主键契约：{e}")
+            full_rows = None
+
+    # 已声明主键契约的数据集：新文件先过三校验，坏身份的数据不落盘
+    if declared_pk:
+        from app.data_channel.datasets.lake_gate import LakeGateError, split_pk, validate_pk
         try:
-            validate_pk(new_rows, split_pk(declared_pk), dataset_name=ds.name, scope="上传的新版本")
+            validate_pk(full_rows or [], split_pk(declared_pk), dataset_name=ds.name, scope="上传的新版本")
         except LakeGateError as e:
             raise HTTPException(400, str(e))
 
-    # 记录旧列，供列变化提示
-    old_rows = svc.preview(dataset_id, None, limit=1)
-    old_cols = set(old_rows[0].keys()) if old_rows else set()
+    # 记录旧列，供列变化提示（契约管理的数据集用契约列，比首行采样更可靠）
+    old_cols = set(schema.get("columns") or [])
+    if not old_cols:
+        old_rows = svc.preview(dataset_id, None, limit=1)
+        old_cols = set(old_rows[0].keys()) if old_rows else set()
 
     ver = svc.create_version(dataset_id, content, rowcount=_estimate_rowcount(content, ext))
 
@@ -154,6 +239,21 @@ async def upload_dataset_version(
     new_cols = set(new_rows[0].keys()) if new_rows else set()
     columns_added = sorted(new_cols - old_cols) if old_cols else []
     columns_removed = sorted(old_cols - new_cols) if old_cols else []
+
+    # 契约管理的数据集：新文件落盘后同步刷新列结构，否则预览表头/在线编辑器
+    # 仍按旧列渲染。声明类型的列保留用户声明，新出现的列按数据推断
+    if schema.get("columns") and full_rows:
+        from app.data_channel.datasets.lake_gate import infer_columns_typed
+        inferred = infer_columns_typed(full_rows)
+        if schema.get("types_source") == "declared":
+            declared_types = {c.get("name"): c.get("type")
+                              for c in (schema.get("columns_typed") or []) if isinstance(c, dict)}
+            inferred = [{"name": c["name"], "type": declared_types.get(c["name"]) or c["type"]}
+                        for c in inferred]
+        schema["columns"] = [c["name"] for c in inferred]
+        schema["columns_typed"] = inferred
+        ds.schema_json = schema
+        db.commit()
 
     return {
         "dataset_id": dataset_id,
@@ -251,7 +351,8 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
     数据重新过主键三校验，坏身份的数据不落盘。base_version_no 不等于当前
     最新版本时返回 409——说明期间有人上传/编辑过，客户端须刷新重做。
     """
-    from app.data_channel.datasets.lake_gate import LakeGateError, infer_columns_typed, split_pk, validate_pk
+    from app.data_channel.datasets.lake_gate import (
+        LakeGateError, infer_columns_typed, split_pk, validate_declared_types, validate_pk)
     from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
     from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
     from app.models.v2.dataset import DatasetVersion
@@ -328,6 +429,16 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
                 check_known_cols(op.values or {}, "新增的行")
                 new_rows.append({c: (op.values or {}).get(c, "") for c in columns})
 
+            # 声明类型的表（在线建表）：本次写入的值必须能按声明类型解析。
+            # 只校验改动值，不全量重扫——历史数据（如文件批量补数）不被追溯阻断
+            if schema.get("types_source") == "declared":
+                try:
+                    validate_declared_types(
+                        [op.values or {} for op in body.updates + body.inserts],
+                        schema.get("columns_typed"), dataset_name=ds.name)
+                except LakeGateError as e:
+                    raise HTTPException(400, str(e))
+
             if pk_cols:
                 try:
                     validate_pk(new_rows, pk_cols, dataset_name=ds.name, scope="编辑后的数据")
@@ -337,7 +448,9 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
             ver = svc.create_version(dataset_id, rows_to_csv_bytes(new_rows, columns), rowcount=len(new_rows))
             if new_rows:
                 schema["columns"] = columns
-                schema["columns_typed"] = infer_columns_typed(new_rows)
+                # 用户声明的类型是契约，不随数据重新推断（否则录入 "123" 会把文本列翻成整数）
+                if schema.get("types_source") != "declared":
+                    schema["columns_typed"] = infer_columns_typed(new_rows)
                 ds.schema_json = schema
             db.commit()
     except DatasetLockTimeout as e:
@@ -374,13 +487,15 @@ def datasets_overview(db: Session = Depends(get_db)):
         vers = versions_by_ds.get(ds.id, [])
         latest = vers[-1] if vers else None
         is_sync = ds.name.startswith("SYNC::") or bool(ds.source_connection_id)
+        is_manual = (ds.schema_json or {}).get("origin") == "manual"
         items.append({
             "id": ds.id,
             "name": ds.name.removeprefix("SYNC::"),
             "raw_name": ds.name,
             "kind": ds.kind,
             "primary_key": str((ds.schema_json or {}).get("primary_key") or ""),
-            "source": "sync" if is_sync else "upload",
+            # sync 优先于 manual：同步维护的数据集不允许被在线编辑语义覆盖
+            "source": "sync" if is_sync else ("manual" if is_manual else "upload"),
             "connection_name": conn_names.get(ds.source_connection_id or "", ""),
             "version_count": len(vers),
             "latest_version_no": latest.version_no if latest else 0,
@@ -491,6 +606,20 @@ def get_schema(dataset_id: str, db: Session = Depends(get_db)):
     ds = svc.get_dataset(dataset_id)
     if not ds:
         raise HTTPException(404, "Dataset not found")
+
+    # 在线建表声明过类型的数据集：类型是用户契约，直接返回声明值而非推断
+    # （空表也有列结构，推断路径此时只会返回空列表）
+    schema_json = ds.schema_json or {}
+    if schema_json.get("types_source") == "declared" and schema_json.get("columns_typed"):
+        rows = svc.preview(dataset_id, None, limit=10)
+        columns = []
+        for c in schema_json["columns_typed"]:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            name = c["name"]
+            samples = [row.get(name) for row in rows if row.get(name) not in (None, "")][:5]
+            columns.append({"name": name, "type": c.get("type") or "string", "sample_values": samples})
+        return {"dataset_id": dataset_id, "columns": columns}
 
     # Use latest version for schema inference
     versions = svc.list_versions(dataset_id)

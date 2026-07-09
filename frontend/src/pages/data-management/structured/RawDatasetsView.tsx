@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import {
   Upload, RefreshCw, Trash2, ChevronDown, ChevronUp, Loader2,
   CheckCircle2, XCircle, X, GitBranch, Play, FileUp, Repeat,
-  Database, Pencil, KeyRound,
+  Database, Pencil, KeyRound, Table2,
 } from 'lucide-react'
-import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type DatasetVersionItem } from '@/api/v2/datasets'
+import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type DatasetVersionItem, type CreateTableResult } from '@/api/v2/datasets'
 import pipelinesApi from '@/api/v2/pipelines'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DatasetEditorModal from './DatasetEditorModal'
+import CreateTableModal from './CreateTableModal'
 
 const KIND_META: Record<string, { label: string; color: string }> = {
   structured:   { label: '结构化',   color: 'bg-blue-50 text-blue-600 border-blue-200' },
@@ -65,6 +66,9 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
 
   // 在线维护
   const [editorTarget, setEditorTarget] = useState<DatasetOverviewItem | null>(null)
+
+  // 在线新建表格
+  const [createOpen, setCreateOpen] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -125,6 +129,22 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
     } finally {
       setUploading(false)
     }
+  }
+
+  /** 在线新建表格成功：刷新列表并直接进入维护编辑器开始录入 */
+  const handleTableCreated = (res: CreateTableResult) => {
+    setCreateOpen(false)
+    setBanner({
+      type: 'success',
+      text: `「${res.name}」已创建。空表已就绪，现在就可以逐行录入数据${res.primary_key ? '' : '（暂未声明主键，仅能新增行）'}`,
+    })
+    load()
+    setEditorTarget({
+      id: res.id, name: res.name, raw_name: res.name, kind: res.kind,
+      primary_key: res.primary_key, source: 'manual', connection_name: '',
+      version_count: 1, latest_version_no: res.version_no, rowcount: 0,
+      consumers: [], created_at: null, updated_at: null,
+    })
   }
 
   /** 给已有数据集上传新版本 */
@@ -219,11 +239,19 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       {/* 工具行 */}
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-gray-400">
-          人工数据集由你上传并持续维护（改单元格 / 增删行都会生成新版本）；声明主键后可直接被本体映射灌入
+          人工数据集由你上传文件或在线建表，并持续维护（改单元格 / 增删行都会生成新版本）；声明主键后可直接被本体映射灌入
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={load} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
             <RefreshCw size={12} /> 刷新
+          </button>
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-sm font-medium rounded-lg hover:bg-gray-50"
+            title="没有现成文件时，在线定义列结构建一张空表，逐行录入并维护"
+          >
+            <Table2 size={14} />
+            在线新建表格
           </button>
           <button
             onClick={() => newFileRef.current?.click()}
@@ -272,13 +300,19 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Database size={32} className="mx-auto opacity-30" />
           <p className="text-sm font-medium">暂无人工数据集</p>
-          <p className="text-xs">点击「上传数据文件」导入 Excel/CSV，之后可在线维护、声明主键并直接灌入本体</p>
+          <p className="text-xs">上传 Excel/CSV 导入现成数据，或在线新建空表格从零录入；之后均可在线维护、声明主键并直接灌入本体</p>
           <div className="flex justify-center gap-2 pt-1">
             <button
               onClick={() => newFileRef.current?.click()}
               className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90"
             >
               上传文件
+            </button>
+            <button
+              onClick={() => setCreateOpen(true)}
+              className="text-xs px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] rounded-lg hover:bg-gray-50"
+            >
+              在线新建表格
             </button>
             <button
               onClick={() => navigate('/data/pipelines/sync-tasks')}
@@ -332,6 +366,10 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                           <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-purple-50 text-purple-600 border-purple-200" title={ds.connection_name ? `连接：${ds.connection_name}` : '由同步任务落地'}>
                             <Repeat size={10} /> 同步任务
                           </span>
+                        ) : ds.source === 'manual' ? (
+                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-teal-50 text-teal-600 border-teal-200" title="在线新建的表格，列类型由创建时声明">
+                            <Table2 size={10} /> 在线创建
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600 border-gray-200">
                             <FileUp size={10} /> 文件上传
@@ -366,7 +404,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                       <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.updated_at)}</td>
                       <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                         <div className="flex gap-1 justify-end">
-                          {ds.source === 'upload' && (
+                          {ds.source !== 'sync' && (
                             <button
                               onClick={() => setEditorTarget(ds)}
                               className="flex items-center gap-1 text-xs px-2 py-1.5 border rounded-lg hover:bg-amber-50 text-amber-700 border-amber-200"
@@ -376,7 +414,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                               维护数据
                             </button>
                           )}
-                          {ds.source === 'upload' && (
+                          {ds.source !== 'sync' && (
                             <button
                               onClick={() => pickVersionFile(ds.id)}
                               disabled={uploadingVersionId === ds.id}
@@ -506,6 +544,14 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* 在线新建表格 */}
+      {createOpen && (
+        <CreateTableModal
+          onClose={() => setCreateOpen(false)}
+          onCreated={handleTableCreated}
+        />
       )}
 
       {/* 在线维护编辑器 */}

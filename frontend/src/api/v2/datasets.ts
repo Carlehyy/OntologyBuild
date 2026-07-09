@@ -16,7 +16,8 @@ export interface DatasetOverviewItem {
   kind: string
   /** 已声明的主键契约（逗号分隔复合主键），空串 = 未声明 */
   primary_key: string
-  source: 'sync' | 'upload'
+  /** sync=同步任务落地 / upload=文件上传 / manual=在线建表 */
+  source: 'sync' | 'upload' | 'manual'
   connection_name: string
   version_count: number
   latest_version_no: number
@@ -53,6 +54,27 @@ export interface DatasetSchemaColumn {
   sample_values: string[]
 }
 
+/** 平台类型词表的中文提示（与后端 lake_gate.FIELD_TYPE_LABELS 一致） */
+export const FIELD_TYPE_LABELS: Record<string, string> = {
+  string: '文本', integer: '整数', float: '小数',
+  boolean: '布尔', timestamp: '时间', json: 'JSON',
+}
+
+export interface CreateTableColumn {
+  name: string
+  /** 平台类型词表 CONTRACT_FIELD_TYPES，非法值后端回落 string */
+  type: string
+}
+
+export interface CreateTableResult {
+  id: string
+  name: string
+  kind: string
+  columns: string[]
+  primary_key: string
+  version_no: number
+}
+
 export interface UploadVersionResult {
   dataset_id: string
   dataset_name: string
@@ -82,6 +104,10 @@ const datasetsApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+
+  /** 在线新建空表格：定义列名/类型/主键，不上传文件，之后在「维护数据」中逐行录入 */
+  createTable: (payload: { name: string; columns: CreateTableColumn[]; primary_key?: string }): Promise<CreateTableResult> =>
+    apiClientV2.post('/datasets/create-table', payload),
 
   /** 给已有数据集上传新版本（数据集 ID 不变，流水线绑定不受影响） */
   uploadVersion: (datasetId: string, file: File): Promise<UploadVersionResult> => {

@@ -110,8 +110,10 @@ class DatasetService:
         self._db = db
         self._storage = storage or get_storage_service()
 
-    def create_dataset(self, name: str, kind: str, connection_id: str | None = None) -> Dataset:
-        ds = Dataset(name=name, kind=kind, source_connection_id=connection_id)
+    def create_dataset(self, name: str, kind: str, connection_id: str | None = None,
+                       schema_json: dict | None = None) -> Dataset:
+        ds = Dataset(name=name, kind=kind, source_connection_id=connection_id,
+                     schema_json=schema_json)
         self._db.add(ds)
         self._db.commit()
         self._db.refresh(ds)

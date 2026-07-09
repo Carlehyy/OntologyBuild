@@ -287,7 +287,7 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
     queryFn: () => apiClientV2.get('/datasets/overview') as any,
   })
   const manualDatasets: ManualDataset[] = ((manualOverview?.items ?? []) as Array<Record<string, unknown>>)
-    .filter(d => d.source === 'upload' && d.primary_key)
+    .filter(d => (d.source === 'upload' || d.source === 'manual') && d.primary_key)
     .map(d => ({
       id: String(d.id), name: String(d.name),
       rowcount: (d.rowcount as number | null) ?? null,
