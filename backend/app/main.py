@@ -161,6 +161,10 @@ def _seed_db():
                 "ALTER TABLE fo_action_types ADD COLUMN source JSON",
                 "ALTER TABLE fo_functions ADD COLUMN source JSON",
                 "ALTER TABLE sentinels ADD COLUMN source JSON",
+                # —— 胖关系（LPG 边属性）：关系映射支持连接表 + 边属性字段映射 ——
+                "ALTER TABLE v2_ontology_link_mappings ADD COLUMN link_type_id VARCHAR",
+                "ALTER TABLE v2_ontology_link_mappings ADD COLUMN edge_dataset_id VARCHAR",
+                "ALTER TABLE v2_ontology_link_mappings ADD COLUMN field_mapping JSON DEFAULT '{}'",
                 # —— 回填历史 NULL latest_version_id（create_version 旧 bug：flush 前取 id）——
                 "UPDATE v2_datasets SET latest_version_id = ("
                 " SELECT v.id FROM v2_dataset_versions v WHERE v.dataset_id = v2_datasets.id"

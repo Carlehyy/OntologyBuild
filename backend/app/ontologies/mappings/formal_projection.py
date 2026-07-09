@@ -49,6 +49,13 @@ def _stable_id(*parts: Any) -> str:
     return str(_uuid.uuid5(_uuid.NAMESPACE_URL, raw))
 
 
+# 关系投影的内部记账键：仅供映射/去重使用，不应作为业务边属性落进 LinkInstance
+_INTERNAL_LINK_PROP_KEYS = frozenset({
+    "mapping_type", "src_key", "tgt_key", "cardinality",
+    "__edge_key__", "fk_column", "alt_column", "source",
+})
+
+
 def _infer_property_type(values: list[Any]) -> str:
     """根据样本值粗略推断 PropertyType（与前端 PropertyType 对齐）。"""
     non_null = [v for v in values if v not in (None, "")]
@@ -565,9 +572,13 @@ def project_to_formal_ontology(
             linktype_cache[key] = lt_id
 
         # LinkInstance：确定性 id 去重；新建链接进入事实流（Link 也是 Fact）
-        li_id = _stable_id("li", ontology_id, lt_id, src_inst, tgt_inst)
+        # 连接表胖关系：同一对实体可有多条属性不同的边 → id 纳入 __edge_key__，防被去重合并成一条。
+        raw_props = rel.properties or {}
+        edge_key = raw_props.get("__edge_key__") or ""
+        li_id = _stable_id("li", ontology_id, lt_id, src_inst, tgt_inst, edge_key)
         existing_li = db.query(LinkInstance).filter(LinkInstance.id == li_id).first()
-        li_props = dict(rel.properties or {})
+        # 只保留真正的业务边属性，剔除映射记账用的内部键
+        li_props = {k: v for k, v in raw_props.items() if k not in _INTERNAL_LINK_PROP_KEYS}
         if existing_li:
             if (existing_li.link_type_id != lt_id
                     or existing_li.source_object_id != src_inst

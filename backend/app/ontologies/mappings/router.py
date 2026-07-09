@@ -292,6 +292,13 @@ class LinkMappingCreate(BaseModel):
     relation_type: str
     src_key: str
     tgt_key: str
+    # —— 胖关系（连接表 + 边属性）——
+    # link_type_id: 绑定手绘 LinkType，令边属性名对齐其 properties schema（为空则按 relation_type 名匹配/自建）
+    link_type_id: str | None = None
+    # edge_dataset_id: 连接表/关系数据集。有值 → 胖关系（src_key/tgt_key/field_mapping 列均在连接表内）
+    edge_dataset_id: str | None = None
+    # field_mapping: {边属性名: 连接表列名}
+    field_mapping: dict = {}
 
 
 @router.post("/{ontology_id}/link-mappings")
@@ -309,15 +316,43 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
         raise HTTPException(400, "Source dataset has no rows")
     if not tgt_rows:
         raise HTTPException(400, "Target dataset has no rows")
-    if body.src_key not in src_rows[0]:
-        raise HTTPException(400, f"Source key '{body.src_key}' not found in source dataset")
-    if body.tgt_key not in tgt_rows[0]:
-        raise HTTPException(400, f"Target key '{body.tgt_key}' not found in target dataset")
 
-    tgt_values = {str(row.get(body.tgt_key, "")).strip() for row in tgt_rows if row.get(body.tgt_key)}
-    match_count = sum(1 for row in src_rows if str(row.get(body.src_key, "")).strip() in tgt_values)
-    if match_count == 0:
-        raise HTTPException(400, "Link mapping produced 0 matches; choose different source/target keys")
+    if body.edge_dataset_id:
+        # —— 连接表胖关系：src_key/tgt_key 及 field_mapping 的列都在连接表内 ——
+        try:
+            edge_rows = svc.preview(body.edge_dataset_id, None, limit=10000)
+        except Exception as e:
+            raise HTTPException(400, f"Failed to preview edge dataset for link mapping: {e}")
+        if not edge_rows:
+            raise HTTPException(400, "Edge (junction) dataset has no rows")
+        edge_cols = set(edge_rows[0].keys())
+        if body.src_key not in edge_cols:
+            raise HTTPException(400, f"Source FK '{body.src_key}' not found in edge dataset")
+        if body.tgt_key not in edge_cols:
+            raise HTTPException(400, f"Target FK '{body.tgt_key}' not found in edge dataset")
+        missing = [c for c in (body.field_mapping or {}).values() if c not in edge_cols]
+        if missing:
+            raise HTTPException(400, f"Edge property columns not found in edge dataset: {missing}")
+        # 两端外键须命中端点数据集（跨所有列做宽松交集，容错端点主键列未知）
+        src_all = {str(r.get(c, "")).strip() for r in src_rows for c in src_rows[0].keys()}
+        tgt_all = {str(r.get(c, "")).strip() for r in tgt_rows for c in tgt_rows[0].keys()}
+        match_count = sum(
+            1 for er in edge_rows
+            if str(er.get(body.src_key, "")).strip() in src_all
+            and str(er.get(body.tgt_key, "")).strip() in tgt_all
+        )
+        if match_count == 0:
+            raise HTTPException(400, "连接表两端外键未命中任何端点实体；请检查 FK 列选择")
+    else:
+        # —— 直连外键瘦关系（原行为不变）——
+        if body.src_key not in src_rows[0]:
+            raise HTTPException(400, f"Source key '{body.src_key}' not found in source dataset")
+        if body.tgt_key not in tgt_rows[0]:
+            raise HTTPException(400, f"Target key '{body.tgt_key}' not found in target dataset")
+        tgt_values = {str(row.get(body.tgt_key, "")).strip() for row in tgt_rows if row.get(body.tgt_key)}
+        match_count = sum(1 for row in src_rows if str(row.get(body.src_key, "")).strip() in tgt_values)
+        if match_count == 0:
+            raise HTTPException(400, "Link mapping produced 0 matches; choose different source/target keys")
 
     lm = OntologyLinkMapping(
         ontology_id=ontology_id,
@@ -326,12 +361,17 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
         relation_type=body.relation_type,
         src_key=body.src_key,
         tgt_key=body.tgt_key,
+        link_type_id=body.link_type_id,
+        edge_dataset_id=body.edge_dataset_id,
+        field_mapping=body.field_mapping or {},
         status="active",
     )
     db.add(lm)
     db.commit()
     db.refresh(lm)
-    return {"link_mapping_id": lm.id, "relation_type": lm.relation_type, "match_count": match_count}
+    return {"link_mapping_id": lm.id, "relation_type": lm.relation_type,
+            "match_count": match_count, "edge_dataset_id": lm.edge_dataset_id,
+            "edge_properties": list((body.field_mapping or {}).keys())}
 
 
 @router.get("/{ontology_id}/link-mappings")
@@ -344,4 +384,21 @@ def list_link_mappings(ontology_id: str, db: Session = Depends(get_db)):
         "id": l.id, "src_dataset_id": l.src_dataset_id, "tgt_dataset_id": l.tgt_dataset_id,
         "relation_type": l.relation_type, "src_key": l.src_key, "tgt_key": l.tgt_key,
         "status": l.status,
+        "link_type_id": l.link_type_id, "edge_dataset_id": l.edge_dataset_id,
+        "field_mapping": l.field_mapping or {},
+        "is_fat": bool(l.edge_dataset_id),
     } for l in links]
+
+
+@router.delete("/{ontology_id}/link-mappings/{link_mapping_id}", status_code=204)
+def delete_link_mapping(ontology_id: str, link_mapping_id: str, db: Session = Depends(get_db)):
+    """删除关系映射通道。已投影的 LinkInstance / 历史事实保留（与对象映射删除语义一致）。"""
+    from app.models.v2.mapping import OntologyLinkMapping
+    lm = db.query(OntologyLinkMapping).filter(
+        OntologyLinkMapping.id == link_mapping_id,
+        OntologyLinkMapping.ontology_id == ontology_id,
+    ).first()
+    if lm:
+        db.delete(lm)
+        db.commit()
+    return None

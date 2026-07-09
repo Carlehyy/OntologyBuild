@@ -1526,7 +1526,6 @@ class MappingService:
 
     def _process_link_mappings(self, ontology_id: str, mapping_meta: dict) -> list[dict]:
         from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping as OM
-        from app.models.relation import Relation
 
         links = self._db.query(OntologyLinkMapping).filter(
             OntologyLinkMapping.ontology_id == ontology_id,
@@ -1541,51 +1540,139 @@ class MappingService:
                 if m.curated_dataset_id == link.src_dataset_id: src_meta = meta
                 if m.curated_dataset_id == link.tgt_dataset_id: tgt_meta = meta
             if not src_meta or not tgt_meta: continue
-            # 行→实体 id 必须按行自身的主键标识反查，不能 zip(rows, dict.items())——
-            # entity_id_map 按 pk 去重后条目数可能少于行数，zip 会截断且错位连边
-            def _eid_of(meta: dict, row: dict) -> str | None:
-                return meta["entity_id_map"].get(self._row_identity_value(row, meta["pk_col"]))
-
-            tgt_val_to_eid = {}
-            for row in tgt_meta["rows"]:
-                eid = _eid_of(tgt_meta, row)
-                v = str(row.get(link.tgt_key, "")).strip()
-                if v and eid: tgt_val_to_eid[v] = eid
-            written = 0
-            src_values: list[str] = []
-            tgt_values: list[str] = []
-            for row in src_meta["rows"]:
-                src_eid = _eid_of(src_meta, row)
-                src_val = str(row.get(link.src_key, "")).strip()
-                if not src_val or not src_eid: continue
-                tgt_eid = tgt_val_to_eid.get(src_val)
-                if not tgt_eid: continue
-                src_values.append(src_eid)
-                tgt_values.append(tgt_eid)
-                rel = Relation(
-                    id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, link.relation_type, "link_mapping"),
-                    ontology_id=ontology_id,
-                    source_entity=src_eid, target_entity=tgt_eid,
-                    type=link.relation_type,
-                    properties={"mapping_type": "link_mapping", "src_key": link.src_key, "tgt_key": link.tgt_key},
-                    confidence=0.9,
-                )
-                self._db.merge(rel); written += 1
-            cardinality = self._infer_cardinality(src_values, tgt_values)
-            if written:
-                for rel in self._db.query(Relation).filter(
-                    Relation.ontology_id == ontology_id,
-                    Relation.type == link.relation_type,
-                ).all():
-                    props = dict(rel.properties or {})
-                    if props.get("mapping_type") == "link_mapping" and props.get("src_key") == link.src_key and props.get("tgt_key") == link.tgt_key:
-                        props["cardinality"] = cardinality
-                        rel.properties = props
-                self._db.commit()
-                self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_meta["entity_class"], link.relation_type)
-                logger.info("Link: " + src_meta["entity_class"] + "-[" + str(link.relation_type) + "]->" + tgt_meta["entity_class"] + " " + str(written) + "条")
-            results.append({"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
-                            "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
-                            "count": written, "cardinality": cardinality,
-                            "warning": None if written else "No rows matched this link mapping"})
+            # edge_dataset_id 有值 → 连接表「胖关系」（边可带属性）；否则 → 直连外键「瘦关系」
+            if getattr(link, "edge_dataset_id", None):
+                results.append(self._process_edge_table_link(ontology_id, link, src_meta, tgt_meta))
+            else:
+                results.append(self._process_direct_fk_link(ontology_id, link, src_meta, tgt_meta))
         return results
+
+    def _pk_value_to_eid(self, meta: dict) -> dict[str, str]:
+        """endpoint 对象映射的「主键值 → 实体 id」查找表：供连接表外键反查两端实体。"""
+        out: dict[str, str] = {}
+        pk_col = meta["pk_col"]
+        for row in meta["rows"]:
+            eid = meta["entity_id_map"].get(self._row_identity_value(row, pk_col))
+            v = str(row.get(pk_col, "")).strip()
+            if v and eid:
+                out[v] = eid
+        return out
+
+    def _process_direct_fk_link(self, ontology_id: str, link, src_meta: dict, tgt_meta: dict) -> dict:
+        """直连外键瘦关系：源表某列 == 目标表某列 → 建边（无自有属性）。原行为保持不变。"""
+        from app.models.relation import Relation
+
+        # 行→实体 id 必须按行自身的主键标识反查，不能 zip(rows, dict.items())——
+        # entity_id_map 按 pk 去重后条目数可能少于行数，zip 会截断且错位连边
+        def _eid_of(meta: dict, row: dict) -> str | None:
+            return meta["entity_id_map"].get(self._row_identity_value(row, meta["pk_col"]))
+
+        tgt_val_to_eid = {}
+        for row in tgt_meta["rows"]:
+            eid = _eid_of(tgt_meta, row)
+            v = str(row.get(link.tgt_key, "")).strip()
+            if v and eid: tgt_val_to_eid[v] = eid
+        written = 0
+        src_values: list[str] = []
+        tgt_values: list[str] = []
+        for row in src_meta["rows"]:
+            src_eid = _eid_of(src_meta, row)
+            src_val = str(row.get(link.src_key, "")).strip()
+            if not src_val or not src_eid: continue
+            tgt_eid = tgt_val_to_eid.get(src_val)
+            if not tgt_eid: continue
+            src_values.append(src_eid)
+            tgt_values.append(tgt_eid)
+            rel = Relation(
+                id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, link.relation_type, "link_mapping"),
+                ontology_id=ontology_id,
+                source_entity=src_eid, target_entity=tgt_eid,
+                type=link.relation_type,
+                properties={"mapping_type": "link_mapping", "src_key": link.src_key, "tgt_key": link.tgt_key},
+                confidence=0.9,
+            )
+            self._db.merge(rel); written += 1
+        cardinality = self._infer_cardinality(src_values, tgt_values)
+        if written:
+            for rel in self._db.query(Relation).filter(
+                Relation.ontology_id == ontology_id,
+                Relation.type == link.relation_type,
+            ).all():
+                props = dict(rel.properties or {})
+                if props.get("mapping_type") == "link_mapping" and props.get("src_key") == link.src_key and props.get("tgt_key") == link.tgt_key:
+                    props["cardinality"] = cardinality
+                    rel.properties = props
+            self._db.commit()
+            self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_meta["entity_class"], link.relation_type)
+            logger.info("Link: " + src_meta["entity_class"] + "-[" + str(link.relation_type) + "]->" + tgt_meta["entity_class"] + " " + str(written) + "条")
+        return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
+                "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
+                "count": written, "cardinality": cardinality,
+                "warning": None if written else "No rows matched this link mapping"}
+
+    def _process_edge_table_link(self, ontology_id: str, link, src_meta: dict, tgt_meta: dict) -> dict:
+        """连接表胖关系：遍历连接表每行，两端外键各自反查实体，按 field_mapping 采集边属性。
+
+        同一对实体之间可有多条边（各连接表行独立成边），稳定 id 纳入连接表行主键防去重合并。
+        """
+        from app.models.relation import Relation
+        from app.data_channel.curated.review_service import load_rows_with_edits
+
+        fmap = dict(getattr(link, "field_mapping", None) or {})
+        try:
+            edge_rows = load_rows_with_edits(self._db, link.edge_dataset_id, limit=10000)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("读取连接表 %s 失败: %s", link.edge_dataset_id, e)
+            return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
+                    "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
+                    "edge_dataset_id": link.edge_dataset_id, "count": 0, "cardinality": "unknown",
+                    "warning": f"读取连接表失败: {e}"}
+
+        src_v2e = self._pk_value_to_eid(src_meta)
+        tgt_v2e = self._pk_value_to_eid(tgt_meta)
+        edge_pk_col = self._choose_pk_col(edge_rows)
+        pending: list[tuple] = []
+        src_values: list[str] = []
+        tgt_values: list[str] = []
+        for erow in edge_rows:
+            sv = str(erow.get(link.src_key, "")).strip()
+            tv = str(erow.get(link.tgt_key, "")).strip()
+            if not sv or not tv:
+                continue
+            src_eid = src_v2e.get(sv)
+            tgt_eid = tgt_v2e.get(tv)
+            if not src_eid or not tgt_eid:
+                continue
+            edge_props = {prop: erow.get(col) for prop, col in fmap.items() if col in erow}
+            edge_key = self._row_identity_value(erow, edge_pk_col)
+            pending.append((src_eid, tgt_eid, edge_props, edge_key))
+            src_values.append(src_eid)
+            tgt_values.append(tgt_eid)
+
+        cardinality = self._infer_cardinality(src_values, tgt_values)
+        written = 0
+        for src_eid, tgt_eid, edge_props, edge_key in pending:
+            props = {"mapping_type": "link_mapping", "__edge_key__": edge_key,
+                     "cardinality": cardinality, **edge_props}
+            rel = Relation(
+                id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, link.relation_type,
+                                            f"link_mapping:{edge_key}"),
+                ontology_id=ontology_id,
+                source_entity=src_eid, target_entity=tgt_eid,
+                type=link.relation_type,
+                properties=props,
+                confidence=1.0,
+            )
+            self._db.merge(rel)
+            written += 1
+        if written:
+            self._db.commit()
+            self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_meta["entity_class"], link.relation_type)
+            logger.info("Link(连接表): %s-[%s]->%s %d条 边属性=%s",
+                        src_meta["entity_class"], link.relation_type, tgt_meta["entity_class"],
+                        written, list(fmap.keys()))
+        return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
+                "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
+                "edge_dataset_id": link.edge_dataset_id, "edge_properties": list(fmap.keys()),
+                "count": written, "cardinality": cardinality,
+                "warning": None if written else "连接表未匹配到任何两端实体"}

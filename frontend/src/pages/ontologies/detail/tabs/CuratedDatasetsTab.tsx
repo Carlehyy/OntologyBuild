@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClientV2 } from '@/api/client'
+import LinkMappingPanel from './LinkMappingPanel'
 import {
   CheckCircle, Loader2, Plus, Play, Database, ChevronDown, ChevronRight,
   Link2, Sparkles, Trash2, ExternalLink, Wand2, RefreshCw,
@@ -688,6 +689,10 @@ export default function CuratedDatasetsTab({ ontologyId }: { ontologyId: string 
           ))}
         </div>
       )}
+
+      {/* 关系映射：把连接表灌成带属性的关系边（胖关系） */}
+      <div className="pt-3 mt-1 border-t border-dashed border-gray-200" />
+      <LinkMappingPanel ontologyId={ontologyId} onDone={handleChanged} />
     </div>
   )
 }
