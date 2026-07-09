@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   X, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronLeft, ChevronRight,
-  KeyRound, Eye, Save, Rocket, Info, Lock, Sparkles, Undo2, Table2,
+  KeyRound, Eye, Save, Rocket, Info, Lock, Sparkles, Undo2, Table2, GitBranch,
 } from 'lucide-react'
 import pipelinesApi, { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult, DryRunRowsPage, ColumnDefinition, ValidateDefinitionsResult } from '@/api/v2/pipelines'
@@ -165,7 +165,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
     try {
       const res = await pipelinesApi.validateDefinitions(pipeline.id, { column_definitions: columnDefs }, dryRunResult.dry_run_id)
       setValidateResult(res)
-      if (res.valid) setStep(4)
+      if (res.valid && (res.errors || []).length === 0) setStep(4)
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setValidateResult({ valid: false, errors: [{ field_key: '', message: err?.detail || err?.message || '校验请求失败', severity: 'error' }] })
@@ -265,15 +265,16 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
           <div>
             <h3 className="font-semibold text-gray-900 flex items-center gap-2">
               编辑流水线「{pipeline.name}」
-              {isN8n && (
+              {isN8n ? (
                 <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[11px] font-normal text-violet-600">
                   <Sparkles size={10} /> n8n
                 </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] font-normal text-blue-600">
+                  <GitBranch size={10} /> 系统流水线
+                </span>
               )}
             </h3>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {isPublished ? '已发布（封版）· 仅名称和描述可修改' : '草稿 · 发布后契约与编排将封版'}
-            </p>
           </div>
           <button onClick={handleClose} className="text-gray-400 hover:text-black shrink-0">
             <X size={16} />
@@ -281,7 +282,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         </div>
 
         {/* 步骤指示器 */}
-        <div className="flex items-center px-6 py-3 gap-1 shrink-0 border-b border-gray-50">
+        <div className="flex items-center justify-center px-6 py-3 gap-1 shrink-0 border-b border-gray-50">
           {steps.map((s, i) => (
             <div key={s.num} className="flex items-center gap-1">
               {i > 0 && <div className={`h-px w-6 ${step > i + 1 ? 'bg-[var(--color-nav-bg)]' : 'bg-gray-200'}`} />}
@@ -564,15 +565,23 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 </div>
               )}
 
-              {validateResult?.valid && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-1">
+              {validateResult?.valid && (validateResult.errors || []).length === 0 && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
                   <div className="flex items-center gap-2 text-xs text-emerald-700">
                     <CheckCircle2 size={14} />
                     全量校验通过（共 {totalRows.toLocaleString()} 行），可以进入下一步
                   </div>
-                  {(validateResult.errors || []).filter(e => e.severity === 'warning').map((e, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-xs text-amber-700">
-                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                </div>
+              )}
+
+              {validateResult?.valid && (validateResult.errors || []).length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-amber-700 font-medium">
+                    <AlertTriangle size={14} />
+                    校验完成，但存在以下问题需要处理
+                  </div>
+                  {(validateResult.errors || []).map((e, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-xs text-amber-700 ml-6">
                       <span>{e.field_key && <span className="font-mono mr-1">[{e.field_key}]</span>}{e.message}</span>
                     </div>
                   ))}

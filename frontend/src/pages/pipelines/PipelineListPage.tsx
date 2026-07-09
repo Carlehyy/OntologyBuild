@@ -245,7 +245,7 @@ export default function PipelineListPage() {
                 return (
                   <tr
                     key={pl.id}
-                    className={`hover:bg-gray-50 transition-colors ${enabled ? '' : 'opacity-60'}`}
+                    className={`hover:bg-gray-50 transition-colors align-middle ${enabled ? '' : 'opacity-60'}`}
                   >
                     <td className="px-4 py-3 align-middle">
                       <p className="font-medium text-gray-900 truncate" title={pl.name}>{pl.name}</p>
@@ -396,7 +396,7 @@ export default function PipelineListPage() {
           onClose={() => setShowCreate(false)}
           onCreated={(pl) => {
             setShowCreate(false)
-            navigate(`/data/pipelines/${pl.id}`)
+            load()
           }}
           onN8nCreated={() => {
             // 创建即在列表登记为草稿——留在列表让用户看到新行；
