@@ -85,75 +85,134 @@ export default function StructuredDataPage() {
 
   return (
     <div className="flex flex-col h-full space-y-3">
-      {/* 顶部数据流卡片：SVG 数据流图 + 切换视图按钮 */}
-      <div className="shrink-0 flex items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 px-5 py-3 shadow-sm/50">
-        {/* 左侧 SVG 数据流图 */}
+      {/* 顶部数据流卡片：SVG 分支数据流图 + 视图切换 Tab */}
+      <div className="shrink-0 flex items-start justify-between gap-4 bg-white rounded-xl border border-slate-200 px-5 py-4 shadow-sm/50">
+        {/* 左侧 SVG 数据流图：双分支结构 */}
         <svg
-          viewBox="0 0 740 72"
-          className="w-full max-w-[700px] h-auto shrink"
-          style={{ minWidth: 500 }}
+          viewBox="0 0 860 175"
+          className="w-full max-w-[820px] h-auto shrink"
+          style={{ minWidth: 600 }}
         >
-          {/* ===== 节点 1：数据流水线 ===== */}
+          <defs>
+            <style>
+              {`
+                @keyframes dashFlow { to { stroke-dashoffset: -24; } }
+                @keyframes dashFlowRev { to { stroke-dashoffset: 24; } }
+                .flow-line {
+                  fill: none;
+                  stroke-width: 1.8;
+                  stroke-dasharray: 8 4;
+                  animation: dashFlow 1.2s linear infinite;
+                }
+                .flow-line-rev {
+                  fill: none;
+                  stroke-width: 1.8;
+                  stroke-dasharray: 8 4;
+                  animation: dashFlowRev 1.2s linear infinite;
+                }
+                .flow-arrow { fill: #94a3b8; }
+                .node-text { font-family: system-ui, -apple-system, sans-serif; }
+              `}
+            </style>
+            {/* 箭头标记 */}
+            <marker id="arr-teal" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#0d9488" /></marker>
+            <marker id="arr-blue" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#3b82f6" /></marker>
+            <marker id="arr-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#10b981" /></marker>
+            <marker id="arr-purple" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#8b5cf6" /></marker>
+          </defs>
+
+          {/* ═══════════════════════════════════════════════════
+              连接线（虚线 + 流动动画）
+             ═══════════════════════════════════════════════════ */}
+          {/* 系统流水线 → 任务池（上支汇入） */}
+          <path d="M130,48 Q160,48 170,68 L175,85" className="flow-line" stroke="#0d9488" marker-end="url(#arr-teal)" />
+          {/* n8n流水线 → 任务池（下支汇入） */}
+          <path d="M130,136 Q160,136 170,116 L175,99" className="flow-line-rev" stroke="#14b8a6" marker-end="url(#arr-teal)" />
+          {/* 任务池 → 资产湖 */}
+          <line x1="330" y1="92" x2="395" y2="92" className="flow-line" stroke="#3b82f6" marker-end="url(#arr-blue)" />
+          {/* 资产湖 → 成品数据集（上支出） */}
+          <path d="M535,92 Q575,92 585,72 L595,50" className="flow-line" stroke="#10b981" marker-end="url(#arr-green)" />
+          {/* 资产湖 → 人工数据集（下支出） */}
+          <path d="M535,92 Q575,92 585,112 L595,134" className="flow-line-rev" stroke="#10b981" marker-end="url(#arr-green)" />
+          {/* 成品数据集 → 本体模型（上支汇入） */}
+          <path d="M730,48 Q755,48 760,68 L763,85" className="flow-line" stroke="#059669" marker-end="url(#arr-purple)" />
+          {/* 人工数据集 → 本体模型（下支汇入） */}
+          <path d="M730,136 Q755,136 760,116 L763,99" className="flow-line-rev" stroke="#f59e0b" marker-end="url(#arr-purple)" />
+
+          {/* ═══════════════════════════════════════════════════
+              节点
+             ═══════════════════════════════════════════════════ */}
+
+          {/* ─── 系统流水线（左上）─── */}
           <g onClick={() => navigate('/data/pipelines')} style={{ cursor: 'pointer' }}>
-            <rect x="0" y="4" width="140" height="64" rx="10" ry="10"
+            <rect x="8" y="24" width="120" height="48" rx="9" ry="9"
               fill="#f0fdfa" stroke="#0d9488" strokeWidth="1.5" />
-            <circle cx="24" cy="28" r="10" fill="#0d9488" opacity="0.15" />
-            <text x="24" y="32" textAnchor="middle" fontSize="11" fill="#0d9488">⚙</text>
-            <text x="44" y="24" fontSize="12" fontWeight="600" fill="#134e4a">数据流水线</text>
-            <text x="44" y="40" fontSize="9" fill="#5eead4">系统流水线 / n8n流水线</text>
-            <text x="44" y="54" fontSize="9" fill="#99f6e4">Pipeline</text>
+            <text x="22" y="42" fontSize="11" fill="#0d9488" className="node-text">⚙</text>
+            <text x="42" y="40" fontSize="11" fontWeight="600" fill="#134e4a" className="node-text">系统流水线</text>
+            <text x="42" y="56" fontSize="8" fill="#5eead4" className="node-text">System Pipeline</text>
           </g>
 
-          {/* 箭头 1→2 */}
-          <line x1="144" y1="36" x2="174" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
-          <polygon points="172,31 182,36 172,41" fill="#cbd5e1" />
+          {/* ─── n8n流水线（左下）─── */}
+          <g onClick={() => navigate('/data/pipelines')} style={{ cursor: 'pointer' }}>
+            <rect x="8" y="112" width="120" height="48" rx="9" ry="9"
+              fill="#f0fdfa" stroke="#14b8a6" strokeWidth="1.5" />
+            <text x="22" y="130" fontSize="11" fill="#14b8a6" className="node-text">🔗</text>
+            <text x="42" y="128" fontSize="11" fontWeight="600" fill="#0f766e" className="node-text">n8n 流水线</text>
+            <text x="42" y="144" fontSize="8" fill="#99f6e4" className="node-text">n8n Pipeline</text>
+          </g>
 
-          {/* ===== 节点 2：数据任务池 ===== */}
+          {/* ─── 数据任务池（中左）─── */}
           <g onClick={() => navigate('/data/pipelines/sync-tasks')} style={{ cursor: 'pointer' }}>
-            <rect x="186" y="8" width="130" height="56" rx="10" ry="10"
+            <rect x="180" y="68" width="148" height="48" rx="9" ry="9"
               fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
-            <circle cx="208" cy="36" r="10" fill="#3b82f6" opacity="0.15" />
-            <text x="208" y="40" textAnchor="middle" fontSize="11" fill="#3b82f6">📋</text>
-            <text x="228" y="32" fontSize="12" fontWeight="600" fill="#1e40af">数据任务池</text>
-            <text x="228" y="48" fontSize="10" fill="#93c5fd">Sync Tasks</text>
+            <text x="198" y="86" fontSize="11" fill="#3b82f6" className="node-text">📋</text>
+            <text x="218" y="84" fontSize="11" fontWeight="600" fill="#1e40af" className="node-text">数据任务池</text>
+            <text x="218" y="100" fontSize="8" fill="#93c5fd" className="node-text">Sync Tasks</text>
           </g>
 
-          {/* 箭头 2→3 */}
-          <line x1="320" y1="36" x2="350" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
-          <polygon points="348,31 358,36 348,41" fill="#cbd5e1" />
-
-          {/* ===== 节点 3：数据资产湖（当前页，高亮） ===== */}
+          {/* ─── 数据资产湖（正中 · 当前页高亮）─── */}
           <g style={{ cursor: 'default' }}>
-            <rect x="362" y="2" width="150" height="68" rx="12" ry="12"
+            <rect x="400" y="64" width="133" height="56" rx="12" ry="12"
               fill="#ecfdf5" stroke="#10b981" strokeWidth="2.5" />
-            <circle cx="388" cy="28" r="11" fill="#10b981" opacity="0.2" />
-            <text x="388" y="32" textAnchor="middle" fontSize="12" fill="#10b981">📊</text>
-            <text x="410" y="22" fontSize="12" fontWeight="700" fill="#065f46">数据资产湖</text>
-            <text x="410" y="37" fontSize="9" fill="#6ee7b7">成品数据集 / 人工数据集</text>
-            <text x="410" y="52" fontSize="9" fill="#a7f3d0">Data Lake</text>
+            <text x="418" y="86" fontSize="12" fill="#10b981" className="node-text">📊</text>
+            <text x="438" y="82" fontSize="11" fontWeight="700" fill="#065f46" className="node-text">数据资产湖</text>
+            <text x="438" y="98" fontSize="8" fill="#6ee7b7" className="node-text">Data Lake</text>
             {/* 当前页角标 */}
-            <rect x="463" y="2" width="49" height="17" rx="0" ry="0"
+            <rect x="485" y="64" width="48" height="17"
               fill="#10b981" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 14px 100%, 0 50%, 14px 0)' }} />
-            <text x="489" y="14" textAnchor="middle" fontSize="9" fontWeight="600" fill="white">当前</text>
+            <text x="510" y="77" textAnchor="middle" fontSize="9" fontWeight="600" fill="white" className="node-text">当前</text>
           </g>
 
-          {/* 箭头 3→4 */}
-          <line x1="516" y1="36" x2="546" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
-          <polygon points="544,31 554,36 544,41" fill="#cbd5e1" />
+          {/* ─── 成品数据集（右上）─── */}
+          <g onClick={() => switchTab('curated')} style={{ cursor: 'pointer' }}>
+            <rect x="600" y="24" width="128" height="48" rx="9" ry="9"
+              fill="#f0fdf4" stroke="#059669" strokeWidth="1.5" />
+            <text x="618" y="42" fontSize="11" fill="#059669" className="node-text">✅</text>
+            <text x="638" y="40" fontSize="11" fontWeight="600" fill="#065f46" className="node-text">成品数据集</text>
+            <text x="638" y="56" fontSize="8" fill="#6ee7b7" className="node-text">Curated</text>
+          </g>
 
-          {/* ===== 节点 4：本体模型 ===== */}
+          {/* ─── 人工数据集（右下）─── */}
+          <g onClick={() => switchTab('raw')} style={{ cursor: 'pointer' }}>
+            <rect x="600" y="112" width="128" height="48" rx="9" ry="9"
+              fill="#fffbeb" stroke="#f59e0b" strokeWidth="1.5" />
+            <text x="618" y="130" fontSize="11" fill="#f59e0b" className="node-text">✏️</text>
+            <text x="638" y="128" fontSize="11" fontWeight="600" fill="#92400e" className="node-text">人工数据集</text>
+            <text x="638" y="144" fontSize="8" fill="#fcd34d" className="node-text">Manual / Raw</text>
+          </g>
+
+          {/* ─── 本体模型（最右）─── */}
           <g onClick={() => navigate('/ontologies')} style={{ cursor: 'pointer' }}>
-            <rect x="558" y="8" width="130" height="56" rx="10" ry="10"
+            <rect x="768" y="68" width="88" height="48" rx="9" ry="9"
               fill="#faf5ff" stroke="#8b5cf6" strokeWidth="1.5" />
-            <circle cx="580" cy="36" r="10" fill="#8b5cf6" opacity="0.15" />
-            <text x="580" y="40" textAnchor="middle" fontSize="11" fill="#8b5cf6">🧠</text>
-            <text x="600" y="32" fontSize="12" fontWeight="600" fill="#5b21b6">本体模型</text>
-            <text x="600" y="48" fontSize="10" fill="#c4b5fd">Ontology</text>
+            <text x="784" y="86" fontSize="11" fill="#8b5cf6" className="node-text">🧠</text>
+            <text x="804" y="84" fontSize="11" fontWeight="600" fill="#5b21b6" className="node-text">本体模型</text>
+            <text x="804" y="100" fontSize="8" fill="#c4b5fd" className="node-text">Ontology</text>
           </g>
         </svg>
 
         {/* 右侧：视图切换 Tab */}
-        <div className="shrink-0">
+        <div className="shrink-0 pt-2">
           <div
             ref={viewTabsRef}
             className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5"
