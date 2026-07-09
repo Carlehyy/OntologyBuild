@@ -8,6 +8,7 @@ import {
   RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, ExternalLink,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
+import { syncTasksApi, type SyncTask } from '@/api/v2/sync-tasks'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -79,6 +80,11 @@ export default function SyncTasksTab() {
   const [actionError, setActionError] = useState('')
   const [presetPipelineId, setPresetPipelineId] = useState<string | null>(null)
 
+  // ── 旧版同步任务（DataSyncTask）—— 调度器仍在跑但页面不可见 ──
+  const [legacyTasks, setLegacyTasks] = useState<SyncTask[]>([])
+  const [legacyLoading, setLegacyLoading] = useState(true)
+  const [legacyDisablingId, setLegacyDisablingId] = useState<string | null>(null)
+
   useEffect(() => {
     const pid = searchParams.get('pipeline')
     if (pid) {
@@ -138,6 +144,44 @@ export default function SyncTasksTab() {
     const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 250)
     return () => clearTimeout(timer)
   }, [searchInput])
+
+  // ── 加载旧版同步任务 ──
+  const loadLegacy = useCallback(async () => {
+    setLegacyLoading(true)
+    try {
+      const res = await syncTasksApi.list({ page: 1, page_size: 100 })
+      setLegacyTasks(res.items ?? [])
+    } catch {
+      setLegacyTasks([])
+    } finally {
+      setLegacyLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadLegacy() }, [loadLegacy])
+
+  const handleDisableLegacy = async (id: string) => {
+    setLegacyDisablingId(id)
+    try {
+      await syncTasksApi.toggle(id, false)
+      setLegacyTasks(prev => prev.map(t => t.id === id ? { ...t, enabled: false } : t))
+    } catch {
+      // 静默失败
+    } finally {
+      setLegacyDisablingId(null)
+    }
+  }
+
+  const handleDisableAllLegacy = async () => {
+    const enabled = legacyTasks.filter(t => t.enabled)
+    for (const t of enabled) {
+      try { await syncTasksApi.toggle(t.id, false) } catch { /* continue */ }
+    }
+    loadLegacy()
+  }
+
+  const legacyEnabledCount = legacyTasks.filter(t => t.enabled).length
+  const legacyHasActive = legacyTasks.some(t => t.enabled && (t.schedule_type === 'CRON' || t.schedule_type === 'INTERVAL'))
 
   const handleTabChange = (key: string) => { setActiveTab(key); setPage(1) }
   const handleCreate = () => { setEditingTask(null); setShowForm(true) }
@@ -300,6 +344,46 @@ export default function SyncTasksTab() {
         <div className="flex-1 grid grid-cols-12 gap-3 min-h-0">
           {/* 左侧 */}
           <div className="col-span-9 flex flex-col min-h-0">
+            {/* ── 旧版同步任务提醒 ── */}
+            {!legacyLoading && legacyTasks.length > 0 && (
+              <div className={`mb-2.5 px-3 py-2 rounded-lg border text-[11.5px] leading-relaxed shrink-0 ${
+                legacyHasActive
+                  ? 'bg-amber-50/80 border-amber-200/70 text-amber-800'
+                  : 'bg-slate-50/80 border-slate-200/60 text-slate-600'
+              }`}>
+                {legacyHasActive ? (
+                  <>
+                    <div className="flex items-center gap-2 mb-1">
+                      <AlertCircle size={13} className="shrink-0 text-amber-600" />
+                      <span className="font-medium">
+                        发现 {legacyTasks.length} 个旧版同步任务（{legacyEnabledCount} 个已启用），后台调度器仍在执行
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-amber-700/80 mb-1.5">
+                      这些任务来自旧版同步系统（DataSyncTask），在"人工数据集"中产生 SYNC:: 数据集。
+                      删除数据集时已自动禁用关联任务，但你也可手动处理遗留任务。
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleDisableAllLegacy}
+                        className="px-2.5 py-1 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded text-[11px] font-medium transition-colors"
+                      >
+                        一键禁用全部启用任务
+                      </button>
+                      <span className="text-[10px] text-amber-600/60">
+                        (也可在下方列表中逐个禁用)
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={13} className="shrink-0 text-green-500" />
+                    <span>{legacyTasks.length} 个旧版同步任务均已被禁用，不会产生新数据集</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 筛选条 */}
             <div className={`${GLASS} px-3 py-1.5 mb-2.5 flex items-center gap-2 shrink-0`}>
               <div className="flex items-center gap-0.5 bg-slate-100/70 p-0.5 rounded-md">
@@ -535,6 +619,77 @@ export default function SyncTasksTab() {
                 </>
               )}
             </div>
+
+            {/* ── 旧版同步任务列表 ── */}
+            {!legacyLoading && legacyTasks.length > 0 && (
+              <div className={`${GLASS} mt-2.5 shrink-0`}>
+                <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <History size={13} className="text-slate-400" />
+                    <span className="text-[12px] font-medium text-slate-600">
+                      旧版同步任务（{legacyTasks.length} 个）
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      · {legacyTasks.filter(t => t.enabled).length} 启用 · {legacyTasks.filter(t => t.schedule_type === 'INTERVAL').length} INTERVAL · {legacyTasks.filter(t => t.schedule_type === 'CRON').length} CRON
+                    </span>
+                  </div>
+                </div>
+                <div className="max-h-[180px] overflow-auto scrollbar-thin">
+                  <table className="w-full text-[11.5px]">
+                    <thead className="sticky top-0 bg-slate-50/90">
+                      <tr className="text-slate-500 text-[10.5px]">
+                        <th className="text-left font-medium px-3 py-1">任务名称</th>
+                        <th className="text-center font-medium px-2 py-1">模式</th>
+                        <th className="text-center font-medium px-2 py-1">调度</th>
+                        <th className="text-center font-medium px-2 py-1">状态</th>
+                        <th className="text-center font-medium px-3 py-1">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {legacyTasks.map(t => (
+                        <tr key={t.id} className="border-t border-slate-100 hover:bg-slate-50/40">
+                          <td className="px-3 py-1.5">
+                            <span className="text-slate-700">{t.name}</span>
+                          </td>
+                          <td className="text-center px-2 py-1.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[10.5px] ${
+                              t.sync_mode === 'SNAPSHOT' ? 'bg-blue-50 text-blue-600' : 'bg-violet-50 text-violet-600'
+                            }`}>{t.sync_mode}</span>
+                          </td>
+                          <td className="text-center px-2 py-1.5">
+                            {t.schedule_type === 'INTERVAL' ? (
+                              <span className="text-blue-600 text-[10.5px]">{t.interval_seconds}s</span>
+                            ) : t.schedule_type === 'CRON' ? (
+                              <span className="text-violet-600 text-[10.5px]">{t.cron_expression}</span>
+                            ) : (
+                              <span className="text-slate-400 text-[10.5px]">手动</span>
+                            )}
+                          </td>
+                          <td className="text-center px-2 py-1.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[10.5px] ${
+                              t.enabled
+                                ? 'bg-green-50 text-green-600'
+                                : 'bg-slate-100 text-slate-400'
+                            }`}>{t.enabled ? '启用' : '禁用'}</span>
+                          </td>
+                          <td className="text-center px-3 py-1.5">
+                            {t.enabled && (
+                              <button
+                                onClick={() => handleDisableLegacy(t.id)}
+                                disabled={legacyDisablingId === t.id}
+                                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[10.5px] transition-colors disabled:opacity-50"
+                              >
+                                {legacyDisablingId === t.id ? '禁用中...' : '禁用'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 右侧侧栏 */}

@@ -404,8 +404,13 @@ def dataset_consumers(dataset_id: str, db: Session = Depends(get_db)):
 
 @router.delete("/{dataset_id}")
 def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(get_db)):
-    """删除原始数据集及其版本。被流水线引用时返回 409（force=true 强制删除）。"""
+    """删除原始数据集及其版本。被流水线引用时返回 409（force=true 强制删除）。
+    若数据集由旧版同步任务（DataSyncTask）驱动，自动禁用该任务防止重建。"""
+    import logging
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+    from app.models.v2.sync_task import DataSyncTask
+
+    _logger = logging.getLogger(__name__)
 
     ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if not ds:
@@ -420,13 +425,39 @@ def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(g
             "consumers": consumers,
         })
 
+    # ── 联动禁用关联的 DataSyncTask（防止 _get_or_create_dataset 重建）──
+    disabled_sync_task: str | None = None
+    if ds.name.startswith("SYNC::"):
+        legacy_task_name = ds.name.removeprefix("SYNC::")
+        sync_task = db.query(DataSyncTask).filter(DataSyncTask.name == legacy_task_name).first()
+        if sync_task and sync_task.enabled:
+            sync_task.enabled = False
+            disabled_sync_task = sync_task.name
+            _logger.info(
+                "DELETE dataset %s → 已自动禁用关联同步任务「%s」(id=%s)",
+                dataset_id, sync_task.name, sync_task.id,
+            )
+            # 通知调度器移除此 Job
+            try:
+                from app.data_channel.sync_tasks.scheduler import SyncScheduler
+                sched = SyncScheduler.get()
+                if sched.started:
+                    sched.reload_task(sync_task.id)
+            except Exception:
+                _logger.warning("DELETE dataset %s → 调度器 reload 失败，任务可能仍会执行一次", dataset_id)
+
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
         db.query(MediaItem).filter(MediaItem.dataset_version_id.in_(ver_ids)).delete(synchronize_session=False)
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()
-    return {"status": "deleted", "id": dataset_id}
+
+    result: dict = {"status": "deleted", "id": dataset_id}
+    if disabled_sync_task:
+        result["disabled_sync_task"] = disabled_sync_task
+        result["message"] = f"已同时禁用同步任务「{disabled_sync_task}」，该数据集不会在下次调度时重建"
+    return result
 
 @router.get("", response_model=list[DatasetResponse])
 def list_datasets(kind: str | None = None, db: Session = Depends(get_db)):
