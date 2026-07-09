@@ -10,8 +10,10 @@ import {
 import MermaidBlock from '@/components/MermaidBlock'
 import ElementDetailModal from './ElementDetailModal'
 
+type CanvasKey = 'objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'scenarios'
+
 const SECTIONS: {
-  key: keyof BusinessCanvas
+  key: CanvasKey
   label: string
   icon: React.ElementType
   tint: string
@@ -31,7 +33,7 @@ const DIAGRAM_TABS: { kind: DiagramKind; label: string; needsTarget?: 'scenario'
   { kind: 'state', label: '状态图', needsTarget: 'object' },
 ]
 
-function elementBadges(key: keyof BusinessCanvas, el: CanvasElement): string[] {
+function elementBadges(key: CanvasKey, el: CanvasElement): string[] {
   const badges: string[] = []
   if (key === 'objects') {
     const attrs = (el.attributes as unknown[] | undefined)?.length || 0
