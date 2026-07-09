@@ -12,6 +12,7 @@ from app.models.rules_config import RulesConfig
 from app.models.audit_task import AuditTask
 from app.models.agent_config import AgentConfig
 from app.models.mcp import McpInterfaceConfig
+from app.models.domain import Domain
 
 __all__ = [
     "User",
@@ -28,4 +29,5 @@ __all__ = [
     "AuditTask",
     "AgentConfig",
     "McpInterfaceConfig",
+    "Domain",
 ]

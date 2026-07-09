@@ -135,6 +135,15 @@ export const settingsApi = {
   ),
 }
 
+export const domainApi = {
+  list: (search?: string) => apiClient.get<{ id: string; name: string; description: string; created_by: string; created_at: string; updated_at: string }[]>(
+    '/domains', { params: search ? { search } : {} },
+  ),
+  create: (body: { name: string; description: string }) => apiClient.post('/domains', body),
+  update: (id: string, body: { name?: string; description?: string }) => apiClient.put(`/domains/${id}`, body),
+  delete: (id: string) => apiClient.delete(`/domains/${id}`),
+}
+
 export const usersApi = {
   list: () => apiClient.get<{ id: string; username: string; email: string; role: string; created_at: string }[]>('/users'),
   create: (body: { username: string; email: string; password: string; role: string }) =>

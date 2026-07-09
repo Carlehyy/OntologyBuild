@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Network, Cpu, Settings, LogOut,
   Database, ChevronLeft, ChevronRight, GitBranch, Table2,
   Sparkles, ChevronDown, MessageSquare, Repeat, Bot, PlugZap, Workflow, Compass,
-  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2, ClipboardList,
+  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2, ClipboardList, Globe,
 } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 
@@ -114,6 +114,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       { to: '/settings/agents', icon: Bot, label: '智能体配置' },
       { to: '/settings/skills', icon: Sparkles, label: '技能中心' },
       { to: '/settings/workflows', icon: Workflow, label: '工作流配置' },
+      { to: '/settings/domains', icon: Globe, label: '领域设置' },
       { to: '/settings/open-interfaces', icon: PlugZap, label: '开放接口' },
     ]},
   ]

@@ -17,7 +17,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from app.database import engine, Base, SessionLocal
 from app.config import settings
-from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit, mcp as mcp_router
+from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit, mcp as mcp_router, domains
 from app.routers import formal as formal_router
 from app.routers import sentinel as sentinel_router
 from app.routers import collectors as collectors_router
@@ -47,8 +47,8 @@ def _seed_db():
     db = SessionLocal()
     try:
         # Import all models to ensure tables are created
-        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, audit_task, mcp
-        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, mcp
+        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, audit_task, mcp, domain
+        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, mcp, domain
         from app.models.v2 import dataset as v2_dataset, pipeline as v2_pipeline, connection as v2_connection  # noqa: F401
         from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine  # noqa: F401
         from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
@@ -346,6 +346,7 @@ app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph"
 app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"])
 app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"])
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
+app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(mcp_router.router, prefix="/api/v1/mcp", tags=["mcp"])
