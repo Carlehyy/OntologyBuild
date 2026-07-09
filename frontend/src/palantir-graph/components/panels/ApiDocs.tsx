@@ -115,7 +115,6 @@ ${functions.map((f) => `POST   /functions/${f.name}  # Call: ${f.displayName}`).
 type Query {
 ${objectTypes.map((o) => `  ${o.name}(id: ID!): ${toPascal(o.name)}
   ${pluralize(o.name)}(filter: ${toPascal(o.name)}Filter, page: PageInput): ${toPascal(o.name)}Connection!`).join('\n')}
-${functions.filter((f) => f.functionType === 'query').map((f) => `  ${f.name}(${f.parameters.map((p) => `${p.name}: ${gqlType(p.type)}`).join(', ')}): ${gqlReturnType(f.returnType)}`).join('\n')}
 }
 
 type Mutation {

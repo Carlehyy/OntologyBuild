@@ -27,7 +27,7 @@ from app.ontologies.formal_modeling.derived import recompute_instance_derived
 from app.ontologies.formal_modeling.validation import validate_model, prune_dangling_data
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
-from app.services.formal.function_engine import test_function
+from app.services.formal.function_engine import test_function, compute_object_set_aggregates
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -940,6 +940,14 @@ def run_test_function(ontology_id: str, body: S.TestFunctionRequest,
     _require_ontology(db, ontology_id)
     result = test_function(db, ontology_id, body)
     return _ok(result)
+
+
+@router.get("/{ontology_id}/object-types/{object_type_id}/aggregates")
+def object_set_aggregates(ontology_id: str, object_type_id: str,
+                          db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """某对象类型的集合指标 —— 跑该类型下所有 object_set 函数并返回结果。"""
+    _require_ontology(db, ontology_id)
+    return _ok(compute_object_set_aggregates(db, ontology_id, object_type_id))
 
 
 # ============================================================

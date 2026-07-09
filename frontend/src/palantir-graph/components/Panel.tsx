@@ -758,7 +758,6 @@ function FunctionPanel({
     { id: 'object', label: '对象函数', desc: '绑定单个对象，计算派生属性', color: 'cyan' },
     { id: 'object_set', label: '集合函数', desc: '面向对象集合的聚合计算', color: 'violet' },
     { id: 'action_validation', label: '校验函数', desc: 'Action 执行前业务校验', color: 'red' },
-    { id: 'query', label: '查询函数', desc: '前端调用的自定义查询/API', color: 'emerald' },
   ];
 
   const returnTypes: PropertyType[] = ['string', 'number', 'boolean', 'date', 'datetime', 'array', 'object'];
@@ -790,8 +789,6 @@ function FunctionPanel({
           return '[o for o in objects if o.status == "active"]';
         case 'action_validation':
           return '(params.quantity or 0) <= 100';
-        case 'query':
-          return '{"total": utils.count(objects)}';
         default:
           return 'object.value';
       }
@@ -803,8 +800,6 @@ function FunctionPanel({
         return '// objectSet: 绑定类型的所有实例数组\n// params: 传入的参数\n// 示例: 过滤低库存\nreturn (objectSet || []).filter(item => item.status === "active");';
       case 'action_validation':
         return '// object: 目标对象（可选）\n// params: Action 参数\n// 返回 { valid: boolean, message?: string } 或 boolean\n// 示例: 校验库存\nif (params.quantity > 100) return { valid: false, message: "数量超过上限" };\nreturn { valid: true };';
-      case 'query':
-        return '// context.allInstances: 所有实例（在 context 中）\n// params: 传入的参数\n// 示例: 查询客户视图\nreturn { total: (context?.allInstances || []).length };';
       default:
         return '// return your value here';
     }
@@ -1054,7 +1049,7 @@ function FunctionPanel({
             <BeakerIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-cyan-500/70" />
             {language === 'expression' ? (
               <div>
-                <div><b>可用变量：</b> <code className="text-cyan-400">object</code>（当前对象属性）、<code className="text-cyan-400">params</code>（参数）、<code className="text-cyan-400">objects</code>（对象集合，集合/查询函数）、<code className="text-cyan-400">utils</code>（sum/avg/count/min/max/round/contains…）</div>
+                <div><b>可用变量：</b> <code className="text-cyan-400">object</code>（当前对象属性）、<code className="text-cyan-400">params</code>（参数）、<code className="text-cyan-400">objects</code>（对象集合，集合函数）、<code className="text-cyan-400">utils</code>（sum/avg/count/min/max/round/contains…）</div>
                 <div><b>写法：</b> 一个表达式即返回值，如 <code>object.score &gt; 80</code>、<code>utils.sum([o.amount for o in objects])</code>；支持 <code>and/or/not</code> 与三元 <code>x if cond else y</code>。</div>
               </div>
             ) : (

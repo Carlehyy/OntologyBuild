@@ -52,7 +52,9 @@ def wrap_scope_value(value: Any) -> Any:
 
 # 允许的 AST 节点
 _ALLOWED_NODES = (
-    ast.Expression, ast.Constant, ast.Name, ast.Load,
+    # Store 仅出现在推导式目标（[x for x in ...]）；eval 模式下赋值语句本就被排除，
+    # 不加它则列表/生成器/字典推导全部报错（含本体 object_set 函数的默认模板）。
+    ast.Expression, ast.Constant, ast.Name, ast.Load, ast.Store,
     ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.IfExp,
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
     ast.USub, ast.UAdd, ast.Not,

@@ -1378,58 +1378,6 @@ return { valid: true };`,
   createdAt: now(), updatedAt: now(),
 };
 
-// --- Query Functions: 前端显式调用的自定义查询/API ---
-const fnQueryCustomerFullView: OntologyFunction = {
-  id: 'fn-customer-full-view',
-  name: 'get_customer_full_view',
-  displayName: '获取客户完整视图',
-  description: '查询客户详情+关联订单数+应收总额+最近联系人',
-  functionType: 'query',
-  language: 'typescript',
-  parameters: [
-    { id: 'fp-cust-code', name: 'customer_code', type: 'string', required: true, description: '客户编码' } as FunctionParameter,
-  ],
-  returnType: 'object',
-  body: `const all = context?.allInstances || [];
-const cust = all.find(i => i.objectTypeId === '${IDS.CUSTOMER}' && i.properties.customer_code === params.customer_code);
-if (!cust) return { error: '客户不存在' };
-const orders = all.filter(i => i.objectTypeId === '${IDS.SALES_ORDER}' && i.properties.customer_id === cust.id);
-const receivables = all.filter(i => i.objectTypeId === '${IDS.RECEIVABLE}' && i.properties.customer_id === cust.id);
-const totalReceivable = receivables.reduce((s, r) => s + (r.properties.balance || 0), 0);
-const contacts = all.filter(i => i.objectTypeId === '${IDS.CUSTOMER_CONTACT}' && i.properties.customer_id === cust.id);
-return {
-  customer: cust.properties,
-  order_count: orders.length,
-  total_order_amount: orders.reduce((s, o) => s + (o.properties.total_amount || 0), 0),
-  total_receivable: totalReceivable,
-  primary_contact: contacts.find(c => c.properties.is_primary)?.properties || contacts[0]?.properties || null,
-};`,
-  enabled: true,
-  cacheStrategy: 'ttl',
-  cacheTTL: 60,
-  createdAt: now(), updatedAt: now(),
-};
-
-const fnQueryOrderTimeline: OntologyFunction = {
-  id: 'fn-order-timeline',
-  name: 'get_order_timeline',
-  displayName: '查询订单时间线',
-  description: '返回订单从创建到交付的完整事件时间线',
-  functionType: 'query',
-  language: 'typescript',
-  parameters: [
-    { id: 'fp-order-id', name: 'order_id', type: 'string', required: true, description: '订单ID' } as FunctionParameter,
-  ],
-  returnType: 'array',
-  body: `const all = context?.allInstances || [];
-const logs = (context?.auditLogs || []).filter(l => l.objectInstanceId === params.order_id);
-const events = logs.map(l => ({ time: l.executedAt, type: l.actionName, status: l.status, operator: 'system' }));
-return events.sort((a, b) => new Date(a.time) - new Date(b.time));`,
-  enabled: true,
-  cacheStrategy: 'none',
-  createdAt: now(), updatedAt: now(),
-};
-
 const tradeErpFunctions: OntologyFunction[] = [
   fnOrderTotalAmount,
   fnInventoryAvailableQty,
@@ -1441,8 +1389,6 @@ const tradeErpFunctions: OntologyFunction[] = [
   fnValidateOrderStock,
   fnValidateCustomerCredit,
   fnValidateShipmentStatus,
-  fnQueryCustomerFullView,
-  fnQueryOrderTimeline,
 ];
 
 // ============================================

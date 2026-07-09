@@ -137,7 +137,7 @@ class FunctionBase(CamelModel):
     name: str
     display_name: str
     description: Optional[str] = None
-    function_type: str = "query"
+    function_type: str = "object"
     language: str = "expression"
     target_object_type_id: Optional[str] = None
     target_action_id: Optional[str] = None

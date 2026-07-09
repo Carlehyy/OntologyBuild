@@ -4,7 +4,7 @@
 执行本体函数 (OntologyFunction)。安全策略：
   - language='expression' → 用 safe_eval 在白名单 AST 沙箱里求值
   - language='typescript'  → 后端不执行（标记为客户端执行），返回提示
-四类：object / object_set / action_validation / query
+三类：object / object_set / action_validation
 """
 from __future__ import annotations
 import time
@@ -27,8 +27,8 @@ def _build_scope(fn: OntologyFunction, db: Session, ontology_id: str,
         "object": obj_props or {},
         "params": params or {},
     }
-    # object_set / query 注入对象集合
-    if fn.function_type in ("object_set", "query", "action_validation"):
+    # object_set / action_validation 注入对象集合
+    if fn.function_type in ("object_set", "action_validation"):
         q = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id)
         if fn.target_object_type_id:
             q = q.filter(ObjectInstance.object_type_id == fn.target_object_type_id)
@@ -93,6 +93,39 @@ def compute_derived_properties(object_type, instance_props: dict, db: Session,
                 r = execute_function(fn, db, ontology_id, obj_props=instance_props)
                 computed[prop["name"]] = r.get("result") if r.get("success") else f"#ERROR: {r.get('error')}"
     return computed
+
+
+def compute_object_set_aggregates(db: Session, ontology_id: str,
+                                  object_type_id: str) -> list[dict[str, Any]]:
+    """某对象类型下所有启用的 object_set 函数的聚合结果（"集合指标"消费端）。
+
+    语言分工与派生属性/校验函数一致：expression 在后端权威求值；
+    typescript 返回 clientSide=True，交前端引擎用已加载实例计算。
+    objects 作用域由 _build_scope 按 target_object_type_id 自动注入。
+    """
+    fns = (db.query(OntologyFunction)
+           .filter(OntologyFunction.ontology_id == ontology_id,
+                   OntologyFunction.function_type == "object_set",
+                   OntologyFunction.target_object_type_id == object_type_id,
+                   OntologyFunction.enabled.is_(True))
+           .order_by(OntologyFunction.created_at.asc())
+           .all())
+    out: list[dict[str, Any]] = []
+    for fn in fns:
+        r = execute_function(fn, db, ontology_id)
+        out.append({
+            "functionId": fn.id,
+            "name": fn.name,
+            "displayName": fn.display_name,
+            "returnType": fn.return_type,
+            "language": fn.language,
+            "success": bool(r.get("success")),
+            "result": r.get("result"),
+            "error": r.get("error"),
+            "clientSide": bool(r.get("clientSide")),
+            "durationMs": r.get("durationMs", 0),
+        })
+    return out
 
 
 def test_function(db: Session, ontology_id: str, body) -> dict[str, Any]:

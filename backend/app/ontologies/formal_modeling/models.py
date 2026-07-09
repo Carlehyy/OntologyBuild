@@ -133,7 +133,7 @@ class OntologyFunction(Base):
     description: Mapped[str] = mapped_column(Text, nullable=True)
 
     # object | object_set | action_validation | query
-    function_type: Mapped[str] = mapped_column(String(30), default="query")
+    function_type: Mapped[str] = mapped_column(String(30), default="object")
     # typescript | expression
     language: Mapped[str] = mapped_column(String(20), default="expression")
 

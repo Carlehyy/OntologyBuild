@@ -442,7 +442,7 @@ export function _engineSelfTest(): string[] {
   // 测试1：简单加法
   const addFn: OntologyFunction = {
     id: '1', name: 'add', displayName: 'Add',
-    functionType: 'query', language: 'typescript',
+    functionType: 'object_set', language: 'typescript',
     parameters: [{ id: 'a', name: 'a', type: 'number', required: true }, { id: 'b', name: 'b', type: 'number', required: true }],
     returnType: 'number',
     body: 'params.a + params.b',

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   XMarkIcon,
   TableCellsIcon,
@@ -10,8 +10,12 @@ import {
   KeyIcon,
   CpuChipIcon,
   ClockIcon,
+  ChartBarIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { useOntologyStore } from '../../store/ontologyStore';
+import { fetchObjectSetAggregates, type ObjectSetAggregate } from '../../api/formalApi';
+import { executeFunction } from '../../engine/functionEngine';
 import InstanceFactsDrawer from './InstanceFactsDrawer';
 import type { ObjectInstance, Property } from '../../types/ontology';
 
@@ -44,6 +48,51 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
   const [factsTarget, setFactsTarget] = useState<{ id: string; label: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ObjectInstance | null>(null);
   const backendId = useOntologyStore((s) => s.backendId);
+
+  // 集合指标（object_set 函数聚合）：expression 走后端权威，typescript 前端引擎兜底
+  const [aggregates, setAggregates] = useState<ObjectSetAggregate[]>([]);
+  const [aggLoading, setAggLoading] = useState(false);
+  const [aggRefresh, setAggRefresh] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const st = useOntologyStore.getState();
+      const type = st.ontology?.objectTypes.find((o) => o.id === selectedTypeId);
+      if (!type || !st.ontology) { setAggregates([]); return; }
+      const objectSetFns = st.ontology.functions.filter(
+        (f) => f.functionType === 'object_set' && f.targetObjectTypeId === type.id && f.enabled,
+      );
+      if (objectSetFns.length === 0) { setAggregates([]); return; }
+      setAggLoading(true);
+      const byId = new Map<string, ObjectSetAggregate>();
+      if (st.backendId) {
+        try {
+          (await fetchObjectSetAggregates(st.backendId, type.id)).forEach((r) => byId.set(r.functionId, r));
+        } catch { /* 离线/未保存：全部走前端引擎兜底 */ }
+      }
+      // TypeScript 函数（clientSide）或无后端连接时：前端引擎用已加载实例计算
+      const objects = st.getInstancesForType(type.id).map((i) => i.properties);
+      for (const fn of objectSetFns) {
+        const remote = byId.get(fn.id);
+        if (remote && !remote.clientSide && remote.success) continue;
+        if (fn.language === 'typescript') {
+          const r = executeFunction(fn, st.ontology, { objects });
+          byId.set(fn.id, {
+            functionId: fn.id, name: fn.name, displayName: fn.displayName,
+            returnType: String(fn.returnType), language: fn.language,
+            success: r.success, result: r.data ?? r.result, error: r.error,
+            clientSide: true, durationMs: r.durationMs ?? 0,
+          });
+        }
+      }
+      if (!cancelled) {
+        setAggregates(objectSetFns.map((f) => byId.get(f.id)).filter(Boolean) as ObjectSetAggregate[]);
+        setAggLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedTypeId, backendId, aggRefresh]);
 
   const objectTypes = ontology?.objectTypes || [];
   const selectedType = objectTypes.find((ot) => ot.id === selectedTypeId);
@@ -213,6 +262,41 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
           </div>
         </div>
 
+        {/* 集合指标条（object_set 聚合） */}
+        {selectedType && aggregates.length > 0 && (
+          <div className="px-6 py-3 border-b border-slate-700/50 bg-slate-900/30">
+            <div className="mb-2 flex items-center gap-2">
+              <ChartBarIcon className="w-4 h-4 text-violet-400" />
+              <span className="text-xs font-medium uppercase tracking-wider text-violet-300">集合指标</span>
+              <span className="text-xs text-gray-600">· 基于 {instances.length} 条实例</span>
+              <button
+                onClick={() => setAggRefresh((n) => n + 1)}
+                className="ml-auto rounded p-1 text-gray-500 hover:text-violet-400 hover:bg-violet-500/10"
+                title="刷新集合指标"
+                aria-label="刷新集合指标"
+              >
+                <ArrowPathIcon className={`w-3.5 h-3.5 ${aggLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {aggregates.map((agg) => (
+                <div
+                  key={agg.functionId}
+                  className="min-w-[120px] rounded-lg border border-slate-700/60 bg-slate-800/50 px-3 py-2"
+                  title={agg.clientSide ? `${agg.name}（前端计算）` : agg.name}
+                >
+                  <div className="truncate text-[11px] text-gray-400">{agg.displayName}</div>
+                  {agg.success ? (
+                    <div className="mt-0.5 font-mono text-lg font-semibold text-violet-300">{formatAggValue(agg.result)}</div>
+                  ) : (
+                    <div className="mt-0.5 truncate text-xs text-red-400/80" title={agg.error}>计算失败</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
           {!selectedType ? (
@@ -373,4 +457,17 @@ function castValue(v: string, type: string): unknown {
   if (type === 'number') return v === '' ? null : Number(v);
   if (type === 'boolean') return v === 'true';
   return v;
+}
+
+/** 集合指标值格式化：数字直显、数组显示项数、对象紧凑 JSON */
+function formatAggValue(v: unknown): string {
+  if (v === null || v === undefined) return '-';
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  if (typeof v === 'boolean') return v ? '是' : '否';
+  if (Array.isArray(v)) return `${v.length} 项`;
+  if (typeof v === 'object') {
+    const s = JSON.stringify(v);
+    return s.length > 40 ? s.slice(0, 40) + '…' : s;
+  }
+  return String(v);
 }

@@ -112,8 +112,7 @@ export interface ActionParameter {
 export type FunctionType =
   | 'object'             // Object Function - 针对单个对象计算派生属性/摘要
   | 'object_set'         // Object Set Function - 面向对象集合批量计算/聚合
-  | 'action_validation'  // Action Validation Function - Action 提交前的业务规则校验
-  | 'query';             // Query Function - 前端可调用的自定义查询/API
+  | 'action_validation'; // Action Validation Function - Action 提交前的业务规则校验
 
 export type FunctionLanguage = 'typescript' | 'expression';
 

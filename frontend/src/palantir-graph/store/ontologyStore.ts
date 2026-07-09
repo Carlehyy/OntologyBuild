@@ -987,7 +987,7 @@ export const useOntologyStore = create<OntologyState>()(
           objectProps = objectPropsOrId;
         }
         const ctx: Record<string, unknown> = {};
-        if (fn.functionType === 'object_set' || fn.functionType === 'query' || fn.functionType === 'action_validation') {
+        if (fn.functionType === 'object_set' || fn.functionType === 'action_validation') {
           ctx.allInstances = state.ontology.instances;
           ctx.auditLogs = state.ontology.executionLogs;
         }

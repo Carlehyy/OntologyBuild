@@ -205,6 +205,31 @@ export async function testFunctionRemote(
   return apiClientV2.post<FunctionExecutionResult>(`${base(id)}/test-function`, body);
 }
 
+// ============ 集合指标（object_set 函数聚合结果） ============
+export interface ObjectSetAggregate {
+  functionId: string;
+  name: string;
+  displayName: string;
+  returnType: string;
+  language: 'typescript' | 'expression';
+  success: boolean;
+  result: unknown;
+  error?: string;
+  /** true=后端未执行（TypeScript 函数），需前端引擎计算 */
+  clientSide: boolean;
+  durationMs: number;
+}
+
+/** GET /object-types/:otid/aggregates — 该类型下所有 object_set 函数的后端聚合结果 */
+export async function fetchObjectSetAggregates(
+  id: string,
+  objectTypeId: string,
+): Promise<ObjectSetAggregate[]> {
+  const data = await apiClientV2.get<ObjectSetAggregate[]>(
+    `${base(id)}/object-types/${objectTypeId}/aggregates`);
+  return data || [];
+}
+
 /** GET /logs — 后端权威 Action 执行日志（最近 200 条） */
 export async function listExecutionLogs(id: string): Promise<ActionExecutionLog[]> {
   const data = await apiClientV2.get<any[]>(`${base(id)}/logs`);

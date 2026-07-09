@@ -8,7 +8,6 @@ import {
   CubeIcon,
   Squares2X2Icon,
   ShieldCheckIcon,
-  MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { useOntologyStore } from '../../store/ontologyStore';
 import type { FunctionType } from '../../types/ontology';
@@ -17,7 +16,6 @@ const functionTypeMeta: Record<FunctionType, { label: string; icon: React.Elemen
   object: { label: '对象函数', icon: CubeIcon, color: 'text-cyan-400', bgColor: 'bg-cyan-500/20' },
   object_set: { label: '集合函数', icon: Squares2X2Icon, color: 'text-violet-400', bgColor: 'bg-violet-500/20' },
   action_validation: { label: '校验函数', icon: ShieldCheckIcon, color: 'text-red-400', bgColor: 'bg-red-500/20' },
-  query: { label: '查询函数', icon: MagnifyingGlassIcon, color: 'text-emerald-400', bgColor: 'bg-emerald-500/20' },
 };
 
 interface FunctionListProps {
@@ -111,7 +109,7 @@ export default function FunctionList({ onTestFunction, isOpen, onClose }: Functi
                 </div>
               ) : (
                 functions.map((fn) => {
-                  const meta = functionTypeMeta[fn.functionType];
+                  const meta = functionTypeMeta[fn.functionType] ?? functionTypeMeta.object;
                   const MetaIcon = meta.icon;
                   return (
                     <div

@@ -71,7 +71,7 @@ export default function PropertyEditor({
 
   // 获取可用于派生属性绑定的 object functions
   const objectFunctions = ontology?.functions.filter(
-    (f) => f.functionType === 'object' || f.functionType === 'query'
+    (f) => f.functionType === 'object'
   ) || [];
 
   return (
