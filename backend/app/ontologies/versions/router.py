@@ -170,6 +170,9 @@ def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
 
     # 更新项目版本号
     project.version = new_version
+    # 发布版本后，项目状态同步为"已发布"
+    if project.status != "published":
+        project.status = "published"
 
     # 记录审计
     audit = AuditLog(

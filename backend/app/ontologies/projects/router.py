@@ -4,8 +4,7 @@ from sqlalchemy import func
 from typing import Optional
 from app.deps import get_db, get_current_user
 from app.models.ontology import OntologyProject
-from app.models.entity import Entity
-from app.models.relation import Relation
+from app.models.ontology_formal import ObjectType, LinkType
 from app.models.user import User
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
 import uuid
@@ -26,8 +25,8 @@ def list_ontologies(
     result = []
     for item in items:
         d = OntologyListItem.model_validate(item).model_dump()
-        d['entity_count'] = db.query(func.count(Entity.id)).filter(Entity.ontology_id == item.id).scalar() or 0
-        d['relation_count'] = db.query(func.count(Relation.id)).filter(Relation.ontology_id == item.id).scalar() or 0
+        d['entity_count'] = db.query(func.count(ObjectType.id)).filter(ObjectType.ontology_id == item.id).scalar() or 0
+        d['relation_count'] = db.query(func.count(LinkType.id)).filter(LinkType.ontology_id == item.id).scalar() or 0
         result.append(d)
     return {"data": {"items": result, "total": total, "page": page, "page_size": page_size}}
 
