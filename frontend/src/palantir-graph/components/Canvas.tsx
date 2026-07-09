@@ -23,6 +23,7 @@ import {
 
 import { useOntologyStore } from '../store/ontologyStore';
 import ObjectTypeNode from './nodes/ObjectTypeNode';
+import MultiConnectionEdge from './edges/MultiConnectionEdge';
 import ConnectLinkDialog from './ConnectLinkDialog';
 import DeleteSelectedDialog, { type DeleteTarget } from './DeleteSelectedDialog';
 
@@ -30,8 +31,12 @@ const nodeTypes = {
   objectType: ObjectTypeNode,
 };
 
+const edgeTypes = {
+  multi: MultiConnectionEdge,
+};
+
 const defaultEdgeOptions = {
-  type: 'smoothstep',
+  type: 'multi',
   animated: true,
   style: { stroke: '#06b6d4', strokeWidth: 2 },
   markerEnd: {
@@ -47,27 +52,37 @@ interface CanvasProps {
   readOnly?: boolean;
 }
 
-/** 同一对节点间的多条边错开偏移，避免平行边完全重叠 */
+/** 相邻平行边顶点之间的间距(px) */
+const PARALLEL_SPACING = 42;
+
+/**
+ * 同一对节点间的多条边错开偏移，避免平行边完全重叠。
+ *
+ * 交给自定义边 `multi`（MultiConnectionEdge）按 `data.__offset` 弯出不同弧度：
+ * - 无向分组：A→B 与 B→A 归为同组一起散开；
+ * - 偏移量以 0 为中心对称展开（1 条→0；2 条→±½;3 条→-1/0/1 …）；
+ * - 反向边(source 非规范首节点)法线方向相反，翻转符号保证同组分列两侧不叠。
+ */
 function offsetParallelEdges(edges: Edge[]): Edge[] {
   const groups = new Map<string, Edge[]>();
   for (const e of edges) {
-    // 无向分组：A→B 与 B→A 也算同组，一起错开
     const key = [e.source, e.target].sort().join('::');
     const arr = groups.get(key) || [];
     arr.push(e);
     groups.set(key, arr);
   }
   const out: Edge[] = [];
-  for (const arr of groups.values()) {
-    if (arr.length === 1) {
-      out.push({ ...arr[0], type: 'smoothstep' });
-      continue;
-    }
+  for (const [key, arr] of groups.entries()) {
+    const canonicalFirst = key.split('::')[0]; // = min(source, target)
+    const n = arr.length;
     arr.forEach((e, i) => {
+      const signed = (i - (n - 1) / 2) * PARALLEL_SPACING;
+      const flip = e.source !== canonicalFirst;
+      const offset = flip ? -signed : signed;
       out.push({
         ...e,
-        type: 'smoothstep',
-        pathOptions: { offset: 24 + i * 22 },
+        type: 'multi',
+        data: { ...(e.data as Record<string, unknown>), __offset: offset },
       } as Edge);
     });
   }
@@ -104,7 +119,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
       id: lt.id,
       source: lt.sourceObjectTypeId,
       target: lt.targetObjectTypeId,
-      type: 'smoothstep',
+      type: 'multi',
       data: lt as unknown as Record<string, unknown>,
       label: lt.displayName,
     }));
@@ -307,6 +322,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
         onEdgeContextMenu={onEdgeContextMenu}
         onPaneContextMenu={onPaneContextMenu}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         connectionMode={ConnectionMode.Loose}
         nodesDraggable={!readOnly}
