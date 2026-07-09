@@ -14,6 +14,7 @@ import DeleteSelectedDialog, { type DeleteTarget } from '../../../palantir-graph
 import ActionList from '../../../palantir-graph/components/panels/ActionList';
 import FunctionList from '../../../palantir-graph/components/panels/FunctionList';
 import LinkList from '../../../palantir-graph/components/panels/LinkList';
+import ObjectList from '../../../palantir-graph/components/panels/ObjectList';
 import SentinelPanel from '../../../palantir-graph/components/panels/SentinelPanel';
 import { FloatingMenu } from '../../../palantir-graph/components/FloatingMenu';
 
@@ -53,6 +54,7 @@ export default function OntologyGraphPage() {
   const [showActionPanel, setShowActionPanel] = useState(false);
   const [showFunctionPanel, setShowFunctionPanel] = useState(false);
   const [showLinkPanel, setShowLinkPanel] = useState(false);
+  const [showObjectPanel, setShowObjectPanel] = useState(false);
   const [showSentinel, setShowSentinel] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
@@ -188,6 +190,8 @@ export default function OntologyGraphPage() {
           showFunctions={showFunctionPanel}
           onToggleLinks={() => setShowLinkPanel(v => !v)}
           showLinks={showLinkPanel}
+          onToggleObjects={() => setShowObjectPanel(v => !v)}
+          showObjects={showObjectPanel}
         />
         <main className="h-full pt-16">
           <Canvas
@@ -202,6 +206,7 @@ export default function OntologyGraphPage() {
         <ActionList onRunAction={openActionRun} isOpen={showActionPanel} onClose={() => setShowActionPanel(false)} />
         <FunctionList onTestFunction={openFunctionTest} isOpen={showFunctionPanel} onClose={() => setShowFunctionPanel(false)} />
         <LinkList isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
+        <ObjectList isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />
         <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />
 
         {showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
