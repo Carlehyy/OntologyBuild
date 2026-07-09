@@ -502,26 +502,18 @@ export default function ModelsPage() {
                     </button>
                   </div>
 
-                  {/* 运行状态 */}
-                  <div className="flex items-center gap-2 mt-3.5">
+                  {/* 运行状态 + 最近调用（精确到秒，与状态标识同行垂直居中；空间不足时整体折行、不截断） */}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-3.5">
                     <span
-                      className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full"
+                      className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
                       style={{ background: runMeta.bg, color: runMeta.color }}
                     >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: runMeta.dot }} />
                       {runMeta.label}
                     </span>
-                    {/* 测试状态（临时） */}
-                    {status === 'testing' && (
-                      <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                        <Loader2 size={10} className="animate-spin" />测试中
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 最近调用 —— 精确到秒的绝对时间 */}
-                  <div className="mt-2 text-[11px] text-slate-400">
-                    最近调用 <span className="text-slate-500 tabular-nums">{summary.lastCall}</span>
+                    <span className="text-[11px] text-slate-400 whitespace-nowrap">
+                      最近调用 <span className="text-slate-500 tabular-nums">{summary.lastCall}</span>
+                    </span>
                   </div>
 
                   {/* 指标 */}
@@ -558,7 +550,7 @@ export default function ModelsPage() {
                   <button
                     onClick={() => handleTest(m.id)}
                     disabled={status === 'testing'}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all disabled:opacity-50 ${
+                    className={`inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all disabled:opacity-50 ${
                       status === 'testing' ? 'bg-blue-50 text-blue-600' :
                       status === 'success' ? 'bg-emerald-50 text-emerald-600' :
                       status === 'error' ? 'bg-red-50 text-red-600' :
@@ -573,10 +565,16 @@ export default function ModelsPage() {
                   </button>
                   <button
                     onClick={() => { setDetailModel(m); setDrawerTestStatus('idle'); setDrawerTestResult('') }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
+                    className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
                   >
                     <BarChart3 size={11} /> 详情
                   </button>
+                  {/* 测试中（临时）—— 紧跟详情按钮右侧 */}
+                  {status === 'testing' && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 shrink-0">
+                      <Loader2 size={10} className="animate-spin" />测试中
+                    </span>
+                  )}
                   {!isDefault && (
                     <button
                       onClick={async () => {
@@ -587,7 +585,7 @@ export default function ModelsPage() {
                           addToast('error', `"${m.name}" 设置默认失败`)
                         }
                       }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                      className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
                     >
                       <Star size={11} /> 默认
                     </button>

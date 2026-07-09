@@ -12,13 +12,14 @@ interface ModelHeatStripProps {
  */
 export default function ModelHeatStrip({ cells, height = 16 }: ModelHeatStripProps) {
   return (
-    <div className="flex gap-0.5">
+    // flex-1 让 60 格按容器宽度等分铺满；不设 minWidth，避免格子总宽超过卡片导致右侧溢出被裁切
+    <div className="flex gap-px">
       {cells.map((c, i) => (
         <span
           key={i}
           title={c.title}
-          className="flex-1 rounded-[2px]"
-          style={{ height, background: c.color, minWidth: 3 }}
+          className="flex-1 min-w-0 rounded-[1px]"
+          style={{ height, background: c.color }}
         />
       ))}
     </div>
