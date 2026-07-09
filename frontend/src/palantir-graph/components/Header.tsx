@@ -24,9 +24,11 @@ interface HeaderProps {
   onToggleFunctions?: () => void;
   showActions?: boolean;
   showFunctions?: boolean;
+  onToggleLinks?: () => void;
+  showLinks?: boolean;
 }
 
-export default function Header({ onToggleActions, onToggleFunctions, showActions, showFunctions }: HeaderProps) {
+export default function Header({ onToggleActions, onToggleFunctions, showActions, showFunctions, onToggleLinks, showLinks }: HeaderProps) {
   const { ontology, syncStatus, isDirty, syncError, saveToBackend, discardAndReload, lastSentinelSummary } = useOntologyStore();
 
   if (!ontology) return null;
@@ -57,7 +59,15 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
 
         <div className="order-3 flex w-full items-center justify-center gap-2 overflow-x-auto pb-1 md:order-none md:w-auto md:flex-none md:overflow-visible md:pb-0 md:justify-self-center">
           <StatBadge icon={CubeIcon} label="对象实体" value={stats.objects} color="indigo" />
-          <StatBadge icon={LinkIcon} label="实体关系" value={stats.links} color="cyan" />
+          <button onClick={onToggleLinks} className="flex">
+            <StatBadge
+              icon={LinkIcon}
+              label="实体关系"
+              value={stats.links}
+              color="cyan"
+              active={showLinks}
+            />
+          </button>
           <button onClick={onToggleActions} className="flex">
             <StatBadge
               icon={BoltIcon}

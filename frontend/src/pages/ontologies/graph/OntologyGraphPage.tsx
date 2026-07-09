@@ -13,6 +13,7 @@ import SearchPalette from '../../../palantir-graph/components/SearchPalette';
 import DeleteSelectedDialog, { type DeleteTarget } from '../../../palantir-graph/components/DeleteSelectedDialog';
 import ActionList from '../../../palantir-graph/components/panels/ActionList';
 import FunctionList from '../../../palantir-graph/components/panels/FunctionList';
+import LinkList from '../../../palantir-graph/components/panels/LinkList';
 import SentinelPanel from '../../../palantir-graph/components/panels/SentinelPanel';
 import { FloatingMenu } from '../../../palantir-graph/components/FloatingMenu';
 
@@ -51,6 +52,7 @@ export default function OntologyGraphPage() {
   const [showApiDocs, setShowApiDocs] = useState(false);
   const [showActionPanel, setShowActionPanel] = useState(false);
   const [showFunctionPanel, setShowFunctionPanel] = useState(false);
+  const [showLinkPanel, setShowLinkPanel] = useState(false);
   const [showSentinel, setShowSentinel] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
@@ -184,6 +186,8 @@ export default function OntologyGraphPage() {
           onToggleFunctions={() => setShowFunctionPanel(v => !v)}
           showActions={showActionPanel}
           showFunctions={showFunctionPanel}
+          onToggleLinks={() => setShowLinkPanel(v => !v)}
+          showLinks={showLinkPanel}
         />
         <main className="h-full pt-16">
           <Canvas
@@ -197,6 +201,7 @@ export default function OntologyGraphPage() {
         <Panel />
         <ActionList onRunAction={openActionRun} isOpen={showActionPanel} onClose={() => setShowActionPanel(false)} />
         <FunctionList onTestFunction={openFunctionTest} isOpen={showFunctionPanel} onClose={() => setShowFunctionPanel(false)} />
+        <LinkList isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
         <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />
 
         {showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
