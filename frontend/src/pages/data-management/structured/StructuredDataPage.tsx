@@ -67,6 +67,10 @@ export default function StructuredDataPage() {
     }, { replace: true })
   }
 
+  const toggleView = () => {
+    switchTab(activeTab === 'curated' ? 'raw' : 'curated')
+  }
+
   return (
     <div className="space-y-4">
       {/* 页头 */}
@@ -80,29 +84,84 @@ export default function StructuredDataPage() {
         </p>
       </div>
 
-      {/* Tab 切换 */}
-      <div className="flex items-center gap-1 border-b border-gray-200">
-        {([
-          ['curated', '成品数据集', <Table2 size={13} key="i" />],
-          ['raw', '人工数据集', <Database size={13} key="i" />],
-        ] as [LakeTab, string, React.ReactNode][]).map(([key, label, icon]) => (
+      {/* 顶部数据流卡片：SVG 数据流图 + 切换视图按钮 */}
+      <div className="flex items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 px-5 py-4 shadow-sm/50">
+        {/* 左侧 SVG 数据流图 */}
+        <svg
+          viewBox="0 0 720 72"
+          className="w-full max-w-[680px] h-auto shrink"
+          style={{ minWidth: 480 }}
+        >
+          {/* ===== 节点 1：数据流水线 ===== */}
+          <g onClick={() => navigate('/data/pipelines')} style={{ cursor: 'pointer' }}>
+            <rect x="0" y="8" width="130" height="56" rx="10" ry="10"
+              fill="#f0fdfa" stroke="#0d9488" strokeWidth="1.5" />
+            <circle cx="22" cy="36" r="10" fill="#0d9488" opacity="0.15" />
+            <text x="22" y="40" textAnchor="middle" fontSize="11" fill="#0d9488">⚙</text>
+            <text x="42" y="32" fontSize="12" fontWeight="600" fill="#134e4a">数据流水线</text>
+            <text x="42" y="48" fontSize="10" fill="#5eead4">Pipeline</text>
+          </g>
+
+          {/* 箭头 1→2 */}
+          <line x1="134" y1="36" x2="164" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
+          <polygon points="162,31 172,36 162,41" fill="#cbd5e1" />
+
+          {/* ===== 节点 2：数据任务池 ===== */}
+          <g onClick={() => navigate('/data/pipelines/sync-tasks')} style={{ cursor: 'pointer' }}>
+            <rect x="176" y="8" width="130" height="56" rx="10" ry="10"
+              fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
+            <circle cx="198" cy="36" r="10" fill="#3b82f6" opacity="0.15" />
+            <text x="198" y="40" textAnchor="middle" fontSize="11" fill="#3b82f6">📋</text>
+            <text x="218" y="32" fontSize="12" fontWeight="600" fill="#1e40af">数据任务池</text>
+            <text x="218" y="48" fontSize="10" fill="#93c5fd">Sync Tasks</text>
+          </g>
+
+          {/* 箭头 2→3 */}
+          <line x1="310" y1="36" x2="340" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
+          <polygon points="338,31 348,36 338,41" fill="#cbd5e1" />
+
+          {/* ===== 节点 3：数据资产湖（当前页，高亮） ===== */}
+          <g style={{ cursor: 'default' }}>
+            <rect x="352" y="4" width="140" height="64" rx="12" ry="12"
+              fill="#ecfdf5" stroke="#10b981" strokeWidth="2.5" />
+            <circle cx="376" cy="36" r="11" fill="#10b981" opacity="0.2" />
+            <text x="376" y="40" textAnchor="middle" fontSize="12" fill="#10b981">📊</text>
+            <text x="396" y="30" fontSize="12" fontWeight="700" fill="#065f46">数据资产湖</text>
+            <text x="396" y="47" fontSize="10" fill="#6ee7b7">Data Lake</text>
+            {/* 当前页角标 */}
+            <rect x="452" y="4" width="40" height="16" rx="0" ry="0"
+              fill="#10b981" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 12px 100%, 0 50%, 12px 0)' }} />
+            <text x="476" y="15" textAnchor="middle" fontSize="9" fontWeight="600" fill="white">当前</text>
+          </g>
+
+          {/* 箭头 3→4 */}
+          <line x1="496" y1="36" x2="526" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
+          <polygon points="524,31 534,36 524,41" fill="#cbd5e1" />
+
+          {/* ===== 节点 4：本体模型 ===== */}
+          <g onClick={() => navigate('/ontologies')} style={{ cursor: 'pointer' }}>
+            <rect x="538" y="8" width="130" height="56" rx="10" ry="10"
+              fill="#faf5ff" stroke="#8b5cf6" strokeWidth="1.5" />
+            <circle cx="560" cy="36" r="10" fill="#8b5cf6" opacity="0.15" />
+            <text x="560" y="40" textAnchor="middle" fontSize="11" fill="#8b5cf6">🧠</text>
+            <text x="580" y="32" fontSize="12" fontWeight="600" fill="#5b21b6">本体模型</text>
+            <text x="580" y="48" fontSize="10" fill="#c4b5fd">Ontology</text>
+          </g>
+        </svg>
+
+        {/* 右侧：切换视图按钮 */}
+        <div className="shrink-0 flex flex-col items-end gap-1">
           <button
-            key={key}
-            onClick={() => switchTab(key)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 -mb-px transition-colors ${
-              activeTab === key
-                ? 'border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] font-medium'
-                : 'border-transparent text-gray-500 hover:text-gray-800'
-            }`}
+            onClick={toggleView}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-sm font-medium rounded-lg hover:bg-teal-50 active:scale-95 transition-all duration-150 shadow-sm"
           >
-            {icon} {label}
+            <RefreshCw size={14} className={activeTab === 'raw' ? 'rotate-180 transition-transform' : 'transition-transform'} />
+            切换数据集视图
           </button>
-        ))}
-        <span className="ml-auto text-xs text-gray-400 pb-2">
-          {activeTab === 'curated'
-            ? '流水线每次运行会把产物追加为新版本；在本体管理中可绑定已审核的成品数据集灌入实例数据'
-            : '上传或在线编辑即可更新数据（每次保存生成新版本）；声明主键后可直接被本体映射灌入'}
-        </span>
+          <span className="text-xs text-gray-400">
+            当前：<span className="font-medium text-gray-600">{activeTab === 'curated' ? '成品数据集' : '人工数据集'}</span>
+          </span>
+        </div>
       </div>
 
       {activeTab === 'raw'
