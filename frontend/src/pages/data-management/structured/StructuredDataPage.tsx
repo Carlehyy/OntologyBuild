@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Search, CheckCircle, AlertTriangle, Clock,
+  CheckCircle, AlertTriangle, Clock,
   X, Loader2, Trash2, Table2, RefreshCw,
   Eye, XCircle,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
 import curatedApi from '@/api/v2/curated'
 import type { CuratedDataset } from '@/api/v2/curated'
+import { syncTasksApi, type SyncTask } from '@/api/v2/sync-tasks'
 import CuratedDetailPanel from './CuratedDetailPanel'
 import RawDatasetsView from './RawDatasetsView'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -67,9 +68,20 @@ export default function StructuredDataPage() {
     }, { replace: true })
   }
 
-  const toggleView = () => {
-    switchTab(activeTab === 'curated' ? 'raw' : 'curated')
-  }
+  // 视图切换 Tab 滑动指示器
+  const viewTabsRef = useRef<HTMLDivElement>(null)
+  const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0 })
+  useEffect(() => {
+    const container = viewTabsRef.current
+    if (!container) return
+    const activeBtn = container.querySelector(`[data-tab-value="${activeTab}"]`) as HTMLElement | null
+    if (!activeBtn) return
+    const cr = container.getBoundingClientRect()
+    const br = activeBtn.getBoundingClientRect()
+    setTabIndicator({ left: br.left - cr.left, width: br.width })
+  }, [activeTab])
+
+  const TABS: [LakeTab, string][] = [['curated', '成品数据集'], ['raw', '人工数据集']]
 
   return (
     <div className="flex flex-col h-full space-y-3">
@@ -140,15 +152,29 @@ export default function StructuredDataPage() {
           </g>
         </svg>
 
-        {/* 右侧：切换视图按钮 */}
+        {/* 右侧：视图切换 Tab */}
         <div className="shrink-0">
-          <button
-            onClick={toggleView}
-            className="flex items-center gap-2 px-4 py-2.5 bg-teal-50 border-2 border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-sm font-medium rounded-lg hover:bg-teal-100 active:scale-95 transition-all duration-150 shadow-sm"
+          <div
+            ref={viewTabsRef}
+            className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5"
           >
-            <RefreshCw size={14} className={activeTab === 'raw' ? 'rotate-180 transition-transform' : 'transition-transform'} />
-            切换数据集视图
-          </button>
+            <div
+              className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-[var(--color-nav-bg)] shadow-sm transition-all duration-300 ease-out"
+              style={{ left: `${tabIndicator.left}px`, width: `${tabIndicator.width}px` }}
+            />
+            {TABS.map(([key, label]) => (
+              <button
+                key={key}
+                data-tab-value={key}
+                onClick={() => switchTab(key)}
+                className={`relative z-10 px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors duration-200 ${
+                  activeTab === key ? 'text-white' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -168,10 +194,11 @@ function CuratedView() {
   const [searchParams] = useSearchParams()
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
+  const [syncTasks, setSyncTasks] = useState<SyncTask[]>([])
   const [curated, setCurated] = useState<CuratedDataset[]>([])
   const [loading, setLoading] = useState(true)
   const [pipelineFilter, setPipelineFilter] = useState(searchParams.get('pipeline') || '')
-  const [curatedFilter, setCuratedFilter] = useState('')
+  const [taskFilter, setTaskFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
 
   const [panelRow, setPanelRow] = useState<Row | null>(null)
@@ -184,9 +211,11 @@ function CuratedView() {
     setLoading(true)
     Promise.all([
       pipelinesApi.list(),
+      syncTasksApi.list(),
       curatedApi.list() as Promise<CuratedDataset[]>,
-    ]).then(([pls, cur]) => {
+    ]).then(([pls, tasksResp, cur]) => {
       setPipelines(Array.isArray(pls) ? pls : [])
+      setSyncTasks(tasksResp?.items ?? [])
       setCurated(Array.isArray(cur) ? cur : [])
     }).catch(() => {}).finally(() => setLoading(false))
   }
@@ -223,16 +252,31 @@ function CuratedView() {
     return rows
   }, [pipelines, curated])
 
+  // 已发布状态的流水线（用于筛选下拉）
+  const publishedPipelines = useMemo(() =>
+    pipelines.filter(p => p.status === 'published'),
+  [pipelines])
+
+  // 选中任务关联的流水线 ID
+  const taskPipelineId = useMemo(() => {
+    if (!taskFilter) return null
+    return syncTasks.find(t => t.id === taskFilter)?.trigger_pipeline_id || null
+  }, [taskFilter, syncTasks])
+
   const filtered = useMemo(() => {
-    const pq = pipelineFilter.toLowerCase()
-    const cq = curatedFilter.toLowerCase()
     return allRows.filter(r => {
-      if (pq && !r.pipelineName.toLowerCase().includes(pq) && !r.pipelineId.toLowerCase().includes(pq)) return false
-      if (cq && !r.curatedName.toLowerCase().includes(cq) && !r.curatedId.toLowerCase().includes(cq)) return false
+      if (pipelineFilter && r.pipelineId !== pipelineFilter) return false
+      if (taskPipelineId && r.pipelineId !== taskPipelineId) return false
       if (statusFilter && r.curatedStatus !== statusFilter) return false
       return true
     })
-  }, [allRows, pipelineFilter, curatedFilter, statusFilter])
+  }, [allRows, pipelineFilter, taskPipelineId, statusFilter])
+
+  const clearFilters = () => {
+    setPipelineFilter('')
+    setTaskFilter('')
+    setStatusFilter('')
+  }
 
   const handleStatusChange = (id: string, newStatus: string) => {
     setCurated(prev => prev.map(c => c.id === id ? { ...c, status: newStatus } : c))
@@ -284,34 +328,31 @@ function CuratedView() {
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
       {/* 筛选 */}
       <div className="shrink-0 flex gap-3 flex-wrap items-center px-5 pt-4 pb-3 border-b border-gray-100">
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={pipelineFilter}
-            onChange={e => setPipelineFilter(e.target.value)}
-            placeholder="按流水线筛选..."
-            className="pl-8 pr-7 py-1.5 border rounded-lg text-sm w-60"
-          />
-          {pipelineFilter && (
-            <button onClick={() => setPipelineFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        <div className="relative">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={curatedFilter}
-            onChange={e => setCuratedFilter(e.target.value)}
-            placeholder="按数据集名称筛选..."
-            className="pl-8 pr-7 py-1.5 border rounded-lg text-sm w-60"
-          />
-          {curatedFilter && (
-            <button onClick={() => setCuratedFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
-              <X size={12} />
-            </button>
-          )}
-        </div>
+        {/* 按流水线筛选（仅已发布） */}
+        <select
+          value={pipelineFilter}
+          onChange={e => setPipelineFilter(e.target.value)}
+          className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
+        >
+          <option value="">全部已发布流水线</option>
+          {publishedPipelines.map(pl => (
+            <option key={pl.id} value={pl.id}>{pl.name}</option>
+          ))}
+        </select>
+
+        {/* 按数据任务筛选 */}
+        <select
+          value={taskFilter}
+          onChange={e => setTaskFilter(e.target.value)}
+          className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
+        >
+          <option value="">全部数据任务</option>
+          {syncTasks.map(t => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+
+        {/* 审核状态 */}
         <select
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
@@ -322,7 +363,17 @@ function CuratedView() {
           <option value="approved">已审核</option>
           <option value="rejected">已拒绝</option>
         </select>
-        <span className="text-xs text-gray-400">共 {filtered.length} 条</span>
+
+        {/* 清除筛选 */}
+        {(pipelineFilter || taskFilter || statusFilter) && (
+          <button
+            onClick={clearFilters}
+            className="flex items-center gap-1 text-xs text-red-500 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+          >
+            <X size={11} /> 清除筛选
+          </button>
+        )}
+
         <button onClick={load} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
           <RefreshCw size={12} /> 刷新
         </button>
