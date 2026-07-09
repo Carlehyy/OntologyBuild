@@ -314,12 +314,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
             >
               在线新建表格
             </button>
-            <button
-              onClick={() => navigate('/data/pipelines/sync-tasks')}
-              className="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 text-gray-600"
-            >
-              去任务池创建同步任务
-            </button>
           </div>
         </div>
       ) : (
