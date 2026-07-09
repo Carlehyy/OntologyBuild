@@ -188,6 +188,11 @@ def delete_conversation(conversation_id: str, db: Session = Depends(get_db),
 @router.get("/pipelines")
 def list_pipeline_records(include_archived: bool = Query(False),
                           db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """受管流水线面板：只列数据管家可编排的流水线 —— 未发布 且 未启用。
+
+    发布即封版、编排移交编辑向导；已发布或 n8n 侧已激活的流水线超出管家职权
+    （同 require_orchestrable 口径），到「数据流水线」列表管理，不在此面板出现。
+    """
     q = db.query(N8nPipeline)
     if not include_archived:
         q = q.filter(N8nPipeline.status != STATUS_ARCHIVED)
@@ -201,8 +206,14 @@ def list_pipeline_records(include_archived: bool = Query(False),
             active_map[str(wf.get("id"))] = bool(wf.get("active"))
     except Exception:  # noqa: BLE001
         pass
-    return _ok([service.record_out(db, r, active=active_map.get(r.n8n_workflow_id))
-                for r in records])
+
+    # 只保留可编排的：未发布（影子流水线 status != published）且未启用（n8n active != True）。
+    # active 未知（n8n 不可达）时按未启用放行，与 require_orchestrable 探测失败即放行同口径。
+    out = [service.record_out(db, r, active=active_map.get(r.n8n_workflow_id))
+           for r in records]
+    out = [o for o in out
+           if o["pipelineStatus"] != "published" and o.get("active") is not True]
+    return _ok(out)
 
 
 class BootstrapBody(BaseModel):

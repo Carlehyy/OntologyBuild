@@ -179,12 +179,13 @@ export default function DataStewardPage() {
     stewardApi.status().then(setStatus).catch(() => setStatus(null))
   }, [])
 
-  const loadRecords = useCallback(() => {
-    setRecordsLoading(true)
-    stewardApi.pipelines()
+  // silent=true 用于后台轮询：不切 loading 态、失败也不清空面板，避免闪烁/闪空
+  const loadRecords = useCallback((opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setRecordsLoading(true)
+    return stewardApi.pipelines()
       .then(res => setRecords(Array.isArray(res) ? res : []))
-      .catch(() => setRecords([]))
-      .finally(() => setRecordsLoading(false))
+      .catch(() => { if (!opts?.silent) setRecords([]) })
+      .finally(() => { if (!opts?.silent) setRecordsLoading(false) })
   }, [])
 
   const loadConversations = useCallback(() => {
@@ -194,6 +195,27 @@ export default function DataStewardPage() {
   useEffect(() => { loadStatus(); loadRecords(); loadConversations() }, [loadStatus, loadRecords, loadConversations])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => () => abortRef.current?.abort(), [])
+
+  // 受管流水线面板尽量实时：HTTP 轮询（非 WebSocket）——数据管家或流水线列表新建/
+  // 改动流水线后，无需手动刷新即可反映可编排的那批。仅在标签页可见时轮询，切回时立即刷新一次。
+  useEffect(() => {
+    const POLL_MS = 10_000
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      if (stopped) return
+      if (document.visibilityState === 'visible') await loadRecords({ silent: true })
+      if (!stopped) timer = setTimeout(tick, POLL_MS)   // 上一轮完成后再排下一轮，避免重叠
+    }
+    timer = setTimeout(tick, POLL_MS)
+    const onVisible = () => { if (document.visibilityState === 'visible') loadRecords({ silent: true }) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [loadRecords])
 
   const resetChat = () => {
     abortRef.current?.abort()
@@ -466,11 +488,6 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
   onExpand: (id: string | null) => void
   onChanged: () => void
 }) {
-  const grouped = {
-    draft: records.filter(r => r.pipelineStatus !== 'published'),
-    published: records.filter(r => r.pipelineStatus === 'published'),
-  }
-
   return (
     <aside className="flex xl:flex-1 xl:min-w-0 shrink-0 flex-col bg-white border overflow-hidden max-xl:max-h-[42%] max-xl:min-h-[180px]">
       <div className="flex items-center justify-between border-b px-4 py-3">
@@ -489,27 +506,22 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
         ) : records.length === 0 ? (
           <div className="border-2 border-dashed rounded-xl p-8 text-center text-gray-400 space-y-2">
             <Workflow size={28} className="mx-auto opacity-30" />
-            <p className="text-sm">还没有受管的 n8n 流水线</p>
+            <p className="text-sm">还没有可编排的 n8n 流水线</p>
             <p className="text-xs">在左侧对话里让数据管家新建一条试试</p>
           </div>
         ) : (
-          ([
-            ['draft', '未发布（编排中）'],
-            ['published', '已发布（编排封版）'],
-          ] as const).map(([key, title]) => grouped[key].length > 0 && (
-            <div key={key}>
-              <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">{title} · {grouped[key].length}</p>
-              <div className="space-y-2">
-                {grouped[key].map(r => (
-                  <RecordCard
-                    key={r.id} record={r}
-                    expanded={expandedId === r.id}
-                    onToggle={() => onExpand(expandedId === r.id ? null : r.id)}
-                  />
-                ))}
-              </div>
+          <div>
+            <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">未发布（编排中） · {records.length}</p>
+            <div className="space-y-2">
+              {records.map(r => (
+                <RecordCard
+                  key={r.id} record={r}
+                  expanded={expandedId === r.id}
+                  onToggle={() => onExpand(expandedId === r.id ? null : r.id)}
+                />
+              ))}
             </div>
-          ))
+          </div>
         )}
       </div>
     </aside>

@@ -342,6 +342,31 @@ def test_delete_pipeline_archives_record(
     assert all(item["id"] != rid for item in r.json()["data"])
 
 
+def test_panel_lists_only_orchestrable(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """受管流水线面板只列可编排的（未发布 且 未启用）——与 require_orchestrable 同口径：
+    草稿可见 → 发布（封版+激活）后隐藏 → 撤回发布恢复 → n8n 侧漂移激活也隐藏。"""
+    rid = draft_record.id
+    panel_ids = lambda: [item["id"] for item in
+                         client.get("/api/v2/steward/pipelines", headers=auth_headers).json()["data"]]
+
+    # 未发布未启用 → 面板可见
+    assert rid in panel_ids()
+
+    # 发布 → 封版 + n8n 激活 → 从面板消失（改到流水线列表管理）
+    assert _publish(client, auth_headers, draft_record.pipeline_id, enable=True).status_code == 200
+    assert rid not in panel_ids()
+
+    # 撤回发布回草稿（未发布 且 未启用）→ 面板恢复可见
+    assert client.post(f"/api/v2/pipelines/{draft_record.pipeline_id}/unpublish",
+                       headers=auth_headers).status_code == 200
+    assert rid in panel_ids()
+
+    # 漂移：影子仍未发布，但有人在 n8n 侧手动激活 → 也从面板隐藏
+    fake_n8n.activate_workflow(draft_record.n8n_workflow_id)
+    assert rid not in panel_ids()
+
+
 # ── 编排工具边界 ──────────────────────────────────────────────────
 
 def test_update_validates_connections(db, fake_n8n, draft_record):
