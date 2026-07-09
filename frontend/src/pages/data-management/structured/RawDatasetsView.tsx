@@ -219,7 +219,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       {/* 工具行 */}
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-gray-400">
-          人工数据集由你上传并持续维护（改单元格 / 增删行都会生成新版本）；声明主键后可直接被本体映射灌入。同步任务落地的数据暂列于此，将随流水线改造迁移
+          人工数据集由你上传并持续维护（改单元格 / 增删行都会生成新版本）；声明主键后可直接被本体映射灌入
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={load} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
@@ -387,15 +387,10 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                               上传新版本
                             </button>
                           )}
-                          {ds.source === 'sync' && (
-                            <button
-                              onClick={() => navigate('/data/pipelines/sync-tasks')}
-                              className="flex items-center gap-1 text-xs px-2 py-1.5 border rounded-lg hover:bg-gray-50 text-gray-600"
-                              title="该数据集由同步任务维护，数据更新请到任务池触发同步"
-                            >
-                              <Repeat size={12} /> 去任务池同步
-                            </button>
-                          )}
+                          {/*
+                            旧版同步任务（DataSyncTask）已废弃，sync 数据集为遗留数据。
+                            用户如需同类数据，请通过新版任务池（PipelineTask）重建。
+                          */}
                           <button
                             onClick={() => setDeleteTarget(ds)}
                             className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
