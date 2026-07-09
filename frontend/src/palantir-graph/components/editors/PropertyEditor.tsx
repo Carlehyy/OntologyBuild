@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { PlusIcon, TrashIcon, KeyIcon } from '@heroicons/react/24/outline';
 import type { Property, PropertyType } from '../../types/ontology';
 import { useOntologyStore } from '../../store/ontologyStore';
+import { sanitizeIdentifier } from '../../utils/identifier';
 
 interface PropertyEditorProps {
   properties: Property[];
@@ -23,7 +24,6 @@ const propertyTypes: { value: PropertyType; label: string }[] = [
   { value: 'datetime', label: '日期时间' },
   { value: 'array', label: '数组' },
   { value: 'object', label: '对象' },
-  { value: 'reference', label: '引用' },
 ];
 
 export default function PropertyEditor({
@@ -87,7 +87,7 @@ export default function PropertyEditor({
         </button>
       </div>
 
-      <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+      <div className="space-y-3">
         {properties.length === 0 ? (
           <div className="text-center py-8 text-surface-500 text-sm">
             暂无属性，点击上方按钮添加
@@ -110,11 +110,11 @@ export default function PropertyEditor({
                       value={prop.name}
                       onChange={(e) =>
                         updateProperty(prop.id, {
-                          name: e.target.value.replace(/\s/g, '_').toLowerCase(),
+                          name: sanitizeIdentifier(e.target.value),
                         })
                       }
                       className="input-field text-xs font-mono py-1.5"
-                      placeholder="属性名"
+                      placeholder="属性标识"
                     />
                     <input
                       type="text"

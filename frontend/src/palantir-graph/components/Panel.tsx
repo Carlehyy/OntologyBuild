@@ -6,6 +6,7 @@ import ParameterEditor from './editors/ParameterEditor';
 import RuleEditor from './editors/RuleEditor';
 import FunctionParameterEditor from './editors/FunctionParameterEditor';
 import type { Property, ActionParameter, ActionRule, OntologyFunction, FunctionParameter, FunctionType, FunctionLanguage, CacheStrategy as FunctionCacheStrategy, PropertyType } from '../types/ontology';
+import { sanitizeIdentifier } from '../utils/identifier';
 
 // Color options for objects
 const colorOptions = [
@@ -184,18 +185,18 @@ function ObjectTypePanel({
         {/* Basic Info */}
         <div className="space-y-4">
           <div>
-            <label className="input-label">类型名称 *</label>
+            <label className="input-label">实体标识 *</label>
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value.replace(/\s/g, '_').toLowerCase())}
+              onChange={(e) => setName(sanitizeIdentifier(e.target.value))}
               className="input-field font-mono"
               placeholder="object_entity_name"
             />
           </div>
-          
+
           <div>
-            <label className="input-label">显示名称 *</label>
+            <label className="input-label">实体名称 *</label>
             <input
               type="text"
               value={displayName}
@@ -204,9 +205,9 @@ function ObjectTypePanel({
               placeholder="对象实体显示名称"
             />
           </div>
-          
+
           <div>
-            <label className="input-label">描述</label>
+            <label className="input-label">实体描述</label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -218,8 +219,6 @@ function ObjectTypePanel({
 
         {/* Appearance */}
         <div className="space-y-4">
-          <h4 className="text-sm font-medium text-surface-300">外观</h4>
-          
           <div>
             <label className="input-label">颜色</label>
             <div className="flex gap-2 flex-wrap">
@@ -397,8 +396,6 @@ function LinkTypePanel({
   const [description, setDescription] = useState(existingLink?.description || '');
   const [sourceObjectTypeId, setSourceObjectTypeId] = useState(existingLink?.sourceObjectTypeId || '');
   const [targetObjectTypeId, setTargetObjectTypeId] = useState(existingLink?.targetObjectTypeId || '');
-  const [sourceRole, setSourceRole] = useState(existingLink?.sourceRole || '');
-  const [targetRole, setTargetRole] = useState(existingLink?.targetRole || '');
   const [properties, setProperties] = useState<Property[]>(existingLink?.properties || []);
   const [cardinality, setCardinality] = useState<'one-to-one' | 'one-to-many' | 'many-to-one' | 'many-to-many'>(
     existingLink?.cardinality || 'one-to-many'
@@ -411,8 +408,6 @@ function LinkTypePanel({
       setDescription(existingLink.description || '');
       setSourceObjectTypeId(existingLink.sourceObjectTypeId);
       setTargetObjectTypeId(existingLink.targetObjectTypeId);
-      setSourceRole(existingLink.sourceRole || '');
-      setTargetRole(existingLink.targetRole || '');
       setProperties(existingLink.properties || []);
       setCardinality(existingLink.cardinality);
     }
@@ -422,27 +417,23 @@ function LinkTypePanel({
     if (!name || !displayName || !sourceObjectTypeId || !targetObjectTypeId) return;
 
     if (mode === 'create') {
-      addLinkType({ 
-        name, 
-        displayName, 
-        description, 
-        sourceObjectTypeId, 
-        targetObjectTypeId, 
+      addLinkType({
+        name,
+        displayName,
+        description,
+        sourceObjectTypeId,
+        targetObjectTypeId,
         cardinality,
-        sourceRole,
-        targetRole,
         properties,
       });
     } else if (selectedId) {
-      updateLinkType(selectedId, { 
-        name, 
-        displayName, 
-        description, 
-        sourceObjectTypeId, 
-        targetObjectTypeId, 
+      updateLinkType(selectedId, {
+        name,
+        displayName,
+        description,
+        sourceObjectTypeId,
+        targetObjectTypeId,
         cardinality,
-        sourceRole,
-        targetRole,
         properties,
       });
     }
@@ -543,29 +534,6 @@ function LinkTypePanel({
               <option value="many-to-one">多对一</option>
               <option value="many-to-many">多对多</option>
             </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="input-label">源端角色名</label>
-              <input
-                type="text"
-                value={sourceRole}
-                onChange={(e) => setSourceRole(e.target.value)}
-                className="input-field"
-                placeholder="例如：订单"
-              />
-            </div>
-            <div>
-              <label className="input-label">目标端角色名</label>
-              <input
-                type="text"
-                value={targetRole}
-                onChange={(e) => setTargetRole(e.target.value)}
-                className="input-field"
-                placeholder="例如：供应商"
-              />
-            </div>
           </div>
         </div>
 
@@ -1171,16 +1139,13 @@ function PanelFooter({
       ) : (
         <div />
       )}
-      <div className="flex flex-col items-end gap-1">
-        <button
-          onClick={onSave}
-          className="btn-primary"
-          disabled={saveDisabled}
-        >
-          应用到画布
-        </button>
-        <span className="text-[11px] text-surface-500">应用后需点击顶部“保存全部更改”入库</span>
-      </div>
+      <button
+        onClick={onSave}
+        className="btn-primary"
+        disabled={saveDisabled}
+      >
+        应用到画布
+      </button>
     </div>
   );
 }
