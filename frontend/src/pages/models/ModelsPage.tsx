@@ -343,7 +343,7 @@ export default function ModelsPage() {
 
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex items-center gap-3 bg-white rounded-xl border border-slate-200 px-4 py-3 flex-wrap mb-5 shadow-sm/50">
-        <div className="relative w-full sm:w-96">
+        <div className="relative w-full sm:w-64">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={searchQuery}

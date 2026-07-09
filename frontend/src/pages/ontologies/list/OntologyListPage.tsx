@@ -102,10 +102,13 @@ export default function OntologyListPage() {
             </Button>
           )}
           <div className="ml-auto">
-            <Button onClick={() => navigate('/ontologies/new')}>
-              <Plus size={16} />
+            <button
+              onClick={() => navigate('/ontologies/new')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-white bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
+            >
+              <Plus size={14} />
               新建本体
-            </Button>
+            </button>
           </div>
         </div>
         {hasFilters && (
