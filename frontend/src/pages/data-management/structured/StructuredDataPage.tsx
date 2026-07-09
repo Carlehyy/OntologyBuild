@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Search, CheckCircle, AlertTriangle, Clock,
-  X, Loader2, Trash2, Table2, Database, RefreshCw, Waves,
+  X, Loader2, Trash2, Table2, RefreshCw,
   Eye, XCircle,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
@@ -72,101 +72,92 @@ export default function StructuredDataPage() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* 页头 */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-          <Waves size={20} className="text-[var(--color-nav-bg)]" />
-          数据资产湖
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          两类一等数据资产：<b>成品数据集</b>（流水线加工后的产物：手动执行与任务池调度都沉淀于此）与<b>人工数据集</b>（上传文件或在线建表、由用户持续维护的表格，声明主键后可直接作为本体对象的数据来源）
-        </p>
-      </div>
-
+    <div className="flex flex-col h-full space-y-3">
       {/* 顶部数据流卡片：SVG 数据流图 + 切换视图按钮 */}
-      <div className="flex items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 px-5 py-4 shadow-sm/50">
+      <div className="shrink-0 flex items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 px-5 py-3 shadow-sm/50">
         {/* 左侧 SVG 数据流图 */}
         <svg
-          viewBox="0 0 720 72"
-          className="w-full max-w-[680px] h-auto shrink"
-          style={{ minWidth: 480 }}
+          viewBox="0 0 740 72"
+          className="w-full max-w-[700px] h-auto shrink"
+          style={{ minWidth: 500 }}
         >
           {/* ===== 节点 1：数据流水线 ===== */}
           <g onClick={() => navigate('/data/pipelines')} style={{ cursor: 'pointer' }}>
-            <rect x="0" y="8" width="130" height="56" rx="10" ry="10"
+            <rect x="0" y="4" width="140" height="64" rx="10" ry="10"
               fill="#f0fdfa" stroke="#0d9488" strokeWidth="1.5" />
-            <circle cx="22" cy="36" r="10" fill="#0d9488" opacity="0.15" />
-            <text x="22" y="40" textAnchor="middle" fontSize="11" fill="#0d9488">⚙</text>
-            <text x="42" y="32" fontSize="12" fontWeight="600" fill="#134e4a">数据流水线</text>
-            <text x="42" y="48" fontSize="10" fill="#5eead4">Pipeline</text>
+            <circle cx="24" cy="28" r="10" fill="#0d9488" opacity="0.15" />
+            <text x="24" y="32" textAnchor="middle" fontSize="11" fill="#0d9488">⚙</text>
+            <text x="44" y="24" fontSize="12" fontWeight="600" fill="#134e4a">数据流水线</text>
+            <text x="44" y="40" fontSize="9" fill="#5eead4">系统流水线 / n8n流水线</text>
+            <text x="44" y="54" fontSize="9" fill="#99f6e4">Pipeline</text>
           </g>
 
           {/* 箭头 1→2 */}
-          <line x1="134" y1="36" x2="164" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
-          <polygon points="162,31 172,36 162,41" fill="#cbd5e1" />
+          <line x1="144" y1="36" x2="174" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
+          <polygon points="172,31 182,36 172,41" fill="#cbd5e1" />
 
           {/* ===== 节点 2：数据任务池 ===== */}
           <g onClick={() => navigate('/data/pipelines/sync-tasks')} style={{ cursor: 'pointer' }}>
-            <rect x="176" y="8" width="130" height="56" rx="10" ry="10"
+            <rect x="186" y="8" width="130" height="56" rx="10" ry="10"
               fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
-            <circle cx="198" cy="36" r="10" fill="#3b82f6" opacity="0.15" />
-            <text x="198" y="40" textAnchor="middle" fontSize="11" fill="#3b82f6">📋</text>
-            <text x="218" y="32" fontSize="12" fontWeight="600" fill="#1e40af">数据任务池</text>
-            <text x="218" y="48" fontSize="10" fill="#93c5fd">Sync Tasks</text>
+            <circle cx="208" cy="36" r="10" fill="#3b82f6" opacity="0.15" />
+            <text x="208" y="40" textAnchor="middle" fontSize="11" fill="#3b82f6">📋</text>
+            <text x="228" y="32" fontSize="12" fontWeight="600" fill="#1e40af">数据任务池</text>
+            <text x="228" y="48" fontSize="10" fill="#93c5fd">Sync Tasks</text>
           </g>
 
           {/* 箭头 2→3 */}
-          <line x1="310" y1="36" x2="340" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
-          <polygon points="338,31 348,36 338,41" fill="#cbd5e1" />
+          <line x1="320" y1="36" x2="350" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
+          <polygon points="348,31 358,36 348,41" fill="#cbd5e1" />
 
           {/* ===== 节点 3：数据资产湖（当前页，高亮） ===== */}
           <g style={{ cursor: 'default' }}>
-            <rect x="352" y="4" width="140" height="64" rx="12" ry="12"
+            <rect x="362" y="2" width="150" height="68" rx="12" ry="12"
               fill="#ecfdf5" stroke="#10b981" strokeWidth="2.5" />
-            <circle cx="376" cy="36" r="11" fill="#10b981" opacity="0.2" />
-            <text x="376" y="40" textAnchor="middle" fontSize="12" fill="#10b981">📊</text>
-            <text x="396" y="30" fontSize="12" fontWeight="700" fill="#065f46">数据资产湖</text>
-            <text x="396" y="47" fontSize="10" fill="#6ee7b7">Data Lake</text>
+            <circle cx="388" cy="28" r="11" fill="#10b981" opacity="0.2" />
+            <text x="388" y="32" textAnchor="middle" fontSize="12" fill="#10b981">📊</text>
+            <text x="410" y="22" fontSize="12" fontWeight="700" fill="#065f46">数据资产湖</text>
+            <text x="410" y="37" fontSize="9" fill="#6ee7b7">成品数据集 / 人工数据集</text>
+            <text x="410" y="52" fontSize="9" fill="#a7f3d0">Data Lake</text>
             {/* 当前页角标 */}
-            <rect x="452" y="4" width="40" height="16" rx="0" ry="0"
-              fill="#10b981" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 12px 100%, 0 50%, 12px 0)' }} />
-            <text x="476" y="15" textAnchor="middle" fontSize="9" fontWeight="600" fill="white">当前</text>
+            <rect x="463" y="2" width="49" height="17" rx="0" ry="0"
+              fill="#10b981" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 14px 100%, 0 50%, 14px 0)' }} />
+            <text x="489" y="14" textAnchor="middle" fontSize="9" fontWeight="600" fill="white">当前</text>
           </g>
 
           {/* 箭头 3→4 */}
-          <line x1="496" y1="36" x2="526" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
-          <polygon points="524,31 534,36 524,41" fill="#cbd5e1" />
+          <line x1="516" y1="36" x2="546" y2="36" stroke="#cbd5e1" strokeWidth="1.5" />
+          <polygon points="544,31 554,36 544,41" fill="#cbd5e1" />
 
           {/* ===== 节点 4：本体模型 ===== */}
           <g onClick={() => navigate('/ontologies')} style={{ cursor: 'pointer' }}>
-            <rect x="538" y="8" width="130" height="56" rx="10" ry="10"
+            <rect x="558" y="8" width="130" height="56" rx="10" ry="10"
               fill="#faf5ff" stroke="#8b5cf6" strokeWidth="1.5" />
-            <circle cx="560" cy="36" r="10" fill="#8b5cf6" opacity="0.15" />
-            <text x="560" y="40" textAnchor="middle" fontSize="11" fill="#8b5cf6">🧠</text>
-            <text x="580" y="32" fontSize="12" fontWeight="600" fill="#5b21b6">本体模型</text>
-            <text x="580" y="48" fontSize="10" fill="#c4b5fd">Ontology</text>
+            <circle cx="580" cy="36" r="10" fill="#8b5cf6" opacity="0.15" />
+            <text x="580" y="40" textAnchor="middle" fontSize="11" fill="#8b5cf6">🧠</text>
+            <text x="600" y="32" fontSize="12" fontWeight="600" fill="#5b21b6">本体模型</text>
+            <text x="600" y="48" fontSize="10" fill="#c4b5fd">Ontology</text>
           </g>
         </svg>
 
         {/* 右侧：切换视图按钮 */}
-        <div className="shrink-0 flex flex-col items-end gap-1">
+        <div className="shrink-0">
           <button
             onClick={toggleView}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-sm font-medium rounded-lg hover:bg-teal-50 active:scale-95 transition-all duration-150 shadow-sm"
+            className="flex items-center gap-2 px-4 py-2.5 bg-teal-50 border-2 border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-sm font-medium rounded-lg hover:bg-teal-100 active:scale-95 transition-all duration-150 shadow-sm"
           >
             <RefreshCw size={14} className={activeTab === 'raw' ? 'rotate-180 transition-transform' : 'transition-transform'} />
             切换数据集视图
           </button>
-          <span className="text-xs text-gray-400">
-            当前：<span className="font-medium text-gray-600">{activeTab === 'curated' ? '成品数据集' : '人工数据集'}</span>
-          </span>
         </div>
       </div>
 
-      {activeTab === 'raw'
-        ? <RawDatasetsView focusDatasetId={focusDatasetId} />
-        : <CuratedView />}
+      {/* 下方内容区域 —— 单页展示，内容区可滚动 */}
+      <div className="flex-1 min-h-0">
+        {activeTab === 'raw'
+          ? <RawDatasetsView focusDatasetId={focusDatasetId} />
+          : <CuratedView />}
+      </div>
     </div>
   )
 }
@@ -290,9 +281,9 @@ function CuratedView() {
   if (loading) return <p className="text-gray-400 text-sm p-6">加载中...</p>
 
   return (
-    <div className="space-y-4">
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
       {/* 筛选 */}
-      <div className="flex gap-3 flex-wrap items-center">
+      <div className="shrink-0 flex gap-3 flex-wrap items-center px-5 pt-4 pb-3 border-b border-gray-100">
         <div className="relative">
           <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -337,7 +328,8 @@ function CuratedView() {
         </button>
       </div>
 
-      {/* 表格 */}
+      {/* 表格 — 可滚动 */}
+      <div className="flex-1 overflow-y-auto px-5 py-3">
       {allRows.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Table2 size={32} className="mx-auto opacity-30" />
@@ -460,6 +452,7 @@ function CuratedView() {
           </table>
         </div>
       )}
+      </div>
 
       {/* 详情面板 */}
       {panelRow && (

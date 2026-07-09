@@ -199,11 +199,12 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   }
 
   return (
-    <div className="space-y-4">
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
       <input ref={newFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleNewUpload} />
       <input ref={versionFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleVersionUpload} />
 
-      {/* 工具行 */}
+      {/* 工具行 + 提示条 */}
+      <div className="shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 space-y-2">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-gray-400">
           人工数据集由你上传文件或在线建表，并持续维护（改单元格 / 增删行都会生成新版本）；声明主键后可直接被本体映射灌入
@@ -243,8 +244,10 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           </div>
         </div>
       )}
+      </div>
 
-      {/* 列表 */}
+      {/* 列表 — 可滚动 */}
+      <div className="flex-1 overflow-y-auto px-5 py-3">
       {loading ? (
         <div className="text-gray-400 text-sm p-8 text-center">加载中...</div>
       ) : items.length === 0 ? (
@@ -452,6 +455,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           </table>
         </div>
       )}
+      </div>
 
       {/* 在线新建表格 */}
       {createOpen && (
