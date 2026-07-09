@@ -66,13 +66,14 @@ function emptySummary(model: ModelConfig | undefined): ModelSummary {
 
 function formatLastCall(iso: string | null): string {
   if (!iso) return '—'
-  const then = new Date(iso).getTime()
-  const now = Date.now()
-  const sec = Math.floor((now - then) / 1000)
-  if (sec < 60) return '刚刚'
-  if (sec < 3600) return `${Math.floor(sec / 60)}分钟前`
-  if (sec < 86400) return `${Math.floor(sec / 3600)}小时前`
-  return `${Math.floor(sec / 86400)}天前`
+  // 后端时间戳存的是 UTC。若序列化结果不带时区信息（SQLite 读回为 naive），
+  // 按 UTC 解析，避免被 new Date 当成本地时间导致 8 小时偏差。
+  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso)
+  const d = new Date(hasTz ? iso : `${iso}Z`)
+  if (Number.isNaN(d.getTime())) return '—'
+  const p = (n: number) => String(n).padStart(2, '0')
+  // 展示为本地时区的绝对时间，精确到秒
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
 export function useMockModels() {

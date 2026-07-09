@@ -502,7 +502,7 @@ export default function ModelsPage() {
                     </button>
                   </div>
 
-                  {/* 运行状态 + 最近调用 */}
+                  {/* 运行状态 */}
                   <div className="flex items-center gap-2 mt-3.5">
                     <span
                       className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full"
@@ -511,14 +511,17 @@ export default function ModelsPage() {
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: runMeta.dot }} />
                       {runMeta.label}
                     </span>
-                    <span className="text-[11px] text-slate-300">·</span>
-                    <span className="text-[11px] text-slate-400 whitespace-nowrap">最近调用 {summary.lastCall}</span>
                     {/* 测试状态（临时） */}
                     {status === 'testing' && (
                       <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
                         <Loader2 size={10} className="animate-spin" />测试中
                       </span>
                     )}
+                  </div>
+
+                  {/* 最近调用 —— 精确到秒的绝对时间 */}
+                  <div className="mt-2 text-[11px] text-slate-400">
+                    最近调用 <span className="text-slate-500 tabular-nums">{summary.lastCall}</span>
                   </div>
 
                   {/* 指标 */}

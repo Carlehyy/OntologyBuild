@@ -1,3 +1,24 @@
+def test_stats_last_call_is_utc_aware(client, auth_headers, db):
+    """最近调用时间必须带 UTC 时区，避免前端把 naive 时间戳当本地时间(东八区差 8 小时)。"""
+    import datetime
+    from app.model_configs.models import ModelCallLog
+
+    cfg = client.post("/api/v1/models", json={
+        "name": "TZ", "provider": "compatible", "models": ["m"],
+    }, headers=auth_headers).json()["data"]
+
+    # 模拟 SQLite 读回的 naive UTC 时间戳
+    db.add(ModelCallLog(
+        id="tz-log-1", model_config_id=cfg["id"], model_name="m", provider="compatible",
+        status="success", latency_ms=1200,
+        created_at=datetime.datetime(2026, 7, 9, 17, 20, 13),
+    ))
+    db.commit()
+
+    stats = client.get(f"/api/v1/models/{cfg['id']}/stats", headers=auth_headers).json()["data"]
+    assert stats["lastCall"] == "2026-07-09T17:20:13+00:00"
+
+
 def test_create_model(client, auth_headers):
     r = client.post("/api/v1/models",
                     json={"name": "GPT-4o", "provider": "openai", "api_key": "sk-test",

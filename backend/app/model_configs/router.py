@@ -34,6 +34,20 @@ def _model_out(config: ModelConfig) -> dict:
     return data
 
 
+def _iso_utc(dt) -> str | None:
+    """序列化时间戳并标注 UTC 时区。
+
+    created_at 存的是 UTC，但 SQLite 读回为 naive datetime，直接 isoformat()
+    会丢失时区，前端 new Date() 会误当本地时间解析（如东八区偏移 8 小时）。
+    这里为 naive 值补上 UTC 时区，保证输出带 +00:00 偏移。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 @router.get("")
 def list_models(db: Session = Depends(get_db), _=Depends(get_current_user)):
     configs = db.query(ModelConfig).order_by(ModelConfig.updated_at.desc()).all()
@@ -290,7 +304,7 @@ def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_
             "todayCalls": today_calls,
             "availability": f"{availability}" if availability is not None else None,
             "avgLatency": avg_latency,
-            "lastCall": last_call.created_at.isoformat() if last_call else None,
+            "lastCall": _iso_utc(last_call.created_at) if last_call else None,
             "successRate": round(success_30d / total_30d * 100, 1) if total_30d > 0 else None,
             "heatCells": heat_cells,
         }
