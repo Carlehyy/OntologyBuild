@@ -14,7 +14,7 @@ from app.exploration.models import ExplorationSession
 
 _FIELD_DOC = """元素字段约定（name 用英文 snake_case/PascalCase 标识符，中文放 display_name）：
 - object: {name, display_name, description, key_attribute(业务主键属性名), attributes: [{name, display_name, type_hint(如 文本/数字/金额/日期/是否), required, enum?, notes?}], relations: [{target(对象名), name?, display_name(如 归属于), cardinality(one-to-one|one-to-many|many-to-one|many-to-many)?, description?}]}
-- actor: {name, display_name, kind(person|org|system|role), description, responsibilities: [str]}
+- actor: {name, display_name, kind(person|org|system|role), description, responsibilities: [str], attributes: [{name, display_name, type_hint, required, enum?, notes?}], key_attribute(业务主键属性名)?} —— person/org 类主体是数据实体，务必给出识别与档案属性（如编码、名称、联系方式、状态）；system/role 类可省略 attributes
 - behavior: {name, display_name, actor(主体名), object(对象名), trigger(触发条件), inputs: [{name, display_name, type_hint, required}], outcome(结果), constraints: [str], needs_approval(bool)}
 - event: {name, display_name, description, source(行为名|external|time), payload: [str], consequences: [str]}
 - rule: {name, display_name, kind(constraint|validation|derivation|approval|alert), applies_to(对象/行为名), statement(规则表述), error_message?}

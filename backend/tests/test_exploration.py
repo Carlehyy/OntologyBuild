@@ -215,6 +215,33 @@ def test_document_generation_without_llm(client, auth_headers, session, db):
 # ---------------------------------------------------------------- 转化管线（确定性单测）
 
 
+def test_converter_actor_carries_attributes():
+    """person/org 主体是数据实体：attributes 应透传为对象类型属性（根治「主体只有名称」）；
+    system 主体不建对象；person/org 空属性触发 completeness 缺口（质量关）。"""
+    cv = C.empty_canvas()
+    cv, _, errs = C.upsert_elements(cv, "actor", [
+        {"name": "Seller", "displayName": "卖家", "kind": "person",
+         "responsibilities": ["发布商品", "发货"], "keyAttribute": "shop_name",
+         "attributes": [
+             {"name": "shop_name", "displayName": "店铺名", "typeHint": "文本", "required": True},
+             {"name": "credit_score", "displayName": "信誉分", "typeHint": "数字"},
+         ]},
+        {"name": "Sys", "displayName": "系统", "kind": "system"},
+    ])
+    assert not errs
+    draft, _ = CV.build_draft(cv)
+    ot = {o["name"]: o for o in draft["objectTypes"]}
+    assert "Seller" in ot and "Sys" not in ot           # system 主体不建对象
+    names = {p["name"] for p in ot["Seller"]["properties"]}
+    assert {"shop_name", "credit_score"} <= names        # 属性透传，不再只有 name
+    assert ot["Seller"]["primaryKey"] == "shop_name"     # 业务主键取自 keyAttribute
+
+    # 质量关：person/org 主体空属性 → 缺口，驱动 agent 追问
+    cv2, _, _ = C.upsert_elements(C.empty_canvas(), "actor",
+                                  [{"name": "Buyer", "displayName": "买家", "kind": "person"}])
+    assert any("买家" in g and "属性" in g for g in C.completeness(cv2)["gaps"])
+
+
 def test_converter_deterministic_mapping():
     draft, report = CV.build_draft(_demo_canvas())
 

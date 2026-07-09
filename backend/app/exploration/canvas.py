@@ -64,6 +64,9 @@ class BusinessObject(_El):
 class Actor(_El):
     kind: str = "role"                   # person | org | system | role
     responsibilities: list[str] = Field(default_factory=list)
+    # 参与方(person/org)本身也是数据实体 —— 转换后与对象同为 ObjectType，故也带属性
+    attributes: list[AttributeSpec] = Field(default_factory=list)
+    key_attribute: Optional[str] = None  # 业务主键属性名
 
 
 class Behavior(_El):
@@ -213,6 +216,11 @@ def completeness(canvas: Any) -> dict:
         for r in o.get("relations") or []:
             if norm_name(r.get("target", "")) not in obj_names:
                 gaps.append(f"对象「{o.get('name')}」的关系指向未定义的对象「{r.get('target')}」")
+    for a in c["actors"]:
+        # person/org 类主体是数据实体，应像对象一样有属性（system/role 可无）
+        if (a.get("kind") or "role") in ("person", "org") and not a.get("attributes"):
+            label = a.get("display_name") or a.get("name")
+            gaps.append(f"主体「{label}」是 {a.get('kind')} 类数据实体，还没有属性（如编码/名称/联系方式/状态）")
     for b in c["behaviors"]:
         if not b.get("actor"):
             gaps.append(f"行为「{b.get('name')}」缺少执行主体")
@@ -255,7 +263,9 @@ def canvas_summary(canvas: Any, max_items: int = 30) -> str:
             elif kind == "rule":
                 extra = f"[{x.get('kind', '')}→{x.get('applies_to') or '?'}]"
             elif kind == "actor":
-                extra = f"[{x.get('kind', '')}]"
+                attrs = [a.get("name", "") for a in (x.get("attributes") or [])]
+                extra = f"[{x.get('kind', '')}]" \
+                        + (f"({', '.join(attrs[:12])}{'…' if len(attrs) > 12 else ''})" if attrs else "")
             parts.append(f"{name}{extra} (id={x.get('id')})")
         suffix = f" …共{len(items)}项" if len(items) > max_items else ""
         lines.append(f"- {KIND_LABELS[kind]}模型({len(items)}): " + "; ".join(parts) + suffix)

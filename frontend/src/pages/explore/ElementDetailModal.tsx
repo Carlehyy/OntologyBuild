@@ -334,11 +334,25 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
     const k = ACTOR_KIND[str(el.kind)] || { label: str(el.kind) || '角色', Icon: UserCog }
     const KI = k.Icon
     const resp = asArr<string>(el.responsibilities)
+    const attrs = asArr<AttrRow>(el.attributes)
+    const keyName = str(el.key_attribute)
+    const isDataActor = ['person', 'org'].includes(str(el.kind))
     return (
       <>
         <span className="inline-flex items-center gap-1.5 rounded-lg bg-violet-50 px-2.5 py-1.5 text-sm font-medium text-violet-700">
           <KI size={14} /> {k.label}
         </span>
+        {(attrs.length > 0 || isDataActor) && (
+          <Section icon={Rows3} title="属性" count={attrs.length || undefined}>
+            {attrs.length ? (
+              <div className="space-y-1.5">
+                {attrs.map((a, i) => (
+                  <AttrCard key={i} attr={a} isKey={!!keyName && norm(a.name) === norm(keyName)} />
+                ))}
+              </div>
+            ) : <Empty text="尚未定义属性 —— person/org 主体也是数据实体，建议补充识别/档案属性" />}
+          </Section>
+        )}
         {resp.length > 0 && (
           <Section icon={ListChecks} title="职责" count={resp.length}><Checklist items={resp} /></Section>
         )}
@@ -474,6 +488,10 @@ function HeaderStats({ sectionKey, el }: { sectionKey: CanvasKey; el: CanvasElem
   } else if (sectionKey === 'actors') {
     const k = ACTOR_KIND[str(el.kind)]
     if (k) pills.push({ icon: k.Icon, text: k.label })
+    const a = asArr(el.attributes).length
+    const r = asArr(el.responsibilities).length
+    if (a) pills.push({ text: `${a} 属性` })
+    if (r) pills.push({ text: `${r} 职责` })
   } else if (sectionKey === 'behaviors') {
     if (el.needs_approval) pills.push({ icon: ShieldCheck, text: '需审批' })
     const inputs = asArr(el.inputs).length

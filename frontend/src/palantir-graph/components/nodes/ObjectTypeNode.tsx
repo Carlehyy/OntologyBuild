@@ -77,7 +77,7 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
             className="flex items-center justify-between gap-2 text-sm"
           >
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              {prop.id === data.primaryKey && (
+              {(prop.id === data.primaryKey || prop.name === data.primaryKey) && (
                 <KeyIcon className="w-3.5 h-3.5 text-yellow-500 flex-shrink-0" />
               )}
               <span className={`truncate ${prop.required ? 'text-surface-200' : 'text-surface-400'}`}>

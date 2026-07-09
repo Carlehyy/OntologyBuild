@@ -30,7 +30,11 @@ function elementBadges(key: keyof BusinessCanvas, el: CanvasElement): string[] {
     if (rels) badges.push(`${rels} 关系`)
     if (el.key_attribute) badges.push(`主键 ${el.key_attribute}`)
   } else if (key === 'actors') {
+    const attrs = (el.attributes as unknown[] | undefined)?.length || 0
+    const resp = (el.responsibilities as unknown[] | undefined)?.length || 0
     if (el.kind) badges.push(String(el.kind))
+    if (attrs) badges.push(`${attrs} 属性`)
+    if (resp) badges.push(`${resp} 职责`)
   } else if (key === 'behaviors') {
     if (el.actor) badges.push(String(el.actor))
     if (el.object) badges.push(`→ ${el.object}`)

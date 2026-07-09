@@ -97,7 +97,7 @@ export default function PropertyEditor({
             <div
               key={prop.id}
               className={`rounded-lg border p-3 transition-colors ${
-                showPrimaryKey && primaryKey === prop.id
+                showPrimaryKey && (primaryKey === prop.id || primaryKey === prop.name)
                   ? 'border-onto-500/50 bg-onto-500/5'
                   : 'border-surface-700 bg-surface-800/30'
               }`}
@@ -182,7 +182,7 @@ export default function PropertyEditor({
                         <button
                           onClick={() => onPrimaryKeyChange?.(prop.id)}
                           className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
-                            primaryKey === prop.id
+                            (primaryKey === prop.id || primaryKey === prop.name)
                               ? 'bg-onto-500/20 text-onto-400'
                               : 'text-surface-500 hover:text-onto-400'
                           }`}
@@ -342,7 +342,7 @@ export default function PropertyEditor({
           <p className="text-xs text-surface-500">
             主键属性：
             <span className="text-onto-400 ml-1 font-mono">
-              {properties.find((p) => p.id === primaryKey)?.name || '未设置'}
+              {properties.find((p) => p.id === primaryKey || p.name === primaryKey)?.name || '未设置'}
             </span>
           </p>
         </div>

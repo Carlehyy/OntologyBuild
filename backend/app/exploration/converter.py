@@ -162,11 +162,14 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
         desc = f"业务主体（{a.get('kind', 'role')}）。" + (a.get("description") or "")
         if a.get("responsibilities"):
             desc += " 职责: " + "；".join(a["responsibilities"])
+        # 参与方也是数据实体：映射其属性（与对象一致），name 作为身份兜底
+        props = [_prop_from_attr(x) for x in (a.get("attributes") or [])]
+        if not any(norm_name(p["name"]) == "name" for p in props):
+            props.insert(0, {"id": _pid(), "name": "name", "displayName": "名称",
+                             "type": "string", "required": True})
         add_object_type(
             a.get("name", ""), a.get("display_name") or a.get("name", ""), desc,
-            [{"id": _pid(), "name": "name", "displayName": "名称",
-              "type": "string", "required": True}],
-            "name", "actor", a.get("id"))
+            props, a.get("key_attribute") or "name", "actor", a.get("id"))
 
     # 对象关系 → 链接类型
     draft_links: list[dict] = []
