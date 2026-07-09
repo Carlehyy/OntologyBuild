@@ -30,10 +30,14 @@ class IncrementalOrchestrator:
         from app.models.v2.pipeline import Pipeline
 
         triggered = []
+        # 与任务池/链式触发同一道双闸：只有「已发布 + 已启用」的流水线才允许
+        # 被自动触发入湖。旧过滤条件 status != "disabled" 是 0008 生命周期收敛
+        # 前的遗留值（收敛后恒真），等于草稿/停用流水线也会被自动执行
         pipelines = self._db.query(Pipeline).filter(
             Pipeline.source_dataset_id == dataset_id,
         ).filter(
-            Pipeline.status != "disabled",
+            Pipeline.status == "published",
+            Pipeline.enabled.isnot(False),  # NULL（老数据）视为启用
         ).all()
 
         for pl in pipelines:

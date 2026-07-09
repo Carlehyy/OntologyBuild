@@ -95,6 +95,25 @@ def contract_pk(defs: list | None) -> str:
     return ",".join(d["field_key"] for d in normalize_definitions(defs) if d["is_primary_key"])
 
 
+def validate_contract_structure(defs: list | None) -> list[str]:
+    """契约结构校验：字段标识命名合法 + 唯一。返回错误文案列表（空 = 通过）。
+
+    发布端点与数据管家审批共用同一套校验——n8n 的发布动作是审批，
+    结构性坏契约（重复 field_key 会让入湖改名时两列互相覆盖）必须在
+    两条发布路径上都拦住，而不是只拦画布流水线。
+    """
+    errors: list[str] = []
+    seen: set[str] = set()
+    for d in normalize_definitions(defs):
+        fk = d["field_key"]
+        if not FIELD_KEY_RE.match(fk):
+            errors.append(f"字段标识「{fk}」不合法：须以字母或下划线开头，仅含字母/数字/下划线（入湖列名约束）")
+        if fk in seen:
+            errors.append(f"字段标识「{fk}」重复：多个列映射到了同一个入湖列名")
+        seen.add(fk)
+    return errors
+
+
 def _value_type(v) -> str | None:
     """单值的平台类型（与 infer_columns_typed 同一词表）。空值 → None。"""
     if v is None:
@@ -134,9 +153,26 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
     defs = normalize_definitions(definitions)
     if not defs or not rows:
         return rows, []
+    dup_errors = validate_contract_structure(defs)
+    if dup_errors:
+        # 重复 field_key 会让改名 map 把两列静默互相覆盖 = 丢一列数据，硬失败兜底
+        raise LakeGateError(f"数据集「{dataset_name}」的字段契约结构非法：{'；'.join(dup_errors)}")
     rename = {d["source_key"]: d["field_key"] for d in defs
               if d["source_key"] != d["field_key"]}
     if rename:
+        # 改名后的列名不能与「未被改名走的既有列」撞车（漂移出的新列同名也算）
+        all_cols: set[str] = set()
+        for row in rows:
+            all_cols.update(str(k) for k in row.keys())
+        final_counts: dict[str, int] = {}
+        for c in all_cols:
+            fc = rename.get(c, c)
+            final_counts[fc] = final_counts.get(fc, 0) + 1
+        collided = sorted(c for c, n in final_counts.items() if n > 1)
+        if collided:
+            raise LakeGateError(
+                f"数据集「{dataset_name}」应用字段契约改名后出现列名冲突：{collided}。"
+                f"改名目标列与实际输出中的既有列同名会导致数据互相覆盖，请调整字段标识或流水线输出。")
         rows = [{rename.get(str(k), str(k)): v for k, v in row.items()} for row in rows]
 
     for d in defs:
@@ -229,31 +265,42 @@ def validate_pk(rows: list[dict], pk_cols: list[str], *,
 
 def resolve_pk(task_pk: str | None, declared_pk: str | None,
                pipeline_pk: str | None = None, *,
-               dataset_name: str = "") -> tuple[str, str]:
+               dataset_name: str = "",
+               allow_redeclare: bool = False) -> tuple[str, str]:
     """仲裁主键声明：湖中已固化 > 流水线契约 > 任务配置。
 
     返回 (生效主键, 来源)。来源 ∈ "lake" | "pipeline" | "task" | ""。
-    任意两方同时声明且不一致 → 硬失败：改主键 = 全部实例身份重算，必须显式
-    操作（以 overwrite 重建资产清除湖中声明，或修改契约/任务配置对齐），
-    不允许被静默改写。
+    改主键 = 全部实例身份重算，必须显式操作，不允许被静默改写：
+      - 增量/合并入库（allow_redeclare=False）：任意两方声明不一致 → 硬失败；
+      - 全量覆盖（allow_redeclare=True）：资产整体重建，契约/任务的新声明
+        允许覆盖湖中旧声明（pipeline > task），这是变更主键的唯一受控通道。
+    契约 vs 任务的不一致任何模式都硬失败——两个「当前意图」互相矛盾。
     """
     task_cols = split_pk(task_pk)
     lake_cols = split_pk(declared_pk)
     pipe_cols = split_pk(pipeline_pk)
-    if lake_cols and pipe_cols and lake_cols != pipe_cols:
-        raise LakeGateError(
-            f"数据集「{dataset_name}」湖中已声明主键 {lake_cols}，与流水线契约的 {pipe_cols} 不一致。"
-            f"主键是该资产的身份契约；若确需变更，请先以 overwrite 方式重建该资产"
-            f"（重建会清除旧声明），或修改流水线契约与湖中声明保持一致。")
-    if lake_cols and task_cols and lake_cols != task_cols:
-        raise LakeGateError(
-            f"数据集「{dataset_name}」已声明主键 {lake_cols}，与任务配置的 {task_cols} 不一致。"
-            f"主键是该资产的身份契约，不能由任务静默改写；若确需变更，请先以 overwrite 方式"
-            f"重建该资产（重建会清除旧声明），或修改任务主键与湖中声明保持一致。")
     if pipe_cols and task_cols and pipe_cols != task_cols:
         raise LakeGateError(
             f"数据集「{dataset_name}」的流水线契约已声明主键 {pipe_cols}，与任务配置的 {task_cols} 不一致。"
             f"主键已上收至流水线契约管理，请清空任务的主键配置或与契约保持一致。")
+    if not allow_redeclare:
+        if lake_cols and pipe_cols and lake_cols != pipe_cols:
+            raise LakeGateError(
+                f"数据集「{dataset_name}」湖中已声明主键 {lake_cols}，与流水线契约的 {pipe_cols} 不一致。"
+                f"主键是该资产的身份契约，增量/合并入库不能改写；若确需变更，请以「全量覆盖」"
+                f"入库方式运行一次重建该资产（重建会重写湖中声明），或修改流水线契约与湖中声明保持一致。")
+        if lake_cols and task_cols and lake_cols != task_cols:
+            raise LakeGateError(
+                f"数据集「{dataset_name}」已声明主键 {lake_cols}，与任务配置的 {task_cols} 不一致。"
+                f"主键是该资产的身份契约，增量/合并入库不能由任务静默改写；若确需变更，请以「全量覆盖」"
+                f"入库方式运行一次重建该资产（重建会重写湖中声明），或修改任务主键与湖中声明保持一致。")
+    else:
+        # 全量覆盖：新声明（契约优先，其次任务）覆盖湖中旧声明；
+        # 与湖中一致时不算重声明，落回 lake 来源
+        if pipe_cols and pipe_cols != lake_cols:
+            return ",".join(pipe_cols), "pipeline"
+        if task_cols and not pipe_cols and task_cols != lake_cols:
+            return ",".join(task_cols), "task"
     if lake_cols:
         return ",".join(lake_cols), "lake"
     if pipe_cols:
@@ -327,13 +374,21 @@ def gate_rows(curated_ds, rows: list[dict], write_opts: dict | None,
     rows, contract_warnings = apply_column_contract(
         rows, column_definitions, dataset_name=name)
 
+    # 全量覆盖（含无 write_opts 的手动运行/预览确认，合并默认即 overwrite）
+    # 是变更主键声明的唯一受控通道；增量/合并模式声明冲突照旧硬失败
+    allow_redeclare = (write_opts or {}).get("mode") in (None, "", "overwrite")
+    declared = schema.get("primary_key")
     pk, pk_source = resolve_pk((write_opts or {}).get("primary_key"),
-                               schema.get("primary_key"),
-                               contract_pk(column_definitions), dataset_name=name)
+                               declared,
+                               contract_pk(column_definitions), dataset_name=name,
+                               allow_redeclare=allow_redeclare)
     if pk and rows:
         validate_pk(rows, split_pk(pk), dataset_name=name, scope="本次输出")
 
     warnings: list[str] = list(contract_warnings)
+    if declared and pk and split_pk(str(declared)) != split_pk(pk):
+        warnings.append(
+            f"本次全量覆盖将重写湖中主键声明：{declared} → {pk}（原声明派生的实例身份将随重建作废）")
     new_cols = [c["name"] for c in infer_columns_typed(rows)] if rows else []
     # 漂移基线用「上次运行的输出列」：append 等合并模式下湖中列是历史并集，
     # 拿它当基线会让正常的追加运行每次误报"缺失列"
@@ -372,10 +427,13 @@ def validate_upsert_base(old_rows: list[dict], pk_cols: list[str], *,
 
 def persist_contract(curated_ds, *, pk: str, pk_source: str,
                      lake_rows: list[dict], output_rows: list[dict] | None = None,
-                     column_definitions: list | None = None) -> dict:
+                     column_definitions: list | None = None,
+                     allow_redeclare: bool = False) -> dict:
     """把契约固化/更新到 schema_json（返回新 schema dict，调用方负责赋值提交）。
 
-    - primary_key：首次声明时写入（来源 task/pipeline）；已有声明保持不动
+    - primary_key：首次声明时写入（来源 task/pipeline）；已有声明仅在
+      allow_redeclare（全量覆盖重建）且生效主键确实不同的时候重写，
+      并把旧声明留在 contract.previous_pk 供审计
     - columns / columns_typed：每次成功入湖都刷新为湖中本版实际列（合并后）
     - last_output_columns：本次流水线输出的列（合并前），下次漂移检测的基线
     - field_names / contract_definitions：流水线契约的显示名与完整定义快照，
@@ -392,10 +450,19 @@ def persist_contract(curated_ds, *, pk: str, pk_source: str,
     if defs:
         schema["field_names"] = {d["field_key"]: d["field_name"] for d in defs}
         schema["contract_definitions"] = defs
-    if pk and not schema.get("primary_key"):
-        schema["primary_key"] = pk
-        schema["contract"] = {
-            "pk_source": pk_source or "task",
-            "declared_at": datetime.now(timezone.utc).isoformat(),
-        }
+    if pk:
+        prev = str(schema.get("primary_key") or "").strip()
+        if not prev:
+            schema["primary_key"] = pk
+            schema["contract"] = {
+                "pk_source": pk_source or "task",
+                "declared_at": datetime.now(timezone.utc).isoformat(),
+            }
+        elif allow_redeclare and split_pk(prev) != split_pk(pk):
+            schema["primary_key"] = pk
+            schema["contract"] = {
+                "pk_source": pk_source or "task",
+                "declared_at": datetime.now(timezone.utc).isoformat(),
+                "previous_pk": prev,
+            }
     return schema

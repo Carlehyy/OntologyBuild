@@ -46,10 +46,11 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const [lastRun, setLastRun] = useState<'loading' | 'none' | { at: string | null; columns: string[]; sample: Record<string, unknown>[] }>('loading')
 
   const multiOutput = (dryRunResult?.outputs.length ?? 0) > 1
-  // 湖中已固化的主键（试运行预检返回）——契约里锁定，不可改写
+  // 湖中已固化的主键（试运行预检返回）——预填提示但可修改：改动后的契约
+  // 需以「全量覆盖」运行一次重建资产（重写湖中声明），增量/合并入库在对齐前会失败
   const lakeDeclaredPk = dryRunResult && dryRunResult.outputs.length === 1 && dryRunResult.outputs[0].pk_source === 'lake'
     ? dryRunResult.outputs[0].pk : ''
-  const lockedPkCols = new Set(splitPk(lakeDeclaredPk))
+  const lakePkCols = new Set(splitPk(lakeDeclaredPk))
 
   // ── 阶段 3: 设置主键组 ──
   const [columnDefs, setColumnDefs] = useState<ColumnDefinition[]>([])
@@ -84,7 +85,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         is_primary_key: false,
         nullable: true,
       }
-      // 湖中已固化主键：预填并锁定（列名即入湖列名）
+      // 湖中已固化主键：预填勾选（列名即入湖列名）；仍可修改，改动走全量覆盖重建
       if (lockedPk?.has(def.field_key)) def.is_primary_key = true
       return def
     })
@@ -235,13 +236,15 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const errorMap = new Map((validateResult?.errors || []).map(e => [e.field_key, e]))
   const contractEditable = !isPublished && !multiOutput
 
+  // 名称/描述到第 4 步保存才落库——中途关窗要提醒，避免静默丢改动
+  const infoDirty = name !== (pipeline.name || '') || description !== (pipeline.description || '')
+  const handleClose = () => {
+    if (infoDirty && !window.confirm('流水线名称/描述有未保存的修改，关闭后将丢失。确认关闭？')) return
+    onClose()
+  }
+
   const updateColDef = (index: number, patch: Partial<ColumnDefinition>) => {
-    setColumnDefs(prev => prev.map((d, i) => {
-      if (i !== index) return d
-      // 湖中已固化的主键列：不允许取消主键，也不允许改字段标识
-      if (lockedPkCols.has(d.field_key) && (patch.is_primary_key === false || patch.field_key !== undefined)) return d
-      return { ...d, ...patch }
-    }))
+    setColumnDefs(prev => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)))
   }
 
   const steps = [
@@ -252,7 +255,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   ]
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6" onClick={handleClose}>
       <div
         className="bg-white rounded-xl shadow-xl w-[900px] max-w-full max-h-[90vh] flex flex-col"
         onClick={e => e.stopPropagation()}
@@ -272,7 +275,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               {isPublished ? '已发布（封版）· 仅名称和描述可修改' : '草稿 · 发布后契约与编排将封版'}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-black shrink-0">
+          <button onClick={handleClose} className="text-gray-400 hover:text-black shrink-0">
             <X size={16} />
           </button>
         </div>
@@ -323,7 +326,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   placeholder="输入流水线描述（可选）"
                 />
               </div>
-              <p className="text-xs text-gray-400">名称和描述在任何状态下都可以修改，不影响契约与编排。</p>
+              <p className="text-xs text-gray-400">名称和描述在任何状态下都可以修改，不影响契约、编排与已产出资产的归属（在第 4 步确认后保存）。</p>
             </div>
           )}
 
@@ -446,12 +449,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 </div>
               )}
 
-              {lockedPkCols.size > 0 && (
+              {lakePkCols.size > 0 && (
                 <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-center gap-1.5">
                   <Lock size={11} className="shrink-0" />
                   <span>
-                    资产湖已固化主键契约 <b className="font-mono">{lakeDeclaredPk}</b>：已自动勾选并锁定，
-                    如需变更请先以「全量覆盖」重建资产。
+                    资产湖已固化主键契约 <b className="font-mono">{lakeDeclaredPk}</b>（已自动勾选）。
+                    可以修改，但改动后需以「全量覆盖」方式运行一次重建资产（会重写湖中声明并重建实例身份）；
+                    增量/合并入库在对齐前会失败。
                   </span>
                 </div>
               )}
@@ -477,7 +481,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   </thead>
                   <tbody className="divide-y">
                     {columnDefs.map((d, i) => {
-                      const locked = lockedPkCols.has(d.field_key)
+                      const declaredInLake = lakePkCols.has(d.field_key)
                       const disabled = !contractEditable
                       const fieldErrors = errorMap.get(d.field_key)
                       const allErrors = [fieldErrors].filter(Boolean)
@@ -490,12 +494,12 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                             <div className="relative">
                               <input
                                 value={d.field_key}
-                                disabled={disabled || locked}
+                                disabled={disabled}
                                 onChange={e => updateColDef(i, { field_key: e.target.value })}
-                                title={locked ? '湖中已固化的主键列，不可改名' : d.source_key !== d.field_key ? `入湖时 ${d.source_key} → ${d.field_key}` : undefined}
-                                className={`w-full px-2 py-1 border rounded text-xs font-mono ${(disabled || locked) ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : d.source_key !== d.field_key ? 'border-blue-300 bg-blue-50/40' : ''}`}
+                                title={declaredInLake ? '湖中已固化的主键列：改名后需以「全量覆盖」运行一次重建资产' : d.source_key !== d.field_key ? `入湖时 ${d.source_key} → ${d.field_key}` : undefined}
+                                className={`w-full px-2 py-1 border rounded text-xs font-mono ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : d.source_key !== d.field_key ? 'border-blue-300 bg-blue-50/40' : ''}`}
                               />
-                              {locked && <Lock size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-amber-500" />}
+                              {declaredInLake && <Lock size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-amber-400 pointer-events-none" />}
                             </div>
                           </td>
                           <td className="px-1 py-1">
@@ -522,9 +526,9 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                             <input
                               type="checkbox"
                               checked={d.is_primary_key}
-                              disabled={disabled || locked}
+                              disabled={disabled}
                               onChange={e => updateColDef(i, { is_primary_key: e.target.checked })}
-                              className={(disabled || locked) ? 'opacity-50 cursor-not-allowed' : ''}
+                              className={disabled ? 'opacity-50 cursor-not-allowed' : ''}
                             />
                           </td>
                           <td className="px-1 py-1 text-center">

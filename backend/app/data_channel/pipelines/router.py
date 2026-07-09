@@ -58,6 +58,11 @@ class PipelineResponse(BaseModel):
     spec: Optional[dict] = None
     definition: Optional[dict] = None
     status: str = "draft"
+    # 与列表端点同一口径——response_model 会过滤未声明字段，漏声明会让
+    # 详情/更新接口悄悄吞掉 enabled/契约（列表返回全量、详情缺字段的坑）
+    engine: Optional[str] = None
+    enabled: Optional[bool] = None
+    column_definitions: Optional[list] = None
     branch: Optional[str] = "main"
     version: int = 1
     target_curated_ids: Optional[list] = None
@@ -77,6 +82,23 @@ class ValidateResult(BaseModel):
 def _is_n8n_pipeline(pl: Pipeline) -> bool:
     """数据管家托管的 n8n 影子流水线 — 生命周期由审批流管理，画布路径绕行。"""
     return ((pl.definition or {}).get("engine") == "n8n")
+
+
+def _reject_if_sync_chain_refs(db: Session, pipeline_id: str, *, action: str) -> None:
+    """同步任务把该流水线设为链式触发目标时拦截删除/撤回发布。
+
+    与任务池引用同一道理：删除靠 FK SET NULL、撤回靠运行期跳过兜底，
+    但两者都只剩日志可见——链路静默断掉不如让操作者当场看见并解绑。"""
+    from app.data_channel.sync_tasks.models import DataSyncTask
+
+    refs = db.query(DataSyncTask).filter(
+        DataSyncTask.trigger_pipeline_id == pipeline_id).all()
+    if refs:
+        names = "、".join(t.name for t in refs[:3])
+        raise HTTPException(
+            400,
+            f"流水线被 {len(refs)} 个同步任务设为链式触发目标（{names}{'…' if len(refs) > 3 else ''}），"
+            f"不能{action}。请先在这些同步任务中解除「同步后触发流水线」的配置。")
 
 
 # ── CRUD ──────────────────────────────────────────────────────────
@@ -191,9 +213,10 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
                 f"请在数据管家对话中修改，或在审批面板管理其状态。")
 
     # ── 已发布封版：definition / column_definitions / spec 不可修改 ──
+    # 按 key 存在性判断而非值非空——显式传 null 同样是修改（会把封版字段清空）
     PROTECTED_FIELDS = ("definition", "column_definitions", "spec")
     if (pl.status or "") == "published":
-        protected_present = [k for k in PROTECTED_FIELDS if update_data.get(k) is not None]
+        protected_present = [k for k in PROTECTED_FIELDS if k in update_data]
         if protected_present:
             raise HTTPException(
                 400,
@@ -251,6 +274,7 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             400,
             f"流水线已被 {len(refs)} 个调度任务引用（{names}{'…' if len(refs) > 3 else ''}），"
             f"请先在数据任务池删除或改绑这些任务。")
+    _reject_if_sync_chain_refs(db, pipeline_id, action="删除")
     # 级联删除 runs + versions
     db.query(PipelineRun).filter(PipelineRun.pipeline_id == pipeline_id).delete()
     db.query(PipelineVersion).filter(PipelineVersion.pipeline_id == pipeline_id).delete()
@@ -529,6 +553,9 @@ def validate_column_definitions(
 
     errors: list[dict] = []
     defs = normalize_definitions(body.column_definitions)
+    if payload.get("truncated"):
+        errors.append({"field_key": "", "severity": "warning",
+                       "message": f"试运行输出超过暂存上限，本次校验仅覆盖已暂存的 {len(rows):,} 行（前缀校验，非全量）"})
 
     # ── 1. 结构校验：字段标识命名合法且唯一；原始列存在 ──
     seen_fk: set[str] = set()
@@ -599,15 +626,18 @@ def validate_column_definitions(
             errors.append({"field_key": d["field_key"], "severity": "error",
                            "message": f"列「{d['field_key']}」不允许为空，但全量数据中存在 {null_count} 个空值"})
 
-    # ── 5. 与湖中已固化主键的冲突（发布前置拦截）──
+    # ── 5. 与湖中已固化主键的差异（提示不阻断：全量覆盖运行会按新契约
+    #      重写湖中声明，这是变更主键的受控通道；增量/合并入库在对齐前会失败）──
     pk = ",".join(d["field_key"] for d in defs if d["is_primary_key"])
     if pk:
         for cid in (pl.target_curated_ids or []):
             ds = db.query(Dataset).filter(Dataset.id == cid).first()
             declared = ((ds.schema_json or {}).get("primary_key") or "") if ds else ""
             if declared and split_pk(declared) != split_pk(pk):
-                errors.append({"field_key": pk, "severity": "error",
-                               "message": f"主键与资产湖数据集「{ds.name}」已固化的主键（{declared}）不一致：身份契约不可静默改写，请对齐或先以全量覆盖重建该资产"})
+                errors.append({"field_key": pk, "severity": "warning",
+                               "message": f"主键与资产湖数据集「{ds.name}」已固化的主键（{declared}）不一致："
+                                          f"下次「全量覆盖」运行将重写湖中声明并重建实例身份；"
+                                          f"增量/合并（append/upsert）入库在对齐前会硬失败"})
 
     has_blocking = any(e["severity"] == "error" for e in errors)
     return ValidateDefinitionsResult(valid=not has_blocking, errors=errors)
@@ -624,13 +654,15 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
                      db: Session = Depends(get_db)):
     """发布 Pipeline：封版编排与字段契约，此后仅名称/描述可修改。
 
-    发布前校验：definition 结构 + 契约结构（字段标识命名/唯一）+ 契约主键与
-    湖中已固化主键的冲突（发布时就拦截，而不是等任务运行时闸门报错）。
-    契约与数据的一致性校验（全量非空/唯一/类型）在向导第 3 步完成——发布
-    不重跑流水线（n8n 试运行会真实触发生产 workflow）。
+    发布前校验：definition 结构 + 契约结构（字段标识命名/唯一，与数据管家
+    审批共用 validate_contract_structure）。契约与数据的一致性校验（全量
+    非空/唯一/类型）在向导第 3 步完成——发布不重跑流水线（n8n 试运行会
+    真实触发生产 workflow）。契约主键与湖中已固化主键不一致不再拦发布：
+    「全量覆盖」运行会按新契约重写湖中声明（变更主键的受控通道），
+    增量/合并运行则会在准入闸门硬失败——差异以 warnings 随响应返回。
     """
     from app.data_channel.datasets.lake_gate import (
-        FIELD_KEY_RE, contract_pk, normalize_definitions, split_pk)
+        contract_pk, split_pk, validate_contract_structure)
     from app.models.v2.dataset import Dataset
 
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
@@ -646,46 +678,42 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
     if not validation.valid:
         raise HTTPException(400, f"Pipeline 校验失败，无法发布: {validation.errors}")
 
-    # 契约结构校验：命名合法 + 唯一
-    defs = normalize_definitions(pl.column_definitions)
-    seen: set[str] = set()
-    for d in defs:
-        fk = d["field_key"]
-        if not FIELD_KEY_RE.match(fk):
-            raise HTTPException(
-                400, f"字段标识「{fk}」不合法：须以字母或下划线开头，仅含字母/数字/下划线。请回到「设置主键组」修正。")
-        if fk in seen:
-            raise HTTPException(400, f"字段标识「{fk}」重复：入湖列名必须唯一。请回到「设置主键组」修正。")
-        seen.add(fk)
+    # 契约结构校验：命名合法 + 唯一（与 n8n 审批路径同一套）
+    structure_errors = validate_contract_structure(pl.column_definitions)
+    if structure_errors:
+        raise HTTPException(
+            400, f"字段契约结构非法：{'；'.join(structure_errors)}。请回到「设置主键组」修正。")
 
-    # 契约主键 vs 湖中已固化主键：不一致 → 发布即拦截
-    pk = contract_pk(defs)
+    # 契约主键 vs 湖中已固化主键：不一致 → 警告随响应返回（不再拦截）
+    warnings: list[str] = []
+    pk = contract_pk(pl.column_definitions)
     if pk:
         for cid in (pl.target_curated_ids or []):
             ds = db.query(Dataset).filter(Dataset.id == cid).first()
             declared = ((ds.schema_json or {}).get("primary_key") or "") if ds else ""
             if declared and split_pk(declared) != split_pk(pk):
-                raise HTTPException(
-                    400,
-                    f"契约主键（{pk}）与资产湖数据集「{ds.name}」已固化的主键（{declared}）不一致。"
-                    f"主键是资产的身份契约：请对齐契约主键，或先以全量覆盖方式重建该资产。")
+                warnings.append(
+                    f"契约主键（{pk}）与资产湖数据集「{ds.name}」已固化的主键（{declared}）不一致："
+                    f"下次「全量覆盖」运行将重写湖中声明并重建实例身份；增量/合并入库在对齐前会失败。")
 
+    # 版本号语义 = 已发布快照序号：首次发布保持当前号，再发布才递增
+    has_prior_published = db.query(PipelineVersion).filter(
+        PipelineVersion.pipeline_id == pipeline_id,
+        PipelineVersion.status == "published").count() > 0
     pl.status = "published"
-    pl.version = (pl.version or 1) + 1
+    pl.version = (pl.version or 1) + (1 if has_prior_published else 0)
     if body and body.enable:
         pl.enabled = True
     pl.updated_at = datetime.now(timezone.utc)
-    db.commit()
-
-    # 保存版本快照（契约是封版核心工件，随版本可回溯）
-    version_record = PipelineVersion(
+    # 版本快照与状态翻转同一事务提交——分两段 commit 会在中断时留下
+    # 「已发布却无快照」的孤儿状态（契约是封版核心工件，必须可回溯）
+    db.add(PipelineVersion(
         pipeline_id=pipeline_id,
         version=pl.version,
         definition=pl.definition,
         column_definitions=pl.column_definitions,
         status="published",
-    )
-    db.add(version_record)
+    ))
     db.commit()
 
     return {
@@ -693,6 +721,7 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
         "status": pl.status,
         "version": pl.version,
         "enabled": True if pl.enabled is None else bool(pl.enabled),
+        "warnings": warnings or None,
     }
 
 
@@ -718,6 +747,7 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             400,
             f"流水线已被 {len(refs)} 个调度任务引用（{names}{'…' if len(refs) > 3 else ''}），不能撤回发布。"
             f"请先在数据任务池删除或改绑这些任务。")
+    _reject_if_sync_chain_refs(db, pipeline_id, action="撤回发布")
     pl.status = "draft"
     pl.enabled = False
     pl.updated_at = datetime.now(timezone.utc)
@@ -902,9 +932,24 @@ def dry_run_pipeline(
     engine_meta: dict = {}
     try:
         if _is_n8n_pipeline(pl):
-            from app.data_channel.steward.runner import collect_n8n_rows
+            from app.data_channel.steward.models import STATUS_APPROVED
+            from app.data_channel.steward.runner import (
+                collect_n8n_rows, collect_test_rows, persist_test_result)
             from app.tasks.v2.pipeline_run import _strip_content
-            rows, engine_meta = collect_n8n_rows(db, pl)
+            n8n_def = (pl.definition or {}).get("n8n") or {}
+            rec = db.query(N8nPipeline).filter(
+                N8nPipeline.id == n8n_def.get("steward_id")).first() if n8n_def.get("steward_id") else None
+            if rec is not None and rec.status != STATUS_APPROVED:
+                # 未批准的 workflow 未激活、生产 webhook 未注册——走数据管家的
+                # 审批前试跑通道（临时激活→触发→恢复），否则向导第 2 步必失败，
+                # 草稿 n8n 永远设不了字段契约（先设契约、后送审批的流程死锁）
+                rows, engine_meta = collect_test_rows(db, rec)
+                if engine_meta.get("error"):
+                    raise RuntimeError(f"n8n 执行失败：{engine_meta['error']}")
+                persist_test_result(db, rec, rows, engine_meta)
+            else:
+                # 已批准（或治理记录缺失时让 collect_n8n_rows 给出准确报错）
+                rows, engine_meta = collect_n8n_rows(db, pl)
             outputs = [{
                 "source": {"dataset_id": None, "filename": pl.name, "route": "A", "kind": "n8n"},
                 "table_name": None, "rows": _strip_content(rows),
@@ -918,17 +963,18 @@ def dry_run_pipeline(
         raise HTTPException(400, f"试运行失败：{e}")
 
     # 资产湖准入闸门预检：按将要写入的目标数据集逐个检查（不落任何数据）。
-    # 单产物流水线同时应用字段契约——预览看到的列名/校验与正式入湖完全一致
+    # 单产物流水线同时应用字段契约——预览看到的列名/校验与正式入湖完全一致。
+    # 目标数据集与入湖同一套解析（id 绑定优先）：流水线改名后预检的仍是
+    # 原产物资产，而不是名字派生出来的新空壳
     from app.data_channel.datasets.lake_gate import LakeGateError, gate_rows
-    from app.tasks.v2.pipeline_run import _curated_name
-    from app.models.v2.dataset import Dataset
+    from app.tasks.v2.pipeline_run import resolve_curated_target
 
     contract_defs = pl.column_definitions if len(outputs) == 1 else None
     preview = []
     for o in outputs:
-        ds_name = _curated_name(pl, o["source"], o["multi_source"], o["table_name"])
-        curated = db.query(Dataset).filter(
-            Dataset.kind == "curated", Dataset.name == ds_name).first()
+        curated, derived_name = resolve_curated_target(
+            db, pl, o["source"], o["multi_source"], o["table_name"])
+        ds_name = curated.name if curated is not None else derived_name
         gate_error = None
         gate_info: dict = {"pk": "", "pk_source": "", "warnings": [], "drift": None}
         preview_rows = o["rows"]
@@ -959,12 +1005,31 @@ def dry_run_pipeline(
             **gate_info,
         })
 
+    # ── 暂存上限：全量输出整包进对象存储、校验时整包回读，行数不设防会把
+    # 内存与存储一起拖垮。超限时截断暂存并在预览/校验里明说（不静默）。──
+    _MAX_STAGE_ROWS = 100_000
+    budget = _MAX_STAGE_ROWS
+    staged_outputs: list[dict] = []
+    truncated = False
+    for i, o in enumerate(outputs):
+        rows_o = o.get("rows") or []
+        keep = rows_o if len(rows_o) <= budget else rows_o[:budget]
+        if len(keep) < len(rows_o):
+            truncated = True
+            if i < len(preview):
+                preview[i]["warnings"] = [*preview[i].get("warnings", []),
+                                          f"输出 {len(rows_o):,} 行超出暂存上限 {_MAX_STAGE_ROWS:,} 行："
+                                          f"「展开查看全部」与第 3 步全量校验仅覆盖前 {len(keep):,} 行"]
+        budget -= len(keep)
+        staged_outputs.append({**o, "rows": keep})
+
     dry_run_id = str(_uuid.uuid4())
     payload = {
         "pipeline_id": pl.id,
         "created_at": _dt.now(_tz.utc).isoformat(),
         "engine_meta": engine_meta,
-        "outputs": outputs,
+        "truncated": truncated,
+        "outputs": staged_outputs,
     }
     from app.services.storage_service import get_storage_service
     storage = get_storage_service()
@@ -1063,6 +1128,15 @@ def commit_dry_run(pipeline_id: str, dry_run_id: str, db: Session = Depends(get_
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
+    # 治理边界：未批准的 n8n 流水线平台侧保持草稿——临时激活试跑出来的
+    # 数据只供预览与契约校验，不允许经「确认入湖」流入正式资产
+    if _is_n8n_pipeline(pl):
+        from app.data_channel.steward.models import STATUS_APPROVED
+        sid = ((pl.definition or {}).get("n8n") or {}).get("steward_id")
+        rec = db.query(N8nPipeline).filter(N8nPipeline.id == sid).first() if sid else None
+        if rec is None or rec.status != STATUS_APPROVED:
+            raise HTTPException(
+                400, "该 n8n 流水线未获批准，试跑数据不能写入资产湖。请先在数据管家完成审批，批准后即可正常入湖。")
     try:
         from app.services.storage_service import get_storage_service
         raw = get_storage_service().get_object(_dry_run_uri(pipeline_id, dry_run_id))
@@ -1073,6 +1147,10 @@ def commit_dry_run(pipeline_id: str, dry_run_id: str, db: Session = Depends(get_
         raise HTTPException(404, "试运行结果不存在或已过期，请重新执行")
     if payload.get("pipeline_id") != pipeline_id:
         raise HTTPException(400, "试运行结果与流水线不匹配")
+    if payload.get("truncated"):
+        raise HTTPException(
+            400, "该次试运行输出超过暂存上限、预览数据已截断，按预览入湖会丢行。"
+                 "请通过任务调度或「立即运行」完成完整入湖。")
 
     run = PipelineRun(
         pipeline_id=pipeline_id, status="running",

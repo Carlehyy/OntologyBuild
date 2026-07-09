@@ -195,6 +195,19 @@ def approve(db: Session, rec: N8nPipeline, client: N8nClient, approver_id: str |
     """批准：拉最新 workflow 快照 → 激活 → 注册/更新影子流水线（published）。"""
     if rec.status != STATUS_PENDING:
         raise StewardError(f"当前状态为 {rec.status}，只有待审批的记录可以批准。")
+
+    # 批准即发布：与画布 publish 端点共用契约结构校验——结构性坏契约
+    # （重复 field_key 会让入湖改名时两列互相覆盖）不能因为走审批路径而漏拦
+    from app.data_channel.datasets.lake_gate import validate_contract_structure
+    from app.models.v2.pipeline import Pipeline
+
+    shadow = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first() if rec.pipeline_id else None
+    structure_errors = validate_contract_structure(shadow.column_definitions) if shadow else []
+    if structure_errors:
+        raise StewardError(
+            f"影子流水线的字段契约结构非法，无法批准：{'；'.join(structure_errors)}。"
+            f"请在流水线编辑向导「设置主键组」修正后重新提交。")
+
     workflow = client.get_workflow(rec.n8n_workflow_id)
     try:
         client.activate_workflow(rec.n8n_workflow_id)
@@ -338,7 +351,12 @@ def _register_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
 
     pl = ensure_shadow_pipeline(db, rec, status="published")
     pl.enabled = True
-    pl.version = (pl.version or 1) + 1
+    # 版本号语义 = 已发布快照序号：首次批准保持当前号，再次批准才递增
+    # （与画布 publish 端点同一口径）
+    has_prior_published = db.query(PipelineVersion).filter(
+        PipelineVersion.pipeline_id == pl.id,
+        PipelineVersion.status == "published").count() > 0
+    pl.version = (pl.version or 1) + (1 if has_prior_published else 0)
     db.add(PipelineVersion(pipeline_id=pl.id, version=pl.version,
                            definition=pl.definition,
                            column_definitions=pl.column_definitions,

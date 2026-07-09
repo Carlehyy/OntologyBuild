@@ -7,6 +7,7 @@ import pytest
 
 from app.data_channel.datasets.lake_gate import (
     LakeGateError,
+    apply_column_contract,
     detect_drift,
     gate_rows,
     infer_columns_typed,
@@ -14,6 +15,7 @@ from app.data_channel.datasets.lake_gate import (
     persist_contract,
     resolve_pk,
     split_pk,
+    validate_contract_structure,
     validate_pk,
     validate_upsert_base,
 )
@@ -150,9 +152,28 @@ def test_gate_rows_enforces_lake_declared_pk_on_manual_run():
 
 
 def test_gate_rows_conflict_between_task_and_lake():
+    """增量/合并入库：任务主键与湖中声明冲突仍硬失败（不允许静默改写）"""
     ds = FakeDataset(schema_json={"primary_key": "order_id"})
     with pytest.raises(LakeGateError, match="不一致"):
-        gate_rows(ds, ROWS, {"primary_key": "order_no"})
+        gate_rows(ds, ROWS, {"primary_key": "order_no", "mode": "upsert"})
+
+
+def test_gate_rows_overwrite_redeclares_lake_pk():
+    """全量覆盖是变更主键声明的唯一受控通道：新声明生效并给出重写警告"""
+    ds = FakeDataset(schema_json={"primary_key": "order_id"})
+    gate = gate_rows(ds, ROWS, {"primary_key": "city", "mode": "overwrite"})
+    assert (gate["pk"], gate["pk_source"]) == ("city", "task")
+    assert any("重写湖中主键声明" in w for w in gate["warnings"])
+
+
+def test_resolve_pk_redeclare_only_on_overwrite():
+    # allow_redeclare：新声明（契约 > 任务）覆盖湖中旧声明；与湖一致时仍归 lake
+    assert resolve_pk("", "old_pk", "new_pk", allow_redeclare=True) == ("new_pk", "pipeline")
+    assert resolve_pk("new_pk", "old_pk", None, allow_redeclare=True) == ("new_pk", "task")
+    assert resolve_pk("", "old_pk", "old_pk", allow_redeclare=True) == ("old_pk", "lake")
+    # 契约 vs 任务的冲突任何模式都硬失败（两个「当前意图」互相矛盾）
+    with pytest.raises(LakeGateError):
+        resolve_pk("a", "old_pk", "b", allow_redeclare=True)
 
 
 def test_gate_rows_drift_warning_uses_last_output_baseline():
@@ -196,6 +217,50 @@ def test_persist_contract_never_rewrites_existing_pk():
                               lake_rows=ROWS, output_rows=ROWS)
     assert schema["primary_key"] == "order_id"
     assert schema["contract"]["pk_source"] == "task"  # 首次声明信息保留
+
+
+def test_persist_contract_redeclares_on_overwrite_with_audit_trail():
+    """全量覆盖重建：新主键重写声明，旧声明留在 contract.previous_pk 供审计"""
+    ds = FakeDataset(schema_json={"primary_key": "order_id", "contract": {"pk_source": "task"}})
+    schema = persist_contract(ds, pk="city", pk_source="pipeline",
+                              lake_rows=ROWS, output_rows=ROWS,
+                              allow_redeclare=True)
+    assert schema["primary_key"] == "city"
+    assert schema["contract"]["pk_source"] == "pipeline"
+    assert schema["contract"]["previous_pk"] == "order_id"
+    # 未开重声明开关时保持原声明（增量/合并路径的兜底不变量）
+    ds2 = FakeDataset(schema_json={"primary_key": "order_id", "contract": {"pk_source": "task"}})
+    schema2 = persist_contract(ds2, pk="city", pk_source="pipeline",
+                               lake_rows=ROWS, output_rows=ROWS)
+    assert schema2["primary_key"] == "order_id"
+
+
+def test_validate_contract_structure_rejects_bad_and_dup_field_keys():
+    errors = validate_contract_structure([
+        {"field_key": "订单号"},                       # 非法命名
+        {"field_key": "user_name"},
+        {"source_key": "uname", "field_key": "user_name"},  # 重复入湖列名
+    ])
+    assert any("不合法" in e for e in errors)
+    assert any("重复" in e for e in errors)
+    assert validate_contract_structure([{"field_key": "ok_col"}]) == []
+
+
+def test_apply_column_contract_dup_field_key_hard_fails():
+    """重复 field_key 的改名映射会让两列互相覆盖=丢数据，运行期硬失败兜底"""
+    defs = [
+        {"source_key": "order_id", "field_key": "oid"},
+        {"source_key": "city", "field_key": "oid"},
+    ]
+    with pytest.raises(LakeGateError, match="结构非法"):
+        apply_column_contract(ROWS, defs, dataset_name="订单 curated")
+
+
+def test_apply_column_contract_rename_collision_with_existing_column_fails():
+    """改名目标与实际输出里的既有列同名（如漂移新列）→ 硬失败而非静默覆盖"""
+    defs = [{"source_key": "order_id", "field_key": "city"}]
+    with pytest.raises(LakeGateError, match="列名冲突"):
+        apply_column_contract(ROWS, defs, dataset_name="订单 curated")
 
 
 def test_infer_columns_typed_orders_and_skips_content():

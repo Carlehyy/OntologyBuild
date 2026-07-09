@@ -179,9 +179,13 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
                           collector=collector, contract_columns=contract_cols)
 
 
-def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None,
-                      wait_seconds: int = 60) -> dict:
-    """审批前试跑：临时激活 → 触发 → 取样 → 恢复原激活状态。不写资产湖。"""
+def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None,
+                      wait_seconds: int = 60) -> tuple[list[dict], dict]:
+    """未批准 workflow 的取数通道：临时激活 → 触发 → 收集完整行 → 恢复原激活状态。
+
+    不写资产湖。数据管家审批前试跑与流水线编辑向导（草稿 n8n 的执行预览）
+    共用——草稿 n8n 的生产 webhook 未注册，走 collect_n8n_rows 必 404。
+    """
     client = service.get_n8n_client(db)
     workflow = client.get_workflow(rec.n8n_workflow_id)
     webhook_path = service.find_webhook_path(workflow)
@@ -206,6 +210,38 @@ def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None
                 client.deactivate_workflow(rec.n8n_workflow_id)
             except Exception:  # noqa: BLE001
                 logger.warning("试跑后停用 workflow %s 失败", rec.n8n_workflow_id, exc_info=True)
+    return rows, exec_meta
+
+
+def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_meta: dict) -> None:
+    """试跑成功即持久化列样本：审批时固化为影子流水线的期望列契约。
+
+    审批面板与编辑向导两条试跑入口共用同一持久化口径。"""
+    if exec_meta.get("error"):
+        return
+    from datetime import datetime, timezone
+    columns: list[str] = []
+    for row in rows[:50]:
+        for k in row.keys():
+            if k not in columns:
+                columns.append(k)
+    rec.last_test_result = {
+        "rows": len(rows),
+        "columns": columns,
+        "sample": rows[:5],
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.commit()
+
+
+def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None,
+                      wait_seconds: int = 60) -> dict:
+    """审批前试跑：临时激活 → 触发 → 取样 → 恢复原激活状态。不写资产湖。
+
+    成功即持久化列样本（persist_test_result）——审批面板、数据管家对话工具、
+    编辑向导三条试跑入口都走这里，审批契约的判断依据保持最新。"""
+    rows, exec_meta = collect_test_rows(db, rec, payload=payload, wait_seconds=wait_seconds)
+    persist_test_result(db, rec, rows, exec_meta)
 
     columns: list[str] = []
     for row in rows[:50]:

@@ -406,28 +406,75 @@ def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None =
     return " ".join(name_parts)
 
 
+def resolve_curated_target(db, pl, source: dict, multi_source: bool,
+                           table_name: str | None = None):
+    """定位本产物应写入的既有 curated 数据集：**按 id 绑定优先，按名字兜底**。
+
+    产物名由 pl.name 派生，若只按名字 get-or-create，流水线改名后下一次运行
+    会另起一个空白资产——旧资产（主键契约/版本史/映射绑定）静默停更。因此
+    先在 target_curated_ids 里按入湖时固化的 schema 键位（pipeline_id /
+    transform_output_table / source_dataset_id）反查；多候选歧义时回退名字，
+    宁可分叉也不错绑别的产物。返回 (既有数据集|None, 派生名)。
+    """
+    from app.models.v2.dataset import Dataset as _DS
+
+    ds_name = _curated_name(pl, source, multi_source, table_name)
+    target_ids = [c for c in (pl.target_curated_ids or []) if c]
+    if not target_ids:
+        return None, ds_name
+    candidates = db.query(_DS).filter(
+        _DS.kind == "curated", _DS.id.in_(target_ids)).all()
+    # 别的流水线的产物（历史数据 target_curated_ids 被误写时）不认
+    candidates = [c for c in candidates
+                  if (dict(c.schema_json or {}).get("pipeline_id") or pl.id) == pl.id]
+
+    def _schema(c):
+        return dict(c.schema_json or {})
+
+    if table_name:
+        matched = [c for c in candidates
+                   if _schema(c).get("transform_output_table") == table_name]
+    elif multi_source:
+        matched = [c for c in candidates
+                   if _schema(c).get("source_dataset_id") == source.get("dataset_id")]
+    else:
+        matched = candidates
+    if len(matched) == 1:
+        return matched[0], ds_name
+    # 0 个（首跑/旧数据无键位）或多个（歧义）→ 名字兜底
+    by_name = db.query(_DS).filter(
+        _DS.kind == "curated", _DS.name == ds_name).first()
+    return by_name, ds_name
+
+
 def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> dict:
     """入湖是「读湖中全量→内存合并→写新版本」的读改写，全程持数据集写锁。
 
     任务调度与手动运行并发落同一 curated 数据集时后到者等待；不锁则双方
-    各自基于旧版本合并，先提交的增量被后提交者静默覆盖。锁键按产物名，
+    各自基于旧版本合并，先提交的增量被后提交者静默覆盖。锁键优先用已绑定
+    数据集的 id（改名后名字会变、id 不变）；首建场景退回名字锁，
     get-or-create 也在锁内，同名数据集的创建竞争一并串行化。
     """
     from app.data_channel.datasets.lock import dataset_write_lock
 
-    ds_name = _curated_name(pl, source, multi_source, table_name)
-    with dataset_write_lock(f"curated::{ds_name}", bind=db.get_bind()):
+    bound_ds, ds_name = resolve_curated_target(db, pl, source, multi_source, table_name)
+    lock_key = f"curated::{bound_ds.id}" if bound_ds is not None else f"curated::{ds_name}"
+    with dataset_write_lock(lock_key, bind=db.get_bind()):
         return _save_curated_dataset_in_lock(
             db, svc, pl, source, data, ctx, multi_source, table_name,
-            write_opts, contract_columns, ds_name)
+            write_opts, contract_columns, ds_name,
+            bound_ds_id=(bound_ds.id if bound_ds is not None else None))
 
 
-def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str) -> dict:
+def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str, bound_ds_id: str | None = None) -> dict:
     # 复用既有 curated 数据集追加版本：同一管道反复运行不再无限增殖新数据集，
-    # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本
+    # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本。
+    # 绑定关系按 id（resolve_curated_target），流水线改名不影响归属
     from app.models.v2.dataset import Dataset as _DS
-    curated_ds = db.query(_DS).filter(
-        _DS.kind == "curated", _DS.name == ds_name).first()
+    curated_ds = db.query(_DS).filter(_DS.id == bound_ds_id).first() if bound_ds_id else None
+    if curated_ds is None:
+        curated_ds = db.query(_DS).filter(
+            _DS.kind == "curated", _DS.name == ds_name).first()
     if curated_ds is None:
         curated_ds = svc.create_dataset(name=ds_name, kind="curated")
 
@@ -490,10 +537,13 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         try:
             # 赋新 dict, 原地修改 JSON 列不会被 SQLAlchemy 跟踪
             # 契约字段（primary_key/columns/columns_typed/last_output_columns）由闸门统一维护
-            schema = persist_contract(curated_ds, pk=effective_pk,
-                                      pk_source=gate["pk_source"],
-                                      lake_rows=lake_rows, output_rows=data,
-                                      column_definitions=column_defs)
+            schema = persist_contract(
+                curated_ds, pk=effective_pk,
+                pk_source=gate["pk_source"],
+                lake_rows=lake_rows, output_rows=data,
+                column_definitions=column_defs,
+                # 全量覆盖重建 = 变更主键声明的唯一受控通道（与 gate_rows 同一口径）
+                allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
             sample = data or lake_rows
             schema["quality_score"] = _compute_quality_score(sample, source["route"], ctx.meta)
             schema["route"] = source["route"]
