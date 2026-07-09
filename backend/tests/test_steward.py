@@ -1,15 +1,14 @@
 """数据管家（steward）的治理与集成测试：
 
   1. 生命周期（发布唯一入口 = 流水线编辑向导的 publish/unpublish 端点）：
-     创建即未发布（不激活）→ publish 激活 + 封版 + 固化 definition →
+     新建即未发布（不激活）→ publish 激活 + 封版 + 固化 definition →
      已发布编排封版（数据管家修改被拒）→ unpublish 停用回草稿可继续编排
-  2. 影子流水线守卫：engine=n8n 的 v2_pipelines 记录禁止画布式 definition
-     修改；删除 = 归档治理记录（workflow 停用、n8n 侧保留）
-  3. 工具边界：connections 引用缺失节点报错回给 LLM；同名去重；节点字段补全
+  2. 职权边界（管家只有两项写权限）：新建骨架（create_pipeline）+ 编排
+     「未发布 且 未启用」的流水线（update_workflow）。已启用即拒编排；
+     试跑 / 纳管 / 执行观测 / 归档删除都不再是管家职权。
+  3. 编排工具边界：connections 引用缺失节点报错回给 LLM；节点字段补全
   4. runner 行数据规整：webhook 响应体 / 执行末节点 items → list[dict]
 """
-import uuid
-
 import pytest
 
 from app.data_channel.steward import service
@@ -125,15 +124,18 @@ def pipelines_client(client, db):
 
 @pytest.fixture
 def draft_record(db, fake_n8n):
-    """经工具集创建的未发布记录（等价于 agent 在对话里创建）。"""
+    """经工具集新建并编排的未发布记录（等价于 agent 在对话里建骨架再补全节点）：
+    create_pipeline 出 Webhook→输出 骨架，update_workflow 换成 Webhook→Set 取数链路。"""
     runner = ToolRunner(db, user_id="u-test", conversation_id="c-test")
-    out = runner.run("create_workflow", {
-        "name": "订单同步流水线", "description": "测试用",
-        "nodes": WEBHOOK_NODES, "connections": WEBHOOK_CONNS,
+    created = runner.run("create_pipeline", {"name": "订单同步流水线", "description": "测试用"})
+    assert "error" not in created, created
+    rid = created["record"]["id"]
+    # 后续用例依赖 WEBHOOK_NODES 这套节点（webhook path=ob-test、末节点=整理字段）
+    updated = runner.run("update_workflow", {
+        "record_id": rid, "nodes": WEBHOOK_NODES, "connections": WEBHOOK_CONNS,
     })
-    assert "error" not in out, out
-    rec = db.query(N8nPipeline).filter(N8nPipeline.id == out["record"]["id"]).first()
-    return rec
+    assert "error" not in updated, updated
+    return db.query(N8nPipeline).filter(N8nPipeline.id == rid).first()
 
 
 def _publish(client, auth_headers, pipeline_id: str, enable: bool = False):
@@ -141,12 +143,12 @@ def _publish(client, auth_headers, pipeline_id: str, enable: bool = False):
                        headers=auth_headers, json={"enable": enable})
 
 
-# ── 生命周期：创建 → 发布 → 封版 → 撤回 ───────────────────────────
+# ── 生命周期：新建 → 发布 → 封版 → 撤回 ───────────────────────────
 
 def test_create_is_inactive_draft(db, fake_n8n, draft_record):
     assert draft_record.status == "draft"
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
-    # 创建即登记影子流水线（draft）——流水线列表立即可见；发布决定能否被调度
+    # 新建即登记影子流水线（draft）——流水线列表立即可见；发布决定能否被调度
     assert draft_record.pipeline_id is not None
     shadow = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
     assert shadow is not None
@@ -154,8 +156,7 @@ def test_create_is_inactive_draft(db, fake_n8n, draft_record):
     assert (shadow.definition or {}).get("engine") == "n8n"
     # 名称去重
     runner = ToolRunner(db, None, None)
-    dup = runner.run("create_workflow", {"name": "订单同步流水线",
-                                         "nodes": WEBHOOK_NODES, "connections": WEBHOOK_CONNS})
+    dup = runner.run("create_pipeline", {"name": "订单同步流水线"})
     assert "error" in dup and "同名" in dup["error"]
 
 
@@ -191,13 +192,20 @@ def test_publish_activates_and_seals(pipelines_client, client, auth_headers, db,
     assert r.status_code == 400
 
 
-def test_publish_fixes_expected_columns_from_test_run(
+def test_publish_fixes_expected_columns_from_wizard_preview(
         pipelines_client, client, auth_headers, db, monkeypatch, fake_n8n, draft_record):
-    """发布固化最近一次试跑的列集合为期望列契约（运行期漂移检测基线）。"""
+    """发布固化最近一次执行预览的列集合为期望列契约（运行期漂移检测基线）。
+
+    未发布 n8n 的执行预览走 runner.collect_test_rows（临时激活→触发→还原）+
+    persist_test_result，与流水线编辑向导第 2 步同一条通道——管家已无试跑工具。"""
     monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
-    runner = ToolRunner(db, None, None)
-    out = runner.run("test_run", {"record_id": draft_record.id})
-    assert out.get("error") is None, out
+    from app.data_channel.steward.runner import collect_test_rows, persist_test_result
+
+    rows, exec_meta = collect_test_rows(db, draft_record)
+    assert exec_meta.get("error") is None, exec_meta
+    persist_test_result(db, draft_record, rows, exec_meta)
+    # 预览不改变发布/激活状态：临时激活后已还原为未激活
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
 
     r = _publish(client, auth_headers, draft_record.pipeline_id)
     assert r.status_code == 200, r.text
@@ -227,6 +235,20 @@ def test_published_is_sealed_for_steward_edit(
     assert pl.status == "published"
 
 
+def test_active_workflow_rejected_for_orchestration(db, fake_n8n, draft_record):
+    """未启用约束：即便影子仍未发布，只要 n8n 侧已激活，编排也被拒（漂移兜底）。"""
+    fake_n8n.activate_workflow(draft_record.n8n_workflow_id)
+    runner = ToolRunner(db, None, None)
+    out = runner.run("update_workflow", {
+        "record_id": draft_record.id,
+        "nodes": WEBHOOK_NODES + [{"name": "过滤", "type": "n8n-nodes-base.filter",
+                                   "typeVersion": 2.2, "parameters": {}}],
+    })
+    assert "error" in out and "启用" in out["error"]
+    # 未写入 n8n：节点仍是编排前的 2 个
+    assert len(fake_n8n.workflows[draft_record.n8n_workflow_id]["nodes"]) == 2
+
+
 def test_unpublish_deactivates_and_reopens_editing(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
     """撤回发布：停用 workflow + 回草稿 + 停用启用开关，之后可继续编排。"""
@@ -240,7 +262,7 @@ def test_unpublish_deactivates_and_reopens_editing(
     pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
     assert pl.status == "draft" and pl.enabled is False
 
-    # 回草稿后编排恢复可写
+    # 回草稿（未发布 且 未启用）后编排恢复可写
     runner = ToolRunner(db, None, None)
     out = runner.run("update_workflow", {
         "record_id": draft_record.id,
@@ -257,14 +279,19 @@ def test_unpublish_deactivates_and_reopens_editing(
 
 
 def test_publish_requires_trigger(pipelines_client, client, auth_headers, db, fake_n8n):
-    """无触发器的工作流不能发布（不可调度的发布没有意义）。"""
+    """无触发器的工作流不能发布（不可调度的发布没有意义）。
+
+    骨架自带 Webhook 触发器，这里用 update_workflow 把它编排掉再试发布。"""
     runner = ToolRunner(db, None, None)
-    out = runner.run("create_workflow", {
-        "name": "无触发器流水线",
+    created = runner.run("create_pipeline", {"name": "无触发器流水线"})
+    rid = created["record"]["id"]
+    up = runner.run("update_workflow", {
+        "record_id": rid,
         "nodes": [{"name": "整理", "type": "n8n-nodes-base.set", "parameters": {}}],
         "connections": {},
     })
-    rec = db.query(N8nPipeline).filter(N8nPipeline.id == out["record"]["id"]).first()
+    assert "error" not in up, up
+    rec = db.query(N8nPipeline).filter(N8nPipeline.id == rid).first()
     r = _publish(client, auth_headers, rec.pipeline_id)
     assert r.status_code == 400 and "触发器" in r.json()["detail"]
     assert fake_n8n.workflows[rec.n8n_workflow_id]["active"] is False
@@ -292,7 +319,7 @@ def test_shadow_pipeline_guards(pipelines_client, client, auth_headers, db, fake
 def test_delete_pipeline_archives_record(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
     """流水线列表删除 n8n 流水线 = 归档治理记录：停用 workflow、影子行移除、
-    n8n 侧工作流保留（可重新纳管）。"""
+    n8n 侧工作流保留。归档只在流水线列表操作，不再是管家职权。"""
     pid = draft_record.pipeline_id
     rid = draft_record.id
     assert _publish(client, auth_headers, pid).status_code == 200
@@ -311,41 +338,32 @@ def test_delete_pipeline_archives_record(
     assert all(item["id"] != rid for item in r.json()["data"])
 
 
-def test_steward_archive_endpoint(client, auth_headers, db, fake_n8n, draft_record):
-    """数据管家面板归档：与流水线列表删除同一条路径。"""
-    shadow_id = draft_record.pipeline_id
-    r = client.delete(f"/api/v2/steward/pipelines/{draft_record.id}", headers=auth_headers)
-    assert r.status_code == 200
-    db.expire_all()
-    assert db.query(Pipeline).filter(Pipeline.id == shadow_id).first() is None
-    db.refresh(draft_record)
-    assert draft_record.status == "archived" and draft_record.pipeline_id is None
+# ── 编排工具边界 ──────────────────────────────────────────────────
 
-
-# ── 工具边界 ──────────────────────────────────────────────────────
-
-def test_toolkit_validates_connections(db, fake_n8n):
+def test_update_validates_connections(db, fake_n8n, draft_record):
+    """编排时 connections 引用不存在的目标节点 → 报错回给 LLM，且不写 n8n。"""
     runner = ToolRunner(db, None, None)
-    out = runner.run("create_workflow", {
-        "name": "坏连接",
+    out = runner.run("update_workflow", {
+        "record_id": draft_record.id,
         "nodes": WEBHOOK_NODES,
         "connections": {"Webhook": {"main": [[{"node": "不存在的节点", "type": "main", "index": 0}]]}},
     })
     assert "error" in out and "不存在的目标节点" in out["error"]
-    # 错误发生在 n8n 写入之前
-    assert fake_n8n.workflows == {}
+    # 校验发生在写 n8n 之前：工作流仍是编排前的 2 个节点
+    assert len(fake_n8n.workflows[draft_record.n8n_workflow_id]["nodes"]) == 2
 
 
-def test_toolkit_normalizes_nodes(db, fake_n8n):
+def test_update_normalizes_nodes(db, fake_n8n, draft_record):
+    """编排时省略的 id/position/typeVersion 自动补全。"""
     runner = ToolRunner(db, None, None)
-    out = runner.run("create_workflow", {
-        "name": "字段补全",
+    out = runner.run("update_workflow", {
+        "record_id": draft_record.id,
         "nodes": [{"name": "Webhook", "type": "n8n-nodes-base.webhook",
                    "parameters": {"path": "x"}}],
         "connections": {},
     })
     assert "error" not in out, out
-    wf = fake_n8n.workflows[out["record"]["n8nWorkflowId"]]
+    wf = fake_n8n.workflows[draft_record.n8n_workflow_id]
     node = wf["nodes"][0]
     assert node["id"] and node["position"] and node["typeVersion"] == 1
 
@@ -357,21 +375,6 @@ def test_normalize_rows_variants():
     assert normalize_rows({"a": 1}) == [{"a": 1}]
     assert normalize_rows([{"json": {"a": 1}}, {"json": {"a": 2}}]) == [{"a": 1}, {"a": 2}]
     assert normalize_rows([{"a": 1}, "raw"]) == [{"a": 1}, {"value": "raw"}]
-
-
-def test_tool_test_run(monkeypatch, db, fake_n8n, draft_record):
-    # 试跑不 sleep：直接返回 fake 里预置的成功执行
-    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
-    runner = ToolRunner(db, None, None)
-    out = runner.run("test_run", {"record_id": draft_record.id})
-    assert "error" not in out or out.get("error") is None, out
-    assert out["rows"] == 2
-    assert out["columns"] == ["currency", "rate"]
-    assert out["sample"][0]["currency"] == "USD"
-    # 试跑不改变发布状态，也不写湖：未发布仍未发布、结束后停用还原
-    db.refresh(draft_record)
-    assert service.shadow_status(db, draft_record) == "draft"
-    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
 
 
 def test_probe_url_guards_and_json_shape(db, fake_n8n):

@@ -10,7 +10,8 @@ write_opts 的 overwrite/append/upsert 合并、空输出保护），差别只�
 被两处调用：
   - pipeline_run_task 经 engine_registry 分发（真实运行，含任务池调度的
     write_opts；通用骨架见 pipelines/external_runner）
-  - steward router 的 test-run（临时激活 → 试跑 → 还原，不写资产湖）
+  - 流水线编辑向导第 2 步对未发布 n8n 的执行预览（collect_test_rows：临时激活
+    → 触发 → 还原，不写资产湖；数据管家已不再有试跑入口）
 """
 from __future__ import annotations
 
@@ -125,7 +126,7 @@ def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str]:
     n8n_def = (pl.definition or {}).get("n8n") or {}
     rec = service.record_for_pipeline(db, pl)
     if rec is None:
-        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请在数据管家中重新纳管该工作流。")
+        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请删除后在数据管家重新新建该流水线。")
     if (pl.status or "") != "published":
         raise StewardError("该 n8n 流水线尚未发布，不能被调度运行。请先在流水线列表的编辑向导中完成发布。")
     webhook_path = n8n_def.get("webhook_path") or service.find_webhook_path(rec.workflow_snapshot)
@@ -182,8 +183,8 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
                       wait_seconds: int = 60) -> tuple[list[dict], dict]:
     """未发布 workflow 的取数通道：临时激活 → 触发 → 收集完整行 → 恢复原激活状态。
 
-    不写资产湖。数据管家试跑与流水线编辑向导（未发布 n8n 的执行预览）
-    共用——未发布 n8n 的生产 webhook 未注册，走 collect_n8n_rows 必 404。
+    不写资产湖。供流水线编辑向导对未发布 n8n 的执行预览使用——未发布 n8n 的
+    生产 webhook 未注册，走 collect_n8n_rows 必 404。数据管家已无试跑入口。
     """
     client = service.get_n8n_client(db)
     workflow = client.get_workflow(rec.n8n_workflow_id)
@@ -208,14 +209,14 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
             try:
                 client.deactivate_workflow(rec.n8n_workflow_id)
             except Exception:  # noqa: BLE001
-                logger.warning("试跑后停用 workflow %s 失败", rec.n8n_workflow_id, exc_info=True)
+                logger.warning("预览取数后停用 workflow %s 失败", rec.n8n_workflow_id, exc_info=True)
     return rows, exec_meta
 
 
 def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_meta: dict) -> None:
-    """试跑成功即持久化列样本：发布时固化为影子流水线的期望列契约。
+    """执行预览成功即持久化列样本：发布时固化为影子流水线的期望列契约。
 
-    数据管家面板与编辑向导两条试跑入口共用同一持久化口径。"""
+    流水线编辑向导的执行预览走这里，与发布契约共用同一持久化口径。"""
     if exec_meta.get("error"):
         return
     from datetime import datetime, timezone
@@ -231,26 +232,3 @@ def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_me
         "at": datetime.now(timezone.utc).isoformat(),
     }
     db.commit()
-
-
-def test_run_workflow(db: Session, rec: N8nPipeline, payload: dict | None = None,
-                      wait_seconds: int = 60) -> dict:
-    """试跑：临时激活 → 触发 → 取样 → 恢复原激活状态。不写资产湖。
-
-    成功即持久化列样本（persist_test_result）——数据管家面板、对话工具、
-    编辑向导三条试跑入口都走这里，发布契约的判断依据保持最新。"""
-    rows, exec_meta = collect_test_rows(db, rec, payload=payload, wait_seconds=wait_seconds)
-    persist_test_result(db, rec, rows, exec_meta)
-
-    columns: list[str] = []
-    for row in rows[:50]:
-        for k in row.keys():
-            if k not in columns:
-                columns.append(k)
-    return {
-        "rows": len(rows),
-        "columns": columns,
-        "sample": rows[:10],
-        "execution": exec_meta,
-        "error": exec_meta.get("error"),
-    }

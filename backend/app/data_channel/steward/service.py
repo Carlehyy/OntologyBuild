@@ -202,6 +202,27 @@ def require_unpublished(db: Session, rec: N8nPipeline) -> None:
             f"请先在流水线列表的编辑向导中「撤回发布」，再回来继续编排。")
 
 
+def require_orchestrable(db: Session, rec: N8nPipeline, client: N8nClient) -> None:
+    """编排守卫（数据管家仅有的写权限边界）：只允许编排「未发布 且 未启用」的流水线。
+
+    - 未发布：影子流水线 status != published（发布=封版，改前须撤回发布）
+    - 未启用：n8n 侧 active == False（发布会激活；若有人在 n8n 界面手动开了
+      开关，会出现"未发布却已激活"的漂移，此处 live 校验一并拦住）
+
+    正常流程里两条件同真同假；分开校验是为了兜住 n8n 侧手动激活的漂移，
+    严格对齐"针对未发布和未启用的 n8n 流水线辅助编排"的职权边界。
+    """
+    require_unpublished(db, rec)
+    try:
+        active = bool(client.get_workflow(rec.n8n_workflow_id).get("active"))
+    except Exception:  # noqa: BLE001 — n8n 不可达时不因探测失败误伤编排
+        active = False
+    if active:
+        raise StewardError(
+            f"流水线「{rec.name}」在 n8n 侧处于已启用状态，数据管家只能编排未启用的流水线。"
+            f"请先在 n8n 界面停用该工作流（或在流水线编辑向导中撤回发布）后再编排。")
+
+
 # ── 发布 / 撤回发布的 n8n 侧动作（被 pipelines publish/unpublish 调用） ──
 
 def activate_for_publish(db: Session, rec: N8nPipeline, client: N8nClient) -> None:

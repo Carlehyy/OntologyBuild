@@ -1,12 +1,18 @@
 """
 数据管家受限工具集 — LLM 与 n8n 交互的全部动词
 
-治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
-  - 创建/纳管的 workflow 一律不激活；激活只发生在用户于流水线编辑向导
-    「发布」时——发布是流水线生命周期的唯一入口，工具集里没有这个动词
-  - 已发布的流水线封版：修改编排一律拒绝，须用户先在编辑向导「撤回发布」
-  - 归档/删除只存在于界面按钮，工具集里没有这些动词
-  - 凭据(credentials)无法经 API 创建 — 工具只能引用用户在 n8n 界面配好的凭据
+职权收敛到两件事（除此之外没有任何写权限）：
+  1. 新建流水线：create_pipeline 只收名称+描述，在 n8n 建 Webhook→输出 骨架并
+     登记为未发布流水线（等价于流水线列表「新建 n8n 流水线」），不激活。
+  2. 辅助编排：update_workflow 只能改「未发布 且 未启用」的流水线定义。
+
+其余工具都是只读支撑（查看/体检/探测数据源/节点目录），不改变流水线的生命
+周期与激活状态。治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
+  - 创建的 workflow 一律不激活；激活只发生在用户于流水线编辑向导「发布」时
+    ——发布是生命周期的唯一入口，工具集里没有这个动词。
+  - 已发布或已启用的流水线：编排一律拒绝（须先在编辑向导撤回发布 / 在 n8n 停用）。
+  - 纳管、试跑、执行观测、归档/删除都不再是管家职权（归档在流水线列表操作）。
+  - 凭据(credentials)无法经 API 创建 — 工具只能引用用户在 n8n 界面配好的凭据。
 """
 from __future__ import annotations
 
@@ -28,8 +34,6 @@ from app.data_channel.steward.service import StewardError
 
 logger = logging.getLogger(__name__)
 
-_EXEC_SAMPLE_ROWS = 5   # get_execution 回填给 LLM 的末节点样例行数
-
 
 TOOL_DEFS: list[dict] = [
     {
@@ -39,7 +43,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "list_pipelines",
-        "description": "列出受管的 n8n 数据流水线记录（含发布状态），以及 n8n 实例上尚未纳管的工作流。",
+        "description": "列出受管的 n8n 数据流水线记录（含发布状态：未发布/已发布）。要编排哪条流水线时先用它拿到 record_id。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -59,30 +63,25 @@ TOOL_DEFS: list[dict] = [
         },
     },
     {
-        "name": "create_workflow",
-        "description": "在 n8n 创建新的数据流水线工作流（自动保持未激活的草稿态）。nodes 省略 id/position 时会自动补全；connections 用节点 name 作为键。创建前先与用户确认设计。",
+        "name": "create_pipeline",
+        "description": (
+            "新建一条 n8n 数据流水线：只需名称与描述。"
+            "后台自动在 n8n 建好 Webhook→输出 的骨架工作流并登记为未发布流水线"
+            "（等价于用户在流水线列表点「新建流水线 → n8n → 填名称/描述」）——不激活、不调度。"
+            "创建后用 get_workflow 看骨架，再用 update_workflow 逐步补全取数与整形节点。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "工作流名称（同时作为平台流水线名）"},
-                "description": {"type": "string", "description": "这条数据流水线的用途说明"},
-                "nodes": {
-                    "type": "array",
-                    "description": "n8n 节点数组：[{name, type, typeVersion, parameters, position?}]",
-                    "items": {"type": "object"},
-                },
-                "connections": {
-                    "type": "object",
-                    "description": 'n8n 连接表，键为源节点 name：{"节点A": {"main": [[{"node": "节点B", "type": "main", "index": 0}]]}}',
-                },
-                "settings": {"type": "object", "description": "workflow settings（可选）"},
+                "name": {"type": "string", "description": "流水线名称（同时作为 n8n 工作流名）"},
+                "description": {"type": "string", "description": "这条数据流水线的用途说明（可选）"},
             },
-            "required": ["name", "nodes", "connections"],
+            "required": ["name"],
         },
     },
     {
         "name": "update_workflow",
-        "description": "修改受管流水线的 workflow 定义（整体替换 nodes/connections，先 get_workflow 取当前值改后回传）。只能修改未发布的流水线；已发布的会被拒绝，需引导用户先在流水线列表的编辑向导中「撤回发布」。",
+        "description": "编排/修改受管流水线的 workflow 定义（整体替换 nodes/connections，先 get_workflow 取当前值改后回传）。只能修改「未发布 且 未启用」的流水线；已发布或 n8n 侧已启用的会被拒绝，需引导用户先在流水线列表的编辑向导中「撤回发布」或在 n8n 停用。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -97,48 +96,12 @@ TOOL_DEFS: list[dict] = [
         },
     },
     {
-        "name": "adopt_workflow",
-        "description": "把 n8n 实例上已存在（但未纳管）的工作流纳入数据管家治理，成为草稿记录。不会改变它在 n8n 侧的激活状态。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "workflow_id": {"type": "string", "description": "n8n workflow id"},
-                "description": {"type": "string"},
-            },
-            "required": ["workflow_id"],
-        },
-    },
-    {
         "name": "check_workflow",
-        "description": "按平台约定体检一条受管流水线：触发器、连接完整性、Webhook 约定、凭据引用。建议用户去发布前先跑一遍并修复 error 级问题。",
+        "description": "只读体检一条受管流水线是否符合平台约定：触发器、连接完整性、Webhook 约定、凭据引用。编排完/让用户去发布前自检一遍，修复 error 级问题（不改动工作流、不激活）。",
         "parameters": {
             "type": "object",
             "properties": {"record_id": {"type": "string"}},
             "required": ["record_id"],
-        },
-    },
-    {
-        "name": "list_executions",
-        "description": "查看某条受管流水线最近的 n8n 执行记录（状态/起止时间），用于排查运行情况。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "record_id": {"type": "string"},
-                "status": {"type": "string", "enum": ["success", "error", "waiting"]},
-                "limit": {"type": "integer"},
-            },
-            "required": ["record_id"],
-        },
-    },
-    {
-        "name": "get_execution",
-        "description": "查看一次执行的细节：各节点产出行数、报错信息、末节点样例数据。定位失败原因用这个。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "execution_id": {"type": "string"},
-            },
-            "required": ["execution_id"],
         },
     },
     {
@@ -150,18 +113,6 @@ TOOL_DEFS: list[dict] = [
                 "category": {"type": "string", "enum": list(CATEGORIES)},
                 "keyword": {"type": "string"},
             },
-        },
-    },
-    {
-        "name": "test_run",
-        "description": "试跑一条受管流水线：临时激活 → POST 它的生产 Webhook → 等执行完成 → 返回行数/列/样例数据与执行状态，结束后恢复原激活状态，不写资产湖。用户说「测一下/看看数据对不对」就用这个（不要用 probe_url 去打 webhook，也不要让用户手动 curl）。失败时结合 get_execution 定位原因。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "record_id": {"type": "string"},
-                "payload": {"type": "object", "description": "可选：POST 给 Webhook 的 JSON 载荷"},
-            },
-            "required": ["record_id"],
         },
     },
     {
@@ -241,18 +192,8 @@ def _validate_connections(nodes: list[dict], connections: dict) -> None:
                         raise StewardError(f"connections 引用了不存在的目标节点「{tgt}」。现有节点：{sorted(names)}")
 
 
-def _execution_brief(e: dict) -> dict:
-    return {
-        "id": e.get("id"),
-        "status": e.get("status"),
-        "startedAt": e.get("startedAt"),
-        "stoppedAt": e.get("stoppedAt"),
-        "mode": e.get("mode"),
-    }
-
-
 class ToolRunner:
-    """一次对话回合的工具执行器 — 记录触达的流水线，供前端刷新审批面板。"""
+    """一次对话回合的工具执行器 — 记录触达的流水线，供前端刷新受管流水线面板。"""
 
     def __init__(self, db: Session, user_id: str | None, conversation_id: str | None):
         self.db = db
@@ -314,27 +255,14 @@ class ToolRunner:
         return overview
 
     def tool_list_pipelines(self, keyword: str | None = None) -> dict:
+        # 只列受管流水线；不再枚举 n8n 上未纳管的工作流（纳管已不在管家职权内）
         records = (self.db.query(N8nPipeline)
                    .filter(N8nPipeline.status != STATUS_ARCHIVED)
                    .order_by(N8nPipeline.updated_at.desc()).limit(50).all())
         if keyword:
             kw = keyword.lower()
             records = [r for r in records if kw in (r.name or "").lower()]
-        managed_ids = {r.n8n_workflow_id for r in records}
-        managed = [service.record_out(self.db, r) for r in records]
-
-        unmanaged = []
-        try:
-            for wf in self.client.list_workflows(limit=50):
-                if str(wf.get("id")) in managed_ids:
-                    continue
-                if keyword and keyword.lower() not in str(wf.get("name", "")).lower():
-                    continue
-                unmanaged.append({"workflowId": wf.get("id"), "name": wf.get("name"),
-                                  "active": wf.get("active")})
-        except StewardError as e:
-            return {"managed": managed, "unmanagedError": str(e)}
-        return {"managed": managed, "unmanaged": unmanaged[:20]}
+        return {"managed": [service.record_out(self.db, r) for r in records]}
 
     def tool_get_workflow(self, record_id: str) -> dict:
         rec = service.require_record(self.db, record_id)
@@ -355,14 +283,6 @@ class ToolRunner:
     def tool_list_node_types(self, category: str | None = None, keyword: str | None = None) -> dict:
         nodes = find_nodes(category=category, keyword=keyword)
         return {"nodes": nodes, "hint": "不在目录里的 n8n 节点也可以使用，但请优先用目录内节点以保证类型/版本正确。"}
-
-    def tool_test_run(self, record_id: str, payload: dict | None = None) -> dict:
-        from app.data_channel.steward.runner import test_run_workflow
-
-        rec = service.require_record(self.db, record_id)
-        result = test_run_workflow(self.db, rec, payload=payload)
-        self._touch(rec.id)
-        return result
 
     def tool_probe_url(self, url: str, headers: dict | None = None) -> dict:
         url = (url or "").strip()
@@ -426,39 +346,19 @@ class ToolRunner:
 
     # ── 写入（治理规则内嵌） ──────────────────────────────────────
 
-    def tool_create_workflow(self, name: str, nodes: list, connections: dict,
-                             description: str | None = None,
-                             settings: dict | None = None) -> dict:
-        name = (name or "").strip()
-        if not name:
-            raise StewardError("name 不能为空。")
-        dup = (self.db.query(N8nPipeline)
-               .filter(N8nPipeline.name == name, N8nPipeline.status != STATUS_ARCHIVED).first())
-        if dup:
-            raise StewardError(f"已存在同名受管流水线「{name}」（记录 {dup.id}）。请换名称，或用 update_workflow 修改它。")
-
-        norm_nodes = _normalize_nodes(nodes)
-        _validate_connections(norm_nodes, connections or {})
-        created = self.client.create_workflow({
-            "name": name, "nodes": norm_nodes,
-            "connections": connections or {}, "settings": settings or {},
-        })
-        rec = N8nPipeline(
-            name=name,
-            description=(description or "").strip(),
-            n8n_workflow_id=str(created.get("id")),
-            workflow_snapshot=N8nClient.sanitize_workflow(created),
-            conversation_id=self.conversation_id,
-            created_by=self.user_id,
-        )
-        self.db.add(rec)
-        self.db.flush()
-        service.ensure_shadow_pipeline(self.db, rec)  # 创建即出现在流水线列表（draft）
+    def tool_create_pipeline(self, name: str, description: str | None = None) -> dict:
+        # 与流水线列表「新建 n8n 流水线」完全同源：建 Webhook→输出 骨架、未激活、
+        # 登记为未发布流水线。任意节点的搭建交给随后的 update_workflow。
+        rec = service.bootstrap_blank_workflow(
+            self.db, name, description or "", user_id=self.user_id)
+        rec.conversation_id = self.conversation_id
         self.db.commit()
         self._touch(rec.id)
         return {
             "record": service.record_out(self.db, rec, active=False),
-            "notice": "已创建为未发布流水线（n8n 侧未激活），流水线列表中已可见。完善后请用 check_workflow 体检、test_run 试跑；确认无误后提醒用户到流水线列表的编辑向导中「发布并启用」。",
+            "notice": ("已新建为未发布流水线（含 Webhook→输出 骨架，n8n 侧未激活），流水线列表已可见。"
+                       "接下来用 get_workflow 看骨架、update_workflow 补全取数与整形节点；"
+                       "编排、体检通过后，提醒用户到流水线列表的编辑向导中「发布并启用」。"),
         }
 
     def tool_update_workflow(self, record_id: str, name: str | None = None,
@@ -485,8 +385,8 @@ class ToolRunner:
             _validate_connections(payload["nodes"], old_conns)
 
         if payload:
-            # 发布封版守卫：写 n8n 之前拦——已发布流水线的编排一律只读
-            service.require_unpublished(self.db, rec)
+            # 编排守卫：写 n8n 之前拦——只放行「未发布 且 未启用」的流水线
+            service.require_orchestrable(self.db, rec, self.client)
             updated = self.client.update_workflow(rec.n8n_workflow_id, payload)
             rec.workflow_snapshot = N8nClient.sanitize_workflow(updated)
             if payload.get("name"):
@@ -498,32 +398,6 @@ class ToolRunner:
         self.db.commit()
         self._touch(rec.id)
         return {"record": service.record_out(self.db, rec)}
-
-    def tool_adopt_workflow(self, workflow_id: str, description: str | None = None) -> dict:
-        existing = (self.db.query(N8nPipeline)
-                    .filter(N8nPipeline.n8n_workflow_id == str(workflow_id),
-                            N8nPipeline.status != STATUS_ARCHIVED).first())
-        if existing:
-            raise StewardError(f"该工作流已被纳管（记录 {existing.id}，状态 {existing.status}）。")
-        workflow = self.client.get_workflow(str(workflow_id))
-        rec = N8nPipeline(
-            name=str(workflow.get("name") or f"workflow-{workflow_id}"),
-            description=(description or "").strip(),
-            n8n_workflow_id=str(workflow_id),
-            workflow_snapshot=N8nClient.sanitize_workflow(workflow),
-            conversation_id=self.conversation_id,
-            created_by=self.user_id,
-        )
-        self.db.add(rec)
-        self.db.flush()
-        service.ensure_shadow_pipeline(self.db, rec)  # 纳管即出现在流水线列表（draft）
-        self.db.commit()
-        self._touch(rec.id)
-        out = {"record": service.record_out(self.db, rec, active=bool(workflow.get("active")))}
-        if workflow.get("active"):
-            out["notice"] = ("注意：该工作流当前在 n8n 侧处于激活状态，但平台记录是未发布流水线。"
-                             "建议提醒用户到流水线列表的编辑向导中「发布并启用」使两侧对齐，或在 n8n 中先停用它。")
-        return out
 
     def tool_check_workflow(self, record_id: str) -> dict:
         rec = service.require_record(self.db, record_id)
@@ -585,44 +459,3 @@ class ToolRunner:
         ok = not any(i["level"] == "error" for i in issues)
         self._touch(rec.id)
         return {"ok": ok, "issues": issues, "summary": summary}
-
-    # ── 执行观测 ──────────────────────────────────────────────────
-
-    def tool_list_executions(self, record_id: str, status: str | None = None,
-                             limit: int | None = None) -> dict:
-        rec = service.require_record(self.db, record_id)
-        executions = self.client.list_executions(
-            workflow_id=rec.n8n_workflow_id, status=status, limit=limit or 10)
-        return {"pipeline": rec.name,
-                "executions": [_execution_brief(e) for e in executions]}
-
-    def tool_get_execution(self, execution_id: str) -> dict:
-        e = self.client.get_execution(str(execution_id), include_data=True)
-        out: dict[str, Any] = _execution_brief(e)
-        data = (e.get("data") or {})
-        result_data = data.get("resultData") or {}
-        out["lastNode"] = result_data.get("lastNodeExecuted")
-        err = result_data.get("error") or {}
-        if err:
-            out["error"] = {
-                "message": str(err.get("message", ""))[:400],
-                "node": (err.get("node") or {}).get("name") if isinstance(err.get("node"), dict) else err.get("node"),
-                "description": str(err.get("description", ""))[:400],
-            }
-        run_data = result_data.get("runData") or {}
-        node_stats = {}
-        for node_name, runs in run_data.items():
-            try:
-                items = ((runs[-1].get("data") or {}).get("main") or [[]])[0] or []
-                node_stats[node_name] = len(items)
-            except Exception:  # noqa: BLE001
-                node_stats[node_name] = None
-        out["nodeItemCounts"] = node_stats
-        last = out.get("lastNode")
-        if last and last in run_data:
-            try:
-                items = ((run_data[last][-1].get("data") or {}).get("main") or [[]])[0] or []
-                out["lastNodeSample"] = [it.get("json") for it in items[:_EXEC_SAMPLE_ROWS]]
-            except Exception:  # noqa: BLE001
-                pass
-        return out

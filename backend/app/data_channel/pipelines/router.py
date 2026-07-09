@@ -266,7 +266,7 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Pipeline not found")
 
     # ── n8n：删除 = 归档治理记录（停用 workflow + 影子行移除；n8n 侧
-    #    工作流保留，可在数据管家重新纳管）。引用保护在 archive 内统一做。──
+    #    工作流保留，不自动删除）。引用保护在 archive 内统一做。──
     if _is_n8n_pipeline(pl):
         from app.data_channel.steward import service as steward_service
 
@@ -329,7 +329,7 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         rec = record_for_pipeline(db, pl)
         if rec is None:
             errors.append({"node_id": "", "severity": "error",
-                           "message": "缺少数据管家治理记录，无法运行。请在数据管家中重新纳管该工作流。"})
+                           "message": "缺少数据管家治理记录，无法运行。请删除后在数据管家重新新建该流水线。"})
         elif not (n8n_def.get("webhook_path") or find_webhook_path(rec.workflow_snapshot)):
             warnings.append({"node_id": "", "severity": "warning",
                              "message": "工作流没有 Webhook 触发器，平台无法主动调度（仅能由 n8n 内部定时自跑，产物不会自动入湖）。"})
@@ -710,7 +710,7 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
 
         rec = steward_service.record_for_pipeline(db, pl)
         if rec is None:
-            raise HTTPException(400, "缺少数据管家治理记录，无法发布。请在数据管家中重新纳管该工作流。")
+            raise HTTPException(400, "缺少数据管家治理记录，无法发布。请删除后在数据管家重新新建该流水线。")
         try:
             client = steward_service.get_n8n_client(db)
             steward_service.activate_for_publish(db, rec, client)

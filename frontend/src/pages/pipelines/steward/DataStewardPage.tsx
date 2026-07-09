@@ -1,26 +1,26 @@
 /**
- * 数据管家 — 对话式编排 n8n 数据流水线
+ * 数据管家 — 对话式新建与编排 n8n 数据流水线
  *
- * 左侧：与数据管家对话（创建/纳管 n8n 工作流、编排完善未发布的流水线）
- * 右侧：受管流水线面板（查看状态与试跑；发布/撤回发布的唯一入口在
- *       流水线列表的编辑向导——发布时激活 n8n 工作流并封版契约）
+ * 职权只有两件事：新建流水线（Webhook→输出 骨架）与编排未发布未启用的流水线。
+ * 左侧：与数据管家对话（create_pipeline 新建骨架、update_workflow 补全编排）
+ * 右侧：受管流水线只读看板（状态与节点链）；试跑/发布/归档都在流水线列表
+ *       与编辑向导完成，不在管家里。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  AlertTriangle, ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight,
-  ClipboardCheck, Eye, FlaskConical, GitBranch, Globe, History, Inbox, Loader2,
+  AlertTriangle, ArrowLeft, Bot, ChevronDown, ChevronRight,
+  ClipboardCheck, Eye, GitBranch, Globe, History, Loader2,
   Plus, RefreshCw, Rocket, Search, Send, Settings, Sparkles, Trash2,
-  User, Workflow, X, XCircle, Zap,
+  User, Workflow, X, Zap,
 } from 'lucide-react'
 import {
   stewardApi, streamStewardChat,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
-  type StewardStatus, type StewardStep, type TestRunResult,
+  type StewardStatus, type StewardStep,
 } from '@/api/steward'
-import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ---------- 状态样式（发布状态 = 影子流水线，与流水线列表同一口径） ----------
 
@@ -33,21 +33,17 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   steward_overview:    { label: '查看全景', icon: Eye },
   list_pipelines:      { label: '列出流水线', icon: GitBranch },
   get_workflow:        { label: '读取工作流', icon: Search },
-  create_workflow:     { label: '创建工作流', icon: Plus },
-  update_workflow:     { label: '修改工作流', icon: Workflow },
-  adopt_workflow:      { label: '纳管工作流', icon: Inbox },
+  create_pipeline:     { label: '新建流水线', icon: Plus },
+  update_workflow:     { label: '编排工作流', icon: Workflow },
   check_workflow:      { label: '体检', icon: ClipboardCheck },
-  test_run:            { label: '试跑', icon: FlaskConical },
-  list_executions:     { label: '执行记录', icon: History },
-  get_execution:       { label: '执行详情', icon: Search },
   list_node_types:     { label: '查节点目录', icon: Zap },
   probe_url:           { label: '探测数据源', icon: Globe },
 }
 
 const SUGGESTED = [
   '看看现在有哪些受管的 n8n 流水线',
-  '帮我创建一条流水线：定时从一个 REST API 拉取 JSON 数据，整理成表格入湖',
-  'n8n 上有没有还没纳管的工作流？帮我接管过来',
+  '新建一条流水线：定时从一个 REST API 拉取 JSON 数据，整理成表格入湖',
+  '帮我完善某条未发布流水线的取数与整形节点',
 ]
 
 interface ChatMsg {
@@ -397,7 +393,7 @@ export default function DataStewardPage() {
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-gray-400">
-              管家只负责创建与编排：发布并启用在流水线列表的编辑向导中完成（发布后编排封版）
+              管家只负责新建与编排未发布未启用的流水线；试跑、发布、归档都在流水线列表与编辑向导完成
             </p>
           </div>
         </section>
@@ -466,24 +462,6 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
   onExpand: (id: string | null) => void
   onChanged: () => void
 }) {
-  const [actionErr, setActionErr] = useState('')
-  const [archiveTarget, setArchiveTarget] = useState<StewardPipeline | null>(null)
-  const [pendingAction, setPendingAction] = useState<string | null>(null)
-
-  const act = async (key: string, fn: () => Promise<unknown>) => {
-    setPendingAction(key)
-    setActionErr('')
-    try {
-      await fn()
-      onChanged()
-    } catch (e: unknown) {
-      const err = e as { detail?: string; message?: string }
-      setActionErr(err?.detail || err?.message || '操作失败')
-    } finally {
-      setPendingAction(null)
-    }
-  }
-
   const grouped = {
     draft: records.filter(r => r.pipelineStatus !== 'published'),
     published: records.filter(r => r.pipelineStatus === 'published'),
@@ -501,14 +479,6 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
         </button>
       </div>
 
-      {actionErr && (
-        <div className="mx-3 mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          <span className="flex-1">{actionErr}</span>
-          <button onClick={() => setActionErr('')}><X size={12} /></button>
-        </div>
-      )}
-
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
         {loading ? (
           <div className="p-6 text-center text-sm text-gray-400">加载中…</div>
@@ -516,7 +486,7 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
           <div className="border-2 border-dashed rounded-xl p-8 text-center text-gray-400 space-y-2">
             <Workflow size={28} className="mx-auto opacity-30" />
             <p className="text-sm">还没有受管的 n8n 流水线</p>
-            <p className="text-xs">在左侧对话里让数据管家创建一条试试</p>
+            <p className="text-xs">在左侧对话里让数据管家新建一条试试</p>
           </div>
         ) : (
           ([
@@ -531,8 +501,6 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
                     key={r.id} record={r}
                     expanded={expandedId === r.id}
                     onToggle={() => onExpand(expandedId === r.id ? null : r.id)}
-                    pendingAction={pendingAction}
-                    onArchive={() => setArchiveTarget(r)}
                   />
                 ))}
               </div>
@@ -540,41 +508,22 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
           ))
         )}
       </div>
-
-      {/* 归档确认 */}
-      <ConfirmDialog
-        open={!!archiveTarget}
-        title="归档流水线"
-        message={`归档「${archiveTarget?.name}」后它将从数据管家与流水线列表消失；n8n 侧的工作流会被停用但保留，可随时重新纳管。确认归档？`}
-        confirmLabel={pendingAction?.startsWith('archive') ? '归档中…' : '确认归档'}
-        onConfirm={async () => {
-          if (!archiveTarget) return
-          await act(`archive:${archiveTarget.id}`, () => stewardApi.archive(archiveTarget.id))
-          setArchiveTarget(null)
-        }}
-        onCancel={() => setArchiveTarget(null)}
-      />
     </aside>
   )
 }
 
 // ---------- 单条记录卡片 ----------
 
-function RecordCard({ record: r, expanded, onToggle, pendingAction, onArchive }: {
+function RecordCard({ record: r, expanded, onToggle }: {
   record: StewardPipeline
   expanded: boolean
   onToggle: () => void
-  pendingAction: string | null
-  onArchive: () => void
 }) {
   const navigate = useNavigate()
   const published = r.pipelineStatus === 'published'
   const meta = PUBLISH_META[published ? 'published' : 'draft']
   const [detail, setDetail] = useState<StewardPipelineDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [testResult, setTestResult] = useState<TestRunResult | null>(null)
-  const [testing, setTesting] = useState(false)
-  const [testErr, setTestErr] = useState('')
 
   useEffect(() => {
     if (expanded && !detail && !detailLoading) {
@@ -585,20 +534,6 @@ function RecordCard({ record: r, expanded, onToggle, pendingAction, onArchive }:
 
   // 记录变化后（如发布/撤回/编排更新）重置已缓存的详情
   useEffect(() => { setDetail(null) }, [r.pipelineStatus, r.updatedAt])
-
-  const runTest = async () => {
-    setTesting(true)
-    setTestErr('')
-    setTestResult(null)
-    try {
-      setTestResult(await stewardApi.testRun(r.id))
-    } catch (e: unknown) {
-      const err = e as { detail?: string; message?: string }
-      setTestErr(err?.detail || err?.message || '试跑失败')
-    } finally {
-      setTesting(false)
-    }
-  }
 
   const btn = 'flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-40'
 
@@ -634,55 +569,21 @@ function RecordCard({ record: r, expanded, onToggle, pendingAction, onArchive }:
             </div>
           )}
 
-          {/* 详情：最近执行 */}
+          {/* n8n 可达性（只读；执行观测/试跑已不在管家职权内） */}
           {detailLoading ? (
             <p className="text-[11px] text-gray-400">读取 n8n 详情…</p>
           ) : detail?.n8nError ? (
             <p className="text-[11px] text-amber-600">n8n 暂不可达：{detail.n8nError}</p>
-          ) : (detail?.executions?.length ?? 0) > 0 && (
-            <div className="space-y-1">
-              <p className="text-[11px] font-medium text-gray-400">最近执行</p>
-              {detail!.executions!.slice(0, 5).map(e => (
-                <div key={e.id} className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                  {e.status === 'success' ? <CheckCircle2 size={11} className="text-green-500" /> : e.status === 'error' ? <XCircle size={11} className="text-red-500" /> : <Loader2 size={11} className="text-gray-400" />}
-                  <span>{e.status}</span>
-                  <span className="text-gray-300">{e.startedAt ? new Date(e.startedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          ) : null}
 
-          {/* 试跑结果 */}
-          {testErr && <p className="rounded-md bg-red-50 border border-red-100 px-2 py-1.5 text-[11px] text-red-600">{testErr}</p>}
-          {testResult && (
-            <div className="rounded-md border bg-gray-50 px-2 py-1.5 text-[11px] text-gray-600 space-y-1">
-              <p className="font-medium">
-                试跑{testResult.error ? '失败' : '成功'}：{testResult.rows} 行
-                {testResult.columns.length > 0 && ` · 列 [${testResult.columns.slice(0, 6).join(', ')}${testResult.columns.length > 6 ? '…' : ''}]`}
-              </p>
-              {testResult.error && <p className="text-red-500">{testResult.error}</p>}
-              {testResult.sample.length > 0 && (
-                <pre className="max-h-28 overflow-auto rounded bg-white border px-1.5 py-1 text-[10px]">{JSON.stringify(testResult.sample.slice(0, 3), null, 1)}</pre>
-              )}
-            </div>
-          )}
-
-          {/* 操作：发布/撤回发布不在这里——唯一入口是流水线列表的编辑向导 */}
+          {/* 管理入口：试跑/发布/撤回/归档都在流水线列表与编辑向导，不在管家 */}
           <div className="flex flex-wrap gap-1.5 pt-0.5">
             {!published ? (
-              <>
-                <button onClick={runTest} disabled={testing} className={`${btn} text-gray-600 hover:bg-gray-50`}>
-                  {testing ? <Loader2 size={11} className="animate-spin" /> : <FlaskConical size={11} />} 试跑
-                </button>
-                <button onClick={() => navigate('/data/pipelines')}
-                  title="到流水线列表打开这条流水线的编辑向导，确认契约后发布并启用"
-                  className={`${btn} border-violet-200 text-violet-700 hover:bg-violet-50`}>
-                  <Rocket size={11} /> 去发布
-                </button>
-                <button onClick={onArchive} disabled={!!pendingAction} className={`${btn} text-gray-400 hover:bg-red-50 hover:text-red-500`}>
-                  <Trash2 size={11} /> 归档
-                </button>
-              </>
+              <button onClick={() => navigate('/data/pipelines')}
+                title="到流水线列表打开这条流水线的编辑向导，预览数据、确认契约后发布并启用"
+                className={`${btn} border-violet-200 text-violet-700 hover:bg-violet-50`}>
+                <Rocket size={11} /> 去发布
+              </button>
             ) : (
               <button onClick={() => navigate('/data/pipelines')}
                 title="已发布流水线的撤回发布、启用开关都在流水线列表"

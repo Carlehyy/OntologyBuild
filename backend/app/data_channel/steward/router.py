@@ -7,13 +7,13 @@
   GET    /conversations/{id}         会话详情（含完整工具轨迹，审计视图）
   DELETE /conversations/{id}
   GET    /pipelines                  受管流水线记录列表（受管流水线面板）
-  GET    /pipelines/{id}             记录详情（workflow 摘要 + 最近执行）
-  POST   /pipelines/bootstrap        流水线列表「新建 n8n 流水线」：骨架工作流纳管
-  POST   /pipelines/{id}/test-run    试跑（临时激活，不写资产湖）
-  DELETE /pipelines/{id}             归档（可选连带删除 n8n workflow）
+  GET    /pipelines/{id}             记录详情（workflow 摘要，只读）
+  POST   /pipelines/bootstrap        流水线列表「新建 n8n 流水线」：骨架工作流登记
 
-生命周期不变式：发布/撤回发布只存在于流水线编辑向导（pipelines 的
-publish/unpublish 端点）——数据管家只负责创建/纳管与编排，不背生命周期。
+职权边界：数据管家只有两项写权限——新建流水线（bootstrap / 对话工具
+create_pipeline）与编排未发布未启用的流水线（对话工具 update_workflow）。
+发布/撤回发布只存在于流水线编辑向导（pipelines 的 publish/unpublish 端点）；
+试跑、归档/删除都不再走 steward，归档在流水线列表（走 service.archive）。
 """
 from __future__ import annotations
 
@@ -34,7 +34,6 @@ from app.data_channel.steward.models import (
     N8nPipeline, StewardConversation, StewardMessage, STATUS_ARCHIVED,
 )
 from app.data_channel.steward.orchestrator import run_steward_turn
-from app.data_channel.steward.runner import test_run_workflow
 from app.data_channel.steward.service import StewardError
 
 router = APIRouter()
@@ -216,7 +215,7 @@ def bootstrap_pipeline(body: BootstrapBody, db: Session = Depends(get_db),
                        current_user=Depends(get_current_user)):
     """流水线列表「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流（草稿纳管）。
 
-    与对话工具 create_workflow 同源治理：创建即未发布、n8n 侧不激活；
+    与对话工具 create_pipeline 同源治理：创建即未发布、n8n 侧不激活；
     编排完善在数据管家对话完成，发布在流水线编辑向导完成。
     返回治理记录供前端深链跳转。
     """
@@ -247,44 +246,6 @@ def get_pipeline_record(record_id: str, db: Session = Depends(get_db),
         out["workflow"] = rec.workflow_snapshot
         out["active"] = bool(workflow.get("active"))
         out["summary"] = service.summarize_workflow(rec.workflow_snapshot)
-        out["executions"] = [{
-            "id": e.get("id"), "status": e.get("status"),
-            "startedAt": e.get("startedAt"), "stoppedAt": e.get("stoppedAt"),
-        } for e in client.list_executions(workflow_id=rec.n8n_workflow_id, limit=10)]
     except Exception as e:  # noqa: BLE001 — n8n 不可达时返回快照视图
         out["n8nError"] = str(e)[:300]
     return _ok(out)
-
-
-class TestRunBody(BaseModel):
-    payload: Optional[dict] = None
-
-
-@router.post("/pipelines/{record_id}/test-run")
-def test_run_record(record_id: str, body: TestRunBody = TestRunBody(),
-                    db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """试跑：临时激活 → 触发 webhook → 返回样例数据 → 恢复。不写资产湖。"""
-    try:
-        rec = service.require_record(db, record_id)
-        # 试跑成功即持久化列样本（test_run_workflow 内统一处理）：
-        # 发布时固化为影子流水线的期望列契约
-        result = test_run_workflow(db, rec, payload=body.payload)
-    except Exception as e:  # noqa: BLE001
-        raise _handle(e)
-    return _ok(result)
-
-
-@router.delete("/pipelines/{record_id}")
-def archive_record(record_id: str, delete_workflow: bool = Query(False),
-                   db: Session = Depends(get_db), _=Depends(get_current_user)):
-    try:
-        rec = service.require_record(db, record_id)
-        client = None
-        try:
-            client = service.get_n8n_client(db)
-        except StewardError:
-            pass  # n8n 未配置也允许归档平台记录
-        service.archive(db, rec, client, delete_workflow=delete_workflow)
-    except Exception as e:  # noqa: BLE001
-        raise _handle(e)
-    return _ok({"status": "archived", "id": record_id})

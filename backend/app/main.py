@@ -151,7 +151,7 @@ def _seed_db():
                 "ALTER TABLE v2_pipeline_runs ADD COLUMN task_id VARCHAR",
                 # —— 事件登记：留存明文密钥以便面板反复复制 ——
                 "ALTER TABLE event_ingest_keys ADD COLUMN secret_plain VARCHAR(120)",
-                # —— 数据管家：试跑列样本 → 审批固化为影子流水线期望列契约 ——
+                # —— 未发布 n8n 执行预览的列样本 → 发布时固化为影子流水线期望列契约 ——
                 "ALTER TABLE v2_n8n_pipelines ADD COLUMN last_test_result JSON",
                 # —— 流水线启用开关：停用后任务池/链式触发不执行 ——
                 "ALTER TABLE v2_pipelines ADD COLUMN enabled BOOLEAN DEFAULT TRUE",

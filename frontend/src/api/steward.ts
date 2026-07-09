@@ -36,7 +36,6 @@ export interface StewardPipeline {
 
 export interface StewardPipelineDetail extends StewardPipeline {
   workflow?: Record<string, unknown> | null
-  executions?: { id: string; status: string; startedAt: string | null; stoppedAt: string | null }[]
   n8nError?: string
 }
 
@@ -72,14 +71,6 @@ export interface StewardConversationDTO {
   messages?: StewardMessageDTO[]
 }
 
-export interface TestRunResult {
-  rows: number
-  columns: string[]
-  sample: Record<string, unknown>[]
-  execution: Record<string, unknown>
-  error?: string | null
-}
-
 export type StewardEvent =
   | { type: 'meta'; conversationId: string; model: string }
   | ({ type: 'step' } & StewardStep)
@@ -99,13 +90,9 @@ export const stewardApi = {
 
   pipelines: () => apiClientV2.get<StewardPipeline[]>('/steward/pipelines'),
   pipeline: (id: string) => apiClientV2.get<StewardPipelineDetail>(`/steward/pipelines/${id}`),
-  /** 列表页新建 n8n 流水线：后台自动在 n8n 创建骨架工作流并纳管（未发布） */
+  /** 列表页 / 数据管家「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流并登记（未发布） */
   bootstrap: (name: string, description = '') =>
     apiClientV2.post<{ record: StewardPipeline }>('/steward/pipelines/bootstrap', { name, description }),
-  testRun: (id: string, payload?: Record<string, unknown>) =>
-    apiClientV2.post<TestRunResult>(`/steward/pipelines/${id}/test-run`, { payload }),
-  archive: (id: string, deleteWorkflow = false) =>
-    apiClientV2.delete(`/steward/pipelines/${id}`, { params: { delete_workflow: deleteWorkflow } }),
 }
 
 // ---------- SSE 流式 chat ----------
