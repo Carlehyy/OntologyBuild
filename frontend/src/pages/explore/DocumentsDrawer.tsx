@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { X, FileText, Download, Loader2, Wand2 } from 'lucide-react'
-import { explorationApi, type BxDocument, type BxDraft } from '@/api/exploration'
+import { X, FileText, Download, Loader2, ShieldAlert, Wand2 } from 'lucide-react'
+import { explorationApi, type BxDocument, type BxDraft, type Readiness } from '@/api/exploration'
 import { ontologyApi } from '@/api/ontologies'
 import Md from './Md'
 
@@ -25,6 +25,8 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
   const [target, setTarget] = useState<string>('')      // '' = 新建本体
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  // 质量门拦截：后端 422 返回结构化 readiness，展示堵门项并允许显式越权
+  const [gateBlock, setGateBlock] = useState<Readiness | null>(null)
 
   useEffect(() => {
     if (!activeId && docs.length > 0) setActiveId(docs[0].id)
@@ -47,21 +49,32 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
     URL.revokeObjectURL(a.href)
   }
 
-  const generateDraft = async () => {
+  const generateDraft = async (force = false) => {
     if (!doc) return
     setError('')
+    if (!force) setGateBlock(null)
     setGenerating(true)
     try {
       const draft = await explorationApi.generateDraft(doc.id, {
         targetOntologyId: target || undefined,
+        force,
       })
+      setGateBlock(null)
       onDraftCreated(draft)
     } catch (e: any) {
-      setError(e?.detail || e?.message || '草稿生成失败')
+      const detail = e?.detail
+      if (detail?.code === 'quality_gate_blocked' && detail?.readiness) {
+        setGateBlock(detail.readiness as Readiness)
+      } else {
+        setError((typeof detail === 'string' && detail) || e?.message || '草稿生成失败')
+      }
     } finally {
       setGenerating(false)
     }
   }
+
+  const gateBlocking: { gate: string; item: string }[] = (gateBlock?.gates || [])
+    .flatMap(g => g.blockingItems.map(item => ({ gate: g.label, item })))
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
@@ -132,6 +145,37 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
           {doc && (
             <div className="border-t border-[var(--color-border)] px-5 py-3.5 space-y-2">
               {error && <div className="text-xs text-[var(--color-danger)]">{error}</div>}
+              {gateBlock && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+                    <ShieldAlert size={13} />
+                    质量门未通过（{gateBlock.gatesPassed}/{gateBlock.gatesTotal} 门）——
+                    还有 {gateBlock.blockingCount} 项口径未定量
+                  </div>
+                  <ul className="mt-1.5 space-y-0.5 max-h-36 overflow-y-auto">
+                    {gateBlocking.slice(0, 10).map((b, i) => (
+                      <li key={i} className="text-[11px] leading-relaxed text-amber-800/90">
+                        · [{b.gate}] {b.item}
+                      </li>
+                    ))}
+                    {gateBlocking.length > 10 && (
+                      <li className="text-[11px] text-amber-700">…共 {gateBlocking.length} 项</li>
+                    )}
+                  </ul>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-[11px] text-amber-800/80 flex-1">
+                      建议回到对话，按画布「质量门」提示逐项澄清后重新生成文档。
+                    </span>
+                    <button
+                      onClick={() => void generateDraft(true)}
+                      disabled={generating}
+                      className="shrink-0 px-2.5 py-1 rounded-md text-[11px] border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      已知悉风险，越权生成（留痕）
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <select
                   value={target}
@@ -144,7 +188,7 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
                   ))}
                 </select>
                 <button
-                  onClick={generateDraft}
+                  onClick={() => void generateDraft(false)}
                   disabled={generating}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50"
                 >
@@ -153,7 +197,7 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
                 </button>
               </div>
               <div className="text-[10px] text-[var(--color-text-tertiary)]">
-                转化以生成该文档时的画布快照为源：确定性映射为主，LLM 仅补缺；草稿需人工审阅勾选后才会写入本体。
+                转化以生成该文档时的画布快照为源，确定性映射；质量门（定量澄清）通过后方可生成，越权生成会留痕；草稿需人工审阅勾选后才会写入本体。
               </div>
             </div>
           )}

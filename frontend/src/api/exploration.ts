@@ -18,6 +18,18 @@ export interface CanvasElement {
   [k: string]: unknown
 }
 
+/** 澄清账本条目：blocking=企业口径必须拍板；advisory=AI 建议待确认 */
+export interface BxQuestion {
+  id: string
+  question: string
+  kind: 'blocking' | 'advisory'
+  target?: string
+  options?: string[]
+  suggestion?: string
+  status: 'open' | 'resolved' | 'dismissed'
+  resolution?: string
+}
+
 export interface BusinessCanvas {
   objects: CanvasElement[]
   actors: CanvasElement[]
@@ -25,11 +37,41 @@ export interface BusinessCanvas {
   events: CanvasElement[]
   rules: CanvasElement[]
   scenarios: CanvasElement[]
+  questions?: BxQuestion[]
 }
 
 export interface Completeness {
   counts: Record<string, number>
   gaps: string[]
+}
+
+/** 质量门：与后端草稿生成闸门同一口径（readiness.evaluate） */
+export interface GateResult {
+  id: string
+  label: string
+  passed: boolean
+  blockingItems: string[]
+  advisoryItems: string[]
+}
+
+export interface Readiness {
+  ready: boolean
+  stage: string
+  gatesPassed: number
+  gatesTotal: number
+  blockingCount: number
+  advisoryCount: number
+  openQuestions: { blocking: number; advisory: number }
+  gates: GateResult[]
+}
+
+export type DiagramKind = 'er' | 'flow' | 'sequence' | 'state'
+
+export interface BxDiagram {
+  kind: DiagramKind
+  title: string
+  target?: string
+  mermaid: string
 }
 
 export interface BxStep {
@@ -38,6 +80,8 @@ export interface BxStep {
   summary: string
   durationMs: number
   error?: string
+  /** show_diagram 的产物：确定性生成的 mermaid，随步骤直接渲染进对话 */
+  diagram?: BxDiagram
 }
 
 export interface BxMessage {
@@ -61,13 +105,14 @@ export interface BxSession {
 export interface BxSessionDetail extends BxSession {
   canvas: BusinessCanvas
   completeness: Completeness
+  readiness: Readiness
   messages: BxMessage[]
 }
 
 export type ExploreEvent =
   | { type: 'meta'; sessionId: string; model: string }
   | ({ type: 'step' } & BxStep)
-  | { type: 'canvas'; canvas: BusinessCanvas; version: number; completeness: Completeness }
+  | { type: 'canvas'; canvas: BusinessCanvas; version: number; completeness: Completeness; readiness: Readiness }
   | { type: 'answer'; content: string; usage?: unknown }
   | { type: 'error'; message: string }
   | { type: 'done' }
@@ -171,6 +216,9 @@ export interface DraftReport {
   conflicts: string[]
   scenarioCoverage: { scenario: string; missingObjects: string[]; missingBehaviors: string[] }[]
   llmRefined: boolean
+  /** 生成时刻的质量门快照；gateOverride=true 表示未就绪被显式越权 */
+  readiness?: Pick<Readiness, 'ready' | 'stage' | 'gatesPassed' | 'gatesTotal' | 'blockingCount' | 'advisoryCount'>
+  gateOverride?: boolean
 }
 
 export interface BxDraft {
@@ -220,8 +268,10 @@ export const explorationApi = {
   session: (sid: string) => apiClientV2.get<BxSessionDetail>(`/exploration/sessions/${sid}`),
   deleteSession: (sid: string) => apiClientV2.delete(`/exploration/sessions/${sid}`),
   canvas: (sid: string) =>
-    apiClientV2.get<{ canvas: BusinessCanvas; version: number; completeness: Completeness }>(
+    apiClientV2.get<{ canvas: BusinessCanvas; version: number; completeness: Completeness; readiness: Readiness }>(
       `/exploration/sessions/${sid}/canvas`),
+  readiness: (sid: string) =>
+    apiClientV2.get<Readiness>(`/exploration/sessions/${sid}/readiness`),
 
   generateDocument: (sid: string, modelId?: string | null) =>
     apiClientV2.post<BxDocument>(`/exploration/sessions/${sid}/documents`,
@@ -230,14 +280,16 @@ export const explorationApi = {
     apiClientV2.get<BxDocumentListItem[]>(`/exploration/sessions/${sid}/documents`),
   document: (docId: string) => apiClientV2.get<BxDocument>(`/exploration/documents/${docId}`),
 
-  generateDraft: (docId: string, body: { targetOntologyId?: string | null; modelId?: string | null }) =>
+  generateDraft: (docId: string, body: { targetOntologyId?: string | null; modelId?: string | null; force?: boolean }) =>
     apiClientV2.post<BxDraft>(`/exploration/documents/${docId}/drafts`, {
       targetOntologyId: body.targetOntologyId || undefined,
       modelId: body.modelId || undefined,
+      force: body.force || undefined,
     }),
   drafts: (sid: string) => apiClientV2.get<BxDraft[]>(`/exploration/sessions/${sid}/drafts`),
-  erDiagram: (sid: string) =>
-    apiClientV2.get<{ mermaid: string }>(`/exploration/sessions/${sid}/diagrams/er`),
+  diagram: (sid: string, kind: DiagramKind, target?: string) =>
+    apiClientV2.get<BxDiagram>(`/exploration/sessions/${sid}/diagrams/${kind}`,
+      { params: target ? { target } : undefined }),
 
   // 会话附件（仅本会话可见，随会话删除清理）
   attachments: (sid: string) =>

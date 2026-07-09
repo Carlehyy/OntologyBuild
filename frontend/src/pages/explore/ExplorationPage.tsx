@@ -7,14 +7,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Bot, Compass, FileText, History, Loader2, Paperclip, Plus, Send, Sparkles,
-  Trash2, User, Wrench, X,
+  Bot, CircleHelp, Compass, FileText, History, Loader2, Paperclip, Plus, Send,
+  ShieldAlert, ShieldCheck, Sparkles, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
   explorationApi, streamExplorationChat,
-  type BusinessCanvas, type BxAttachment, type BxDraft, type BxStep, type Completeness,
+  type BusinessCanvas, type BxAttachment, type BxDraft, type BxQuestion, type BxStep,
+  type Completeness, type Readiness,
 } from '@/api/exploration'
 import { modelApi } from '@/api/ontologies'
+import MermaidBlock from '@/components/MermaidBlock'
 import Md from './Md'
 import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
@@ -46,23 +48,44 @@ const formatSize = (n: number) =>
     : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB`
       : `${(n / 1024 / 1024).toFixed(1)} MB`
 
+const STEP_LABELS: Record<string, string> = {
+  upsert_elements: '沉淀画布',
+  remove_elements: '修正画布',
+  raise_questions: '登记问题',
+  resolve_questions: '销账',
+  show_diagram: '生成图表',
+  use_skill: '激活技能',
+}
+
 function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
   if (steps.length === 0 && !running) return null
   return (
     <div className="mb-3 rounded-lg bg-[var(--color-bg-base)] border border-[var(--color-border)] px-3 py-2.5 space-y-2">
       {steps.map((s, i) => (
-        <div key={i} className="flex items-start gap-2.5">
-          <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${s.error
-            ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
-            : 'bg-teal-50 text-teal-600'}`}>
-            <Wrench size={11} />
+        <div key={i}>
+          <div className="flex items-start gap-2.5">
+            <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${s.error
+              ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
+              : 'bg-teal-50 text-teal-600'}`}>
+              <Wrench size={11} />
+            </div>
+            <div className="min-w-0 text-xs leading-5">
+              <span className={`font-medium ${s.error ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]'}`}>
+                {STEP_LABELS[s.tool] || s.tool}
+              </span>
+              <span className="text-[var(--color-text-tertiary)]"> · {s.summary}</span>
+            </div>
           </div>
-          <div className="min-w-0 text-xs leading-5">
-            <span className={`font-medium ${s.error ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]'}`}>
-              {s.tool === 'upsert_elements' ? '沉淀画布' : s.tool === 'remove_elements' ? '修正画布' : s.tool}
-            </span>
-            <span className="text-[var(--color-text-tertiary)]"> · {s.summary}</span>
-          </div>
+          {/* show_diagram 的确定性 mermaid 随步骤直接出现在对话流中，历史可回放 */}
+          {s.diagram && (
+            <div className="mt-2 ml-[30px]">
+              <div className="text-[11px] font-medium text-[var(--color-text-secondary)] mb-1">
+                {s.diagram.title}
+                <span className="ml-1.5 font-normal text-[var(--color-text-tertiary)]">由画布确定性生成 · 请核对与实际是否一致</span>
+              </div>
+              <MermaidBlock chart={s.diagram.mermaid} />
+            </div>
+          )}
         </div>
       ))}
       {running && (
@@ -75,6 +98,47 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
           </span>
         </div>
       )}
+    </div>
+  )
+}
+
+/** 开放堵门问题的快捷答复：点选候选值直接作为回答发送（定量闭环的最短路径） */
+function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
+  questions: BxQuestion[]
+  disabled?: boolean
+  onAnswer: (text: string) => void
+  onCustom: (prefill: string) => void
+}) {
+  if (questions.length === 0) return null
+  return (
+    <div className="mb-2 space-y-1.5">
+      {questions.map(q => (
+        <div key={q.id} className="flex items-start gap-2 rounded-lg border border-amber-200/80 bg-amber-50/50 px-2.5 py-1.5">
+          <CircleHelp size={13} className="mt-[3px] shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1">
+            <span className="text-xs text-amber-900/90 leading-5">{q.question}</span>
+            <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
+              {(q.options || []).slice(0, 4).map(opt => (
+                <button
+                  key={opt}
+                  disabled={disabled}
+                  onClick={() => onAnswer(`「${q.question}」我的答复：${opt}`)}
+                  className="px-2 py-0.5 rounded-md text-[11px] border border-amber-300 bg-white text-amber-800 hover:bg-amber-100 disabled:opacity-40"
+                >
+                  {opt}
+                </button>
+              ))}
+              <button
+                disabled={disabled}
+                onClick={() => onCustom(`「${q.question}」我的答复：`)}
+                className="px-2 py-0.5 rounded-md text-[11px] border border-dashed border-amber-300 text-amber-700 hover:bg-amber-100 disabled:opacity-40"
+              >
+                自定义…
+              </button>
+            </span>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -96,6 +160,7 @@ export default function ExplorationPage() {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [canvas, setCanvas] = useState<BusinessCanvas | null>(null)
   const [completeness, setCompleteness] = useState<Completeness | null>(null)
+  const [readiness, setReadiness] = useState<Readiness | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
@@ -107,6 +172,7 @@ export default function ExplorationPage() {
   const [uploads, setUploads] = useState<{ uid: string; name: string; ts: number }[]>([])
   const [attachError, setAttachError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
 
@@ -156,6 +222,7 @@ export default function ExplorationPage() {
     })))
     setCanvas(detail.canvas)
     setCompleteness(detail.completeness)
+    setReadiness(detail.readiness)
     explorationApi.attachments(id).then(setAttachments).catch(() => { /* 非致命 */ })
   }, [])
 
@@ -170,6 +237,7 @@ export default function ExplorationPage() {
     setMessages([])
     setCanvas(null)
     setCompleteness(null)
+    setReadiness(null)
     setAttachments([])
     setUploads([])
     setAttachError('')
@@ -177,6 +245,7 @@ export default function ExplorationPage() {
     const detail = await explorationApi.session(s.id)
     setCanvas(detail.canvas)
     setCompleteness(detail.completeness)
+    setReadiness(detail.readiness)
   }
 
   const removeSession = async (id: string) => {
@@ -186,6 +255,7 @@ export default function ExplorationPage() {
       setMessages([])
       setCanvas(null)
       setCompleteness(null)
+      setReadiness(null)
       setAttachments([])
       setUploads([])
     }
@@ -254,6 +324,7 @@ export default function ExplorationPage() {
         } else if (e.type === 'canvas') {
           setCanvas(e.canvas)
           setCompleteness(e.completeness)
+          setReadiness(e.readiness)
         } else if (e.type === 'answer') {
           patchLast(m => ({ ...m, content: e.content, streaming: false }))
         } else if (e.type === 'error') {
@@ -285,6 +356,15 @@ export default function ExplorationPage() {
 
   const canvasCount = completeness
     ? Object.values(completeness.counts).reduce((a, b) => a + b, 0) : 0
+
+  // 开放堵门问题 → 输入框上方的快捷答复（最多展示 2 个，按登记顺序）
+  const openBlocking = (canvas?.questions || [])
+    .filter(q => q.status === 'open' && q.kind === 'blocking')
+  const askInChat = (text: string) => { void send(text) }
+  const prefillInput = (text: string) => {
+    setInput(text)
+    textareaRef.current?.focus()
+  }
 
   return (
     <div className="flex h-full min-h-[560px] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] shadow-sm">
@@ -348,6 +428,18 @@ export default function ExplorationPage() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              {readiness && canvasCount > 0 && (
+                <span
+                  title={`当前阶段：${readiness.stage}\n堵门项 ${readiness.blockingCount} · 建议项 ${readiness.advisoryCount}（明细见右侧画布）`}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium ${readiness.ready
+                    ? 'border-teal-200 bg-teal-50 text-teal-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                >
+                  {readiness.ready ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
+                  质量门 {readiness.gatesPassed}/{readiness.gatesTotal}
+                  {!readiness.ready && <span className="font-normal">· {readiness.blockingCount} 项待定量</span>}
+                </span>
+              )}
               <select
                 value={modelId}
                 onChange={e => setModelId(e.target.value)}
@@ -482,6 +574,18 @@ export default function ExplorationPage() {
                 {attachError}
               </div>
             )}
+            {/* 澄清账本的开放堵门问题 → 点选候选值即答（定量闭环最短路径） */}
+            <QuickReplies
+              questions={openBlocking.slice(0, 2)}
+              disabled={busy}
+              onAnswer={askInChat}
+              onCustom={prefillInput}
+            />
+            {openBlocking.length > 2 && (
+              <div className="mb-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+                还有 {openBlocking.length - 2} 个待澄清问题，见右侧画布「澄清账本」
+              </div>
+            )}
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
             <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] focus-within:border-teal-500">
               <div className="flex items-end gap-2 px-3 py-2">
@@ -493,6 +597,7 @@ export default function ExplorationPage() {
                   <Paperclip size={16} />
                 </button>
                 <textarea
+                  ref={textareaRef}
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => {
@@ -517,7 +622,13 @@ export default function ExplorationPage() {
 
       {/* 业务画布 */}
       <aside className="w-[280px] lg:w-[320px] 2xl:w-[340px] shrink-0 ml-3 border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
-        <CanvasPanel sessionId={sid || undefined} canvas={canvas} completeness={completeness} />
+        <CanvasPanel
+          sessionId={sid || undefined}
+          canvas={canvas}
+          completeness={completeness}
+          readiness={readiness}
+          onAsk={busy ? undefined : askInChat}
+        />
       </aside>
 
       {docsOpen && sid && (

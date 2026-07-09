@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.ontologies.agent_runtime import llm_bridge
 from app.exploration import canvas as C
+from app.exploration import questions as Q
+from app.exploration import readiness as R
 from app.exploration.models import ExplorationDocument, ExplorationMessage, ExplorationSession
 
 logger = logging.getLogger(__name__)
@@ -141,15 +143,57 @@ def _narrative(db: Session, session: ExplorationSession, call_kwargs: Optional[d
         return "## 1. 背景与目标\n\n" + _NARRATIVE_FALLBACK + "\n\n## 2. 业务概述\n\n" + _NARRATIVE_FALLBACK
 
 
+_Q_STATUS = {"open": "⏳ 待澄清", "resolved": "✅ 已定量", "dismissed": "➖ 已搁置"}
+_Q_KIND = {"blocking": "B·堵门", "advisory": "A·建议"}
+
+
+def _q_conclusion(q: dict) -> str:
+    if q.get("resolution"):
+        return str(q["resolution"])
+    if q.get("options"):
+        return "候选: " + " / ".join(str(o) for o in q["options"])
+    return str(q.get("suggestion") or "")
+
+
+def _render_ledger(canvas: dict) -> str:
+    """澄清账本 → markdown 表格：全部问题（含已销账）留档，可追溯定量过程。"""
+    items = Q.get_questions(canvas)
+    if not items:
+        return "（账本为空 —— 本次探索未登记澄清问题）\n"
+    rows = [[q.get("question", ""), _Q_KIND.get(q.get("kind") or "blocking", q.get("kind")),
+             q.get("target", ""), _Q_STATUS.get(q.get("status") or "open", q.get("status")),
+             _q_conclusion(q)]
+            for q in items]
+    return _table(["问题", "类别", "关联元素", "状态", "定量结论"], rows)
+
+
+def _render_readiness(rd: dict) -> str:
+    """质量门报告 → markdown：与草稿生成闸门同一口径。"""
+    head = (f"**{'✅ 已就绪' if rd['ready'] else '⛔ 未就绪'}** — "
+            f"{rd['gatesPassed']}/{rd['gatesTotal']} 门通过，"
+            f"堵门项 {rd['blockingCount']}，建议项 {rd['advisoryCount']}。"
+            f"当前阶段：{rd['stage']}\n")
+    rows = []
+    for g in rd["gates"]:
+        detail = "；".join(g["blockingItems"][:4]) or "—"
+        if len(g["blockingItems"]) > 4:
+            detail += f"（等 {len(g['blockingItems'])} 项）"
+        rows.append([("✅" if g["passed"] else "⛔") + " " + g["label"],
+                     len(g["blockingItems"]), len(g["advisoryItems"]), detail])
+    table = _table(["质量门", "堵门项", "建议项", "未决明细"], rows)
+    advisory = [f"- {item}" for g in rd["gates"] for item in g["advisoryItems"]][:12]
+    adv_md = ("\n**建议补齐（不拦路）**\n\n" + "\n".join(advisory) + "\n") if advisory else ""
+    return head + "\n" + table + adv_md
+
+
 def generate_document(db: Session, session: ExplorationSession,
                       call_kwargs: Optional[dict]) -> ExplorationDocument:
     canvas = C._ensure_canvas(session.canvas)
-    comp = C.completeness(canvas)
+    rd = R.evaluate(canvas)
     version = 1 + (db.query(ExplorationDocument)
                    .filter(ExplorationDocument.session_id == session.id).count())
     title = f"{session.title} · 需求文档 v{version}"
 
-    gaps_md = "\n".join(f"- {g}" for g in comp["gaps"]) or "- 无"
     body = f"""# {title}
 
 {_narrative(db, session, call_kwargs)}
@@ -178,9 +222,13 @@ def generate_document(db: Session, session: ExplorationSession,
 
 {_render_scenarios(canvas["scenarios"])}
 
-## 9. 待澄清问题
+## 9. 澄清账本
 
-{gaps_md}
+{_render_ledger(canvas)}
+
+## 10. 质量门检查
+
+{_render_readiness(rd)}
 """
     doc = ExplorationDocument(session_id=session.id, title=title,
                               content_md=body, canvas_snapshot=canvas, version=version)

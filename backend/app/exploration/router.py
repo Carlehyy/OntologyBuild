@@ -33,7 +33,8 @@ from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.models.ontology import OntologyProject
 from app.services.document_service import convert_document
 from app.exploration import canvas as C
-from app.exploration import converter, schemas as S
+from app.exploration import converter, readiness as R, schemas as S
+from app.exploration.diagram import DIAGRAM_KINDS, DiagramError, build_diagram
 from app.exploration.document import generate_document
 from app.exploration.models import (ExplorationAttachment, ExplorationDocument,
                                     ExplorationDraft, ExplorationMessage,
@@ -102,6 +103,7 @@ def get_session(session_id: str, db: Session = Depends(get_db),
         **_session_out(s),
         "canvas": C._ensure_canvas(s.canvas),
         "completeness": C.completeness(s.canvas),
+        "readiness": R.evaluate(s.canvas),
         "messages": [S.MessageOut.model_validate(m).model_dump(by_alias=True) for m in messages],
     })
 
@@ -125,19 +127,37 @@ def get_canvas(session_id: str, db: Session = Depends(get_db),
                current_user=Depends(get_current_user)):
     s = _require_session(db, session_id, current_user)
     return _ok({"canvas": C._ensure_canvas(s.canvas), "version": s.canvas_version,
-                "completeness": C.completeness(s.canvas)})
+                "completeness": C.completeness(s.canvas),
+                "readiness": R.evaluate(s.canvas)})
 
 
-@router.get("/sessions/{session_id}/diagrams/er")
-def get_er_diagram(session_id: str, db: Session = Depends(get_db),
-                   current_user=Depends(get_current_user)):
-    """画布对象模型 → mermaid ER 图（确定性生成，不经 LLM）。"""
-    from app.exploration.diagram import er_mermaid
+@router.get("/sessions/{session_id}/readiness")
+def get_readiness(session_id: str, db: Session = Depends(get_db),
+                  current_user=Depends(get_current_user)):
+    """质量门报告（确定性评估，与草稿生成闸门同一口径）。"""
     s = _require_session(db, session_id, current_user)
-    mermaid = er_mermaid(s.canvas)
-    if not mermaid:
-        raise HTTPException(422, "画布还没有对象模型 —— 先在对话中沉淀业务对象")
-    return _ok({"mermaid": mermaid})
+    return _ok(R.evaluate(s.canvas))
+
+
+@router.get("/sessions/{session_id}/diagrams/{kind}")
+def get_diagram(session_id: str, kind: str, target: str | None = None,
+                db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """画布 → 业务建模图表（er/flow/sequence/state，确定性生成，不经 LLM）。
+
+    flow/sequence 可用 ?target=场景名 指定场景；state 用 ?target=对象名。
+    """
+    s = _require_session(db, session_id, current_user)
+    try:
+        return _ok(build_diagram(s.canvas, kind, target))
+    except DiagramError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@router.get("/sessions/{session_id}/diagrams")
+def list_diagram_kinds(session_id: str, db: Session = Depends(get_db),
+                       current_user=Depends(get_current_user)):
+    _require_session(db, session_id, current_user)
+    return _ok({"kinds": [{"kind": k, "label": v} for k, v in DIAGRAM_KINDS.items()]})
 
 
 # ---------------------------------------------------------------- 会话附件
@@ -325,7 +345,19 @@ def get_document(document_id: str, db: Session = Depends(get_db),
 @router.post("/documents/{document_id}/drafts", status_code=201)
 def create_draft(document_id: str, body: S.GenerateDraftRequest,
                  db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """需求文档 → 本体草稿。质量门是准入闸：堵门项未清零时拒绝生成，
+    除非 force=true 显式越权（越权事实与未决项写入草稿报告，人审可见）。"""
     d = _require_document(db, document_id, current_user)
+
+    rd = R.evaluate(d.canvas_snapshot or {})
+    if not rd["ready"] and not body.force:
+        raise HTTPException(422, detail={
+            "code": "quality_gate_blocked",
+            "message": (f"质量门未通过（{rd['gatesPassed']}/{rd['gatesTotal']} 门，"
+                        f"剩余 {rd['blockingCount']} 项堵门问题）。"
+                        "请回到对话完成定量澄清后重新生成文档，或显式越权强制生成。"),
+            "readiness": rd,
+        })
 
     existing = None
     if body.target_ontology_id:
@@ -341,6 +373,18 @@ def create_draft(document_id: str, body: S.GenerateDraftRequest,
         raise HTTPException(422, str(e)) from e
     draft_data, report = converter.build_draft(
         d.canvas_snapshot or {}, existing=existing, call_kwargs=call_kwargs)
+
+    # 质量门结论随草稿留档：人审抽屉与落地审计都能看到生成时刻的门禁状态
+    report["readiness"] = {k: rd[k] for k in
+                           ("ready", "stage", "gatesPassed", "gatesTotal",
+                            "blockingCount", "advisoryCount")}
+    if not rd["ready"]:
+        report["gateOverride"] = True
+        blocking = [f"[{g['label']}] {item}"
+                    for g in rd["gates"] for item in g["blockingItems"]]
+        report["warnings"] = (
+            [f"⚠️ 质量门未通过被显式越权：{rd['blockingCount']} 项堵门问题未解决即生成草稿"]
+            + blocking[:12] + report.get("warnings", []))
 
     row = ExplorationDraft(session_id=d.session_id, document_id=d.id,
                            target_ontology_id=body.target_ontology_id,

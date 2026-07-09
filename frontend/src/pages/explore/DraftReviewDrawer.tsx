@@ -85,6 +85,7 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
   }
 
   const report = draft.report || { warnings: [], conflicts: [], scenarioCoverage: [], llmRefined: false }
+  const gateOverridden = Boolean(report.gateOverride)
 
   const checkbox = (key: string, conflict?: boolean) => (
     <input
@@ -147,6 +148,22 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
             </div>
           ) : (
             <>
+              {gateOverridden && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50/60 px-3.5 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-rose-700">
+                    <ShieldAlert size={13} /> 质量门越权生成
+                    {report.readiness && (
+                      <span className="font-normal">
+                        （生成时 {report.readiness.gatesPassed}/{report.readiness.gatesTotal} 门通过，
+                        {report.readiness.blockingCount} 项口径未定量）
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-relaxed text-rose-800/90">
+                    此草稿在堵门问题未清零时被强制生成，未定量的规则/关系将以兜底值落地 —— 请逐项重点审阅，或回到对话澄清后重新生成。
+                  </div>
+                </div>
+              )}
               {(report.warnings.length > 0 || report.conflicts.length > 0) && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3.5 py-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 mb-1">

@@ -62,6 +62,7 @@ class DocumentListItem(CamelModel):
 class GenerateDraftRequest(CamelModel):
     target_ontology_id: Optional[str] = None   # None = 应用时新建本体
     model_id: Optional[str] = None             # LLM 补缺用的模型；缺省用系统默认
+    force: bool = False                        # 质量门未通过时显式越权（留痕于草稿报告）
 
 
 class DraftOut(CamelModel):

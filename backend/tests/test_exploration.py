@@ -116,7 +116,7 @@ def _fake_model_config(db, admin_user):
     from app.models.model_config import ModelConfig
     db.add(ModelConfig(id=str(uuid.uuid4()), name="fake", provider="openai",
                        config_type="llm", models=["fake-model"],
-                       created_by=admin_user.id))
+                       enabled=True, created_by=admin_user.id))
     db.commit()
 
 
@@ -202,7 +202,9 @@ def test_document_generation_without_llm(client, auth_headers, session, db):
     # 确定性章节忠实于画布；LLM 缺席时叙述节降级为占位而非失败
     assert "## 4. 对象模型" in md and "订单" in md and "order_no" in md
     assert "标记支付" in md and "大额审批" in md and "支付流程" in md
-    assert "待澄清" in md
+    # §9/§10：澄清账本 + 质量门报告（与草稿闸门同一口径）
+    assert "## 9. 澄清账本" in md and "## 10. 质量门检查" in md
+    assert "⛔ 未就绪" in md          # demo 画布故意含瑕疵（悬空关系/缺主键）
 
     r = client.post(f"{BASE}/sessions/{session['id']}/documents",
                     headers=auth_headers, json={})
@@ -316,22 +318,36 @@ def test_converter_approval_unmatched_not_silent():
     assert any("ghost_approval" in w and "审批" in w for w in report["warnings"])
 
 
-def test_converter_llm_refine_discarded_on_bad_json(monkeypatch):
-    """LLM 补缺输出垃圾 → 重试后丢弃补丁，确定性结果不受影响。"""
+def test_converter_build_draft_is_llm_free(monkeypatch):
+    """build_draft 全程不触碰 LLM（补缺已移除，确定性映射自足）——
+    即便传了 call_kwargs，llm_bridge 被调用即失败。"""
     from app.ontologies.agent_runtime import llm_bridge
-    monkeypatch.setattr(llm_bridge, "chat",
-                        lambda kw, msgs, tools: {"content": "这不是 JSON", "tool_calls": [],
-                                                 "usage": None})
+
+    def _boom(kw, msgs, tools):
+        raise AssertionError("build_draft 不应调用 LLM")
+
+    monkeypatch.setattr(llm_bridge, "chat", _boom)
     draft, report = CV.build_draft(_demo_canvas(), call_kwargs={"model": "fake"})
     assert report["llmRefined"] is False
-    assert any("补缺" in w for w in report["warnings"])
     assert {o["name"] for o in draft["objectTypes"]} == {"Order", "Supplier", "Finance"}
 
 
-def test_converter_llm_refine_whitelist(monkeypatch):
-    """LLM 补缺只允许白名单字段生效，非法类型/基数被忽略。"""
+def test_converter_refine_whitelist_direct(monkeypatch):
+    """refine_draft（保留的工具函数）只允许白名单字段生效，非法类型/基数被忽略；
+    垃圾输出重试后整体丢弃，确定性骨架不受影响。"""
     import json as _json
     from app.ontologies.agent_runtime import llm_bridge
+
+    # 垃圾输出 → 丢弃补丁
+    monkeypatch.setattr(llm_bridge, "chat",
+                        lambda kw, msgs, tools: {"content": "这不是 JSON", "tool_calls": [],
+                                                 "usage": None})
+    warnings: list[str] = []
+    draft, _ = CV.build_draft(_demo_canvas())
+    assert CV.refine_draft(draft, _demo_canvas(), {"model": "fake"}, warnings) is False
+    assert any("补缺" in w for w in warnings)
+
+    # 白名单合并
     patch = {"objectTypes": [{"key": "obj:order", "description": "客户订单",
                               "properties": [{"name": "amount", "type": "decimal128"},
                                              {"name": "paid", "type": "boolean",
@@ -341,16 +357,16 @@ def test_converter_llm_refine_whitelist(monkeypatch):
     monkeypatch.setattr(llm_bridge, "chat",
                         lambda kw, msgs, tools: {"content": _json.dumps(patch),
                                                  "tool_calls": [], "usage": None})
-    draft, report = CV.build_draft(_demo_canvas(), call_kwargs={"model": "fake"})
-    assert report["llmRefined"] is True
+    warnings2: list[str] = []
+    assert CV.refine_draft(draft, _demo_canvas(), {"model": "fake"}, warnings2) is True
     order = next(o for o in draft["objectTypes"] if o["key"] == "obj:order")
     types = {p["name"]: p for p in order["properties"]}
     assert order["description"] == "客户订单"
     assert types["amount"]["type"] == "number"        # 非法类型被忽略，保留确定性结果
     assert types["paid"]["displayName"] == "已支付"
+    assert any("不合法" in w for w in warnings2)       # 非法基数记警告
     link = draft["linkTypes"][0]
     assert link["cardinality"] == "many-to-one"       # 非法基数被忽略
-    assert any("不合法" in w for w in report["warnings"])
 
 
 # ---------------------------------------------------------------- 草稿生成与落地
@@ -360,7 +376,9 @@ def _make_draft(client, auth_headers, session_id, db, target_ontology_id=None):
     _seed_canvas(db, session_id, _demo_canvas())
     r = client.post(f"{BASE}/sessions/{session_id}/documents", headers=auth_headers, json={})
     doc_id = r.json()["data"]["id"]
-    body = {"targetOntologyId": target_ontology_id} if target_ontology_id else {}
+    # demo 画布故意含瑕疵（测转化管线的兜底），质量门会拦 —— 显式越权
+    body = {"targetOntologyId": target_ontology_id, "force": True} \
+        if target_ontology_id else {"force": True}
     r = client.post(f"{BASE}/documents/{doc_id}/drafts", headers=auth_headers, json=body)
     assert r.status_code == 201, r.text
     return r.json()["data"]
@@ -591,9 +609,13 @@ def test_er_mermaid_deterministic():
     assert "number amount" in text               # 类型映射
     assert 'Order }o--|| Supplier : "归属供应商"' in text
     assert "Ghost" not in text                   # 悬空关系不进图
-    # 无属性的主体对象兜底 id PK — Finance 来自画布? demo canvas 的 actor 不进 er（er 只投影 objects）
-    assert "Finance" not in text
-    assert er_mermaid({}) == ""                  # 空画布
+    # 主体入图口径与转化管线一致：role/system 不进；person/org 进（它们将转成 ObjectType）；
+    # 与对象同名的主体合并不重复出实体
+    assert "Finance" not in text and "ERP" not in text
+    assert text.count("Supplier {") == 1
+    from app.exploration.diagram import DiagramError
+    with pytest.raises(DiagramError):
+        er_mermaid({})                           # 空画布 → 指明先补什么
 
 
 def test_er_diagram_endpoint(client, auth_headers, session, db):
@@ -672,3 +694,262 @@ def test_attachment_cascade_on_session_delete(client, auth_headers, db, tmp_path
 
     assert client.delete(f"{BASE}/sessions/{sid}", headers=auth_headers).status_code == 204
     assert db.query(ExplorationAttachment).filter_by(session_id=sid).count() == 0
+
+
+# ---------------------------------------------------------------- 澄清账本（questions）
+
+
+def test_questions_ledger_quant_discipline():
+    """账本三纪律：同题去重；堵门问题模糊结论拒收；定量/点选结论放行。"""
+    from app.exploration import questions as Q
+
+    cv = C.empty_canvas()
+    cv, ids, errs = Q.raise_questions(cv, [
+        {"question": "大额订单的门槛是多少？", "kind": "blocking",
+         "target": "Order.amount", "options": ["≥10000元", "≥50000元"]},
+        {"question": "订单状态有哪些？", "kind": "blocking"},
+        {"question": "订单编号建议用系统流水号", "kind": "advisory",
+         "suggestion": "ORD-yyyyMMdd-序号"},
+    ])
+    assert not errs and len(ids) == 3
+    # 同题重复登记 → 复用既有 id，不新增
+    cv, ids2, _ = Q.raise_questions(cv, [{"question": "大额订单的门槛是多少？",
+                                          "kind": "blocking"}])
+    assert ids2 == [ids[0]] and len(Q.get_questions(cv)) == 3
+
+    # 模糊结论 → 拒收并说明命中的模糊词
+    cv, done, errs = Q.resolve_questions(cv, [{"id": ids[0], "resolution": "金额较大时算大额"}])
+    assert not done and any("较大" in e for e in errs)
+    assert Q.open_questions(cv, "blocking") and len(Q.open_questions(cv)) == 3
+
+    # 定量结论 → 销账；枚举清单也算定量
+    cv, done, errs = Q.resolve_questions(cv, [
+        {"id": ids[0], "resolution": "≥50000元"},
+        {"id": ids[1], "resolution": "待支付/已支付/已发货/已完成/已取消"},
+    ])
+    assert len(done) == 2 and not errs
+    # advisory 可用原文销账；dismissed 需写原因
+    cv, done, errs = Q.resolve_questions(cv, [
+        {"id": "订单编号建议用系统流水号", "resolution": "用户确认采用建议值",
+         "status": "dismissed"}])
+    assert len(done) == 1 and not Q.open_questions(cv)
+
+
+# ---------------------------------------------------------------- 质量门（readiness）
+
+
+def _quantified_canvas() -> dict:
+    """一份全绿画布：主键/基数/定量规则/事件来源/场景引用全部齐备。"""
+    cv = C.empty_canvas()
+    cv, _, _ = C.upsert_elements(cv, "object", [
+        {"name": "Order", "displayName": "订单", "keyAttribute": "order_no",
+         "attributes": [
+             {"name": "order_no", "displayName": "订单号", "typeHint": "文本", "required": True},
+             {"name": "amount", "displayName": "金额", "typeHint": "金额"},
+             {"name": "status", "displayName": "状态", "typeHint": "枚举",
+              "enum": ["待支付", "已支付", "已取消"]},
+         ],
+         "relations": [{"target": "Customer", "displayName": "下单客户",
+                        "cardinality": "many-to-one"}]},
+        {"name": "Customer", "displayName": "客户", "keyAttribute": "customer_no",
+         "attributes": [{"name": "customer_no", "displayName": "客户编码",
+                         "typeHint": "文本", "required": True}]},
+    ])
+    cv, _, _ = C.upsert_elements(cv, "actor", [
+        {"name": "Sales", "displayName": "销售", "kind": "role"},
+    ])
+    cv, _, _ = C.upsert_elements(cv, "behavior", [
+        {"name": "confirm_pay", "displayName": "确认支付", "actor": "Sales",
+         "object": "Order", "trigger": "收到银行回单",
+         "outcome": "订单从待支付变为已支付"},
+    ])
+    cv, _, _ = C.upsert_elements(cv, "rule", [
+        {"name": "big_amount", "displayName": "大额审批", "kind": "approval",
+         "appliesTo": "confirm_pay", "statement": "金额 ≥ 50000 元需要财务总监审批"},
+    ])
+    cv, _, _ = C.upsert_elements(cv, "event", [
+        {"name": "order_paid", "displayName": "订单已支付", "source": "confirm_pay",
+         "consequences": ["通知仓库发货"]},
+    ])
+    cv, _, _ = C.upsert_elements(cv, "scenario", [
+        {"name": "pay_flow", "displayName": "支付流程", "goal": "完成订单支付",
+         "actors": ["Sales"], "steps": ["销售确认回单", "如果金额 ≥ 50000 元则走审批", "订单变为已支付"],
+         "objects": ["Order", "Customer"], "behaviors": ["confirm_pay"],
+         "expected_outcome": "订单进入已支付状态"}])
+    return cv
+
+
+def test_readiness_gates_block_and_pass():
+    from app.exploration import readiness as R
+
+    # demo 画布：悬空关系 / Supplier 缺主键 / 场景引用未定义元素 → 未就绪
+    rd = R.evaluate(_demo_canvas())
+    assert rd["ready"] is False and rd["blockingCount"] > 0
+    by_id = {g["id"]: g for g in rd["gates"]}
+    assert not by_id["relations"]["passed"]           # Ghost 悬空关系
+    assert any("Ghost" in i for i in by_id["relations"]["blockingItems"])
+    assert not by_id["objects"]["passed"]             # Supplier 缺主键
+    assert any("Supplier" in i or "供应商" in i for i in by_id["objects"]["blockingItems"])
+    assert not by_id["coverage"]["passed"]            # Invoice/refund 未定义
+    # 模糊规则拦截：加一条未定量规则
+    cv = _demo_canvas()
+    cv, _, _ = C.upsert_elements(cv, "rule", [
+        {"name": "vague_rule", "kind": "alert", "appliesTo": "Order",
+         "statement": "订单长时间未支付要尽快提醒"}])
+    rd2 = R.evaluate(cv)
+    by_id2 = {g["id"]: g for g in rd2["gates"]}
+    assert any("vague_rule" in i and "定量" in i for i in by_id2["rules"]["blockingItems"])
+
+    # 全绿画布 → ready；开放堵门问题会把它拦回来
+    from app.exploration import questions as Q
+    good = _quantified_canvas()
+    rd3 = R.evaluate(good)
+    assert rd3["ready"] is True, rd3
+    assert "已就绪" in rd3["stage"]
+    good2, _, _ = Q.raise_questions(good, [{"question": "退货窗口几天？", "kind": "blocking"}])
+    rd4 = R.evaluate(good2)
+    assert rd4["ready"] is False and rd4["openQuestions"]["blocking"] == 1
+
+
+def test_readiness_endpoint(client, auth_headers, session, db):
+    _seed_canvas(db, session["id"], _quantified_canvas())
+    r = client.get(f"{BASE}/sessions/{session['id']}/readiness", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["ready"] is True and data["gatesPassed"] == data["gatesTotal"]
+    # 会话详情与画布端点同样带 readiness（前端头部即时展示）
+    r = client.get(f"{BASE}/sessions/{session['id']}", headers=auth_headers)
+    assert r.json()["data"]["readiness"]["ready"] is True
+
+
+# ---------------------------------------------------------------- 图表（确定性生成）
+
+
+def test_diagram_builders():
+    from app.exploration import diagram as D
+
+    cv = _quantified_canvas()
+    er = D.build_diagram(cv, "er")
+    assert er["mermaid"].startswith("erDiagram")
+    assert "order_no PK" in er["mermaid"] and "}o--||" in er["mermaid"]
+
+    flow = D.build_diagram(cv, "flow", "支付流程")
+    assert flow["mermaid"].startswith("flowchart")
+    assert "S1" in flow["mermaid"] and "SE" in flow["mermaid"]
+    assert "{" in flow["mermaid"]                      # 「如果…」步骤转菱形判断
+
+    seq = D.build_diagram(cv, "sequence")
+    assert seq["mermaid"].startswith("sequenceDiagram")
+    assert "Sales" in seq["mermaid"] and "Order" in seq["mermaid"]
+
+    st = D.build_diagram(cv, "state", "Order")
+    assert st["mermaid"].startswith("stateDiagram-v2")
+    assert "待支付" in st["mermaid"] and "已支付" in st["mermaid"]
+    # 行为 outcome「从待支付变为已支付」→ 识别为状态迁移边
+    assert "-->" in st["mermaid"] and "确认支付" in st["mermaid"]
+
+    # 条件不足 → DiagramError 指明先补什么
+    with pytest.raises(D.DiagramError):
+        D.build_diagram(C.empty_canvas(), "er")
+    with pytest.raises(D.DiagramError):
+        D.build_diagram(cv, "state", "Customer")       # 无枚举状态属性
+
+
+def test_diagram_endpoint(client, auth_headers, session, db):
+    _seed_canvas(db, session["id"], _quantified_canvas())
+    r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/er", headers=auth_headers)
+    assert r.status_code == 200 and r.json()["data"]["mermaid"].startswith("erDiagram")
+    r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/flow",
+                   headers=auth_headers, params={"target": "支付流程"})
+    assert r.status_code == 200
+    r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/state",
+                   headers=auth_headers, params={"target": "Customer"})
+    assert r.status_code == 422                        # 条件不足给出可操作提示
+    r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/nope", headers=auth_headers)
+    assert r.status_code == 422
+
+
+# ---------------------------------------------------------------- 草稿质量门
+
+
+def test_draft_gate_blocks_until_ready(client, auth_headers, session, db):
+    """未就绪画布：默认拒绝生成草稿（422+报告）；force 越权放行且草稿报告留痕。"""
+    _seed_canvas(db, session["id"], _demo_canvas())
+    r = client.post(f"{BASE}/sessions/{session['id']}/documents", headers=auth_headers, json={})
+    doc_id = r.json()["data"]["id"]
+
+    r = client.post(f"{BASE}/documents/{doc_id}/drafts", headers=auth_headers, json={})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["code"] == "quality_gate_blocked"
+    assert detail["readiness"]["blockingCount"] > 0
+
+    r = client.post(f"{BASE}/documents/{doc_id}/drafts", headers=auth_headers,
+                    json={"force": True})
+    assert r.status_code == 201
+    report = r.json()["data"]["report"]
+    assert report["gateOverride"] is True
+    assert report["readiness"]["ready"] is False
+    assert any("越权" in w for w in report["warnings"])
+
+
+def test_draft_gate_passes_when_ready(client, auth_headers, session, db):
+    """全绿画布：无需 force 直接放行，报告记录就绪状态。"""
+    _seed_canvas(db, session["id"], _quantified_canvas())
+    r = client.post(f"{BASE}/sessions/{session['id']}/documents", headers=auth_headers, json={})
+    doc_id = r.json()["data"]["id"]
+    r = client.post(f"{BASE}/documents/{doc_id}/drafts", headers=auth_headers, json={})
+    assert r.status_code == 201, r.text
+    report = r.json()["data"]["report"]
+    assert report["readiness"]["ready"] is True
+    assert "gateOverride" not in report
+
+
+# ---------------------------------------------------------------- 对话内出图与账本工具
+
+
+def test_chat_show_diagram_and_questions(client, auth_headers, session, db,
+                                         admin_user, monkeypatch):
+    """假 LLM 依次：登记问题 → 出 ER 图 → 收尾。step 事件应携带 mermaid，
+    账本随 canvas 事件对前端可见，消息历史可回放图表。"""
+    _fake_model_config(db, admin_user)
+    _seed_canvas(db, session["id"], _quantified_canvas())
+    calls = {"n": 0}
+
+    def fake_chat(call_kwargs, messages, tools):
+        calls["n"] += 1
+        names = {t["name"] for t in tools}
+        assert {"raise_questions", "resolve_questions", "show_diagram"} <= names
+        # 系统提示注入质量门与账本
+        assert "质量门" in messages[0]["content"] and "澄清账本" in messages[0]["content"]
+        if calls["n"] == 1:
+            return {"content": None, "usage": None, "tool_calls": [
+                {"id": "t1", "name": "raise_questions",
+                 "arguments": {"questions": [{"question": "退货窗口是几天？",
+                                              "kind": "blocking",
+                                              "options": ["7天", "14天"]}]}},
+                {"id": "t2", "name": "show_diagram", "arguments": {"kind": "er"}},
+            ]}
+        return {"content": "请核对 ER 图；另外退货窗口是几天？", "tool_calls": [], "usage": None}
+
+    from app.ontologies.agent_runtime import llm_bridge
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+
+    r = client.post(f"{BASE}/sessions/{session['id']}/chat", headers=auth_headers,
+                    json={"message": "开始吧", "stream": False})
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    steps = data["steps"]
+    assert steps[0]["tool"] == "raise_questions" and "登记 1 个" in steps[0]["summary"]
+    assert steps[1]["tool"] == "show_diagram"
+    assert steps[1]["diagram"]["mermaid"].startswith("erDiagram")   # 图随 step 直达前端
+    # 账本进画布 → readiness 拦回未就绪
+    assert data["completeness"] is not None
+    canvas = data["canvas"]
+    assert canvas["questions"][0]["question"] == "退货窗口是几天？"
+
+    # 消息持久化后历史可回放（steps 内含 diagram）
+    detail = client.get(f"{BASE}/sessions/{session['id']}", headers=auth_headers).json()["data"]
+    last = detail["messages"][-1]
+    assert last["steps"][1]["diagram"]["kind"] == "er"
+    assert detail["readiness"]["openQuestions"]["blocking"] == 1

@@ -58,7 +58,14 @@ export default function MermaidBlock({ chart }: { chart: string }) {
 
   return (
     <>
-      <div ref={containerRef} style={{ display: 'none' }} aria-hidden />
+      {/* 测量容器必须可布局（display:none 会让 erDiagram 文本测宽为 0，
+          触发 "Could not find a suitable point for the given distance"）——
+          用屏外定位 + visibility:hidden 隐藏 */}
+      <div
+        ref={containerRef}
+        style={{ position: 'fixed', left: -10000, top: 0, visibility: 'hidden' }}
+        aria-hidden
+      />
       {error ? (
         <div className="my-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
           <div className="text-[11px] text-amber-700 mb-1.5">图表渲染失败（显示源码）：{error.slice(0, 160)}</div>

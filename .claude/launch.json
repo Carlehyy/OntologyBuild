@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "backend",
-      "runtimeExecutable": "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python",
-      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--app-dir", "/Users/carle/Desktop/OntologyBuild/backend"],
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["SECRET_KEY=3eaf458cb2155e9b16df05a9f6896d85", "DATABASE_URL=sqlite:////tmp/ontoprompt.db", "/Users/carle/Desktop/OntologyBuild/backend/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--app-dir", "/Users/carle/Desktop/OntologyBuild/backend"],
       "port": 8000
     },
     {
