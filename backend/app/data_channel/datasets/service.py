@@ -46,12 +46,99 @@ def rows_to_csv_bytes(rows: list[dict], columns: list[str]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
+def rows_to_parquet_bytes(rows: list[dict]) -> bytes:
+    """行列表 → Parquet bytes：湖内产物快照的存储格式（替代 CSV）。
+
+    全列以「字符串」落盘，精确复刻既有 CSV 入湖的往返语义，保证只换存储格式、
+    不改变任何下游可见行为：
+      - None → ""；bytes → "<N bytes>"；dict/list → 紧凑 JSON；其余 → str(v)
+      - 跳过二进制 content 列（与 CSV 路径一致）
+      - 列序按首现；行缺某列 → ""（对齐 CSV DictWriter 的 restval）
+    压缩用 zstd（结构化数据通常比 CSV 小数倍，直接省存储与读写 I/O）。
+    空行 / 无有效列 → b""（读回为 []，与 _safe_csv_bytes 一致）。
+    """
+    if not rows:
+        return b""
+    import io as _io
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    def _cell(v) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (bytes, bytearray)):
+            return f"<{len(v)} bytes>"
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    all_keys: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for k in row.keys():
+            if k == "content" or k in seen:
+                continue
+            all_keys.append(k)
+            seen.add(k)
+    if not all_keys:
+        return b""
+
+    table = pa.table({
+        k: pa.array([_cell(row.get(k)) for row in rows], type=pa.string())
+        for k in all_keys
+    })
+    buf = _io.BytesIO()
+    pq.write_table(table, buf, compression="zstd")
+    return buf.getvalue()
+
+
+def _parse_parquet_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[dict]:
+    """读 Parquet 字节为行列表。值以字符串返回（写入时已按 CSV 往返语义规范化）。
+
+    offset/limit 走 record-batch 级跳过与提前终止：分页只物化窗口内的行，
+    把「翻一页要全量解析成 dict」降到近 O(页)。limit=None 且 offset=0 时全量读。
+    """
+    import io as _io
+    import pyarrow.parquet as pq
+
+    src = _io.BytesIO(raw)
+    if limit is None and offset == 0:
+        return pq.read_table(src).to_pylist()
+
+    out: list[dict] = []
+    skip = offset
+    for batch in pq.ParquetFile(src).iter_batches():
+        n = batch.num_rows
+        if skip >= n:
+            skip -= n
+            continue
+        if skip:
+            batch = batch.slice(skip)
+            skip = 0
+        rows = batch.to_pylist()
+        if limit is None:
+            out.extend(rows)
+        else:
+            out.extend(rows[: limit - len(out)])
+            if len(out) >= limit:
+                break
+    return out
+
+
 def _parse_stored_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[dict]:
-    """把存储对象解析成行列表（JSON / Excel / CSV 自动检测）。
+    """把存储对象解析成行列表（Parquet / JSON / Excel / CSV 自动检测）。
 
     limit=None 表示不设行数上限——合并基座必须全量，截断即丢数据。
+    格式按魔数/内容嗅探：新版产物为 Parquet，存量历史 CSV/JSON/xlsx 一并可读，
+    支持滚动窗口内的多格式共存（湖版本随流水线运行逐步自然迁移到 Parquet）。
     """
     offset = max(0, offset)
+
+    # Parquet（列存，魔数 PAR1）：必须在 UTF-8 解码之前判定，避免把大二进制
+    # 整份 decode 成文本。
+    if raw[:4] == b"PAR1":
+        return _parse_parquet_rows(raw, limit, offset)
+
     text = raw.decode("utf-8", errors="replace").lstrip("﻿")
 
     # 检测是否 JSON

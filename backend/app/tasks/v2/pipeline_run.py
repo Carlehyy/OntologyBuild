@@ -359,41 +359,6 @@ def collect_pipeline_output(db, pl) -> list[dict]:
     return outputs
 
 
-def _safe_csv_bytes(data: list[dict]) -> bytes:
-    import csv
-    import io
-    import json as _json
-
-    def _safe_str(v) -> str:
-        if v is None:
-            return ""
-        if isinstance(v, bytes):
-            return f"<{len(v)} bytes>"
-        if isinstance(v, (dict, list)):
-            return _json.dumps(v, ensure_ascii=False)
-        return str(v)
-
-    if not data:
-        return b""
-
-    all_keys: list[str] = []
-    seen_keys: set[str] = set()
-    for row in data:
-        for key in row.keys():
-            if key == "content":
-                continue
-            if key not in seen_keys:
-                all_keys.append(key)
-                seen_keys.add(key)
-
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=all_keys, extrasaction="ignore", restval="")
-    writer.writeheader()
-    for row in data:
-        writer.writerow({k: _safe_str(row.get(k)) for k in all_keys})
-    return buf.getvalue().encode("utf-8")
-
-
 def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None = None) -> str:
     """产物 curated 数据集的命名规则——入湖与 dry-run 预检必须用同一套派生。"""
     stem = Path(source["filename"]).stem
@@ -531,7 +496,8 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         # 审计：本次入库对资产湖的行级影响（入库前后 diff：新增/更新/删除）
         lake_impact = compute_lake_impact(prev_rows, lake_rows, split_pk(effective_pk))
 
-    ver = svc.create_version(curated_ds.id, _safe_csv_bytes(lake_rows), rowcount=len(lake_rows))
+    from app.data_channel.datasets.service import rows_to_parquet_bytes
+    ver = svc.create_version(curated_ds.id, rows_to_parquet_bytes(lake_rows), rowcount=len(lake_rows))
 
     if data or lake_rows:
         try:
