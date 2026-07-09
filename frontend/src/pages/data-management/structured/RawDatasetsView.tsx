@@ -53,7 +53,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
 
   // 删除
   const [deleteTarget, setDeleteTarget] = useState<DatasetOverviewItem | null>(null)
-  const [deleteBlocked, setDeleteBlocked] = useState<{ item: DatasetOverviewItem; consumers: DatasetConsumer[] } | null>(null)
+  const [deleteBlocked, setDeleteBlocked] = useState<{ item: DatasetOverviewItem; consumers: DatasetConsumer[]; mappings: { name: string }[] } | null>(null)
   const [deleting, setDeleting] = useState(false)
 
   // 在线维护
@@ -185,12 +185,15 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       setBanner({ type: 'success', text: `数据集「${target.name}」已删除` })
       load()
     } catch (err: unknown) {
-      const er = err as { detail?: { message?: string; consumers?: DatasetConsumer[] } | string }
-      if (typeof er?.detail === 'object' && er.detail?.consumers) {
+      const er = err as { detail?: { message?: string; consumers?: DatasetConsumer[]; mappings?: { name: string }[] } | string }
+      const d = er?.detail
+      if (typeof d === 'object' && ((d?.consumers?.length ?? 0) > 0 || (d?.mappings?.length ?? 0) > 0)) {
         setDeleteTarget(null)
-        setDeleteBlocked({ item: target, consumers: er.detail.consumers })
+        setDeleteBlocked({ item: target, consumers: d.consumers ?? [], mappings: d.mappings ?? [] })
       } else {
-        setBanner({ type: 'error', text: `删除失败：${typeof er?.detail === 'string' ? er.detail : '未知错误'}` })
+        const raw = typeof d === 'string' ? d : (d?.message ?? '')
+        const msg = raw === 'Admin required' ? '删除数据集需要管理员权限' : (raw || '未知错误')
+        setBanner({ type: 'error', text: `删除失败：${msg}` })
         setDeleteTarget(null)
       }
     } finally {
@@ -490,14 +493,21 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           <div className="bg-white rounded-lg shadow-lg p-6 w-[440px]">
             <h3 className="font-semibold text-lg mb-2">数据集正在被使用</h3>
             <p className="text-gray-600 text-sm mb-3">
-              「{deleteBlocked.item.name}」被以下流水线引用，删除后这些流水线将无法运行：
+              「{deleteBlocked.item.name}」被以下对象引用，删除后它们将无法运行或断源：
             </p>
             <div className="space-y-1 mb-5">
               {deleteBlocked.consumers.map(c => (
                 <div key={c.id} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2">
                   <GitBranch size={11} className="text-gray-400" />
                   <span className="font-medium">{c.name}</span>
-                  <span className="text-gray-400">（{PIPELINE_STATUS_LABEL[c.status] || c.status}）</span>
+                  <span className="text-gray-400">（流水线 · {PIPELINE_STATUS_LABEL[c.status] || c.status}）</span>
+                </div>
+              ))}
+              {deleteBlocked.mappings.map((m, i) => (
+                <div key={`m-${i}`} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2">
+                  <GitBranch size={11} className="text-gray-400" />
+                  <span className="font-medium">{m.name || '本体映射'}</span>
+                  <span className="text-gray-400">（本体映射）</span>
                 </div>
               ))}
             </div>

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, require_admin
 from app.services.v2.dataset_service import DatasetService
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -518,8 +518,10 @@ def dataset_consumers(dataset_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{dataset_id}")
-def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(get_db)):
-    """删除原始数据集及其版本。被流水线引用时返回 409（force=true 强制删除）。
+def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(get_db),
+                   _admin=Depends(require_admin)):
+    """删除原始数据集及其版本（仅管理员，与成品数据集删除权限对齐）。
+    被流水线 / 本体映射引用时返回 409（force=true 强制删除）。
     若数据集由旧版同步任务（DataSyncTask）驱动，自动禁用该任务防止重建。"""
     import logging
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
@@ -534,10 +536,14 @@ def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(g
         raise HTTPException(400, "成品数据集请在资产湖「成品数据集」中删除")
 
     consumers = _dataset_consumers(db, dataset_id)
-    if consumers and not force:
+    from app.ontologies.mappings.consumers import dataset_mapping_bindings
+    mappings = dataset_mapping_bindings(db, dataset_id)
+    if (consumers or mappings) and not force:
         raise HTTPException(409, detail={
-            "message": f"数据集被 {len(consumers)} 条流水线引用，删除后这些流水线将无法运行",
+            "message": f"数据集被 {len(consumers)} 条流水线、{len(mappings)} 个本体映射引用，"
+                       f"删除后这些流水线将无法运行、本体投影将断源",
             "consumers": consumers,
+            "mappings": mappings,
         })
 
     # ── 联动禁用关联的 DataSyncTask（防止 _get_or_create_dataset 重建）──

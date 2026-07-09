@@ -243,6 +243,7 @@ function CuratedView() {
   const [rejectingId, setRejectingId] = useState<string | null>(null)
   const [deleteRow, setDeleteRow] = useState<Row | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteErr, setDeleteErr] = useState('')
 
   const load = () => {
     setLoading(true)
@@ -349,10 +350,15 @@ function CuratedView() {
   const handleQuickDelete = async () => {
     if (!deleteRow?.curatedId) return
     setDeleting(true)
+    setDeleteErr('')
     try {
       await curatedApi.delete(deleteRow.curatedId)
       handleDeleted(deleteRow.curatedId)
-    } catch {
+      setDeleteRow(null)
+    } catch (e: any) {
+      const detail = e?.detail ?? e?.data?.detail
+      const raw = (detail && typeof detail === 'object' ? detail.message : detail) || e?.message || '删除失败'
+      setDeleteErr(raw === 'Admin required' ? '删除数据集需要管理员权限' : String(raw))
       setDeleteRow(null)
     } finally {
       setDeleting(false)
@@ -559,11 +565,18 @@ function CuratedView() {
       <ConfirmDialog
         open={!!deleteRow}
         title="删除数据集"
-        message={`确认删除「${deleteRow?.curatedName}」？此操作不可撤销。`}
+        message={`确认删除「${deleteRow?.curatedName}」？将永久删除该数据集及其全部历史版本，不可恢复。若已被流水线或本体映射引用，删除会被拦截。`}
         confirmLabel={deleting ? '删除中...' : '确认删除'}
         onConfirm={handleQuickDelete}
         onCancel={() => setDeleteRow(null)}
       />
+
+      {deleteErr && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-md px-4 py-2.5 bg-red-600 text-white text-sm rounded-lg shadow-lg flex items-start gap-2">
+          <span className="flex-1">{deleteErr}</span>
+          <button onClick={() => setDeleteErr('')} className="text-white/70 hover:text-white shrink-0">×</button>
+        </div>
+      )}
     </div>
   )
 }

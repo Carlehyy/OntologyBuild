@@ -21,11 +21,41 @@ export interface ReviewSession {
   status: string
 }
 
+export interface ReviewDiffView {
+  version_no: number | null
+  total: number
+  rows: Record<string, any>[]
+}
+
+export interface ReviewDelta {
+  keyed_by: string[] | null
+  total_before: number
+  total_after: number
+  added_count: number
+  updated_count: number
+  deleted_count: number
+  unchanged_count: number
+  added_sample: Record<string, any>[]
+  updated_sample: { before: Record<string, any>; after: Record<string, any> }[]
+  deleted_sample: Record<string, any>[]
+  sample_truncated: boolean
+}
+
+export interface ReviewDiff {
+  pk: string[]
+  current: ReviewDiffView
+  previous: ReviewDiffView
+  delta: ReviewDelta | null
+}
+
 const curatedApi = {
   list: () => apiClientV2.get<CuratedDataset[]>('/curated'),
   get: (id: string) => apiClientV2.get<CuratedDataset>(`/curated/${id}`),
   preview: (id: string, limit = 200) =>
     apiClientV2.get<CuratedPreview>(`/curated/${id}/preview?limit=${limit}`),
+  /** 审批三视角：变化量 / 上一版全量 / 本次全量 */
+  reviewDiff: (id: string, limit = 500) =>
+    apiClientV2.get<ReviewDiff>(`/curated/${id}/review-diff?limit=${limit}`),
   quality: (id: string) => apiClientV2.get(`/curated/${id}/quality`),
 
   /** Quick approve/reject (no review session needed) */
@@ -34,8 +64,9 @@ const curatedApi = {
   reject: (id: string, notes = '') =>
     apiClientV2.post(`/curated/${id}/review?action=reject&notes=${encodeURIComponent(notes)}`),
 
-  /** Delete a curated dataset (admin only) */
-  delete: (id: string) => apiClientV2.delete(`/curated/${id}`),
+  /** Delete a curated dataset (admin only; approved datasets are blocked) */
+  delete: (id: string, force = false) =>
+    apiClientV2.delete(`/curated/${id}${force ? '?force=true' : ''}`),
 
   /** Start a review session for row-level edits */
   startReview: (id: string) =>

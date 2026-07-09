@@ -71,12 +71,44 @@ def list_curated(db: Session = Depends(get_db)):
 
 
 @router.delete("/{dataset_id}", status_code=204)
-def delete_curated(dataset_id: str, db: Session = Depends(get_db), _admin=Depends(require_admin)):
-    """删除 Curated Dataset 及其版本数据（仅管理员）"""
+def delete_curated(dataset_id: str, force: bool = False,
+                   db: Session = Depends(get_db), _admin=Depends(require_admin)):
+    """删除 Curated Dataset 及其版本数据（仅管理员）。
+
+    安全约束：
+    - 已审批通过（approved）的数据集不可删除——审批即背书，删除会让审批失去意义；
+      如确需删除，请先在审核中「拒绝」撤回审批后再删。此约束不受 force 影响。
+    - 被流水线 / 本体映射引用时默认拦截（force=true 强制删除，下游将断源）。
+    """
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
     ds = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.kind == "curated").first()
     if not ds:
         raise HTTPException(404, "Curated dataset not found")
+
+    # 已审批通过 → 硬禁止删除（force 也不能绕）
+    latest_review = db.query(CuratedReview).filter(
+        CuratedReview.curated_dataset_id == dataset_id
+    ).order_by(CuratedReview.created_at.desc()).first()
+    if latest_review and latest_review.status == "approved":
+        raise HTTPException(409, detail={
+            "code": "approved_locked",
+            "message": "该成品数据集已审批通过，不可删除。审批即背书，如确需删除请先在审核中「拒绝」撤回审批。",
+        })
+
+    # 依赖检查：被流水线 / 本体映射引用时拦截（force 可绕）
+    if not force:
+        from app.data_channel.datasets.router import _dataset_consumers
+        from app.ontologies.mappings.consumers import dataset_mapping_bindings
+        pipelines = _dataset_consumers(db, dataset_id)
+        mappings = dataset_mapping_bindings(db, dataset_id)
+        if pipelines or mappings:
+            raise HTTPException(409, detail={
+                "code": "in_use",
+                "message": f"该数据集被 {len(pipelines)} 条流水线、{len(mappings)} 个本体映射引用，"
+                           f"删除会导致下游断源。确认无碍可强制删除（force=true）。",
+                "pipelines": pipelines, "mappings": mappings,
+            })
+
     # 清理关联版本和媒体项
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
@@ -125,6 +157,52 @@ def preview_curated(dataset_id: str, limit: int = 100, db: Session = Depends(get
         return {"dataset_id": dataset_id, "name": name, "rows": rows, "count": len(rows)}
     except Exception as e:
         return {"dataset_id": dataset_id, "name": name, "rows": [], "count": 0, "error": str(e)}
+
+
+@router.get("/{dataset_id}/review-diff")
+def review_diff(dataset_id: str, limit: int = 500, db: Session = Depends(get_db)):
+    """审批三视角：① 变化量（相对上一版）② 上一版全量 ③ 本次全量（叠加审核编辑）。
+
+    变化量 = compute_lake_impact(上一版全量, 本次全量)，按主键识别新增/更新/删除；
+    无主键则退化为整行比对（只有新增/删除）。无上一版（v1 首次）→ ① 全为新增、② 空。
+    审核者据此聚焦本次改动，而非盲审全量。
+    """
+    from app.models.v2.dataset import Dataset as Ds2
+    from app.services.v2.dataset_service import DatasetService, DatasetReadError
+    from app.data_channel.curated.review_service import apply_all_row_edits
+    from app.data_channel.pipeline_tasks.merge import compute_lake_impact
+    from app.data_channel.datasets.lake_gate import split_pk
+
+    d2 = db.query(Ds2).filter(Ds2.id == dataset_id, Ds2.kind == "curated").first()
+    if not d2:
+        raise HTTPException(404, "Curated dataset not found")
+    schema = d2.schema_json if isinstance(d2.schema_json, dict) else {}
+    pk_cols = split_pk(schema.get("primary_key"))
+
+    svc = DatasetService(db)
+    versions = svc.list_versions(dataset_id)  # 按 version_no 升序
+    empty = {"version_no": None, "total": 0, "rows": []}
+    if not versions:
+        return {"pk": pk_cols, "current": empty, "previous": empty, "delta": None}
+    latest = versions[-1]
+    prev = versions[-2] if len(versions) >= 2 else None
+
+    try:
+        current_full = apply_all_row_edits(
+            db, dataset_id, svc.load_all_rows(dataset_id, latest.version_no))
+        prev_full = svc.load_all_rows(dataset_id, prev.version_no) if prev else []
+    except DatasetReadError as e:
+        raise HTTPException(422, f"版本数据读取失败：{e}")
+
+    delta = compute_lake_impact(prev_full, current_full, pk_cols, sample_limit=200)
+    return {
+        "pk": pk_cols,
+        "current": {"version_no": latest.version_no, "total": len(current_full),
+                    "rows": current_full[:limit]},
+        "previous": {"version_no": prev.version_no if prev else None,
+                     "total": len(prev_full), "rows": prev_full[:limit]},
+        "delta": delta,
+    }
 
 
 @router.get("/{dataset_id}/quality")
