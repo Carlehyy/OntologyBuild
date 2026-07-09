@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Search, CheckCircle, AlertTriangle, Clock,
-  ExternalLink, X, Loader2, Trash2, Table2, Database, RefreshCw, Waves,
+  X, Loader2, Trash2, Table2, Database, RefreshCw, Waves,
+  Eye, XCircle,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
 import curatedApi from '@/api/v2/curated'
@@ -121,9 +122,11 @@ function CuratedView() {
   const [loading, setLoading] = useState(true)
   const [pipelineFilter, setPipelineFilter] = useState(searchParams.get('pipeline') || '')
   const [curatedFilter, setCuratedFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
 
   const [panelRow, setPanelRow] = useState<Row | null>(null)
   const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [rejectingId, setRejectingId] = useState<string | null>(null)
   const [deleteRow, setDeleteRow] = useState<Row | null>(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -176,9 +179,10 @@ function CuratedView() {
     return allRows.filter(r => {
       if (pq && !r.pipelineName.toLowerCase().includes(pq) && !r.pipelineId.toLowerCase().includes(pq)) return false
       if (cq && !r.curatedName.toLowerCase().includes(cq) && !r.curatedId.toLowerCase().includes(cq)) return false
+      if (statusFilter && r.curatedStatus !== statusFilter) return false
       return true
     })
-  }, [allRows, pipelineFilter, curatedFilter])
+  }, [allRows, pipelineFilter, curatedFilter, statusFilter])
 
   const handleStatusChange = (id: string, newStatus: string) => {
     setCurated(prev => prev.map(c => c.id === id ? { ...c, status: newStatus } : c))
@@ -199,6 +203,16 @@ function CuratedView() {
       await curatedApi.approve(row.curatedId)
       handleStatusChange(row.curatedId, 'approved')
     } finally { setApprovingId(null) }
+  }
+
+  const handleQuickReject = async (e: React.MouseEvent, row: Row) => {
+    e.stopPropagation()
+    if (!row.curatedId) return
+    setRejectingId(row.curatedId)
+    try {
+      await curatedApi.reject(row.curatedId)
+      handleStatusChange(row.curatedId, 'rejected')
+    } finally { setRejectingId(null) }
   }
 
   const handleQuickDelete = async () => {
@@ -248,6 +262,16 @@ function CuratedView() {
             </button>
           )}
         </div>
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
+        >
+          <option value="">全部审核状态</option>
+          <option value="pending_review">待审核</option>
+          <option value="approved">已审核</option>
+          <option value="rejected">已拒绝</option>
+        </select>
         <span className="text-xs text-gray-400">共 {filtered.length} 条</span>
         <button onClick={load} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
           <RefreshCw size={12} /> 刷新
@@ -320,12 +344,13 @@ function CuratedView() {
                   </td>
                   <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1 justify-end">
-                      {row.curatedId && row.curatedStatus !== 'approved' && (
+                      {/* 批准 — 仅待审核 */}
+                      {row.curatedId && row.curatedStatus === 'pending_review' && (
                         <button
                           onClick={e => handleQuickApprove(e, row)}
                           disabled={approvingId === row.curatedId}
                           className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 disabled:opacity-50"
-                          title="批准（审核通过后可用于本体数据绑定）"
+                          title="批准"
                         >
                           {approvingId === row.curatedId
                             ? <Loader2 size={13} className="animate-spin" />
@@ -333,23 +358,39 @@ function CuratedView() {
                         </button>
                       )}
 
-                      {row.pipelineId && (
+                      {/* 驳回 — 仅待审核 */}
+                      {row.curatedId && row.curatedStatus === 'pending_review' && (
                         <button
-                          onClick={() => navigate(`/data/pipelines/${row.pipelineId}`)}
-                          className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-black"
-                          title="打开来源流水线"
+                          onClick={e => handleQuickReject(e, row)}
+                          disabled={rejectingId === row.curatedId}
+                          className="p-1.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-600 disabled:opacity-50"
+                          title="驳回"
                         >
-                          <ExternalLink size={13} />
+                          {rejectingId === row.curatedId
+                            ? <Loader2 size={13} className="animate-spin" />
+                            : <XCircle size={13} />}
                         </button>
                       )}
 
-                      {row.curatedId && (
+                      {/* 删除 — 待审核 / 已拒绝 */}
+                      {row.curatedId && (row.curatedStatus === 'pending_review' || row.curatedStatus === 'rejected') && (
                         <button
                           onClick={() => setDeleteRow(row)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
                           title="删除"
                         >
                           <Trash2 size={13} />
+                        </button>
+                      )}
+
+                      {/* 查看 — 所有状态 */}
+                      {row.curatedId && (
+                        <button
+                          onClick={() => setPanelRow(row)}
+                          className="p-1.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-600"
+                          title="查看详情"
+                        >
+                          <Eye size={13} />
                         </button>
                       )}
                     </div>
