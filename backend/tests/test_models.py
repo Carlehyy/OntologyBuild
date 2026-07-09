@@ -11,6 +11,21 @@ def test_create_model(client, auth_headers):
     assert "api_key" not in d  # key should not be returned
 
 
+def test_model_config_limits_to_single_model(client, auth_headers):
+    # 创建时多填模型 —— 仅保留第一个，并去除首尾空白
+    created = client.post("/api/v1/models", json={
+        "name": "Multi", "provider": "compatible",
+        "models": ["  deepseek-v4-flash  ", "deepseek-v4-pro", ""],
+    }, headers=auth_headers).json()["data"]
+    assert created["models"] == ["deepseek-v4-flash"]
+
+    # 更新时多填模型 —— 同样仅保留第一个
+    updated = client.put(f"/api/v1/models/{created['id']}", json={
+        "models": ["a-model", "b-model"],
+    }, headers=auth_headers).json()["data"]
+    assert updated["models"] == ["a-model"]
+
+
 def test_list_models(client, auth_headers):
     client.post("/api/v1/models", json={"name": "M1", "provider": "openai", "models": []}, headers=auth_headers)
     r = client.get("/api/v1/models", headers=auth_headers)

@@ -1,6 +1,15 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
 from typing import Optional, List
+
+
+def _single_model(value: Optional[List[str]]) -> Optional[List[str]]:
+    """每个提供商仅允许配置一个模型：去空去重后只保留第一个。"""
+    if value is None:
+        return None
+    cleaned = [str(m).strip() for m in value if str(m).strip()]
+    return cleaned[:1]
+
 
 class ModelConfigCreate(BaseModel):
     name: str
@@ -13,6 +22,11 @@ class ModelConfigCreate(BaseModel):
     enabled: bool = False
     is_default: bool = False
 
+    @field_validator("models", mode="before")
+    @classmethod
+    def _limit_models(cls, v):
+        return _single_model(v) or []
+
 class ModelConfigUpdate(BaseModel):
     name: Optional[str] = None
     config_type: Optional[str] = None
@@ -23,6 +37,11 @@ class ModelConfigUpdate(BaseModel):
     options: Optional[dict] = None
     enabled: Optional[bool] = None
     is_default: Optional[bool] = None
+
+    @field_validator("models", mode="before")
+    @classmethod
+    def _limit_models(cls, v):
+        return _single_model(v)
 
 class ModelConfigOut(BaseModel):
     id: str

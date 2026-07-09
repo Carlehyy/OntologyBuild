@@ -39,8 +39,10 @@ const PROVIDERS: Record<string, Array<{ value: string; label: string }>> = {
   ],
 }
 
+// 每个提供商仅允许配置一个模型：单个模型名转成后端期望的数组结构
 function modelList(text?: string) {
-  return text ? text.split('\n').map((s: string) => s.trim()).filter(Boolean) : []
+  const name = text?.trim()
+  return name ? [name] : []
 }
 
 function parseOptions(text?: string) {
@@ -215,7 +217,7 @@ export default function ModelsPage() {
               config_type: item.config_type || 'llm',
               provider: item.provider,
               api_base: item.api_base || '',
-              models: item.models || [],
+              models: (item.models || []).slice(0, 1),
               options: item.options || {},
               enabled: item.enabled !== false,
               is_default: Boolean(item.is_default),
@@ -322,7 +324,7 @@ export default function ModelsPage() {
     setValue('provider', m.provider)
     setValue('api_key', '')
     setValue('api_base', m.api_base || '')
-    setValue('models_str', (m.models || []).join('\n'))
+    setValue('models_str', (m.models || [])[0] || '')
     setValue('ocr_enabled', options.enabled ? 'true' : 'false')
     setValue('ocr_lang', String(options.lang || 'ch'))
     setValue('ocr_device', String(options.device || 'cpu'))
@@ -694,9 +696,10 @@ export default function ModelsPage() {
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">模型名（每行一个）</label>
-                <textarea {...regEdit('models_str')} rows={3} placeholder="gpt-4o&#10;gpt-4o-mini"
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">模型名</label>
+                <input {...regEdit('models_str')} placeholder="gpt-4o"
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                <p className="text-[11px] text-slate-400 mt-1">每个提供商仅支持配置一个模型</p>
               </div>
               {(watchEdit('config_type') || 'llm') === 'llm' && (
                 <div className="grid grid-cols-2 gap-4">
@@ -829,9 +832,10 @@ function ModelFormModal({ title, onClose, onSubmit, register, handleSubmit, conf
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">模型名（每行一个）</label>
-            <textarea {...register('models_str')} rows={3} placeholder="gpt-4o&#10;gpt-4o-mini"
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">模型名</label>
+            <input {...register('models_str')} placeholder="gpt-4o"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+            <p className="text-[11px] text-slate-400 mt-1">每个提供商仅支持配置一个模型</p>
           </div>
           {configType === 'llm' && (
             <div className="grid grid-cols-2 gap-4">
