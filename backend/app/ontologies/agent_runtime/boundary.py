@@ -97,6 +97,24 @@ class AgentScope:
     def require_action(self, ref: str) -> ActionType:
         return self._resolve(self.actions, ref, "动作")
 
+    def resolve_property(self, ot: ObjectType, ref: str) -> str:
+        """把属性引用（name 或 displayName）解析为规范 name；越界即 ToolError（含可用属性）。
+
+        合法集直接取自 ot.properties —— 派生/计算属性也声明在其中（source='computed'，
+        computed 的键名即 prop['name']），故一并覆盖，不会误伤合法的派生属性过滤。
+        这是「越界硬失败」：LLM 拼错或臆造属性名时，返回可用清单让它自我修正，
+        而不是让一个查不到的条件静默匹配为空、给出看似正确实则错误的答案。
+        """
+        ref = (ref or "").strip()
+        for p in (ot.properties or []):
+            if isinstance(p, dict) and ref in (p.get("name"), p.get("displayName"), p.get("display_name")):
+                return p.get("name")
+        avail = "、".join(
+            f"{p.get('displayName') or p.get('name')}({p.get('name')})"
+            for p in (ot.properties or []) if isinstance(p, dict) and p.get("name")
+        ) or "（无）"
+        raise ToolError(f"属性「{ref}」不在对象类型「{ot.display_name}」上，或拼写有误。可用属性：{avail}")
+
     def visible_instance(self, inst: Optional[ObjectInstance]) -> ObjectInstance:
         """实例必须属于本体 + 其类型在授权范围内。"""
         if not inst or inst.ontology_id != self.ontology.id:

@@ -28,11 +28,18 @@ from app.models.ontology_formal import (
 from app.ontologies.agent_runtime.boundary import AgentScope, ToolError
 from app.ontologies.formal_modeling.facts import fact_order_clause
 
-_SCAN_CAP = 5000          # 单次工具最多扫描的实例行数（演示规模防护）
+_SCAN_CAP = 5000          # search 单次翻页最多扫描的实例行数（找一页，非计数）
+_AGG_SCAN_CAP = 100_000   # aggregate 流式扫描的安全阀：到此才停并标 partial（不再盲截断 5000）
 _VALUE_TRUNC = 200        # 单个属性值的输出截断长度
 _CITATION_CAP = 20        # 一次回答最多引用的实例数
 _CHART_POINT_CAP = 20     # 聚合图表最多展示的数据点（已按值降序取前 N）
 _SNIPPET_FIELDS = 3       # 引用卡片附带的属性摘要字段数
+
+# 多跳遍历的缰绳（防扇出爆炸）
+_MAX_HOPS = 5             # 单次多跳最多跳数
+_HOP_FANOUT_CAP = 200     # 每个节点每一跳最多考察的链接数
+_FRONTIER_CAP = 500       # 每一跳最多展开的前沿节点数
+_PATH_NODE_BUDGET = 2000  # 一次多跳最多访问的节点总数
 
 
 # ---------------------------------------------------------------- 工具定义
@@ -87,6 +94,30 @@ TOOL_DEFS: list[dict] = [
                 "limit": {"type": "integer"},
             },
             "required": ["instance_id", "link_type"],
+        },
+    },
+    {
+        "name": "traverse_path",
+        "description": "从一个起点对象出发，沿指定的链接类型序列做多跳遍历，返回终点对象。用于回答'X 经由 A 再经由 B 关联到哪些 Z'这类多跳 / 影响分析 / 血缘追溯问题。单跳用 traverse_links 即可；本工具用于 2 跳及以上。已内置扇出上限与节点预算，超限会截断并标记。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {"type": "string", "description": "起点对象实例 id"},
+                "path": {
+                    "type": "array",
+                    "description": f"有序的跳序列，每一跳指定一个链接类型和方向；最多 {_MAX_HOPS} 跳",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "link_type": {"type": "string", "description": "链接类型的 name 或显示名"},
+                            "direction": {"type": "string", "enum": ["out", "in"], "description": "out=沿链接向外, in=反向；默认 out"},
+                        },
+                        "required": ["link_type"],
+                    },
+                },
+                "limit": {"type": "integer", "description": "返回终点对象的条数上限（受授权配额约束）"},
+            },
+            "required": ["instance_id", "path"],
         },
     },
     {
@@ -325,6 +356,26 @@ class ToolRunner:
                 .order_by(ObjectInstance.created_at.desc())
                 .limit(_SCAN_CAP).all())
 
+    def _stream_instances(self, type_id: str):
+        """流式产出某类型的全部实例（yield_per，不materialize全表）。聚合走此口，
+        以修正原先 .limit(5000) 盲截断导致的『大数据量下统计静默算错』。"""
+        return (self.db.query(ObjectInstance)
+                .filter(ObjectInstance.ontology_id == self.scope.ontology.id,
+                        ObjectInstance.object_type_id == type_id)
+                .yield_per(2000))
+
+    def _validated_filters(self, ot, filters):
+        """校验并规范化过滤条件的属性名（越界硬失败）：把 displayName 归一到 name，
+        属性不存在则 ToolError 让 LLM 自我修正——而非静默匹配为空。"""
+        if not filters:
+            return filters
+        out = []
+        for f in filters:
+            if not isinstance(f, dict):
+                continue
+            out.append({**f, "property": self.scope.resolve_property(ot, f.get("property", ""))})
+        return out
+
     def _apply_filters(self, rows: list[ObjectInstance], filters, keyword) -> list[ObjectInstance]:
         out = []
         kw = (keyword or "").strip().lower()
@@ -349,8 +400,9 @@ class ToolRunner:
 
     def _tool_search_objects(self, args: dict) -> dict:
         ot = self.scope.require_object_type(args.get("object_type", ""))
+        filters = self._validated_filters(ot, args.get("filters"))
         rows = self._instances_of(ot.id)
-        matched = self._apply_filters(rows, args.get("filters"), args.get("keyword"))
+        matched = self._apply_filters(rows, filters, args.get("keyword"))
         limit = self._limit(args.get("limit"))
         page = matched[:limit]
         for inst in page:
@@ -426,51 +478,149 @@ class ToolRunner:
             "truncated": len(links) > limit, "items": items,
         }
 
+    def _tool_traverse_path(self, args: dict) -> dict:
+        start = self.scope.visible_instance(
+            self.db.query(ObjectInstance).filter(
+                ObjectInstance.id == args.get("instance_id", "")).first())
+        path = args.get("path")
+        if not isinstance(path, list) or not path:
+            raise ToolError('path 不能为空：给出有序跳序列，如 [{"link_type":"下单","direction":"out"}]')
+        if len(path) > _MAX_HOPS:
+            raise ToolError(f"最多 {_MAX_HOPS} 跳，当前 {len(path)} 跳。请缩短路径或分多次遍历")
+
+        # 逐跳预解析链接类型（越界即失败：每一跳都受作用域约束，防经由链接泄露隐藏类型）
+        hops = []
+        for h in path:
+            if not isinstance(h, dict):
+                raise ToolError('path 每一跳必须是对象，如 {"link_type":"下单","direction":"out"}')
+            lt = self.scope.require_link_type(h.get("link_type", ""))
+            direction = h.get("direction") or "out"
+            if direction not in ("out", "in"):
+                raise ToolError("direction 只能是 out 或 in")
+            hops.append((lt, direction))
+
+        visited = {start.id}
+        frontier = [start.id]
+        budget_hit = frontier_capped = False
+        hop_trace: list[dict] = []
+        for depth, (lt, direction) in enumerate(hops):
+            self_col = (LinkInstance.source_object_id if direction == "out"
+                        else LinkInstance.target_object_id)
+            cur = frontier[:_FRONTIER_CAP]
+            if len(frontier) > _FRONTIER_CAP:
+                frontier_capped = True
+            next_ids: list[str] = []
+            next_seen: set[str] = set()
+            for node_id in cur:
+                links = (self.db.query(LinkInstance.source_object_id, LinkInstance.target_object_id)
+                         .filter(LinkInstance.ontology_id == self.scope.ontology.id,
+                                 LinkInstance.link_type_id == lt.id, self_col == node_id)
+                         .limit(_HOP_FANOUT_CAP).all())
+                for src_id, tgt_id in links:
+                    other = tgt_id if direction == "out" else src_id
+                    if other in visited or other in next_seen:
+                        continue
+                    next_seen.add(other)
+                    next_ids.append(other)
+                    if len(visited) + len(next_ids) > _PATH_NODE_BUDGET:
+                        budget_hit = True
+                        break
+                if budget_hit:
+                    break
+            visited.update(next_ids)
+            frontier = next_ids
+            hop_trace.append({"hop": depth + 1, "linkType": lt.display_name,
+                              "direction": direction, "reached": len(next_ids)})
+            if not frontier or budget_hit:
+                break
+
+        limit = self._limit(args.get("limit"))
+        items = []
+        for oid in frontier[:limit]:
+            inst = self.db.query(ObjectInstance).filter(ObjectInstance.id == oid).first()
+            if not inst or inst.object_type_id not in self.scope.object_types:
+                continue  # 终点仍受作用域约束
+            self._cite(inst)
+            otx = self.scope.object_types[inst.object_type_id]
+            items.append({"objectType": otx.display_name, **_row(inst)})
+        return {
+            "from": _label(self.scope, start),
+            "path": [{"linkType": lt.display_name, "direction": d} for lt, d in hops],
+            "hops": hop_trace,
+            "endpoints": len(frontier),
+            "returned": len(items),
+            "truncated": len(frontier) > limit,
+            "budgetHit": budget_hit,
+            "frontierCapped": frontier_capped,
+            "items": items,
+        }
+
     def _tool_aggregate_objects(self, args: dict) -> dict:
         ot = self.scope.require_object_type(args.get("object_type", ""))
         metric = args.get("metric") or "count"
+        if metric not in ("count", "sum", "avg", "min", "max"):
+            raise ToolError(f"不支持的 metric: {metric}")
         metric_prop = args.get("metric_property")
         if metric != "count" and not metric_prop:
             raise ToolError(f"metric={metric} 需要提供 metric_property（数值属性名）")
-
-        rows = self._apply_filters(self._instances_of(ot.id), args.get("filters"), None)
+        # 属性护栏（越界硬失败）：拼错/臆造的属性名当场报错并给可用清单，不静默算错
+        if metric_prop:
+            metric_prop = self.scope.resolve_property(ot, metric_prop)
         group_by = args.get("group_by")
+        if group_by:
+            group_by = self.scope.resolve_property(ot, group_by)
+        filters = self._validated_filters(ot, args.get("filters"))
 
-        def compute(group: list[ObjectInstance]):
+        # 流式累加（不materialize全表，内存安全）：修正原先 .limit(5000) 盲截断
+        # 导致的『大数据量下统计静默算错』；到安全阀才停并诚实标 partial。
+        acc: dict[str, dict] = {}
+        def bump(key: str, v):
+            a = acc.get(key)
+            if a is None:
+                a = acc[key] = {"count": 0, "sum": 0.0, "nnum": 0, "min": None, "max": None}
+            a["count"] += 1
+            if v is not None:
+                a["sum"] += v
+                a["nnum"] += 1
+                a["min"] = v if a["min"] is None else min(a["min"], v)
+                a["max"] = v if a["max"] is None else max(a["max"], v)
+
+        scanned = matched = 0
+        partial = False
+        for inst in self._stream_instances(ot.id):
+            if scanned >= _AGG_SCAN_CAP:
+                partial = True
+                break
+            scanned += 1
+            merged = {**(inst.properties or {}), **(inst.computed or {})}
+            if filters and not all(_match(merged, f) for f in filters):
+                continue
+            matched += 1
+            v = _num(merged.get(metric_prop)) if metric != "count" else None
+            bump(str(merged.get(group_by)) if group_by else "__all__", v)
+
+        def finalize(a: dict):
             if metric == "count":
-                return len(group)
-            vals = []
-            for inst in group:
-                v = _num({**(inst.properties or {}), **(inst.computed or {})}.get(metric_prop))
-                if v is not None:
-                    vals.append(v)
-            if not vals:
+                return a["count"]
+            if a["nnum"] == 0:
                 return None
             if metric == "sum":
-                return round(sum(vals), 6)
+                return round(a["sum"], 6)
             if metric == "avg":
-                return round(sum(vals) / len(vals), 6)
-            if metric == "min":
-                return min(vals)
-            if metric == "max":
-                return max(vals)
-            raise ToolError(f"不支持的 metric: {metric}")
+                return round(a["sum"] / a["nnum"], 6)
+            return a["min"] if metric == "min" else a["max"]
 
+        base = {"objectType": ot.display_name, "metric": metric,
+                "metricProperty": metric_prop, "scanned": scanned,
+                "matched": matched, "partial": partial}
         if not group_by:
-            return {"objectType": ot.display_name, "metric": metric,
-                    "metricProperty": metric_prop, "scanned": len(rows),
-                    "value": compute(rows)}
+            empty = {"count": 0, "sum": 0.0, "nnum": 0, "min": None, "max": None}
+            return {**base, "value": finalize(acc.get("__all__") or empty)}
 
-        groups: dict[str, list[ObjectInstance]] = {}
-        for inst in rows:
-            key = str({**(inst.properties or {}), **(inst.computed or {})}.get(group_by))
-            groups.setdefault(key, []).append(inst)
-        result = [{"group": k, "value": compute(v), "count": len(v)} for k, v in groups.items()]
+        result = [{"group": k, "value": finalize(a), "count": a["count"]} for k, a in acc.items()]
         result.sort(key=lambda x: (x["value"] is None, -(x["value"] or 0)))
         groups_out = result[:50]
-        out = {"objectType": ot.display_name, "metric": metric,
-               "metricProperty": metric_prop, "groupBy": group_by,
-               "scanned": len(rows), "groups": groups_out,
+        out = {**base, "groupBy": group_by, "groups": groups_out,
                "truncated": len(result) > 50}
         # 确定性图表：直接从真实分组值生成，前端渲染，无需 LLM 再吐 chart
         chart = _build_aggregate_chart(ot.display_name, metric, metric_prop, group_by, groups_out)

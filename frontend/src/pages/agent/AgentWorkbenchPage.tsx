@@ -148,6 +148,7 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   search_objects: { label: '检索对象', icon: Search },
   get_object: { label: '查看详情', icon: Eye },
   traverse_links: { label: '遍历关系', icon: GitBranch },
+  traverse_path: { label: '多跳遍历', icon: Network },
   aggregate_objects: { label: '聚合统计', icon: Sigma },
   get_object_history: { label: '事实溯源', icon: ScrollText },
   list_actions: { label: '查看动作', icon: ListChecks },

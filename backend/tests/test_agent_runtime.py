@@ -307,3 +307,72 @@ def test_disabled_agent(client, auth_headers, modeled_ontology):
     r = client.post(f"{_fo(oid)}/agent/chat", headers=auth_headers,
                     json={"message": "你好", "stream": False})
     assert "停用" in (r.json()["data"]["error"] or "")
+
+
+# ---------------------------------------------------------------- 多跳遍历 & 护栏
+
+
+def test_traverse_path_multi_hop(client, auth_headers, modeled_ontology, db):
+    """2 跳：订单 →(order_supplier)→ 供应商 →(supplier_customer)→ 客户。"""
+    oid = modeled_ontology["id"]
+    from app.models.ontology_formal import ObjectType, LinkType, ObjectInstance, LinkInstance
+    db.add(ObjectType(id="ot-customer", ontology_id=oid, name="Customer", display_name="客户",
+                      primary_key="cname",
+                      properties=[{"id": "pc", "name": "cname", "displayName": "客户名", "type": "string"}]))
+    db.add(LinkType(id="lt-2", ontology_id=oid, name="supplier_customer", display_name="供应商-客户",
+                    source_object_type_id="ot-supplier", target_object_type_id="ot-customer",
+                    cardinality="one-to-many"))
+    db.add(ObjectInstance(id="inst-c1", ontology_id=oid, object_type_id="ot-customer",
+                          properties={"cname": "张三"}, computed={}))
+    db.add(LinkInstance(id="li-2", ontology_id=oid, link_type_id="lt-2",
+                        source_object_id="inst-s1", target_object_id="inst-c1"))
+    db.commit()
+
+    from app.ontologies.agent_runtime.boundary import build_scope, ToolError
+    from app.ontologies.agent_runtime.toolkit import ToolRunner
+    _, _, scope = build_scope(db, oid)
+    runner = ToolRunner(db, scope)
+
+    res = runner.run("traverse_path", {"instance_id": "inst-o1", "path": [
+        {"link_type": "order_supplier", "direction": "out"},
+        {"link_type": "supplier_customer", "direction": "out"},
+    ]})
+    assert res["returned"] == 1
+    assert res["items"][0]["properties"]["cname"] == "张三"
+    assert len(res["hops"]) == 2 and res["hops"][-1]["reached"] == 1
+    assert runner.citations[-1]["label"] == "张三"
+
+    # 缰绳：超过最大跳数 → 硬失败
+    with pytest.raises(ToolError):
+        runner.run("traverse_path", {"instance_id": "inst-o1",
+                                     "path": [{"link_type": "order_supplier"}] * 6})
+
+    # 边界：隐藏供应商 → 经其的链接不可见，多跳越界即失败（防经链接泄露隐藏类型）
+    client.put(f"{_fo(oid)}/agent/profile", headers=auth_headers,
+               json={"allowedObjectTypeIds": ["ot-order"]})
+    _, _, scope2 = build_scope(db, oid)
+    with pytest.raises(ToolError):
+        ToolRunner(db, scope2).run("traverse_path", {"instance_id": "inst-o1",
+                                   "path": [{"link_type": "order_supplier"}]})
+
+
+def test_property_scope_guard(client, auth_headers, modeled_ontology, db):
+    """越界属性硬失败：拼错/臆造的属性名当场报错，而非静默算错。"""
+    oid = modeled_ontology["id"]
+    from app.ontologies.agent_runtime.boundary import build_scope, ToolError
+    from app.ontologies.agent_runtime.toolkit import ToolRunner
+    _, _, scope = build_scope(db, oid)
+    runner = ToolRunner(db, scope)
+
+    with pytest.raises(ToolError):
+        runner.run("aggregate_objects", {"object_type": "Order", "metric": "count",
+                                         "group_by": "bogus_prop"})
+    with pytest.raises(ToolError):
+        runner.run("search_objects", {"object_type": "Order",
+                                      "filters": [{"property": "nope", "op": "eq", "value": 1}]})
+
+    # displayName 也能解析（状态 → status），并正常分组 + 附确定性图表
+    grouped = runner.run("aggregate_objects", {"object_type": "订单", "metric": "count",
+                                               "group_by": "状态"})
+    assert {g["group"]: g["value"] for g in grouped["groups"]} == {"pending": 1, "paid": 1}
+    assert grouped["partial"] is False and grouped["scanned"] == 2

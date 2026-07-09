@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 _TOOL_RESULT_CAP = 8000     # 回填给 LLM 的单个工具结果长度上限
 _RESULT_DISPLAY_CAP = 6000  # 推送/持久化给前端展示的工具结果长度上限
-_HISTORY_LIMIT = 10         # 携带的历史消息条数
+_HISTORY_LIMIT = 10         # 逐字带入的最近消息条数
+_HISTORY_DIGEST_SCAN = 40   # 为「对话回顾」额外回溯的条数（滑出窗口的更早提问压成摘要）
 
 
 # 图表可视化能力（普通字符串，含 JSON 花括号，勿并入 f-string）
@@ -73,9 +74,9 @@ def _system_prompt(scope) -> str:
 {scope.skill_card()}
 
 # 行为准则
-1. 先查证后回答：任何涉及数据的结论必须来自工具返回结果，禁止编造。查不到就直说查不到。
+1. 先查证后回答：任何涉及数据的结论都必须来自工具返回结果，禁止编造，也不要用本体之外的常识或训练记忆去补充业务事实。工具结果不足以回答时，明确说明还缺什么、需要用户补充或授权什么，而不是猜。多个结果相互矛盾时，指出差异并优先采信更具体、更有出处的来源。工具返回 partial=true 时，说明这是基于部分数据的估计。
 2. 用中文回答，简洁、结构化；提到具体对象时带上它的标签（如订单号、名称），便于用户核对。
-3. 统计类问题（总共/平均/最多/分布）优先用 aggregate_objects，不要拉列表自己数。
+3. 统计类问题（总共/平均/最多/分布）优先用 aggregate_objects，不要拉列表自己数；跨多层关系的问题（X 经由 A 再到 B）用 traverse_path 多跳遍历，别让我自己反复单跳。
 4. 用户问「为什么是这个值 / 谁改的 / 什么时候变的」，用 get_object_history 给出带出处的回答。
 5. 需要修改数据时：只能用 propose_action 做预演并生成提案，真实执行由用户在界面上确认。绝不能声称你已经完成了修改。
 6. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
@@ -94,6 +95,8 @@ def _summarize(name: str, result: dict) -> str:
         return f"{result.get('objectType', '')} · {len(result.get('links', []))} 组关联"
     if name == "traverse_links":
         return f"{result.get('from', '')} —{result.get('linkType', '')}→ {result.get('returned', 0)} 个对象"
+    if name == "traverse_path":
+        return f"{result.get('from', '')} 经 {len(result.get('path') or [])} 跳 → {result.get('returned', 0)} 个终点对象"
     if name == "aggregate_objects":
         if "groups" in result:
             return f"{result.get('objectType', '')} 按 {result.get('groupBy')} 分 {len(result['groups'])} 组"
@@ -122,6 +125,17 @@ def _display_result(result: dict):
         "_note": f"结果较大（约 {len(payload)} 字符），此处仅展示前 {_RESULT_DISPLAY_CAP} 字符预览。",
         "preview": payload[:_RESULT_DISPLAY_CAP],
     }
+
+
+def _history_digest(older: list) -> Optional[str]:
+    """把滑出窗口的更早消息压成一段轻量「对话回顾」——只保留早前的提问，
+    维持长对话里的指代与延续。不额外调用 LLM、不落新表、不跨会话，纯会话内续接。"""
+    qs = [(m.content or "").strip() for m in older
+          if m.role == "user" and (m.content or "").strip()]
+    if not qs:
+        return None
+    lines = "\n".join(f"- {q[:80]}" for q in qs[-15:])
+    return "# 对话回顾（更早轮次的提问，帮助理解指代与延续；不必逐条重新回答）\n" + lines
 
 
 def run_agent_turn(db: Session, ontology_id: str, user, question: str,
@@ -168,10 +182,12 @@ def _run(db: Session, ontology_id: str, user, question: str,
         db.add(conv)
         db.flush()
 
-    history = (db.query(AgentMessage)
-               .filter(AgentMessage.conversation_id == conv.id)
-               .order_by(AgentMessage.created_at.desc())
-               .limit(_HISTORY_LIMIT).all())[::-1]
+    recent = (db.query(AgentMessage)
+              .filter(AgentMessage.conversation_id == conv.id)
+              .order_by(AgentMessage.created_at.desc())
+              .limit(_HISTORY_DIGEST_SCAN).all())[::-1]
+    verbatim = recent[-_HISTORY_LIMIT:]
+    older = recent[:-_HISTORY_LIMIT] if len(recent) > _HISTORY_LIMIT else []
 
     db.add(AgentMessage(conversation_id=conv.id, role="user", content=question))
     db.commit()
@@ -179,7 +195,10 @@ def _run(db: Session, ontology_id: str, user, question: str,
     yield {"type": "meta", "conversationId": conv.id, "model": call_kwargs.get("model")}
 
     messages: list[dict] = [{"role": "system", "content": _system_prompt(scope)}]
-    for m in history:
+    digest = _history_digest(older)
+    if digest:
+        messages.append({"role": "system", "content": digest})
+    for m in verbatim:
         if m.role in ("user", "assistant") and (m.content or "").strip():
             messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": question})
