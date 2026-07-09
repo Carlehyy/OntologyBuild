@@ -1,12 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   Upload, RefreshCw, Trash2, ChevronDown, ChevronUp, Loader2,
-  CheckCircle2, XCircle, X, GitBranch, Play, FileUp, Repeat,
+  CheckCircle2, XCircle, X, FileUp, Repeat, GitBranch,
   Database, Pencil, KeyRound, Table2,
 } from 'lucide-react'
 import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type DatasetVersionItem, type CreateTableResult } from '@/api/v2/datasets'
-import pipelinesApi from '@/api/v2/pipelines'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DatasetEditorModal from './DatasetEditorModal'
 import CreateTableModal from './CreateTableModal'
@@ -33,12 +31,9 @@ function formatTime(iso?: string | null): string {
 interface Banner {
   type: 'success' | 'error'
   text: string
-  /** 上传新版本后，可一键运行的已发布消费流水线 */
-  runnableConsumers?: DatasetConsumer[]
 }
 
 export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: string | null }) {
-  const navigate = useNavigate()
   const [items, setItems] = useState<DatasetOverviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(focusDatasetId ?? null)
@@ -55,9 +50,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   const versionTargetRef = useRef<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadingVersionId, setUploadingVersionId] = useState<string | null>(null)
-
-  // 运行流水线
-  const [runningPipelineId, setRunningPipelineId] = useState<string | null>(null)
 
   // 删除
   const [deleteTarget, setDeleteTarget] = useState<DatasetOverviewItem | null>(null)
@@ -121,7 +113,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
     setBanner(null)
     try {
       const res = await datasetsApi.upload(file)
-      setBanner({ type: 'success', text: `「${res.name}」上传成功，已创建人工数据集。在「维护数据」中声明主键后可直接灌入本体，也可作为流水线的数据源。` })
+      setBanner({ type: 'success', text: `「${res.name}」上传成功，已创建人工数据集。在「维护数据」中声明主键后可直接灌入本体。` })
       load()
     } catch (err: unknown) {
       const er = err as { detail?: string; message?: string }
@@ -167,11 +159,9 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         ...(res.columns_added.length ? [`新增列：${res.columns_added.join('、')}`] : []),
         ...(res.columns_removed.length ? [`缺失列：${res.columns_removed.join('、')}`] : []),
       ].join('；')
-      const runnable = (res.consumers || []).filter(c => c.status === 'published')
       setBanner({
         type: 'success',
         text: `「${res.dataset_name}」已更新至 v${res.version_no}${res.rowcount != null ? `（${res.rowcount} 行）` : ''}${colChange ? `。注意，${colChange}` : ''}`,
-        runnableConsumers: runnable,
       })
       load()
       loadDetail(id, true)
@@ -180,29 +170,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       setBanner({ type: 'error', text: `更新失败：${er?.detail || er?.message || '未知错误'}` })
     } finally {
       setUploadingVersionId(null)
-    }
-  }
-
-  /** 一键运行消费流水线 */
-  const handleRunPipeline = async (pl: DatasetConsumer) => {
-    if (runningPipelineId) return
-    setRunningPipelineId(pl.id)
-    try {
-      const res = await pipelinesApi.runSync(pl.id)
-      const stats = (res.stats || {}) as Record<string, unknown>
-      if (res.status === 'success') {
-        setBanner({
-          type: 'success',
-          text: `流水线「${pl.name}」运行成功：输入 ${stats.rows_in ?? 0} 行 → 输出 ${stats.rows_out ?? 0} 行，产物已更新到成品数据集`,
-        })
-      } else {
-        setBanner({ type: 'error', text: `流水线「${pl.name}」运行失败：${(res as { error?: string }).error || '未知错误'}` })
-      }
-    } catch (err: unknown) {
-      const er = err as { detail?: string; message?: string }
-      setBanner({ type: 'error', text: `流水线「${pl.name}」运行失败：${er?.detail || er?.message || '未知错误'}` })
-    } finally {
-      setRunningPipelineId(null)
     }
   }
 
@@ -274,22 +241,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
             <span className="flex-1">{banner.text}</span>
             <button onClick={() => setBanner(null)} className="text-gray-400 hover:text-gray-600 shrink-0"><X size={14} /></button>
           </div>
-          {banner.runnableConsumers && banner.runnableConsumers.length > 0 && (
-            <div className="flex items-center gap-2 mt-2 ml-6 flex-wrap">
-              <span className="text-xs">立即用新数据运行流水线：</span>
-              {banner.runnableConsumers.map(pl => (
-                <button
-                  key={pl.id}
-                  onClick={() => handleRunPipeline(pl)}
-                  disabled={!!runningPipelineId}
-                  className="flex items-center gap-1 text-xs px-2.5 py-1 bg-white border border-green-300 rounded-lg hover:bg-green-100 disabled:opacity-50"
-                >
-                  {runningPipelineId === pl.id ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-                  {pl.name}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -442,44 +393,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                             <p className="text-xs text-gray-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> 加载数据...</p>
                           ) : (
                             <div className="space-y-4">
-                              {/* 消费流水线 */}
-                              <div>
-                                <p className="text-xs font-medium text-gray-500 mb-1.5">被以下流水线使用</p>
-                                {ds.consumers.length === 0 ? (
-                                  <p className="text-xs text-gray-400">
-                                    暂未被任何流水线使用。
-                                    <button onClick={() => navigate('/data/pipelines')} className="text-[var(--color-nav-bg)] hover:underline ml-1">
-                                      去创建流水线加工这份数据 →
-                                    </button>
-                                  </p>
-                                ) : (
-                                  <div className="flex gap-2 flex-wrap">
-                                    {ds.consumers.map(pl => (
-                                      <div key={pl.id} className="flex items-center gap-2 bg-white border rounded-lg px-3 py-1.5 text-xs">
-                                        <GitBranch size={11} className="text-gray-400" />
-                                        <button onClick={() => navigate(`/data/pipelines/${pl.id}`)} className="font-medium text-gray-700 hover:text-[var(--color-nav-bg)] hover:underline">
-                                          {pl.name}
-                                        </button>
-                                        <span className={`px-1 py-0.5 rounded text-[10px] ${pl.status === 'published' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
-                                          {PIPELINE_STATUS_LABEL[pl.status] || pl.status}
-                                        </span>
-                                        {pl.status === 'published' && (
-                                          <button
-                                            onClick={() => handleRunPipeline(pl)}
-                                            disabled={!!runningPipelineId}
-                                            className="flex items-center gap-0.5 text-[10px] text-green-700 hover:bg-green-50 px-1.5 py-0.5 rounded disabled:opacity-50"
-                                            title="立即运行该流水线加工最新数据"
-                                          >
-                                            {runningPipelineId === pl.id ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />}
-                                            运行
-                                          </button>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-
                               {/* 数据预览 */}
                               <div>
                                 <p className="text-xs font-medium text-gray-500 mb-1.5">
