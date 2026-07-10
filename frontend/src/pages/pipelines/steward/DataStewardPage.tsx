@@ -534,7 +534,6 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
           </div>
         ) : (
           <div>
-            <p className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">未发布（编排中） · {records.length}</p>
             <div className="space-y-2">
               {records.map(r => (
                 <RecordCard
@@ -621,9 +620,7 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
           )}
 
           {/* n8n 可达性（只读；执行观测/试跑已不在管家职权内） */}
-          {detailLoading ? (
-            <p className="text-[11px] text-gray-400">读取 n8n 详情…</p>
-          ) : detail?.n8nError ? (
+          {detail?.n8nError ? (
             <p className="text-[11px] text-amber-600">n8n 暂不可达：{detail.n8nError}</p>
           ) : null}
 
