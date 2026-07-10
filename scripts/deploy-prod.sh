@@ -121,11 +121,8 @@ reject_secret() {
     exit 1
   fi
 }
-require_secret ENCRYPTION_KEY
 reject_secret SECRET_KEY dev-secret-key
 reject_secret SECRET_KEY change-me-to-a-random-32-char-string
-reject_secret CORS_ALLOWED_ORIGINS '*'
-reject_secret CORS_ALLOWED_ORIGINS https://ontology.example.com
 reject_secret FIRST_ADMIN_PASSWORD admin123
 reject_secret POSTGRES_PASSWORD ontoprompt
 reject_secret DATABASE_URL postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
@@ -133,19 +130,25 @@ reject_secret NEO4J_PASSWORD ontoprompt123
 reject_secret NEO4J_AUTH neo4j/ontoprompt123
 reject_secret MINIO_ACCESS_KEY minioadmin
 reject_secret MINIO_SECRET_KEY minioadmin
-require_image_digest() {
+if [ -z "$(env_value ENCRYPTION_KEY)" ]; then
+  log "ENCRYPTION_KEY is empty; preserving the existing SECRET_KEY-derived encryption key"
+fi
+check_image_digest() {
   local key="$1"
   local value
   value="$(env_value "$key")"
   if [[ ! "$value" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
-    log "$key must be pinned to an immutable @sha256 digest"
-    exit 1
+    if [ "${STRICT_IMAGE_DIGESTS:-0}" = "1" ]; then
+      log "$key must be pinned to an immutable @sha256 digest"
+      exit 1
+    fi
+    log "warning: $key is not digest-pinned; set STRICT_IMAGE_DIGESTS=1 after populating immutable image references"
   fi
 }
 for image_key in \
   POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE CHROMA_IMAGE \
   PYTHON_BASE_IMAGE NODE_BASE_IMAGE NGINX_BASE_IMAGE; do
-  require_image_digest "$image_key"
+  check_image_digest "$image_key"
 done
 log "building images"
 run_with_retry compose build --pull

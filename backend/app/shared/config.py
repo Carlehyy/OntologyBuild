@@ -45,40 +45,51 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env"}
 
+def production_config_errors(current: Settings) -> list[str]:
+    """Return fail-closed production configuration errors.
+
+    ``ENCRYPTION_KEY`` intentionally remains optional for existing deployments:
+    historical ciphertext was encrypted with a Fernet key derived from
+    ``SECRET_KEY``. Requiring a new independent key without re-encrypting those
+    rows makes every stored connection credential unreadable.
+    """
+    _insecure = []
+    if (
+        current.secret_key in {"dev-secret-key", "change-me-to-a-random-32-char-string"}
+        or len(current.secret_key) < 32
+    ):
+        _insecure.append("SECRET_KEY")
+    if current.first_admin_password in {"admin123", "change-me"} or len(current.first_admin_password) < 12:
+        _insecure.append("FIRST_ADMIN_PASSWORD")
+    if current.minio_access_key == "minioadmin" or current.minio_secret_key == "minioadmin":
+        _insecure.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
+    if "ontoprompt:ontoprompt@" in current.database_url:
+        _insecure.append("DATABASE_URL credentials")
+    if not current.database_url.lower().startswith("postgresql"):
+        _insecure.append("DATABASE_URL must use PostgreSQL")
+    if current.neo4j_password == "ontoprompt123":
+        _insecure.append("NEO4J_PASSWORD")
+    if current.encryption_key:
+        try:
+            from cryptography.fernet import Fernet
+            Fernet(current.encryption_key.encode())
+        except Exception:
+            _insecure.append("ENCRYPTION_KEY must be a valid Fernet key")
+    origins = [item.strip() for item in current.cors_allowed_origins.split(",") if item.strip()]
+    # Empty means same-origin only and is safe. Wildcard remains forbidden.
+    if "*" in origins:
+        _insecure.append("CORS_ALLOWED_ORIGINS")
+    if current.storage_local_fallback:
+        _insecure.append("STORAGE_LOCAL_FALLBACK=false")
+    if current.allow_public_registration:
+        _insecure.append("ALLOW_PUBLIC_REGISTRATION=false")
+    return _insecure
+
+
 settings = Settings()
 
 if settings.environment == "production":
-    _insecure = []
-    if (
-        settings.secret_key in {"dev-secret-key", "change-me-to-a-random-32-char-string"}
-        or len(settings.secret_key) < 32
-    ):
-        _insecure.append("SECRET_KEY")
-    if settings.first_admin_password in {"admin123", "change-me"} or len(settings.first_admin_password) < 12:
-        _insecure.append("FIRST_ADMIN_PASSWORD")
-    if settings.minio_access_key == "minioadmin" or settings.minio_secret_key == "minioadmin":
-        _insecure.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
-    if "ontoprompt:ontoprompt@" in settings.database_url:
-        _insecure.append("DATABASE_URL credentials")
-    if not settings.database_url.lower().startswith("postgresql"):
-        _insecure.append("DATABASE_URL must use PostgreSQL")
-    if settings.neo4j_password == "ontoprompt123":
-        _insecure.append("NEO4J_PASSWORD")
-    if not settings.encryption_key:
-        _insecure.append("ENCRYPTION_KEY")
-    else:
-        try:
-            from cryptography.fernet import Fernet
-            Fernet(settings.encryption_key.encode())
-        except Exception:
-            _insecure.append("ENCRYPTION_KEY must be a valid Fernet key")
-    origins = [item.strip() for item in settings.cors_allowed_origins.split(",") if item.strip()]
-    if not origins or "*" in origins:
-        _insecure.append("CORS_ALLOWED_ORIGINS")
-    if settings.storage_local_fallback:
-        _insecure.append("STORAGE_LOCAL_FALLBACK=false")
-    if settings.allow_public_registration:
-        _insecure.append("ALLOW_PUBLIC_REGISTRATION=false")
+    _insecure = production_config_errors(settings)
     if _insecure:
         raise RuntimeError(
             f"ENVIRONMENT=production 但以下配置仍为默认值, 必须通过环境变量注入: {', '.join(_insecure)}"
