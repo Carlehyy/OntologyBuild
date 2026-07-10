@@ -1,2 +1,6 @@
-# re-export - real content moved to app.data_channel.pipelines.steps.md_to_structured
-from app.data_channel.pipelines.steps.md_to_structured import *  # noqa: F401,F403
+"""Compatibility alias for the relocated Markdown extraction step module."""
+import sys
+
+from app.data_channel.pipelines.steps import md_to_structured as _implementation
+
+sys.modules[__name__] = _implementation

@@ -1,19 +1,17 @@
 """v2 Pipeline API — 支持新 DSL (nodes/edges) + 旧 steps 格式兼容"""
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
 from app.database import SessionLocal
+from app.config import settings
 from app.deps import get_current_user
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 from app.data_channel.steward.models import N8nPipeline
 # 确保 Dataset 模型先导入以解析 FK
 import app.models.v2.dataset  # noqa: F401
-
-router = APIRouter(dependencies=[Depends(get_current_user)])
-
 
 def get_db():
     db = SessionLocal()
@@ -21,6 +19,35 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def pipeline_access_guard(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Pipeline 的统一写权限边界。
+
+    读接口对所有已认证用户开放；写接口仅 admin/editor。已有 owner 的
+    Pipeline 只允许 owner 或 admin 修改/发布/执行。迁移前 created_by 为空的
+    存量 Pipeline 暂允许 editor 接管，避免升级后全部不可维护。
+    """
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return current_user
+    role = str(getattr(current_user, "role", "viewer") or "viewer")
+    if role not in {"admin", "editor"}:
+        raise HTTPException(403, "Viewer is read-only")
+    pipeline_id = request.path_params.get("pipeline_id")
+    if not pipeline_id or role == "admin":
+        return current_user
+    pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    # 404 由端点以统一文案返回；guard 只负责已存在资源的授权。
+    if pipeline is not None and pipeline.created_by not in (None, "", current_user.id):
+        raise HTTPException(403, "Only the pipeline owner or an admin may modify it")
+    return current_user
+
+
+router = APIRouter(dependencies=[Depends(pipeline_access_guard)])
 
 
 # ── Pydantic Models ────────────────────────────────────────────────
@@ -85,6 +112,16 @@ def _is_n8n_pipeline(pl: Pipeline) -> bool:
     return ((pl.definition or {}).get("engine") == "n8n")
 
 
+def _require_production_executable(pl: Pipeline) -> None:
+    """Production writes may only execute an immutable, enabled release."""
+    if settings.environment != "production":
+        return
+    if (pl.status or "") != "published":
+        raise HTTPException(409, "生产环境只允许运行已发布的流水线；草稿请使用 dry-run 预览。")
+    if not bool(pl.enabled):
+        raise HTTPException(409, "流水线当前未启用，生产运行已拒绝。")
+
+
 def _reject_if_sync_chain_refs(db: Session, pipeline_id: str, *, action: str) -> None:
     """同步任务把该流水线设为链式触发目标时拦截删除/撤回发布。
 
@@ -105,7 +142,11 @@ def _reject_if_sync_chain_refs(db: Session, pipeline_id: str, *, action: str) ->
 # ── CRUD ──────────────────────────────────────────────────────────
 
 @router.post("", response_model=PipelineResponse, status_code=201)
-def create_pipeline(body: PipelineCreate, db: Session = Depends(get_db)):
+def create_pipeline(
+    body: PipelineCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     """创建新 Pipeline。支持旧 steps 格式和新 nodes/edges DSL。"""
     # 重名校验
     existing = db.query(Pipeline).filter(
@@ -135,6 +176,7 @@ def create_pipeline(body: PipelineCreate, db: Session = Depends(get_db)):
         status="draft",
         branch="main",
         version=1,
+        created_by=current_user.id,
     )
     db.add(pl)
     db.commit()
@@ -384,6 +426,17 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         elif ntype == "storage":
             storage_configs[nid] = n.get("config") or {}
 
+    # The runtime supports one linear branch per connector.  Compile here as a
+    # publish/run guard so an unsupported graph can never be flattened into a
+    # different execution plan.
+    try:
+        from app.data_channel.pipelines.dag_compiler import compile_definition
+        compile_definition(definition)
+    except Exception as exc:
+        compile_errors = getattr(exc, "errors", None) or [str(exc)]
+        for message in compile_errors:
+            errors.append({"node_id": "", "severity": "error", "message": message})
+
     # 检查连接规则
     for edge in edges:
         src = edge.get("source", "")
@@ -495,9 +548,9 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         })
 
     if has_connector and not has_output:
-        warnings.append({
-            "node_id": "", "severity": "warning",
-            "message": "存在 Connector 但没有 Output 节点，Pipeline 不会产生输出。",
+        errors.append({
+            "node_id": "", "severity": "error",
+            "message": "存在 Connector 但没有 Output 节点，禁止发布或运行。",
         })
 
     return ValidateResult(valid=len(errors) == 0, errors=errors, warnings=warnings)
@@ -669,7 +722,8 @@ class PublishBody(BaseModel):
 
 @router.post("/{pipeline_id}/publish")
 def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
-                     db: Session = Depends(get_db)):
+                     db: Session = Depends(get_db),
+                     current_user=Depends(get_current_user)):
     """发布 Pipeline：封版编排与字段契约，此后仅名称/描述可修改。
 
     发布是所有引擎共同的生命周期唯一入口（画布与 n8n 一致）。n8n 引擎
@@ -748,6 +802,7 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
         definition=pl.definition,
         column_definitions=pl.column_definitions,
         status="published",
+        created_by=current_user.id,
     ))
     db.commit()
 
@@ -829,6 +884,7 @@ def run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
+    _require_production_executable(pl)
 
     run = PipelineRun(pipeline_id=pipeline_id, status="pending", started_at=datetime.now(timezone.utc))
     db.add(run)
@@ -901,6 +957,7 @@ def run_pipeline_sync(pipeline_id: str, db: Session = Depends(get_db)):
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
+    _require_production_executable(pl)
 
     run = PipelineRun(pipeline_id=pipeline_id, status="pending", started_at=datetime.now(timezone.utc))
     db.add(run)
@@ -1172,6 +1229,7 @@ def commit_dry_run(pipeline_id: str, dry_run_id: str, db: Session = Depends(get_
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
+    _require_production_executable(pl)
     # 治理边界：未发布的 n8n 流水线——临时激活试跑出来的数据只供预览与
     # 契约校验，不允许经「确认入湖」流入正式资产
     if _is_n8n_pipeline(pl) and (pl.status or "") != "published":

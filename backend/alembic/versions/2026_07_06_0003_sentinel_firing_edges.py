@@ -22,6 +22,16 @@ def _column_exists(table: str, column: str) -> bool:
 
 
 def upgrade() -> None:
+    # The original baseline predates the formal/sentinel tables and older
+    # deployments relied on application startup create_all before Alembic.
+    # Fresh production databases run Alembic first, so bootstrap every missing
+    # model table here. create_all is additive only; later guarded migrations
+    # still handle columns on existing installations.
+    from app.database import Base
+    from app.model_registry import import_all_models
+    import_all_models()
+    Base.metadata.create_all(bind=op.get_bind())
+
     if not _column_exists("sentinel_firings", "entered"):
         op.add_column(
             "sentinel_firings",

@@ -3,7 +3,8 @@ import uuid
 
 import pytest
 
-from app.models.v2.curated import CuratedDataset
+from app.models.v2.curated import CuratedReview
+from app.models.v2.dataset import Dataset, DatasetVersion
 
 
 @pytest.fixture
@@ -21,10 +22,16 @@ def curated_client(client, db):
 
 
 def _make_curated(db) -> str:
-    ds = CuratedDataset(name=f"authz-{uuid.uuid4().hex[:6]}", status="pending_review", quality_score=0.8)
+    ds = Dataset(
+        name=f"authz-{uuid.uuid4().hex[:6]}", kind="curated",
+        schema_json={"quality_score": 0.8})
     db.add(ds)
     db.commit()
     db.refresh(ds)
+    db.add(DatasetVersion(
+        dataset_id=ds.id, version_no=1, rowcount=1,
+        storage_uri=None, checksum=None))
+    db.commit()
     return ds.id
 
 
@@ -45,5 +52,5 @@ def test_admin_can_approve_curated(curated_client, db, admin_user):
     headers = _login(curated_client, "admin", "admin123")
     r = curated_client.post(f"/api/v2/curated/{ds_id}/review", params={"action": "approve"}, headers=headers)
     assert r.status_code == 200
-    db.refresh(db.query(CuratedDataset).filter(CuratedDataset.id == ds_id).first())
-    assert db.query(CuratedDataset).filter(CuratedDataset.id == ds_id).first().status == "approved"
+    assert db.query(CuratedReview).filter(
+        CuratedReview.curated_dataset_id == ds_id).one().status == "approved"

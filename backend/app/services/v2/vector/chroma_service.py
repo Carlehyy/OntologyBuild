@@ -1,2 +1,6 @@
-# re-export - real content moved to app.shared.chroma_service
-from app.shared.chroma_service import *  # noqa: F401,F403
+"""Compatibility alias for the relocated Chroma service module."""
+import sys
+
+from app.shared import chroma_service as _implementation
+
+sys.modules[__name__] = _implementation

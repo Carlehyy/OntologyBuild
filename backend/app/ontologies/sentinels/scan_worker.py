@@ -12,9 +12,12 @@ logger = logging.getLogger(__name__)
 TICK_SECONDS = int(os.getenv("SENTINEL_SCAN_TICK", "15"))
 
 _started = False
+_thread: threading.Thread | None = None
+_last_error: str | None = None
 
 
 def _loop():
+    global _last_error
     from app.services.sentinel.engine import run_scheduled
     from app.database import SessionLocal
     while True:
@@ -22,18 +25,28 @@ def _loop():
         db = SessionLocal()
         try:
             run_scheduled(db)
+            _last_error = None
         except Exception as e:  # noqa: BLE001
+            _last_error = str(e)
             logger.warning(f"Sentinel scan tick 失败: {e}")
             db.rollback()
         finally:
             db.close()
 
 
-def start_scan_worker() -> None:
-    global _started
-    if _started:
-        return
+def start_scan_worker() -> bool:
+    global _started, _thread
+    if _started and _thread is not None and _thread.is_alive():
+        return True
     if os.getenv("SENTINEL_SCAN_ENABLED", "1") in ("0", "false", "False"):
-        return
-    threading.Thread(target=_loop, daemon=True).start()
-    _started = True
+        return False
+    _thread = threading.Thread(
+        target=_loop, daemon=True, name="sentinel-scan-worker")
+    _thread.start()
+    _started = _thread.is_alive()
+    return _started
+
+
+def scan_worker_status() -> dict:
+    alive = bool(_thread is not None and _thread.is_alive())
+    return {"started": _started, "alive": alive, "last_error": _last_error}

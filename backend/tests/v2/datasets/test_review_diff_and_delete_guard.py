@@ -16,7 +16,8 @@ from app.main import app
 from app.routers.v2 import curated as curated_module
 from app.routers.v2 import datasets as datasets_module
 from app.routers.v2 import mappings as mappings_module
-from app.models.v2.dataset import Dataset
+from app.models.v2.dataset import Dataset, DatasetVersion
+from app.models.v2.curated import CuratedReview
 from app.data_channel.datasets.service import DatasetService, rows_to_parquet_bytes
 
 
@@ -127,6 +128,47 @@ def test_approved_curated_cannot_be_deleted(api, auth_headers, db, admin_user):
     # force 也不能绕
     r = api.delete(f"/api/v2/curated/{ds_id}?force=true", headers=auth_headers)
     assert r.status_code == 409, r.text
+
+
+def test_new_version_does_not_inherit_old_approval(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "v1"}]])
+    version_1 = db.query(DatasetVersion).filter_by(dataset_id=ds_id).one()
+
+    r = api.post(
+        f"/api/v2/curated/{ds_id}/review",
+        params={"action": "approve"}, headers=auth_headers)
+    assert r.status_code == 200, r.text
+    review = db.query(CuratedReview).filter_by(
+        id=r.json().get("data", r.json())["review_id"]).one()
+    assert review.dataset_version_id == version_1.id
+
+    DatasetService(db).create_version(
+        ds_id, rows_to_parquet_bytes([{"id": "1", "name": "v2"}]), rowcount=1)
+
+    r = api.get("/api/v2/curated", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    rows = payload.get("data", payload) if isinstance(payload, dict) else payload
+    current = next(row for row in rows if row["id"] == ds_id)
+    assert current["status"] == "pending_review"
+    detail = api.get(f"/api/v2/curated/{ds_id}", headers=auth_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json().get("data", detail.json())["status"] == "pending_review"
+
+
+def test_stale_review_cannot_approve_newer_version(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "v1"}]])
+    r = api.post(f"/api/v2/curated/{ds_id}/reviews", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    review_id = r.json().get("data", r.json())["review_id"]
+
+    DatasetService(db).create_version(
+        ds_id, rows_to_parquet_bytes([{"id": "1", "name": "v2"}]), rowcount=1)
+    r = api.post(
+        f"/api/v2/curated/reviews/{review_id}/approve", headers=auth_headers)
+    assert r.status_code == 409, r.text
+    db.expire_all()
+    assert db.query(CuratedReview).filter_by(id=review_id).one().status == "pending"
 
 
 def test_pending_curated_can_be_deleted(api, auth_headers, db):

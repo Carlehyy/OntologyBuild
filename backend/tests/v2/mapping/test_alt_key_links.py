@@ -22,6 +22,17 @@ def test_detect_alt_key_columns():
     assert "年采购额" not in alt    # 纯数字列易误连
 
 
+def test_detect_alt_key_columns_rejects_unique_status_in_small_sample():
+    """两行状态值碰巧都不同，也不能被当作跨表身份键。"""
+    rows = [
+        {"id": "1", "supplier_name": "Alpha Industries", "rating_status": "approved"},
+        {"id": "2", "supplier_name": "Beta Technologies", "rating_status": "pending_review"},
+    ]
+    alt = MappingService(db=None)._detect_alt_key_columns(rows, pk_col="id")
+    assert "supplier_name" in alt
+    assert "rating_status" not in alt
+
+
 def test_alt_key_relation_via_document_mentions(db, admin_user):
     """文档记录的 organizations 字段(逗号分隔)按公司名连到 Supplier"""
     onto = OntologyProject(name="alt-key 测试", domain="供应链",

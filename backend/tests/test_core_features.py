@@ -3,6 +3,14 @@
 覆盖: 认证、本体CRUD、实体、规则、图谱、版本化、属性Schema、词表、影子试跑、推理运行、审计日志、导出
 """
 import sys, os
+
+# This file is a legacy executable smoke-test script, not a pytest module: it
+# owns a database, invokes functions at import time and exits the interpreter.
+# Never let pytest collection execute destructive setup or terminate the suite.
+if "pytest" in sys.modules:
+    import pytest
+    pytest.skip("legacy executable smoke script; covered by isolated API tests", allow_module_level=True)
+
 sys.path.insert(0, "/mnt/agents/nano-ontoprompt/backend")
 os.environ["DATABASE_URL"] = "sqlite:////tmp/test_ontoprompt.db"
 os.environ["SECRET_KEY"] = "test-secret-key"

@@ -72,8 +72,9 @@ def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current
     db.add(config)
     db.flush()
     if config.is_default:
+        config.enabled = True
         _set_default(db, config)
-    elif not db.query(ModelConfig).filter(ModelConfig.is_default.is_(True)).first():
+    elif config.enabled and not db.query(ModelConfig).filter(ModelConfig.is_default.is_(True)).first():
         config.is_default = True
     db.commit(); db.refresh(config)
     return {"data": _model_out(config)}
@@ -161,6 +162,11 @@ def set_model_enabled(model_id: str, body: dict, db: Session = Depends(get_db), 
 
 @router.post("/{model_id}/test")
 def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    # Import the exception class before entering provider-specific branches.
+    # Otherwise an OCR import failure occurs before the later local import and
+    # Python raises UnboundLocalError while trying to match ``except LLMError``.
+    from app.ontologies.agent_runtime.llm_bridge import LLMError
+
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
@@ -197,7 +203,7 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
             return {"data": {"ok": True, "response": f"Config type configured: {c.config_type}"}}
 
         from app.services.model_config_selector import llm_call_kwargs
-        from app.ontologies.agent_runtime.llm_bridge import chat as llm_chat, LLMError
+        from app.ontologies.agent_runtime.llm_bridge import chat as llm_chat
 
         call_kwargs = llm_call_kwargs(c)
         if not call_kwargs:

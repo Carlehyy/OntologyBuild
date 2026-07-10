@@ -44,12 +44,6 @@ def list_curated(db: Session = Depends(get_db)):
         CuratedReview.curated_dataset_id.in_(dataset_ids)
     ).order_by(CuratedReview.created_at.desc()).all()
 
-    # Build dict: dataset_id -> latest review
-    review_by_dataset: dict = {}
-    for rev in all_reviews:
-        if rev.curated_dataset_id not in review_by_dataset:
-            review_by_dataset[rev.curated_dataset_id] = rev
-
     result = []
     for r in rows:
         ver = db.query(DatasetVersion).filter(
@@ -59,7 +53,9 @@ def list_curated(db: Session = Depends(get_db)):
         quality = None
         if r.schema_json and isinstance(r.schema_json, dict):
             quality = r.schema_json.get("quality_score")
-        review = review_by_dataset.get(r.id)
+        from app.data_channel.curated.review_service import review_matches_version
+        candidates = [rev for rev in all_reviews if rev.curated_dataset_id == r.id]
+        review = next((rev for rev in candidates if review_matches_version(rev, ver)), None)
         real_status = review.status if review else "pending_review"
         result.append(CuratedDatasetResponse(
             id=r.id, name=r.name,
@@ -86,9 +82,8 @@ def delete_curated(dataset_id: str, force: bool = False,
         raise HTTPException(404, "Curated dataset not found")
 
     # 已审批通过 → 硬禁止删除（force 也不能绕）
-    latest_review = db.query(CuratedReview).filter(
-        CuratedReview.curated_dataset_id == dataset_id
-    ).order_by(CuratedReview.created_at.desc()).first()
+    from app.data_channel.curated.review_service import current_version_review
+    latest_review = current_version_review(db, dataset_id)
     if latest_review and latest_review.status == "approved":
         raise HTTPException(409, detail={
             "code": "approved_locked",
@@ -122,13 +117,26 @@ def delete_curated(dataset_id: str, force: bool = False,
 
 @router.get("/{dataset_id}", response_model=CuratedDatasetResponse)
 def get_curated(dataset_id: str, db: Session = Depends(get_db)):
-    # 先查旧 curated 表，再查 v2_datasets
+    # 旧 curated 表仅保存兼容字段；只要真实 Dataset 存在，状态必须按当前
+    # DatasetVersion 的审批计算，不能返回镜像表里从 v1 遗留的 approved。
     ds = db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
-    if not ds:
-        from app.models.v2.dataset import Dataset
-        d2 = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.kind == "curated").first()
-        if d2:
-            return CuratedDatasetResponse(id=d2.id, name=d2.name, status="pending_review")
+    from app.models.v2.dataset import Dataset, DatasetVersion
+    d2 = db.query(Dataset).filter(
+        Dataset.id == dataset_id, Dataset.kind == "curated").first()
+    if d2:
+        from app.data_channel.curated.review_service import current_version_review
+        review = current_version_review(db, dataset_id)
+        version = db.query(DatasetVersion).filter(
+            DatasetVersion.dataset_id == dataset_id
+        ).order_by(DatasetVersion.version_no.desc()).first()
+        quality = ((d2.schema_json or {}).get("quality_score")
+                   if isinstance(d2.schema_json, dict)
+                   else getattr(ds, "quality_score", None))
+        return CuratedDatasetResponse(
+            id=d2.id, name=d2.name,
+            status=review.status if review else "pending_review",
+            row_count=version.rowcount if version else None,
+            quality_score=quality)
     if not ds:
         raise HTTPException(404, "Curated dataset not found")
     return ds
@@ -244,32 +252,25 @@ def submit_review(
     _admin=Depends(require_admin),  # PRD Security Logic: only admin can approve curated rows
 ):
     """提交审核结果（approve/reject）"""
-    ds = db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
+    from app.models.v2.dataset import Dataset
+    ds = db.query(Dataset).filter(
+        Dataset.id == dataset_id, Dataset.kind == "curated").first()
     if not ds:
-        from app.models.v2.dataset import Dataset
-        ds_v2 = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.kind == "curated").first()
-        if not ds_v2:
-            raise HTTPException(404, "Curated dataset not found")
-        # Create a CuratedDataset record so the FK in CuratedReview resolves
-        ds = CuratedDataset(
-            id=dataset_id,
-            name=ds_v2.name,
-            schema_json=ds_v2.schema_json,
-            quality_score=ds_v2.schema_json.get("quality_score") if isinstance(ds_v2.schema_json, dict) else None,
-            status="pending_review",
-        )
-        db.add(ds)
-        db.flush()
+        raise HTTPException(404, "Curated dataset not found")
 
     from datetime import datetime, timezone
+    from app.data_channel.curated.review_service import latest_dataset_version
+    version = latest_dataset_version(db, dataset_id)
+    if version is None:
+        raise HTTPException(409, "Curated dataset has no version to review")
     review = CuratedReview(
         curated_dataset_id=dataset_id,
+        dataset_version_id=version.id if version else None,
         status="approved" if action == "approve" else "rejected",
         notes=notes,
         decided_at=datetime.now(timezone.utc),
     )
     db.add(review)
-    ds.status = "approved" if action == "approve" else "rejected"
     db.commit()
     db.refresh(review)
 
@@ -309,6 +310,7 @@ def get_review(review_id: str, db: Session = Depends(get_db)):
     return {
         "id": review.id,
         "curated_dataset_id": review.curated_dataset_id,
+        "dataset_version_id": review.dataset_version_id,
         "status": review.status,
         "notes": review.notes,
         "decided_at": review.decided_at,

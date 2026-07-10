@@ -18,6 +18,7 @@ build/
 # Uploads
 uploads/
 !uploads/.gitkeep
+storage/
 
 # Node
 node_modules/

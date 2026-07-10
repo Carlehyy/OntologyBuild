@@ -58,10 +58,14 @@ def _route_for_kind(kind: str | None, default_route: str | None = None) -> str:
     return "A"
 
 
-def _transform_nodes(definition: dict | None) -> list[dict]:
+def _transform_nodes(definition: dict | None, node_ids: set[str] | None = None) -> list[dict]:
     if not definition:
         return []
-    return [n for n in definition.get("nodes") or [] if n.get("type") == "transform"]
+    return [
+        n for n in definition.get("nodes") or []
+        if n.get("type") == "transform"
+        and (node_ids is None or n.get("id") in node_ids)
+    ]
 
 
 def _route_from_transform_config(config: dict | None) -> str | None:
@@ -168,8 +172,10 @@ def _spec_from_transform_config(config: dict | None) -> dict:
     return spec
 
 
-def _pipeline_runtime_config(pl) -> tuple[str | None, dict]:
-    transforms = _transform_nodes(pl.definition)
+def _pipeline_runtime_config(pl, node_ids: list[str] | set[str] | None = None) -> tuple[str | None, dict]:
+    """Build runtime config from transforms on the selected DAG path only."""
+    selected = set(node_ids) if node_ids is not None else None
+    transforms = _transform_nodes(pl.definition, selected)
     route = None
     spec = dict(pl.spec or {})
     for node in transforms:
@@ -199,13 +205,16 @@ def _find_dataset_for_file(db, filename: str):
     return candidates[0] if candidates else None
 
 
-def _collect_sources(db, pl) -> list[dict]:
+def _collect_sources(db, pl, connector_ids: set[str] | None = None) -> list[dict]:
     from app.models.v2.dataset import Dataset
 
     sources: list[dict] = []
     definition = pl.definition or {}
     for node in definition.get("nodes") or []:
         if node.get("type") != "connector":
+            continue
+        connector_id = node.get("id")
+        if connector_ids is not None and connector_id not in connector_ids:
             continue
         for file_info in (node.get("config") or {}).get("files", []) or []:
             filename = file_info.get("name") or file_info.get("filename") or ""
@@ -219,6 +228,7 @@ def _collect_sources(db, pl) -> list[dict]:
                     "filename": filename or ds.name,
                     "route": _route_for_kind(ds.kind, None),
                     "kind": ds.kind,
+                    "connector_node_id": connector_id,
                 })
 
     if not sources and pl.source_dataset_id:
@@ -229,28 +239,44 @@ def _collect_sources(db, pl) -> list[dict]:
                 "filename": ds.name,
                 "route": _route_for_kind(ds.kind, pl.route),
                 "kind": ds.kind,
+                "connector_node_id": (
+                    next(iter(connector_ids)) if connector_ids and len(connector_ids) == 1 else None
+                ),
             })
 
     # Preserve order while removing duplicate datasets.
-    seen: set[str] = set()
+    seen: set[tuple[str, str | None]] = set()
     unique_sources = []
     for source in sources:
-        if source["dataset_id"] in seen:
+        identity = (source["dataset_id"], source.get("connector_node_id"))
+        if identity in seen:
             continue
-        seen.add(source["dataset_id"])
+        seen.add(identity)
         unique_sources.append(source)
     return unique_sources
 
 
-def _load_source_rows(db, svc, source: dict, limit: int = 10000) -> list[dict]:
+def _load_source_rows(db, svc, source: dict) -> list[dict]:
     from app.models.v2.dataset import DatasetVersion
+    from app.config import settings
 
+    ver = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == source["dataset_id"]
+    ).order_by(DatasetVersion.version_no.desc()).first()
+    if not ver or not ver.storage_uri:
+        return []
+    source["dataset_version_id"] = ver.id
+    source["version_no"] = ver.version_no
+    source["source_rowcount"] = ver.rowcount
+    if (settings.environment == "production"
+            and settings.pipeline_max_in_memory_rows > 0
+            and (ver.rowcount or 0) > settings.pipeline_max_in_memory_rows):
+        raise ValueError(
+            f"源数据集 {source['dataset_id']} v{ver.version_no} 有 {ver.rowcount:,} 行，"
+            f"超过当前内存执行器安全上限 {settings.pipeline_max_in_memory_rows:,}；"
+            "已拒绝执行，避免进程 OOM。请拆分资产或启用流式执行器。"
+        )
     if source["route"] == "C":
-        ver = db.query(DatasetVersion).filter(
-            DatasetVersion.dataset_id == source["dataset_id"]
-        ).order_by(DatasetVersion.version_no.desc()).first()
-        if not ver or not ver.storage_uri:
-            return []
         raw = svc._storage.get_object(ver.storage_uri)
         return [{
             "filename": source["filename"],
@@ -258,8 +284,9 @@ def _load_source_rows(db, svc, source: dict, limit: int = 10000) -> list[dict]:
             "storage_uri": ver.storage_uri,
             "source_dataset_id": source["dataset_id"],
         }]
-    # None=最新版本：增量同步产生 v2+ 后，管道必须加工最新数据而非首个旧版本
-    return svc.preview(source["dataset_id"], None, limit=limit)
+    # Production execution must be complete and fail closed.  preview() is a
+    # UI helper that truncates and converts storage errors into an empty list.
+    return svc.load_all_rows(source["dataset_id"], ver.version_no)
 
 
 def _execute_route(route: str, ctx, data: list[dict]) -> tuple[list[dict], object]:
@@ -285,7 +312,7 @@ def _execute_source(db, svc, pl, source: dict, transform_route: str | None, runt
 
     ctx = PipelineContext(
         dataset_id=source["dataset_id"],
-        version_no=1,
+        version_no=int(source.get("version_no") or 1),
         route=source["route"],
         spec=runtime_spec,
     )
@@ -329,15 +356,20 @@ def collect_pipeline_output(db, pl) -> list[dict]:
     """
     from app.services.v2.dataset_service import DatasetService
 
+    from app.data_channel.pipelines.dag_compiler import compile_definition
+
     svc = DatasetService(db)
-    sources = _collect_sources(db, pl)
+    plan = compile_definition(pl.definition)
+    connector_ids = set(plan.get("paths") or {}) or None
+    sources = _collect_sources(db, pl, connector_ids)
     if not sources:
         raise ValueError("Pipeline 未绑定源数据集，请先在画布中配置连接器节点")
-    transform_route, runtime_spec = _pipeline_runtime_config(pl)
 
     outputs: list[dict] = []
     multi_source = len(sources) > 1
     for source in sources:
+        path = (plan.get("paths") or {}).get(source.get("connector_node_id"))
+        transform_route, runtime_spec = _pipeline_runtime_config(pl, path)
         data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
         base_meta = {k: v for k, v in ctx.meta.items()
                      if k in ("rows_before", "rows_after")}  # 质量分只用这两个键
@@ -568,7 +600,8 @@ def _save_curated_outputs(db, svc, pl, source: dict, data: list[dict], ctx, mult
 def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = None):
     """Pipeline 执行任务 — 支持 DAG 编译 + 节点状态追踪"""
     from app.database import SessionLocal
-    from app.models.v2.pipeline import Pipeline, PipelineRun
+    from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
+    from app.config import settings
     from app.services.v2.pipeline.dag_compiler import compile_definition
     from app.services.v2.dataset_service import DatasetService
 
@@ -588,6 +621,33 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             run.error_log = "Pipeline not found"
             db.commit()
             return
+
+        if settings.environment == "production":
+            if (pl.status or "") != "published":
+                raise ValueError("生产运行拒绝草稿流水线：必须先发布不可变版本")
+            if not bool(pl.enabled):
+                raise ValueError("生产运行拒绝未启用流水线")
+
+        published_version = db.query(PipelineVersion).filter(
+            PipelineVersion.pipeline_id == pl.id,
+            PipelineVersion.version == pl.version,
+            PipelineVersion.status == "published",
+        ).order_by(PipelineVersion.created_at.desc()).first()
+        if settings.environment == "production" and published_version is None:
+            raise ValueError(f"Pipeline v{pl.version} 缺少发布快照，拒绝执行")
+        if published_version is not None:
+            if ((published_version.definition or {}) != (pl.definition or {})
+                    or (published_version.column_definitions or []) != (pl.column_definitions or [])):
+                raise ValueError("Pipeline live 配置与发布快照不一致，拒绝执行漂移版本")
+        run.stats = {
+            **(run.stats or {}),
+            "pipeline_version": pl.version,
+            "pipeline_version_snapshot_id": published_version.id if published_version else None,
+            "definition_snapshot": pl.definition,
+            "spec_snapshot": pl.spec,
+            "column_definitions_snapshot": pl.column_definitions,
+        }
+        db.commit()
 
         # ── 非画布引擎（n8n / 未来第三方工作流）：注册表分发，共用入湖通道 ──
         from app.data_channel.pipelines.engine_registry import (
@@ -618,11 +678,10 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
                 db.commit()
 
         svc = DatasetService(db)
-        sources = _collect_sources(db, pl)
+        connector_ids = set(plan.get("paths") or {}) or None
+        sources = _collect_sources(db, pl, connector_ids)
         if not sources:
             raise ValueError("Pipeline has no source datasets")
-
-        transform_route, runtime_spec = _pipeline_runtime_config(pl)
 
         if sources and not pl.source_dataset_id:
             pl.source_dataset_id = sources[0]["dataset_id"]
@@ -632,19 +691,11 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
         source_stats = []
         multi_source = len(sources) > 1
         for source in sources:
+            path = (plan.get("paths") or {}).get(source.get("connector_node_id"))
+            transform_route, runtime_spec = _pipeline_runtime_config(pl, path)
             data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
 
-            # 找到对应的 connector 节点
-            conn_node_id = None
-            for n in (definition or {}).get("nodes", []):
-                if n.get("type") == "connector":
-                    n_files = (n.get("config") or {}).get("files", []) or []
-                    for fi in n_files:
-                        if fi.get("dataset_id") == source["dataset_id"]:
-                            conn_node_id = n.get("id")
-                            break
-                if conn_node_id:
-                    break
+            conn_node_id = source.get("connector_node_id")
 
             outputs.extend(_save_curated_outputs(db, svc, pl, source, data, ctx, multi_source, write_opts))
 
@@ -652,24 +703,44 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             source_stat = {
                 "source_name": source.get("filename", source["dataset_id"][:8]),
                 "dataset_id": source["dataset_id"],
+                "dataset_version_id": source.get("dataset_version_id"),
+                "dataset_version_no": source.get("version_no"),
+                "source_rowcount": source.get("source_rowcount"),
                 "route": source["route"],
                 "rows_in": ctx.rows_in,
                 "rows_out": ctx.rows_out,
                 "connector_node_id": conn_node_id,
             }
             source_stats.append(source_stat)
-            if conn_node_id:
-                set_node_status(conn_node_id, f"in:{ctx.rows_in} out:{ctx.rows_out}")
 
         total_in = sum(s["rows_in"] for s in source_stats)
         total_out = sum(s["rows_out"] for s in source_stats)
 
-        # 更新 transform 和 output 节点状态
-        for n in (definition or {}).get("nodes", []):
-            if n.get("type") == "transform":
-                set_node_status(n.get("id"), f"in:{total_in} out:{total_out}")
-            elif n.get("type") == "output":
-                set_node_status(n.get("id"), f"out:{total_out}")
+        # Every accepted canvas node belongs to exactly one validated path.
+        # Statuses therefore describe executed nodes, not decorative nodes.
+        connector_totals: dict[str, dict[str, int]] = {}
+        for source_stat in source_stats:
+            connector_id = source_stat.get("connector_node_id")
+            if connector_id:
+                total = connector_totals.setdefault(connector_id, {"rows_in": 0, "rows_out": 0})
+                total["rows_in"] += int(source_stat["rows_in"] or 0)
+                total["rows_out"] += int(source_stat["rows_out"] or 0)
+        for connector_id, connector_stat in connector_totals.items():
+            set_node_status(
+                connector_id,
+                f"in:{connector_stat['rows_in']} out:{connector_stat['rows_out']}",
+            )
+            path = (plan.get("paths") or {}).get(connector_id, [])
+            for node_id in path:
+                node = next((n for n in (definition or {}).get("nodes", [])
+                             if n.get("id") == node_id), {})
+                if node.get("type") == "transform":
+                    set_node_status(
+                        node_id,
+                        f"in:{connector_stat['rows_in']} out:{connector_stat['rows_out']}",
+                    )
+                elif node.get("type") == "output":
+                    set_node_status(node_id, f"out:{connector_stat['rows_out']}")
 
         for nid in node_status:
             if ":" not in str(node_status.get(nid, "")):

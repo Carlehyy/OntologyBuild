@@ -38,6 +38,10 @@ def normalize_rows(body: Any) -> list[dict]:
     if body is None:
         return []
     if isinstance(body, list):
+        if len(body) > _MAX_ROWS:
+            raise StewardError(
+                f"n8n 输出 {len(body)} 行，超过单次 {_MAX_ROWS} 行安全上限；"
+                "请在工作流中分页或拆批，平台不会静默截断数据")
         rows = []
         for item in body:
             if isinstance(item, dict):
@@ -45,7 +49,7 @@ def normalize_rows(body: Any) -> list[dict]:
                 rows.append(item.get("json") if isinstance(item.get("json"), dict) else item)
             else:
                 rows.append({"value": item})
-        return rows[:_MAX_ROWS]
+        return rows
     if isinstance(body, dict):
         return [body]
     return [{"value": body}]
@@ -102,6 +106,15 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
         candidates = client.list_executions(workflow_id=workflow_id, limit=20)
         fresh = [e for e in candidates if str(e.get("id")) not in before_ids]
         if fresh:
+            # n8n webhook response does not reliably carry execution_id.  More than
+            # one fresh execution means an external/concurrent trigger makes
+            # attribution ambiguous; choosing the newest could ingest someone
+            # else's output, so fail closed.
+            fresh_ids = {str(e.get("id")) for e in fresh}
+            if len(fresh_ids) != 1:
+                raise StewardError(
+                    f"n8n 执行归属不唯一（检测到 {len(fresh_ids)} 个新执行），"
+                    "拒绝猜测并入湖；请避免工作流被平台外部并发触发")
             newest = fresh[0]  # n8n 按时间倒序返回
             if newest.get("status") in ("success", "error", "crashed", "canceled"):
                 execution = client.get_execution(str(newest["id"]), include_data=True)
@@ -109,12 +122,17 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
         time.sleep(_POLL_INTERVAL)
 
     if execution is None:
-        # 执行未落库（saveData 关闭 / 尚未结束）：退回 webhook 响应体
-        rows = normalize_rows(body)
-        return rows, {"execution_id": None, "execution_status": "unknown",
-                      "note": "未在等待窗口内取到执行详情，行数据来自 webhook 响应体。"}
+        # Without an execution record there is no trustworthy status, output
+        # ownership, or audit lineage.  A webhook 2xx alone is not proof that the
+        # workflow completed successfully.
+        raise StewardError(
+            "等待窗口内未取得唯一且已结束的 n8n 执行记录；"
+            "请开启执行数据保存并检查超时设置，平台拒绝仅凭 webhook 响应入湖")
 
     rows, meta = _extract_execution_rows(execution)
+    if meta.get("execution_status") != "success":
+        detail = meta.get("error") or f"status={meta.get('execution_status') or 'unknown'}"
+        raise StewardError(f"n8n 执行未成功：{detail}")
     if meta.get("execution_status") == "success" and not rows:
         rows = normalize_rows(body)
         if rows:
@@ -144,9 +162,16 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
     rec, workflow_id, webhook_path = _resolve_n8n_context(db, pl)
     client = service.get_n8n_client(db)
     wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
-    rows, exec_meta = trigger_and_collect(client, workflow_id, webhook_path,
-                                          payload=payload or {"source": "ontoprompt-dry-run"},
-                                          wait_seconds=wait_seconds)
+    from app.data_channel.datasets.lock import dataset_write_lock
+    with dataset_write_lock(
+        f"n8n::{workflow_id}", bind=db.get_bind(),
+        wait_timeout=float(wait_seconds) + 10,
+        stale_after=float(wait_seconds) + 60,
+    ):
+        rows, exec_meta = trigger_and_collect(
+            client, workflow_id, webhook_path,
+            payload=payload or {"source": "ontoprompt-dry-run"},
+            wait_seconds=wait_seconds)
     if exec_meta.get("error"):
         raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
     return rows, exec_meta
@@ -167,9 +192,16 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
         _rec, workflow_id, webhook_path = _resolve_n8n_context(db_, pl_)
         client = service.get_n8n_client(db_)
         wait_seconds = int(((pl_.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
-        rows, exec_meta = trigger_and_collect(client, workflow_id, webhook_path,
-                                              payload={"source": "ontoprompt", "run_id": run.id},
-                                              wait_seconds=wait_seconds)
+        from app.data_channel.datasets.lock import dataset_write_lock
+        with dataset_write_lock(
+            f"n8n::{workflow_id}", bind=db_.get_bind(),
+            wait_timeout=float(wait_seconds) + 10,
+            stale_after=float(wait_seconds) + 60,
+        ):
+            rows, exec_meta = trigger_and_collect(
+                client, workflow_id, webhook_path,
+                payload={"source": "ontoprompt", "run_id": run.id},
+                wait_seconds=wait_seconds)
         if exec_meta.get("error"):
             raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
         return rows, exec_meta
@@ -201,9 +233,16 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
         # webhook 注册非即时，稍等再触发
         time.sleep(1.5)
     try:
-        rows, exec_meta = trigger_and_collect(client, rec.n8n_workflow_id, webhook_path,
-                                              payload=payload or {"source": "ontoprompt-test"},
-                                              wait_seconds=wait_seconds)
+        from app.data_channel.datasets.lock import dataset_write_lock
+        with dataset_write_lock(
+            f"n8n::{rec.n8n_workflow_id}", bind=db.get_bind(),
+            wait_timeout=float(wait_seconds) + 10,
+            stale_after=float(wait_seconds) + 60,
+        ):
+            rows, exec_meta = trigger_and_collect(
+                client, rec.n8n_workflow_id, webhook_path,
+                payload=payload or {"source": "ontoprompt-test"},
+                wait_seconds=wait_seconds)
     finally:
         if not was_active:
             try:

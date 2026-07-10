@@ -1,2 +1,6 @@
-# re-export - real content moved to app.ontologies.graph.graph_analytics
-from app.ontologies.graph.graph_analytics import *  # noqa: F401,F403
+"""Compatibility alias for the relocated graph analytics module."""
+import sys
+
+from app.ontologies.graph import graph_analytics as _implementation
+
+sys.modules[__name__] = _implementation

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -206,13 +208,36 @@ class DatasetService:
         self._db.refresh(ds)
         return ds
 
-    def create_version(self, dataset_id: str, data: bytes, rowcount: int | None = None) -> DatasetVersion:
-        """将数据存入 MinIO 并创建 DatasetVersion"""
+    def create_version(self, dataset_id: str, data: bytes, rowcount: int | None = None,
+                       *, _lock_held: bool = False) -> DatasetVersion:
+        """将数据存入对象存储并原子发布为 DatasetVersion。
+
+        对象键使用预生成的 version UUID，而不是可竞争的 ``version_no``。旧实现
+        中两个并发写者会先后覆盖同一个 ``vN/data.bin``，数据库唯一约束虽然能
+        拒绝其中一条元数据，却无法撤销已经发生的对象覆盖。
+
+        ``_lock_held`` 仅供已经覆盖完整读改写临界区的调用方使用；普通调用一律
+        通过数据库锁串行化版本号分配。对象存储与数据库无法组成单一事务，因此
+        对象键不可复用是避免失败重试破坏已提交版本的最后一道硬保证。
+        """
+        if not _lock_held:
+            from app.data_channel.datasets.lock import dataset_write_lock
+            guard = dataset_write_lock(
+                f"dataset::{dataset_id}", bind=self._db.get_bind(), wait_timeout=300)
+        else:
+            guard = nullcontext()
+
+        with guard:
+            return self._create_version_locked(dataset_id, data, rowcount=rowcount)
+
+    def _create_version_locked(self, dataset_id: str, data: bytes,
+                               rowcount: int | None = None) -> DatasetVersion:
         ds = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not ds:
             raise ValueError(f"Dataset {dataset_id} not found")
 
-        checksum = hashlib.sha256(data).hexdigest()[:16]
+        # 新版本存完整 SHA-256；load_all_rows 同时兼容历史 16 位校验和。
+        checksum = hashlib.sha256(data).hexdigest()
         ver: DatasetVersion | None = None
         # 版本号 = 查最大值+1，并发写会撞唯一约束 (dataset_id, version_no)——
         # 撞了就重算重试，而不是静默产生重复版本号
@@ -222,10 +247,14 @@ class DatasetService:
             ).order_by(DatasetVersion.version_no.desc()).first()
             version_no = (last_ver.version_no + 1) if last_ver else 1
 
-            key = f"datasets/{dataset_id}/v{version_no}/data.bin"
+            # UUID 对象键与版本号分配解耦：即使数据库提交失败/重试，也绝不覆盖
+            # 另一个已提交版本的内容。
+            version_id = str(uuid.uuid4())
+            key = f"datasets/{dataset_id}/objects/{version_id}.bin"
             uri = self._storage.put_bytes("raw-datasets", key, data)
 
             ver = DatasetVersion(
+                id=version_id,
                 dataset_id=dataset_id,
                 version_no=version_no,
                 rowcount=rowcount,
@@ -234,8 +263,6 @@ class DatasetService:
             )
             self._db.add(ver)
             try:
-                # id 的 uuid 默认值在 flush 时才生成——flush 前取 ver.id 是 None，
-                # 会把 latest_version_id 永远写成 NULL（存量数据即如此）
                 self._db.flush()
                 ds.latest_version_id = ver.id
                 self._db.commit()
@@ -247,6 +274,24 @@ class DatasetService:
         self._db.refresh(ver)
         self._prune_versions_best_effort(dataset_id)
         return ver
+
+    @staticmethod
+    def _checksum_matches(raw: bytes, expected: str | None) -> bool:
+        """校验对象内容；兼容两种历史 16 位写法。
+
+        历史 DatasetService 保存全文 SHA-256 的前 16 位，旧 SyncEngine 则只哈希
+        前 1KiB。新写入统一保存完整 64 位 SHA-256。
+        """
+        if not expected:
+            return True  # 迁移前允许 checksum=NULL 的存量版本继续读取
+        expected = str(expected).lower()
+        full = hashlib.sha256(raw).hexdigest()
+        if len(expected) == 64:
+            return full == expected
+        if len(expected) == 16:
+            legacy_prefix = hashlib.sha256(raw[:1024]).hexdigest()[:16]
+            return full.startswith(expected) or legacy_prefix == expected
+        return False
 
     def _prune_versions_best_effort(self, dataset_id: str) -> None:
         """机会式版本保留：只留最近 N 个全量快照，防止存储无限膨胀。
@@ -329,6 +374,10 @@ class DatasetService:
             raise DatasetReadError(
                 f"数据集 {dataset_id} v{ver.version_no} 存储对象读取失败"
                 f"（{ver.storage_uri}）：{e}") from e
+        if not self._checksum_matches(raw, ver.checksum):
+            raise DatasetReadError(
+                f"数据集 {dataset_id} v{ver.version_no} 校验和不匹配"
+                f"（{ver.storage_uri}）：对象内容可能已损坏或被覆盖")
         if not raw:
             return []
         try:
@@ -353,6 +402,10 @@ class DatasetService:
             return []
         try:
             raw = self._storage.get_object(ver.storage_uri)
+            if not self._checksum_matches(raw, ver.checksum):
+                # preview 保持历史容错契约：损坏对象不向 UI 冒充可用数据，
+                # 但也不把展示请求升级成 5xx。生产消费方必须走 load_all_rows。
+                return []
             return _parse_stored_rows(raw, limit=limit, offset=offset)
         except Exception:
             return []

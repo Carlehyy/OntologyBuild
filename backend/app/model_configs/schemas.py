@@ -19,7 +19,7 @@ class ModelConfigCreate(BaseModel):
     api_base: Optional[str] = None
     models: List[str] = []
     options: dict = {}
-    enabled: bool = False
+    enabled: bool = True
     is_default: bool = False
 
     @field_validator("models", mode="before")
@@ -51,7 +51,7 @@ class ModelConfigOut(BaseModel):
     api_base: Optional[str]
     models: List[str]
     options: dict = {}
-    enabled: bool = False
+    enabled: bool = True
     is_default: bool = False
     created_by: str
     created_at: datetime

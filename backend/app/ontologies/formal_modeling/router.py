@@ -5,14 +5,17 @@
 所有响应统一包裹 {"data": ...}，与前端 apiClient 解包逻辑一致。
 """
 import logging
+import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional
 
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin
+from app.ontologies.access import ontology_access_guard
 from app.models.ontology import OntologyProject
 from app.models.ontology_formal import (
     ObjectType, LinkType, ActionType, OntologyFunction,
@@ -24,17 +27,24 @@ from app.ontologies.formal_modeling.facts import (
     record_decision_fact, fact_order_clause,
 )
 from app.ontologies.formal_modeling.derived import recompute_instance_derived
-from app.ontologies.formal_modeling.validation import validate_model, prune_dangling_data
+from app.ontologies.formal_modeling.validation import (
+    validate_model, validate_instance_contract, validate_link_instance_contract,
+)
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
+from app.config import settings
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 logger = logging.getLogger(__name__)
 
 
-def _require_ontology(db: Session, ontology_id: str) -> OntologyProject:
-    p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
+def _require_ontology(
+        db: Session, ontology_id: str, *, for_update: bool = False) -> OntologyProject:
+    query = db.query(OntologyProject).filter(OntologyProject.id == ontology_id)
+    if for_update:
+        query = query.with_for_update()
+    p = query.first()
     if not p:
         raise HTTPException(404, "Ontology not found")
     return p
@@ -42,6 +52,48 @@ def _require_ontology(db: Session, ontology_id: str) -> OntologyProject:
 
 def _ok(data):
     return {"data": data}
+
+
+def _raise_validation_failed(errors: list[dict], message: str = "运行契约校验未通过") -> None:
+    if errors:
+        raise HTTPException(422, detail={
+            "code": "validation_failed",
+            "message": f"{message}（{len(errors)} 个错误）",
+            "errors": errors,
+        })
+
+
+def _require_schema_draft(project: OntologyProject) -> None:
+    if (project.status or "") == "published":
+        raise HTTPException(
+            409,
+            "已发布本体的模式层不可直接修改。请先通过版本接口撤回为草稿，修改后重新发布。",
+        )
+
+
+def _reject_direct_runtime_data_write() -> None:
+    if settings.environment == "production":
+        raise HTTPException(
+            403,
+            "生产本体数据只允许由已审批的数据资产湖 Mapping 写入；直接实例写入已禁用。",
+        )
+
+
+def _runtime_state(db: Session, ontology_id: str):
+    """读取当前正规本体完整视图，供所有旁路 CRUD 复用同一校验契约。"""
+    def q(model):
+        return db.query(model).filter(model.ontology_id == ontology_id).all()
+    return (
+        q(ObjectType), q(LinkType), q(ActionType), q(OntologyFunction),
+        q(ObjectInstance), q(LinkInstance),
+    )
+
+
+def _orm_view(obj, updates: Optional[dict] = None):
+    """生成无 ORM 副作用的候选视图，避免 422 后脏对象留在复用 Session 中。"""
+    data = {column.key: getattr(obj, column.key) for column in obj.__table__.columns}
+    data.update(updates or {})
+    return SimpleNamespace(**data)
 
 
 # ============ 保存共用辅助（全量 PUT 与增量 PATCH 复用） ============
@@ -200,7 +252,8 @@ def save_full_ontology(ontology_id: str, body: S.SaveFullOntologyRequest,
     采用 upsert + 清理：保留 body 中带 id 的记录（按 id upsert），
     删除库中存在但 body 未提供的记录。执行日志不在此处理。
     """
-    p = _require_ontology(db, ontology_id)
+    p = _require_ontology(db, ontology_id, for_update=True)
+    _require_schema_draft(p)
     # 本请求随后会同步调用 run_for_save 评估哨兵——抑制 CDC 后台线程的并行评估，
     # 否则两边同时做边沿差分，动作可能被重复执行
     from app.ontologies.sentinels.cdc import SUPPRESS_KEY
@@ -217,27 +270,18 @@ def save_full_ontology(ontology_id: str, body: S.SaveFullOntologyRequest,
                 "currentRevision": current,
             })
 
-    # 服务端强制校验（模式层硬错误 → 422 拒绝；实例层悬挂 → 自动清理）
+    # 服务端强制校验：模式层与运行层硬错误统一以 422 拒绝。
     errors = validate_model(body.object_types, body.link_types, body.actions,
                             body.functions, body.instances, body.link_instances)
-    if errors:
-        raise HTTPException(422, detail={
-            "code": "validation_failed",
-            "message": f"模型校验未通过（{len(errors)} 个错误），已拒绝保存",
-            "errors": errors,
-        })
-    clean_instances, clean_link_instances, pruned = prune_dangling_data(
-        body.instances, body.link_instances, body.object_types, body.link_types)
-    if any(pruned.values()):
-        logger.info("保存时自动清理悬挂实例数据: %s (ontology=%s)", pruned, ontology_id)
+    _raise_validation_failed(errors, "模型校验未通过，已拒绝保存")
 
     # 同步本体元信息（可选字段）
     if body.name is not None:
         p.name = body.name
     if body.description is not None:
         p.description = body.description
-    if body.version is not None:
-        p.version = body.version
+    if body.version is not None and body.version != p.version:
+        raise HTTPException(409, "版本号由发布流程管理，full-save 不能直接修改")
 
     actor = getattr(current_user, "id", None)
 
@@ -264,11 +308,11 @@ def save_full_ontology(ontology_id: str, body: S.SaveFullOntologyRequest,
         db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id).all()
     }
 
-    _sync(ObjectInstance, clean_instances, FIELDS_INSTANCE)
-    _sync(LinkInstance, clean_link_instances, FIELDS_LINK_INSTANCE)
+    _sync(ObjectInstance, body.instances, FIELDS_INSTANCE)
+    _sync(LinkInstance, body.link_instances, FIELDS_LINK_INSTANCE)
 
     # 被整体保存移除的实例 → 墓碑事实（先于属性事实，保证回放语义完整）
-    kept_ids = {inst.id for inst in clean_instances if inst.id}
+    kept_ids = {inst.id for inst in body.instances if inst.id}
     for gone_id, gone in prev_instances.items():
         if gone_id not in kept_ids:
             record_object_tombstone(
@@ -290,7 +334,7 @@ def save_full_ontology(ontology_id: str, body: S.SaveFullOntologyRequest,
                              link_type_id=lt, exists=False, source="editor-save", actor_id=actor)
 
     facts_added = 0
-    for inst in clean_instances:
+    for inst in body.instances:
         if not inst.id:
             continue  # 无 id 的新实例由 _sync 生成 id，此处无法关联，跳过（编辑器始终带 id）
         created = record_property_facts(
@@ -359,7 +403,8 @@ def patch_full_ontology(ontology_id: str, body: S.PatchOntologyRequest,
     并发检测 → 合并视图强制校验 → 应用 delta → 属性事实 + 派生重算 →
     孤儿清理 → 哨兵评估。负载 O(变更) 而非 O(全模型)。
     """
-    p = _require_ontology(db, ontology_id)
+    p = _require_ontology(db, ontology_id, for_update=True)
+    _require_schema_draft(p)
     from app.ontologies.sentinels.cdc import SUPPRESS_KEY
     db.info[SUPPRESS_KEY] = True
 
@@ -389,22 +434,18 @@ def patch_full_ontology(ontology_id: str, body: S.PatchOntologyRequest,
         merged(LinkType, up.link_types, dele.link_types),
         merged(ActionType, up.actions, dele.actions),
         merged(OntologyFunction, up.functions, dele.functions),
-        [], [],
+        merged(ObjectInstance, up.instances, dele.instances),
+        merged(LinkInstance, up.link_instances, dele.link_instances),
     )
-    if errors:
-        raise HTTPException(422, detail={
-            "code": "validation_failed",
-            "message": f"模型校验未通过（{len(errors)} 个错误），已拒绝保存",
-            "errors": errors,
-        })
+    _raise_validation_failed(errors, "模型校验未通过，已拒绝保存")
 
     # 元信息
     if body.name is not None:
         p.name = body.name
     if body.description is not None:
         p.description = body.description
-    if body.version is not None:
-        p.version = body.version
+    if body.version is not None and body.version != p.version:
+        raise HTTPException(409, "版本号由发布流程管理，PATCH 不能直接修改")
 
     actor = getattr(current_user, "id", None)
 
@@ -623,6 +664,9 @@ def _scrub_dangling_references(db: Session, ontology_id: str) -> dict:
 # ============================================================
 def _crud(model, create_schema, update_schema, out_schema, name: str):
     sub = APIRouter()
+    state_index = {
+        ObjectType: 0, LinkType: 1, ActionType: 2, OntologyFunction: 3,
+    }
 
     @sub.get(f"/{{ontology_id}}/{name}")
     def list_items(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -632,10 +676,14 @@ def _crud(model, create_schema, update_schema, out_schema, name: str):
 
     @sub.post(f"/{{ontology_id}}/{name}", status_code=201)
     def create_item(ontology_id: str, body: create_schema, db: Session = Depends(get_db), _=Depends(get_current_user)):  # type: ignore
-        _require_ontology(db, ontology_id)
+        project = _require_ontology(db, ontology_id, for_update=True)
+        _require_schema_draft(project)
         data = body.model_dump(exclude_none=True)
-        # ObjectInstanceCreate 可带 id
-        obj = model(ontology_id=ontology_id, **data)
+        obj = model(id=str(uuid.uuid4()), ontology_id=ontology_id, **data)
+        state = list(_runtime_state(db, ontology_id))
+        state[state_index[model]] = [*state[state_index[model]], obj]
+        _raise_validation_failed(validate_model(*state), f"{name} 创建被拒绝")
+        project.updated_at = datetime.now(timezone.utc)
         db.add(obj); db.commit(); db.refresh(obj)
         return _ok(out_schema.model_validate(obj).model_dump(by_alias=True))
 
@@ -648,19 +696,38 @@ def _crud(model, create_schema, update_schema, out_schema, name: str):
 
     @sub.put(f"/{{ontology_id}}/{name}/{{item_id}}")
     def update_item(ontology_id: str, item_id: str, body: update_schema, db: Session = Depends(get_db), _=Depends(get_current_user)):  # type: ignore
+        project = _require_ontology(db, ontology_id, for_update=True)
+        _require_schema_draft(project)
         obj = db.query(model).filter(model.id == item_id, model.ontology_id == ontology_id).first()
         if not obj:
             raise HTTPException(404, "Not found")
-        for k, v in body.model_dump(exclude_unset=True).items():
+        updates = body.model_dump(exclude_unset=True)
+        candidate = _orm_view(obj, updates)
+        state = list(_runtime_state(db, ontology_id))
+        state[state_index[model]] = [
+            candidate if item.id == item_id else item
+            for item in state[state_index[model]]
+        ]
+        _raise_validation_failed(validate_model(*state), f"{name} 更新被拒绝")
+        for k, v in updates.items():
             setattr(obj, k, v)
+        project.updated_at = datetime.now(timezone.utc)
         db.commit(); db.refresh(obj)
         return _ok(out_schema.model_validate(obj).model_dump(by_alias=True))
 
     @sub.delete(f"/{{ontology_id}}/{name}/{{item_id}}", status_code=204)
     def delete_item(ontology_id: str, item_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+        project = _require_ontology(db, ontology_id, for_update=True)
+        _require_schema_draft(project)
         obj = db.query(model).filter(model.id == item_id, model.ontology_id == ontology_id).first()
         if not obj:
             raise HTTPException(404, "Not found")
+        state = list(_runtime_state(db, ontology_id))
+        state[state_index[model]] = [
+            item for item in state[state_index[model]] if item.id != item_id
+        ]
+        _raise_validation_failed(validate_model(*state), f"{name} 删除会造成悬挂引用，已拒绝")
+        project.updated_at = datetime.now(timezone.utc)
         db.delete(obj); db.commit()
 
     return sub
@@ -689,9 +756,15 @@ def list_instances(ontology_id: str, object_type_id: Optional[str] = None,
 @router.post("/{ontology_id}/instances", status_code=201)
 def create_instance(ontology_id: str, body: S.ObjectInstanceCreate,
                     db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    _require_ontology(db, ontology_id)
+    _reject_direct_runtime_data_write()
+    project = _require_ontology(db, ontology_id, for_update=True)
     data = body.model_dump(exclude_none=True)
+    data["id"] = data.get("id") or str(uuid.uuid4())
     obj = ObjectInstance(ontology_id=ontology_id, **data)
+    object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
+    instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+    errors = validate_instance_contract(object_types, [*instances, obj], validate_ids={obj.id})
+    _raise_validation_failed(errors, "实例创建被拒绝")
     db.add(obj); db.flush()
     created = record_property_facts(
         db, ontology_id=ontology_id, instance_id=obj.id,
@@ -700,6 +773,7 @@ def create_instance(ontology_id: str, body: S.ObjectInstanceCreate,
         source=obj.source or "manual", actor_id=getattr(current_user, "id", None),
     )
     recompute_instance_derived(db, ontology_id=ontology_id, instance=obj, trigger_facts=created)
+    project.updated_at = datetime.now(timezone.utc)
     db.commit(); db.refresh(obj)
     return _ok(S.ObjectInstanceOut.model_validate(obj).model_dump(by_alias=True))
 
@@ -707,12 +781,21 @@ def create_instance(ontology_id: str, body: S.ObjectInstanceCreate,
 @router.put("/{ontology_id}/instances/{instance_id}")
 def update_instance(ontology_id: str, instance_id: str, body: S.ObjectInstanceUpdate,
                     db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _reject_direct_runtime_data_write()
+    project = _require_ontology(db, ontology_id, for_update=True)
     obj = db.query(ObjectInstance).filter(ObjectInstance.id == instance_id,
                                           ObjectInstance.ontology_id == ontology_id).first()
     if not obj:
         raise HTTPException(404, "Not found")
     old_props = dict(obj.properties or {})
-    for k, v in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    candidate = _orm_view(obj, updates)
+    object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
+    instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+    merged_instances = [candidate if item.id == instance_id else item for item in instances]
+    errors = validate_instance_contract(object_types, merged_instances, validate_ids={instance_id})
+    _raise_validation_failed(errors, "实例更新被拒绝")
+    for k, v in updates.items():
         setattr(obj, k, v)
     created = record_property_facts(
         db, ontology_id=ontology_id, instance_id=obj.id,
@@ -723,6 +806,7 @@ def update_instance(ontology_id: str, instance_id: str, body: S.ObjectInstanceUp
     )
     if created:
         recompute_instance_derived(db, ontology_id=ontology_id, instance=obj, trigger_facts=created)
+    project.updated_at = datetime.now(timezone.utc)
     db.commit(); db.refresh(obj)
     return _ok(S.ObjectInstanceOut.model_validate(obj).model_dump(by_alias=True))
 
@@ -809,15 +893,31 @@ def instance_as_of(ontology_id: str, instance_id: str, t: str,
 @router.delete("/{ontology_id}/instances/{instance_id}", status_code=204)
 def delete_instance(ontology_id: str, instance_id: str,
                     db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _reject_direct_runtime_data_write()
+    project = _require_ontology(db, ontology_id, for_update=True)
     obj = db.query(ObjectInstance).filter(ObjectInstance.id == instance_id,
                                           ObjectInstance.ontology_id == ontology_id).first()
     if not obj:
         raise HTTPException(404, "Not found")
+    related = db.query(LinkInstance).filter(
+        LinkInstance.ontology_id == ontology_id,
+        ((LinkInstance.source_object_id == instance_id)
+         | (LinkInstance.target_object_id == instance_id)),
+    ).all()
+    if related:
+        _raise_validation_failed([{
+            "code": "instance_in_use",
+            "kind": "objectInstance",
+            "name": "",
+            "id": instance_id,
+            "message": f"实例仍被 {len(related)} 条链接引用，请先删除相关链接",
+        }], "实例删除被拒绝")
     # 墓碑事实：投影删除后，事实流仍能回答"它存在过、何时被谁删除"
     record_object_tombstone(
         db, ontology_id=ontology_id, instance_id=obj.id,
         object_type_id=obj.object_type_id, source="manual",
         actor_id=getattr(current_user, "id", None))
+    project.updated_at = datetime.now(timezone.utc)
     db.delete(obj); db.commit()
 
 
@@ -834,13 +934,22 @@ def list_link_instances(ontology_id: str, db: Session = Depends(get_db), _=Depen
 @router.post("/{ontology_id}/link-instances", status_code=201)
 def create_link_instance(ontology_id: str, body: S.LinkInstanceCreate,
                          db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    _require_ontology(db, ontology_id)
-    obj = LinkInstance(ontology_id=ontology_id, **body.model_dump(exclude_none=True))
+    _reject_direct_runtime_data_write()
+    project = _require_ontology(db, ontology_id, for_update=True)
+    obj = LinkInstance(id=str(uuid.uuid4()), ontology_id=ontology_id,
+                       **body.model_dump(exclude_none=True))
+    link_types = db.query(LinkType).filter(LinkType.ontology_id == ontology_id).all()
+    instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+    links = db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id).all()
+    errors = validate_link_instance_contract(
+        link_types, instances, [*links, obj], validate_ids={obj.id})
+    _raise_validation_failed(errors, "链接实例创建被拒绝")
     db.add(obj); db.flush()
     # 链接存在性也是事实（对齐演示：assigned_to(CA1234, A5).exists = true）
     record_link_fact(db, ontology_id=ontology_id, link_instance_id=obj.id,
                      link_type_id=obj.link_type_id, exists=True,
                      source="manual", actor_id=getattr(current_user, "id", None))
+    project.updated_at = datetime.now(timezone.utc)
     db.commit(); db.refresh(obj)
     return _ok(S.LinkInstanceOut.model_validate(obj).model_dump(by_alias=True))
 
@@ -848,6 +957,8 @@ def create_link_instance(ontology_id: str, body: S.LinkInstanceCreate,
 @router.delete("/{ontology_id}/link-instances/{link_id}", status_code=204)
 def delete_link_instance(ontology_id: str, link_id: str,
                          db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _reject_direct_runtime_data_write()
+    project = _require_ontology(db, ontology_id, for_update=True)
     obj = db.query(LinkInstance).filter(LinkInstance.id == link_id,
                                         LinkInstance.ontology_id == ontology_id).first()
     if not obj:
@@ -855,6 +966,7 @@ def delete_link_instance(ontology_id: str, link_id: str,
     record_link_fact(db, ontology_id=ontology_id, link_instance_id=obj.id,
                      link_type_id=obj.link_type_id, exists=False,
                      source="manual", actor_id=getattr(current_user, "id", None))
+    project.updated_at = datetime.now(timezone.utc)
     db.delete(obj); db.commit()
 
 
@@ -864,7 +976,9 @@ def delete_link_instance(ontology_id: str, link_id: str,
 @router.post("/{ontology_id}/run-action")
 def run_action(ontology_id: str, body: S.RunActionRequest,
                db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    _require_ontology(db, ontology_id)
+    project = _require_ontology(db, ontology_id, for_update=True)
+    if not body.dry_run and (project.status or "") != "published":
+        raise HTTPException(409, "真实动作只能在已发布本体上执行；草稿仅允许 dry-run")
     log = execute_action(db, ontology_id, body,
                          actor_id=getattr(current_user, "id", None))
     return _ok(log)
@@ -886,10 +1000,10 @@ def list_pending_actions(ontology_id: str,
 @router.post("/{ontology_id}/action-logs/{log_id}/decide")
 def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest,
                           db: Session = Depends(get_db),
-                          current_user=Depends(get_current_user)):
+                          current_user=Depends(require_admin)):
     """HITL 决策：批准 → 写决策事实并真正执行（执行产生的事实 caused_by=决策事实）；
     拒绝 → 同样写决策事实（拒绝也要溯源，供将来分析"哪些建议被人否决了"）。"""
-    _require_ontology(db, ontology_id)
+    project = _require_ontology(db, ontology_id, for_update=True)
     log = db.query(ActionExecutionLog).filter(
         ActionExecutionLog.id == log_id,
         ActionExecutionLog.ontology_id == ontology_id).first()
@@ -900,6 +1014,17 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
     decision = (body.decision or "").lower()
     if decision not in ("approved", "rejected"):
         raise HTTPException(422, "decision 必须是 approved 或 rejected")
+    if decision == "approved":
+        if (project.status or "") != "published":
+            raise HTTPException(409, "本体已撤回发布，不能批准并执行待办动作；可选择拒绝")
+        if not log.ontology_version:
+            raise HTTPException(409, "该待办动作缺少发布版本血缘，不能安全批准；可选择拒绝")
+        if log.ontology_version != project.version:
+            raise HTTPException(
+                409,
+                f"该动作属于本体 {log.ontology_version}，当前为 {project.version}；"
+                "跨版本审批已拒绝",
+            )
 
     uid = getattr(current_user, "id", None)
     uname = getattr(current_user, "username", None) or getattr(current_user, "email", None) or uid
@@ -915,22 +1040,54 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
 
     if decision == "rejected":
         log.status = "rejected"
+        # Rejection is terminal for this approval proposal but not for the
+        # business edge.  Release the unique key/claim so a later evaluation
+        # can create one new, auditable attempt rather than replaying rejection.
+        state_id = log.sentinel_match_state_id
+        log.idempotency_key = None
         db.commit(); db.refresh(log)
+        if state_id:
+            from app.services.sentinel.evaluator import reject_sentinel_match_claim
+            reject_sentinel_match_claim(db, ontology_id, state_id)
         return _ok(S.ActionLogOut.model_validate(log).model_dump(by_alias=True))
 
     # 批准：以原参数真正执行；执行事实的因果指针指向决策事实（对齐 caused_by=f010 语义）
     from types import SimpleNamespace
     exec_body = SimpleNamespace(action_id=log.action_id, parameters=log.parameters or {},
-                                target_instance_id=log.object_instance_id, dry_run=False)
-    result = execute_action(db, ontology_id, exec_body, actor_id=uid,
-                            caused_by_fact=fact.id, skip_approval=True)
+                                target_instance_id=log.object_instance_id, dry_run=False,
+                                sentinel_match_state_id=log.sentinel_match_state_id)
+    sentinel_token = None
+    if log.sentinel_match_state_id:
+        from app.services.sentinel.evaluator import in_sentinel_run
+        sentinel_token = in_sentinel_run.set(True)
+    try:
+        result = execute_action(db, ontology_id, exec_body, actor_id=uid,
+                                caused_by_fact=fact.id, skip_approval=True)
+    finally:
+        if sentinel_token is not None:
+            in_sentinel_run.reset(sentinel_token)
     log.status = "approved"
     log.related_log_id = result.get("id")
+    state_id = log.sentinel_match_state_id
+    execution_succeeded = result.get("status") == "success"
+    if not execution_succeeded:
+        # Human approval and technical execution are separate facts.  A failed
+        # execution must not permanently own the step's idempotency key.
+        log.idempotency_key = None
     db.commit(); db.refresh(log)
+    sentinel_resume = None
+    if state_id:
+        if execution_succeeded:
+            from app.services.sentinel.evaluator import resume_sentinel_match_claim
+            sentinel_resume = resume_sentinel_match_claim(db, ontology_id, state_id)
+        else:
+            from app.services.sentinel.evaluator import fail_sentinel_match_claim
+            sentinel_resume = fail_sentinel_match_claim(db, ontology_id, state_id)
     return _ok({
         "pendingLog": S.ActionLogOut.model_validate(log).model_dump(by_alias=True),
         "executionLog": result,
         "decisionFactId": fact.id,
+        "sentinelResume": sentinel_resume,
     })
 
 

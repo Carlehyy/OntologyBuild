@@ -20,24 +20,12 @@ database_url = os.environ.get("DATABASE_URL")
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# Import Base and all models so that autogenerate can detect them.
+# Import the complete model registry so autogenerate and fresh-database upgrades
+# operate on the same metadata as the application.
 from app.database import Base  # noqa: E402
-from app.models import (  # noqa: E402, F401
-    user,
-    ontology,
-    file,
-    prompt,
-    model_config,
-    entity,
-    logic,
-    action,
-    relation,
-    extraction_task,
-    rules_config,
-)
-from app.models.v2 import connection, dataset, pipeline, curated, mapping  # noqa: E402, F401
+from app.model_registry import import_all_models  # noqa: E402
+
+import_all_models()
 
 target_metadata = Base.metadata
 

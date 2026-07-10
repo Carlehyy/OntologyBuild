@@ -19,6 +19,7 @@ from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_loc
 from app.data_channel.datasets.service import DatasetReadError, DatasetService, _parse_stored_rows
 from app.data_channel.pipeline_tasks.merge import load_latest_rows
 from app.models.v2.dataset import DatasetVersion, DatasetWriteLock, MediaItem
+from app.shared.storage import StorageService
 
 
 class FakeStorage:
@@ -41,6 +42,19 @@ class FakeStorage:
     def delete_object(self, uri: str) -> None:
         self.objects.pop(uri, None)
         self.deleted.append(uri)
+
+
+def test_production_storage_failure_is_not_local_success():
+    """A missing shared object store must fail before reporting an s3 URI."""
+    storage = StorageService.__new__(StorageService)
+    storage._available = False
+    storage._client = None
+    storage._allow_local_fallback = False
+
+    with pytest.raises(RuntimeError, match="对象存储不可用"):
+        storage.put_bytes("raw-datasets", "unsafe.bin", b"data")
+    with pytest.raises(RuntimeError, match="对象存储不可用"):
+        storage.get_object("s3://raw-datasets/unsafe.bin")
 
 
 def _csv_bytes(rows: list[dict]) -> bytes:
@@ -114,6 +128,28 @@ def test_checksum_covers_full_content(svc):
     v1 = svc.create_version(ds.id, b"A" * 2048)
     v2 = svc.create_version(ds.id, b"A" * 1024 + b"B" * 1024)  # 前 1KB 相同
     assert v1.checksum != v2.checksum
+
+
+def test_version_objects_use_immutable_unique_keys(svc):
+    """数据库版本号竞争/重试不能再覆盖已提交版本的对象。"""
+    ds = svc.create_dataset("不可变对象键", "structured")
+    v1 = svc.create_version(ds.id, _csv_bytes([{"id": "1"}]))
+    v2 = svc.create_version(ds.id, _csv_bytes([{"id": "2"}]))
+
+    assert v1.storage_uri != v2.storage_uri
+    assert f"/objects/{v1.id}.bin" in v1.storage_uri
+    assert f"/objects/{v2.id}.bin" in v2.storage_uri
+    assert "/v1/data.bin" not in v1.storage_uri
+
+
+def test_checksum_mismatch_is_strict_failure_but_preview_is_lenient(svc, storage):
+    ds = svc.create_dataset("对象篡改", "structured")
+    ver = svc.create_version(ds.id, _csv_bytes([{"id": "1", "value": "safe"}]))
+    storage.objects[ver.storage_uri] = _csv_bytes([{"id": "1", "value": "tampered"}])
+
+    with pytest.raises(DatasetReadError, match="校验和不匹配"):
+        svc.load_all_rows(ds.id)
+    assert svc.preview(ds.id, None) == []
 
 
 # ── 3. 版本号唯一约束 ─────────────────────────────────────────

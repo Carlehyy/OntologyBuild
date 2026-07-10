@@ -1,11 +1,29 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user
 from app.models.action import Action
 from app.schemas.action import ActionCreate, ActionUpdate, ActionOut
 import uuid
+from app.config import settings
+from app.ontologies.access import ontology_access_guard
 
-router = APIRouter()
+def _legacy_action_write_guard(request: Request):
+    """Production has exactly one executable action model: Formal ActionType.
+
+    The v1 table remains readable for migration/export compatibility, but accepting
+    writes here would recreate a second source of truth that sentinels never execute.
+    """
+    if settings.environment == "production" and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        raise HTTPException(
+            410,
+            "Legacy action writes are disabled in production; use the Formal ActionType API",
+        )
+
+
+router = APIRouter(dependencies=[
+    Depends(ontology_access_guard),
+    Depends(_legacy_action_write_guard),
+])
 
 @router.get("")
 def list_actions(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):

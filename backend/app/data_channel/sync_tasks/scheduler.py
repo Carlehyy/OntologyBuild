@@ -81,6 +81,7 @@ class SyncScheduler:
     def __init__(self):
         self._scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
         self._started = False
+        self._last_error: str | None = None
 
     @property
     def scheduler(self):
@@ -89,6 +90,17 @@ class SyncScheduler:
     @property
     def started(self):
         return self._started
+
+    @property
+    def healthy(self) -> bool:
+        return bool(
+            self._started
+            and getattr(self._scheduler, "running", False)
+            and self._last_error is None)
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
 
     @classmethod
     def get(cls) -> "SyncScheduler":
@@ -106,6 +118,8 @@ class SyncScheduler:
             self.reload_all()
             logger.info("DataSyncScheduler 已启动")
         except Exception as e:
+            self._last_error = str(e)
+            self._started = False
             logger.error(f"DataSyncScheduler 启动失败: {e}")
 
     def shutdown(self) -> None:
@@ -205,6 +219,7 @@ class SyncScheduler:
         """从 DB 加载所有 SyncTask + PipelineTask 并重建 Job 列表"""
         if not self._started:
             return
+        self._last_error = None
         try:
             from app.database import SessionLocal
             from app.models.v2.sync_task import DataSyncTask
@@ -225,6 +240,7 @@ class SyncScheduler:
             finally:
                 db.close()
         except Exception as e:
+            self._last_error = str(e)
             logger.error(f"reload_all 失败: {e}")
 
     def reload_pipeline_task(self, task_id: str) -> None:

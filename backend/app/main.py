@@ -10,6 +10,7 @@ v1 兼容：/api/v1/* 路由全部保留
 import json
 
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
@@ -38,6 +39,8 @@ from app.routers.v2 import sync_tasks as sync_tasks_v2
 from app.data_channel.pipeline_tasks import router as pipeline_tasks_v2
 from app.data_channel.steward import router as steward_v2
 from app.routers.v2 import test_data as test_data_v2
+from app.data_channel.access import asset_lake_access_guard
+from app.ontologies.access import legacy_ontology_write_guard
 
 def _seed_db():
     from app.services.auth_service import seed_admin
@@ -257,20 +260,38 @@ async def lifespan(app: FastAPI):
     # 哨兵引擎：注册 CDC(监听对象改动→变化驱动) + 启动定期扫描 worker
     try:
         from app.services.sentinel import register_cdc, start_scan_worker
-        register_cdc(); start_scan_worker()
+        register_cdc()
+        sentinel_started = start_scan_worker()
+        if settings.environment == "production" and not sentinel_started:
+            raise RuntimeError("Sentinel scan worker is disabled or failed to start")
     except Exception as e:
+        if settings.environment == "production":
+            raise RuntimeError("Sentinel engine failed to initialize") from e
         import logging; logging.getLogger(__name__).warning(f'Sentinel 启动失败: {e}')
-    # 初始化 Neo4j 索引（后台执行，不阻塞启动）
+    # 初始化 Neo4j 索引；开发环境可降级，生产环境必须完成后才就绪。
     try:
         from app.services.v2.graph.index_setup import setup_indexes
-        setup_indexes()
-    except Exception:
-        pass  # Neo4j 不可用时不影响启动
+        index_result = setup_indexes()
+        if settings.environment == "production" and (
+            index_result.get("status") != "done"
+            or any(item.get("status") != "ok"
+                   for item in index_result.get("results", []))
+        ):
+            raise RuntimeError(f"Neo4j index setup incomplete: {index_result}")
+    except Exception as e:
+        if settings.environment == "production":
+            raise RuntimeError("Neo4j indexes failed to initialize") from e
     # 启动数据同步任务调度器（后台线程）
     try:
         from app.services.v2.sync_scheduler import get_sync_scheduler
-        get_sync_scheduler().start()
+        scheduler = get_sync_scheduler()
+        scheduler.start()
+        if settings.environment == "production" and not scheduler.healthy:
+            raise RuntimeError(
+                f"Data scheduler is not healthy: {scheduler.last_error or 'not running'}")
     except Exception as e:
+        if settings.environment == "production":
+            raise RuntimeError("Data scheduler failed to initialize") from e
         import logging
         logging.getLogger(__name__).warning(f"SyncScheduler 启动失败: {e}")
     from app import mcp_server as _mcp_server
@@ -283,13 +304,18 @@ app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
 from app import mcp_server
 mcp_server.bind_app(app)
 
-@app.get("/api/health", tags=["health"])
-def health_check():
+@app.get("/health/live", tags=["health"])
+def liveness():
+    """Process liveness only; dependency readiness is exposed separately."""
     return {"status": "ok"}
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源（演示环境）
+    allow_origins=[
+        origin.strip()
+        for origin in settings.cors_allowed_origins.split(",")
+        if origin.strip()
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -341,11 +367,12 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(overview.router, prefix="/api/v1/overview", tags=["overview"])
 app.include_router(ontologies.router, prefix="/api/v1/ontologies", tags=["ontologies"])
-app.include_router(files.router, prefix="/api/v1/ontologies/{ontology_id}/files", tags=["files"])
-app.include_router(entities.router, prefix="/api/v1/ontologies/{ontology_id}/entities", tags=["entities"])
-app.include_router(logic.router, prefix="/api/v1/ontologies/{ontology_id}/logic", tags=["logic"])
-app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/actions", tags=["actions"])
-app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/execute", tags=["extraction"])
+legacy_write_guard = [Depends(legacy_ontology_write_guard)]
+app.include_router(files.router, prefix="/api/v1/ontologies/{ontology_id}/files", tags=["files"], dependencies=legacy_write_guard)
+app.include_router(entities.router, prefix="/api/v1/ontologies/{ontology_id}/entities", tags=["entities"], dependencies=legacy_write_guard)
+app.include_router(logic.router, prefix="/api/v1/ontologies/{ontology_id}/logic", tags=["logic"], dependencies=legacy_write_guard)
+app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/actions", tags=["actions"], dependencies=legacy_write_guard)
+app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/execute", tags=["extraction"], dependencies=legacy_write_guard)
 app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"])
 app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"])
 app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"])
@@ -354,23 +381,24 @@ app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(mcp_router.router, prefix="/api/v1/mcp", tags=["mcp"])
-app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"])
-app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"])
+asset_lake_guard = [Depends(asset_lake_access_guard)]
+app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"], dependencies=asset_lake_guard)
+app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"], dependencies=asset_lake_guard)
 app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"])
 app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph"])
 app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"])
-app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"])
+app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"], dependencies=asset_lake_guard)
 app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-mappings"])
-app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"])
-app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"])
+app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"], dependencies=asset_lake_guard)
+app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"], dependencies=legacy_write_guard)
 app.include_router(versions_v2.router, prefix="/api/v2/ontologies", tags=["v2-versions"])
 app.include_router(attr_schemas_v2.router, prefix="/api/v2/ontologies", tags=["v2-attributes"])
 app.include_router(inference_v2.router, prefix="/api/v2/ontologies", tags=["v2-inference"])
-app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-extraction"])
-app.include_router(sync_tasks_v2.router, prefix="/api/v2/sync-tasks", tags=["v2-sync-tasks"])
-app.include_router(pipeline_tasks_v2.router, prefix="/api/v2/pipeline-tasks", tags=["v2-pipeline-tasks"])
-app.include_router(steward_v2.router, prefix="/api/v2/steward", tags=["v2-steward"])
-app.include_router(test_data_v2.router, prefix="/api/v2/test-data", tags=["v2-test-data"])
+app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-extraction"], dependencies=legacy_write_guard)
+app.include_router(sync_tasks_v2.router, prefix="/api/v2/sync-tasks", tags=["v2-sync-tasks"], dependencies=asset_lake_guard)
+app.include_router(pipeline_tasks_v2.router, prefix="/api/v2/pipeline-tasks", tags=["v2-pipeline-tasks"], dependencies=asset_lake_guard)
+app.include_router(steward_v2.router, prefix="/api/v2/steward", tags=["v2-steward"], dependencies=asset_lake_guard)
+app.include_router(test_data_v2.router, prefix="/api/v2/test-data", tags=["v2-test-data"], dependencies=asset_lake_guard)
 
 # 正规本体模型 (Palantir 风格) — 平台核心建模 API
 app.include_router(formal_router.router, prefix="/api/v2/formal/ontologies", tags=["formal-ontology"])
@@ -399,15 +427,20 @@ def get_db():
         db.close()
 
 
-@app.get("/api/health")
-@app.get("/health")
+@app.get("/api/health", tags=["health"])
+@app.get("/health", tags=["health"])
+@app.get("/health/ready", tags=["health"])
 def health(db: Session = Depends(get_db)):
     checks = {
         "status": "ok",
         "db": "unknown",
+        "redis": "unknown",
         "neo4j": "unknown",
         "minio": "unknown",
         "chroma": "unknown",
+        "sentinel_scheduler": "unknown",
+        "data_scheduler": "unknown",
+        "ontology_projection": "unknown",
     }
 
     # PostgreSQL check
@@ -417,7 +450,21 @@ def health(db: Session = Depends(get_db)):
     except Exception:
         checks["db"] = "error"
 
+    # Redis/Celery broker check.  A TCP accept is not readiness: authenticate
+    # and execute PING so a misconfigured or loading Redis fails closed.
+    try:
+        import redis
+        redis.Redis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=1.5,
+            socket_timeout=1.5,
+        ).ping()
+        checks["redis"] = "ok"
+    except Exception:
+        checks["redis"] = "unavailable"
+
     # Neo4j check
+    driver = None
     try:
         from neo4j import GraphDatabase
         driver = GraphDatabase.driver(
@@ -425,10 +472,15 @@ def health(db: Session = Depends(get_db)):
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
         driver.verify_connectivity()
-        driver.close()
         checks["neo4j"] = "ok"
     except Exception:
         checks["neo4j"] = "unavailable"
+    finally:
+        if driver is not None:
+            try:
+                driver.close()
+            except Exception:
+                pass
 
     # MinIO check
     try:
@@ -456,4 +508,44 @@ def health(db: Session = Depends(get_db)):
     except Exception:
         checks["chroma"] = "unavailable"
 
-    return checks
+    try:
+        from app.ontologies.sentinels.scan_worker import scan_worker_status
+        sentinel_status = scan_worker_status()
+        checks["sentinel_scheduler"] = (
+            "ok" if sentinel_status["alive"] and not sentinel_status["last_error"]
+            else "unavailable")
+    except Exception:
+        checks["sentinel_scheduler"] = "unavailable"
+
+    try:
+        from app.data_channel.sync_tasks.scheduler import get_sync_scheduler
+        scheduler = get_sync_scheduler()
+        checks["data_scheduler"] = "ok" if scheduler.healthy else "unavailable"
+    except Exception:
+        checks["data_scheduler"] = "unavailable"
+
+    try:
+        from app.models.ontology import OntologyProject
+        from app.models.v2.mapping import OntologyMapping
+        published_ids = [item[0] for item in db.query(OntologyProject.id).filter(
+            OntologyProject.status == "published").all()]
+        unhealthy = 0
+        if published_ids:
+            unhealthy = db.query(OntologyMapping).filter(
+                OntologyMapping.ontology_id.in_(published_ids),
+                OntologyMapping.status != "applied",
+            ).count()
+        checks["ontology_projection"] = "ok" if unhealthy == 0 else "unavailable"
+    except Exception:
+        checks["ontology_projection"] = "unavailable"
+
+    service_keys = (
+        "db", "redis", "neo4j", "minio", "chroma",
+        "sentinel_scheduler", "data_scheduler",
+        "ontology_projection",
+    )
+    unavailable = [name for name in service_keys if checks[name] != "ok"]
+    strict = settings.environment == "production"
+    checks["status"] = "ok" if not unavailable else ("error" if strict else "degraded")
+    checks["unavailable"] = unavailable
+    return JSONResponse(status_code=503 if strict and unavailable else 200, content=checks)

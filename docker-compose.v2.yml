@@ -96,7 +96,7 @@ services:
       chromadb:
         condition: service_healthy
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: celery -A app.tasks.extraction worker --loglevel=info
+    command: celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 
   frontend:
     build: ./frontend

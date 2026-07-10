@@ -108,16 +108,30 @@ class IncrementalOrchestrator:
             OntologyMapping.status != "disabled",
         ).all()
 
-        triggered = []
+        eligible_by_ontology: dict[str, list] = {}
         for mapping in mappings:
             # 检查是否配置了自动触发
             field_map = mapping.field_mapping or {}
             auto_apply = field_map.get("__auto_apply_on_review__", False)
 
             if auto_apply:
-                task_id = self._trigger_mapping_apply(mapping.id, mapping.ontology_id)
-                triggered.append({"mapping_id": mapping.id, "task_id": task_id})
-                logger.info(f"自动触发 Mapping {mapping.id} 增量写入")
+                eligible_by_ontology.setdefault(mapping.ontology_id, []).append(mapping)
+
+        triggered = []
+        for ontology_id, ontology_mappings in eligible_by_ontology.items():
+            trigger_mapping = ontology_mappings[0]
+            task_id = self._trigger_mapping_apply(
+                trigger_mapping.id, ontology_id)
+            mapping_ids = [item.id for item in ontology_mappings]
+            triggered.append({
+                "ontology_id": ontology_id,
+                "mapping_id": trigger_mapping.id,
+                "mapping_ids": mapping_ids,
+                "task_id": task_id,
+            })
+            logger.info(
+                "自动触发本体 %s 全量映射对账，来源 Mapping=%s",
+                ontology_id, mapping_ids)
 
         return {
             "triggered_mappings": triggered,

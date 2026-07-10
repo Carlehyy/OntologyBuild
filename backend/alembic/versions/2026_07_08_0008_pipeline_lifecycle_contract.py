@@ -35,6 +35,12 @@ def upgrade() -> None:
             "v2_pipeline_versions",
             sa.Column("column_definitions", sa.JSON(), nullable=True),
         )
+    if not _column_exists("v2_pipelines", "enabled"):
+        op.add_column(
+            "v2_pipelines",
+            sa.Column("enabled", sa.Boolean(), nullable=False,
+                      server_default=sa.false()),
+        )
     # 有已发布版本快照的 → published；其余脏值 → draft
     op.execute(
         "UPDATE v2_pipelines SET status='published' "
@@ -61,4 +67,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("v2_pipeline_versions", "column_definitions")
+    if _column_exists("v2_pipeline_versions", "column_definitions"):
+        op.drop_column("v2_pipeline_versions", "column_definitions")
+    if _column_exists("v2_pipelines", "enabled"):
+        op.drop_column("v2_pipelines", "enabled")

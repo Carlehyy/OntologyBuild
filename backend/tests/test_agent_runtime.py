@@ -67,6 +67,13 @@ def modeled_ontology(client, auth_headers, ontology):
     }
     r = client.put(f"{_fo(oid)}/full", headers=auth_headers, json=body)
     assert r.status_code == 200, r.text
+    # Real actions are a production runtime capability and therefore execute
+    # only against an immutable published ontology release.
+    r = client.post(
+        f"/api/v2/ontologies/{oid}/versions", headers=auth_headers,
+        json={"version_label": "agent-runtime-test"},
+    )
+    assert r.status_code == 201, r.text
     return ontology
 
 

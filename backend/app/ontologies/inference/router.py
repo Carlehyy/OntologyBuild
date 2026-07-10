@@ -9,6 +9,7 @@ from sqlalchemy import desc
 import uuid
 import time
 from app.deps import get_db, get_current_user
+from app.ontologies.access import ontology_access_guard
 from app.models.inference import (
     ShadowRun, InferenceRun, InferenceResult, ActionFiring, AuditLog,
 )
@@ -20,7 +21,7 @@ from app.models.action import Action
 from app.models.user import User
 from app.services.v2.graph.networkx_service import NetworkXGraphService
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
 
 class ShadowRunCreate(BaseModel):

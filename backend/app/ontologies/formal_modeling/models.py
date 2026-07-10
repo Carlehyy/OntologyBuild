@@ -18,7 +18,10 @@
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Float, ForeignKey, Text, JSON, Boolean, Integer
+from sqlalchemy import (
+    String, DateTime, Float, ForeignKey, Text, JSON, Boolean, Integer,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -187,6 +190,9 @@ class LinkInstance(Base):
     source_object_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     target_object_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     properties: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Stable pointer to the relational projection record.  Kept outside business
+    # properties so lineage metadata cannot violate LinkType property schemas.
+    source_relation_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -234,6 +240,14 @@ class PropertyFact(Base):
 class ActionExecutionLog(Base):
     """动作执行日志"""
     __tablename__ = "fo_action_logs"
+    __table_args__ = (
+        # NULL 表示普通调用或可重试的失败尝试；非 NULL 只允许一个
+        # pending/success owner，防止哨兵重放已完成副作用。
+        UniqueConstraint(
+            "ontology_id", "idempotency_key",
+            name="uq_action_log_ontology_idempotency_key",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -261,5 +275,14 @@ class ActionExecutionLog(Base):
     decision_reason: Mapped[str] = mapped_column(Text, nullable=True)
     # 批准后真正执行产生的新日志 id（pending 日志 ↔ 执行日志互链）
     related_log_id: Mapped[str] = mapped_column(String, nullable=True)
+
+    # 哨兵运行时幂等关联。失败/拒绝会清空 idempotency_key 以允许新尝试；
+    # pending、success 与 approved-success 保留键并在重试时复用。
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=True)
+    sentinel_match_state_id: Mapped[str] = mapped_column(
+        String, nullable=True, index=True)
+    # Bind an approval/idempotency record to the immutable ontology release that
+    # produced it.  A pending v1 action must never execute after v2 is published.
+    ontology_version: Mapped[str] = mapped_column(String(20), nullable=True, index=True)
 
     executed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

@@ -21,8 +21,8 @@ class OntologyUpdate(BaseModel):
     name: Optional[str] = None
     domain: Optional[str] = None
     description: Optional[str] = None
-    status: Optional[str] = None
-    version: Optional[str] = None
+    # status/version are controlled exclusively by the version publish and
+    # rollback state machine; generic PUT must not forge release identity.
     build_mode: Optional[str] = None
 
 class OntologyOut(BaseModel):

@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
 from app.deps import get_current_user
+from app.ontologies.access import ontology_access_guard
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
 
 def get_db():
@@ -82,10 +83,38 @@ def _validate_target_type(db: Session, ontology_id: str, type_id: Optional[str])
     return ot
 
 
+def _require_draft_ontology(db: Session, ontology_id: str) -> None:
+    """发布后冻结 Mapping 结构；数据实例仍可通过 apply-from-dataset 更新。"""
+    from app.models.ontology import OntologyProject
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).with_for_update().first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    if project.status != "draft":
+        raise HTTPException(
+            409,
+            "本体已发布，Mapping/LinkMapping 结构已冻结；"
+            "请先创建或切换到 draft 版本再维护映射")
+
+
+def _reject_reserved_mapping_keys(value: Optional[dict], field_name: str) -> None:
+    """System lineage keys are write-only for the mapping runtime."""
+    reserved = sorted(
+        str(key) for key in (value or {}) if str(key).startswith("__"))
+    if reserved:
+        raise HTTPException(422, detail={
+            "code": "reserved_mapping_keys",
+            "message": f"{field_name} 包含平台保留键，客户端不得写入",
+            "keys": reserved,
+        })
+
+
 @router.post("/{ontology_id}/mappings")
 def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db)):
     from app.services.v2.mapping.mapping_service import MappingService
+    _require_draft_ontology(db, ontology_id)
     _validate_target_type(db, ontology_id, body.target_object_type_id)
+    _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
 
     # 人工数据集（非 curated）可直接灌入本体，但必须先声明主键契约——
     # 无主键时实例身份退化为整行哈希，字段一变就堆积新实例
@@ -120,6 +149,7 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
 def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest,
                    db: Session = Depends(get_db)):
     """映射维护：改绑定 / 改字段映射 / 开关审核后自动灌入。"""
+    _require_draft_ontology(db, ontology_id)
     from app.models.v2.mapping import OntologyMapping
     m = db.query(OntologyMapping).filter(
         OntologyMapping.id == mapping_id,
@@ -134,7 +164,8 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
         m.entity_class = body.entity_class
     fm = dict(m.field_mapping or {})
     if body.field_mapping is not None:
-        # 保留 __ 开头的系统键（除非新值里显式提供）
+        _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
+        # Preserve runtime-owned keys; user payloads containing them are rejected.
         sys_keys = {k: v for k, v in fm.items() if k.startswith("__")}
         fm = {**sys_keys, **body.field_mapping}
     if body.primary_key_column is not None:
@@ -144,6 +175,17 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
             fm["__auto_apply_on_review__"] = True
         else:
             fm.pop("__auto_apply_on_review__", None)
+    projection_changed = bool({
+        "entity_class", "field_mapping", "primary_key_column",
+        "target_object_type_id",
+    } & provided)
+    if projection_changed:
+        # Any definition change invalidates the previous apply attestation.  The
+        # old marker must never be reused by the release gate for new semantics.
+        for key in list(fm):
+            if key.startswith("__applied_") or key == "__last_apply_error__":
+                fm.pop(key, None)
+        m.status = "draft"
     m.field_mapping = fm
     db.commit(); db.refresh(m)
     return {"mapping_id": m.id, "status": m.status,
@@ -153,14 +195,25 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
 
 @router.delete("/{ontology_id}/mappings/{mapping_id}", status_code=204)
 def delete_mapping(ontology_id: str, mapping_id: str, db: Session = Depends(get_db)):
-    """删除映射（不动已灌入的实例——历史事实保留）。"""
+    """删除映射并撤销其当前态投影；不可变事实历史通过墓碑保留。"""
+    _require_draft_ontology(db, ontology_id)
     from app.models.v2.mapping import OntologyMapping
+    from app.services.v2.mapping.mapping_service import MappingApplyError, MappingService
     m = db.query(OntologyMapping).filter(
         OntologyMapping.id == mapping_id,
         OntologyMapping.ontology_id == ontology_id).first()
     if not m:
         raise HTTPException(404, "Mapping not found")
-    db.delete(m); db.commit()
+    svc = MappingService(db)
+    try:
+        stale_ids = svc.remove_mapping_projection(m)
+        db.delete(m)
+        db.commit()
+    except MappingApplyError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    # Neo4j is a rebuildable read projection and is reconciled after truth commits.
+    svc._delete_neo4j_entities(ontology_id, stale_ids)
 
 
 @router.get("/{ontology_id}/mappings")
@@ -231,17 +284,28 @@ def list_mappings(ontology_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply")
 def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Session = Depends(get_db)):
-    from app.services.v2.mapping.mapping_service import MappingService
-    svc = MappingService(db)
-    result = svc.apply_mapping(mapping_id, data)
-    return result
+    """已禁用的原始数据旁路。
+
+    正式 Apply 必须从映射绑定的、可追溯的 DatasetVersion 读取；否则请求方可
+    用任意 JSON 冒充资产湖数据，审批、checksum 与版本血缘全部失效。
+    """
+    from app.models.v2.mapping import OntologyMapping
+    mapping = db.query(OntologyMapping).filter(
+        OntologyMapping.id == mapping_id,
+        OntologyMapping.ontology_id == ontology_id).first()
+    if not mapping:
+        raise HTTPException(404, "Mapping not found in this ontology")
+    raise HTTPException(
+        409,
+        "禁止直接提交原始数据执行映射；请使用 apply-from-dataset，"
+        "由服务端读取已绑定且通过校验的数据版本")
 
 
 @router.post("/{ontology_id}/mappings/{mapping_id}/apply-from-dataset")
 def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = Depends(get_db)):
     from app.models.v2.mapping import OntologyMapping
-    from app.services.v2.mapping.mapping_service import MappingService
-    from app.services.v2.dataset_service import DatasetService
+    from app.services.v2.mapping.mapping_service import (
+        MappingApplyError, MappingSourceError, MappingService)
 
     mapping = db.query(OntologyMapping).filter(
         OntologyMapping.id == mapping_id,
@@ -252,25 +316,25 @@ def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = 
     if not mapping.curated_dataset_id:
         raise HTTPException(400, "Mapping has no curated_dataset_id")
 
-    try:
-        # 最新版本 + 行级审核编辑叠加（人工修正必须体现在灌入本体的数据里）
-        from app.data_channel.curated.review_service import load_rows_with_edits
-        data = load_rows_with_edits(db, mapping.curated_dataset_id, limit=10000)
-    except Exception as e:
-        raise HTTPException(500, f"Failed to read curated dataset: {e}")
-
     svc = MappingService(db)
-    result = svc.apply_mapping(mapping_id, data)
-    return result
+    try:
+        result = svc.build_all(ontology_id, require_approved=True)
+        result["trigger_mapping_id"] = mapping_id
+        return result
+    except MappingSourceError as e:
+        raise HTTPException(422, str(e))
+    except MappingApplyError as e:
+        raise HTTPException(500, str(e))
 
 
 @router.post("/{ontology_id}/mappings/build-all")
 def build_all_mappings(ontology_id: str, db: Session = Depends(get_db)):
-    from app.services.v2.mapping.mapping_service import MappingService
+    from app.services.v2.mapping.mapping_service import (
+        MappingApplyError, MappingSourceError, MappingService)
     from app.models.v2.mapping import OntologyLinkMapping
     svc = MappingService(db)
     try:
-        result = svc.build_all(ontology_id)
+        result = svc.build_all(ontology_id, require_approved=True)
         active_links = db.query(OntologyLinkMapping).filter(
             OntologyLinkMapping.ontology_id == ontology_id,
             OntologyLinkMapping.status == "active",
@@ -282,6 +346,10 @@ def build_all_mappings(ontology_id: str, db: Session = Depends(get_db)):
         result["link_mappings_configured"] = active_links
         result["link_mappings_inferred"] = inferred_links
         return result
+    except MappingSourceError as e:
+        raise HTTPException(422, detail=str(e))
+    except MappingApplyError as e:
+        raise HTTPException(500, detail=str(e))
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
@@ -305,6 +373,8 @@ class LinkMappingCreate(BaseModel):
 def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session = Depends(get_db)):
     from app.models.v2.mapping import OntologyLinkMapping
     from app.services.v2.dataset_service import DatasetService
+    _require_draft_ontology(db, ontology_id)
+    _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
 
     svc = DatasetService(db)
     try:
@@ -392,13 +462,23 @@ def list_link_mappings(ontology_id: str, db: Session = Depends(get_db)):
 
 @router.delete("/{ontology_id}/link-mappings/{link_mapping_id}", status_code=204)
 def delete_link_mapping(ontology_id: str, link_mapping_id: str, db: Session = Depends(get_db)):
-    """删除关系映射通道。已投影的 LinkInstance / 历史事实保留（与对象映射删除语义一致）。"""
+    """删除关系映射并撤销当前态边；Link Fact 历史以墓碑保留。"""
+    _require_draft_ontology(db, ontology_id)
     from app.models.v2.mapping import OntologyLinkMapping
+    from app.services.v2.mapping.mapping_service import MappingApplyError, MappingService
     lm = db.query(OntologyLinkMapping).filter(
         OntologyLinkMapping.id == link_mapping_id,
         OntologyLinkMapping.ontology_id == ontology_id,
     ).first()
-    if lm:
+    if not lm:
+        raise HTTPException(404, "Link mapping not found")
+    svc = MappingService(db)
+    try:
+        svc.remove_link_mapping_projection(lm)
         db.delete(lm)
         db.commit()
+    except MappingApplyError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    svc._rebuild_neo4j_projection(ontology_id)
     return None

@@ -445,7 +445,9 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
                 except LakeGateError as e:
                     raise HTTPException(400, str(e))
 
-            ver = svc.create_version(dataset_id, rows_to_csv_bytes(new_rows, columns), rowcount=len(new_rows))
+            ver = svc.create_version(
+                dataset_id, rows_to_csv_bytes(new_rows, columns),
+                rowcount=len(new_rows), _lock_held=True)
             if new_rows:
                 schema["columns"] = columns
                 # 用户声明的类型是契约，不随数据重新推断（否则录入 "123" 会把文本列翻成整数）

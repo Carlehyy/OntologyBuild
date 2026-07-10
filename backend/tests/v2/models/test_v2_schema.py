@@ -40,6 +40,12 @@ def test_curated_review_model_tablename():
     assert CuratedReview.__tablename__ == "v2_curated_reviews"
 
 
+def test_curated_review_is_bound_to_dataset_version():
+    assert "dataset_version_id" in CuratedReview.__table__.columns
+    fks = CuratedReview.__table__.columns.dataset_version_id.foreign_keys
+    assert {fk.target_fullname for fk in fks} == {"v2_dataset_versions.id"}
+
+
 def test_curated_row_edit_model_tablename():
     assert CuratedRowEdit.__tablename__ == "v2_curated_row_edits"
 

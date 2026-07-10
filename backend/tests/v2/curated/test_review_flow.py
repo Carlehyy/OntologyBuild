@@ -1,29 +1,33 @@
 """ReviewService 单元测试"""
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from app.services.v2.curated.review_service import ReviewService
 from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit
-import uuid
+from app.models.v2.dataset import Dataset, DatasetVersion
 
 
-def make_db_with_dataset(status="pending_review"):
+def make_db_with_dataset():
     db = MagicMock()
-    ds = CuratedDataset(
-        id="ds-1", name="test_dataset", status=status,
-        pipeline_id=None, schema_json=None,
-    )
+    ds = Dataset(
+        id="ds-1", name="test_dataset", kind="curated", schema_json={})
+    version = DatasetVersion(
+        id="ver-1", dataset_id="ds-1", version_no=1, rowcount=1)
     review = CuratedReview(
-        id="rev-1", curated_dataset_id="ds-1", status="pending"
+        id="rev-1", curated_dataset_id="ds-1",
+        dataset_version_id=version.id, status="pending"
     )
 
     def query_side_effect(model):
         mock_q = MagicMock()
-        if model == CuratedDataset:
+        if model == Dataset:
             mock_q.filter.return_value.first.return_value = ds
+        elif model == CuratedDataset:
+            mock_q.filter.return_value.first.return_value = None
         elif model == CuratedReview:
             mock_q.filter.return_value.first.return_value = review
         elif model == CuratedRowEdit:
             mock_q.filter.return_value.all.return_value = []
+        elif model == DatasetVersion:
+            mock_q.filter.return_value.order_by.return_value.first.return_value = version
         return mock_q
 
     db.query.side_effect = query_side_effect
@@ -46,25 +50,24 @@ def test_start_review_creates_record():
     review = svc.start_review("ds-1")
     db.add.assert_called_once()
     db.commit.assert_called()
-    assert ds.status == "in_review"
+    assert review.status == "pending"
+    assert review.dataset_version_id == "ver-1"
 
 
 def test_approve_updates_status():
-    db, ds, review = make_db_with_dataset("in_review")
+    db, _, review = make_db_with_dataset()
     svc = ReviewService(db)
     result = svc.approve("rev-1", notes="数据看起来不错")
     assert review.status == "approved"
-    assert ds.status == "approved"
     assert review.notes == "数据看起来不错"
     assert review.decided_at is not None
 
 
 def test_reject_updates_status():
-    db, ds, review = make_db_with_dataset("in_review")
+    db, _, review = make_db_with_dataset()
     svc = ReviewService(db)
     result = svc.reject("rev-1", notes="存在数据质量问题")
     assert review.status == "rejected"
-    assert ds.status == "rejected"
 
 
 def test_edit_row_creates_edit_record():

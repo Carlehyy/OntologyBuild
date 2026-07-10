@@ -1,2 +1,11 @@
-# re-export - real content moved to app.shared.storage
-from app.shared.storage import *  # noqa: F401,F403
+"""Backward-compatible module alias for :mod:`app.shared.storage`.
+
+A star re-export copied ``Minio`` into this namespace while ``StorageService``
+continued to resolve globals in ``app.shared.storage``. Patching the established
+legacy import path therefore patched a dead name and real network I/O still ran.
+"""
+import sys
+
+from app.shared import storage as _implementation
+
+sys.modules[__name__] = _implementation

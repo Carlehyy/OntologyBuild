@@ -21,7 +21,13 @@ class CuratedReview(Base):
     __tablename__ = "v2_curated_reviews"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    curated_dataset_id: Mapped[str] = mapped_column(String, ForeignKey("v2_curated_datasets.id", ondelete="CASCADE"), nullable=False)
+    curated_dataset_id: Mapped[str] = mapped_column(
+        String, ForeignKey("v2_datasets.id", ondelete="CASCADE"), nullable=False)
+    # 审批背书的是不可变数据版本，而不是会持续追加版本的数据集逻辑 ID。
+    # nullable=True 仅为兼容迁移前的历史审批；新审批一律绑定最新版本。
+    dataset_version_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("v2_dataset_versions.id", ondelete="SET NULL"),
+        nullable=True, index=True)
     reviewer_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|approved|rejected|partial
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

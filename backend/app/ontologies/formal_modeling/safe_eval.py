@@ -146,6 +146,33 @@ def safe_eval(expr: str, scope: dict[str, Any]) -> Any:
         raise SafeEvalError(str(e))
 
 
+def validate_safe_expression(expr: str, allowed_names: set[str] | None = None) -> None:
+    """Compile-time validation without executing business comparisons.
+
+    Used by release gates so a typoed Sentinel expression cannot be published as
+    a rule that silently never matches.  Utility/literal names remain available;
+    callers constrain only business scope aliases.
+    """
+    raw = (expr or "").strip().rstrip(";").strip()
+    if not raw:
+        return
+    try:
+        tree = ast.parse(raw, mode="eval")
+    except SyntaxError as exc:
+        raise SafeEvalError(f"表达式语法错误: {exc}") from exc
+    _check(tree)
+    if allowed_names is None:
+        return
+    permitted = set(allowed_names) | set(_SAFE_NAMES) | {"utils"}
+    loaded_names = {
+        node.id for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    unknown = sorted(loaded_names - permitted)
+    if unknown:
+        raise SafeEvalError(f"表达式引用未声明变量: {', '.join(unknown)}")
+
+
 class _Namespace:
     """把 dict 包装成可以 .attr 访问的对象（用于 utils.sum）"""
     def __init__(self, d: dict):

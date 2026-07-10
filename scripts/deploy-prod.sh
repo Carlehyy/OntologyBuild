@@ -5,6 +5,7 @@ BRANCH="${BRANCH:-nano-ontoprompt}"
 REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PUBLIC_PORT:-80}/}"
+READINESS_URL="${READINESS_URL:-${HEALTH_URL%/}/api/health}"
 RETRIES="${DEPLOY_RETRIES:-3}"
 SLEEP_SECONDS="${DEPLOY_RETRY_SLEEP:-10}"
 log() { printf '[%s] %s\n' "$(date -Is)" "$*"; }
@@ -74,6 +75,11 @@ check_frontend_assets() {
 
   rm -f "$index_file" "$main_file"
 }
+check_action_worker() {
+  compose exec -T celery_worker \
+    celery -A app.tasks.celery_app:celery_app inspect ping --timeout=5 \
+    >/dev/null
+}
 command -v docker >/dev/null 2>&1 || { log "docker is not installed"; exit 1; }
 if [ "${SKIP_GIT:-0}" != "1" ]; then
   command -v git >/dev/null 2>&1 || { log "git is not installed"; exit 1; }
@@ -89,21 +95,80 @@ if [ "${SKIP_GIT:-0}" != "1" ]; then
 else
   cd "$APP_DIR"
 fi
-[ -f .env ] || cp .env.example .env
+[ -f .env ] || { log "production .env is missing; refusing to deploy with example credentials"; exit 1; }
+env_value() {
+  local key="$1"
+  awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key "=" {
+      line=$0; sub("^[[:space:]]*" key "=", "", line); value=line
+    }
+    END { gsub(/\r$/, "", value); print value }
+  ' .env
+}
+require_secret() {
+  local key="$1"
+  local value
+  value="$(env_value "$key")"
+  [ -n "$value" ] || { log "$key is missing or empty in production .env"; exit 1; }
+}
+reject_secret() {
+  local key="$1"
+  local insecure="$2"
+  local value
+  value="$(env_value "$key")"
+  if [ -z "$value" ] || [ "$value" = "$insecure" ]; then
+    log "$key is missing or still uses an example credential"
+    exit 1
+  fi
+}
+require_secret ENCRYPTION_KEY
+reject_secret SECRET_KEY dev-secret-key
+reject_secret SECRET_KEY change-me-to-a-random-32-char-string
+reject_secret CORS_ALLOWED_ORIGINS '*'
+reject_secret CORS_ALLOWED_ORIGINS https://ontology.example.com
+reject_secret FIRST_ADMIN_PASSWORD admin123
+reject_secret POSTGRES_PASSWORD ontoprompt
+reject_secret DATABASE_URL postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+reject_secret NEO4J_PASSWORD ontoprompt123
+reject_secret NEO4J_AUTH neo4j/ontoprompt123
+reject_secret MINIO_ACCESS_KEY minioadmin
+reject_secret MINIO_SECRET_KEY minioadmin
+require_image_digest() {
+  local key="$1"
+  local value
+  value="$(env_value "$key")"
+  if [[ ! "$value" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+    log "$key must be pinned to an immutable @sha256 digest"
+    exit 1
+  fi
+}
+for image_key in \
+  POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE CHROMA_IMAGE \
+  PYTHON_BASE_IMAGE NODE_BASE_IMAGE NGINX_BASE_IMAGE; do
+  require_image_digest "$image_key"
+done
 log "building images"
 run_with_retry compose build --pull
 log "running database migrations"
-# 先 stamp 到已知已应用的基准版本（跳过可能已手动执行但未记录的 migration），
-# 再 upgrade head 应用新的 migration。stamp 失败（如已是最新）不阻塞部署。
-log "  stamping to base revision (ignore errors if already stamped)"
-compose run --rm backend alembic stamp 0006_element_source_lineage 2>&1 || true
+# Never rewrite Alembic history during a normal deploy.  If a legacy database
+# needs a one-off baseline stamp it must be an explicit, audited operation.
+log "  validating migration graph"
+MIGRATION_HEADS="$(compose run --rm backend alembic heads)"
+printf '%s\n' "$MIGRATION_HEADS"
+HEAD_COUNT="$(printf '%s\n' "$MIGRATION_HEADS" | grep -c '(head)' || true)"
+if [ "$HEAD_COUNT" -ne 1 ]; then
+  log "migration graph must have exactly one head, found ${HEAD_COUNT}"
+  exit 1
+fi
 log "  upgrading to head"
 run_with_retry compose run --rm backend alembic upgrade head
 log "starting services"
 run_with_retry compose up -d --remove-orphans
-log "waiting for public health endpoint: ${HEALTH_URL}"
+log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"
 for i in $(seq 1 30); do
-  if curl -fsS --connect-timeout 5 --max-time 10 "$HEALTH_URL" >/dev/null && check_frontend_assets; then
+  if curl -fsS --connect-timeout 5 --max-time 10 "$READINESS_URL" >/dev/null \
+      && check_action_worker \
+      && check_frontend_assets; then
     log "deployment succeeded"
     compose ps
     exit 0

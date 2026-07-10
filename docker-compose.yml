@@ -28,7 +28,7 @@ services:
     env_file: .env
     depends_on: [db, redis]
     volumes: [./backend:/app, ./uploads:/uploads]
-    command: celery -A app.tasks.celery_app worker --loglevel=info
+    command: celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest

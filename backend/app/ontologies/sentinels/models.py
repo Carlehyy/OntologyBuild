@@ -11,7 +11,9 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Boolean, Integer
+from sqlalchemy import (
+    String, DateTime, ForeignKey, Text, JSON, Boolean, Integer, UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -57,6 +59,9 @@ class Sentinel(Base):
 
     # —— 命中后执行(可多个动作) ——
     action_ids: Mapped[list] = mapped_column(JSON, default=list)
+    # 每个动作的安全参数绑定：{actionId: {parameterName: literal|bindingSpec}}。
+    # bindingSpec 只支持 constant / match-property / target-id，不执行任意表达式。
+    action_parameters: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
 
     # —— 执行入口 ——
     on_change: Mapped[bool] = mapped_column(Boolean, default=True)      # 变化驱动
@@ -93,6 +98,9 @@ class SentinelMatchState(Base):
     与哨兵配置数据分离,作为高频读写的运行时状态独立存放。
     """
     __tablename__ = "sentinel_match_state"
+    __table_args__ = (
+        UniqueConstraint("sentinel_id", "match_key", name="uq_sentinel_match_state_key"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
@@ -101,6 +109,13 @@ class SentinelMatchState(Base):
     match_key: Mapped[str] = mapped_column(String(500), nullable=False)
     # 命中元组明细(回显/证据用)：{alias: instanceId}
     match_detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    # completed 才表示 on_enter 已被消费；processing/pending/failed 都是
+    # 可恢复的执行 claim，仍会在后续评估中续跑而不是静默吸收边沿。
+    runtime_status: Mapped[str] = mapped_column(
+        String(24), default="processing_enter", server_default="completed")
+    # run_on_all 每完成一轮递增；崩溃重试沿用当前 epoch，下一轮才生成新键。
+    execution_epoch: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -125,7 +140,7 @@ class SentinelFiring(Base):
     # 动作执行结果: [{actionId, targetInstanceId, edge, status, logId, effects}]
     action_results: Mapped[list] = mapped_column(JSON, default=list)
 
-    # fired | no_change | no_match | muted | error | skipped
+    # fired | pending | no_change | no_match | muted | error | skipped
     status: Mapped[str] = mapped_column(String(20), default="fired")
     error: Mapped[str] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=True)

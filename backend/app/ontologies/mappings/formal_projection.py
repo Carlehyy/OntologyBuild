@@ -37,6 +37,7 @@ _RESERVED_PROP_KEYS = {
     "id", "ontology_id", "source_id", "object_type",
     "source_row_count", "name", "name_cn", "name_en",
     "name_abbr", "display_name",
+    "__mapping_ids__",
 }
 
 # entity_class → 一组默认图标 / 颜色（仅美观，无业务含义）
@@ -52,7 +53,7 @@ def _stable_id(*parts: Any) -> str:
 # 关系投影的内部记账键：仅供映射/去重使用，不应作为业务边属性落进 LinkInstance
 _INTERNAL_LINK_PROP_KEYS = frozenset({
     "mapping_type", "src_key", "tgt_key", "cardinality",
-    "__edge_key__", "fk_column", "alt_column", "source",
+    "__edge_key__", "__link_mapping_id__", "fk_column", "alt_column", "source",
 })
 
 
@@ -125,6 +126,8 @@ def _property_data_binding(
             binding["mappingId"] = binding_context["mapping_id"]
         if binding_context.get("curated_dataset_id"):
             binding["curatedDatasetId"] = binding_context["curated_dataset_id"]
+        if binding_context.get("source_dataset_version_id"):
+            binding["datasetVersionId"] = binding_context["source_dataset_version_id"]
         if binding_context.get("dataset_name"):
             binding["datasetName"] = binding_context["dataset_name"]
     return binding
@@ -132,7 +135,8 @@ def _property_data_binding(
 
 def _coerce_props_to_type(props: dict, type_props: list[dict]) -> dict:
     """按类型的属性定义做值转换（CSV 来的全是字符串——number 属性不转数字，
-    哨兵的数值条件、派生函数、动作校验会整体失灵）。转不动的保留原值。"""
+    哨兵的数值条件、派生函数、动作校验会整体失灵）。声明过的类型转换失败
+    必须阻止投影，不能把错误字符串悄悄塞进已发布本体。"""
     kind_by_name = {p.get("name"): (p.get("type") or "string")
                     for p in (type_props or []) if isinstance(p, dict)}
     out = dict(props)
@@ -153,8 +157,10 @@ def _coerce_props_to_type(props: dict, type_props: list[dict]) -> dict:
                     out[k] = True
                 elif low in ("false", "0", "no", "否"):
                     out[k] = False
-        except (ValueError, TypeError):
-            pass  # 保留原始字符串，宁可可见地类型不齐也不丢数据
+                elif s:
+                    raise ValueError(f"属性 {k} 的值 {v!r} 无法转换为 boolean")
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"属性 {k} 的值 {v!r} 无法转换为 {t}") from exc
     return out
 
 
@@ -263,6 +269,12 @@ def project_to_formal_ontology(
     from app.models.ontology_formal import (
         ObjectType, ObjectInstance, LinkType, LinkInstance,
     )
+    from app.models.ontology import OntologyProject
+
+    project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
+    if project is None:
+        raise ValueError(f"Ontology {ontology_id} not found")
+    schema_locked = (project.status or "") == "published"
 
     summary = {
         "object_types": 0,
@@ -270,6 +282,7 @@ def project_to_formal_ontology(
         "link_types": 0,
         "link_instances": 0,
         "skipped_relations": 0,
+        "removed_link_instances": 0,
     }
 
     entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
@@ -289,6 +302,7 @@ def project_to_formal_ontology(
                 "binding_context": {
                     "mapping_id": meta.get("mapping_id"),
                     "curated_dataset_id": meta.get("curated_dataset_id"),
+                    "source_dataset_version_id": meta.get("source_dataset_version_id"),
                     "dataset_name": meta.get("dataset_name"),
                 },
             }
@@ -358,7 +372,20 @@ def project_to_formal_ontology(
         if existing_ot:
             # 属性合并而非替换：手绘/已有定义（computed 属性、类型修正、显示名）
             # 永远优先，只追加数据里新出现的列——重跑投影不再冲掉人的加工
-            merged = _merge_properties(existing_ot.properties or [], data_props)
+            if schema_locked:
+                declared = {p.get("name") for p in (existing_ot.properties or [])
+                            if isinstance(p, dict) and p.get("name")}
+                incoming = {p.get("name") for p in data_props
+                            if isinstance(p, dict) and p.get("name")}
+                unknown = sorted(incoming - declared)
+                if unknown:
+                    raise ValueError(
+                        f"已发布对象类型「{existing_ot.display_name}」出现未声明字段 {unknown}；"
+                        "请先撤回版本、维护 schema 并重新发布"
+                    )
+                merged = list(existing_ot.properties or [])
+            else:
+                merged = _merge_properties(existing_ot.properties or [], data_props)
             if merged != (existing_ot.properties or []):
                 existing_ot.properties = merged
             existing_ot.display_name = existing_ot.display_name or ec
@@ -370,6 +397,11 @@ def project_to_formal_ontology(
             final_props = merged
             final_pk_id = existing_ot.primary_key
         else:
+            if schema_locked:
+                raise ValueError(
+                    f"已发布本体不允许由数据投影自动创建对象类型「{ec}」；"
+                    "请先在草稿中建立并绑定类型"
+                )
             ot_id = _stable_id("ot", ontology_id, ec)
             db.add(ObjectType(
                 id=ot_id,
@@ -400,7 +432,7 @@ def project_to_formal_ontology(
         for ent in ent_list:
             inst_id = _stable_id("oi", ontology_id, ent.id)
             props = {k: v for k, v in (ent.properties or {}).items()
-                     if k not in ("ontology_id",)}
+                     if k not in ("ontology_id", "__mapping_ids__")}
             # 按类型属性定义转换值类型（CSV 字符串 → number/boolean）
             props = _coerce_props_to_type(props, final_props)
             # 补充展示名，便于图谱卡片渲染
@@ -451,19 +483,38 @@ def project_to_formal_ontology(
                 summary["object_instances"] += 1
             entity_to_instance[ent.id] = inst_id
 
-    db.commit()
+    # Keep object and link projection in one caller-controlled transaction.
+    db.flush()
 
     # ── 3. 投影 LinkType + LinkInstance ──
     relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
     if not relations:
         logger.info("投影：本体 %s 无 Relation，跳过链接投影", ontology_id)
+        from app.ontologies.formal_modeling.validation import validate_instance_contract
+        from app.ontologies.formal_modeling.facts import record_link_fact
+        for link in db.query(LinkInstance).filter(
+                LinkInstance.ontology_id == ontology_id).all():
+            if link.source_relation_id:
+                record_link_fact(
+                    db, ontology_id=ontology_id, link_instance_id=link.id,
+                    link_type_id=link.link_type_id, exists=False,
+                    source="pipeline-reconcile")
+                db.delete(link)
+                summary["removed_link_instances"] += 1
+        all_object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
+        all_instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+        contract_errors = validate_instance_contract(all_object_types, all_instances)
+        if contract_errors:
+            preview = "; ".join(error.get("message", "") for error in contract_errors[:5])
+            raise ValueError(
+                f"正规本体投影违反运行契约（{len(contract_errors)} 项）: {preview}")
         # 即使无关系，实例投影也已发生 → 同样要推进修订戳
         from datetime import datetime as _dt, timezone as _tz
         from app.models.ontology import OntologyProject as _OP
         proj = db.query(_OP).filter(_OP.id == ontology_id).first()
         if proj is not None:
             proj.updated_at = _dt.now(_tz.utc)
-            db.commit()
+        db.flush()
         return summary
 
     # entity_class 查询缓存：Entity.id → entity_class
@@ -551,10 +602,20 @@ def project_to_formal_ontology(
                 existing_lt = db.query(LinkType).filter(LinkType.id == lt_id).first()
                 if existing_lt:
                     # 投影自建的关系：随数据更新基数/端点
-                    existing_lt.cardinality = cardinality
-                    existing_lt.source_object_type_id = src_ot
-                    existing_lt.target_object_type_id = tgt_ot
+                    if schema_locked:
+                        if (existing_lt.source_object_type_id != src_ot
+                                or existing_lt.target_object_type_id != tgt_ot):
+                            raise ValueError(f"已发布关系类型「{rel_type}」端点与投影数据不一致")
+                    else:
+                        existing_lt.cardinality = cardinality
+                        existing_lt.source_object_type_id = src_ot
+                        existing_lt.target_object_type_id = tgt_ot
                 else:
+                    if schema_locked:
+                        raise ValueError(
+                            f"已发布本体不允许由数据投影自动创建关系类型「{rel_type}」；"
+                            "请先在草稿中建立关系定义"
+                        )
                     db.add(LinkType(
                         id=lt_id,
                         ontology_id=ontology_id,
@@ -583,11 +644,13 @@ def project_to_formal_ontology(
             if (existing_li.link_type_id != lt_id
                     or existing_li.source_object_id != src_inst
                     or existing_li.target_object_id != tgt_inst
-                    or (existing_li.properties or {}) != li_props):
+                    or (existing_li.properties or {}) != li_props
+                    or existing_li.source_relation_id != rel.id):
                 existing_li.link_type_id = lt_id
                 existing_li.source_object_id = src_inst
                 existing_li.target_object_id = tgt_inst
                 existing_li.properties = li_props
+                existing_li.source_relation_id = rel.id
         else:
             from app.ontologies.formal_modeling.facts import record_link_fact
             li_obj = LinkInstance(
@@ -597,6 +660,7 @@ def project_to_formal_ontology(
                 source_object_id=src_inst,
                 target_object_id=tgt_inst,
                 properties=li_props,
+                source_relation_id=rel.id,
             )
             db.add(li_obj)
             db.flush()
@@ -604,6 +668,22 @@ def project_to_formal_ontology(
                 db, ontology_id=ontology_id, link_instance_id=li_id,
                 link_type_id=lt_id, exists=True, source="pipeline")
             summary["link_instances"] += 1
+
+    # Materialized links must mirror the current Relation projection.  Keep the
+    # immutable link facts, but tombstone and remove links whose source relation
+    # disappeared after an approved lake snapshot or link-mapping change.
+    current_relation_ids = {rel.id for rel in relations}
+    from app.ontologies.formal_modeling.facts import record_link_fact
+    for link in db.query(LinkInstance).filter(
+            LinkInstance.ontology_id == ontology_id).all():
+        relation_id = link.source_relation_id
+        if relation_id and relation_id not in current_relation_ids:
+            record_link_fact(
+                db, ontology_id=ontology_id, link_instance_id=link.id,
+                link_type_id=link.link_type_id, exists=False,
+                source="pipeline-reconcile")
+            db.delete(link)
+            summary["removed_link_instances"] += 1
 
     # 投影改变了本体数据 → 推进修订戳，否则编辑器的乐观并发检测（以
     # OntologyProject.updated_at 为 revision）看不见投影发生过，旧画布
@@ -614,6 +694,21 @@ def project_to_formal_ontology(
     if proj is not None:
         proj.updated_at = _dt.now(_tz.utc)
 
-    db.commit()
+    from app.ontologies.formal_modeling.validation import (
+        validate_instance_contract, validate_link_instance_contract,
+    )
+    all_object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
+    all_link_types = db.query(LinkType).filter(LinkType.ontology_id == ontology_id).all()
+    all_instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+    all_links = db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id).all()
+    contract_errors = [
+        *validate_instance_contract(all_object_types, all_instances),
+        *validate_link_instance_contract(all_link_types, all_instances, all_links),
+    ]
+    if contract_errors:
+        preview = "; ".join(error.get("message", "") for error in contract_errors[:5])
+        raise ValueError(f"正规本体投影违反运行契约（{len(contract_errors)} 项）: {preview}")
+
+    db.flush()
     logger.info("正规本体投影完成 ontology=%s: %s", ontology_id, summary)
     return summary

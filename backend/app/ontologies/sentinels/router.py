@@ -15,9 +15,11 @@ from sqlalchemy.orm import Session
 from app.deps import get_db, get_current_user
 from app.schemas.ontology_formal import CamelModel
 from app.models.sentinel import Sentinel, SentinelFiring, SentinelMatchState, Notification
+from app.models.ontology import OntologyProject
 from app.services.sentinel.engine import run_manual
+from app.ontologies.access import ontology_access_guard
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
 
 class SentinelIn(CamelModel):
@@ -31,14 +33,15 @@ class SentinelIn(CamelModel):
     condition_logic: str = "and"
     primary_alias: Optional[str] = None
     action_ids: list = Field(default_factory=list)
+    action_parameters: dict = Field(default_factory=dict)
     on_change: bool = True
     on_schedule: bool = False
     scan_interval_seconds: int = 300
     trigger_mode: str = "on_enter"
     muted: bool = False
     enabled: bool = True
-    # UI 创建即上线（enabled 是运行开关）；status 是展示标签，默认与行为一致
-    status: str = "published"
+    # 本体 release 是唯一上线边界；客户端不能把未校验定义直接标成 published。
+    status: str = "draft"
 
 
 class SentinelUpdate(CamelModel):
@@ -52,13 +55,32 @@ class SentinelUpdate(CamelModel):
     condition_logic: Optional[str] = None
     primary_alias: Optional[str] = None
     action_ids: Optional[list] = None
+    action_parameters: Optional[dict] = None
     on_change: Optional[bool] = None
     on_schedule: Optional[bool] = None
     scan_interval_seconds: Optional[int] = None
     trigger_mode: Optional[str] = None
     muted: Optional[bool] = None
     enabled: Optional[bool] = None
-    status: Optional[str] = None
+
+
+def _project(
+        db: Session, ontology_id: str, *, for_update: bool = False) -> OntologyProject:
+    query = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id)
+    if for_update:
+        query = query.with_for_update()
+    project = query.first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    return project
+
+
+def _require_draft(db: Session, ontology_id: str) -> OntologyProject:
+    project = _project(db, ontology_id, for_update=True)
+    if (project.status or "") != "draft":
+        raise HTTPException(409, "Sentinel 结构只能在 draft 本体中维护；请先撤回发布")
+    return project
 
 
 def _dict(s: Sentinel) -> dict[str, Any]:
@@ -68,7 +90,8 @@ def _dict(s: Sentinel) -> dict[str, Any]:
         "bindings": s.bindings or [], "links": s.links or [],
         "condition": s.condition, "conditionRows": s.condition_rows or [],
         "conditionLogic": s.condition_logic or "and", "primaryAlias": s.primary_alias,
-        "actionIds": s.action_ids or [], "onChange": s.on_change,
+        "actionIds": s.action_ids or [], "actionParameters": s.action_parameters or {},
+        "onChange": s.on_change,
         "onSchedule": s.on_schedule, "scanIntervalSeconds": s.scan_interval_seconds,
         "triggerMode": s.trigger_mode, "muted": s.muted,
         "lastScannedAt": s.last_scanned_at.isoformat() if s.last_scanned_at else None,
@@ -89,7 +112,12 @@ def list_sentinels(ontology_id: str, db: Session = Depends(get_db), _=Depends(ge
 @router.post("/", status_code=201)
 def create_sentinel(ontology_id: str, body: SentinelIn,
                     db: Session = Depends(get_db), _=Depends(get_current_user)):
-    s = Sentinel(ontology_id=ontology_id, **body.model_dump())
+    _require_draft(db, ontology_id)
+    s = Sentinel(
+        ontology_id=ontology_id,
+        **body.model_dump(exclude={"status"}),
+        status="draft",
+    )
     if not s.primary_alias and s.bindings:
         s.primary_alias = s.bindings[0].get("alias")
     db.add(s); db.commit(); db.refresh(s)
@@ -151,10 +179,24 @@ def update_sentinel(ontology_id: str, sentinel_id: str, body: SentinelUpdate,
         Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
     if not s:
         raise HTTPException(404, "Sentinel not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    update = body.model_dump(exclude_unset=True)
+    project = _project(db, ontology_id, for_update=True)
+    operational_fields = {"enabled", "muted"}
+    if (project.status or "") != "draft" and set(update) - operational_fields:
+        raise HTTPException(
+            409,
+            "已发布 Sentinel 仅允许启停/静默；修改条件、绑定或动作前请先撤回本体发布",
+        )
+    if ((project.status or "") == "published" and update.get("enabled") is True
+            and (s.status or "") != "published"):
+        raise HTTPException(
+            409, "该 Sentinel 不属于当前发布版本；请撤回、重新发布后再启用")
+    for k, v in update.items():
         setattr(s, k, v)
     if not s.primary_alias and s.bindings:
         s.primary_alias = s.bindings[0].get("alias")
+    if (project.status or "") == "draft":
+        s.status = "draft"
     db.commit(); db.refresh(s)
     return {"data": _dict(s)}
 
@@ -162,6 +204,7 @@ def update_sentinel(ontology_id: str, sentinel_id: str, body: SentinelUpdate,
 @router.delete("/{sentinel_id}", status_code=204)
 def delete_sentinel(ontology_id: str, sentinel_id: str,
                     db: Session = Depends(get_db), _=Depends(get_current_user)):
+    _require_draft(db, ontology_id)
     s = db.query(Sentinel).filter(
         Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
     if not s:
@@ -179,6 +222,11 @@ def toggle_sentinel(ontology_id: str, sentinel_id: str,
         Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
     if not s:
         raise HTTPException(404, "Sentinel not found")
+    project = _project(db, ontology_id, for_update=True)
+    if (not s.enabled and (project.status or "") == "published"
+            and (s.status or "") != "published"):
+        raise HTTPException(
+            409, "该 Sentinel 不属于当前发布版本；请撤回、重新发布后再启用")
     s.enabled = not s.enabled
     db.commit()
     return {"enabled": s.enabled}

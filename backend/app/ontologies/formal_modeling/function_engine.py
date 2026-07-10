@@ -64,10 +64,22 @@ def execute_function(fn: OntologyFunction, db: Session, ontology_id: str,
             # 规范化为 ValidationResult
             if isinstance(result, bool):
                 result = {"valid": result, "errors": [] if result else ["校验失败"]}
-            elif isinstance(result, dict) and "valid" in result:
+            elif isinstance(result, dict) and isinstance(result.get("valid"), bool):
                 result.setdefault("errors", [])
+                if not isinstance(result.get("errors"), list):
+                    return {
+                        "success": False,
+                        "error": "action_validation 的 errors 必须是数组",
+                        "durationMs": int((time.time() - start) * 1000),
+                        "timestamp": ts,
+                    }
             else:
-                result = {"valid": True, "errors": []}
+                return {
+                    "success": False,
+                    "error": "action_validation 必须返回 bool 或包含布尔 valid 的对象",
+                    "durationMs": int((time.time() - start) * 1000),
+                    "timestamp": ts,
+                }
 
         return {"success": True, "result": result, "data": result,
                 "durationMs": int((time.time() - start) * 1000), "timestamp": ts}

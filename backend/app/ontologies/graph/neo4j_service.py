@@ -65,9 +65,11 @@ class Neo4jService:
         try:
             if GraphDatabase is None:
                 raise RuntimeError("neo4j package not installed")
-            # 先用 socket 快速预检端口: 无服务时 driver.verify_connectivity() 要等 ~5s,
-            # socket 预检 0.5s 即可判定不可用, 大幅降低无 Neo4j 时的首屏延迟。
-            if not _port_open(self._uri):
+            # The socket probe is an optimisation for the application-wide
+            # default connection only.  Explicit connection parameters are
+            # commonly used by connection tests and may be handled by a custom
+            # driver/resolver, so the Neo4j driver remains the source of truth.
+            if self._is_default_config and not _port_open(self._uri):
                 raise RuntimeError("Neo4j port not reachable")
             driver = GraphDatabase.driver(
                 self._uri, auth=(self._user, self._password),
@@ -145,6 +147,21 @@ class Neo4jService:
                 session.run(query, batch=batch)
                 count += len(chunk)
         return count
+
+    def batch_delete_entities(self, ontology_id: str, entity_ids: list[str]) -> int:
+        """Delete stale materialized nodes by stable source id (relationships cascade)."""
+        if not self._available or not entity_ids:
+            return 0
+        query = """
+        UNWIND $ids AS entity_id
+        MATCH (n {ontology_id: $ontology_id, id: entity_id})
+        DETACH DELETE n
+        RETURN count(n) AS deleted
+        """
+        with self._driver.session() as session:
+            record = session.run(
+                query, ontology_id=ontology_id, ids=list(entity_ids)).single()
+            return int(record["deleted"] if record else 0)
 
     # ── 读取 ────────────────────────────────────────────────────────
 

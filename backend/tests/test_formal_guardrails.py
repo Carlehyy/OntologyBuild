@@ -254,7 +254,9 @@ def test_version_publish_snapshots_formal_and_rollback(client, auth_headers, ont
     assert snap and len(snap["objectTypes"]) == 1
     assert snap["objectTypes"][0]["name"] == "Flight"
 
-    # 删除对象类型（模拟误操作后的空模型保存）
+    # 发布态已封版；先由管理员撤回，再模拟误操作后的空模型保存。
+    r = client.post(f"/api/v2/ontologies/{oid}/unpublish", headers=auth_headers)
+    assert r.status_code == 200
     empty = {"objectTypes": [], "linkTypes": [], "actions": [], "functions": [],
              "instances": [], "linkInstances": []}
     r = client.put(f"{_fo(oid)}/full", headers=auth_headers, json=empty)

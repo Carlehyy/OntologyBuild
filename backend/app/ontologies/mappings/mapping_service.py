@@ -11,6 +11,64 @@ from app.models.v2.mapping import OntologyMapping
 logger = logging.getLogger(__name__)
 
 
+class MappingSourceError(ValueError):
+    """映射绑定的数据版本不可读取、为空或未满足治理闸门。"""
+
+
+class MappingApplyError(RuntimeError):
+    """映射写入或正规本体投影失败；调用方不得把本次运行视为 applied。"""
+
+
+def load_mapping_source_rows(db: Session, mapping: OntologyMapping, *,
+                             require_approved: bool = True) -> tuple[list[dict], object | None]:
+    """严格全量读取映射绑定的数据版本，返回 ``(rows, DatasetVersion)``。
+
+    正式映射不允许使用 UI preview 的容错/截断语义。对新 ``v2_datasets`` 使用
+    checksum 校验的全量读取；curated 数据要求当前版本审批通过。仅为兼容旧
+    ``v2_curated_datasets``，允许读取其 sample_rows/无上限 preview，读取为空
+    时明确失败而不是空跑成功。
+    """
+    dataset_id = mapping.curated_dataset_id
+    if not dataset_id:
+        raise MappingSourceError(f"Mapping {mapping.id} 未绑定数据集")
+
+    from app.models.v2.dataset import Dataset
+    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.curated.review_service import (
+        ReviewApprovalError, latest_dataset_version, load_all_rows_with_edits)
+
+    ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    version = latest_dataset_version(db, dataset_id)
+    if ds is not None:
+        if ds.kind == "curated":
+            try:
+                rows = load_all_rows_with_edits(
+                    db, dataset_id, require_approved=require_approved,
+                    version=version)
+            except ReviewApprovalError as e:
+                raise MappingSourceError(str(e)) from e
+        else:
+            rows = DatasetService(db).load_all_rows(
+                dataset_id, version.version_no if version is not None else None)
+    else:
+        # 迁移前的 legacy curated 兼容；没有真实版本时无法提供版本级血缘。
+        from app.models.v2.curated import CuratedDataset
+        legacy = db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
+        if legacy is None:
+            raise MappingSourceError(f"映射绑定的数据集 {dataset_id} 不存在")
+        if require_approved and legacy.status != "approved":
+            raise MappingSourceError(f"数据集「{legacy.name}」尚未审批通过")
+        rows = list((legacy.schema_json or {}).get("sample_rows") or [])
+        if not rows:
+            # 无上限仅用于旧表兼容；真实 v2 Dataset 上方始终走严格 load_all_rows。
+            rows = DatasetService(db).preview(dataset_id, None, limit=None)
+
+    if not rows:
+        name = getattr(ds, "name", None) or dataset_id
+        raise MappingSourceError(f"映射数据集「{name}」当前版本为空，已拒绝空跑投影")
+    return rows, version
+
+
 class MappingService:
 
     def __init__(self, db: Session):
@@ -38,25 +96,138 @@ class MappingService:
     def get_mappings(self, ontology_id: str) -> list[OntologyMapping]:
         return self._db.query(OntologyMapping).filter(OntologyMapping.ontology_id == ontology_id).all()
 
+    def remove_mapping_projection(self, mapping: OntologyMapping) -> list[str]:
+        """Remove this mapping's materialized current state in the caller transaction.
+
+        Shared identities remain while another mapping still owns them.  Historical
+        facts are retained and receive object/link tombstones.
+        """
+        self._adopt_legacy_projection_ownership(mapping)
+        return self._reconcile_mapping_entities(mapping, set())
+
+    def remove_link_mapping_projection(self, link_mapping) -> list[str]:
+        """Remove relations/materialized Formal links owned by a LinkMapping."""
+        from app.models.relation import Relation
+        from app.models.v2.mapping import OntologyLinkMapping
+        from app.models.ontology_formal import ObjectInstance, LinkType, LinkInstance
+        from app.ontologies.formal_modeling.facts import record_link_fact
+
+        signature = (
+            OntologyLinkMapping.ontology_id == link_mapping.ontology_id,
+            OntologyLinkMapping.src_dataset_id == link_mapping.src_dataset_id,
+            OntologyLinkMapping.tgt_dataset_id == link_mapping.tgt_dataset_id,
+            OntologyLinkMapping.relation_type == link_mapping.relation_type,
+            OntologyLinkMapping.src_key == link_mapping.src_key,
+            OntologyLinkMapping.tgt_key == link_mapping.tgt_key,
+            OntologyLinkMapping.edge_dataset_id == link_mapping.edge_dataset_id,
+        )
+        possible_owners = self._db.query(OntologyLinkMapping).filter(*signature).count()
+        legacy: list[Relation] = []
+        for relation in self._db.query(Relation).filter(
+                Relation.ontology_id == link_mapping.ontology_id,
+                Relation.type == link_mapping.relation_type).all():
+            props = relation.properties or {}
+            if props.get("mapping_type") != "link_mapping" or props.get("__link_mapping_id__"):
+                continue
+            direct_match = (props.get("src_key") == link_mapping.src_key
+                            and props.get("tgt_key") == link_mapping.tgt_key)
+            edge_match = bool(link_mapping.edge_dataset_id and props.get("__edge_key__"))
+            if direct_match or edge_match:
+                legacy.append(relation)
+        if legacy and possible_owners != 1:
+            raise MappingApplyError(
+                f"关系 {link_mapping.relation_type} 有 {len(legacy)} 条历史投影缺少 LinkMapping 血缘，"
+                f"且存在 {possible_owners} 个同签名映射；拒绝猜测删除归属")
+        for relation in legacy:
+            props = dict(relation.properties or {})
+            props["__link_mapping_id__"] = link_mapping.id
+            relation.properties = props
+
+        owned = [
+            relation for relation in self._db.query(Relation).filter(
+                Relation.ontology_id == link_mapping.ontology_id).all()
+            if (relation.properties or {}).get("__link_mapping_id__") == link_mapping.id
+        ]
+        internal_relation_keys = {
+            "mapping_type", "src_key", "tgt_key", "cardinality",
+            "__edge_key__", "__link_mapping_id__", "fk_column",
+            "alt_column", "source",
+        }
+        # One-time lineage adoption for links projected before
+        # source_relation_id existed.  Only an exact, unambiguous endpoint/type/
+        # business-property match is accepted.
+        for relation in owned:
+            source = self._db.query(ObjectInstance).filter(
+                ObjectInstance.ontology_id == link_mapping.ontology_id,
+                ObjectInstance.external_id == relation.source_entity).first()
+            target = self._db.query(ObjectInstance).filter(
+                ObjectInstance.ontology_id == link_mapping.ontology_id,
+                ObjectInstance.external_id == relation.target_entity).first()
+            if source is None or target is None:
+                continue
+            link_type_ids = [item.id for item in self._db.query(LinkType).filter(
+                LinkType.ontology_id == link_mapping.ontology_id,
+                LinkType.name == relation.type,
+                LinkType.source_object_type_id == source.object_type_id,
+                LinkType.target_object_type_id == target.object_type_id,
+            ).all()]
+            business_props = {
+                key: value for key, value in dict(relation.properties or {}).items()
+                if key not in internal_relation_keys
+            }
+            candidates = [item for item in self._db.query(LinkInstance).filter(
+                LinkInstance.ontology_id == link_mapping.ontology_id,
+                LinkInstance.source_object_id == source.id,
+                LinkInstance.target_object_id == target.id,
+                LinkInstance.source_relation_id.is_(None),
+            ).all() if item.link_type_id in link_type_ids
+                and dict(item.properties or {}) == business_props]
+            if len(candidates) > 1:
+                raise MappingApplyError(
+                    f"关系 {relation.id} 对应 {len(candidates)} 条无血缘 Formal Link，拒绝猜测删除")
+            if candidates:
+                candidates[0].source_relation_id = relation.id
+        relation_ids = [relation.id for relation in owned]
+        if relation_ids:
+            for link in self._db.query(LinkInstance).filter(
+                    LinkInstance.ontology_id == link_mapping.ontology_id).all():
+                if link.source_relation_id in relation_ids:
+                    record_link_fact(
+                        self._db, ontology_id=link_mapping.ontology_id,
+                        link_instance_id=link.id, link_type_id=link.link_type_id,
+                        exists=False, source=f"link-mapping://{link_mapping.id}")
+                    self._db.delete(link)
+            for relation in owned:
+                self._db.delete(relation)
+        self._db.flush()
+        return relation_ids
+
     # ── 单个 Mapping 应用 ─────────────────────────────────────────────
 
-    def apply_mapping(self, mapping_id: str, data: list[dict]) -> dict:
-        mapping = self._db.query(OntologyMapping).filter(OntologyMapping.id == mapping_id).first()
+    def apply_mapping(self, mapping_id: str, data: list[dict], *,
+                      ontology_id: str | None = None,
+                      source_dataset_version_id: str | None = None) -> dict:
+        q = self._db.query(OntologyMapping).filter(OntologyMapping.id == mapping_id)
+        if ontology_id is not None:
+            q = q.filter(OntologyMapping.ontology_id == ontology_id)
+        mapping = q.first()
         if not mapping:
-            raise ValueError(f"Mapping {mapping_id} not found")
-        if data:
-            self._normalize_mapping(mapping, data)
-        entities = self._rows_to_entities(mapping, data)
-        neo4j_count = self._write_neo4j(mapping.entity_class, entities)
-        v1_count = self._write_v1_entities(mapping, entities)
-        mapping.status = "applied"
-        self._db.commit()
+            suffix = f" in ontology {ontology_id}" if ontology_id else ""
+            raise ValueError(f"Mapping {mapping_id} not found{suffix}")
 
-        # 单映射路径同样要投影到正规本体（fo_object_instances）——
-        # 否则审核后自动增量只更新 v1 entities，图谱编辑器看不到、哨兵 CDC 不触发，
-        # "数据灌入本体"链路在此断裂。投影幂等，只对变化实例写事实。
-        formal_projection: dict = {}
+        mapping.status = "applying"
+        self._db.flush()
         try:
+            if data:
+                self._normalize_mapping(mapping, data)
+            entities = self._rows_to_entities(mapping, data)
+            self._adopt_legacy_projection_ownership(mapping)
+            v1_count = self._write_v1_entities(mapping, entities)
+            stale_entity_ids = self._reconcile_mapping_entities(
+                mapping, {entity["id"] for entity in entities})
+
+            # 单映射路径同样要投影到正规本体（fo_object_instances）。该投影是
+            # Mapping applied 的必需条件，不再作为可吞掉的 best-effort 尾步骤。
             from app.services.v2.mapping.formal_projection import project_to_formal_ontology
             pk_col = (mapping.field_mapping or {}).get("__primary_key__") or self._choose_pk_col(data)
             meta = {mapping.id: {
@@ -76,24 +247,104 @@ class MappingService:
             }}
             formal_projection = project_to_formal_ontology(
                 self._db, mapping.ontology_id, meta)
+            self._ensure_source_version_is_current(
+                mapping, source_dataset_version_id)
+
+            # Entity + Formal projection + applied lineage are one relational
+            # transaction.  A mid-flight commit used to leave partial entities
+            # behind when formal validation failed, even though the mapping was
+            # marked failed.
+            mapping.status = "applied"
+            fm = dict(mapping.field_mapping or {})
+            fm.pop("__last_apply_error__", None)
+            if source_dataset_version_id:
+                fm["__applied_dataset_version_id__"] = source_dataset_version_id
+            mapping.field_mapping = fm
+            self._db.commit()
         except Exception as e:
-            logger.warning(f"apply_mapping 正规本体投影失败（非致命）: {e}")
+            logger.exception("apply_mapping 写入/正规本体投影失败")
             self._db.rollback()
+            failed = self._db.query(OntologyMapping).filter(
+                OntologyMapping.id == mapping_id).first()
+            if failed is not None:
+                failed.status = "failed"
+                fm = dict(failed.field_mapping or {})
+                fm["__last_apply_error__"] = str(e)[:1000]
+                failed.field_mapping = fm
+                self._db.commit()
+            raise MappingApplyError(
+                f"Mapping {mapping_id} 正规投影失败，未标记为 applied：{e}") from e
+
+        # Neo4j is a rebuildable read projection, not the commit authority.
+        # Write it only after the relational source-of-truth transaction commits;
+        # failure is observable as a warning and can be repaired idempotently.
+        neo4j_deleted = self._delete_neo4j_entities(
+            mapping.ontology_id, stale_entity_ids)
+        neo4j_count = self._write_neo4j(mapping.entity_class, entities)
 
         return {"mapping_id": mapping_id, "entity_class": mapping.entity_class,
                 "nodes_created": neo4j_count, "v1_entities_written": v1_count,
                 "formal_projection": formal_projection,
+                "stale_entities_removed": len(stale_entity_ids),
+                "stale_neo4j_nodes_removed": neo4j_deleted,
+                "source_dataset_version_id": source_dataset_version_id,
+                "warnings": (["Neo4j 不可用或未写入节点，正规本体投影已完成"]
+                             if entities and neo4j_count == 0 else []),
                 "errors": 0, "total_rows": len(data)}
 
     # ── 全量构建：Entity → Relation → ChromaDB ────────────────────────
 
-    def build_all(self, ontology_id: str) -> dict:
-        from app.services.v2.dataset_service import DatasetService
-        mappings = self.get_mappings(ontology_id)
+    def build_all(self, ontology_id: str, *, require_approved: bool = False) -> dict:
+        """Rebuild one ontology as one relational transaction.
+
+        The ontology project row is the serialization point shared with release
+        publication.  Entity, relation, discovered rule/action and Formal writes
+        either commit together or are rolled back together.  Neo4j/Chroma are
+        rebuilt only from the committed relational truth afterwards.
+        """
+        from app.models.ontology import OntologyProject
+
+        mapping_ids: list[str] = []
+        try:
+            project = self._db.query(OntologyProject).filter(
+                OntologyProject.id == ontology_id,
+            ).with_for_update().first()
+            if project is None:
+                raise MappingApplyError(f"本体 {ontology_id} 不存在")
+            mappings = self.get_mappings(ontology_id)
+            mapping_ids = [mapping.id for mapping in mappings]
+            return self._build_all_transaction(
+                ontology_id, mappings, require_approved=require_approved)
+        except Exception as exc:
+            self._db.rollback()
+            try:
+                if not mapping_ids:
+                    mapping_ids = [item[0] for item in self._db.query(
+                        OntologyMapping.id).filter(
+                            OntologyMapping.ontology_id == ontology_id).all()]
+                for mapping_id in mapping_ids:
+                    failed = self._db.query(OntologyMapping).filter(
+                        OntologyMapping.id == mapping_id).first()
+                    if failed is not None:
+                        failed.status = "failed"
+                        fm = dict(failed.field_mapping or {})
+                        fm["__last_apply_error__"] = str(exc)[:1000]
+                        failed.field_mapping = fm
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                logger.exception("记录 build_all 失败状态时数据库不可用")
+            if isinstance(exc, (MappingApplyError, MappingSourceError)):
+                raise
+            raise MappingApplyError(
+                f"本体 {ontology_id} 全量映射失败，关系型投影已回滚：{exc}") from exc
+
+    def _build_all_transaction(
+            self, ontology_id: str, mappings: list[OntologyMapping], *,
+            require_approved: bool = False) -> dict:
         if not mappings:
             return {"error": "no mappings configured", "ontology_id": ontology_id}
 
-        ds_svc = DatasetService(self._db)
         from app.models.v2.dataset import Dataset
         from app.models.v2.curated import CuratedDataset
 
@@ -104,23 +355,17 @@ class MappingService:
         for m in mappings:
             if not m.curated_dataset_id:
                 continue
-            try:
-                # 最新版本 + 行级审核编辑叠加（人工修正必须体现在灌入的数据里）
-                from app.data_channel.curated.review_service import load_rows_with_edits
-                rows = load_rows_with_edits(self._db, m.curated_dataset_id, limit=10000)
-            except Exception as e:
-                logger.warning(f"读取数据集 {m.curated_dataset_id} 失败: {e}")
-                continue
-            if len(rows) >= 10000:
-                logger.warning("数据集 %s 行数达到 build_all 上限 10000，超出部分未灌入",
-                               m.curated_dataset_id)
+            rows, source_version = load_mapping_source_rows(
+                self._db, m, require_approved=require_approved)
 
             if rows:
                 self._normalize_mapping(m, rows)
 
             entities = self._rows_to_entities(m, rows)
-            neo4j_count = self._write_neo4j(m.entity_class, entities)
+            self._adopt_legacy_projection_ownership(m)
             v1_count = self._write_v1_entities(m, entities)
+            stale_ids = self._reconcile_mapping_entities(
+                m, {entity["id"] for entity in entities})
 
             pk_col = (m.field_mapping or {}).get("__primary_key__") or self._choose_pk_col(rows)
             entity_id_map = {
@@ -138,6 +383,7 @@ class MappingService:
             mapping_meta[m.id] = {
                 "mapping_id": m.id,
                 "curated_dataset_id": m.curated_dataset_id,
+                "source_dataset_version_id": getattr(source_version, "id", None),
                 "dataset_name": dataset_name,
                 "entity_class": m.entity_class, "pk_col": pk_col,
                 "pk_source": (m.field_mapping or {}).get("__pk_source__"),
@@ -146,11 +392,13 @@ class MappingService:
                 "columns": list(rows[0].keys()) if rows else [],
                 "property_mappings": (m.field_mapping or {}).get("__properties__", []),
             }
-            m.status = "applied"
+            m.status = "applying"
             entity_results.append({"mapping_id": m.id, "entity_class": m.entity_class,
-                                   "v1_entities_written": v1_count, "nodes_created": neo4j_count})
+                                   "v1_entities_written": v1_count,
+                                   "stale_entities_removed": len(stale_ids),
+                                   "nodes_created": 0})
 
-        self._db.commit()
+        self._db.flush()
 
         # Phase 2: Relation 推断
         relation_results = self._infer_and_write_relations(ontology_id, mappings, mapping_meta)
@@ -163,36 +411,68 @@ class MappingService:
         logic_result = self._discover_logic_rules(ontology_id, mappings, mapping_meta, relation_results)
         action_result = self._discover_action_types(ontology_id, mappings, mapping_meta, relation_results, logic_result)
 
-        # Phase 4: 写入 ChromaDB
-        chroma_count = 0
-        try:
-            from app.services.v2.vector.chroma_service import ChromaService
-            chroma = ChromaService()
-            all_entities = []
-            for m in mappings:
-                if m.id not in mapping_meta:
-                    continue
-                meta = mapping_meta[m.id]
-                for row in meta["rows"]:
-                    eid = meta.get("entity_id_map", {}).get(self._row_identity_value(row, meta["pk_col"]))
-                    if eid:
-                        all_entities.append({"id": eid, "type": m.entity_class, "properties": row})
-            if all_entities:
-                chroma.upsert_entities(ontology_id, all_entities)
-                chroma_count = len(all_entities)
-        except Exception as e:
-            logger.warning(f"ChromaDB 写入失败（非致命）: {e}")
+        # Chroma/Neo4j are derived projections.  They are rebuilt only after the
+        # relational + Formal transaction succeeds below, never mid-transaction.
 
         # Phase 5: 投影到正规本体 (Projection to Formal Ontology)
         # 把已落地的 Entity / Relation 投影成 ObjectType / ObjectInstance /
         # LinkType / LinkInstance，让流水线数据直接在图谱编辑器里可见、可建模。
-        formal_projection = {}
-        try:
-            from app.services.v2.mapping.formal_projection import project_to_formal_ontology
-            formal_projection = project_to_formal_ontology(self._db, ontology_id, mapping_meta)
-        except Exception as e:
-            logger.warning(f"正规本体投影失败（非致命）: {e}")
-            self._db.rollback()
+        from app.services.v2.mapping.formal_projection import project_to_formal_ontology
+        formal_projection = project_to_formal_ontology(
+            self._db, ontology_id, mapping_meta)
+        for mapping_id, meta in mapping_meta.items():
+            source_mapping = next(m for m in mappings if m.id == mapping_id)
+            self._ensure_source_version_is_current(
+                source_mapping, meta.get("source_dataset_version_id"))
+
+        for mapping_id in mapping_meta:
+            applied = self._db.query(OntologyMapping).filter(
+                OntologyMapping.id == mapping_id).first()
+            if applied is not None:
+                # Persist a fence before touching non-transactional projections.
+                # Runtime actions and publication reject this transient state.
+                applied.status = "projecting"
+                fm = dict(applied.field_mapping or {})
+                fm.pop("__last_apply_error__", None)
+                source_version_id = mapping_meta[mapping_id].get(
+                    "source_dataset_version_id")
+                if source_version_id:
+                    fm["__applied_dataset_version_id__"] = source_version_id
+                applied.field_mapping = fm
+        self._db.commit()
+        neo4j_rebuilt = self._rebuild_neo4j_projection(ontology_id)
+        chroma_result = self._rebuild_chroma_projection(ontology_id)
+        chroma_count = chroma_result if chroma_result is not None else 0
+        from app.config import settings
+        projection_errors = []
+        if not neo4j_rebuilt:
+            projection_errors.append("Neo4j projection rebuild failed")
+        if chroma_result is None:
+            projection_errors.append("Chroma projection rebuild failed")
+        if projection_errors and settings.environment == "production":
+            message = "; ".join(projection_errors)
+            for mapping_id in mapping_meta:
+                failed = self._db.query(OntologyMapping).filter(
+                    OntologyMapping.id == mapping_id).first()
+                if failed is not None:
+                    failed.status = "failed"
+                    fm = dict(failed.field_mapping or {})
+                    fm["__last_apply_error__"] = message
+                    failed.field_mapping = fm
+            self._db.commit()
+            raise MappingApplyError(
+                "关系型/Formal 投影已提交，但派生查询投影未完成；"
+                f"已阻断发布和动作执行，重试本体全量对账即可修复: {message}")
+
+        for mapping_id in mapping_meta:
+            applied = self._db.query(OntologyMapping).filter(
+                OntologyMapping.id == mapping_id).first()
+            if applied is not None:
+                applied.status = "applied"
+        self._db.commit()
+        if neo4j_rebuilt:
+            for result in entity_results:
+                result["nodes_created"] = result["v1_entities_written"]
 
         return {
             "ontology_id": ontology_id,
@@ -202,6 +482,8 @@ class MappingService:
             "action_discovery": action_result,
             "formal_projection": formal_projection,
             "chroma_entities_written": chroma_count,
+            "neo4j_projection_rebuilt": neo4j_rebuilt,
+            "projection_warnings": projection_errors,
             "total_entities": sum(r.get("v1_entities_written", 0) for r in entity_results),
             "total_relations": sum(r.get("count", 0) for r in relation_results),
             "total_logic": logic_result.get("total_v2", 0),
@@ -209,6 +491,19 @@ class MappingService:
             "review_required": True,
             "publish_status": "draft",
         }
+
+    def _ensure_source_version_is_current(
+            self, mapping: OntologyMapping, source_dataset_version_id: str | None) -> None:
+        """Apply 结束前重验版本，封住“读取 v1 时并发发布 v2”的竞态。"""
+        if not source_dataset_version_id or not mapping.curated_dataset_id:
+            return  # legacy 数据源没有 DatasetVersion，只能维持兼容语义
+        from app.data_channel.curated.review_service import latest_dataset_version
+        current = latest_dataset_version(self._db, mapping.curated_dataset_id)
+        if current is None or current.id != source_dataset_version_id:
+            current_label = f"v{current.version_no}" if current is not None else "无版本"
+            raise MappingApplyError(
+                f"映射执行期间数据源已更新为 {current_label}；"
+                f"本次读取版本 {source_dataset_version_id} 已过期，拒绝标记 applied")
 
     # ── Relation 推断 ───────────────────────────────────────────────
 
@@ -227,7 +522,7 @@ class MappingService:
         for rel in stale:
             if (rel.properties or {}).get("source") == "fk_inference":
                 self._db.delete(rel)
-        self._db.commit()
+        self._db.flush()
 
         for i, src_m in enumerate(m_list):
             src_meta = mapping_meta[src_m.id]
@@ -318,8 +613,7 @@ class MappingService:
                                 rel.properties = props
                                 # JSON 列原地替换 dict 时显式标记 dirty，确保持久化
                                 flag_modified(rel, "properties")
-                        self._db.commit()
-                        self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_class, rel_type)
+                        self._db.flush()
                         results.append({"src": src_meta["entity_class"], "tgt": tgt_class,
                                         "rel_type": rel_type, "fk_col": fk_col, "count": written,
                                         "cardinality": cardinality,
@@ -432,8 +726,7 @@ class MappingService:
                                     props["cardinality"] = cardinality
                                     rel.properties = props
                                     flag_modified(rel, "properties")
-                            self._db.commit()
-                            self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_class, rel_type)
+                            self._db.flush()
                             results.append({"src": src_meta["entity_class"], "tgt": tgt_class,
                                             "rel_type": rel_type, "fk_col": col,
                                             "via": "same_name_fk", "count": written,
@@ -455,8 +748,18 @@ class MappingService:
         if not rows:
             return []
         alt: list[str] = []
+        # 小样本中 status/type 等枚举很容易“碰巧唯一”（两行 approved/pending），
+        # 但它们不是实体身份键；拿它们跨表连边会生成语义错误且违反基数。
+        non_identity_tokens = {
+            "status", "state", "type", "category", "level", "rating", "stage"}
+        non_identity_cjk = {"状态", "类型", "类别", "分类", "等级", "评级", "阶段", "标志", "是否"}
         for col in rows[0].keys():
             if col == pk_col:
+                continue
+            normalized_col = str(col).strip().lower().replace("_", " ")
+            col_tokens = set(re.findall(r"[a-z0-9]+", normalized_col))
+            if (col_tokens & non_identity_tokens
+                    or any(token in normalized_col for token in non_identity_cjk)):
                 continue
             vals = [str(r.get(col, "") or "").strip() for r in rows]
             vals = [v for v in vals if v]
@@ -575,8 +878,7 @@ class MappingService:
                     tgt_key=alt_col,
                     model=link_model,
                 )
-                self._db.commit()
-                self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_class, rel_type)
+                self._db.flush()
                 results.append({"src": src_meta["entity_class"], "tgt": tgt_class,
                                 "rel_type": rel_type, "fk_col": col, "alt_col": alt_col,
                                 "via": "alternate_key", "count": written,
@@ -657,7 +959,7 @@ class MappingService:
         field_map["__properties__"] = self._property_metadata(rows, field_map)
         if field_map != (mapping.field_mapping or {}):
             mapping.field_mapping = field_map
-            self._db.commit()
+            self._db.flush()
 
     def _property_metadata(self, rows: list[dict], field_map: dict) -> list[dict]:
         if not rows:
@@ -958,6 +1260,10 @@ class MappingService:
             props.update(self._instance_names(mapping, row, pk_col, index))
             props["name"] = props["name_cn"]
             props["object_type"] = mapping.entity_class
+            # Ownership metadata powers source-of-truth reconciliation.  It is
+            # reserved platform metadata and is not exposed as a business
+            # ObjectType property by formal_projection.
+            props["__mapping_ids__"] = [mapping.id]
             if props["id"] in entities_by_id:
                 existing = entities_by_id[props["id"]]
                 existing["source_row_count"] = int(existing.get("source_row_count", 1)) + 1
@@ -975,6 +1281,12 @@ class MappingService:
                 name_cn = props.get("name_cn") or props.get("display_name") or eid
                 name_en = props.get("name_en") or props.get("display_name") or eid
                 other = {k: v for k, v in props.items() if k not in ("id", "ontology_id")}
+                existing = self._db.query(Entity).filter(
+                    Entity.id == eid, Entity.ontology_id == mapping.ontology_id).first()
+                previous_owners = set(
+                    (existing.properties or {}).get("__mapping_ids__", [])
+                    if isinstance(existing, Entity) else [])
+                other["__mapping_ids__"] = sorted(previous_owners | {mapping.id})
                 self._db.merge(Entity(
                     id=eid, ontology_id=mapping.ontology_id,
                     name_cn=str(name_cn)[:200], name_en=str(name_en)[:200],
@@ -982,11 +1294,108 @@ class MappingService:
                     confidence=mapping.confidence or 0.85,
                 ))
                 count += 1
-            self._db.commit()
+            self._db.flush()
         except Exception as e:
-            logger.warning(f"v1 entities 写入失败: {e}")
+            logger.exception("v1 entities 写入失败")
             self._db.rollback()
+            raise MappingApplyError(f"v1 entities 写入失败: {e}") from e
         return count
+
+    def _adopt_legacy_projection_ownership(self, mapping: OntologyMapping) -> None:
+        """Backfill provenance for pre-hardening Entity rows before reconciliation.
+
+        Adoption is safe only when one mapping owns the ontology/entity_class.  If
+        several mappings could have produced the same legacy rows, deleting by
+        guess would be worse than refusing the apply.
+        """
+        from app.models.entity import Entity
+
+        unowned = [
+            entity for entity in self._db.query(Entity).filter(
+                Entity.ontology_id == mapping.ontology_id,
+                Entity.type == mapping.entity_class,
+            ).all()
+            if not (entity.properties or {}).get("__mapping_ids__")
+        ]
+        if not unowned:
+            return
+        owners = self._db.query(OntologyMapping).filter(
+            OntologyMapping.ontology_id == mapping.ontology_id,
+            OntologyMapping.entity_class == mapping.entity_class,
+        ).count()
+        if owners != 1:
+            raise MappingApplyError(
+                f"实体类型 {mapping.entity_class} 存在 {len(unowned)} 条无来源的历史投影，"
+                f"且有 {owners} 个映射可能拥有它们；拒绝猜测删除归属，请先做一次性血缘迁移")
+        for entity in unowned:
+            props = dict(entity.properties or {})
+            props["__mapping_ids__"] = [mapping.id]
+            entity.properties = props
+        self._db.flush()
+
+    def _reconcile_mapping_entities(
+        self, mapping: OntologyMapping, current_entity_ids: set[str],
+    ) -> list[str]:
+        """Remove current-state projections absent from the new lake snapshot.
+
+        Immutable PropertyFact history is retained; formal object/link tombstones
+        are appended before deleting the materialized current-state rows.
+        """
+        from sqlalchemy import or_
+        from app.models.entity import Entity
+        from app.models.relation import Relation
+        from app.models.ontology_formal import ObjectInstance, LinkInstance
+        from app.ontologies.formal_modeling.facts import (
+            record_link_fact, record_object_tombstone)
+
+        removed: list[str] = []
+        candidates = self._db.query(Entity).filter(
+            Entity.ontology_id == mapping.ontology_id).all()
+        for entity in candidates:
+            props = dict(entity.properties or {})
+            owners = set(props.get("__mapping_ids__") or [])
+            if mapping.id not in owners or entity.id in current_entity_ids:
+                continue
+            owners.discard(mapping.id)
+            if owners:
+                props["__mapping_ids__"] = sorted(owners)
+                entity.properties = props
+                continue
+
+            # Legacy current-state edges are derived from the object projection.
+            for relation in self._db.query(Relation).filter(
+                Relation.ontology_id == mapping.ontology_id,
+                or_(Relation.source_entity == entity.id,
+                    Relation.target_entity == entity.id),
+            ).all():
+                self._db.delete(relation)
+
+            instance = self._db.query(ObjectInstance).filter(
+                ObjectInstance.ontology_id == mapping.ontology_id,
+                ObjectInstance.external_id == entity.id,
+                ObjectInstance.source == "pipeline",
+            ).first()
+            if instance is not None:
+                links = self._db.query(LinkInstance).filter(
+                    LinkInstance.ontology_id == mapping.ontology_id,
+                    or_(LinkInstance.source_object_id == instance.id,
+                        LinkInstance.target_object_id == instance.id),
+                ).all()
+                for link in links:
+                    record_link_fact(
+                        self._db, ontology_id=mapping.ontology_id,
+                        link_instance_id=link.id, link_type_id=link.link_type_id,
+                        exists=False, source=f"mapping://{mapping.id}")
+                    self._db.delete(link)
+                record_object_tombstone(
+                    self._db, ontology_id=mapping.ontology_id,
+                    instance_id=instance.id, object_type_id=instance.object_type_id,
+                    source=f"mapping://{mapping.id}")
+                self._db.delete(instance)
+            self._db.delete(entity)
+            removed.append(entity.id)
+        self._db.flush()
+        return removed
 
     # ── Logic / Action Discovery ───────────────────────────────────
 
@@ -1193,7 +1602,7 @@ class MappingService:
                 "automation", {"trigger": "curated_review.approved", "effect": "mapping_resync"}),
         ))
 
-        self._db.commit()
+        self._db.flush()
         from app.models.v2.logic import OntologyLogicRule
         from app.models.logic import LogicRule
         return {
@@ -1374,7 +1783,7 @@ class MappingService:
                 ontology_id, name, category, desc, [], [], 0.78,
             ))
 
-        self._db.commit()
+        self._db.flush()
         from app.models.v2.action import OntologyActionType
         from app.models.action import Action
         return {
@@ -1397,6 +1806,105 @@ class MappingService:
             logger.error(f"Neo4j 写入失败: {e}")
         return 0
 
+    def _delete_neo4j_entities(self, ontology_id: str, entity_ids: list[str]) -> int:
+        if not entity_ids:
+            return 0
+        try:
+            from app.services.v2.graph.neo4j_service import Neo4jService
+            neo = Neo4jService()
+            if neo.available:
+                count = neo.batch_delete_entities(ontology_id, entity_ids)
+                neo.close()
+                return count
+        except Exception as e:
+            # Relational/Formal current state remains authoritative and has
+            # already committed.  Health/repair tooling can rebuild this derived
+            # projection; never roll back truth because a cache is unavailable.
+            logger.error("Neo4j stale-node reconciliation failed: %s", e)
+        return 0
+
+    def _rebuild_neo4j_projection(self, ontology_id: str) -> bool:
+        """Rebuild the derived graph after relation reconciliation.
+
+        Neo4j cannot join the SQL transaction.  Rebuild-after-commit gives it a
+        deterministic repair path and removes stale relationships instead of
+        accumulating them forever.
+        """
+        from app.models.entity import Entity
+        from app.models.relation import Relation
+        neo = None
+        try:
+            from app.services.v2.graph.neo4j_service import Neo4jService
+            neo = Neo4jService()
+            if not neo.available:
+                return False
+            neo.delete_by_ontology(ontology_id)
+            entities = self._db.query(Entity).filter(
+                Entity.ontology_id == ontology_id).all()
+            by_type: dict[str, list[dict]] = {}
+            for entity in entities:
+                props = {"id": entity.id, "ontology_id": ontology_id,
+                         **dict(entity.properties or {})}
+                by_type.setdefault(entity.type or "Object", []).append(props)
+            for label, rows in by_type.items():
+                neo.batch_upsert_entities(label, rows)
+            entity_type = {entity.id: entity.type or "Object" for entity in entities}
+            for relation in self._db.query(Relation).filter(
+                    Relation.ontology_id == ontology_id).all():
+                src_type = entity_type.get(relation.source_entity)
+                tgt_type = entity_type.get(relation.target_entity)
+                if not src_type or not tgt_type:
+                    continue
+                neo.upsert_relation(
+                    src_type, relation.source_entity, tgt_type,
+                    relation.target_entity, relation.type,
+                    props={"id": relation.id, "ontology_id": ontology_id,
+                           "confidence": relation.confidence,
+                           **dict(relation.properties or {})})
+            return True
+        except Exception as e:
+            logger.warning("Neo4j projection rebuild failed: %s", e)
+            return False
+        finally:
+            if neo is not None:
+                try:
+                    neo.close()
+                except Exception:
+                    pass
+
+    def _rebuild_chroma_projection(self, ontology_id: str) -> int | None:
+        """Replace the semantic-search projection from relational current state."""
+        from app.models.entity import Entity
+        try:
+            from app.services.v2.vector.chroma_service import ChromaService
+            chroma = ChromaService()
+            if not chroma.available:
+                return None
+            name = f"ontology_{ontology_id}"
+            # Delete may return false when the collection does not exist; upsert
+            # below creates it.  Other failures are contained by the service and
+            # surfaced as a zero count in the mapping result.
+            chroma.delete_collection(name)
+            entities = self._db.query(Entity).filter(
+                Entity.ontology_id == ontology_id).all()
+            payload = [{
+                "id": entity.id,
+                "type": entity.type or "Object",
+                "name_cn": entity.name_cn,
+                "name_en": entity.name_en,
+                "confidence": entity.confidence,
+                "properties": dict(entity.properties or {}),
+            } for entity in entities]
+            written = chroma.upsert_entities(ontology_id, payload) if payload else 0
+            if payload and written != len(payload):
+                return None
+            if chroma.count(ontology_id) != len(payload):
+                return None
+            return written
+        except Exception as e:
+            logger.warning("Chroma projection rebuild failed: %s", e)
+            return None
+
     def _write_neo4j_relations(self, ontology_id: str, src_class: str, tgt_class: str, rel_type: str) -> None:
         from app.models.relation import Relation
         from app.models.entity import Entity
@@ -1411,7 +1919,8 @@ class MappingService:
             for r in rels:
                 neo.upsert_relation(src_class, r.source_entity,
                                     tgt_class, r.target_entity, rel_type,
-                                    props={"ontology_id": ontology_id, "confidence": r.confidence})
+                                    props={"id": r.id, "ontology_id": ontology_id,
+                                           "confidence": r.confidence})
             neo.close()
         except Exception as e:
             logger.warning(f"Neo4j relation 写入失败（非致命）: {e}")
@@ -1573,6 +2082,7 @@ class MappingService:
             v = str(row.get(link.tgt_key, "")).strip()
             if v and eid: tgt_val_to_eid[v] = eid
         written = 0
+        current_relation_ids: set[str] = set()
         src_values: list[str] = []
         tgt_values: list[str] = []
         for row in src_meta["rows"]:
@@ -1583,16 +2093,25 @@ class MappingService:
             if not tgt_eid: continue
             src_values.append(src_eid)
             tgt_values.append(tgt_eid)
+            relation_id = self._stable_relation_id(
+                ontology_id, src_eid, tgt_eid, link.relation_type,
+                f"link_mapping:{link.id}")
             rel = Relation(
-                id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, link.relation_type, "link_mapping"),
+                id=relation_id,
                 ontology_id=ontology_id,
                 source_entity=src_eid, target_entity=tgt_eid,
                 type=link.relation_type,
-                properties={"mapping_type": "link_mapping", "src_key": link.src_key, "tgt_key": link.tgt_key},
+                properties={"mapping_type": "link_mapping", "src_key": link.src_key,
+                            "tgt_key": link.tgt_key, "__link_mapping_id__": link.id},
                 confidence=0.9,
             )
-            self._db.merge(rel); written += 1
+            self._db.merge(rel); current_relation_ids.add(relation_id); written += 1
         cardinality = self._infer_cardinality(src_values, tgt_values)
+        for stale_rel in self._db.query(Relation).filter(
+                Relation.ontology_id == ontology_id).all():
+            if ((stale_rel.properties or {}).get("__link_mapping_id__") == link.id
+                    and stale_rel.id not in current_relation_ids):
+                self._db.delete(stale_rel)
         if written:
             for rel in self._db.query(Relation).filter(
                 Relation.ontology_id == ontology_id,
@@ -1602,8 +2121,10 @@ class MappingService:
                 if props.get("mapping_type") == "link_mapping" and props.get("src_key") == link.src_key and props.get("tgt_key") == link.tgt_key:
                     props["cardinality"] = cardinality
                     rel.properties = props
-            self._db.commit()
-            self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_meta["entity_class"], link.relation_type)
+            self._db.flush()
+        self._record_link_mapping_versions(link, src_meta, tgt_meta)
+        self._db.flush()
+        if written:
             logger.info("Link: " + src_meta["entity_class"] + "-[" + str(link.relation_type) + "]->" + tgt_meta["entity_class"] + " " + str(written) + "条")
         return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
                 "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
@@ -1616,17 +2137,34 @@ class MappingService:
         同一对实体之间可有多条边（各连接表行独立成边），稳定 id 纳入连接表行主键防去重合并。
         """
         from app.models.relation import Relation
-        from app.data_channel.curated.review_service import load_rows_with_edits
+        from app.data_channel.curated.review_service import (
+            latest_dataset_version, load_all_rows_with_edits)
+        from app.models.v2.dataset import Dataset
+        from app.models.v2.curated import CuratedDataset
+        from app.config import settings
 
-        fmap = dict(getattr(link, "field_mapping", None) or {})
+        fmap = {k: v for k, v in dict(getattr(link, "field_mapping", None) or {}).items()
+                if not str(k).startswith("__")}
+        edge_version = latest_dataset_version(self._db, link.edge_dataset_id)
         try:
-            edge_rows = load_rows_with_edits(self._db, link.edge_dataset_id, limit=10000)
+            if self._db.query(Dataset).filter(Dataset.id == link.edge_dataset_id).first():
+                edge_rows = load_all_rows_with_edits(
+                    self._db, link.edge_dataset_id,
+                    require_approved=True, version=edge_version)
+            else:
+                legacy = self._db.query(CuratedDataset).filter(
+                    CuratedDataset.id == link.edge_dataset_id).first()
+                if settings.environment == "production" or legacy is None or legacy.status != "approved":
+                    raise MappingSourceError("legacy 连接表不允许进入生产投影")
+                from app.services.v2.dataset_service import DatasetService
+                edge_rows = DatasetService(self._db).preview(
+                    link.edge_dataset_id, None, limit=None)
         except Exception as e:  # noqa: BLE001
-            logger.warning("读取连接表 %s 失败: %s", link.edge_dataset_id, e)
-            return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
-                    "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
-                    "edge_dataset_id": link.edge_dataset_id, "count": 0, "cardinality": "unknown",
-                    "warning": f"读取连接表失败: {e}"}
+            raise MappingSourceError(
+                f"关系映射 {link.id} 的连接表 {link.edge_dataset_id} 无法严格读取/审批: {e}") from e
+        if not edge_rows:
+            raise MappingSourceError(
+                f"关系映射 {link.id} 的连接表当前审批版本为空，拒绝空跑")
 
         src_v2e = self._pk_value_to_eid(src_meta)
         tgt_v2e = self._pk_value_to_eid(tgt_meta)
@@ -1651,12 +2189,16 @@ class MappingService:
 
         cardinality = self._infer_cardinality(src_values, tgt_values)
         written = 0
+        current_relation_ids: set[str] = set()
         for src_eid, tgt_eid, edge_props, edge_key in pending:
             props = {"mapping_type": "link_mapping", "__edge_key__": edge_key,
+                     "__link_mapping_id__": link.id,
                      "cardinality": cardinality, **edge_props}
+            relation_id = self._stable_relation_id(
+                ontology_id, src_eid, tgt_eid, link.relation_type,
+                f"link_mapping:{link.id}:{edge_key}")
             rel = Relation(
-                id=self._stable_relation_id(ontology_id, src_eid, tgt_eid, link.relation_type,
-                                            f"link_mapping:{edge_key}"),
+                id=relation_id,
                 ontology_id=ontology_id,
                 source_entity=src_eid, target_entity=tgt_eid,
                 type=link.relation_type,
@@ -1664,10 +2206,20 @@ class MappingService:
                 confidence=1.0,
             )
             self._db.merge(rel)
+            current_relation_ids.add(relation_id)
             written += 1
+        for stale_rel in self._db.query(Relation).filter(
+                Relation.ontology_id == ontology_id).all():
+            if ((stale_rel.properties or {}).get("__link_mapping_id__") == link.id
+                    and stale_rel.id not in current_relation_ids):
+                self._db.delete(stale_rel)
         if written:
-            self._db.commit()
-            self._write_neo4j_relations(ontology_id, src_meta["entity_class"], tgt_meta["entity_class"], link.relation_type)
+            self._db.flush()
+        self._record_link_mapping_versions(
+            link, src_meta, tgt_meta,
+            edge_version_id=getattr(edge_version, "id", None))
+        self._db.flush()
+        if written:
             logger.info("Link(连接表): %s-[%s]->%s %d条 边属性=%s",
                         src_meta["entity_class"], link.relation_type, tgt_meta["entity_class"],
                         written, list(fmap.keys()))
@@ -1676,3 +2228,35 @@ class MappingService:
                 "edge_dataset_id": link.edge_dataset_id, "edge_properties": list(fmap.keys()),
                 "count": written, "cardinality": cardinality,
                 "warning": None if written else "连接表未匹配到任何两端实体"}
+
+    def _record_link_mapping_versions(
+        self, link, src_meta: dict, tgt_meta: dict,
+        *, edge_version_id: str | None = None,
+    ) -> None:
+        """Persist exact immutable lake versions consumed by a LinkMapping."""
+        from app.data_channel.curated.review_service import latest_dataset_version
+        from app.config import settings
+
+        version_pairs = (
+            ("source", link.src_dataset_id, src_meta.get("source_dataset_version_id")),
+            ("target", link.tgt_dataset_id, tgt_meta.get("source_dataset_version_id")),
+            ("edge", link.edge_dataset_id, edge_version_id),
+        )
+        field_mapping = dict(link.field_mapping or {})
+        for role, dataset_id, version_id in version_pairs:
+            if not dataset_id:
+                continue
+            current = latest_dataset_version(self._db, dataset_id)
+            if current is None and settings.environment != "production":
+                # Read-only compatibility for pre-canonical CuratedDataset rows.
+                # Production release gates reject these because no immutable
+                # DatasetVersion lineage can be proven.
+                continue
+            if current is None or current.id != version_id:
+                current_label = f"v{current.version_no}" if current is not None else "无版本"
+                raise MappingApplyError(
+                    f"关系映射 {link.id} 执行期间 {role} 数据集已更新为 {current_label}；"
+                    "拒绝记录过期投影")
+            field_mapping[f"__applied_{role}_version_id__"] = version_id
+        link.field_mapping = field_mapping
+        self._db.flush()

@@ -22,7 +22,6 @@ from app.models.v2.sync_task import DataSyncTask, DataSyncHistory
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.services.connection.registry import get_connector
-from app.services.storage_service import get_storage_service
 from app.services import encryption_service
 
 logger = logging.getLogger(__name__)
@@ -188,34 +187,19 @@ def _get_or_create_dataset(db: Session, task: DataSyncTask, conn: Connection) ->
 def _write_dataset_version(
     db: Session, ds: Dataset, rows: list[dict], trigger: str, connection_id: str
 ) -> tuple[DatasetVersion, list[str]]:
-    """把行列表写入 Dataset 新版本，返回版本和列名"""
-    import hashlib
-    storage = get_storage_service()
+    """把行列表写入 Dataset 新版本，返回版本和列名。
 
-    last_ver = db.query(DatasetVersion).filter(
-        DatasetVersion.dataset_id == ds.id
-    ).order_by(DatasetVersion.version_no.desc()).first()
-    version_no = (last_ver.version_no + 1) if last_ver else 1
-
+    版本发布统一委托 DatasetService，避免本同步入口绕过 UUID 对象键、写锁和
+    完整 checksum 校验。
+    """
     content, cols = _rows_to_csv_bytes(rows)
-    checksum = hashlib.sha256(content[:1024]).hexdigest()[:16]
-    key = f"datasets/{ds.id}/v{version_no}/data.csv"
-    uri = storage.put_bytes("raw-datasets", key, content, content_type="text/csv")
-
     # 推断 schema_json
     schema_json = _infer_schema(rows, cols)
     # 记录源信息
     schema_json["source"] = {"connection_id": connection_id, "trigger": trigger}
 
-    ver = DatasetVersion(
-        dataset_id=ds.id,
-        version_no=version_no,
-        rowcount=len(rows),
-        checksum=checksum,
-        storage_uri=uri,
-    )
-    db.add(ver)
-    ds.latest_version_id = ver.id
+    from app.services.v2.dataset_service import DatasetService
+    ver = DatasetService(db).create_version(ds.id, content, rowcount=len(rows))
     ds.schema_json = schema_json
     ds.updated_at = datetime.utcnow()
     db.commit()
@@ -224,21 +208,13 @@ def _write_dataset_version(
 
 
 def _load_previous_version_rows(db: Session, ds: Dataset) -> list[dict]:
-    """加载上一个版本的全部数据（用于 APPEND 主键去重合并）"""
-    storage = get_storage_service()
-    last_ver = db.query(DatasetVersion).filter(
-        DatasetVersion.dataset_id == ds.id
-    ).order_by(DatasetVersion.version_no.desc()).first()
-    if not last_ver or not last_ver.storage_uri:
-        return []
-    try:
-        raw = storage.get_object(last_ver.storage_uri)
-        text = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
-        reader = csv.DictReader(io.StringIO(text))
-        return [dict(r) for r in reader]
-    except Exception as e:
-        logger.warning(f"加载历史版本失败（将视为空）: {e}")
-        return []
+    """严格加载上一个版本的全部数据（用于 APPEND 主键去重合并）。
+
+    存储读取/解析/checksum 失败必须让本次同步失败；把失败伪装成空基座会使
+    新版本只剩本次增量，构成静默数据丢失。
+    """
+    from app.services.v2.dataset_service import DatasetService
+    return DatasetService(db).load_all_rows(ds.id)
 
 
 def _dedup_by_key(rows: list[dict], key_cols: list[str]) -> list[dict]:

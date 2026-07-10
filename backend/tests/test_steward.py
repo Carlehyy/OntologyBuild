@@ -13,7 +13,8 @@ import pytest
 
 from app.data_channel.steward import service
 from app.data_channel.steward.models import N8nPipeline
-from app.data_channel.steward.runner import normalize_rows, _extract_execution_rows
+from app.data_channel.steward.runner import normalize_rows, _extract_execution_rows, trigger_and_collect
+from app.data_channel.steward.service import StewardError
 from app.data_channel.steward.toolkit import ToolRunner
 from app.models.v2.pipeline import Pipeline, PipelineVersion
 
@@ -465,6 +466,46 @@ def test_normalize_rows_variants():
     assert normalize_rows({"a": 1}) == [{"a": 1}]
     assert normalize_rows([{"json": {"a": 1}}, {"json": {"a": 2}}]) == [{"a": 1}, {"a": 2}]
     assert normalize_rows([{"a": 1}, "raw"]) == [{"a": 1}, {"value": "raw"}]
+
+
+def test_normalize_rows_rejects_truncation(monkeypatch):
+    from app.data_channel.steward import runner as runner_module
+    monkeypatch.setattr(runner_module, "_MAX_ROWS", 2)
+    with pytest.raises(StewardError, match="不会静默截断"):
+        normalize_rows([{"a": 1}, {"a": 2}, {"a": 3}])
+
+
+def test_n8n_execution_must_be_unique_and_successful():
+    class Client:
+        executions = []
+
+        def list_executions(self, **_kwargs):
+            return list(self.executions)
+
+        def trigger_webhook(self, *_args, **_kwargs):
+            self.executions = [{
+                "id": "1", "status": "error",
+                "data": {"resultData": {"error": {"message": "boom"}}},
+            }]
+            return 200, [{"should_not": "be_ingested"}]
+
+        def get_execution(self, *_args, **_kwargs):
+            return self.executions[0]
+
+    with pytest.raises(StewardError, match="未成功"):
+        trigger_and_collect(Client(), "wf", "hook", wait_seconds=1)
+
+
+def test_n8n_missing_execution_lineage_is_not_webhook_success():
+    class Client:
+        def list_executions(self, **_kwargs):
+            return []
+
+        def trigger_webhook(self, *_args, **_kwargs):
+            return 200, [{"unverified": True}]
+
+    with pytest.raises(StewardError, match="执行记录"):
+        trigger_and_collect(Client(), "wf", "hook", wait_seconds=0)
 
 
 def test_probe_url_guards_and_json_shape(db, fake_n8n):

@@ -1,7 +1,7 @@
 """PRD v1.1 Ontology Logic & Actions API"""
 from __future__ import annotations
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -11,8 +11,25 @@ from app.deps import get_current_user
 from app.models.user import User
 from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine
 from app.models.v2.action import OntologyActionType, OntologyActionRun
+from app.config import settings
+from app.ontologies.access import ontology_access_guard
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+def _legacy_v2_action_write_guard(request: Request):
+    # Keep read compatibility during migration, but prevent a parallel production
+    # action definition/execution runtime from diverging from Formal ActionType.
+    if (settings.environment == "production"
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and "/actions" in request.url.path):
+        raise HTTPException(
+            410,
+            "Legacy v2 action runtime is disabled in production; use Formal ActionType",
+        )
+
+
+router = APIRouter(dependencies=[
+    Depends(ontology_access_guard),
+    Depends(_legacy_v2_action_write_guard),
+])
 
 def get_db():
     db = SessionLocal()

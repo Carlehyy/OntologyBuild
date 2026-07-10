@@ -1,2 +1,6 @@
-# re-export - real content moved to app.ontologies.graph.neo4j_service
-from app.ontologies.graph.neo4j_service import *  # noqa: F401,F403
+"""Compatibility alias for the relocated Neo4j service module."""
+import sys
+
+from app.ontologies.graph import neo4j_service as _implementation
+
+sys.modules[__name__] = _implementation

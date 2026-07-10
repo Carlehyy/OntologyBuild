@@ -7,9 +7,10 @@ from sqlalchemy import desc
 import re
 import uuid
 from app.deps import get_db, get_current_user
+from app.ontologies.access import ontology_access_guard
 from app.models.attribute_schema import AttributeSchema, VocabularyEntry
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
 
 class AttrSchemaCreate(BaseModel):

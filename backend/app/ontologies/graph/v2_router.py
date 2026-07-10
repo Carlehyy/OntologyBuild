@@ -8,13 +8,24 @@ from app.database import SessionLocal
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
+def get_neo4j():
+    """Return the concrete Neo4j service used by status and graph routing.
+
+    Keeping this small factory separate from the fallback selector lets the
+    integration endpoint report a Neo4j outage instead of accidentally
+    presenting an available NetworkX fallback as a healthy Neo4j connection.
+    """
+    from app.services.v2.graph.neo4j_service import Neo4jService
+
+    return Neo4jService()
+
+
 def get_graph_service():
     """
     获取图服务：优先 Neo4j，不可用时自动回退 NetworkX。
     两个服务返回兼容的数据格式，业务层无感知。
     """
-    from app.services.v2.graph.neo4j_service import Neo4jService
-    neo = Neo4jService()
+    neo = get_neo4j()
     if neo.available:
         return neo
     neo.close()
@@ -158,15 +169,31 @@ def graph_quality(ontology_id: str):
 
 @router.get("/{ontology_id}/integrations/status")
 def integration_status(ontology_id: str):
-    svc = get_graph_service()
-    svc_type = svc.__class__.__name__
-    graph_available = svc.available
-    svc.close()
+    neo = get_neo4j()
+    neo_available = bool(neo.available)
+    neo.close()
+
+    if neo_available:
+        graph_type = "Neo4jService"
+        graph_available = True
+    else:
+        from app.services.v2.graph.networkx_service import NetworkXGraphService
+
+        fallback = NetworkXGraphService()
+        graph_type = fallback.__class__.__name__
+        graph_available = bool(fallback.available)
+        fallback.close()
+
     from app.services.v2.vector.chroma_service import ChromaService
     chroma = ChromaService()
     return {
         "ontology_id": ontology_id,
-        "graph_service": {"type": svc_type, "available": graph_available},
+        "neo4j": {"available": neo_available},
+        "graph_service": {
+            "type": graph_type,
+            "available": graph_available,
+            "fallback": not neo_available,
+        },
         "chroma": {"available": chroma.available, "entity_count": chroma.count(ontology_id)},
     }
 
