@@ -12,7 +12,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
-  ClipboardCheck, Eye, GitBranch, Globe, History, KeyRound, Library, Loader2,
+  ClipboardCheck, ExternalLink, Eye, GitBranch, Globe, History, KeyRound, Library, Loader2,
   Plus, RefreshCw, Rocket, Search, Send, Settings, Sparkles, Trash2,
   User, Workflow, X, Zap,
 } from 'lucide-react'
@@ -21,6 +21,9 @@ import {
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep,
 } from '@/api/steward'
+import pipelinesApi from '@/api/v2/pipelines'
+import type { Pipeline } from '@/api/v2/pipelines'
+import PipelineEditWizard from '../PipelineEditWizard'
 
 // ---------- 状态样式（发布状态 = 影子流水线，与流水线列表同一口径） ----------
 
@@ -144,6 +147,8 @@ export default function DataStewardPage() {
   const [records, setRecords] = useState<StewardPipeline[]>([])
   const [recordsLoading, setRecordsLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(searchParams.get('record'))
+  const [editTarget, setEditTarget] = useState<Pipeline | null>(null)
+  const n8nApiUrl = status?.n8n?.api_url ?? ''
   // 拖拽调整对话区/审批面板宽度（仅宽屏有效）
   const [chatWidthPct, setChatWidthPct] = useState(58)
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -427,9 +432,9 @@ export default function DataStewardPage() {
         {/* 拖拽分隔条（仅宽屏，拖动调整对话区与受管流水线面板宽度） */}
         <div
           onMouseDown={startResize}
-          className="hidden xl:flex w-1.5 shrink-0 cursor-col-resize items-center justify-center group"
+          className="hidden xl:flex shrink-0 cursor-col-resize items-center justify-center group"
         >
-          <div className="h-8 w-px rounded-full bg-gray-200 group-hover:h-12 group-hover:bg-violet-400 transition-all" />
+          <div className="h-16 w-1 rounded-full bg-gray-200 group-hover:h-24 group-hover:bg-violet-400 transition-all" />
         </div>
 
         {/* 受管流水线面板 */}
@@ -439,8 +444,21 @@ export default function DataStewardPage() {
           expandedId={expandedId}
           onExpand={setExpandedId}
           onChanged={() => { loadRecords(); loadStatus() }}
+          n8nApiUrl={n8nApiUrl}
+          onOpenWizard={(pipelineId: string) => {
+            pipelinesApi.get(pipelineId).then(setEditTarget).catch(() => {})
+          }}
         />
       </div>
+
+      {/* 编辑向导 */}
+      {editTarget && (
+        <PipelineEditWizard
+          pipeline={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={() => { setEditTarget(null); loadRecords(); loadStatus() }}
+        />
+      )}
 
       {/* 会话管理弹窗 */}
       {showHistory && (
@@ -481,22 +499,27 @@ export default function DataStewardPage() {
 
 // ---------- 受管流水线面板 ----------
 
-function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged }: {
+function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged, n8nApiUrl, onOpenWizard }: {
   records: StewardPipeline[]
   loading: boolean
   expandedId: string | null
   onExpand: (id: string | null) => void
   onChanged: () => void
+  n8nApiUrl: string
+  onOpenWizard: (pipelineId: string) => void
 }) {
   return (
     <aside className="flex xl:flex-1 xl:min-w-0 shrink-0 flex-col bg-white border overflow-hidden max-xl:max-h-[42%] max-xl:min-h-[180px]">
       <div className="flex items-center justify-between border-b px-4 py-3">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-800">
-          <Workflow size={15} className="text-violet-600" /> 受管流水线
-        </h2>
-        <button onClick={onChanged} title="刷新"
-          className="flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700">
-          <RefreshCw size={13} />
+        <div className="flex items-center gap-2 min-w-0">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-800 shrink-0">
+            <Workflow size={15} className="text-violet-600" /> 流水线清单
+          </h2>
+          <span className="truncate text-[11px] text-gray-400">当前只纳管处于未发布状态的流水线</span>
+        </div>
+        <button onClick={onChanged}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50 shrink-0">
+          <RefreshCw size={13} /> 手动刷新
         </button>
       </div>
 
@@ -518,6 +541,8 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
                   key={r.id} record={r}
                   expanded={expandedId === r.id}
                   onToggle={() => onExpand(expandedId === r.id ? null : r.id)}
+                  n8nApiUrl={n8nApiUrl}
+                  onOpenWizard={onOpenWizard}
                 />
               ))}
             </div>
@@ -530,10 +555,12 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
 
 // ---------- 单条记录卡片 ----------
 
-function RecordCard({ record: r, expanded, onToggle }: {
+function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: {
   record: StewardPipeline
   expanded: boolean
   onToggle: () => void
+  n8nApiUrl: string
+  onOpenWizard: (pipelineId: string) => void
 }) {
   const navigate = useNavigate()
   const published = r.pipelineStatus === 'published'
@@ -553,6 +580,9 @@ function RecordCard({ record: r, expanded, onToggle }: {
 
   const btn = 'flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-40'
 
+  const n8nWebUrl = n8nApiUrl ? n8nApiUrl.replace(/\/api\/.*$/, '') : ''
+  const canJump = !!(n8nWebUrl && r.n8nWorkflowId)
+
   return (
     <div className={`rounded-lg border transition-shadow ${expanded ? 'shadow-sm border-violet-200' : 'hover:border-gray-300'}`}>
       <button onClick={onToggle} className="flex w-full items-start gap-2 px-3 py-2.5 text-left">
@@ -562,7 +592,14 @@ function RecordCard({ record: r, expanded, onToggle }: {
             <p className="truncate text-sm font-medium text-gray-900">{r.name}</p>
             <span className={`shrink-0 rounded border px-1.5 py-px text-[10px] ${meta.cls}`}>{meta.label}</span>
             {r.active && <span className="shrink-0 rounded border border-green-200 bg-green-50 px-1.5 py-px text-[10px] text-green-600">n8n 已激活</span>}
+            {canJump && (
+              <button onClick={(e) => { e.stopPropagation(); window.open(`${n8nWebUrl}/workflow/${r.n8nWorkflowId}`, '_blank') }}
+                className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 shrink-0" title="跳转 n8n 工作流">
+                <ExternalLink size={11} />
+              </button>
+            )}
           </div>
+          {r.description && <p className="mt-0.5 truncate text-[11px] text-gray-500">{r.description}</p>}
           <p className="mt-0.5 truncate text-[11px] text-gray-400">
             {r.summary?.node_count ?? 0} 个节点
             {r.summary?.webhook_path ? ` · webhook:/${r.summary.webhook_path}` : ' · 无 Webhook（平台不可调度）'}
@@ -572,8 +609,6 @@ function RecordCard({ record: r, expanded, onToggle }: {
 
       {expanded && (
         <div className="border-t px-3 py-2.5 space-y-2.5">
-          {r.description && <p className="text-xs leading-relaxed text-gray-500">{r.description}</p>}
-
           {/* 节点链路 */}
           {(r.summary?.nodes?.length ?? 0) > 0 && (
             <div className="flex flex-wrap items-center gap-1">
@@ -595,8 +630,8 @@ function RecordCard({ record: r, expanded, onToggle }: {
           {/* 管理入口：试跑/发布/撤回/归档都在流水线列表与编辑向导，不在管家 */}
           <div className="flex flex-wrap gap-1.5 pt-0.5">
             {!published ? (
-              <button onClick={() => navigate('/data/pipelines')}
-                title="到流水线列表打开这条流水线的编辑向导，预览数据、确认契约后发布并启用"
+              <button onClick={() => { if (r.pipelineId) onOpenWizard(r.pipelineId) }}
+                title="打开编辑向导，预览数据、确认契约后发布并启用"
                 className={`${btn} border-violet-200 text-violet-700 hover:bg-violet-50`}>
                 <Rocket size={11} /> 去发布
               </button>
