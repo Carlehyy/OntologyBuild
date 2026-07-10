@@ -7,12 +7,12 @@
  *       与编辑向导完成，不在管家里。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
-  ClipboardCheck, ExternalLink, Eye, Globe, History, KeyRound, Library, Loader2,
+  ClipboardCheck, ExternalLink, Eye, GitBranch, Globe, History, KeyRound, Library, Loader2,
   Pencil, Plus, RefreshCw, Search, Send, Settings, Sparkles, Trash2,
   User, Workflow, X, Zap,
 } from 'lucide-react'
@@ -573,7 +573,7 @@ function layoutGraph(nodes: Node[], edges: Edge[]) {
   })
 }
 
-function buildGraph(workflow: Record<string, unknown> | null | undefined): { nodes: Node[]; edges: Edge[] } {
+function buildGraph(workflow: any): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = []
   const edges: Edge[] = []
   const wfNodes = (workflow?.nodes as any[]) || []
@@ -609,7 +609,7 @@ function buildGraph(workflow: Record<string, unknown> | null | undefined): { nod
   return { nodes, edges }
 }
 
-function MiniGraph({ workflow }: { workflow: Record<string, unknown> | null | undefined }) {
+function MiniGraph({ workflow }: { workflow: any }) {
   const { nodes, edges } = buildGraph(workflow)
   const laidOut = layoutGraph([...nodes], [...edges])
 
