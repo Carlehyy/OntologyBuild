@@ -569,12 +569,6 @@ export default function ModelsPage() {
                   >
                     <BarChart3 size={11} /> 详情
                   </button>
-                  {/* 测试中（临时）—— 紧跟详情按钮右侧 */}
-                  {status === 'testing' && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 shrink-0">
-                      <Loader2 size={10} className="animate-spin" />测试中
-                    </span>
-                  )}
                   {!isDefault && (
                     <button
                       onClick={async () => {
