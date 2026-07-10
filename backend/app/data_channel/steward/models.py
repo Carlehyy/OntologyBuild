@@ -17,7 +17,7 @@ LLM 在授权工具边界内创建/编辑 n8n workflow。**数据管家只负责
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Text, JSON
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -58,21 +58,31 @@ class N8nPipeline(Base):
     last_test_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # 对应的 v2_pipelines.id（engine=n8n 的影子流水线，创建即登记）
-    pipeline_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    pipeline_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("v2_pipelines.id", ondelete="SET NULL"), nullable=True, index=True)
     # 创建它的数据管家会话（血缘：这条流水线是哪段对话产出的）
-    conversation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("v2_steward_conversations.id", ondelete="SET NULL"), nullable=True)
 
-    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        Index("uq_n8n_pipelines_workflow", "n8n_workflow_id", unique=True),
+        Index("uq_n8n_pipelines_shadow_pipeline", "pipeline_id", unique=True),
+        CheckConstraint("status IN ('draft','archived')", name="ck_n8n_pipelines_status"),
+    )
 
 
 class StewardConversation(Base):
     __tablename__ = "v2_steward_conversations"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -84,7 +94,9 @@ class StewardMessage(Base):
     __tablename__ = "v2_steward_messages"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    conversation_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String, ForeignKey("v2_steward_conversations.id", ondelete="CASCADE"),
+        nullable=False, index=True)
 
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # user | assistant
     content: Mapped[str] = mapped_column(Text, default="")

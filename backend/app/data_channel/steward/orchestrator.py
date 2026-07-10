@@ -58,7 +58,7 @@ def _system_prompt(db: Session) -> str:
 
 # 平台数据流水线约定（重要）
 1. **平台调度入口**：工作流应以 Webhook 触发器开头 —— parameters 建议 {{"httpMethod": "POST", "path": "ob-<流水线短名>", "responseMode": "lastNode"}}。骨架已自带这样一个 Webhook。平台运行该流水线时 POST 这个 webhook，并把**末节点输出的 items 作为行数据写入数据资产湖**（支持任务池的 overwrite/append/upsert 入库方式）。
-2. 也可以再加一个 Schedule Trigger 让它在 n8n 内定时自跑，但注意：自跑产生的数据只有经平台触发的运行才会自动入湖；若需自跑回传，需用户提供平台 API Token，用 HTTP Request 节点回传，此时要向用户说明并索要 Token。
+2. **不要添加 Schedule/Cron Trigger 作为受管流水线的调度入口**：运行计划由数据任务池统一管理，n8n 只保留平台 Webhook。这样发布状态、运行记录与入湖结果才是一条可审计链路；Manual Trigger 仅可用于 n8n 内部临时调试，不能作为唯一触发器。
 3. 末节点输出应是"一行一个 item、字段扁平"的表格形数据（用 Set/Code 节点整形），便于入湖后治理与映射。
 4. 数据库/SaaS 节点的凭据无法由 API 创建：先告诉用户去 n8n 界面配置凭据，再在节点里引用凭据名。
 

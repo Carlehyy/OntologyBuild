@@ -9,7 +9,16 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Boolean, Integer, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from app.database import Base
 
 
@@ -46,11 +55,18 @@ class PipelineTask(Base):
     description = Column(Text, default="")
 
     # 关联流水线（仅允许已发布）
-    pipeline_id = Column(String(36), nullable=False, index=True)
+    pipeline_id = Column(
+        String(36),
+        ForeignKey("v2_pipelines.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
 
     # 入库方式
     write_mode = Column(String(20), default=WriteMode.OVERWRITE.value, nullable=False)
-    primary_key = Column(String(200), default="")          # upsert 模式的主键列（逗号分隔多列）
+    # 兼容列：仅保存流水线发布契约的主键快照，API/UI 均不可独立定义。
+    # 待存量任务完成迁移后可删除；运行时始终读取 Pipeline.column_definitions。
+    primary_key = Column(String(200), default="")
     soft_delete_column = Column(String(200), default="")   # upsert 模式可选：源端软删除标识列
     skip_empty = Column(Boolean, default=True, nullable=False)  # 空输出保护：流水线输出 0 行时跳过入库
 
@@ -68,6 +84,21 @@ class PipelineTask(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "write_mode IN ('overwrite','append','upsert','append_dedup')",
+            name="ck_pipeline_tasks_write_mode",
+        ),
+        CheckConstraint(
+            "schedule_type IN ('MANUAL','CRON','INTERVAL')",
+            name="ck_pipeline_tasks_schedule_type",
+        ),
+        CheckConstraint(
+            "status IN ('idle','running','success','failed')",
+            name="ck_pipeline_tasks_status",
+        ),
+    )
 
     def to_dict(self) -> dict:
         return {

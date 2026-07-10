@@ -13,7 +13,12 @@ import pytest
 
 from app.data_channel.steward import service
 from app.data_channel.steward.models import N8nPipeline
-from app.data_channel.steward.runner import normalize_rows, _extract_execution_rows, trigger_and_collect
+from app.data_channel.steward.runner import (
+    _extract_execution_rows,
+    collect_n8n_rows,
+    normalize_rows,
+    trigger_and_collect,
+)
 from app.data_channel.steward.service import StewardError
 from app.data_channel.steward.toolkit import ToolRunner
 from app.models.v2.pipeline import Pipeline, PipelineVersion
@@ -46,7 +51,14 @@ class FakeN8nClient:
 
     def create_workflow(self, payload: dict) -> dict:
         wid = str(len(self.workflows) + 1)
-        wf = {**self.sanitize_workflow(payload), "id": wid, "active": False}
+        wf = {
+            **self.sanitize_workflow(payload),
+            "id": wid,
+            "active": False,
+            "versionId": f"v-{wid}-1",
+            "activeVersionId": None,
+            "updatedAt": f"2026-07-11T00:00:0{wid}.000Z",
+        }
         self.workflows[wid] = wf
         self.calls.append(f"create:{wid}")
         return dict(wf)
@@ -54,11 +66,15 @@ class FakeN8nClient:
     def update_workflow(self, workflow_id: str, payload: dict) -> dict:
         wf = self.workflows[str(workflow_id)]
         wf.update(self.sanitize_workflow(payload))
+        current = int(str(wf["versionId"]).rsplit("-", 1)[-1])
+        wf["versionId"] = f"v-{workflow_id}-{current + 1}"
+        wf["updatedAt"] = f"2026-07-11T00:01:{current:02d}.000Z"
         self.calls.append(f"update:{workflow_id}")
         return dict(wf)
 
     def activate_workflow(self, workflow_id: str):
         self.workflows[str(workflow_id)]["active"] = True
+        self.workflows[str(workflow_id)]["activeVersionId"] = self.workflows[str(workflow_id)]["versionId"]
         self.calls.append(f"activate:{workflow_id}")
 
     def deactivate_workflow(self, workflow_id: str):
@@ -88,10 +104,15 @@ class FakeN8nClient:
             "id": eid, "status": "success", "startedAt": "t1", "stoppedAt": "t2",
             "data": {"resultData": {
                 "lastNodeExecuted": "整理字段",
-                "runData": {"整理字段": [{"data": {"main": [[
-                    {"json": {"currency": "USD", "rate": 1.0}},
-                    {"json": {"currency": "CNY", "rate": 7.1}},
-                ]]}}]},
+                "runData": {
+                    "Webhook": [{"data": {"main": [[{
+                        "json": {"body": dict(payload or {})},
+                    }]]}}],
+                    "整理字段": [{"data": {"main": [[
+                        {"json": {"currency": "USD", "rate": 1.0}},
+                        {"json": {"currency": "CNY", "rate": 7.1}},
+                    ]]}}],
+                },
             }},
         }]
         self.calls.append(f"webhook:{webhook_path}")
@@ -187,10 +208,16 @@ def test_publish_activates_and_seals(pipelines_client, client, auth_headers, db,
     assert pl.definition["engine"] == "n8n"
     assert pl.definition["n8n"]["steward_id"] == draft_record.id
     assert pl.definition["n8n"]["webhook_path"] == "ob-test"
+    assert pl.definition["n8n"]["revision"] == {
+        "versionId": fake_n8n.workflows[draft_record.n8n_workflow_id]["versionId"],
+        "activeVersionId": fake_n8n.workflows[draft_record.n8n_workflow_id]["activeVersionId"],
+        "updatedAt": fake_n8n.workflows[draft_record.n8n_workflow_id]["updatedAt"],
+    }
     # 版本快照与发布同一事务
     snaps = db.query(PipelineVersion).filter(
         PipelineVersion.pipeline_id == pid, PipelineVersion.status == "published").all()
     assert len(snaps) == 1
+    assert snaps[0].definition["n8n"]["revision"] == pl.definition["n8n"]["revision"]
 
     # 重复发布被拒
     r = _publish(client, auth_headers, pid)
@@ -217,6 +244,23 @@ def test_publish_fixes_expected_columns_from_wizard_preview(
     db.expire_all()
     pl = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
     assert pl.definition["n8n"]["expected_columns"] == ["currency", "rate"]
+
+
+def test_preview_deactivation_failure_is_explicit(db, fake_n8n, draft_record, monkeypatch):
+    from app.data_channel.steward.runner import collect_test_rows
+
+    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        fake_n8n,
+        "deactivate_workflow",
+        lambda _workflow_id: (_ for _ in ()).throw(RuntimeError("n8n unavailable")),
+    )
+
+    with pytest.raises(service.StewardError) as error:
+        collect_test_rows(db, draft_record)
+
+    assert "恢复 n8n 草稿" in str(error.value)
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
 
 
 def test_published_is_sealed_for_steward_edit(
@@ -300,6 +344,104 @@ def test_publish_requires_trigger(pipelines_client, client, auth_headers, db, fa
     r = _publish(client, auth_headers, rec.pipeline_id)
     assert r.status_code == 400 and "触发器" in r.json()["detail"]
     assert fake_n8n.workflows[rec.n8n_workflow_id]["active"] is False
+
+
+@pytest.mark.parametrize("trigger_type", [
+    "n8n-nodes-base.scheduleTrigger",
+    "n8n-nodes-base.cron",
+    "n8n-nodes-base.manualTrigger",
+])
+def test_publish_requires_platform_webhook_not_other_trigger(
+        pipelines_client, client, auth_headers, db, fake_n8n, trigger_type):
+    runner = ToolRunner(db, None, None)
+    created = runner.run("create_pipeline", {"name": f"非平台触发-{trigger_type}"})
+    rid = created["record"]["id"]
+    up = runner.run("update_workflow", {
+        "record_id": rid,
+        "nodes": [{"name": "Trigger", "type": trigger_type, "parameters": {}}],
+        "connections": {},
+    })
+    assert "error" not in up, up
+    rec = db.query(N8nPipeline).filter(N8nPipeline.id == rid).first()
+
+    check = runner.run("check_workflow", {"record_id": rid})
+    assert check["ok"] is False
+    assert any("Webhook" in issue["message"] for issue in check["issues"] if issue["level"] == "error")
+
+    response = _publish(client, auth_headers, rec.pipeline_id)
+
+    assert response.status_code == 400
+    assert "Webhook" in response.json()["detail"]
+    assert fake_n8n.workflows[rec.n8n_workflow_id]["active"] is False
+
+
+def test_publish_requires_complete_remote_revision_and_compensates(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    fake_n8n.workflows[draft_record.n8n_workflow_id].pop("updatedAt")
+
+    response = _publish(client, auth_headers, draft_record.pipeline_id)
+
+    assert response.status_code == 400
+    assert "updatedAt" in response.json()["detail"]
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    db.expire_all()
+    assert db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first().status == "draft"
+
+
+def test_publish_local_commit_failure_compensates_remote_activation(
+        db, fake_n8n, draft_record, monkeypatch):
+    from fastapi import HTTPException
+    from app.data_channel.pipelines.router import PublishBody, publish_pipeline
+
+    real_commit = db.commit
+    monkeypatch.setattr(db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+    with pytest.raises(HTTPException) as error:
+        publish_pipeline(draft_record.pipeline_id, PublishBody(enable=True), db)
+    monkeypatch.setattr(db, "commit", real_commit)
+
+    assert error.value.status_code == 500
+    assert "激活已撤销" in str(error.value.detail)
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    assert f"deactivate:{draft_record.n8n_workflow_id}" in fake_n8n.calls
+
+
+def test_unpublish_remote_deactivation_failure_keeps_local_published(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record, monkeypatch):
+    pid = draft_record.pipeline_id
+    assert _publish(client, auth_headers, pid).status_code == 200
+
+    monkeypatch.setattr(
+        fake_n8n,
+        "deactivate_workflow",
+        lambda _workflow_id: (_ for _ in ()).throw(RuntimeError("n8n unavailable")),
+    )
+    response = client.post(f"/api/v2/pipelines/{pid}/unpublish", headers=auth_headers)
+
+    assert response.status_code == 400
+    assert "撤回发布已中止" in response.json()["detail"]
+    db.expire_all()
+    assert db.query(Pipeline).filter(Pipeline.id == pid).first().status == "published"
+
+
+def test_unpublish_local_commit_failure_reactivates_remote(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record, monkeypatch):
+    from fastapi import HTTPException
+    from app.data_channel.pipelines.router import unpublish_pipeline
+
+    pid = draft_record.pipeline_id
+    assert _publish(client, auth_headers, pid).status_code == 200
+    real_commit = db.commit
+    monkeypatch.setattr(db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    with pytest.raises(HTTPException) as error:
+        unpublish_pipeline(pid, db)
+    monkeypatch.setattr(db, "commit", real_commit)
+
+    assert error.value.status_code == 500
+    assert "远端状态已恢复" in str(error.value.detail)
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
+    db.expire_all()
+    assert db.query(Pipeline).filter(Pipeline.id == pid).first().status == "published"
 
 
 # ── 影子流水线的画布路径守卫 ──────────────────────────────────────
@@ -471,7 +613,7 @@ def test_normalize_rows_variants():
 def test_normalize_rows_rejects_truncation(monkeypatch):
     from app.data_channel.steward import runner as runner_module
     monkeypatch.setattr(runner_module, "_MAX_ROWS", 2)
-    with pytest.raises(StewardError, match="不会静默截断"):
+    with pytest.raises(StewardError, match="不会截断入湖"):
         normalize_rows([{"a": 1}, {"a": 2}, {"a": 3}])
 
 
@@ -482,10 +624,15 @@ def test_n8n_execution_must_be_unique_and_successful():
         def list_executions(self, **_kwargs):
             return list(self.executions)
 
-        def trigger_webhook(self, *_args, **_kwargs):
+        def trigger_webhook(self, *_args, payload=None, **_kwargs):
             self.executions = [{
                 "id": "1", "status": "error",
-                "data": {"resultData": {"error": {"message": "boom"}}},
+                "data": {"resultData": {
+                    "error": {"message": "boom"},
+                    "runData": {"Webhook": [{"data": {"main": [[{
+                        "json": {"body": {"run_id": payload["run_id"]}},
+                    }]]}}]},
+                }},
             }]
             return 200, [{"should_not": "be_ingested"}]
 
@@ -504,8 +651,108 @@ def test_n8n_missing_execution_lineage_is_not_webhook_success():
         def trigger_webhook(self, *_args, **_kwargs):
             return 200, [{"unverified": True}]
 
-    with pytest.raises(StewardError, match="执行记录"):
+    with pytest.raises(StewardError, match="精确关联"):
         trigger_and_collect(Client(), "wf", "hook", wait_seconds=0)
+
+
+def test_normalize_rows_rejects_oversized_result_without_truncation():
+    with pytest.raises(service.StewardError) as error:
+        normalize_rows([{"id": i} for i in range(50001)])
+    message = str(error.value)
+    assert "50000" in message and "50001" in message and "不会截断" in message
+
+    oversized_execution = {
+        "id": "too-large",
+        "status": "success",
+        "data": {"resultData": {
+            "lastNodeExecuted": "Output",
+            "runData": {"Output": [{"data": {"main": [[
+                {"json": {"id": i}} for i in range(50001)
+            ]]}}]},
+        }},
+    }
+    with pytest.raises(service.StewardError):
+        _extract_execution_rows(oversized_execution)
+
+
+def test_run_rejects_remote_revision_drift_before_webhook(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    assert _publish(client, auth_headers, draft_record.pipeline_id).status_code == 200
+    fake_n8n.workflows[draft_record.n8n_workflow_id]["versionId"] = "edited-after-publish"
+
+    pl = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
+    with pytest.raises(service.StewardError) as error:
+        collect_n8n_rows(db, pl)
+
+    assert "版本漂移" in str(error.value)
+    assert not any(call.startswith("webhook:") for call in fake_n8n.calls)
+
+
+def test_trigger_and_collect_matches_run_id_not_newest_execution(monkeypatch):
+    class ConcurrentClient(FakeN8nClient):
+        def trigger_webhook(self, webhook_path, payload=None, timeout_seconds=None):
+            def execution(eid, request_id, value):
+                return {
+                    "id": eid,
+                    "status": "success",
+                    "data": {"resultData": {
+                        "lastNodeExecuted": "Output",
+                        "runData": {
+                            "Webhook": [{"data": {"main": [[{
+                                "json": {"body": {"run_id": request_id}},
+                            }]]}}],
+                            "Output": [{"data": {"main": [[{"json": {"value": value}}]]}}],
+                        },
+                    }},
+                }
+
+            # Newest belongs to another concurrent request; the second one is ours.
+            self._executions = [
+                execution("newest-wrong", "other-run", "wrong"),
+                execution("matched", payload["run_id"], "right"),
+            ]
+            return 200, {"ok": True}
+
+    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+    rows, meta = trigger_and_collect(
+        ConcurrentClient(), "wf-1", "hook", payload={"run_id": "wanted"}, wait_seconds=1)
+
+    assert rows == [{"value": "right"}]
+    assert meta["execution_id"] == "matched" and meta["run_id"] == "wanted"
+
+
+def test_trigger_and_collect_fails_when_run_id_cannot_be_verified(monkeypatch):
+    class UnmatchedClient(FakeN8nClient):
+        def __init__(self):
+            super().__init__()
+            self.triggered = False
+
+        def list_executions(self, **kwargs):
+            if not self.triggered:
+                return []
+            return [{
+                "id": "wrong",
+                "status": "success",
+                "data": {"resultData": {
+                    "lastNodeExecuted": "Output",
+                    "runData": {"Output": [{"data": {"main": [[{"json": {"value": 1}}]]}}]},
+                }},
+            }]
+
+        def trigger_webhook(self, webhook_path, payload=None, timeout_seconds=None):
+            self.triggered = True
+            return 200, {"ok": True}
+
+    ticks = iter([0.0, 0.0, 2.0])
+    monkeypatch.setattr("app.data_channel.steward.runner.time.time", lambda: next(ticks))
+    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+
+    with pytest.raises(service.StewardError) as error:
+        trigger_and_collect(
+            UnmatchedClient(), "wf-1", "hook", payload={"run_id": "wanted"}, wait_seconds=1)
+
+    message = str(error.value)
+    assert "精确关联" in message and "不会采用最新执行" in message
 
 
 def test_probe_url_guards_and_json_shape(db, fake_n8n):

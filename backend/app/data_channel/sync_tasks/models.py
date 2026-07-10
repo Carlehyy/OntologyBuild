@@ -80,7 +80,7 @@ class DataSyncTask(Base):
     trigger_pipeline_id = Column(String(36), ForeignKey("v2_pipelines.id", ondelete="SET NULL"), nullable=True)
 
     # 运行状态（最近一次）
-    status = Column(String(20), default="IDLE", nullable=False)  # IDLE/RUNNING/SUCCESS/FAILED
+    status = Column(String(20), default=SyncStatus.IDLE.value, nullable=False)
     last_sync_at = Column(DateTime, nullable=True)
     last_rows = Column(Integer, default=0)
     last_error = Column(Text, default="")
@@ -143,7 +143,7 @@ class DataSyncHistory(Base):
     ended_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, default=0)
 
-    status = Column(String(20), default="RUNNING", nullable=False)  # RUNNING/SUCCESS/FAILED
+    status = Column(String(20), default=HistoryStatus.RUNNING.value, nullable=False)
     source_count = Column(Integer, default=0)     # 本次从源端拉取的行数
     inserted_count = Column(Integer, default=0)   # 新增行数
     updated_count = Column(Integer, default=0)    # 去重后更新行数（主键冲突替换）

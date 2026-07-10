@@ -226,27 +226,111 @@ def require_orchestrable(db: Session, rec: N8nPipeline, client: N8nClient) -> No
 
 # ── 发布 / 撤回发布的 n8n 侧动作（被 pipelines publish/unpublish 调用） ──
 
-def activate_for_publish(db: Session, rec: N8nPipeline, client: N8nClient) -> None:
-    """发布 n8n 流水线：拉最新快照 → 校验触发器 → 激活 workflow。
+_REVISION_FIELDS = ("versionId", "activeVersionId", "updatedAt")
+
+
+def _require_complete_revision(workflow: dict, *, context: str) -> dict:
+    revision = N8nClient.workflow_revision(workflow)
+    missing = [field for field in _REVISION_FIELDS if not revision.get(field)]
+    if missing:
+        raise StewardError(
+            f"{context}无法取得 n8n 不可变版本信息（缺少 {', '.join(missing)}），"
+            "为避免发布内容与实际执行内容不一致，操作已中止。请确认 n8n 公共 API "
+            "会返回 versionId、activeVersionId、updatedAt。")
+    return revision
+
+
+def activate_for_publish(db: Session, rec: N8nPipeline, client: N8nClient) -> dict:
+    """发布 n8n 流水线：拉最新快照 → 校验 Webhook → 激活并锁定 revision。
 
     状态翻转/版本快照由 publish 端点的通用封版逻辑承担；这里只做 n8n
-    特有的部分。激活失败原样抛出，发布随之中止。
+    特有的部分。返回的 revision 必须固化到影子 definition；激活后任何
+    校验失败都会先补偿停用，避免留下「平台草稿、n8n 已激活」。
     """
     workflow = client.get_workflow(rec.n8n_workflow_id)
     rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
-    summary = summarize_workflow(rec.workflow_snapshot)
-    if not summary["has_trigger"]:
-        raise StewardError("工作流没有任何触发器节点（Webhook / Schedule Trigger），无法发布。"
-                           "请先在数据管家中补全编排。")
+    summary = summarize_workflow(workflow)
+    if not summary["webhook_path"]:
+        raise StewardError(
+            "平台托管的 n8n 工作流必须包含 Webhook 触发器（Webhook Trigger），才能由数据任务池精确调度。"
+            "仅含 Schedule/Cron/Manual Trigger 的工作流不能发布；请保留平台 Webhook，"
+            "并把运行计划配置在数据任务池。")
+    if bool(workflow.get("active")):
+        raise StewardError(
+            "该草稿工作流已在 n8n 侧激活，平台无法确认其生命周期来源。"
+            "请先在 n8n 停用，再由平台执行发布。")
+
+    activated = False
     try:
         client.activate_workflow(rec.n8n_workflow_id)
-    except Exception as exc:  # noqa: BLE001 — 激活失败原样透出
+        activated = True
+        published_workflow = client.get_workflow(rec.n8n_workflow_id)
+        revision = _require_complete_revision(published_workflow, context="发布后")
+        if revision["versionId"] != revision["activeVersionId"]:
+            raise StewardError(
+                "n8n 当前编辑版本与实际激活版本不一致"
+                f"（versionId={revision['versionId']}，"
+                f"activeVersionId={revision['activeVersionId']}），无法形成可靠发布快照。")
+        if not bool(published_workflow.get("active")):
+            raise StewardError("n8n 激活接口返回后工作流仍未处于 active 状态，发布已中止。")
+        rec.workflow_snapshot = N8nClient.sanitize_workflow(published_workflow)
+        return revision
+    except Exception as exc:  # noqa: BLE001 — 远端错误统一转换为业务错误
+        if activated:
+            try:
+                client.deactivate_workflow(rec.n8n_workflow_id)
+            except Exception as compensation_exc:  # noqa: BLE001
+                raise StewardError(
+                    f"发布失败（{exc}），且补偿停用 n8n 工作流也失败（{compensation_exc}）。"
+                    "远端可能仍处于激活状态，请立即人工核对。") from exc
+        if isinstance(exc, StewardError):
+            raise
         raise StewardError(f"激活 n8n 工作流失败：{exc}") from exc
 
 
+def compensate_failed_publish(rec: N8nPipeline, client: N8nClient) -> None:
+    """本地发布事务失败后，严格撤销刚完成的远端激活。"""
+    try:
+        client.deactivate_workflow(rec.n8n_workflow_id)
+    except Exception as exc:  # noqa: BLE001
+        raise StewardError(
+            f"平台发布事务失败，且补偿停用 n8n 工作流失败：{exc}。"
+            "远端可能仍处于激活状态，请立即人工核对。") from exc
+
+
 def deactivate_on_unpublish(rec: N8nPipeline, client: N8nClient) -> None:
-    """撤回发布：停用 n8n workflow（本就未激活/已删除时不阻塞撤回）。"""
-    _safe_deactivate(client, rec.n8n_workflow_id)
+    """撤回发布：确认 n8n workflow 已停用；失败时必须阻断本地撤回。"""
+    try:
+        workflow = client.get_workflow(rec.n8n_workflow_id)
+        if bool(workflow.get("active")):
+            client.deactivate_workflow(rec.n8n_workflow_id)
+        confirmed = client.get_workflow(rec.n8n_workflow_id)
+    except Exception as exc:  # noqa: BLE001
+        raise StewardError(f"停用 n8n 工作流失败，撤回发布已中止：{exc}") from exc
+    if bool(confirmed.get("active")):
+        raise StewardError("n8n 停用接口返回后工作流仍处于 active 状态，撤回发布已中止。")
+
+
+def require_published_revision(pl, remote_workflow: dict) -> dict:
+    """运行前确认远端仍是发布时审核过的同一 revision。"""
+    published = (((pl.definition or {}).get("n8n") or {}).get("revision") or {})
+    missing_published = [field for field in _REVISION_FIELDS if not published.get(field)]
+    if missing_published:
+        raise StewardError(
+            "该流水线的发布快照缺少 n8n revision 信息，不能安全运行。"
+            "请先撤回并重新发布。")
+    current = _require_complete_revision(remote_workflow, context="运行前")
+    drift = [field for field in _REVISION_FIELDS if current.get(field) != published.get(field)]
+    if drift:
+        details = "，".join(
+            f"{field}: 发布={published.get(field)} / 当前={current.get(field)}"
+            for field in drift)
+        raise StewardError(
+            f"检测到 n8n 工作流在平台发布后发生版本漂移（{details}）。"
+            "为避免按旧数据契约执行新逻辑，本次运行已中止；请撤回发布、检查并重新发布。")
+    if not bool(remote_workflow.get("active")):
+        raise StewardError("n8n 工作流已在远端被停用，与平台发布快照不一致，本次运行已中止。")
+    return current
 
 
 def archive(db: Session, rec: N8nPipeline, client: N8nClient | None,
@@ -299,7 +383,7 @@ def _safe_deactivate(client: N8nClient, workflow_id: str) -> None:
 
 # ── 影子流水线（v2_pipelines, engine=n8n） ────────────────────────
 
-def _shadow_definition(rec: N8nPipeline) -> dict:
+def _shadow_definition(rec: N8nPipeline, *, published_revision: dict | None = None) -> dict:
     return {
         # nodes/edges 留空数组：画布等旧代码读取时不会崩，但引擎标记让它们绕行
         "engine": ENGINE_N8N,
@@ -309,6 +393,8 @@ def _shadow_definition(rec: N8nPipeline) -> dict:
             "steward_id": rec.id,
             "workflow_id": rec.n8n_workflow_id,
             "webhook_path": find_webhook_path(rec.workflow_snapshot),
+            # 只在发布事务中写入；draft 编排不会伪造或沿用旧 revision。
+            "revision": published_revision,
             # 发布契约：以最近一次试跑的列集合为期望列，运行期资产湖闸门
             # 据此做漂移检测（警告不阻断——湖中主键契约才是硬校验）
             "expected_columns": (rec.last_test_result or {}).get("columns") or None,
@@ -316,7 +402,8 @@ def _shadow_definition(rec: N8nPipeline) -> dict:
     }
 
 
-def ensure_shadow_pipeline(db: Session, rec: N8nPipeline):
+def ensure_shadow_pipeline(db: Session, rec: N8nPipeline,
+                           *, published_revision: dict | None = None):
     """确保治理记录有对应的 v2_pipelines 影子行，并同步名称/定义。
 
     创建即登记（draft）——n8n 流水线从诞生起就出现在流水线列表里；
@@ -340,7 +427,7 @@ def ensure_shadow_pipeline(db: Session, rec: N8nPipeline):
         rec.pipeline_id = pl.id
     pl.name = rec.name
     pl.description = rec.description or pl.description
-    pl.definition = _shadow_definition(rec)
+    pl.definition = _shadow_definition(rec, published_revision=published_revision)
     pl.updated_at = _now()
     return pl
 

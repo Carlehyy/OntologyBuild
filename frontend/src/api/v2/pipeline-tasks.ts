@@ -11,6 +11,7 @@ export interface PipelineTask {
   pipeline_id: string
   pipeline_name?: string
   pipeline_status?: string
+  pipeline_enabled?: boolean
   pipeline_version?: number | null
   write_mode: WriteMode
   primary_key: string
@@ -128,6 +129,7 @@ export interface PipelineTaskStats {
   today_errors?: number
   total_runs?: number
   total_errors?: number
+  trend_7d?: Array<{ date: string; runs: number; errors: number }>
 }
 
 export interface CuratedColumn {
@@ -182,7 +184,6 @@ export interface PipelineTaskPayload {
   description?: string
   pipeline_id: string
   write_mode: WriteMode
-  primary_key?: string
   soft_delete_column?: string
   skip_empty?: boolean
   schedule_type: PipelineTaskScheduleType
@@ -237,6 +238,6 @@ export const pipelineTasksApi = {
 export const WRITE_MODE_META: Record<WriteMode, { label: string; desc: string }> = {
   overwrite:    { label: '全量覆盖', desc: '资产 = 本次流水线输出，先清空后全量写入' },
   append:       { label: '直接追加', desc: '本次输出直接追加到资产尾部' },
-  upsert:       { label: '主键合并', desc: '按主键去重保留最新，可选软删除标记' },
+  upsert:       { label: '主键合并', desc: '按流水线发布契约的主键合并，可选软删除标记' },
   append_dedup: { label: '去重追加', desc: '按整行内容去重后追加，无主键防重复导入' },
 }

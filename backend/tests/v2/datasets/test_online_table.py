@@ -103,13 +103,11 @@ def test_create_table_validation(api, auth_headers):
     assert r.status_code == 400 and "重复" in str(r.json()["detail"])
     r = _create_table(api, auth_headers, primary_key="不存在的列")
     assert r.status_code == 400 and "不在列定义中" in str(r.json()["detail"])
-    # 非法类型回落 string、空白列名被忽略
+    # 非法类型必须显式拒绝，不能静默改成 string 造成契约与用户选择不一致
     r = _create_table(api, auth_headers, primary_key="",
                       columns=[{"name": "a", "type": "非法类型"}, {"name": " "}])
-    assert r.status_code == 201
-    sc = api.get(f"/api/v2/datasets/{r.json()['data']['id']}/schema",
-                 headers=auth_headers).json()
-    assert sc["columns"] == [{"name": "a", "type": "string", "sample_values": []}]
+    assert r.status_code == 400
+    assert "不受支持" in str(r.json()["detail"])
 
 
 # ── 在线维护 ─────────────────────────────────────────────────
@@ -229,6 +227,24 @@ def test_upload_version_refreshes_declared_schema(api, auth_headers):
                  files={"file": ("坏.csv", io.BytesIO(bad.encode("utf-8")), "text/csv")},
                  headers=auth_headers)
     assert r.status_code == 400 and "重复" in str(r.json()["detail"])
+
+
+def test_upload_version_enforces_declared_column_types(api, auth_headers):
+    """批量补数与在线编辑必须服从同一份类型契约，坏版本不能先落盘再告警。"""
+    ds_id = _create_table(api, auth_headers).json()["data"]["id"]
+    bad = "编号,名称,数量\nB1,泵机,十个\n"
+
+    r = api.post(
+        f"/api/v2/datasets/{ds_id}/upload",
+        files={"file": ("类型错误.csv", io.BytesIO(bad.encode("utf-8")), "text/csv")},
+        headers=auth_headers,
+    )
+
+    assert r.status_code == 400
+    assert "数量" in str(r.json()["detail"])
+    assert "integer" in str(r.json()["detail"])
+    versions = api.get(f"/api/v2/datasets/{ds_id}/versions", headers=auth_headers).json()
+    assert len(versions) == 1
 
 
 # ── 本体映射准入（第一性原理：与上传数据集同权）──────────────────

@@ -4,6 +4,7 @@ import {
   ChevronLeft, ChevronRight, CheckCircle2, XCircle, Pencil,
 } from 'lucide-react'
 import datasetsApi, { FIELD_TYPE_LABELS, type DatasetOverviewItem } from '@/api/v2/datasets'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 const PAGE_SIZE = 50
 
@@ -37,6 +38,7 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
+  const [confirmClose, setConfirmClose] = useState(false)
 
   // 主键契约声明面板
   const [pkPanelOpen, setPkPanelOpen] = useState(false)
@@ -82,6 +84,15 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   const switchPage = (off: number) => {
     if (dirty) { setError('有未保存的修改，请先保存或放弃后再翻页'); return }
     loadPage(Math.max(0, off))
+  }
+
+  const requestClose = () => {
+    if (saving) return
+    if (dirty) {
+      setConfirmClose(true)
+      return
+    }
+    onClose()
   }
 
   /* ── 主键契约 ── */
@@ -198,7 +209,9 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                 : '先声明主键契约才能修改/删除行（否则行没有稳定身份）；声明后还可直接被本体映射灌入'}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 shrink-0"><X size={16} /></button>
+          <button onClick={requestClose} disabled={saving}
+            className="text-gray-400 hover:text-gray-700 shrink-0 disabled:opacity-40"
+            aria-label="关闭数据维护窗口"><X size={16} /></button>
         </div>
 
         {/* 主键契约声明面板 */}
@@ -345,7 +358,8 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
           </div>
           {dirty && <span className="text-xs text-amber-600">有未保存的修改</span>}
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={onClose} className="text-xs px-3 py-1.5 border rounded-lg bg-white hover:bg-gray-50 text-gray-600">
+            <button onClick={requestClose} disabled={saving}
+              className="text-xs px-3 py-1.5 border rounded-lg bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-40">
               关闭
             </button>
             <button onClick={handleSave} disabled={saving || !dirty}
@@ -356,6 +370,14 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmClose}
+        title="放弃未保存的修改？"
+        message="当前页面有尚未保存的新增、修改或删除。关闭后这些改动将无法恢复。"
+        confirmLabel="放弃修改并关闭"
+        onCancel={() => setConfirmClose(false)}
+        onConfirm={onClose}
+      />
     </div>
   )
 }

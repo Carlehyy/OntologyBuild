@@ -107,7 +107,7 @@ def stats_overview(db: Session = Depends(get_db)):
     today_runs = db.query(DataSyncHistory).filter(DataSyncHistory.started_at >= today_start).count()
     success_runs = db.query(DataSyncHistory).filter(
         DataSyncHistory.started_at >= today_start,
-        DataSyncHistory.status == "SUCCESS",
+        DataSyncHistory.status == HistoryStatus.SUCCESS.value,
     ).count()
     success_rate = round(success_runs / today_runs * 100, 1) if today_runs > 0 else 100.0
 

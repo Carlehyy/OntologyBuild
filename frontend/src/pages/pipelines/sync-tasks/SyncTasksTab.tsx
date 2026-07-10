@@ -5,7 +5,7 @@ import {
   Plus, History, RefreshCw, Trash2, Edit2,
   Database, Clock, CheckCircle2, XCircle, Loader2, AlertCircle,
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
-  RotateCw, Activity, ArrowUpRight, Waves, DatabaseZap, ExternalLink,
+    RotateCw, Activity, Waves, DatabaseZap, ExternalLink,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import { syncTasksApi, type SyncTask } from '@/api/v2/sync-tasks'
@@ -124,6 +124,7 @@ export default function SyncTasksTab() {
       setStats(statsRes)
     } catch (err) {
       console.error('加载调度任务失败', err)
+      setActionError('任务数据加载失败，请检查服务状态后重试')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -215,7 +216,8 @@ export default function SyncTasksTab() {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const attentionTasks = useMemo(
-    () => tasks.filter(t => t.status === 'failed' || t.pipeline_status === 'deleted' || (t.pipeline_status && t.pipeline_status !== 'published')),
+    () => tasks.filter(t => t.status === 'failed' || t.pipeline_status === 'deleted'
+      || (t.pipeline_status && t.pipeline_status !== 'published') || t.pipeline_enabled === false),
     [tasks],
   )
 
@@ -228,17 +230,12 @@ export default function SyncTasksTab() {
   }, [stats])
 
   const trendData = useMemo(() => {
-    const days: string[] = []
-    const series: number[] = []
-    const today = stats?.today_runs ?? 0
-    const seedBase = Math.max(today, 6)
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date()
-      d.setDate(d.getDate() - i)
-      days.push(`${d.getMonth() + 1}/${d.getDate()}`)
-      const r = Math.sin(i * 7.3 + seedBase * 2.7) * 0.5 + 0.5
-      series.push(Math.max(0, Math.round(seedBase * (0.55 + r * 0.9))))
-    }
+    const source = stats?.trend_7d ?? []
+    const days = source.map(item => {
+      const [, month, day] = item.date.split('-')
+      return `${Number(month)}/${Number(day)}`
+    })
+    const series = source.map(item => item.runs)
     return { days, series, total7d: series.reduce((a, b) => a + b, 0) }
   }, [stats])
 
@@ -482,6 +479,7 @@ export default function SyncTasksTab() {
                           const wm = WRITE_MODE_META[t.write_mode as WriteMode]
                           const pipelineGone = t.pipeline_status === 'deleted'
                           const pipelineUnpub = !pipelineGone && t.pipeline_status && t.pipeline_status !== 'published'
+                          const pipelineDisabled = !pipelineGone && t.pipeline_enabled === false
                           const sch = SCHEDULE_LABEL[t.schedule_type] || SCHEDULE_LABEL.MANUAL
                           const SchIcon = sch.Icon
                           return (
@@ -505,9 +503,9 @@ export default function SyncTasksTab() {
                                     <span className="truncate">{t.pipeline_name || t.pipeline_id.slice(0, 8)}</span>
                                     {!pipelineGone && <ExternalLink size={9} className="shrink-0 opacity-60" />}
                                   </button>
-                                  {(pipelineGone || pipelineUnpub) && (
+                                  {(pipelineGone || pipelineUnpub || pipelineDisabled) && (
                                     <div className="text-[10px] text-rose-500 mt-0.5 flex items-center gap-0.5">
-                                      <AlertCircle size={9} />{pipelineGone ? '已删除' : '未发布'}
+                                      <AlertCircle size={9} />{pipelineGone ? '已删除' : pipelineUnpub ? '未发布' : '流水线已停用'}
                                     </div>
                                   )}
                                 </div>
@@ -567,7 +565,9 @@ export default function SyncTasksTab() {
                               {/* 操作 */}
                               <td className="px-3 py-2">
                                 <div className="flex items-center justify-center gap-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                                  <IconBtn2 title="立即执行" disabled={t.status === 'running' || isTriggering || pipelineGone} onClick={() => handleTrigger(t)} accent="blue">
+                                  <IconBtn2 title={pipelineDisabled ? '关联流水线已停用' : '立即执行'}
+                                    disabled={t.status === 'running' || isTriggering || pipelineGone || !!pipelineUnpub || pipelineDisabled}
+                                    onClick={() => handleTrigger(t)} accent="blue">
                                     <RotateCw size={11} className={isTriggering ? 'animate-spin' : ''} />
                                   </IconBtn2>
                                   <IconBtn2 title="执行历史" onClick={() => setHistoryTask(t)} accent="slate">
@@ -758,12 +758,13 @@ export default function SyncTasksTab() {
                             <span className="truncate">
                               {t.pipeline_status === 'deleted' ? '关联流水线已删除'
                                 : t.pipeline_status && t.pipeline_status !== 'published' ? '流水线未发布'
+                                : t.pipeline_enabled === false ? '流水线已停用'
                                 : t.last_error ? t.last_error.slice(0, 26) : '执行失败'}
                             </span>
                           </div>
                         </div>
                         <div className="flex items-center gap-px shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {t.status === 'failed' && (
+                          {t.status === 'failed' && t.pipeline_status === 'published' && t.pipeline_enabled !== false && (
                             <button onClick={() => handleTrigger(t)} title="重试"
                               className="w-5 h-5 flex items-center justify-center rounded text-blue-600 hover:bg-blue-50/70">
                               <RotateCw size={10} />
@@ -790,7 +791,6 @@ export default function SyncTasksTab() {
                 </h3>
                 <span className="text-[10.5px] text-slate-500 flex items-center gap-0.5 tabular-nums">
                   {trendData.total7d} 次
-                  <ArrowUpRight size={10} className="text-emerald-500" />
                 </span>
               </div>
               <div className="overflow-hidden" style={{ height: 44 }}>
@@ -986,4 +986,3 @@ function ExecResultCell({ impact, status }: { impact?: LakeImpact | null; status
     </div>
   )
 }
-

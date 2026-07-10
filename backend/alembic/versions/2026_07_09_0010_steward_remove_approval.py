@@ -27,12 +27,17 @@ _LEGACY_COLUMNS = ("submitted_at", "approved_by", "approved_at",
 
 def _existing_columns() -> set[str]:
     inspector = sa_inspect(op.get_bind())
+    if not inspector.has_table(_TABLE):
+        return set()
     return {c["name"] for c in inspector.get_columns(_TABLE)}
 
 
 def upgrade() -> None:
     # 部署脚本每次 stamp 回 0006 再 upgrade，本迁移会被反复执行——
     # 状态归一天然幂等，删列必须带存在性检查（项目惯例，见 0008/0009）
+    if not sa_inspect(op.get_bind()).has_table(_TABLE):
+        # 旧环境可能从未启用数据管家；正式建表由后续契约迁移负责。
+        return
     op.execute(
         f"UPDATE {_TABLE} SET status='draft' "
         f"WHERE status IN ('pending_approval', 'approved', 'rejected')"
@@ -48,6 +53,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not sa_inspect(op.get_bind()).has_table(_TABLE):
+        return
     # 审批数据不可恢复，仅补回空列保证旧代码可运行
     present = _existing_columns()
     with op.batch_alter_table(_TABLE) as batch:

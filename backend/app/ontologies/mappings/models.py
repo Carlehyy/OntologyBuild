@@ -9,8 +9,7 @@ class OntologyMapping(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False)
-    # v2_datasets is the single asset identity table.  The legacy
-    # v2_curated_datasets mirror is no longer an FK target.
+    # 数据资产湖的唯一权威表是 v2_datasets（同时承载 curated/manual）。
     curated_dataset_id: Mapped[str | None] = mapped_column(String, ForeignKey("v2_datasets.id"), nullable=True)
     entity_class: Mapped[str] = mapped_column(String(200), nullable=False)
     field_mapping: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

@@ -18,6 +18,8 @@ depends_on = None
 def _column_exists(table: str, column: str) -> bool:
     conn = op.get_bind()
     inspector = sa_inspect(conn)
+    if not inspector.has_table(table):
+        return False
     return column in [c["name"] for c in inspector.get_columns(table)]
 
 
@@ -31,7 +33,10 @@ def upgrade() -> None:
     from app.model_registry import import_all_models
     import_all_models()
     Base.metadata.create_all(bind=op.get_bind())
-
+    # Sentinel 在部分精简部署中是可选子系统；即使模型注册表
+    # 未创建该表，迁移也不应阻断数据管理主链路。
+    if not sa_inspect(op.get_bind()).has_table("sentinel_firings"):
+        return
     if not _column_exists("sentinel_firings", "entered"):
         op.add_column(
             "sentinel_firings",
@@ -45,6 +50,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not sa_inspect(op.get_bind()).has_table("sentinel_firings"):
+        return
     if _column_exists("sentinel_firings", "left"):
         op.drop_column("sentinel_firings", "left")
     if _column_exists("sentinel_firings", "entered"):

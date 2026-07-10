@@ -62,7 +62,7 @@ export const FIELD_TYPE_LABELS: Record<string, string> = {
 
 export interface CreateTableColumn {
   name: string
-  /** 平台类型词表 CONTRACT_FIELD_TYPES，非法值后端回落 string */
+  /** 平台类型词表 CONTRACT_FIELD_TYPES，非法值会被后端明确拒绝 */
   type: string
 }
 

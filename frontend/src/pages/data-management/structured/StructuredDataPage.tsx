@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle, AlertTriangle, Clock,
   X, Loader2, Trash2, Table2, RefreshCw,
-  Eye, XCircle,
+  Eye, XCircle, Workflow, ListChecks, Database,
+  Boxes, Network, ArrowRight, BarChart3,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
 import curatedApi from '@/api/v2/curated'
 import type { CuratedDataset } from '@/api/v2/curated'
-import { syncTasksApi, type SyncTask } from '@/api/v2/sync-tasks'
+import { pipelineTasksApi, type PipelineTask } from '@/api/v2/pipeline-tasks'
+import datasetsApi from '@/api/v2/datasets'
 import CuratedDetailPanel from './CuratedDetailPanel'
 import RawDatasetsView from './RawDatasetsView'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -32,34 +34,153 @@ const STATUS_ICON = (status: string) => {
 
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '待审核',
+  pending:        '待审核',
+  in_review:      '审核中',
   approved:       '已审核',
   rejected:       '已拒绝',
 }
 
 const STATUS_STYLE: Record<string, string> = {
   pending_review: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  pending:        'bg-yellow-50 text-yellow-700 border-yellow-200',
+  in_review:      'bg-blue-50 text-blue-700 border-blue-200',
   approved:       'bg-green-50 text-green-700 border-green-200',
   rejected:       'bg-red-50 text-red-600 border-red-200',
 }
 
 type LakeTab = 'curated' | 'raw'
 
+const isPendingReview = (status: string) => status === 'pending_review' || status === 'pending' || status === 'in_review'
+
+function errorText(error: unknown, fallback: string): string {
+  if (!error || typeof error !== 'object') return fallback
+  const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
+  const detail = e.detail ?? e.data?.detail
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail && typeof detail === 'object' && 'message' in detail) {
+    const message = (detail as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim()) return message
+  }
+  return typeof e.message === 'string' && e.message.trim() ? e.message : fallback
+}
+
+function FlowArrow() {
+  return (
+    <div className="flex items-center min-w-8 flex-1" aria-hidden="true">
+      <span className="h-px w-full border-t border-dashed border-slate-300" />
+      <ArrowRight size={14} className="-ml-1 shrink-0 text-slate-400" />
+    </div>
+  )
+}
+
+function FlowNode({
+  label, icon, active = false, onClick,
+}: {
+  label: string
+  icon: ReactNode
+  active?: boolean
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className={`group flex h-10 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors ${
+        active
+          ? 'border-emerald-400 bg-emerald-50 text-emerald-800 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)]'
+          : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300 hover:bg-teal-50/50 disabled:hover:border-slate-200 disabled:hover:bg-white'
+      }`}
+    >
+      <span className={`grid h-6 w-6 place-items-center rounded-md ${active ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-teal-100 group-hover:text-teal-700'}`}>
+        {icon}
+      </span>
+      <span className="whitespace-nowrap">{label}</span>
+      {active && <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-medium text-white">当前</span>}
+    </button>
+  )
+}
+
+/** 洞察只使用接口返回的真实数据；任何接口失败时都明确提示，不补造指标。 */
+function AssetInsightStrip() {
+  const [retryToken, setRetryToken] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [metrics, setMetrics] = useState<Array<{ label: string; value: string; note: string }> | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    Promise.all([curatedApi.list(), datasetsApi.overview()])
+      .then(([curatedResult, rawResult]) => {
+        if (!alive) return
+        const curatedItems = Array.isArray(curatedResult) ? curatedResult : []
+        const rawItems = Array.isArray(rawResult?.items) ? rawResult.items : []
+        const scored = curatedItems
+          .map(item => item.quality_score)
+          .filter((score): score is number => typeof score === 'number' && Number.isFinite(score))
+        const avgQuality = scored.length
+          ? `${Math.round((scored.reduce((sum, score) => sum + score, 0) / scored.length) * 100)}%`
+          : '—'
+        setMetrics([
+          { label: '数据集总数', value: String(curatedItems.length + rawItems.length), note: `成品 ${curatedItems.length} · 人工 ${rawItems.length}` },
+          { label: '待审核', value: String(curatedItems.filter(item => isPendingReview(item.status)).length), note: '需要人工确认的成品数据集' },
+          { label: '平均质量分', value: avgQuality, note: scored.length ? `基于 ${scored.length} 个已评分成品` : '暂无已评分成品' },
+          { label: '人工数据集', value: String(rawItems.length), note: '文件上传或在线维护' },
+          { label: '已声明主键', value: String(rawItems.filter(item => Boolean(item.primary_key)).length), note: '具备主键契约的人工数据集' },
+        ])
+      })
+      .catch(error => {
+        if (!alive) return
+        setMetrics(null)
+        setError(errorText(error, '洞察数据加载失败'))
+      })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [retryToken])
+
+  if (loading) {
+    return (
+      <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5" aria-label="洞察加载中">
+        {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-[74px] animate-pulse rounded-xl border border-slate-200 bg-slate-100/70" />)}
+      </div>
+    )
+  }
+
+  if (error || !metrics) {
+    return (
+      <div className="flex shrink-0 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <AlertTriangle size={15} className="shrink-0" />
+        <span className="flex-1">{error || '洞察数据不可用'}</span>
+        <button
+          type="button"
+          onClick={() => { setLoading(true); setError(''); setRetryToken(token => token + 1) }}
+          className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs hover:bg-red-100"
+        >重试</button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+      {metrics.map(metric => (
+        <div key={metric.label} className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
+          <p className="text-[11px] font-medium text-slate-500">{metric.label}</p>
+          <p className="mt-0.5 text-xl font-semibold tabular-nums text-slate-900">{metric.value}</p>
+          <p className="mt-0.5 truncate text-[10px] text-slate-400" title={metric.note}>{metric.note}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function StructuredDataPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeTab, setActiveTab] = useState<LakeTab>(
-    searchParams.get('tab') === 'raw' ? 'raw' : 'curated')
+  const activeTab: LakeTab = searchParams.get('tab') === 'raw' ? 'raw' : 'curated'
+  const [insightSelected, setInsightSelected] = useState(true)
   const focusDatasetId = searchParams.get('dataset')
 
-  // 深链/浏览器前进后退时同步 Tab（同路由 query 变化不会重挂载组件）
-  useEffect(() => {
-    const t = searchParams.get('tab')
-    if ((t === 'raw' || t === 'curated') && t !== activeTab) setActiveTab(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams])
-
   const switchTab = (tab: LakeTab) => {
-    setActiveTab(tab)
     setSearchParams(prev => {
       const n = new URLSearchParams(prev)
       n.set('tab', tab)
@@ -68,152 +189,61 @@ export default function StructuredDataPage() {
     }, { replace: true })
   }
 
-  // 视图切换 Tab 滑动指示器
-  const viewTabsRef = useRef<HTMLDivElement>(null)
-  const [tabIndicator, setTabIndicator] = useState({ left: 0, width: 0 })
-  useEffect(() => {
-    const container = viewTabsRef.current
-    if (!container) return
-    const activeBtn = container.querySelector(`[data-tab-value="${activeTab}"]`) as HTMLElement | null
-    if (!activeBtn) return
-    const cr = container.getBoundingClientRect()
-    const br = activeBtn.getBoundingClientRect()
-    setTabIndicator({ left: br.left - cr.left, width: br.width })
-  }, [activeTab])
-
   const TABS: [LakeTab, string][] = [['curated', '成品数据集'], ['raw', '人工数据集']]
 
   return (
-    <div className="flex flex-col h-full space-y-3">
-      {/* 顶部数据流卡片：SVG 分支数据流图 + 视图切换 Tab */}
-      <div className="shrink-0 flex items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 px-5 py-2.5 shadow-sm/50">
-        {/* 左侧 SVG 数据流图：双分支结构 */}
-        <svg
-          viewBox="0 0 860 115"
-          className="w-full max-w-[820px] h-auto shrink"
-          style={{ minWidth: 600 }}
-        >
-          <defs>
-            <style>
-              {`
-                @keyframes dashFlow { to { stroke-dashoffset: -24; } }
-                @keyframes dashFlowRev { to { stroke-dashoffset: 24; } }
-                .flow-line {
-                  fill: none;
-                  stroke-width: 1.8;
-                  stroke-dasharray: 8 4;
-                  animation: dashFlow 1.2s linear infinite;
-                }
-                .flow-line-rev {
-                  fill: none;
-                  stroke-width: 1.8;
-                  stroke-dasharray: 8 4;
-                  animation: dashFlowRev 1.2s linear infinite;
-                }
-                .flow-arrow { fill: #94a3b8; }
-                .node-text { font-family: system-ui, -apple-system, sans-serif; }
-              `}
-            </style>
-            <marker id="arr-teal" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#0d9488" /></marker>
-            <marker id="arr-blue" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#3b82f6" /></marker>
-            <marker id="arr-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#10b981" /></marker>
-            <marker id="arr-purple" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><polygon points="0,0 6,3 0,6" fill="#8b5cf6" /></marker>
-          </defs>
+    <div className="flex h-full flex-col gap-3">
+      {/* 不重复页面标题，首屏直接呈现用户真正需要理解和操作的数据流。 */}
+      <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
+        <div className="flex items-center gap-4">
+          <div className="min-w-0 flex-1 overflow-x-auto pb-0.5">
+            <div className="flex min-w-[650px] items-center">
+              <FlowNode label="n8n 流水线" icon={<Workflow size={14} />} onClick={() => navigate('/data/pipelines')} />
+              <FlowArrow />
+              <FlowNode label="数据任务池" icon={<ListChecks size={14} />} onClick={() => navigate('/data/pipelines/sync-tasks')} />
+              <FlowArrow />
+              <FlowNode label="数据资产湖" icon={<Database size={14} />} active />
+              <FlowArrow />
+              <FlowNode label="成品 / 人工数据集" icon={<Boxes size={14} />} />
+              <FlowArrow />
+              <FlowNode label="本体模型" icon={<Network size={14} />} onClick={() => navigate('/ontologies')} />
+            </div>
+          </div>
 
-          {/* 连接线 */}
-          <path d="M130,34 Q160,34 170,44 L175,52" className="flow-line" stroke="#0d9488" marker-end="url(#arr-teal)" />
-          <path d="M130,86 Q160,86 170,76 L175,68" className="flow-line-rev" stroke="#14b8a6" marker-end="url(#arr-teal)" />
-          <line x1="330" y1="60" x2="395" y2="60" className="flow-line" stroke="#3b82f6" marker-end="url(#arr-blue)" />
-          <path d="M535,60 Q575,60 585,50 L595,34" className="flow-line" stroke="#10b981" marker-end="url(#arr-green)" />
-          <path d="M535,60 Q575,60 585,70 L595,86" className="flow-line-rev" stroke="#10b981" marker-end="url(#arr-green)" />
-          <path d="M730,34 Q755,34 760,44 L763,52" className="flow-line" stroke="#059669" marker-end="url(#arr-purple)" />
-          <path d="M730,86 Q755,86 760,76 L763,68" className="flow-line-rev" stroke="#f59e0b" marker-end="url(#arr-purple)" />
-
-          {/* ─── 系统流水线（左上）─── */}
-          <g onClick={() => navigate('/data/pipelines')} style={{ cursor: 'pointer' }}>
-            <rect x="8" y="16" width="120" height="36" rx="8" ry="8"
-              fill="#f0fdfa" stroke="#0d9488" strokeWidth="1.5" />
-            <text x="22" y="40" fontSize="12" fill="#0d9488" className="node-text">⚙</text>
-            <text x="42" y="40" fontSize="11" fontWeight="600" fill="#134e4a" className="node-text">系统流水线</text>
-          </g>
-
-          {/* ─── n8n流水线（左下）─── */}
-          <g onClick={() => navigate('/data/pipelines')} style={{ cursor: 'pointer' }}>
-            <rect x="8" y="68" width="120" height="36" rx="8" ry="8"
-              fill="#f0fdfa" stroke="#14b8a6" strokeWidth="1.5" />
-            <text x="22" y="92" fontSize="12" fill="#14b8a6" className="node-text">🔗</text>
-            <text x="42" y="92" fontSize="11" fontWeight="600" fill="#0f766e" className="node-text">n8n 流水线</text>
-          </g>
-
-          {/* ─── 数据任务池（中左）─── */}
-          <g onClick={() => navigate('/data/pipelines/sync-tasks')} style={{ cursor: 'pointer' }}>
-            <rect x="180" y="42" width="148" height="36" rx="8" ry="8"
-              fill="#eff6ff" stroke="#3b82f6" strokeWidth="1.5" />
-            <text x="198" y="66" fontSize="12" fill="#3b82f6" className="node-text">📋</text>
-            <text x="218" y="66" fontSize="11" fontWeight="600" fill="#1e40af" className="node-text">数据任务池</text>
-          </g>
-
-          {/* ─── 数据资产湖（正中 · 当前页高亮）─── */}
-          <g style={{ cursor: 'default' }}>
-            <rect x="400" y="38" width="133" height="40" rx="10" ry="10"
-              fill="#ecfdf5" stroke="#10b981" strokeWidth="2.5" />
-            <text x="418" y="64" fontSize="13" fill="#10b981" className="node-text">📊</text>
-            <text x="438" y="64" fontSize="11" fontWeight="700" fill="#065f46" className="node-text">数据资产湖</text>
-            <rect x="485" y="38" width="48" height="17"
-              fill="#10b981" style={{ clipPath: 'polygon(0 0, 100% 0, 100% 100%, 14px 100%, 0 50%, 14px 0)' }} />
-            <text x="510" y="51" textAnchor="middle" fontSize="9" fontWeight="600" fill="white" className="node-text">当前</text>
-          </g>
-
-          {/* ─── 成品数据集（右上）─── */}
-          <g onClick={() => switchTab('curated')} style={{ cursor: 'pointer' }}>
-            <rect x="600" y="16" width="128" height="36" rx="8" ry="8"
-              fill="#f0fdf4" stroke="#059669" strokeWidth="1.5" />
-            <text x="618" y="40" fontSize="12" fill="#059669" className="node-text">✅</text>
-            <text x="638" y="40" fontSize="11" fontWeight="600" fill="#065f46" className="node-text">成品数据集</text>
-          </g>
-
-          {/* ─── 人工数据集（右下）─── */}
-          <g onClick={() => switchTab('raw')} style={{ cursor: 'pointer' }}>
-            <rect x="600" y="68" width="128" height="36" rx="8" ry="8"
-              fill="#fffbeb" stroke="#f59e0b" strokeWidth="1.5" />
-            <text x="618" y="92" fontSize="12" fill="#f59e0b" className="node-text">✏️</text>
-            <text x="638" y="92" fontSize="11" fontWeight="600" fill="#92400e" className="node-text">人工数据集</text>
-          </g>
-
-          {/* ─── 本体模型（最右）─── */}
-          <g onClick={() => navigate('/ontologies')} style={{ cursor: 'pointer' }}>
-            <rect x="768" y="42" width="88" height="36" rx="8" ry="8"
-              fill="#faf5ff" stroke="#8b5cf6" strokeWidth="1.5" />
-            <text x="784" y="66" fontSize="12" fill="#8b5cf6" className="node-text">🧠</text>
-            <text x="804" y="66" fontSize="11" fontWeight="600" fill="#5b21b6" className="node-text">本体模型</text>
-          </g>
-        </svg>
-
-        {/* 右侧：视图切换 Tab */}
-        <div className="shrink-0">
-          <div
-            ref={viewTabsRef}
-            className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5"
-          >
-            <div
-              className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-[var(--color-nav-bg)] shadow-sm transition-all duration-300 ease-out"
-              style={{ left: `${tabIndicator.left}px`, width: `${tabIndicator.width}px` }}
-            />
+          <div className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
             {TABS.map(([key, label]) => (
               <button
                 key={key}
-                data-tab-value={key}
+                type="button"
                 onClick={() => switchTab(key)}
-                className={`relative z-10 px-5 py-2 text-sm font-medium rounded-md transition-colors duration-200 ${
-                  activeTab === key ? 'text-white' : 'text-slate-500 hover:text-slate-700'
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  activeTab === key
+                    ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                    : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
                 }`}
               >
                 {label}
               </button>
             ))}
+            <span className="mx-0.5 h-5 w-px bg-slate-200" aria-hidden="true" />
+            <button
+              type="button"
+              aria-pressed={insightSelected}
+              onClick={() => setInsightSelected(selected => !selected)}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                insightSelected
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+              }`}
+              title={insightSelected ? '隐藏数据洞察' : '显示数据洞察'}
+            >
+              <BarChart3 size={13} /> 洞察
+            </button>
           </div>
         </div>
       </div>
+
+      {insightSelected && <AssetInsightStrip />}
 
       {/* 下方内容区域 —— 单页展示，内容区可滚动 */}
       <div className="flex-1 min-h-0">
@@ -228,13 +258,15 @@ export default function StructuredDataPage() {
 /** 成品数据集（Curated）视图：流水线 × 产物 关联表 */
 function CuratedView() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
-  const [syncTasks, setSyncTasks] = useState<SyncTask[]>([])
+  const [pipelineTasks, setPipelineTasks] = useState<PipelineTask[]>([])
   const [curated, setCurated] = useState<CuratedDataset[]>([])
   const [loading, setLoading] = useState(true)
-  const [pipelineFilter, setPipelineFilter] = useState(searchParams.get('pipeline') || '')
+  const [loadError, setLoadError] = useState('')
+  const [curatedLoadFailed, setCuratedLoadFailed] = useState(false)
+  const [actionError, setActionError] = useState('')
   const [taskFilter, setTaskFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
 
@@ -245,20 +277,37 @@ function CuratedView() {
   const [deleting, setDeleting] = useState(false)
   const [deleteErr, setDeleteErr] = useState('')
 
-  const load = () => {
+  const load = async () => {
     setLoading(true)
-    Promise.all([
+    setLoadError('')
+    const results = await Promise.allSettled([
       pipelinesApi.list(),
-      syncTasksApi.list(),
+      pipelineTasksApi.list(),
       curatedApi.list() as Promise<CuratedDataset[]>,
-    ]).then(([pls, tasksResp, cur]) => {
-      setPipelines(Array.isArray(pls) ? pls : [])
-      setSyncTasks(tasksResp?.items ?? [])
-      setCurated(Array.isArray(cur) ? cur : [])
-    }).catch(() => {}).finally(() => setLoading(false))
+    ])
+    const [pipelineResult, taskResult, curatedResult] = results
+    if (pipelineResult.status === 'fulfilled') {
+      setPipelines(Array.isArray(pipelineResult.value) ? pipelineResult.value : [])
+    }
+    if (taskResult.status === 'fulfilled') {
+      setPipelineTasks(Array.isArray(taskResult.value?.items) ? taskResult.value.items : [])
+    }
+    if (curatedResult.status === 'fulfilled') {
+      setCurated(Array.isArray(curatedResult.value) ? curatedResult.value : [])
+      setCuratedLoadFailed(false)
+    } else {
+      setCuratedLoadFailed(true)
+    }
+    const failures = [
+      pipelineResult.status === 'rejected' ? `流水线：${errorText(pipelineResult.reason, '加载失败')}` : '',
+      taskResult.status === 'rejected' ? `数据任务：${errorText(taskResult.reason, '加载失败')}` : '',
+      curatedResult.status === 'rejected' ? `成品数据集：${errorText(curatedResult.reason, '加载失败')}` : '',
+    ].filter(Boolean)
+    if (failures.length) setLoadError(failures.join('；'))
+    setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { void Promise.resolve().then(load) }, [])
 
   // 以成品数据集为主视角，关联其来源流水线
   const allRows = useMemo<Row[]>(() => {
@@ -295,23 +344,40 @@ function CuratedView() {
     pipelines.filter(p => p.status === 'published'),
   [pipelines])
 
+  // 兼容历史深链传名称和新深链传 ID；筛选内部只使用解析后的稳定 ID。
+  const pipelineFilter = searchParams.get('pipeline') || ''
+  const normalizedPipelineFilter = useMemo(() => {
+    if (!pipelineFilter) return ''
+    return pipelines.find(pipeline => pipeline.id === pipelineFilter || pipeline.name === pipelineFilter)?.id ?? pipelineFilter
+  }, [pipelineFilter, pipelines])
+
+  const changePipelineFilter = (value: string) => {
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      if (value) next.set('pipeline', value)
+      else next.delete('pipeline')
+      return next
+    }, { replace: true })
+  }
+
   // 选中任务关联的流水线 ID
   const taskPipelineId = useMemo(() => {
     if (!taskFilter) return null
-    return syncTasks.find(t => t.id === taskFilter)?.trigger_pipeline_id || null
-  }, [taskFilter, syncTasks])
+    return pipelineTasks.find(task => task.id === taskFilter)?.pipeline_id || null
+  }, [taskFilter, pipelineTasks])
 
   const filtered = useMemo(() => {
     return allRows.filter(r => {
-      if (pipelineFilter && r.pipelineId !== pipelineFilter) return false
+      if (normalizedPipelineFilter && r.pipelineId !== normalizedPipelineFilter) return false
       if (taskPipelineId && r.pipelineId !== taskPipelineId) return false
-      if (statusFilter && r.curatedStatus !== statusFilter) return false
+      if (statusFilter === 'pending_review' && !isPendingReview(r.curatedStatus)) return false
+      if (statusFilter && statusFilter !== 'pending_review' && r.curatedStatus !== statusFilter) return false
       return true
     })
-  }, [allRows, pipelineFilter, taskPipelineId, statusFilter])
+  }, [allRows, normalizedPipelineFilter, taskPipelineId, statusFilter])
 
   const clearFilters = () => {
-    setPipelineFilter('')
+    changePipelineFilter('')
     setTaskFilter('')
     setStatusFilter('')
   }
@@ -327,23 +393,29 @@ function CuratedView() {
     setDeleteRow(null)
   }
 
-  const handleQuickApprove = async (e: React.MouseEvent, row: Row) => {
+  const handleQuickApprove = async (e: MouseEvent, row: Row) => {
     e.stopPropagation()
     if (!row.curatedId) return
     setApprovingId(row.curatedId)
+    setActionError('')
     try {
       await curatedApi.approve(row.curatedId)
       handleStatusChange(row.curatedId, 'approved')
+    } catch (error) {
+      setActionError(`批准失败：${errorText(error, '请稍后重试')}`)
     } finally { setApprovingId(null) }
   }
 
-  const handleQuickReject = async (e: React.MouseEvent, row: Row) => {
+  const handleQuickReject = async (e: MouseEvent, row: Row) => {
     e.stopPropagation()
     if (!row.curatedId) return
     setRejectingId(row.curatedId)
+    setActionError('')
     try {
       await curatedApi.reject(row.curatedId)
       handleStatusChange(row.curatedId, 'rejected')
+    } catch (error) {
+      setActionError(`驳回失败：${errorText(error, '请稍后重试')}`)
     } finally { setRejectingId(null) }
   }
 
@@ -355,9 +427,8 @@ function CuratedView() {
       await curatedApi.delete(deleteRow.curatedId)
       handleDeleted(deleteRow.curatedId)
       setDeleteRow(null)
-    } catch (e: any) {
-      const detail = e?.detail ?? e?.data?.detail
-      const raw = (detail && typeof detail === 'object' ? detail.message : detail) || e?.message || '删除失败'
+    } catch (error: unknown) {
+      const raw = errorText(error, '删除失败')
       setDeleteErr(raw === 'Admin required' ? '删除数据集需要管理员权限' : String(raw))
       setDeleteRow(null)
     } finally {
@@ -365,16 +436,14 @@ function CuratedView() {
     }
   }
 
-  if (loading) return <p className="text-gray-400 text-sm p-6">加载中...</p>
-
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
       {/* 筛选 */}
       <div className="shrink-0 flex gap-3 flex-wrap items-center px-5 pt-4 pb-3 border-b border-gray-100">
         {/* 按流水线筛选（仅已发布） */}
         <select
-          value={pipelineFilter}
-          onChange={e => setPipelineFilter(e.target.value)}
+          value={publishedPipelines.some(pipeline => pipeline.id === normalizedPipelineFilter) ? normalizedPipelineFilter : ''}
+          onChange={e => changePipelineFilter(e.target.value)}
           className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
         >
           <option value="">全部已发布流水线</option>
@@ -390,8 +459,8 @@ function CuratedView() {
           className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
         >
           <option value="">全部数据任务</option>
-          {syncTasks.map(t => (
-            <option key={t.id} value={t.id}>{t.name}</option>
+          {pipelineTasks.map(task => (
+            <option key={task.id} value={task.id}>{task.name}</option>
           ))}
         </select>
 
@@ -422,9 +491,31 @@ function CuratedView() {
         </button>
       </div>
 
+      {(loadError || actionError) && (
+        <div className="mx-5 mt-3 flex shrink-0 items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <span className="flex-1">{actionError || `部分数据加载失败：${loadError}`}</span>
+          {loadError && (
+            <button type="button" onClick={load} className="rounded border border-red-200 bg-white px-2 py-0.5 hover:bg-red-100">重试</button>
+          )}
+          {actionError && <button type="button" onClick={() => setActionError('')} className="text-red-400 hover:text-red-700" aria-label="关闭错误提示">×</button>}
+        </div>
+      )}
+
       {/* 表格 — 可滚动 */}
       <div className="flex-1 overflow-y-auto px-5 py-3">
-      {allRows.length === 0 ? (
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 p-12 text-sm text-gray-400">
+          <Loader2 size={16} className="animate-spin" /> 加载数据集...
+        </div>
+      ) : curatedLoadFailed && curated.length === 0 ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-10 text-center text-red-700">
+          <AlertTriangle size={28} className="mx-auto mb-2 opacity-70" />
+          <p className="text-sm font-medium">成品数据集加载失败</p>
+          <p className="mt-1 text-xs text-red-500">{loadError}</p>
+          <button type="button" onClick={load} className="mt-3 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs hover:bg-red-100">重新加载</button>
+        </div>
+      ) : allRows.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Table2 size={32} className="mx-auto opacity-30" />
           <p className="text-sm font-medium">暂无成品数据集</p>
@@ -490,7 +581,7 @@ function CuratedView() {
                   <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center gap-1 justify-end">
                       {/* 批准 — 仅待审核 */}
-                      {row.curatedId && row.curatedStatus === 'pending_review' && (
+                      {row.curatedId && isPendingReview(row.curatedStatus) && (
                         <button
                           onClick={e => handleQuickApprove(e, row)}
                           disabled={approvingId === row.curatedId}
@@ -504,7 +595,7 @@ function CuratedView() {
                       )}
 
                       {/* 驳回 — 仅待审核 */}
-                      {row.curatedId && row.curatedStatus === 'pending_review' && (
+                      {row.curatedId && isPendingReview(row.curatedStatus) && (
                         <button
                           onClick={e => handleQuickReject(e, row)}
                           disabled={rejectingId === row.curatedId}
@@ -518,7 +609,7 @@ function CuratedView() {
                       )}
 
                       {/* 删除 — 待审核 / 已拒绝 */}
-                      {row.curatedId && (row.curatedStatus === 'pending_review' || row.curatedStatus === 'rejected') && (
+                      {row.curatedId && (isPendingReview(row.curatedStatus) || row.curatedStatus === 'rejected') && (
                         <button
                           onClick={() => setDeleteRow(row)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"

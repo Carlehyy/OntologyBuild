@@ -3,9 +3,23 @@ from unittest.mock import patch
 
 from app.models.ontology import OntologyProject
 from app.models.relation import Relation
-from app.models.v2.curated import CuratedDataset
+from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.mapping import OntologyMapping
 from app.services.v2.mapping.mapping_service import MappingService
+
+
+def _add_curated(db, name: str) -> Dataset:
+    """Mapping 正式入口只接受 canonical Dataset + DatasetVersion。"""
+    ds = Dataset(name=name, kind="curated", schema_json={"review_status": "approved"})
+    db.add(ds)
+    db.flush()
+    db.add(DatasetVersion(
+        dataset_id=ds.id, version_no=1, rowcount=1,
+        storage_uri=f"s3://test/{ds.id}/v1.parquet",
+    ))
+    db.commit()
+    db.refresh(ds)
+    return ds
 
 
 def test_detect_alt_key_columns():
@@ -41,10 +55,8 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
     db.commit()
     db.refresh(onto)
 
-    ds_sup = CuratedDataset(name="suppliers", status="approved", quality_score=0.9)
-    ds_doc = CuratedDataset(name="strategy_docs", status="approved", quality_score=0.9)
-    db.add_all([ds_sup, ds_doc])
-    db.commit()
+    ds_sup = _add_curated(db, "suppliers")
+    ds_doc = _add_curated(db, "strategy_docs")
 
     rows_by_ds = {
         ds_sup.id: [
@@ -70,7 +82,7 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
     db.commit()
 
     svc = MappingService(db)
-    with patch("app.services.v2.dataset_service.DatasetService.preview",
+    with patch("app.services.v2.dataset_service.DatasetService.load_all_rows",
                side_effect=lambda dataset_id, *a, **k: rows_by_ds[dataset_id]), \
          patch.object(MappingService, "_write_neo4j",
                       side_effect=lambda _s, _c, ents: len(ents), autospec=True), \
@@ -95,10 +107,8 @@ def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
     db.commit()
     db.refresh(onto)
 
-    ds_sup = CuratedDataset(name="suppliers2", status="approved", quality_score=0.9)
-    ds_po = CuratedDataset(name="orders2", status="approved", quality_score=0.9)
-    db.add_all([ds_sup, ds_po])
-    db.commit()
+    ds_sup = _add_curated(db, "suppliers2")
+    ds_po = _add_curated(db, "orders2")
 
     rows_by_ds = {
         ds_sup.id: [
@@ -118,7 +128,7 @@ def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
     db.commit()
 
     svc = MappingService(db)
-    with patch("app.services.v2.dataset_service.DatasetService.preview",
+    with patch("app.services.v2.dataset_service.DatasetService.load_all_rows",
                side_effect=lambda dataset_id, *a, **k: rows_by_ds[dataset_id]), \
          patch.object(MappingService, "_write_neo4j",
                       side_effect=lambda _s, _c, ents: len(ents), autospec=True), \

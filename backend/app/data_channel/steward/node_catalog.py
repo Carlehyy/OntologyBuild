@@ -18,7 +18,7 @@ NODE_CATALOG: list[dict] = [
      "name": "Webhook", "usage": "HTTP 触发（平台调度数据流水线的标准入口）",
      "key_params": {"httpMethod": "POST", "path": "ob-<流水线短名>", "responseMode": "lastNode"}},
     {"type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.2, "category": "trigger",
-     "name": "Schedule Trigger", "usage": "定时触发（在 n8n 内部自主调度）",
+     "name": "Schedule Trigger", "usage": "外部自管工作流可用；平台受管流水线禁止使用，统一由数据任务池调度",
      "key_params": {"rule": {"interval": [{"field": "hours", "hoursInterval": 6}]}}},
     {"type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "category": "trigger",
      "name": "Manual Trigger", "usage": "仅手动测试用，正式流水线不要以它为唯一触发器",

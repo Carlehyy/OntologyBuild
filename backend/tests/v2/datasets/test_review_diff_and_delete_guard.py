@@ -11,6 +11,7 @@ import io
 import uuid
 
 import pytest
+from fastapi import HTTPException
 
 from app.main import app
 from app.routers.v2 import curated as curated_module
@@ -19,6 +20,7 @@ from app.routers.v2 import mappings as mappings_module
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.curated import CuratedReview
 from app.data_channel.datasets.service import DatasetService, rows_to_parquet_bytes
+from app.data_channel.curated.review_service import ReviewService, load_rows_with_edits
 
 
 class FakeStorage:
@@ -115,6 +117,170 @@ def test_review_diff_first_version_all_added(api, auth_headers, db):
     assert body["delta"]["deleted_count"] == 0
 
 
+# ── 审核行身份与版本绑定 ───────────────────────────────────────
+def test_review_edit_uses_arbitrary_single_primary_key(db, fake_storage):
+    ds_id = _make_curated_with_versions(db, [[
+        {"order_no": "SO-1", "name": "原名称"},
+        {"order_no": "SO-2", "name": "不应修改"},
+    ]], pk="order_no")
+    svc = ReviewService(db)
+    review = svc.start_review(ds_id)
+    assert review.dataset_version_id is not None
+    svc.batch_edit_rows(review.id, [{
+        "row_pk": "SO-1", "field_name": "name",
+        "old_value": "原名称", "new_value": "新名称",
+    }])
+    result = svc.apply_edits_to_snapshot(review.id, [
+        {"order_no": "SO-1", "name": "原名称"},
+        {"order_no": "SO-2", "name": "不应修改"},
+    ])
+    assert result[0]["name"] == "新名称"
+    assert result[1]["name"] == "不应修改"
+
+
+def test_review_edit_with_wrong_row_key_is_not_silently_ignored(db, fake_storage):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "原名称"}]], pk="order_no")
+    svc = ReviewService(db)
+    review = svc.start_review(ds_id)
+    with pytest.raises(HTTPException) as exc:
+        svc.batch_edit_rows(review.id, [{
+            "row_pk": "NOT-EXISTS", "field_name": "name",
+            "old_value": None, "new_value": "错误目标",
+        }])
+    assert exc.value.detail["code"] == "review_row_not_found"
+
+
+def test_review_edit_supports_composite_primary_key_without_collision(db, fake_storage):
+    ds_id = _make_curated_with_versions(db, [[
+        {"tenant": "cn", "order_no": "1,2", "amount": "10"},
+        {"tenant": "cn,1", "order_no": "2", "amount": "20"},
+    ]], pk="tenant,order_no")
+    svc = ReviewService(db)
+    review = svc.start_review(ds_id)
+    svc.batch_edit_rows(review.id, [{
+        # JSON 数组编码不会把 ("cn", "1,2") 与 ("cn,1", "2") 混为一行
+        "row_pk": ["cn", "1,2"], "field_name": "amount",
+        "old_value": "10", "new_value": "11",
+    }])
+    result = svc.apply_edits_to_snapshot(review.id, [
+        {"tenant": "cn", "order_no": "1,2", "amount": "10"},
+        {"tenant": "cn,1", "order_no": "2", "amount": "20"},
+    ])
+    assert [r["amount"] for r in result] == ["11", "20"]
+
+
+def test_review_cannot_approve_after_new_dataset_version_arrives(db, fake_storage):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "v1"}]], pk="order_no")
+    review_svc = ReviewService(db)
+    review = review_svc.start_review(ds_id)
+    reviewed_version_id = review.dataset_version_id
+
+    DatasetService(db).create_version(
+        ds_id, rows_to_parquet_bytes([{"order_no": "SO-1", "name": "v2"}]), rowcount=1)
+    with pytest.raises(HTTPException) as exc:
+        review_svc.approve(review.id)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "review_version_stale"
+    assert exc.value.detail["review_dataset_version_id"] == reviewed_version_id
+    db.refresh(review)
+    assert review.status == "pending"
+
+
+def test_review_cannot_save_edits_after_new_dataset_version_arrives(db, fake_storage):
+    """页面打开后的新版本不能让行级修改悄悄落进旧审核。"""
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "v1"}]], pk="order_no")
+    review_svc = ReviewService(db)
+    review = review_svc.start_review(ds_id)
+
+    DatasetService(db).create_version(
+        ds_id, rows_to_parquet_bytes([{"order_no": "SO-1", "name": "v2"}]), rowcount=1)
+    with pytest.raises(HTTPException) as exc:
+        review_svc.batch_edit_rows(review.id, [{
+            "row_pk": "SO-1", "field_name": "name",
+            "old_value": "v1", "new_value": "用户以为在改 v2",
+        }])
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "review_version_stale"
+
+
+def test_review_diff_keeps_showing_bound_version_after_new_version(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "v1"}]], pk="order_no")
+    review = ReviewService(db).start_review(ds_id)
+    DatasetService(db).create_version(
+        ds_id, rows_to_parquet_bytes([{"order_no": "SO-1", "name": "v2"}]), rowcount=1)
+
+    response = api.get(
+        f"/api/v2/curated/{ds_id}/review-diff",
+        params={"review_id": review.id}, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    body = response.json().get("data", response.json())
+    assert body["current"]["version_no"] == 1
+    assert body["current"]["rows"][0]["name"] == "v1"
+    assert body["review"]["stale"] is True
+    assert body["review"]["latest_version_no"] == 2
+
+
+def test_approved_v1_edits_do_not_leak_into_v2_export(db, fake_storage):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "v1"}]], pk="order_no")
+    review_svc = ReviewService(db)
+    review = review_svc.start_review(ds_id)
+    review_svc.batch_edit_rows(review.id, [{
+        "row_pk": "SO-1", "field_name": "name",
+        "old_value": "v1", "new_value": "v1-approved",
+    }])
+    review_svc.approve(review.id)
+    DatasetService(db).create_version(
+        ds_id, rows_to_parquet_bytes([{"order_no": "SO-1", "name": "v2"}]), rowcount=1)
+
+    assert load_rows_with_edits(db, ds_id)[0]["name"] == "v2"
+
+
+def test_quick_approve_decides_existing_pending_row_edits(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "原名称"}]], pk="order_no")
+    svc = ReviewService(db)
+    pending = svc.start_review(ds_id)
+    svc.batch_edit_rows(pending.id, [{
+        "row_pk": "SO-1", "field_name": "name",
+        "old_value": "原名称", "new_value": "审核修正",
+    }])
+
+    response = api.post(
+        f"/api/v2/curated/{ds_id}/review",
+        params={"action": "approve"}, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    body = response.json().get("data", response.json())
+    assert body["review_id"] == pending.id
+    assert load_rows_with_edits(db, ds_id)[0]["name"] == "审核修正"
+
+
+def test_repeated_start_review_reuses_pending_session_for_same_version(db, fake_storage):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "原名称", "amount": "10"}]],
+        pk="order_no")
+    svc = ReviewService(db)
+    first = svc.start_review(ds_id)
+    svc.batch_edit_rows(first.id, [{
+        "row_pk": "SO-1", "field_name": "name",
+        "old_value": "原名称", "new_value": "第一批修改",
+    }])
+    second = svc.start_review(ds_id)
+    assert second.id == first.id
+    svc.batch_edit_rows(second.id, [{
+        "row_pk": "SO-1", "field_name": "amount",
+        "old_value": "10", "new_value": "11",
+    }])
+    svc.approve(second.id)
+    exported = load_rows_with_edits(db, ds_id)[0]
+    assert exported["name"] == "第一批修改"
+    assert exported["amount"] == "11"
+
+
 # ── 禁删已审批 ─────────────────────────────────────────────────
 def test_approved_curated_cannot_be_deleted(api, auth_headers, db, admin_user):
     ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "a"}]])
@@ -175,6 +341,24 @@ def test_pending_curated_can_be_deleted(api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "a"}]])
     r = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
     assert r.status_code == 204, r.text
+
+
+def test_pending_review_is_removed_before_its_bound_dataset_version(api, auth_headers, db):
+    from app.models.v2.curated import CuratedReview, CuratedRowEdit
+
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "a"}]], pk="order_no")
+    review = ReviewService(db).start_review(ds_id)
+    review_id = review.id
+    ReviewService(db).batch_edit_rows(review.id, [{
+        "row_pk": "SO-1", "field_name": "name",
+        "old_value": "a", "new_value": "A",
+    }])
+
+    response = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
+    assert response.status_code == 204, response.text
+    assert db.query(CuratedReview).filter(CuratedReview.id == review_id).first() is None
+    assert db.query(CuratedRowEdit).filter(CuratedRowEdit.review_id == review_id).first() is None
 
 
 # ── 依赖检查：被本体映射引用时拦截 ─────────────────────────────

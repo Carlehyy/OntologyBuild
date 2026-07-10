@@ -14,6 +14,27 @@ from datetime import datetime
 from typing import Any
 
 
+VALID_WRITE_MODES = frozenset({"overwrite", "append", "append_dedup", "upsert"})
+
+
+def normalize_write_mode(mode: Any) -> str:
+    """把历史空值规整为 overwrite，并拒绝任何未知入库方式。
+
+    旧实现把所有未识别值都落入 overwrite 分支。这会让拼写错误或新旧版本
+    不兼容的任务静默变成全量覆盖，属于不可接受的数据破坏风险。空值仍按
+    历史约定解释为 overwrite，其余值必须属于平台公开支持的模式。
+    """
+    if mode is None or str(mode).strip() == "":
+        return "overwrite"
+    normalized = str(mode).strip().lower()
+    if normalized not in VALID_WRITE_MODES:
+        allowed = ", ".join(sorted(VALID_WRITE_MODES))
+        raise ValueError(
+            f"不支持的入库方式「{mode}」。允许值：{allowed}；"
+            f"为避免误覆盖资产，系统不会把未知方式回退为 overwrite。")
+    return normalized
+
+
 def load_latest_rows(db, dataset_id: str) -> list[dict]:
     """加载资产湖中该数据集最新版本的全部行（合并基座）。
 
@@ -77,7 +98,8 @@ def _apply_soft_delete(rows: list[dict], deleted_col: str) -> list[dict]:
 
 def merge_rows(old: list[dict], new: list[dict], opts: dict[str, Any]) -> tuple[list[dict], dict]:
     """按入库方式合并，返回 (合并后的全量行, 合并统计)"""
-    mode = (opts or {}).get("mode") or "overwrite"
+    opts = opts or {}
+    mode = normalize_write_mode(opts.get("mode"))
 
     if mode == "append":
         merged = old + new
@@ -87,7 +109,7 @@ def merge_rows(old: list[dict], new: list[dict], opts: dict[str, Any]) -> tuple[
         key_cols = [c.strip() for c in str(opts.get("primary_key") or "").split(",") if c.strip()]
         merged = _dedup_by_key(old + new, key_cols) if key_cols else (old + new)
         merged = _apply_soft_delete(merged, str(opts.get("soft_delete_column") or ""))
-    else:  # overwrite
+    elif mode == "overwrite":
         merged = new
 
     return merged, {

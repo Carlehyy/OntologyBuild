@@ -31,6 +31,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 
@@ -370,10 +371,20 @@ def _cell_type_ok(v, expected: str) -> bool:
     SchemaInferenceStep._infer_type 保持一致；"1"/"0" 在 integer 列同样放行
     （推断器会把它们判成 boolean，但作为整数录入是完全合法的）。
     """
-    if expected in ("string", "json"):
+    if expected == "string":
         return True
-    if v is None:
+    if v is None or (isinstance(v, str) and not v.strip()):
         return True
+    if expected == "json":
+        if isinstance(v, (dict, list)):
+            return True
+        if not isinstance(v, str):
+            return False
+        try:
+            json.loads(v)
+            return True
+        except (TypeError, ValueError):
+            return False
     if isinstance(v, (dict, list)):
         return False
     s = str(v).strip()
@@ -500,6 +511,27 @@ def validate_upsert_base(old_rows: list[dict], pk_cols: list[str], *,
         raise LakeGateError(
             f"{e} —— 湖中存量数据不满足主键契约，无法安全执行主键合并（upsert）。"
             f"请先用 overwrite 方式重建该资产，让全量数据经过主键校验后再切回 upsert。") from None
+
+
+def validate_merged_lake(rows: list[dict], pk_cols: list[str], *,
+                         dataset_name: str = "", write_mode: str = "") -> None:
+    """有身份契约的资产在合并后必须再次满足全湖主键约束。
+
+    gate_rows 校验的是「本次输出」，无法发现旧批次与新批次之间的重复键。
+    append / append_dedup 尤其容易把两个批次中相同业务对象并排保留；因此
+    落盘前对合并后的完整快照再做一次非空/唯一校验。append_dedup 的整行去重
+    只能消除完全相同的行，不能消除“同一主键、其他字段已变化”的两行。
+    """
+    if not rows or not pk_cols:
+        return
+    try:
+        validate_pk(rows, pk_cols, dataset_name=dataset_name, scope="合并后的全量数据")
+    except LakeGateError as exc:
+        mode_hint = (
+            "当前使用追加模式；有主键的资产应改用 upsert，或确保各批次主键互不重复。"
+            if write_mode in ("append", "append_dedup") else
+            "请修正合并逻辑或源数据后重试。")
+        raise LakeGateError(f"{exc} {mode_hint}为保护既有版本，本次数据不会入湖。") from None
 
 
 def persist_contract(curated_ds, *, pk: str, pk_source: str,

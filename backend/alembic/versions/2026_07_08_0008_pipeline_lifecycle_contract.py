@@ -24,6 +24,8 @@ depends_on = None
 def _column_exists(table: str, column: str) -> bool:
     conn = op.get_bind()
     inspector = sa_inspect(conn)
+    if not inspector.has_table(table):
+        return False
     return column in [c["name"] for c in inspector.get_columns(table)]
 
 
@@ -35,6 +37,8 @@ def upgrade() -> None:
             "v2_pipeline_versions",
             sa.Column("column_definitions", sa.JSON(), nullable=True),
         )
+    # enabled 过去由应用启动时临时补列，导致 Alembic 空库部署在下方
+    # UPDATE 中直接引用不存在的列。生命周期字段必须由迁移正式管理。
     if not _column_exists("v2_pipelines", "enabled"):
         op.add_column(
             "v2_pipelines",

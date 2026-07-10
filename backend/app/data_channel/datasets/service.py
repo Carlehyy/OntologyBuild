@@ -307,6 +307,7 @@ class DatasetService:
     def _prune_versions(self, dataset_id: str) -> None:
         from app.config import settings
         from app.models.v2.dataset import MediaItem
+        from app.models.v2.curated import CuratedReview
 
         keep = int(getattr(settings, "dataset_version_keep", 0) or 0)
         if keep <= 0:
@@ -320,10 +321,14 @@ class DatasetService:
         # 挂着媒体文件（OCR 等）的版本不清理，避免级联删除媒体记录
         media_ver_ids = {row[0] for row in self._db.query(MediaItem.dataset_version_id).filter(
             MediaItem.dataset_version_id.in_([v.id for v in candidates])).all()}
+        # 审核背书绑定不可变 DatasetVersion；先删对象再撞 FK 会留下“审核记录还在、
+        # 证据快照已丢”的不可恢复状态，因此被任何审核引用的版本永久排除清理。
+        reviewed_ver_ids = {row[0] for row in self._db.query(CuratedReview.dataset_version_id).filter(
+            CuratedReview.dataset_version_id.in_([v.id for v in candidates])).all()}
 
         removed = 0
         for v in candidates:
-            if v.id in media_ver_ids:
+            if v.id in media_ver_ids or v.id in reviewed_ver_ids:
                 continue
             if v.storage_uri:
                 try:

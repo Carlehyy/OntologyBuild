@@ -1,6 +1,7 @@
 """Pipeline 执行 Celery 任务 — 支持 DAG 编译 + 节点状态追踪"""
 from __future__ import annotations
 from datetime import datetime, timezone
+import hashlib
 import logging
 from pathlib import Path
 
@@ -403,45 +404,116 @@ def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None =
     return " ".join(name_parts)
 
 
-def resolve_curated_target(db, pl, source: dict, multi_source: bool,
-                           table_name: str | None = None):
-    """定位本产物应写入的既有 curated 数据集：**按 id 绑定优先，按名字兜底**。
+def _curated_output_key(source: dict, multi_source: bool,
+                        table_name: str | None = None) -> str:
+    """同一流水线内产物的稳定键，不含可修改的流水线名称。
 
-    产物名由 pl.name 派生，若只按名字 get-or-create，流水线改名后下一次运行
-    会另起一个空白资产——旧资产（主键契约/版本史/映射绑定）静默停更。因此
-    先在 target_curated_ids 里按入湖时固化的 schema 键位（pipeline_id /
-    transform_output_table / source_dataset_id）反查；多候选歧义时回退名字，
-    宁可分叉也不错绑别的产物。返回 (既有数据集|None, 派生名)。
+    单产物固定为 default；多源/拆表产物把源数据集和表名都纳入键，避免两个
+    源恰好产出同名拆表时串湖。文件名只用于极少数没有 dataset_id 的兼容路径。
     """
+    parts: list[str] = []
+    if multi_source:
+        source_key = source.get("dataset_id") or source.get("filename") or "unknown-source"
+        parts.append(f"source:{source_key}")
+    if table_name:
+        parts.append(f"table:{table_name}")
+    return "|".join(parts) or "default"
+
+
+def _legacy_output_matches(schema: dict, source: dict, multi_source: bool,
+                           table_name: str | None) -> bool:
+    """判断没有 output_key 的历史资产是否与当前产物槽位一致。"""
+    if schema.get("output_key"):
+        return schema.get("output_key") == _curated_output_key(
+            source, multi_source, table_name)
+    old_table = schema.get("transform_output_table")
+    old_source = schema.get("source_dataset_id")
+    if table_name and old_table != table_name:
+        return False
+    if not table_name and old_table:
+        return False
+    if multi_source and old_source and old_source != source.get("dataset_id"):
+        return False
+    return True
+
+
+def _disambiguated_curated_name(db, base_name: str, pipeline_id: str,
+                                output_key: str) -> str:
+    """同名已被其他产物占用时生成确定、可诊断且满足 200 字符限制的名字。"""
     from app.models.v2.dataset import Dataset as _DS
 
+    digest = hashlib.sha256(f"{pipeline_id}:{output_key}".encode("utf-8")).hexdigest()[:8]
+    suffix = f" [{digest}]"
+    candidate = f"{base_name[:200 - len(suffix)].rstrip()}{suffix}"
+    n = 2
+    while db.query(_DS).filter(_DS.kind == "curated", _DS.name == candidate).first():
+        numbered = f" [{digest}-{n}]"
+        candidate = f"{base_name[:200 - len(numbered)].rstrip()}{numbered}"
+        n += 1
+    return candidate
+
+
+def resolve_curated_target(db, pl, source: dict, multi_source: bool,
+                           table_name: str | None = None):
+    """按 (pipeline_id, output_key) 找产物；名字只作经归属校验的兼容兜底。
+
+    流水线名称可修改，也可在归档后被另一条新流水线复用，不能充当资产身份。
+    历史资产尚无 output_key 时，仅允许同流水线或 target_curated_ids 中明确绑定
+    的无主资产按旧槽位规则认领。发现同名属于别的流水线时，返回一个不冲突的
+    展示名创建新资产，绝不复用对方的版本史、主键契约和下游映射。
+    """
+    from app.models.v2.dataset import Dataset as _DS
+    from app.data_channel.datasets.lake_gate import LakeGateError
+
     ds_name = _curated_name(pl, source, multi_source, table_name)
+    output_key = _curated_output_key(source, multi_source, table_name)
     target_ids = [c for c in (pl.target_curated_ids or []) if c]
-    if not target_ids:
-        return None, ds_name
-    candidates = db.query(_DS).filter(
+
+    # JSON 路径过滤由 SQLite/PostgreSQL 方言分别编译，避免每次运行把全湖资产
+    # 拉进 Python 扫描；资产数量增长后身份解析仍是索引/数据库侧查询。
+    stable = db.query(_DS).filter(
+        _DS.kind == "curated",
+        _DS.schema_json["pipeline_id"].as_string() == pl.id,
+        _DS.schema_json["output_key"].as_string() == output_key,
+    ).all()
+    if len(stable) > 1:
+        ids = [c.id for c in stable]
+        raise LakeGateError(
+            f"流水线「{pl.name}」产物身份 ({pl.id}, {output_key}) 对应多个资产 {ids}，"
+            f"无法安全决定写入目标。请先保留正确资产并解除其余重复绑定。")
+    if stable:
+        return stable[0], ds_name
+
+    # 兼容历史数据：只从流水线显式绑定的 target ids 中认领没有 output_key 的资产。
+    legacy_bound = []
+    bound_candidates = (db.query(_DS).filter(
         _DS.kind == "curated", _DS.id.in_(target_ids)).all()
-    # 别的流水线的产物（历史数据 target_curated_ids 被误写时）不认
-    candidates = [c for c in candidates
-                  if (dict(c.schema_json or {}).get("pipeline_id") or pl.id) == pl.id]
+        if target_ids else [])
+    for c in bound_candidates:
+        schema = dict(c.schema_json or {})
+        owner = schema.get("pipeline_id")
+        if owner not in (None, "", pl.id):
+            continue
+        if _legacy_output_matches(schema, source, multi_source, table_name):
+            legacy_bound.append(c)
+    if len(legacy_bound) > 1:
+        ids = [c.id for c in legacy_bound]
+        raise LakeGateError(
+            f"流水线「{pl.name}」的历史产物绑定存在歧义：槽位 {output_key} 命中 {ids}。"
+            f"为避免串湖，本次运行已停止；请清理 target_curated_ids 后重试。")
+    if legacy_bound:
+        return legacy_bound[0], ds_name
 
-    def _schema(c):
-        return dict(c.schema_json or {})
-
-    if table_name:
-        matched = [c for c in candidates
-                   if _schema(c).get("transform_output_table") == table_name]
-    elif multi_source:
-        matched = [c for c in candidates
-                   if _schema(c).get("source_dataset_id") == source.get("dataset_id")]
-    else:
-        matched = candidates
-    if len(matched) == 1:
-        return matched[0], ds_name
-    # 0 个（首跑/旧数据无键位）或多个（歧义）→ 名字兜底
+    # 名称兜底也必须验证归属；仅同一流水线且槽位兼容时可复用。
     by_name = db.query(_DS).filter(
         _DS.kind == "curated", _DS.name == ds_name).first()
-    return by_name, ds_name
+    if by_name is None:
+        return None, ds_name
+    schema = dict(by_name.schema_json or {})
+    if (schema.get("pipeline_id") == pl.id
+            and _legacy_output_matches(schema, source, multi_source, table_name)):
+        return by_name, ds_name
+    return None, _disambiguated_curated_name(db, ds_name, pl.id, output_key)
 
 
 def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> dict:
@@ -453,6 +525,11 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     get-or-create 也在锁内，同名数据集的创建竞争一并串行化。
     """
     from app.data_channel.datasets.lock import dataset_write_lock
+    from app.data_channel.pipeline_tasks.merge import normalize_write_mode
+
+    # 在任何空输出短路/目标创建之前验证，未知模式不能借 skip_empty 伪装成功。
+    if write_opts is not None:
+        write_opts = {**write_opts, "mode": normalize_write_mode(write_opts.get("mode"))}
 
     bound_ds, ds_name = resolve_curated_target(db, pl, source, multi_source, table_name)
     lock_key = f"curated::{bound_ds.id}" if bound_ds is not None else f"curated::{ds_name}"
@@ -468,17 +545,39 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本。
     # 绑定关系按 id（resolve_curated_target），流水线改名不影响归属
     from app.models.v2.dataset import Dataset as _DS
+    from app.data_channel.datasets.lake_gate import LakeGateError
+    from app.data_channel.pipeline_tasks.merge import normalize_write_mode
+
+    if write_opts is not None:
+        write_opts = {**write_opts, "mode": normalize_write_mode(write_opts.get("mode"))}
+    output_key = _curated_output_key(source, multi_source, table_name)
     curated_ds = db.query(_DS).filter(_DS.id == bound_ds_id).first() if bound_ds_id else None
     if curated_ds is None:
-        curated_ds = db.query(_DS).filter(
+        same_name = db.query(_DS).filter(
             _DS.kind == "curated", _DS.name == ds_name).first()
+        if same_name is not None:
+            schema = dict(same_name.schema_json or {})
+            if (schema.get("pipeline_id") != pl.id
+                    or not _legacy_output_matches(schema, source, multi_source, table_name)):
+                raise LakeGateError(
+                    f"成品资产名称「{ds_name}」在获取写锁后已被其他流水线/产物占用，"
+                    f"本次运行停止以避免串湖，请重试让系统重新分配安全名称。")
+            curated_ds = same_name
     if curated_ds is None:
-        curated_ds = svc.create_dataset(name=ds_name, kind="curated")
+        # 首建即写入身份，不留“先建空资产、稍后才补 pipeline_id”的并发窗口。
+        curated_ds = svc.create_dataset(
+            name=ds_name, kind="curated", schema_json={
+                "pipeline_id": pl.id,
+                "output_key": output_key,
+                "source_dataset_id": source.get("dataset_id"),
+                **({"transform_output_table": table_name} if table_name else {}),
+            })
 
     # ── 资产湖准入闸门：行格式规范化 + 主键契约（声明仲裁/三校验）+ 列漂移检测。
     # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
     from app.data_channel.datasets.lake_gate import (
-        gate_rows, persist_contract, split_pk, validate_upsert_base, infer_columns_typed)
+        gate_rows, persist_contract, split_pk, validate_merged_lake,
+        validate_upsert_base, infer_columns_typed)
     # 流水线字段契约（改名/非空/主键）仅适用于单产物运行：多源/宽表拆分的
     # 契约粒度是「每个数据集一个」，流水线级契约对不上，跳过并在警告里说明
     contract_applicable = table_name is None and not multi_source
@@ -525,6 +624,11 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         # 合并统一用仲裁后的生效主键（湖中已声明的契约优先于任务本次填写）
         lake_rows, merge_meta = merge_rows(
             old_rows, data, {**write_opts, "primary_key": effective_pk})
+        # gate_rows 只看本批输出；合并后再验完整快照，才能发现跨批次重复主键。
+        # 对所有模式统一执行可防未来新增合并策略遗漏，当前 append 两种模式受益最大。
+        validate_merged_lake(
+            lake_rows, split_pk(effective_pk), dataset_name=curated_ds.name,
+            write_mode=merge_meta.get("mode") or "")
         # 审计：本次入库对资产湖的行级影响（入库前后 diff：新增/更新/删除）
         lake_impact = compute_lake_impact(prev_rows, lake_rows, split_pk(effective_pk))
 
@@ -547,6 +651,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
             schema["route"] = source["route"]
             schema["source_dataset_id"] = source["dataset_id"]
             schema["pipeline_id"] = pl.id
+            schema["output_key"] = output_key
             if merge_meta:
                 schema["write_mode"] = merge_meta.get("mode")
             if table_name:

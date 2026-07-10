@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   X, Loader2, AlertCircle, CheckCircle2, GitBranch, ArrowRight,
-  Database, KeyRound, Lock, ChevronLeft, ChevronRight, Table2, Check, Sparkles,
+  Database, KeyRound, ChevronLeft, ChevronRight, Table2, Check, Sparkles,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -22,8 +22,6 @@ const STEPS = ['基本信息', '选择流水线', '设置入库方式', '调度�
 
 const splitPk = (s?: string): string[] =>
   (s ?? '').split(',').map(x => x.trim()).filter(Boolean)
-const joinPk = (arr: string[]): string => arr.join(',')
-
 export default function TaskFormModal({ initialTask, initialPipelineId, onClose, onSaved }: Props) {
   const navigate = useNavigate()
   const isEdit = !!initialTask
@@ -33,6 +31,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
   const [pipelines, setPipelines] = useState<SelectablePipeline[]>([])
   const [pipelinesLoading, setPipelinesLoading] = useState(true)
+  const [pipelinesError, setPipelinesError] = useState('')
   /** 当前用于「预览 + 主键勾选」的成品数据集 id（流水线可能产出多个） */
   const [activeCuratedId, setActiveCuratedId] = useState<string>('')
 
@@ -41,7 +40,6 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     description: initialTask.description,
     pipeline_id: initialTask.pipeline_id,
     write_mode: initialTask.write_mode,
-    primary_key: initialTask.primary_key,
     soft_delete_column: initialTask.soft_delete_column,
     skip_empty: initialTask.skip_empty,
     schedule_type: initialTask.schedule_type,
@@ -53,7 +51,6 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     description: '',
     pipeline_id: initialPipelineId || '',
     write_mode: 'overwrite',
-    primary_key: '',
     soft_delete_column: '',
     skip_empty: true,
     schedule_type: 'MANUAL',
@@ -64,9 +61,13 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
   useEffect(() => {
     setPipelinesLoading(true)
+    setPipelinesError('')
     pipelineTasksApi.selectablePipelines()
       .then(res => setPipelines(res.items ?? []))
-      .catch(() => setPipelines([]))
+      .catch((err: any) => {
+        setPipelines([])
+        setPipelinesError(err?.detail || err?.message || '可用流水线加载失败，请稍后重试')
+      })
       .finally(() => setPipelinesLoading(false))
   }, [])
 
@@ -74,15 +75,14 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   const curatedList: CuratedDataset[] = selectedPipeline?.curated_datasets || []
   const activeCurated = curatedList.find(c => c.id === activeCuratedId) || curatedList[0] || null
   const contract = selectedPipeline?.contract || null
-  // 主键锁定来源优先级：湖中已固化 > 流水线契约（两者若都有必然一致，闸门保证）
+  // 主键唯一权威源是流水线发布契约；湖中值只用于发现历史漂移，不能反向改写任务。
   const declaredPk = (activeCurated?.primary_key || '').trim()
   const contractPk = (contract?.primary_key || '').trim()
-  const lockedPk = declaredPk || contractPk
-  const pkLocked = lockedPk.length > 0
-  const pkLockSource: 'lake' | 'contract' | null = declaredPk ? 'lake' : contractPk ? 'contract' : null
-  // 主键可选范围：湖列优先（真实数据），没有湖数据时用契约列
-  const pkColumns = (activeCurated?.columns?.length ? activeCurated.columns : null)
-    || (contract?.columns?.map(c => ({ name: c.name, type: c.type })) ?? [])
+  const pkMismatch = Boolean(
+    declaredPk && contractPk
+    && splitPk(declaredPk).join('\u0000') !== splitPk(contractPk).join('\u0000'),
+  )
+  const contractColumns = contract?.columns?.map(c => ({ name: c.name, type: c.type })) ?? []
 
   // 选中流水线后默认锁定第一个成品数据集
   useEffect(() => {
@@ -90,13 +90,6 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
       setActiveCuratedId(curatedList[0]?.id || '')
     }
   }, [selectedPipeline, curatedList, activeCuratedId])
-
-  // 湖中/契约已声明主键时强制对齐（任务不能改写身份契约，否则运行会被闸门拒绝）
-  useEffect(() => {
-    if (pkLocked && form.primary_key !== lockedPk) {
-      setForm(prev => ({ ...prev, primary_key: lockedPk }))
-    }
-  }, [pkLocked, lockedPk]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = <K extends keyof PipelineTaskPayload>(key: K, val: PipelineTaskPayload[K]) => {
     setForm(prev => ({ ...prev, [key]: val }))
@@ -106,23 +99,16 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     update('pipeline_id', id)
     const np = pipelines.find(p => p.id === id)
     setActiveCuratedId(np?.curated_datasets[0]?.id || '')
-    // 换流水线：预填契约主键（有则锁定），否则清空交给锁定 effect 或用户重新勾选
-    if (!isEdit) update('primary_key', (np?.contract?.primary_key || '').trim())
     setError('')
-  }
-
-  const togglePk = (col: string) => {
-    if (pkLocked) return
-    const cur = splitPk(form.primary_key)
-    const next = cur.includes(col) ? cur.filter(c => c !== col) : [...cur, col]
-    update('primary_key', joinPk(next))
   }
 
   const validateStep = (s: number): string | null => {
     if (s === 0 && !form.name.trim()) return '请填写任务名称'
     if (s === 1 && !form.pipeline_id) return '请选择一条已产出数据的流水线'
-    if (s === 2 && form.write_mode === 'upsert' && !(form.primary_key ?? '').trim())
-      return '「主键合并」入库方式必须至少选择一个主键列'
+    if (s === 2 && pkMismatch)
+      return '资产湖主键与流水线发布契约不一致，请先修复契约漂移后再创建任务'
+    if (s === 2 && form.write_mode === 'upsert' && !contractPk)
+      return '「主键合并」要求流水线在发布契约中声明主键'
     if (s === 3) {
       if (form.schedule_type === 'CRON' && !(form.cron_expression ?? '').trim()) return '请填写 Cron 表达式'
       if (form.schedule_type === 'INTERVAL' && (!form.interval_seconds || form.interval_seconds < 10)) return '间隔必须 ≥ 10 秒'
@@ -168,10 +154,9 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
       : `每隔 ${form.interval_seconds || 0} 秒自动触发一次`
     const modeLabel = WRITE_MODE_META[form.write_mode].label
     const targets = curatedList.length ? curatedList.map(c => `「${c.name}」`).join('、') : '其成品数据集'
-    const pk = (form.primary_key || '').trim()
     const modeDetail =
       form.write_mode === 'upsert'
-        ? `按主键（${pk || '未设置'}）识别同一条记录并保留最新` + (form.soft_delete_column ? `，依据「${form.soft_delete_column}」处理逻辑删除` : '')
+        ? `按流水线契约主键（${contractPk || '未声明'}）识别同一条记录并保留最新` + (form.soft_delete_column ? `，依据「${form.soft_delete_column}」处理逻辑删除` : '')
       : form.write_mode === 'overwrite' ? '先清空再写入本次全部产物（全量覆盖）'
       : form.write_mode === 'append' ? '直接追加到已有数据尾部'
       : '按整行内容去重后追加'
@@ -252,6 +237,13 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <div className="text-sm text-slate-400 flex items-center justify-center gap-1.5 py-8">
                   <Loader2 size={14} className="animate-spin" />加载可用流水线...
                 </div>
+              ) : pipelinesError ? (
+                <div className="text-sm text-red-600 p-5 bg-red-50 border border-red-100 rounded-xl text-center space-y-2">
+                  <AlertCircle size={22} className="mx-auto text-red-400" />
+                  <p>{pipelinesError}</p>
+                  <button type="button" onClick={() => window.location.reload()}
+                    className="text-xs px-3 py-1.5 border border-red-200 rounded-lg hover:bg-white">重新加载</button>
+                </div>
               ) : pipelines.length === 0 ? (
                 <div className="text-sm text-slate-500 p-5 bg-slate-50 rounded-xl text-center space-y-2">
                   <Database size={22} className="mx-auto text-slate-300" />
@@ -319,90 +311,55 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
             </StepShell>
           )}
 
-          {/* Step 2: 入库方式 + 主键多选 */}
+          {/* Step 2: 入库方式；主键只读继承流水线发布契约 */}
           {show(2) && (
             <StepShell title="设置入库方式" subtitle="流水线最终产物与资产湖已有数据的合并策略">
               <Field label="入库方式" required>
                 <div className="grid grid-cols-2 gap-2">
                   {(Object.keys(WRITE_MODE_META) as WriteMode[]).map(mode => (
-                    <ModeCard key={mode} active={form.write_mode === mode} onClick={() => update('write_mode', mode)}
+                    <ModeCard key={mode} active={form.write_mode === mode}
+                      disabled={mode === 'upsert' && !contractPk}
+                      onClick={() => update('write_mode', mode)}
                       title={WRITE_MODE_META[mode].label} desc={WRITE_MODE_META[mode].desc} />
                   ))}
                 </div>
               </Field>
 
-              {/* 主键：勾选式多选，展示当前可设置的主键范围 */}
-              <div className={`space-y-3 p-3.5 rounded-xl border ${form.write_mode === 'upsert' ? 'bg-violet-50/40 border-violet-100' : 'bg-slate-50/60 border-slate-100'}`}>
+              <div className={`space-y-3 p-3.5 rounded-xl border ${contractPk ? 'bg-violet-50/40 border-violet-100' : 'bg-slate-50/60 border-slate-100'}`}>
                 <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                   <KeyRound size={13} className="text-slate-400" />
-                  主键列{form.write_mode === 'upsert' && <span className="text-red-500">*</span>}
-                  {pkLocked && (
-                    <span className={`ml-1 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border ${
-                      pkLockSource === 'lake'
-                        ? 'bg-amber-50 text-amber-600 border-amber-100'
-                        : 'bg-violet-50 text-violet-600 border-violet-100'}`}>
-                      <Lock size={9} /> {pkLockSource === 'lake' ? '湖中已固化' : '流水线契约'}
-                    </span>
-                  )}
+                  流水线主键契约
+                  <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded-full border bg-violet-50 text-violet-600 border-violet-100">
+                    发布时封版 · 任务只读
+                  </span>
                 </div>
-
-                {pkLocked ? (
-                  <p className="text-xs text-slate-500 leading-relaxed">
-                    {pkLockSource === 'lake' ? (
-                      <>该资产已固化主键契约 <b className="font-mono text-slate-700">{lockedPk}</b>，作为本体实例身份不可在任务里改写；
-                        如需变更请先以「全量覆盖」重建资产。</>
-                    ) : (
-                      <>主键由流水线字段契约声明为 <b className="font-mono text-slate-700">{lockedPk}</b>（发布时封版），任务自动继承、不可改写；
-                        如需变更请撤回该流水线的发布后修改契约。</>
-                    )}
-                  </p>
-                ) : pkColumns.length > 0 ? (
-                  <>
-                    <p className="text-xs text-slate-400">
-                      {form.write_mode === 'upsert'
-                        ? '勾选用于识别同一条记录的列（可多选，组合主键）'
-                        : '选填但建议：首次入湖将把所选列固化为该资产的主键契约（校验非空且唯一）'}
-                    </p>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {pkColumns.map(col => {
-                        const checked = splitPk(form.primary_key).includes(col.name)
-                        return (
-                          <button type="button" key={col.name} onClick={() => togglePk(col.name)}
-                            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-left transition
-                              ${checked ? 'border-violet-300 bg-violet-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
-                            <span className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border
-                              ${checked ? 'bg-violet-500 border-violet-500 text-white' : 'border-slate-300 bg-white'}`}>
-                              {checked && <Check size={11} />}
-                            </span>
-                            <span className="min-w-0">
-                              <span className="block text-xs font-mono text-slate-700 truncate">{col.name}</span>
-                              <span className="block text-[10px] text-slate-400">{col.type}</span>
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                    {splitPk(form.primary_key).length > 0 && (
-                      <div className="text-xs text-slate-500">
-                        当前主键：<span className="font-mono text-violet-600">{splitPk(form.primary_key).join(' , ')}</span>
-                        <span className="text-slate-400">（顺序即组合键顺序）</span>
-                      </div>
-                    )}
-                  </>
+                {contractPk ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {splitPk(contractPk).map(col => (
+                      <span key={col} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-violet-200 bg-white text-xs font-mono text-violet-700">
+                        <KeyRound size={10} />{col}
+                      </span>
+                    ))}
+                  </div>
                 ) : (
-                  // 兜底：拿不到列清单时回退手动输入
-                  <input type="text" value={form.primary_key ?? ''} onChange={e => update('primary_key', e.target.value)}
-                    placeholder="例如：order_id 或 order_id,line_no"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-400" />
+                  <p className="text-xs text-amber-600 leading-relaxed">
+                    当前流水线发布契约未声明主键，因此不能使用「主键合并」。如业务记录需要稳定身份，请返回流水线补齐主键后重新发布。
+                  </p>
                 )}
 
-                {form.write_mode === 'upsert' && !pkLocked && (
+                {pkMismatch && (
+                  <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-2.5">
+                    检测到历史资产主键「{declaredPk}」与流水线契约「{contractPk}」不一致，已阻止创建任务，避免错误合并。
+                  </div>
+                )}
+
+                {form.write_mode === 'upsert' && contractPk && (
                   <Field label="软删除列（可选）" hint="产物中的逻辑删除标识列；命中的行会打上 __deleted__ 标记而非物理删除">
-                    {pkColumns.length > 0 ? (
+                    {contractColumns.length > 0 ? (
                       <select value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-400">
                         <option value="">— 不使用 —</option>
-                        {pkColumns.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                        {contractColumns.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
                       </select>
                     ) : (
                       <input type="text" value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
@@ -465,7 +422,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <SummaryRow label="流水线" value={selectedPipeline ? `${selectedPipeline.name}${selectedPipeline.version ? ` (v${selectedPipeline.version})` : ''}` : '-'} />
                 <SummaryRow label="产出资产" value={curatedList.length ? curatedList.map(c => c.name).join('、') : '-'} />
                 <SummaryRow label="入库方式" value={WRITE_MODE_META[form.write_mode].label} />
-                <SummaryRow label="主键" value={(form.primary_key || '').trim() || (form.write_mode === 'upsert' ? '（未设置）' : '未设置')} mono />
+                <SummaryRow label="主键（流水线契约）" value={contractPk || '未声明（无主键模式）'} mono />
                 {form.write_mode === 'upsert' && form.soft_delete_column && <SummaryRow label="软删除列" value={form.soft_delete_column} mono />}
                 <SummaryRow label="空输出保护" value={form.skip_empty ? '开启' : '关闭'} />
                 <SummaryRow label="调度" value={
@@ -670,15 +627,16 @@ function Field({ label, required, hint, children }: {
   )
 }
 
-function ModeCard({ active, onClick, title, desc }: {
-  active: boolean; onClick: () => void; title: string; desc: string
+function ModeCard({ active, onClick, title, desc, disabled = false }: {
+  active: boolean; onClick: () => void; title: string; desc: string; disabled?: boolean
 }) {
   return (
-    <button type="button" onClick={onClick}
+    <button type="button" onClick={onClick} disabled={disabled}
       className={`text-left p-3 rounded-xl border-2 transition-all
-        ${active ? 'border-blue-400 bg-blue-50/40' : 'border-slate-200 hover:border-slate-300'}`}>
+        ${disabled ? 'border-slate-100 bg-slate-50 opacity-55 cursor-not-allowed'
+          : active ? 'border-blue-400 bg-blue-50/40' : 'border-slate-200 hover:border-slate-300'}`}>
       <div className={`text-sm font-medium ${active ? 'text-blue-600' : 'text-slate-800'}`}>{title}</div>
-      <div className="text-xs text-slate-500 mt-0.5">{desc}</div>
+      <div className="text-xs text-slate-500 mt-0.5">{disabled ? `${desc}（流水线未声明主键）` : desc}</div>
     </button>
   )
 }

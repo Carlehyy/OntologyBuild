@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, JSON, Integer, BigInteger, ForeignKey, Text, UniqueConstraint, Index, text
+from sqlalchemy import String, DateTime, JSON, Integer, BigInteger, ForeignKey, Text, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -25,7 +25,7 @@ class Dataset(Base):
 class DatasetVersion(Base):
     __tablename__ = "v2_dataset_versions"
     __table_args__ = (
-        UniqueConstraint("dataset_id", "version_no", name="uq_dataset_versions_dataset_version"),
+        Index("uq_dataset_versions_dataset_version", "dataset_id", "version_no", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))

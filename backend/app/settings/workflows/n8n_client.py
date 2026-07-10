@@ -89,6 +89,22 @@ class N8nClient:
         body.setdefault("settings", {})
         return body
 
+    @staticmethod
+    def workflow_revision(payload: dict | None) -> dict[str, Any]:
+        """Extract the immutable remote revision fields used by a published release.
+
+        These fields are deliberately kept separate from ``sanitize_workflow``:
+        n8n rejects them on workflow create/update requests, while the platform must
+        still retain them to prove that a run executes the revision that was
+        reviewed and published.
+        """
+        workflow = payload or {}
+        return {
+            "versionId": workflow.get("versionId"),
+            "activeVersionId": workflow.get("activeVersionId"),
+            "updatedAt": workflow.get("updatedAt"),
+        }
+
     def list_workflows(self, *, active: Optional[bool] = None, limit: int = 50) -> list[dict]:
         params: dict[str, Any] = {"limit": max(1, min(limit, 250))}
         if active is not None:

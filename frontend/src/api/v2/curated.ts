@@ -19,12 +19,14 @@ export interface CuratedPreview {
 export interface ReviewSession {
   review_id: string
   status: string
+  dataset_version_id?: string | null
 }
 
 export interface ReviewDiffView {
   version_no: number | null
+  dataset_version_id?: string | null
   total: number
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
 }
 
 export interface ReviewDelta {
@@ -35,17 +37,29 @@ export interface ReviewDelta {
   updated_count: number
   deleted_count: number
   unchanged_count: number
-  added_sample: Record<string, any>[]
-  updated_sample: { before: Record<string, any>; after: Record<string, any> }[]
-  deleted_sample: Record<string, any>[]
+  added_sample: Record<string, unknown>[]
+  updated_sample: { before: Record<string, unknown>; after: Record<string, unknown> }[]
+  deleted_sample: Record<string, unknown>[]
   sample_truncated: boolean
+}
+
+export interface ReviewDiffSession {
+  id: string
+  dataset_version_id: string | null
+  status: string
+  stale: boolean
+  latest_dataset_version_id: string | null
+  latest_version_no: number | null
 }
 
 export interface ReviewDiff {
   pk: string[]
+  /** 行级编辑主键编码：单主键为原值字符串，复合主键为 JSON 字符串数组。 */
+  row_pk_encoding?: 'plain-string' | 'json-array'
   current: ReviewDiffView
   previous: ReviewDiffView
   delta: ReviewDelta | null
+  review?: ReviewDiffSession | null
 }
 
 const curatedApi = {
@@ -54,8 +68,10 @@ const curatedApi = {
   preview: (id: string, limit = 200) =>
     apiClientV2.get<CuratedPreview>(`/curated/${id}/preview?limit=${limit}`),
   /** 审批三视角：变化量 / 上一版全量 / 本次全量 */
-  reviewDiff: (id: string, limit = 500) =>
-    apiClientV2.get<ReviewDiff>(`/curated/${id}/review-diff?limit=${limit}`),
+  reviewDiff: (id: string, limit = 500, reviewId?: string) =>
+    apiClientV2.get<ReviewDiff>(`/curated/${id}/review-diff`, {
+      params: { limit, ...(reviewId ? { review_id: reviewId } : {}) },
+    }),
   quality: (id: string) => apiClientV2.get(`/curated/${id}/quality`),
 
   /** Quick approve/reject (no review session needed) */

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -38,10 +39,11 @@ def normalize_rows(body: Any) -> list[dict]:
     if body is None:
         return []
     if isinstance(body, list):
-        if len(body) > _MAX_ROWS:
+        actual = len(body)
+        if actual > _MAX_ROWS:
             raise StewardError(
-                f"n8n 输出 {len(body)} 行，超过单次 {_MAX_ROWS} 行安全上限；"
-                "请在工作流中分页或拆批，平台不会静默截断数据")
+                f"n8n 单次输出超过平台安全上限：上限 {_MAX_ROWS} 行，实际 {actual} 行。"
+                "本次运行已失败且不会截断入湖；请在 n8n 中分页/分批输出。")
         rows = []
         for item in body:
             if isinstance(item, dict):
@@ -77,9 +79,50 @@ def _extract_execution_rows(execution: dict) -> tuple[list[dict], dict]:
         try:
             items = ((run_data[last_node][-1].get("data") or {}).get("main") or [[]])[0] or []
             rows = normalize_rows(items)
-        except Exception:  # noqa: BLE001 — 结构异常时退回 webhook 响应体
+        except StewardError:
+            raise
+        except Exception:  # noqa: BLE001 — 结构异常由调用方按空输出处理
             logger.warning("解析执行 %s 末节点输出失败", execution.get("id"), exc_info=True)
     return rows, meta
+
+
+def _execution_has_run_id(execution: dict, run_id: str) -> bool:
+    """Verify that execution data contains the exact webhook correlation id.
+
+    n8n's Webhook node normally records the request under ``json.body`` in
+    ``resultData.runData``.  We intentionally inspect the complete saved
+    execution instead of assuming that the newest execution belongs to this
+    request; concurrent manual/external runs otherwise cross-wire data.
+    """
+    expected = str(run_id)
+
+    def contains(value: Any) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"run_id", "runId", "correlation_id", "correlationId"}:
+                    if str(child) == expected:
+                        return True
+                if contains(child):
+                    return True
+        elif isinstance(value, list):
+            return any(contains(child) for child in value)
+        return False
+
+    return contains((execution.get("data") or {}).get("resultData") or {})
+
+
+def _response_execution_id(body: Any) -> str | None:
+    """Read an optional exact execution id returned by a managed webhook."""
+    if not isinstance(body, dict):
+        return None
+    for key in ("executionId", "execution_id"):
+        value = body.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    meta = body.get("meta")
+    if isinstance(meta, dict):
+        return _response_execution_id(meta)
+    return None
 
 
 def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
@@ -87,12 +130,15 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
                         wait_seconds: int = _DEFAULT_WAIT) -> tuple[list[dict], dict]:
     """POST webhook → 等执行落库 → 返回 (行数据, 执行元信息)。
 
-    行数据优先取执行详情的末节点完整 items（webhook responseData 默认只回
-    首条，直接用响应体会漏行）；执行详情拿不到时才退回响应体。
+    行数据只取与本次 run_id 精确匹配的 execution 详情。不能验证关联时
+    明确失败，不回退到「最新 execution」或未关联的 webhook 响应体。
     """
+    request_payload = dict(payload or {})
+    run_id = str(request_payload.get("run_id") or uuid.uuid4())
+    request_payload["run_id"] = run_id
     before_ids = {str(e.get("id")) for e in client.list_executions(workflow_id=workflow_id, limit=20)}
 
-    status_code, body = client.trigger_webhook(webhook_path, payload=payload or {},
+    status_code, body = client.trigger_webhook(webhook_path, payload=request_payload,
                                                timeout_seconds=float(wait_seconds))
     if status_code == 404:
         raise StewardError(
@@ -102,41 +148,41 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
 
     deadline = time.time() + wait_seconds
     execution: dict | None = None
+    response_execution_id = _response_execution_id(body)
     while time.time() < deadline:
-        candidates = client.list_executions(workflow_id=workflow_id, limit=20)
-        fresh = [e for e in candidates if str(e.get("id")) not in before_ids]
-        if fresh:
-            # n8n webhook response does not reliably carry execution_id.  More than
-            # one fresh execution means an external/concurrent trigger makes
-            # attribution ambiguous; choosing the newest could ingest someone
-            # else's output, so fail closed.
-            fresh_ids = {str(e.get("id")) for e in fresh}
-            if len(fresh_ids) != 1:
-                raise StewardError(
-                    f"n8n 执行归属不唯一（检测到 {len(fresh_ids)} 个新执行），"
-                    "拒绝猜测并入湖；请避免工作流被平台外部并发触发")
-            newest = fresh[0]  # n8n 按时间倒序返回
-            if newest.get("status") in ("success", "error", "crashed", "canceled"):
-                execution = client.get_execution(str(newest["id"]), include_data=True)
+        if response_execution_id:
+            candidates = [{"id": response_execution_id}]
+        else:
+            candidates = [
+                item for item in client.list_executions(workflow_id=workflow_id, limit=20)
+                if str(item.get("id")) not in before_ids
+            ]
+        for candidate in candidates:
+            execution_id = candidate.get("id")
+            if execution_id is None:
+                continue
+            detail = client.get_execution(str(execution_id), include_data=True)
+            if detail.get("status") not in ("success", "error", "crashed", "canceled"):
+                continue
+            if _execution_has_run_id(detail, run_id):
+                execution = detail
                 break
+        if execution is not None:
+            break
         time.sleep(_POLL_INTERVAL)
 
     if execution is None:
-        # Without an execution record there is no trustworthy status, output
-        # ownership, or audit lineage.  A webhook 2xx alone is not proof that the
-        # workflow completed successfully.
         raise StewardError(
-            "等待窗口内未取得唯一且已结束的 n8n 执行记录；"
-            "请开启执行数据保存并检查超时设置，平台拒绝仅凭 webhook 响应入湖")
+            f"无法在 {wait_seconds} 秒内把 Webhook 请求与 n8n execution 精确关联"
+            f"（run_id={run_id}）。为避免并发任务串线，本次运行已失败且不会采用最新执行或"
+            "Webhook 响应体。请确认 n8n 保存成功/失败 execution 数据，且 Webhook 输入中的 "
+            "run_id 未被清除。")
 
     rows, meta = _extract_execution_rows(execution)
+    meta["run_id"] = run_id
     if meta.get("execution_status") != "success":
         detail = meta.get("error") or f"status={meta.get('execution_status') or 'unknown'}"
         raise StewardError(f"n8n 执行未成功：{detail}")
-    if meta.get("execution_status") == "success" and not rows:
-        rows = normalize_rows(body)
-        if rows:
-            meta["note"] = "执行详情无末节点数据，行数据来自 webhook 响应体。"
     return rows, meta
 
 
@@ -161,6 +207,7 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
     """
     rec, workflow_id, webhook_path = _resolve_n8n_context(db, pl)
     client = service.get_n8n_client(db)
+    service.require_published_revision(pl, client.get_workflow(workflow_id))
     wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
     from app.data_channel.datasets.lock import dataset_write_lock
     with dataset_write_lock(
@@ -191,6 +238,7 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
     def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
         _rec, workflow_id, webhook_path = _resolve_n8n_context(db_, pl_)
         client = service.get_n8n_client(db_)
+        service.require_published_revision(pl_, client.get_workflow(workflow_id))
         wait_seconds = int(((pl_.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
         from app.data_channel.datasets.lock import dataset_write_lock
         with dataset_write_lock(
@@ -247,8 +295,10 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
         if not was_active:
             try:
                 client.deactivate_workflow(rec.n8n_workflow_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("预览取数后停用 workflow %s 失败", rec.n8n_workflow_id, exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                raise StewardError(
+                    f"执行预览结束，但恢复 n8n 草稿的停用状态失败：{exc}。"
+                    "为避免未发布工作流继续对外生效，请立即在 n8n 中停用后再继续。") from exc
     return rows, exec_meta
 
 

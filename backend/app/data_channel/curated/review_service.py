@@ -1,7 +1,13 @@
-"""人工审核服务 — 行级编辑、版本合并、审核状态管理"""
+"""人工审核服务 — 行级编辑、版本合并、审核状态管理。"""
 from __future__ import annotations
+
+import json
 from datetime import datetime, timezone
+
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
+from app.data_channel.datasets.lake_gate import split_pk
 from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit
 
 
@@ -10,23 +16,25 @@ class ReviewApprovalError(ValueError):
 
 
 def latest_dataset_version(db: Session, dataset_id: str):
+    """返回统一资产表的最新不可变版本。"""
     from app.models.v2.dataset import DatasetVersion
+
     return (db.query(DatasetVersion)
             .filter(DatasetVersion.dataset_id == dataset_id)
             .order_by(DatasetVersion.version_no.desc()).first())
 
 
-def _as_aware(dt):
-    if dt is None:
+def _as_aware(value):
+    if value is None:
         return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def review_matches_version(review: CuratedReview, version) -> bool:
-    """审批是否属于指定版本；兼容迁移前 dataset_version_id=NULL 的记录。
+    """判断审核是否属于指定版本，并安全兼容迁移前的空版本记录。
 
-    历史空版本审批仅能背书“审批发生时已经存在的当前版本”。一旦产生时间更晚
-    的新版本，该审批自动失效，避免 v1 的批准状态泄漏给 v2/v3。
+    新审核始终通过 ``dataset_version_id`` 精确绑定。历史空版本审核仅能背书
+    审核创建时已存在的版本；版本创建时间晚于审核时，旧审核自动失效。
     """
     if version is None:
         return review.dataset_version_id is None
@@ -38,7 +46,7 @@ def review_matches_version(review: CuratedReview, version) -> bool:
 
 
 def current_version_review(db: Session, dataset_id: str, *, status: str | None = None):
-    """返回当前 DatasetVersion 的最新审批；没有则 None。"""
+    """返回当前 DatasetVersion 的最新有效审核；没有则返回 ``None``。"""
     version = latest_dataset_version(db, dataset_id)
     reviews = (db.query(CuratedReview)
                .filter(CuratedReview.curated_dataset_id == dataset_id)
@@ -52,7 +60,7 @@ def current_version_review(db: Session, dataset_id: str, *, status: str | None =
 
 
 def require_current_version_approved(db: Session, dataset_id: str) -> CuratedReview:
-    """要求当前数据版本已有 approved 审批，否则硬失败。"""
+    """要求当前数据版本已经审批通过，否则硬失败。"""
     version = latest_dataset_version(db, dataset_id)
     if version is None:
         raise ReviewApprovalError(f"数据集 {dataset_id} 尚无可审批的数据版本")
@@ -60,12 +68,12 @@ def require_current_version_approved(db: Session, dataset_id: str) -> CuratedRev
 
 
 def require_version_approved(db: Session, dataset_id: str, version) -> CuratedReview:
-    """要求指定的不可变版本已审批，避免审批检查与读数之间切换到新版本。"""
+    """要求指定不可变版本已审批，避免检查和读数之间切换版本。"""
     reviews = (db.query(CuratedReview)
                .filter(CuratedReview.curated_dataset_id == dataset_id)
                .order_by(CuratedReview.created_at.desc()).all())
-    review = next((r for r in reviews
-                   if r.status == "approved" and review_matches_version(r, version)), None)
+    review = next((item for item in reviews
+                   if item.status == "approved" and review_matches_version(item, version)), None)
     if review is None:
         raise ReviewApprovalError(
             f"数据集 {dataset_id} 当前版本 v{version.version_no} 尚未审批通过；"
@@ -73,83 +81,198 @@ def require_version_approved(db: Session, dataset_id: str, version) -> CuratedRe
     return review
 
 
-def apply_all_row_edits(db: Session, dataset_id: str, rows: list[dict], *,
-                        version=None, statuses: set[str] | None = None) -> list[dict]:
-    """把该数据集全部审核的行级编辑按时间序叠加到行数据上（后写覆盖前写）。
+def _dataset_schema(db: Session, dataset_id: str) -> dict:
+    """读取权威 v2 dataset schema；legacy 表仅作只读兼容回退。"""
+    from app.models.v2.dataset import Dataset
 
-    行匹配键与录入时一致：str(row['id'] or row['__pk__'])。
-    不修改底层存储——编辑是审核层的"修正事实"，出口时叠加。
+    dataset = db.query(Dataset).filter(
+        Dataset.id == dataset_id, Dataset.kind == "curated").first()
+    if dataset:
+        return dict(dataset.schema_json or {})
+    legacy = db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
+    return dict(legacy.schema_json or {}) if legacy else {}
+
+
+def dataset_pk_columns(db: Session, dataset_id: str) -> list[str]:
+    """审核行身份只认 schema 中固化的真实主键，支持复合主键。"""
+    return split_pk(_dataset_schema(db, dataset_id).get("primary_key"))
+
+
+def encode_row_pk(row: dict, pk_cols: list[str], *, dataset_name: str = "") -> str:
+    """把真实主键编码成审核 ``row_pk``。
+
+    单主键沿用纯字符串；复合主键使用紧凑 JSON 数组，避免业务值中的分隔符
+    造成碰撞。
+    """
+    if not pk_cols:
+        raise ValueError(
+            f"数据集「{dataset_name}」未声明主键，无法安全定位审核编辑行。"
+            f"请先在流水线数据契约中声明主键并重新入湖。")
+    values: list[str] = []
+    for column in pk_cols:
+        value = row.get(column)
+        if value is None or str(value).strip() == "":
+            raise ValueError(
+                f"数据集「{dataset_name}」的审核行缺少主键列「{column}」或值为空，"
+                f"无法应用行级编辑。")
+        values.append(str(value).strip())
+    if len(values) == 1:
+        return values[0]
+    return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+
+
+def normalize_row_pk(value, pk_cols: list[str], *, dataset_name: str = "") -> str:
+    """规整 API 提交的行键；复合键接受 JSON 数组或按列名给出的对象。"""
+    if not pk_cols:
+        raise HTTPException(409, detail={
+            "code": "review_primary_key_required",
+            "message": f"数据集「{dataset_name}」未声明主键，无法安全编辑具体行。"
+                       f"请先在流水线数据契约中声明主键并重新入湖。",
+        })
+    parsed = value
+    if isinstance(value, str) and len(pk_cols) > 1:
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            raise HTTPException(400, detail={
+                "code": "invalid_composite_row_pk",
+                "message": f"复合主键 {pk_cols} 的 row_pk 必须是 JSON 数组或对象。",
+            }) from None
+    if isinstance(parsed, dict):
+        row = {column: parsed.get(column) for column in pk_cols}
+    elif isinstance(parsed, (list, tuple)):
+        if len(parsed) != len(pk_cols):
+            raise HTTPException(400, detail={
+                "code": "invalid_composite_row_pk",
+                "message": f"row_pk 提供了 {len(parsed)} 个值，但主键需要 "
+                           f"{len(pk_cols)} 列 {pk_cols}。",
+            })
+        row = dict(zip(pk_cols, parsed))
+    elif len(pk_cols) == 1:
+        row = {pk_cols[0]: parsed}
+    else:
+        raise HTTPException(400, "复合主键 row_pk 格式非法")
+    try:
+        return encode_row_pk(row, pk_cols, dataset_name=dataset_name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+def _version_by_id(db: Session, dataset_id: str, version_id: str | None):
+    if not version_id:
+        return latest_dataset_version(db, dataset_id)
+    from app.models.v2.dataset import DatasetVersion
+
+    return db.query(DatasetVersion).filter(
+        DatasetVersion.id == version_id,
+        DatasetVersion.dataset_id == dataset_id,
+    ).first()
+
+
+def apply_all_row_edits(
+    db: Session,
+    dataset_id: str,
+    rows: list[dict],
+    *,
+    dataset_version_id: str | None = None,
+    include_review_id: str | None = None,
+) -> list[dict]:
+    """把指定版本的审核编辑叠加到数据行。
+
+    正式读取默认只应用已批准审核，避免 pending/rejected 修改泄漏到本体映射；
+    审核详情通过 ``include_review_id`` 额外预览当前 pending 审核。历史空版本
+    审核仍按创建时间与版本匹配，不能永久污染后续版本。
     """
     if not rows:
         return rows
-    version = version or latest_dataset_version(db, dataset_id)
+    version = _version_by_id(db, dataset_id, dataset_version_id)
+    if dataset_version_id and version is None:
+        raise ValueError(f"数据集 {dataset_id} 的版本 {dataset_version_id} 不存在")
     reviews = (db.query(CuratedReview)
                .filter(CuratedReview.curated_dataset_id == dataset_id)
-               .order_by(CuratedReview.created_at.asc())
-               .all())
-    reviews = [r for r in reviews
-               if review_matches_version(r, version)
-               and (statuses is None or r.status in statuses)]
+               .order_by(CuratedReview.created_at.asc()).all())
+    reviews = [review for review in reviews
+               if review_matches_version(review, version)
+               and (review.status == "approved" or review.id == include_review_id)]
     if not reviews:
         return rows
-    review_ids = [r.id for r in reviews]
+
+    review_ids = [review.id for review in reviews]
     edits = (db.query(CuratedRowEdit)
              .filter(CuratedRowEdit.review_id.in_(review_ids))
-             .order_by(CuratedRowEdit.edited_at.asc())
-             .all())
+             .order_by(CuratedRowEdit.edited_at.asc()).all())
     if not edits:
         return rows
-    # row_pk → {field: new_value}；时间序遍历天然后写覆盖前写
+    pk_cols = dataset_pk_columns(db, dataset_id)
+    if not pk_cols:
+        raise ValueError(
+            f"数据集 {dataset_id} 存在行级审核编辑，但 schema 未声明主键；"
+            f"系统拒绝猜测 id 或第一列，以免把修改应用到错误行。")
+
     edit_map: dict[str, dict[str, str | None]] = {}
-    for e in edits:
-        edit_map.setdefault(e.row_pk, {})[e.field_name] = e.new_value
-    out: list[dict] = []
-    for row in rows:
-        pk = str(row.get("id", row.get("__pk__", "")))
-        patch = edit_map.get(pk)
+    for edit in edits:
+        edit_map.setdefault(edit.row_pk, {})[edit.field_name] = edit.new_value
+
+    output: list[dict] = []
+    matched_keys: set[str] = set()
+    for source_row in rows:
+        row_pk = encode_row_pk(source_row, pk_cols, dataset_name=dataset_id)
+        patch = edit_map.get(row_pk)
+        row = source_row
         if patch:
-            row = dict(row)
-            for field, val in patch.items():
-                if val is None:
+            matched_keys.add(row_pk)
+            row = dict(source_row)
+            for field, value in patch.items():
+                if value is None:
                     row.pop(field, None)
                 else:
-                    row[field] = val
-        out.append(row)
-    return out
+                    row[field] = value
+        output.append(row)
+
+    unmatched = sorted(set(edit_map) - matched_keys)
+    if unmatched:
+        raise ValueError(
+            f"数据集 {dataset_id} 的审核编辑包含无法在绑定版本中定位的行主键 "
+            f"{unmatched[:5]}。请刷新审核页面后按 schema 主键重新提交；"
+            f"系统不会把未命中的编辑静默忽略。")
+    return output
 
 
 def load_rows_with_edits(db: Session, dataset_id: str, limit: int = 10000) -> list[dict]:
-    """curated 数据的统一出口读数：最新版本行 + 行级审核编辑叠加。
-
-    预览 / 质量报告 / 映射灌入本体 都应经过这里——否则人工修正的
-    v2_curated_row_edits 永远不会体现在下游数据里（行级审核变成摆设）。
-    """
+    """严格读取最新版本并叠加属于该版本的已批准编辑。"""
     from app.services.v2.dataset_service import DatasetService
+
     version = latest_dataset_version(db, dataset_id)
-    rows = DatasetService(db).preview(dataset_id, None, limit=limit)
-    return apply_all_row_edits(db, dataset_id, rows, version=version)
+    if version is None:
+        return []
+    rows = DatasetService(db).load_all_rows(dataset_id, version.version_no)[:limit]
+    return apply_all_row_edits(
+        db, dataset_id, rows, dataset_version_id=version.id)
 
 
-def load_all_rows_with_edits(db: Session, dataset_id: str, *,
-                             require_approved: bool = False,
-                             version=None) -> list[dict]:
-    """严格全量读取当前版本并叠加属于该版本的审核编辑。
+def load_all_rows_with_edits(
+    db: Session,
+    dataset_id: str,
+    *,
+    require_approved: bool = False,
+    version=None,
+) -> list[dict]:
+    """严格全量读取指定版本并叠加该版本的已批准审核编辑。
 
-    Mapping/投影等生产消费方必须使用此入口：无行数上限，存储读取、解析或
-    checksum 失败均抛错。要求审批时只叠加 approved 审批中的编辑。
+    Mapping/投影等生产消费方必须使用此入口；存储读取、校验或解析失败均抛错。
     """
     from app.services.v2.dataset_service import DatasetService
 
     version = version or latest_dataset_version(db, dataset_id)
-    if require_approved:
-        if version is None:
+    if version is None:
+        if require_approved:
             raise ReviewApprovalError(f"数据集 {dataset_id} 尚无可审批的数据版本")
+        return []
+    if require_approved:
         require_version_approved(db, dataset_id, version)
-    rows = DatasetService(db).load_all_rows(
-        dataset_id, version.version_no if version is not None else None)
-    statuses = {"approved"} if require_approved else None
+    rows = DatasetService(db).load_all_rows(dataset_id, version.version_no)
     return apply_all_row_edits(
-        db, dataset_id, rows, version=version, statuses=statuses)
+        db, dataset_id, rows, dataset_version_id=version.id)
 
 
 class ReviewService:
@@ -157,21 +280,36 @@ class ReviewService:
     def __init__(self, db: Session):
         self._db = db
 
-    def start_review(self, curated_dataset_id: str, reviewer_id: str | None = None) -> CuratedReview:
-        """新建审核记录，状态设为 pending"""
+    def start_review(
+        self,
+        curated_dataset_id: str,
+        reviewer_id: str | None = None,
+    ) -> CuratedReview:
+        """为当前不可变 DatasetVersion 新建或复用 pending 审核。"""
         self._get_dataset_or_raise(curated_dataset_id)
         version = latest_dataset_version(self._db, curated_dataset_id)
         if version is None:
-            from fastapi import HTTPException
-            raise HTTPException(409, "数据集尚无不可变版本，无法发起审批")
+            raise HTTPException(409, detail={
+                "code": "dataset_has_no_version",
+                "message": "该成品数据集尚无可审核版本，请先成功执行流水线入湖。",
+            })
+
+        existing = (self._db.query(CuratedReview).filter(
+            CuratedReview.curated_dataset_id == curated_dataset_id,
+            CuratedReview.status == "pending",
+            CuratedReview.dataset_version_id == version.id,
+        ).order_by(CuratedReview.created_at.desc()).first())
+        if existing:
+            return existing
 
         review = CuratedReview(
             curated_dataset_id=curated_dataset_id,
-            dataset_version_id=version.id if version else None,
+            dataset_version_id=version.id,
             reviewer_id=reviewer_id,
             status="pending",
         )
         self._db.add(review)
+        self._set_dataset_status(curated_dataset_id, "in_review")
         self._db.commit()
         self._db.refresh(review)
         return review
@@ -184,8 +322,20 @@ class ReviewService:
         old_value: str | None,
         new_value: str | None,
     ) -> CuratedRowEdit:
-        """记录单行单字段的修改"""
+        """记录单行单字段修改，并验证版本、主键及目标行。"""
         review = self._get_review_or_raise(review_id)
+        self._ensure_pending(review)
+        self._assert_review_version_current(review)
+        pk_cols = dataset_pk_columns(self._db, review.curated_dataset_id)
+        row_pk = normalize_row_pk(
+            row_pk, pk_cols, dataset_name=self._dataset_name(review.curated_dataset_id))
+        if field_name in pk_cols:
+            raise HTTPException(409, detail={
+                "code": "primary_key_edit_forbidden",
+                "message": f"列「{field_name}」属于主键 {pk_cols}，审核编辑不能改变行身份。"
+                           f"如需变更主键，请修改流水线源数据并重新入湖。",
+            })
+        self._assert_row_keys_exist(review, [row_pk], pk_cols)
 
         edit = CuratedRowEdit(
             review_id=review_id,
@@ -200,18 +350,37 @@ class ReviewService:
         return edit
 
     def batch_edit_rows(self, review_id: str, edits: list[dict]) -> list[CuratedRowEdit]:
-        """批量提交行编辑
-        edits 格式：[{"row_pk": "...", "field_name": "...", "old_value": "...", "new_value": "..."}]
-        """
-        self._get_review_or_raise(review_id)
-        results = []
-        for e in edits:
+        """原子保存一批行级编辑。"""
+        review = self._get_review_or_raise(review_id)
+        self._ensure_pending(review)
+        self._assert_review_version_current(review)
+        pk_cols = dataset_pk_columns(self._db, review.curated_dataset_id)
+        dataset_name = self._dataset_name(review.curated_dataset_id)
+        prepared: list[tuple[dict, str, str]] = []
+        for source in edits:
+            field_name = str(source.get("field_name") or "").strip()
+            if not field_name:
+                raise HTTPException(400, "field_name 不能为空")
+            if field_name in pk_cols:
+                raise HTTPException(409, detail={
+                    "code": "primary_key_edit_forbidden",
+                    "message": f"列「{field_name}」属于主键 {pk_cols}，审核编辑不能改变行身份。",
+                })
+            prepared.append((
+                source,
+                normalize_row_pk(source.get("row_pk"), pk_cols, dataset_name=dataset_name),
+                field_name,
+            ))
+        self._assert_row_keys_exist(review, [item[1] for item in prepared], pk_cols)
+
+        results: list[CuratedRowEdit] = []
+        for source, row_pk, field_name in prepared:
             edit = CuratedRowEdit(
                 review_id=review_id,
-                row_pk=e["row_pk"],
-                field_name=e["field_name"],
-                old_value=e.get("old_value"),
-                new_value=e.get("new_value"),
+                row_pk=row_pk,
+                field_name=field_name,
+                old_value=source.get("old_value"),
+                new_value=source.get("new_value"),
             )
             self._db.add(edit)
             results.append(edit)
@@ -219,91 +388,185 @@ class ReviewService:
         return results
 
     def approve(self, review_id: str, notes: str = "") -> CuratedReview:
-        """审核通过 — 将数据集状态改为 approved"""
+        """批准当前版本审核。"""
         review = self._get_review_or_raise(review_id)
-        self._ensure_review_is_current(review)
+        self._ensure_pending(review)
+        self._assert_review_version_current(review)
         review.status = "approved"
         review.notes = notes
         review.decided_at = datetime.now(timezone.utc)
-
+        self._set_dataset_status(review.curated_dataset_id, "approved")
         self._db.commit()
         self._db.refresh(review)
         return review
 
     def reject(self, review_id: str, notes: str = "") -> CuratedReview:
-        """审核拒绝"""
+        """拒绝当前版本审核。"""
         review = self._get_review_or_raise(review_id)
-        self._ensure_review_is_current(review)
+        self._ensure_pending(review)
+        self._assert_review_version_current(review)
         review.status = "rejected"
         review.notes = notes
         review.decided_at = datetime.now(timezone.utc)
-
+        self._set_dataset_status(review.curated_dataset_id, "rejected")
         self._db.commit()
         self._db.refresh(review)
         return review
 
-    def _ensure_review_is_current(self, review: CuratedReview) -> None:
-        """禁止对旧版本审批记录作出会影响当前资产状态的决定。"""
-        version = latest_dataset_version(self._db, review.curated_dataset_id)
-        if version is not None and not review_matches_version(review, version):
-            from fastapi import HTTPException
-            raise HTTPException(
-                409,
-                f"该审核属于旧数据版本，当前已更新到 v{version.version_no}。"
-                f"请为最新版本重新发起审核")
-
     def get_edits(self, review_id: str) -> list[CuratedRowEdit]:
-        """获取审核下的所有行编辑记录"""
         return self._db.query(CuratedRowEdit).filter(
-            CuratedRowEdit.review_id == review_id
-        ).all()
+            CuratedRowEdit.review_id == review_id).all()
 
-    def apply_edits_to_snapshot(self, review_id: str, original_data: list[dict]) -> list[dict]:
-        """将行编辑应用到数据快照，返回修改后的数据（不修改数据库原始存储）"""
+    def apply_edits_to_snapshot(
+        self,
+        review_id: str,
+        original_data: list[dict],
+    ) -> list[dict]:
+        """将审核编辑应用到内存快照，不修改底层版本文件。"""
+        review = self._get_review_or_raise(review_id)
         edits = self.get_edits(review_id)
         if not edits:
             return original_data
+        pk_cols = dataset_pk_columns(self._db, review.curated_dataset_id)
+        if not pk_cols:
+            raise HTTPException(409, detail={
+                "code": "review_primary_key_required",
+                "message": "数据集未声明主键，无法安全应用行级编辑。",
+            })
 
-        # 按 row_pk 分组编辑
         edit_map: dict[str, dict[str, str | None]] = {}
         for edit in edits:
-            if edit.row_pk not in edit_map:
-                edit_map[edit.row_pk] = {}
-            edit_map[edit.row_pk][edit.field_name] = edit.new_value
+            edit_map.setdefault(edit.row_pk, {})[edit.field_name] = edit.new_value
 
-        result = []
-        for row in original_data:
-            row_pk = str(row.get("id", row.get("__pk__", "")))
+        result: list[dict] = []
+        matched_keys: set[str] = set()
+        for source_row in original_data:
+            try:
+                row_pk = encode_row_pk(
+                    source_row, pk_cols,
+                    dataset_name=self._dataset_name(review.curated_dataset_id))
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+            row = source_row
             if row_pk in edit_map:
-                row = dict(row)
-                for field, new_val in edit_map[row_pk].items():
-                    if new_val is None:
-                        row.pop(field, None)  # 删除字段
+                matched_keys.add(row_pk)
+                row = dict(source_row)
+                for field, value in edit_map[row_pk].items():
+                    if value is None:
+                        row.pop(field, None)
                     else:
-                        row[field] = new_val
+                        row[field] = value
             result.append(row)
 
+        unmatched = sorted(set(edit_map) - matched_keys)
+        if unmatched:
+            raise HTTPException(409, detail={
+                "code": "review_row_not_found",
+                "message": f"审核编辑中的行主键 {unmatched[:5]} 不存在于绑定版本。"
+                           f"请刷新审核页面后重新选择行。",
+            })
         return result
 
-    # ── 私有辅助 ──────────────────────────────────────────────────
+    def _dataset_name(self, dataset_id: str) -> str:
+        dataset = self._get_dataset_or_raise(dataset_id)
+        return str(getattr(dataset, "name", dataset_id) or dataset_id)
+
+    @staticmethod
+    def _ensure_pending(review: CuratedReview) -> None:
+        if review.status != "pending":
+            raise HTTPException(409, detail={
+                "code": "review_already_decided",
+                "message": f"审核已处于 {review.status} 状态，不能继续编辑或重复决定。",
+            })
+
+    def _assert_review_version_current(self, review: CuratedReview) -> None:
+        """阻止用旧版本审核结果背书或修改当前资产。"""
+        latest = latest_dataset_version(self._db, review.curated_dataset_id)
+        if latest is not None and review_matches_version(review, latest):
+            return
+        raise HTTPException(409, detail={
+            "code": "review_version_stale",
+            "message": "审核发起后数据集已产生新版本，本次审核仅对应旧版本，"
+                       "不能继续保存、批准或拒绝。请为最新版本重新发起审核。",
+            "review_dataset_version_id": review.dataset_version_id,
+            "latest_dataset_version_id": latest.id if latest else None,
+            "latest_version_no": latest.version_no if latest else None,
+        })
+
+    def _assert_row_keys_exist(
+        self,
+        review: CuratedReview,
+        row_pks: list[str],
+        pk_cols: list[str],
+    ) -> None:
+        """验证编辑目标行真实存在于审核绑定版本。"""
+        if not row_pks or not review.dataset_version_id:
+            return
+        from app.models.v2.dataset import DatasetVersion
+        from app.services.v2.dataset_service import DatasetReadError, DatasetService
+
+        version = self._db.query(DatasetVersion).filter(
+            DatasetVersion.id == review.dataset_version_id,
+            DatasetVersion.dataset_id == review.curated_dataset_id,
+        ).first()
+        if not version:
+            raise HTTPException(409, detail={
+                "code": "review_version_unavailable",
+                "message": "审核绑定的数据版本已不存在，不能继续提交编辑。",
+            })
+        try:
+            rows = DatasetService(self._db).load_all_rows(
+                review.curated_dataset_id, version.version_no)
+        except DatasetReadError as exc:
+            raise HTTPException(422, f"审核版本数据读取失败：{exc}") from None
+        existing = {
+            encode_row_pk(row, pk_cols, dataset_name=review.curated_dataset_id)
+            for row in rows
+        }
+        missing = sorted(set(row_pks) - existing)
+        if missing:
+            raise HTTPException(409, detail={
+                "code": "review_row_not_found",
+                "message": f"行主键 {missing[:5]} 不存在于审核绑定的数据版本。"
+                           f"请刷新审核页面后重新选择行。",
+            })
 
     def _get_dataset_or_raise(self, dataset_id: str):
-        """Resolve the canonical v2 Dataset; legacy table is read-only fallback."""
+        """统一资产表是审核唯一权威源；legacy 表仅只读兼容。"""
         from app.models.v2.dataset import Dataset
-        ds_v2 = self._db.query(Dataset).filter(
-            Dataset.id == dataset_id, Dataset.kind == "curated"
-        ).first()
-        if ds_v2:
-            return ds_v2
-        ds = self._db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
-        if ds:
-            return ds
-        from fastapi import HTTPException
+
+        dataset = self._db.query(Dataset).filter(
+            Dataset.id == dataset_id, Dataset.kind == "curated").first()
+        if dataset:
+            return dataset
+        legacy = self._db.query(CuratedDataset).filter(
+            CuratedDataset.id == dataset_id).first()
+        if legacy:
+            raise HTTPException(409, detail={
+                "code": "legacy_curated_not_migrated",
+                "message": "该成品数据集仍属于旧资产表，尚未迁移到统一数据资产湖，"
+                           "不能发起新审核。",
+            })
         raise HTTPException(404, f"Curated dataset {dataset_id} not found")
 
+    def _set_dataset_status(self, dataset_id: str, status: str) -> None:
+        """审核状态写入统一资产元数据；legacy 表只做兼容同步。"""
+        from app.models.v2.dataset import Dataset
+
+        dataset = self._db.query(Dataset).filter(
+            Dataset.id == dataset_id, Dataset.kind == "curated").first()
+        if dataset:
+            schema = dict(dataset.schema_json or {})
+            schema["review_status"] = status
+            dataset.schema_json = schema
+        legacy = self._db.query(CuratedDataset).filter(
+            CuratedDataset.id == dataset_id).first()
+        if legacy:
+            legacy.status = status
+
     def _get_review_or_raise(self, review_id: str) -> CuratedReview:
-        review = self._db.query(CuratedReview).filter(CuratedReview.id == review_id).first()
+        review = self._db.query(CuratedReview).filter(
+            CuratedReview.id == review_id).first()
         if not review:
-            from fastapi import HTTPException
             raise HTTPException(404, f"Review {review_id} not found")
         return review

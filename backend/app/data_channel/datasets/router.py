@@ -114,7 +114,7 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
 
 class TableColumnDef(BaseModel):
     name: str
-    type: str = "string"  # CONTRACT_FIELD_TYPES 平台词表，非法值回落 string
+    type: str = "string"  # CONTRACT_FIELD_TYPES 平台词表；非法值显式拒绝
 
 
 class CreateTableRequest(BaseModel):
@@ -132,7 +132,7 @@ def create_online_table(body: CreateTableRequest, db: Session = Depends(get_db))
     上传文件批量补数。列类型由用户声明（types_source=declared），在线编辑
     时按声明校验，不再随数据重新推断。
     """
-    from app.data_channel.datasets.lake_gate import normalize_field_type, split_pk
+    from app.data_channel.datasets.lake_gate import CONTRACT_FIELD_TYPES, normalize_field_type, split_pk
 
     name = body.name.strip()
     if not name:
@@ -148,6 +148,12 @@ def create_online_table(body: CreateTableRequest, db: Session = Depends(get_db))
             continue
         if col in seen:
             raise HTTPException(400, f"列名「{col}」重复，请修改后重试")
+        requested_type = str(c.type or "").strip().lower()
+        if requested_type not in CONTRACT_FIELD_TYPES:
+            raise HTTPException(
+                400,
+                f"列「{col}」的数据类型「{c.type}」不受支持；可选类型：{', '.join(CONTRACT_FIELD_TYPES)}",
+            )
         seen.add(col)
         columns.append({"name": col, "type": normalize_field_type(c.type)})
     if not columns:
@@ -200,9 +206,25 @@ async def upload_dataset_version(
         raise HTTPException(404, "Dataset not found")
     if ds.kind == "curated":
         raise HTTPException(400, "成品数据集由流水线生成，不支持手动上传数据")
+    _require_manual_dataset(ds, "手动上传")
 
     content = await file.read()
     ext = _check_upload_file(file.filename, content)
+
+    from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
+    try:
+        # 上传、在线编辑和流水线入湖必须竞争同一把数据集锁。否则两个请求可能
+        # 同时选择 vN+1 并覆盖同一个对象键，造成 checksum 与实际内容错配。
+        with dataset_write_lock(f"dataset::{dataset_id}", bind=db.get_bind(), wait_timeout=30):
+            db.refresh(ds)
+            return _persist_uploaded_version(db, svc, ds, content, ext)
+    except DatasetLockTimeout as e:
+        raise HTTPException(423, str(e))
+
+
+def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: bytes, ext: str) -> dict:
+    """持锁执行人工数据集的新版本校验与落盘。"""
+    dataset_id = ds.id
 
     # 契约管理的数据集（声明过主键 / 在线建表 / 编辑过）需要全量行做校验与列刷新
     schema = dict(ds.schema_json or {})
@@ -213,10 +235,10 @@ async def upload_dataset_version(
         try:
             full_rows = _parse_stored_rows(content, limit=None)
         except Exception as e:
-            # 主键契约必须在解析后的行上校验，解析不了就不允许落盘；
-            # 仅为刷新列结构的解析失败则放行（不阻断上传，只是不刷新）
-            if declared_pk:
-                raise HTTPException(400, f"文件解析失败，无法校验主键契约：{e}")
+            # 只要存在主键或声明类型契约，就必须在解析后的全量行上校验；
+            # 解析失败时放行会让“声明 integer、实际任意文本”的坏版本落湖。
+            if declared_pk or schema.get("types_source") == "declared":
+                raise HTTPException(400, f"文件解析失败，无法校验数据契约：{e}")
             full_rows = None
 
     # 已声明主键契约的数据集：新文件先过三校验，坏身份的数据不落盘
@@ -227,13 +249,23 @@ async def upload_dataset_version(
         except LakeGateError as e:
             raise HTTPException(400, str(e))
 
+    # 在线建表声明的类型是数据契约，不是展示标签；文件批量补数也必须遵守。
+    if schema.get("types_source") == "declared":
+        from app.data_channel.datasets.lake_gate import LakeGateError, validate_declared_types
+        try:
+            validate_declared_types(
+                full_rows or [], schema.get("columns_typed"), dataset_name=ds.name)
+        except LakeGateError as e:
+            raise HTTPException(400, str(e))
+
     # 记录旧列，供列变化提示（契约管理的数据集用契约列，比首行采样更可靠）
     old_cols = set(schema.get("columns") or [])
     if not old_cols:
         old_rows = svc.preview(dataset_id, None, limit=1)
         old_cols = set(old_rows[0].keys()) if old_rows else set()
 
-    ver = svc.create_version(dataset_id, content, rowcount=_estimate_rowcount(content, ext))
+    rowcount = len(full_rows) if full_rows is not None else _estimate_rowcount(content, ext)
+    ver = svc.create_version(dataset_id, content, rowcount=rowcount)
 
     new_rows = svc.preview(dataset_id, None, limit=1)
     new_cols = set(new_rows[0].keys()) if new_rows else set()

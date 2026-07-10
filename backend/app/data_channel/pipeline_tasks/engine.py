@@ -45,6 +45,12 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
             logger.info("PipelineTask %s 跳过：%s", task_id, msg)
             return {"status": "skipped", "task_id": task_id, "reason": msg}
 
+        from app.data_channel.datasets.lake_gate import contract_pk
+        pipeline_pk = contract_pk(pipe.column_definitions)
+        if (task.write_mode or "overwrite") == "upsert" and not pipeline_pk:
+            _fail(db, task, "主键合并无法执行：关联流水线的已发布数据契约没有主键")
+            return {"status": "error", "error": task.last_error}
+
         task.status = "running"
         task.last_error = ""
         run = PipelineRun(
@@ -62,7 +68,8 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
                     "pipeline_name": pipe.name,
                     "pipeline_version": getattr(pipe, "version", None),
                     "write_mode": task.write_mode,
-                    "primary_key": task.primary_key or "",
+                    "primary_key": pipeline_pk,
+                    "primary_key_source": "pipeline_contract",
                     "soft_delete_column": task.soft_delete_column or "",
                     "skip_empty": bool(task.skip_empty),
                     "schedule_type": task.schedule_type,
@@ -78,7 +85,7 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
 
         write_opts = {
             "mode": task.write_mode or "overwrite",
-            "primary_key": task.primary_key or "",
+            "primary_key": pipeline_pk,
             "soft_delete_column": task.soft_delete_column or "",
             "skip_empty": bool(task.skip_empty),
         }

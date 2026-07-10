@@ -477,8 +477,11 @@ class ToolRunner:
         summary = service.summarize_workflow(workflow)
         if not nodes:
             issues.append({"level": "error", "message": "工作流没有任何节点。"})
-        if not summary["has_trigger"]:
-            issues.append({"level": "error", "message": "缺少触发器节点（Webhook 或 Schedule Trigger），无法发布。"})
+        if not summary["webhook_path"]:
+            issues.append({
+                "level": "error",
+                "message": "缺少 Webhook 触发器：平台托管流水线必须由数据任务池经 Webhook 调度，无法发布。",
+            })
 
         try:
             _validate_connections([{"name": n.get("name")} for n in nodes], connections)
@@ -510,9 +513,6 @@ class ToolRunner:
             if params.get("responseMode") not in ("lastNode", "responseNode"):
                 issues.append({"level": "warning",
                                "message": "Webhook responseMode 建议设为 lastNode：平台触发后可直接取回末节点数据入湖。"})
-        else:
-            issues.append({"level": "warning",
-                           "message": "没有 Webhook 触发器：平台将无法主动调度这条流水线（只能由 n8n 内部定时自跑），运行产物也无法自动入湖。"})
 
         for n in nodes:
             if n.get("credentials"):

@@ -16,6 +16,8 @@ from app.data_channel.datasets.lake_gate import (
     resolve_pk,
     split_pk,
     validate_contract_structure,
+    validate_declared_types,
+    validate_merged_lake,
     validate_pk,
     validate_upsert_base,
 )
@@ -131,6 +133,18 @@ def test_validate_upsert_base_blocks_legacy_rows_without_pk():
 def test_validate_upsert_base_ok():
     validate_upsert_base(ROWS, ["order_id"])
     validate_upsert_base([], ["order_id"])  # 空湖直接放行
+
+
+def test_append_full_lake_validation_blocks_cross_batch_duplicate_pk():
+    """两个批次内部各自唯一仍可能互相撞键，必须在合并快照上拦截。"""
+    merged = [
+        {"order_id": "A-1", "amount": "10"},
+        {"order_id": "A-1", "amount": "12"},
+    ]
+    with pytest.raises(LakeGateError, match="合并后的全量数据") as exc:
+        validate_merged_lake(
+            merged, ["order_id"], dataset_name="订单", write_mode="append")
+    assert "upsert" in str(exc.value)
 
 
 # ── gate_rows 编排 ────────────────────────────────────────────
@@ -266,6 +280,19 @@ def test_apply_column_contract_rename_collision_with_existing_column_fails():
 def test_infer_columns_typed_orders_and_skips_content():
     typed = infer_columns_typed([{"b": "1", "content": b"x"}, {"a": "y", "b": "2"}])
     assert [c["name"] for c in typed] == ["b", "a"]
+
+
+def test_manual_json_type_requires_structured_or_parseable_json():
+    columns = [{"name": "payload", "type": "json"}]
+    validate_declared_types(
+        [{"payload": {"ok": True}}, {"payload": '[1, {"x": 2}]'}, {"payload": ""}],
+        columns, dataset_name="人工数据")
+    with pytest.raises(LakeGateError, match="不符合声明类型 json"):
+        validate_declared_types(
+            [{"payload": "not-json"}], columns, dataset_name="人工数据")
+    with pytest.raises(LakeGateError, match="不符合声明类型 json"):
+        validate_declared_types(
+            [{"payload": 123}], columns, dataset_name="人工数据")
 
 
 # ── 流水线字段契约（column_definitions）───────────────────────────

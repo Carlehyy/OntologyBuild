@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, String, DateTime, JSON, Text, ForeignKey
+from sqlalchemy import Boolean, String, DateTime, JSON, Text, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -50,13 +50,21 @@ class PipelineVersion(Base):
     created_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    __table_args__ = (
+        Index("uq_pipeline_versions_pipeline_version", "pipeline_id", "version", unique=True),
+    )
+
 
 class PipelineRun(Base):
     __tablename__ = "v2_pipeline_runs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     pipeline_id: Mapped[str] = mapped_column(String, ForeignKey("v2_pipelines.id", ondelete="CASCADE"), nullable=False)
-    task_id: Mapped[str | None] = mapped_column(String, nullable=True)  # 由哪条调度任务触发（血缘）
+    task_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("v2_pipeline_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )  # 由哪条调度任务触发（血缘）
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending|running|success|failed|cancelled
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

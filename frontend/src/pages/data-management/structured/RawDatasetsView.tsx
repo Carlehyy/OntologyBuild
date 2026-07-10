@@ -36,6 +36,7 @@ interface Banner {
 export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: string | null }) {
   const [items, setItems] = useState<DatasetOverviewItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [expanded, setExpanded] = useState<string | null>(focusDatasetId ?? null)
   const [banner, setBanner] = useState<Banner | null>(null)
 
@@ -43,6 +44,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   const [previews, setPreviews] = useState<Record<string, { columns: string[]; rows: Record<string, unknown>[]; total: number; versionNo?: number }>>({})
   const [versions, setVersions] = useState<Record<string, DatasetVersionItem[]>>({})
   const [previewLoading, setPreviewLoading] = useState<string | null>(null)
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({})
 
   // 上传（新建 / 新版本）
   const newFileRef = useRef<HTMLInputElement>(null)
@@ -64,26 +66,31 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
 
   const load = () => {
     setLoading(true)
+    setLoadError('')
     datasetsApi.overview()
       .then(res => setItems(res.items ?? []))
-      .catch(() => setItems([]))
+      .catch((error: unknown) => {
+        const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
+        const detail = e?.detail ?? e?.data?.detail
+        setLoadError(
+          typeof detail === 'string' ? detail
+            : typeof e?.message === 'string' ? e.message
+              : '人工数据集加载失败，请检查网络后重试',
+        )
+      })
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
-
-  // 深链定位：?dataset=xxx 自动展开并加载预览
-  useEffect(() => {
-    if (focusDatasetId) {
-      setExpanded(focusDatasetId)
-      loadDetail(focusDatasetId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusDatasetId])
+  useEffect(() => { void Promise.resolve().then(load) }, [])
 
   const loadDetail = async (id: string, refresh = false) => {
     if (previews[id] && !refresh) return
     setPreviewLoading(id)
+    setDetailErrors(previous => {
+      const next = { ...previous }
+      delete next[id]
+      return next
+    })
     try {
       const [pv, vers] = await Promise.all([
         datasetsApi.previewLatest(id, 20),
@@ -91,12 +98,29 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       ])
       setPreviews(p => ({ ...p, [id]: { columns: pv.columns ?? [], rows: pv.rows ?? [], total: pv.total_rows ?? 0, versionNo: pv.version_no } }))
       setVersions(p => ({ ...p, [id]: Array.isArray(vers) ? vers : [] }))
-    } catch {
-      setPreviews(p => ({ ...p, [id]: { columns: [], rows: [], total: 0 } }))
+    } catch (error: unknown) {
+      const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
+      const detail = e?.detail ?? e?.data?.detail
+      const message = typeof detail === 'string'
+        ? detail
+        : typeof e?.message === 'string' ? e.message : '数据预览加载失败'
+      setDetailErrors(previous => ({ ...previous, [id]: message }))
     } finally {
       setPreviewLoading(null)
     }
   }
+
+  // 深链定位：?dataset=xxx 自动展开并加载预览。
+  useEffect(() => {
+    if (!focusDatasetId) return
+    const timer = window.setTimeout(() => {
+      setExpanded(focusDatasetId)
+      void loadDetail(focusDatasetId)
+    }, 0)
+    return () => window.clearTimeout(timer)
+    // loadDetail 只消费当前缓存；深链仅应在目标 ID 变化时重新定位。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusDatasetId])
 
   const handleExpand = (id: string) => {
     if (expanded === id) { setExpanded(null); return }
@@ -206,13 +230,10 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       <input ref={newFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleNewUpload} />
       <input ref={versionFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleVersionUpload} />
 
-      {/* 工具行 + 提示条 */}
+      {/* 工具行 + 提示条：删除重复说明文字，首屏直接聚焦可执行操作。 */}
       <div className="shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-gray-400">
-          💡 人工数据集作为成品数据集的一种拓展方式，用户可以在线管理与维护，从而增强数据集的汇聚能力
-        </p>
-        <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center justify-end gap-3">
+        <div className="flex shrink-0 items-center gap-2">
           <button onClick={load} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
             <RefreshCw size={12} /> 刷新
           </button>
@@ -247,12 +268,26 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           </div>
         </div>
       )}
+      {loadError && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+          <XCircle size={15} className="shrink-0" />
+          <span className="flex-1">加载失败：{loadError}</span>
+          <button type="button" onClick={load} className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs hover:bg-red-100">重试</button>
+        </div>
+      )}
       </div>
 
       {/* 列表 — 可滚动 */}
       <div className="flex-1 overflow-y-auto px-5 py-3">
       {loading ? (
         <div className="text-gray-400 text-sm p-8 text-center">加载中...</div>
+      ) : loadError && items.length === 0 ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-10 text-center text-red-700">
+          <XCircle size={28} className="mx-auto mb-2 opacity-70" />
+          <p className="text-sm font-medium">无法加载人工数据集</p>
+          <p className="mt-1 text-xs text-red-500">{loadError}</p>
+          <button type="button" onClick={load} className="mt-3 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs hover:bg-red-100">重新加载</button>
+        </div>
       ) : items.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Database size={32} className="mx-auto opacity-30" />
@@ -395,7 +430,13 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                     {isOpen && (
                       <tr>
                         <td colSpan={7} className="bg-gray-50/70 border-t px-6 py-4">
-                          {previewLoading === ds.id && !preview ? (
+                          {detailErrors[ds.id] ? (
+                            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                              <XCircle size={13} className="shrink-0" />
+                              <span className="flex-1">详情加载失败：{detailErrors[ds.id]}</span>
+                              <button type="button" onClick={() => loadDetail(ds.id, true)} className="rounded border border-red-200 bg-white px-2 py-1 hover:bg-red-100">重试</button>
+                            </div>
+                          ) : previewLoading === ds.id && !preview ? (
                             <p className="text-xs text-gray-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> 加载数据...</p>
                           ) : (
                             <div className="space-y-4">
@@ -412,7 +453,16 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                                       <thead className="bg-gray-50 border-b">
                                         <tr>
                                           {preview.columns.map(c => (
-                                            <th key={c} className="text-left px-3 py-1.5 font-medium text-gray-500 whitespace-nowrap">{c}</th>
+                                            <th key={c} className="text-left px-3 py-1.5 font-medium text-gray-500 whitespace-nowrap">
+                                              <span className="inline-flex items-center gap-1">
+                                                {c}
+                                                {ds.primary_key?.split(',').map(key => key.trim()).includes(c) && (
+                                                  <span className="inline-flex items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] text-amber-700" title="主键列">
+                                                    <KeyRound size={8} /> 主键
+                                                  </span>
+                                                )}
+                                              </span>
+                                            </th>
                                           ))}
                                         </tr>
                                       </thead>

@@ -8,16 +8,29 @@ from unittest.mock import patch
 
 from app.models.ontology import OntologyProject
 from app.models.relation import Relation
-from app.models.v2.curated import CuratedDataset
+from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
 from app.ontologies.formal_modeling.models import LinkInstance, LinkType
 from app.services.v2.mapping.mapping_service import MappingService
 
 
+def _add_curated(db, name: str) -> Dataset:
+    ds = Dataset(name=name, kind="curated", schema_json={"review_status": "approved"})
+    db.add(ds)
+    db.flush()
+    db.add(DatasetVersion(
+        dataset_id=ds.id, version_no=1, rowcount=1,
+        storage_uri=f"s3://test/{ds.id}/v1.parquet",
+    ))
+    db.commit()
+    db.refresh(ds)
+    return ds
+
+
 def _build_twice(db, onto_id, rows_by_ds):
     """跑两遍 build_all，顺带验证幂等（重跑不重复建边）。"""
     svc = MappingService(db)
-    with patch("app.services.v2.dataset_service.DatasetService.preview",
+    with patch("app.services.v2.dataset_service.DatasetService.load_all_rows",
                side_effect=lambda dataset_id, *a, **k: rows_by_ds[dataset_id]), \
          patch.object(MappingService, "_write_neo4j",
                       side_effect=lambda _s, _c, ents: len(ents), autospec=True), \
@@ -39,11 +52,9 @@ def test_fat_relationship_via_junction_table(db, admin_user):
     db.commit()
     db.refresh(onto)
 
-    ds_order = CuratedDataset(name="orders", status="approved", quality_score=0.9)
-    ds_product = CuratedDataset(name="products", status="approved", quality_score=0.9)
-    ds_edge = CuratedDataset(name="order_items", status="approved", quality_score=0.9)
-    db.add_all([ds_order, ds_product, ds_edge])
-    db.commit()
+    ds_order = _add_curated(db, "orders")
+    ds_product = _add_curated(db, "products")
+    ds_edge = _add_curated(db, "order_items")
 
     rows_by_ds = {
         ds_order.id: [
@@ -117,10 +128,8 @@ def test_thin_fk_link_still_works(db, admin_user):
     db.commit()
     db.refresh(onto)
 
-    ds_order = CuratedDataset(name="po", status="approved", quality_score=0.9)
-    ds_sup = CuratedDataset(name="sup", status="approved", quality_score=0.9)
-    db.add_all([ds_order, ds_sup])
-    db.commit()
+    ds_order = _add_curated(db, "po")
+    ds_sup = _add_curated(db, "sup")
 
     rows_by_ds = {
         ds_order.id: [

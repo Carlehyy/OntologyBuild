@@ -197,6 +197,29 @@ def test_retention_spares_versions_with_media(db, svc, storage, monkeypatch):
     assert 2 not in remaining  # 无媒体的旧版本被清理
 
 
+def test_retention_spares_versions_bound_to_review(db, svc, storage, monkeypatch):
+    """审核记录引用的不可变证据版本不能先被对象存储清理。"""
+    from app.config import settings
+    from app.models.v2.curated import CuratedReview
+
+    monkeypatch.setattr(settings, "dataset_version_keep", 1)
+    ds = svc.create_dataset("审核证据保留", "curated")
+    v1 = svc.create_version(ds.id, _csv_bytes([{"id": "A", "v": "1"}]))
+    db.add(CuratedReview(
+        curated_dataset_id=ds.id,
+        dataset_version_id=v1.id,
+        status="approved",
+    ))
+    db.commit()
+
+    svc.create_version(ds.id, _csv_bytes([{"id": "A", "v": "2"}]))
+    svc.create_version(ds.id, _csv_bytes([{"id": "A", "v": "3"}]))
+
+    remaining = {v.id for v in svc.list_versions(ds.id)}
+    assert v1.id in remaining
+    assert svc.load_all_rows(ds.id, v1.version_no) == [{"id": "A", "v": "1"}]
+
+
 def test_retention_disabled_when_keep_is_zero(svc, monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "dataset_version_keep", 0)

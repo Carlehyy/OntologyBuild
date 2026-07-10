@@ -361,9 +361,9 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     warnings = []
     definition = pl.definition
 
-    # ── n8n 引擎（数据管家托管）：校验绑定完整性，发布资格不在此处
-    #    （发布与否由本路由的 publish/unpublish 管理，validate 需在
-    #    未发布时也通过，否则发布流程死锁）────────────────────
+    # ── n8n 引擎（数据管家托管）：校验绑定与平台调度入口。
+    #    validate 本来就是发布前置步骤，因此不可调度的 Schedule/Manual-only
+    #    工作流应在这里直接给出 error，而不是等发布远端动作阶段才失败。──
     if _is_n8n_pipeline(pl):
         from app.data_channel.steward.service import find_webhook_path, record_for_pipeline
 
@@ -373,8 +373,11 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             errors.append({"node_id": "", "severity": "error",
                            "message": "缺少数据管家治理记录，无法运行。请删除后在数据管家重新新建该流水线。"})
         elif not (n8n_def.get("webhook_path") or find_webhook_path(rec.workflow_snapshot)):
-            warnings.append({"node_id": "", "severity": "warning",
-                             "message": "工作流没有 Webhook 触发器，平台无法主动调度（仅能由 n8n 内部定时自跑，产物不会自动入湖）。"})
+            errors.append({
+                "node_id": "",
+                "severity": "error",
+                "message": "工作流没有 Webhook 触发器：平台托管流水线必须由数据任务池经 Webhook 调度，不能发布。",
+            })
         return ValidateResult(valid=len(errors) == 0, errors=errors, warnings=warnings)
 
     # ── 旧格式兼容 ────────────────────────────────────────
@@ -756,9 +759,9 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
         raise HTTPException(
             400, f"字段契约结构非法：{'；'.join(structure_errors)}。请回到「设置主键组」修正。")
 
-    # ── n8n：发布 = 激活 workflow + 固化 definition（webhook/期望列）。
-    #    激活放在状态翻转之前——激活失败发布必须中止；反向顺序会留下
-    #    「平台已发布、n8n 未激活」的必失败组合 ──
+    # ── n8n：发布 = 激活 workflow + 固化 definition（webhook/期望列/revision）。
+    #    激活是远端副作用，后续本地事务若失败必须补偿停用。──
+    n8n_activation = None
     if _is_n8n_pipeline(pl):
         from app.data_channel.steward import service as steward_service
 
@@ -767,44 +770,61 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
             raise HTTPException(400, "缺少数据管家治理记录，无法发布。请删除后在数据管家重新新建该流水线。")
         try:
             client = steward_service.get_n8n_client(db)
-            steward_service.activate_for_publish(db, rec, client)
+            revision = steward_service.activate_for_publish(db, rec, client)
         except steward_service.StewardError as e:
             raise HTTPException(400, str(e))
-        # 刷新影子 definition：固化 webhook_path 与试跑列（运行期漂移检测基线）
-        steward_service.ensure_shadow_pipeline(db, rec)
+        n8n_activation = (rec, client)
 
-    # 契约主键 vs 湖中已固化主键：不一致 → 警告随响应返回（不再拦截）
-    warnings: list[str] = []
-    pk = contract_pk(pl.column_definitions)
-    if pk:
-        for cid in (pl.target_curated_ids or []):
-            ds = db.query(Dataset).filter(Dataset.id == cid).first()
-            declared = ((ds.schema_json or {}).get("primary_key") or "") if ds else ""
-            if declared and split_pk(declared) != split_pk(pk):
-                warnings.append(
-                    f"契约主键（{pk}）与资产湖数据集「{ds.name}」已固化的主键（{declared}）不一致："
-                    f"下次「全量覆盖」运行将重写湖中声明并重建实例身份；增量/合并入库在对齐前会失败。")
+    try:
+        if n8n_activation is not None:
+            rec, _client = n8n_activation
+            # revision 来自激活后再次读取的远端真身，和本地状态/版本快照同事务固化。
+            steward_service.ensure_shadow_pipeline(
+                db, rec, published_revision=revision)
 
-    # 版本号语义 = 已发布快照序号：首次发布保持当前号，再发布才递增
-    has_prior_published = db.query(PipelineVersion).filter(
-        PipelineVersion.pipeline_id == pipeline_id,
-        PipelineVersion.status == "published").count() > 0
-    pl.status = "published"
-    pl.version = (pl.version or 1) + (1 if has_prior_published else 0)
-    if body and body.enable:
-        pl.enabled = True
-    pl.updated_at = datetime.now(timezone.utc)
-    # 版本快照与状态翻转同一事务提交——分两段 commit 会在中断时留下
-    # 「已发布却无快照」的孤儿状态（契约是封版核心工件，必须可回溯）
-    db.add(PipelineVersion(
-        pipeline_id=pipeline_id,
-        version=pl.version,
-        definition=pl.definition,
-        column_definitions=pl.column_definitions,
-        status="published",
-        created_by=current_user.id,
-    ))
-    db.commit()
+        # 契约主键 vs 湖中已固化主键：不一致 → 警告随响应返回（不再拦截）
+        warnings: list[str] = []
+        pk = contract_pk(pl.column_definitions)
+        if pk:
+            for cid in (pl.target_curated_ids or []):
+                ds = db.query(Dataset).filter(Dataset.id == cid).first()
+                declared = ((ds.schema_json or {}).get("primary_key") or "") if ds else ""
+                if declared and split_pk(declared) != split_pk(pk):
+                    warnings.append(
+                        f"契约主键（{pk}）与资产湖数据集「{ds.name}」已固化的主键（{declared}）不一致："
+                        f"下次「全量覆盖」运行将重写湖中声明并重建实例身份；增量/合并入库在对齐前会失败。")
+
+        # 版本号语义 = 已发布快照序号：首次发布保持当前号，再发布才递增
+        has_prior_published = db.query(PipelineVersion).filter(
+            PipelineVersion.pipeline_id == pipeline_id,
+            PipelineVersion.status == "published").count() > 0
+        pl.status = "published"
+        pl.version = (pl.version or 1) + (1 if has_prior_published else 0)
+        if body and body.enable:
+            pl.enabled = True
+        pl.updated_at = datetime.now(timezone.utc)
+        # 版本快照与状态翻转同一事务提交——分两段 commit 会在中断时留下
+        # 「已发布却无快照」的孤儿状态（契约是封版核心工件，必须可回溯）
+        db.add(PipelineVersion(
+            pipeline_id=pipeline_id,
+            version=pl.version,
+            definition=pl.definition,
+            column_definitions=pl.column_definitions,
+            status="published",
+            created_by=current_user.id,
+        ))
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 — 本地事务失败必须撤销远端激活
+        db.rollback()
+        if n8n_activation is not None:
+            rec, client = n8n_activation
+            try:
+                steward_service.compensate_failed_publish(rec, client)
+            except steward_service.StewardError as compensation_error:
+                raise HTTPException(500, str(compensation_error)) from exc
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(500, f"平台发布事务失败，n8n 激活已撤销：{exc}") from exc
 
     return {
         "id": pl.id,
@@ -838,7 +858,8 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             f"请先在数据任务池删除或改绑这些任务。")
     _reject_if_sync_chain_refs(db, pipeline_id, action="撤回发布")
 
-    # n8n：撤回发布同时停用 workflow（n8n 侧已删/本就停用时不阻塞）
+    # n8n：必须先确认远端已停用；失败时不允许提交本地 draft。
+    n8n_unpublish = None
     if _is_n8n_pipeline(pl):
         from app.data_channel.steward import service as steward_service
 
@@ -848,12 +869,29 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
                 client = steward_service.get_n8n_client(db)
             except steward_service.StewardError as e:
                 raise HTTPException(400, f"撤回发布需要停用 n8n 工作流：{e}")
-            steward_service.deactivate_on_unpublish(rec, client)
+            try:
+                steward_service.deactivate_on_unpublish(rec, client)
+            except steward_service.StewardError as e:
+                raise HTTPException(400, str(e))
+            n8n_unpublish = (rec, client)
 
     pl.status = "draft"
     pl.enabled = False
     pl.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 — 恢复发布前的远端激活状态
+        db.rollback()
+        if n8n_unpublish is not None:
+            rec, client = n8n_unpublish
+            try:
+                client.activate_workflow(rec.n8n_workflow_id)
+            except Exception as compensation_exc:  # noqa: BLE001
+                raise HTTPException(
+                    500,
+                    f"平台撤回事务失败，且恢复 n8n 激活状态失败：{compensation_exc}。请立即人工核对。",
+                ) from exc
+        raise HTTPException(500, f"平台撤回事务失败，远端状态已恢复：{exc}") from exc
     db.refresh(pl)
     return _format_pipeline(pl)
 

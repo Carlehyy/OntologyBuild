@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 
 from app.deps import get_current_user, get_db
@@ -21,6 +21,8 @@ class PipelineTaskCreate(BaseModel):
     description: Optional[str] = ""
     pipeline_id: str
     write_mode: Literal["overwrite", "append", "upsert", "append_dedup"] = "overwrite"
+    # deprecated：只为兼容旧客户端；服务端只接受与流水线发布契约一致的值，
+    # 最终始终从流水线契约派生。
     primary_key: Optional[str] = ""
     soft_delete_column: Optional[str] = ""
     skip_empty: bool = True
@@ -44,8 +46,8 @@ class PipelineTaskUpdate(BaseModel):
     enabled: Optional[bool] = None
 
 
-def _validate(db: Session, body, existing: PipelineTask | None = None) -> None:
-    from app.data_channel.datasets.lake_gate import contract_pk, split_pk
+def _validate(db: Session, body, existing: PipelineTask | None = None) -> tuple[Pipeline, str]:
+    from app.data_channel.datasets.lake_gate import contract_pk, normalize_definitions, split_pk
 
     def g(k):
         v = getattr(body, k, None)
@@ -67,13 +69,23 @@ def _validate(db: Session, body, existing: PipelineTask | None = None) -> None:
     if picking_pipeline and pipe.enabled is False:
         raise HTTPException(400, f"流水线「{pipe.name}」未启用，任务只能挂接已启用的流水线。请先在流水线列表打开启用开关。")
 
-    # 主键契约仲裁：流水线契约已声明主键时，任务不能改写（可留空继承）
+    # 主键只有一个权威源：流水线发布契约。任务请求里的 primary_key 仅用于
+    # 兼容旧客户端，允许留空或传入同值，绝不允许自行补充/改写。
     pipe_pk = contract_pk(pipe.column_definitions)
-    task_pk = (g("primary_key") or "").strip()
-    if pipe_pk and task_pk and split_pk(task_pk) != split_pk(pipe_pk):
-        raise HTTPException(400, f"主键已由流水线契约声明为「{pipe_pk}」，任务不能改写；请清空任务主键（自动继承契约）或与契约保持一致。")
-    if g("write_mode") == "upsert" and not task_pk and not pipe_pk:
-        raise HTTPException(400, "「主键合并」入库方式必须指定主键列（或在流水线契约中声明主键）")
+    requested_pk = (getattr(body, "primary_key", None) or "").strip()
+    if requested_pk and split_pk(requested_pk) != split_pk(pipe_pk):
+        raise HTTPException(
+            400,
+            "数据任务不再定义主键；主键必须来自已发布流水线的数据契约"
+            + (f"（当前契约：{pipe_pk}）" if pipe_pk else "（当前流水线未声明主键）"),
+        )
+    if g("write_mode") == "upsert" and not pipe_pk:
+        raise HTTPException(400, "「主键合并」要求流水线在发布契约中声明主键；请返回流水线补齐契约后重新发布")
+
+    soft_delete = (g("soft_delete_column") or "").strip()
+    contract_columns = {d["field_key"] for d in normalize_definitions(pipe.column_definitions)}
+    if soft_delete and soft_delete not in contract_columns:
+        raise HTTPException(400, f"软删除列「{soft_delete}」不在流水线发布契约中")
 
     schedule_type = g("schedule_type")
     if schedule_type == "CRON":
@@ -86,6 +98,7 @@ def _validate(db: Session, body, existing: PipelineTask | None = None) -> None:
         iv = g("interval_seconds")
         if not iv or iv < 10:
             raise HTTPException(400, "固定间隔调度的间隔必须 ≥ 10 秒")
+    return pipe, pipe_pk
 
 
 def _refresh_scheduler(task_id: str) -> None:
@@ -188,6 +201,7 @@ def _with_pipeline_info(db: Session, tasks: list[PipelineTask]) -> list[dict]:
         pipe = pipe_map.get(t.pipeline_id)
         d["pipeline_name"] = pipe.name if pipe else "(已删除)"
         d["pipeline_status"] = (pipe.status or "draft") if pipe else "deleted"
+        d["pipeline_enabled"] = bool(pipe.enabled) if pipe else False
         d["pipeline_version"] = (pipe.version or 1) if pipe else None
         d["next_run_at"] = live.get(t.id) or _computed_next_run(t)
         d["last_impact"] = impacts.get(t.id)
@@ -307,6 +321,25 @@ def stats_overview(db: Session = Depends(get_db)):
         PipelineRun.created_at >= today_start, PipelineRun.status == "failed").count()
     total_runs = task_runs.count()
     total_errors = task_runs.filter(PipelineRun.status == "failed").count()
+    # 最近 7 个自然日的真实运行次数。前端不得用随机/合成曲线冒充观测数据。
+    first_day = datetime.utcnow().date() - timedelta(days=6)
+    trend = {
+        (first_day + timedelta(days=i)).isoformat(): {"runs": 0, "errors": 0}
+        for i in range(7)
+    }
+    recent = task_runs.filter(
+        PipelineRun.created_at >= datetime.combine(first_day, datetime.min.time())
+    ).with_entities(PipelineRun.created_at, PipelineRun.status).all()
+    for created_at, run_status in recent:
+        if not created_at:
+            continue
+        key = created_at.date().isoformat()
+        if key not in trend:
+            continue
+        trend[key]["runs"] += 1
+        if run_status == "failed":
+            trend[key]["errors"] += 1
+
     return {
         "total": total,
         "running": running,
@@ -316,6 +349,10 @@ def stats_overview(db: Session = Depends(get_db)):
         "today_errors": today_errors,
         "total_runs": total_runs,
         "total_errors": total_errors,
+        "trend_7d": [
+            {"date": day, "runs": counts["runs"], "errors": counts["errors"]}
+            for day, counts in trend.items()
+        ],
     }
 
 
@@ -323,14 +360,14 @@ def stats_overview(db: Session = Depends(get_db)):
 
 @router.post("", status_code=201)
 def create_task(body: PipelineTaskCreate, db: Session = Depends(get_db)):
-    _validate(db, body)
+    _, pipe_pk = _validate(db, body)
     task = PipelineTask(
         id=str(uuid.uuid4()),
         name=body.name,
         description=body.description or "",
         pipeline_id=body.pipeline_id,
         write_mode=body.write_mode,
-        primary_key=(body.primary_key or "").strip(),
+        primary_key=pipe_pk,
         soft_delete_column=(body.soft_delete_column or "").strip(),
         skip_empty=body.skip_empty,
         schedule_type=body.schedule_type,
@@ -383,9 +420,13 @@ def update_task(task_id: str, body: PipelineTaskUpdate, db: Session = Depends(ge
     task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "PipelineTask not found")
-    _validate(db, body, existing=task)
+    _, pipe_pk = _validate(db, body, existing=task)
     for field, val in body.model_dump(exclude_unset=True).items():
+        if field == "primary_key":
+            continue
         setattr(task, field, val)
+    # 兼容字段只保留当前发布契约快照，修复历史任务可能存在的自定义值。
+    task.primary_key = pipe_pk
     task.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(task)
@@ -409,6 +450,10 @@ def toggle_task(task_id: str, enabled: bool, db: Session = Depends(get_db)):
     task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "PipelineTask not found")
+    if enabled:
+        pipe = db.query(Pipeline).filter(Pipeline.id == task.pipeline_id).first()
+        if not pipe or (pipe.status or "draft") != "published" or pipe.enabled is False:
+            raise HTTPException(409, "关联流水线未发布或已停用，不能启用该调度任务")
     task.enabled = enabled
     task.updated_at = datetime.utcnow()
     db.commit()

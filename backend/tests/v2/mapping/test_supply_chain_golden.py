@@ -6,15 +6,23 @@ from app.models.logic import LogicRule
 from app.models.ontology import OntologyProject
 from app.models.relation import Relation
 from app.models.v2.action import OntologyActionType
-from app.models.v2.curated import CuratedDataset
+from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.logic import OntologyLogicRule
 from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
 from app.services.v2.mapping.mapping_service import MappingService
 
 
-def _add_curated(db, name: str) -> CuratedDataset:
-    ds = CuratedDataset(name=name, status="approved", quality_score=0.9)
+def _add_curated(db, name: str) -> Dataset:
+    ds = Dataset(
+        name=name, kind="curated",
+        schema_json={"review_status": "approved", "quality_score": 0.9},
+    )
     db.add(ds)
+    db.flush()
+    db.add(DatasetVersion(
+        dataset_id=ds.id, version_no=1, rowcount=1,
+        storage_uri=f"s3://test/{ds.id}/v1.parquet",
+    ))
     db.commit()
     db.refresh(ds)
     return ds
@@ -102,7 +110,7 @@ def test_supply_chain_mapping_golden_prd_242_semantics(db, admin_user):
         _add_mapping(db, ontology.id, ds.id, entity_class, pk_by_entity[entity_class])
 
     service = MappingService(db)
-    with patch("app.services.v2.dataset_service.DatasetService.preview", side_effect=lambda dataset_id, *_args, **_kwargs: rows_by_dataset[dataset_id]), \
+    with patch("app.services.v2.dataset_service.DatasetService.load_all_rows", side_effect=lambda dataset_id, *_args, **_kwargs: rows_by_dataset[dataset_id]), \
          patch.object(MappingService, "_write_neo4j", side_effect=lambda _self, _entity_class, entities: len(entities), autospec=True), \
          patch.object(MappingService, "_write_neo4j_relations", return_value=None), \
          patch("app.services.v2.vector.chroma_service.ChromaService.upsert_entities", return_value=None):
