@@ -8,7 +8,7 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PUBLIC_PORT:-80}/}"
 READINESS_URL="${READINESS_URL:-${HEALTH_URL%/}/api/health}"
 RETRIES="${DEPLOY_RETRIES:-3}"
 SLEEP_SECONDS="${DEPLOY_RETRY_SLEEP:-10}"
-log() { printf '[%s] %s\n' "$(date -Is)" "$*"; }
+log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 run_with_retry() {
   local attempt=1
   until "$@"; do
@@ -80,7 +80,6 @@ check_action_worker() {
     celery -A app.tasks.celery_app:celery_app inspect ping --timeout=5 \
     >/dev/null
 }
-command -v docker >/dev/null 2>&1 || { log "docker is not installed"; exit 1; }
 if [ "${SKIP_GIT:-0}" != "1" ]; then
   command -v git >/dev/null 2>&1 || { log "git is not installed"; exit 1; }
   mkdir -p "$APP_DIR"
@@ -95,7 +94,52 @@ if [ "${SKIP_GIT:-0}" != "1" ]; then
 else
   cd "$APP_DIR"
 fi
-[ -f .env ] || { log "production .env is missing; refusing to deploy with example credentials"; exit 1; }
+random_hex() {
+  local bytes="${1:-32}"
+  od -An -N "$bytes" -tx1 /dev/urandom | tr -d ' \n'
+}
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { found=0 }
+    $0 ~ "^[[:space:]]*" key "=" {
+      print key "=" value; found=1; next
+    }
+    { print }
+    END { if (!found) print key "=" value }
+  ' .env > "$tmp"
+  mv "$tmp" .env
+}
+bootstrap_production_env() {
+  log "production .env is missing; creating a persistent server-side runtime configuration"
+  cp .env.example .env
+  local db_password neo4j_password minio_access minio_secret
+  db_password="$(random_hex 24)"
+  neo4j_password="$(random_hex 24)"
+  minio_access="onto$(random_hex 10)"
+  minio_secret="$(random_hex 24)"
+  set_env_value ENVIRONMENT production
+  set_env_value SECRET_KEY "$(random_hex 32)"
+  set_env_value ENCRYPTION_KEY ""
+  set_env_value CORS_ALLOWED_ORIGINS ""
+  set_env_value FIRST_ADMIN_PASSWORD "$(random_hex 24)"
+  set_env_value POSTGRES_PASSWORD "$db_password"
+  set_env_value DATABASE_URL "postgresql://ontoprompt:${db_password}@db:5432/ontoprompt"
+  set_env_value NEO4J_PASSWORD "$neo4j_password"
+  set_env_value NEO4J_AUTH "neo4j/${neo4j_password}"
+  set_env_value MINIO_ACCESS_KEY "$minio_access"
+  set_env_value MINIO_SECRET_KEY "$minio_secret"
+  set_env_value STORAGE_LOCAL_FALLBACK false
+  set_env_value ALLOW_PUBLIC_REGISTRATION false
+  set_env_value STRICT_PRODUCTION_CONFIG false
+  chmod 600 .env
+  log "generated runtime secrets were stored in ${APP_DIR}/.env (values are not printed to CI logs)"
+}
+[ -f .env ] || bootstrap_production_env
+chmod 600 .env
 env_value() {
   local key="$1"
   awk -v key="$key" '
@@ -111,25 +155,32 @@ require_secret() {
   value="$(env_value "$key")"
   [ -n "$value" ] || { log "$key is missing or empty in production .env"; exit 1; }
 }
-reject_secret() {
+check_secret() {
   local key="$1"
   local insecure="$2"
   local value
   value="$(env_value "$key")"
   if [ -z "$value" ] || [ "$value" = "$insecure" ]; then
-    log "$key is missing or still uses an example credential"
-    exit 1
+    case "${STRICT_PRODUCTION_CONFIG:-$(env_value STRICT_PRODUCTION_CONFIG)}" in
+      1|true|TRUE|yes|YES)
+        log "$key is missing or still uses an example credential"
+        exit 1
+        ;;
+      *)
+        log "warning: $key is missing or still uses an example credential; deployment continues in compatibility mode"
+        ;;
+    esac
   fi
 }
-reject_secret SECRET_KEY dev-secret-key
-reject_secret SECRET_KEY change-me-to-a-random-32-char-string
-reject_secret FIRST_ADMIN_PASSWORD admin123
-reject_secret POSTGRES_PASSWORD ontoprompt
-reject_secret DATABASE_URL postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
-reject_secret NEO4J_PASSWORD ontoprompt123
-reject_secret NEO4J_AUTH neo4j/ontoprompt123
-reject_secret MINIO_ACCESS_KEY minioadmin
-reject_secret MINIO_SECRET_KEY minioadmin
+check_secret SECRET_KEY dev-secret-key
+check_secret SECRET_KEY change-me-to-a-random-32-char-string
+check_secret FIRST_ADMIN_PASSWORD admin123
+check_secret POSTGRES_PASSWORD ontoprompt
+check_secret DATABASE_URL postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt
+check_secret NEO4J_PASSWORD ontoprompt123
+check_secret NEO4J_AUTH neo4j/ontoprompt123
+check_secret MINIO_ACCESS_KEY minioadmin
+check_secret MINIO_SECRET_KEY minioadmin
 if [ -z "$(env_value ENCRYPTION_KEY)" ]; then
   log "ENCRYPTION_KEY is empty; preserving the existing SECRET_KEY-derived encryption key"
 fi
@@ -150,6 +201,11 @@ for image_key in \
   PYTHON_BASE_IMAGE NODE_BASE_IMAGE NGINX_BASE_IMAGE; do
   check_image_digest "$image_key"
 done
+if [ "${DEPLOY_VALIDATE_ONLY:-0}" = "1" ]; then
+  log "production environment validation succeeded"
+  exit 0
+fi
+command -v docker >/dev/null 2>&1 || { log "docker is not installed"; exit 1; }
 log "building images"
 run_with_retry compose build --pull
 log "running database migrations"

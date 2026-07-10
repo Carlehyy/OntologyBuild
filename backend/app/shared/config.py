@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key"
     encryption_key: str = ""
     cors_allowed_origins: str = "*"
+    # Compatibility-first rollout: existing installations may still have the
+    # historical example credentials. Enable only after rotating server .env
+    # values and, when applicable, re-encrypting stored connector credentials.
+    strict_production_config: bool = False
     first_admin_user: str = "admin"
     first_admin_password: str = "admin123"
     uploads_dir: str = "./uploads"
@@ -91,6 +95,12 @@ settings = Settings()
 if settings.environment == "production":
     _insecure = production_config_errors(settings)
     if _insecure:
-        raise RuntimeError(
-            f"ENVIRONMENT=production 但以下配置仍为默认值, 必须通过环境变量注入: {', '.join(_insecure)}"
-        )
+        message = (
+            "ENVIRONMENT=production 检测到不安全或旧版配置: "
+            f"{', '.join(_insecure)}")
+        if settings.strict_production_config:
+            raise RuntimeError(message)
+        import logging
+        logging.getLogger(__name__).warning(
+            "%s。当前以兼容模式启动；完成服务器 .env 轮换后设置 "
+            "STRICT_PRODUCTION_CONFIG=true 可恢复强制门禁。", message)

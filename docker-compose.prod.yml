@@ -79,6 +79,7 @@ services:
       # Empty is intentional and means same-origin only. Existing production
       # .env files therefore do not need a breaking CORS migration.
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
       STORAGE_LOCAL_FALLBACK: "false"
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
@@ -122,6 +123,7 @@ services:
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
       STORAGE_LOCAL_FALLBACK: "false"
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
