@@ -332,7 +332,7 @@ export default function DataStewardPage() {
       )}
 
       {/* 主体：对话 + 审批面板（窄屏纵向堆叠，避免挤压对话区） */}
-      <div ref={chatContainerRef} className="flex flex-1 min-h-0 max-xl:flex-col">
+      <div ref={chatContainerRef} className="flex flex-1 min-h-0 max-xl:flex-col m-1">
         {/* 对话区 */}
         <section style={isWide ? { width: `${chatWidthPct}%` } : undefined}
           className="flex h-full min-w-0 min-h-0 flex-col bg-white border overflow-hidden max-xl:w-full max-xl:min-h-[55%]">
