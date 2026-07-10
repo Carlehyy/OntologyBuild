@@ -3,13 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
-import { Badge } from '@/components/ui/Badge'
+import { Badge, type BadgeProps } from '@/components/ui/Badge'
 import { LoadingState } from '@/components/ui/LoadingState'
+import type { OntologyDetail } from '@/types/ontology'
 import OverviewDashboard from './tabs/OverviewDashboard'
 import GovernanceTab from './tabs/GovernanceTab'
 import ModelStructureView from './tabs/ModelStructureView'
 import FormalInstancesView from './tabs/FormalInstancesView'
-import CuratedDatasetsTab from './tabs/CuratedDatasetsTab'
+import DataMappingStudio from './tabs/DataMappingStudio'
 import VersionsTab from './tabs/VersionsTab'
 import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
@@ -59,23 +60,29 @@ export default function OntologyDetailPage() {
     setExportingFormat(format)
     try {
       await ontologyApi.exportOntology(id!, format)
-    } catch (err: any) {
-      setExportError(err?.detail ?? err?.message ?? '导出失败')
+    } catch (error: unknown) {
+      const candidate = typeof error === 'object' && error !== null
+        ? error as { detail?: unknown; message?: unknown }
+        : null
+      setExportError(
+        typeof candidate?.detail === 'string' ? candidate.detail
+          : typeof candidate?.message === 'string' ? candidate.message : '导出失败',
+      )
     } finally {
       setExportingFormat(null)
     }
   }
 
-  const { data: ontology, isLoading } = useQuery({
+  const { data: ontology, isLoading } = useQuery<OntologyDetail>({
     queryKey: ['ontology', id],
-    queryFn: () => ontologyApi.get(id!) as any,
+    queryFn: () => ontologyApi.get(id!),
     enabled: !!id,
   })
 
   if (isLoading) return <LoadingState message={t('common.loading')} />
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
-  const statusMap: Record<string, { label: string; variant: any }> = {
+  const statusMap: Record<string, { label: string; variant: BadgeProps['variant'] }> = {
     draft: { label: '草稿', variant: 'warning' },
     review: { label: '审核中', variant: 'info' },
     published: { label: '已发布', variant: 'success' },
@@ -150,8 +157,8 @@ export default function OntologyDetailPage() {
           <ModelStructureView ontologyId={id!} />
         </div>
       ) : activeGroup === 'data-mapping' ? (
-        <div className="onto-glass-card onto-glass-in p-4">
-          <CuratedDatasetsTab ontologyId={id!} />
+        <div className="onto-glass-in">
+          <DataMappingStudio ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
         <div className="onto-glass-card onto-glass-in p-4">
