@@ -139,6 +139,7 @@ def summarize_workflow(workflow: dict | None) -> dict:
             "type": str(n.get("type", "")).replace("n8n-nodes-base.", ""),
             "disabled": bool(n.get("disabled")),
         } for n in nodes],
+        "connections": (workflow or {}).get("connections") or {},
         "has_trigger": any(str(n.get("type", "")).startswith(TRIGGER_TYPE_PREFIXES) for n in nodes),
         "webhook_path": find_webhook_path(workflow),
     }

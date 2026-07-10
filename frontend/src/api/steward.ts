@@ -14,6 +14,7 @@ export type StewardPipelineStatus = 'draft' | 'archived'
 export interface StewardWorkflowSummary {
   node_count: number
   nodes: { name: string; type: string; disabled?: boolean }[]
+  connections: Record<string, Record<string, { node: string; type: string; index: number }[][]>>
   has_trigger: boolean
   webhook_path: string | null
 }

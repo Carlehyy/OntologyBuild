@@ -7,13 +7,13 @@
  *       与编辑向导完成，不在管家里。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
-  ClipboardCheck, ExternalLink, Eye, GitBranch, Globe, History, KeyRound, Library, Loader2,
-  Plus, RefreshCw, Rocket, Search, Send, Settings, Sparkles, Trash2,
+  ClipboardCheck, ExternalLink, Eye, Globe, History, KeyRound, Library, Loader2,
+  Pencil, Plus, RefreshCw, Search, Send, Settings, Sparkles, Trash2,
   User, Workflow, X, Zap,
 } from 'lucide-react'
 import {
@@ -24,6 +24,9 @@ import {
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import PipelineEditWizard from '../PipelineEditWizard'
+import { ReactFlow, ReactFlowProvider, Background, type Node, type Edge } from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+import dagre from '@dagrejs/dagre'
 
 // ---------- 状态样式（发布状态 = 影子流水线，与流水线列表同一口径） ----------
 
@@ -552,6 +555,87 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
   )
 }
 
+// ---------- 迷你流水线图 ----------
+
+const NODE_W = 120
+const NODE_H = 32
+
+function layoutGraph(nodes: Node[], edges: Edge[]) {
+  const g = new dagre.graphlib.Graph()
+  g.setDefaultEdgeLabel(() => ({}))
+  g.setGraph({ rankdir: 'LR', nodesep: 20, ranksep: 50, marginx: 12, marginy: 12 })
+  nodes.forEach(n => g.setNode(n.id, { width: NODE_W, height: NODE_H }))
+  edges.forEach(e => g.setEdge(e.source, e.target))
+  dagre.layout(g)
+  return nodes.map(n => {
+    const pos = g.node(n.id)
+    return { ...n, position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 } }
+  })
+}
+
+function buildGraph(workflow: Record<string, unknown> | null | undefined): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = []
+  const edges: Edge[] = []
+  const wfNodes = (workflow?.nodes as any[]) || []
+  const wfConns = (workflow?.connections as Record<string, any>) || {}
+
+  wfNodes.forEach((n: any) => {
+    nodes.push({
+      id: n.name,
+      type: 'default',
+      data: { label: n.name },
+      position: { x: 0, y: 0 },
+      style: {
+        fontSize: '9px', padding: '4px 10px', borderRadius: '6px',
+        border: '1px solid #e5e7eb', background: '#f9fafb', color: '#374151',
+        width: NODE_W,
+      },
+    })
+  })
+
+  Object.entries(wfConns).forEach(([source, outputs]) => {
+    Object.entries(outputs as Record<string, any>).forEach(([, targets]) => {
+      (targets as any[]).forEach((t: any) => {
+        edges.push({
+          id: `e-${source}-${t.node}`,
+          source,
+          target: t.node,
+          style: { stroke: '#d1d5db', strokeWidth: 1.5 },
+        })
+      })
+    })
+  })
+
+  return { nodes, edges }
+}
+
+function MiniGraph({ workflow }: { workflow: Record<string, unknown> | null | undefined }) {
+  const { nodes, edges } = buildGraph(workflow)
+  const laidOut = layoutGraph([...nodes], [...edges])
+
+  if (nodes.length === 0) return <div className="flex items-center justify-center h-full text-[11px] text-gray-400">暂无节点</div>
+
+  return (
+    <ReactFlowProvider>
+      <ReactFlow
+        nodes={laidOut}
+        edges={edges}
+        fitView
+        fitViewOptions={{ padding: 0.15 }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        panOnDrag
+        zoomOnScroll
+        preventScrolling={false}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="#f3f4f6" gap={16} size={0.5} />
+      </ReactFlow>
+    </ReactFlowProvider>
+  )
+}
+
 // ---------- 单条记录卡片 ----------
 
 function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: {
@@ -561,7 +645,6 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
   n8nApiUrl: string
   onOpenWizard: (pipelineId: string) => void
 }) {
-  const navigate = useNavigate()
   const published = r.pipelineStatus === 'published'
   const meta = PUBLISH_META[published ? 'published' : 'draft']
   const [detail, setDetail] = useState<StewardPipelineDetail | null>(null)
@@ -577,8 +660,6 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
   // 记录变化后（如发布/撤回/编排更新）重置已缓存的详情
   useEffect(() => { setDetail(null) }, [r.pipelineStatus, r.updatedAt])
 
-  const btn = 'flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors disabled:opacity-40'
-
   const n8nWebUrl = n8nApiUrl ? n8nApiUrl.replace(/\/api\/.*$/, '') : ''
   const canJump = !!(n8nWebUrl && r.n8nWorkflowId)
 
@@ -589,12 +670,18 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="truncate text-sm font-medium text-gray-900">{r.name}</p>
-            <span className={`shrink-0 rounded border px-1.5 py-px text-[10px] ${meta.cls}`}>{meta.label}</span>
+            {published && <span className={`shrink-0 rounded border px-1.5 py-px text-[10px] ${meta.cls}`}>{meta.label}</span>}
             {r.active && <span className="shrink-0 rounded border border-green-200 bg-green-50 px-1.5 py-px text-[10px] text-green-600">n8n 已激活</span>}
+            <button onClick={(e) => { e.stopPropagation(); if (r.pipelineId) onOpenWizard(r.pipelineId) }}
+              className="flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors border-violet-200 text-violet-700 hover:bg-violet-50 shrink-0 ml-auto"
+              title="打开编辑向导">
+              <Pencil size={11} /> 编辑
+            </button>
             {canJump && (
               <button onClick={(e) => { e.stopPropagation(); window.open(`${n8nWebUrl}/workflow/${r.n8nWorkflowId}`, '_blank') }}
-                className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 shrink-0" title="跳转 n8n 工作流">
-                <ExternalLink size={11} />
+                className="flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors border-blue-200 text-blue-600 hover:bg-blue-50 shrink-0"
+                title="跳转 n8n 工作流">
+                <ExternalLink size={11} /> 访问
               </button>
             )}
           </div>
@@ -607,39 +694,20 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
       </button>
 
       {expanded && (
-        <div className="border-t px-3 py-2.5 space-y-2.5">
-          {/* 节点链路 */}
-          {(r.summary?.nodes?.length ?? 0) > 0 && (
-            <div className="flex flex-wrap items-center gap-1">
-              {r.summary.nodes.map((n, i) => (
-                <span key={i} className="inline-flex items-center gap-1 rounded-md border bg-gray-50 px-1.5 py-0.5 text-[10px] text-gray-600" title={n.type}>
-                  {n.name}
-                </span>
-              ))}
-            </div>
-          )}
+        <div className="border-t px-3 py-2.5 space-y-2">
+          {/* 节点连线图 */}
+          <div className="h-[180px] w-full rounded-lg overflow-hidden border bg-gray-50/30">
+            {detailLoading ? (
+              <div className="flex items-center justify-center h-full text-[11px] text-gray-400">加载中…</div>
+            ) : (
+              <MiniGraph workflow={detail?.workflow ?? r.summary} />
+            )}
+          </div>
 
           {/* n8n 可达性（只读；执行观测/试跑已不在管家职权内） */}
           {detail?.n8nError ? (
             <p className="text-[11px] text-amber-600">n8n 暂不可达：{detail.n8nError}</p>
           ) : null}
-
-          {/* 管理入口：试跑/发布/撤回/归档都在流水线列表与编辑向导，不在管家 */}
-          <div className="flex flex-wrap gap-1.5 pt-0.5">
-            {!published ? (
-              <button onClick={() => { if (r.pipelineId) onOpenWizard(r.pipelineId) }}
-                title="打开编辑向导，预览数据、确认契约后发布并启用"
-                className={`${btn} border-violet-200 text-violet-700 hover:bg-violet-50`}>
-                <Rocket size={11} /> 去发布
-              </button>
-            ) : (
-              <button onClick={() => navigate('/data/pipelines')}
-                title="已发布流水线的撤回发布、启用开关都在流水线列表"
-                className={`${btn} text-gray-600 hover:bg-gray-50`}>
-                <GitBranch size={11} /> 在流水线列表管理
-              </button>
-            )}
-          </div>
         </div>
       )}
     </div>
