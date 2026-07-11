@@ -13,7 +13,7 @@
 .dmo-card button, .dmo-card input { font: inherit; }
 .dmo-loading { min-height: 360px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #778397; font-size: 13px; }
 .dmo-loading--error { color: #b44a46; }
-.dmo-hero { min-height: 118px; padding: 22px 24px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid #e9edef; background: radial-gradient(circle at 82% 0,rgba(20,184,166,.14),transparent 28%),linear-gradient(135deg,#fff,#f7fbfa); }
+.dmo-hero { min-height: 118px; padding: 22px 24px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid #e9edef; background: #e9f1f6; }
 .dmo-eyebrow { display: flex; align-items: center; gap: 6px; color: var(--dmo-teal); font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 .dmo-hero h2 { margin: 7px 0 4px; font-size: 22px; letter-spacing: -.025em; }
 .dmo-hero p { margin: 0; color: var(--dmo-muted); font-size: 12px; }

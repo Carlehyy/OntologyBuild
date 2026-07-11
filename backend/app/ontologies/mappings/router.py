@@ -85,6 +85,170 @@ def _validate_target_type(db: Session, ontology_id: str, type_id: Optional[str])
     return ot
 
 
+def _normal_mapping_type(raw: object) -> str:
+    """Normalize lake and ontology type vocabularies for mapping contracts."""
+    value = str(raw or "string").strip().lower().split("(", 1)[0]
+    aliases = {
+        "str": "string", "text": "string", "varchar": "string",
+        "char": "string", "uuid": "string",
+        "int": "number", "integer": "number", "bigint": "number",
+        "smallint": "number", "float": "number", "double": "number",
+        "decimal": "number", "decimal128": "number",
+        "date": "datetime", "timestamp": "datetime", "time": "datetime",
+        "bool": "boolean", "list": "array", "set": "array",
+        "object": "json", "map": "json",
+    }
+    return aliases.get(value, value)
+
+
+def _dataset_column_types(db: Session, dataset_id: str) -> dict[str, str]:
+    from app.models.v2.dataset import Dataset
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if dataset is None:
+        raise HTTPException(404, detail={
+            "code": "mapping_dataset_not_found",
+            "message": f"映射数据集不存在或尚未迁入资产湖：{dataset_id}",
+        })
+    schema = dataset.schema_json if isinstance(dataset.schema_json, dict) else {}
+    return {
+        str(column.get("name")): _normal_mapping_type(column.get("type"))
+        for column in (schema.get("columns_typed") or [])
+        if isinstance(column, dict) and column.get("name")
+    }
+
+
+def _assert_mapping_types_compatible(
+    db: Session,
+    dataset_id: str,
+    target_type: object | None,
+    field_mapping: dict,
+) -> None:
+    """Enforce source-to-property compatibility at the trusted API boundary.
+
+    Older imported datasets may not yet carry ``columns_typed``.  Those remain
+    readable for backwards compatibility; every lake-managed dataset with a
+    typed contract is checked strictly.
+    """
+    if target_type is None:
+        return
+    source_types = _dataset_column_types(db, dataset_id)
+    if not source_types:
+        return
+    properties = {
+        str(item.get("name")): item
+        for item in (getattr(target_type, "properties", None) or [])
+        if isinstance(item, dict) and item.get("name")
+    }
+    failures: list[dict] = []
+    for source, target in (field_mapping or {}).items():
+        source_name, target_name = str(source), str(target)
+        source_type = source_types.get(source_name)
+        target_property = properties.get(target_name)
+        if source_type is None:
+            failures.append({
+                "source": source_name, "target": target_name,
+                "reason": "source_column_not_found",
+            })
+            continue
+        if target_property is None:
+            failures.append({
+                "source": source_name, "target": target_name,
+                "reason": "target_property_not_found",
+            })
+            continue
+        target_type_name = _normal_mapping_type(target_property.get("type"))
+        if source_type != target_type_name:
+            failures.append({
+                "source": source_name, "source_type": source_type,
+                "target": target_name, "target_type": target_type_name,
+                "reason": "type_mismatch",
+            })
+    if failures:
+        raise HTTPException(422, detail={
+            "code": "mapping_type_mismatch",
+            "message": "字段映射包含不存在的字段或不兼容的数据类型，请修正后再保存。",
+            "errors": failures,
+        })
+
+
+def _assert_link_mapping_types_compatible(
+    db: Session, *, src_dataset_id: str, tgt_dataset_id: str,
+    edge_dataset_id: str | None, src_key: str, tgt_key: str,
+    link_type: object | None, field_mapping: dict,
+) -> None:
+    """Validate relation endpoint keys and edge properties before persistence."""
+    from app.data_channel.datasets.lake_gate import split_pk
+
+    if field_mapping and not edge_dataset_id:
+        raise HTTPException(422, detail={
+            "code": "edge_dataset_required_for_properties",
+            "message": "关系属性必须来自同一张连接表；请先选择关系数据集再映射属性。",
+        })
+
+    src_types = _dataset_column_types(db, src_dataset_id)
+    tgt_types = _dataset_column_types(db, tgt_dataset_id)
+    edge_types = (
+        _dataset_column_types(db, edge_dataset_id) if edge_dataset_id else None)
+    failures: list[dict] = []
+
+    def compare(source_name: str, source_type: str | None,
+                target_name: str, target_type: str | None, role: str) -> None:
+        # Untyped legacy assets remain operable; typed contracts are strict.
+        if source_type is None or target_type is None:
+            return
+        if source_type != target_type:
+            failures.append({
+                "role": role, "source": source_name, "source_type": source_type,
+                "target": target_name, "target_type": target_type,
+                "reason": "type_mismatch",
+            })
+
+    src_pk = split_pk(_canonical_primary_key(db, src_dataset_id))[0]
+    tgt_pk = split_pk(_canonical_primary_key(db, tgt_dataset_id))[0]
+    if edge_types is not None:
+        compare(src_key, edge_types.get(src_key), src_pk, src_types.get(src_pk),
+                "source_endpoint")
+        compare(tgt_key, edge_types.get(tgt_key), tgt_pk, tgt_types.get(tgt_pk),
+                "target_endpoint")
+    else:
+        compare(src_key, src_types.get(src_key), tgt_key, tgt_types.get(tgt_key),
+                "endpoint_join")
+
+    if link_type is not None:
+        properties = {
+            str(item.get("name")): item
+            for item in (getattr(link_type, "properties", None) or [])
+            if isinstance(item, dict) and item.get("name")
+        }
+        property_source_types = edge_types or {}
+        for target_property, source_column in (field_mapping or {}).items():
+            target_name, source_name = str(target_property), str(source_column)
+            source_type = property_source_types.get(source_name)
+            target = properties.get(target_name)
+            if edge_types is not None and source_type is None:
+                failures.append({
+                    "role": "edge_property", "source": source_name,
+                    "target": target_name, "reason": "source_column_not_found",
+                })
+                continue
+            if target is None:
+                failures.append({
+                    "role": "edge_property", "source": source_name,
+                    "target": target_name, "reason": "target_property_not_found",
+                })
+                continue
+            compare(source_name, source_type, target_name,
+                    _normal_mapping_type(target.get("type")), "edge_property")
+
+    if failures:
+        raise HTTPException(422, detail={
+            "code": "link_mapping_type_mismatch",
+            "message": "关系映射的端点外键或关系属性类型不兼容，请修正后再保存。",
+            "errors": failures,
+        })
+
+
 def _require_draft_ontology(db: Session, ontology_id: str) -> None:
     """发布后冻结 Mapping 结构；数据实例仍可通过 apply-from-dataset 更新。"""
     from app.models.ontology import OntologyProject
@@ -204,7 +368,7 @@ def _assert_client_primary_key_matches(
 def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db)):
     from app.services.v2.mapping.mapping_service import MappingService
     _require_draft_ontology(db, ontology_id)
-    _validate_target_type(db, ontology_id, body.target_object_type_id)
+    target_type = _validate_target_type(db, ontology_id, body.target_object_type_id)
     _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
 
     declared_pk = _canonical_primary_key(db, body.curated_dataset_id)
@@ -212,6 +376,8 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
         body.primary_key_column, declared_pk, body.curated_dataset_id)
     _validate_user_field_mapping(body.field_mapping or {}, body.ignored_fields)
     _assert_ignored_fields_do_not_hide_identity(body.ignored_fields, declared_pk)
+    _assert_mapping_types_compatible(
+        db, body.curated_dataset_id, target_type, body.field_mapping or {})
 
     svc = MappingService(db)
     field_mapping = dict(body.field_mapping or {})
@@ -300,11 +466,12 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
     _assert_client_primary_key_matches(
         body.primary_key_column, declared_pk, m.curated_dataset_id)
     provided = body.model_fields_set
-    if "target_object_type_id" in provided:
-        _validate_target_type(db, ontology_id, body.target_object_type_id)
-        m.target_object_type_id = body.target_object_type_id
-    if body.entity_class is not None:
-        m.entity_class = body.entity_class
+    candidate_target_type_id = (
+        body.target_object_type_id
+        if "target_object_type_id" in provided else m.target_object_type_id
+    )
+    target_type = _validate_target_type(
+        db, ontology_id, candidate_target_type_id)
     fm = dict(m.field_mapping or {})
     previous_pk = fm.get("__primary_key__")
     if body.field_mapping is not None:
@@ -322,6 +489,11 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
     )
     _validate_user_field_mapping(effective_user_mapping, effective_ignored)
     _assert_ignored_fields_do_not_hide_identity(effective_ignored, declared_pk)
+    _assert_mapping_types_compatible(
+        db, m.curated_dataset_id, target_type, effective_user_mapping)
+    m.target_object_type_id = candidate_target_type_id
+    if body.entity_class is not None:
+        m.entity_class = body.entity_class
     if body.ignored_fields is not None:
         if effective_ignored:
             fm["__ignored_fields__"] = sorted(set(effective_ignored))
@@ -552,6 +724,7 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
     from app.services.v2.dataset_service import DatasetService
     _require_draft_ontology(db, ontology_id)
     _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
+    link_type = None
 
     src_pk = split_pk(_canonical_primary_key(db, body.src_dataset_id))
     tgt_pk = split_pk(_canonical_primary_key(db, body.tgt_dataset_id))
@@ -609,6 +782,17 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
                 "expected_src_dataset_ids": src_candidates,
                 "expected_tgt_dataset_ids": tgt_candidates,
             })
+
+    _assert_link_mapping_types_compatible(
+        db,
+        src_dataset_id=body.src_dataset_id,
+        tgt_dataset_id=body.tgt_dataset_id,
+        edge_dataset_id=body.edge_dataset_id,
+        src_key=body.src_key,
+        tgt_key=body.tgt_key,
+        link_type=link_type,
+        field_mapping=body.field_mapping or {},
+    )
 
     existing_query = db.query(OntologyLinkMapping).filter(
         OntologyLinkMapping.ontology_id == ontology_id)

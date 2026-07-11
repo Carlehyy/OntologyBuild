@@ -37,7 +37,7 @@ _RESERVED_PROP_KEYS = {
     "id", "ontology_id", "source_id", "object_type",
     "source_row_count", "name", "name_cn", "name_en",
     "name_abbr", "display_name",
-    "__mapping_ids__",
+    "__mapping_ids__", "__business_properties__",
 }
 
 # entity_class → 一组默认图标 / 颜色（仅美观，无业务含义）
@@ -359,7 +359,13 @@ def project_to_formal_ontology(
     entity_to_instance: dict[str, str] = {}
 
     for idx, (ec, ent_list) in enumerate(entities_by_class.items()):
-        ent_props_list = [dict(e.properties or {}) for e in ent_list]
+        ent_props_list = []
+        for entity in ent_list:
+            flattened = dict(entity.properties or {})
+            business = flattened.pop("__business_properties__", {})
+            if isinstance(business, dict):
+                flattened.update(business)
+            ent_props_list.append(flattened)
         meta = class_meta.get(ec, {})
         # property_mappings 里的 property 名是落地后的属性键
         pk_source_fields = [part.strip() for part in str(
@@ -472,7 +478,10 @@ def project_to_formal_ontology(
         for ent in ent_list:
             inst_id = _stable_id("oi", ontology_id, ent.id)
             props = {k: v for k, v in (ent.properties or {}).items()
-                     if k not in ("ontology_id", "__mapping_ids__")}
+                     if k not in ("ontology_id", "__mapping_ids__", "__business_properties__")}
+            business = (ent.properties or {}).get("__business_properties__")
+            if isinstance(business, dict):
+                props.update(business)
             # 按类型属性定义转换值类型（CSV 字符串 → number/boolean）
             props = _coerce_props_to_type(props, final_props)
             # 补充展示名，便于图谱卡片渲染

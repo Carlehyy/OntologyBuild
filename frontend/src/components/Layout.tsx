@@ -125,7 +125,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
   const isGroupActive = (item: NavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events') || isActive('/api-hub')
+  const isMappingWorkspace = /^\/ontologies\/[^/]+\/mapping-config$/.test(location.pathname)
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events') || isActive('/api-hub') || isMappingWorkspace
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true
@@ -179,7 +180,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         const subActive = exact ? sub.to === exact.to : isActive(sub.to)
                         return (
                           <Link key={sub.to} to={sub.to}
-                            className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors ${subActive ? 'bg-[var(--color-nav-light)] text-[var(--color-nav-bg)] font-medium' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}>
+                            className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors ${subActive ? 'bg-[#b5f3e6] text-[var(--color-nav-bg)] font-medium' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}>
                             <SubIcon size={14} />
                             <span>{sub.label}</span>
                           </Link>

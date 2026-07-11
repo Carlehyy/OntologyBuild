@@ -963,13 +963,25 @@ class MappingService:
             "source_row_count", "name", "name_cn", "name_en",
             "display_name", "__mapping_ids__",
         }
+        declared_target_properties: set[str] = set()
+        if mapping.target_object_type_id:
+            from app.models.ontology_formal import ObjectType
+            target_type = self._db.query(ObjectType).filter(
+                ObjectType.id == mapping.target_object_type_id,
+                ObjectType.ontology_id == mapping.ontology_id,
+            ).first()
+            declared_target_properties = {
+                str(item.get("name"))
+                for item in (getattr(target_type, "properties", None) or [])
+                if isinstance(item, dict) and item.get("name")
+            }
         occupied = {
             str(prop) for source, prop in field_map.items()
             if not str(source).startswith("__") and str(prop) not in reserved_outputs
         }
         for col in sample.keys():
             prop = str(field_map.get(col) or col)
-            if prop not in reserved_outputs:
+            if prop not in reserved_outputs or prop in declared_target_properties:
                 continue
             candidate = "business_id" if prop == "id" else f"business_{prop}"
             if candidate in occupied:
@@ -1376,16 +1388,24 @@ class MappingService:
         field_map = mapping.field_mapping or {}
         pk_col = field_map.get("__primary_key__") or self._choose_pk_col(rows)
         property_meta = self._property_metadata_by_column(field_map)
+        runtime_keys = {
+            "id", "ontology_id", "source_id", "object_type", "source_row_count",
+            "name", "name_cn", "name_en", "display_name", "__mapping_ids__",
+        }
         entities_by_id: dict[str, dict] = {}
         for index, row in enumerate(rows):
             props: dict = {"ontology_id": mapping.ontology_id}
+            business_runtime_values: dict = {}
             for col, prop in field_map.items():
                 if col.startswith("__"):
                     continue
                 if property_meta.get(col, {}).get("hidden"):
                     continue
                 if col in row:
-                    props[prop] = row[col]
+                    if prop in runtime_keys:
+                        business_runtime_values[prop] = row[col]
+                    else:
+                        props[prop] = row[col]
             if len(self._pk_columns(pk_col)) > 1:
                 # Formal ObjectType currently exposes one primary_key property.
                 # Preserve every component as required business fields and add a
@@ -1403,6 +1423,12 @@ class MappingService:
             # reserved platform metadata and is not exposed as a business
             # ObjectType property by formal_projection.
             props["__mapping_ids__"] = [mapping.id]
+            if business_runtime_values:
+                # Entity's legacy envelope owns keys such as id/name.  Keep
+                # explicitly mapped business properties separately so the
+                # Formal projection can restore them without corrupting the
+                # runtime identity/display metadata.
+                props["__business_properties__"] = business_runtime_values
             if props["id"] in entities_by_id:
                 existing = entities_by_id[props["id"]]
                 existing["source_row_count"] = int(existing.get("source_row_count", 1)) + 1

@@ -42,6 +42,10 @@ function typeLabel(type?: string) {
   return { string: '文本', number: '数字', datetime: '时间', boolean: '布尔', array: '数组', json: 'JSON' }[normalized] || type || '文本'
 }
 
+function targetLaneX() {
+  return window.innerWidth < 1400 ? 410 : 650
+}
+
 function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
   const dataset = data.dataset
   return (
@@ -135,6 +139,19 @@ function sameLinkDefinition(existing: LinkMappingRecord, desired: DesiredLinkMap
     && JSON.stringify(existing.field_mapping || {}) === JSON.stringify(desired.fieldMapping)
 }
 
+function estimatedNodeHeight(node: MappingNode) {
+  if (node.measured?.height) return node.measured.height
+  if (node.data.kind === 'dataset') return 68 + node.data.dataset.columns.length * 33
+  if (node.data.kind === 'relation') return 68 + (2 + (node.data.relation?.properties?.length || 0)) * 33
+  return 68 + (node.data.object?.properties.length || 0) * 33
+}
+
+function nextLaneY(nodes: MappingNode[], lane: 'dataset' | 'target') {
+  return nodes
+    .filter(node => lane === 'dataset' ? node.data.kind === 'dataset' : node.data.kind !== 'dataset')
+    .reduce((bottom, node) => Math.max(bottom, node.position.y + estimatedNodeHeight(node) + 36), 55)
+}
+
 export default function MappingConfigurationPage() {
   const { id: ontologyId = '' } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -152,6 +169,8 @@ export default function MappingConfigurationPage() {
   const [saveIssues, setSaveIssues] = useState<SaveIssue[]>([])
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null)
   const [tutorialStep, setTutorialStep] = useState<number | null>(() => localStorage.getItem(`mapping-tutorial:${ontologyId}`) ? null : 0)
+  const [tutorialBounds, setTutorialBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  const pageRef = useRef<HTMLDivElement>(null)
   const initialized = useRef(false)
 
   const previewQuery = useQuery<PreviewResponse>({
@@ -174,9 +193,8 @@ export default function MappingConfigurationPage() {
   const addDatasetNode = useCallback((dataset: MappingDataset, position?: { x: number; y: number }) => {
     const nodeId = `dataset:${dataset.id}`
     if (nodes.some(node => node.id === nodeId)) return
-    const count = nodes.filter(node => node.data.kind === 'dataset').length
     setNodes(current => [...current, {
-      id: nodeId, type: 'dataset', position: position || { x: 70, y: 70 + count * 90 },
+      id: nodeId, type: 'dataset', position: position || { x: 60, y: nextLaneY(current, 'dataset') },
       data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId },
     }])
     setDirty(true)
@@ -185,18 +203,17 @@ export default function MappingConfigurationPage() {
   const addTargetNode = useCallback((kind: 'object' | 'relation', id: string, position?: { x: number; y: number }) => {
     const nodeId = `${kind}:${id}`
     if (nodes.some(node => node.id === nodeId)) return
-    const count = nodes.filter(node => node.data.kind !== 'dataset').length
     if (kind === 'object') {
       const object = objectById.get(id)
       if (!object) return
-      setNodes(current => [...current, { id: nodeId, type: 'object', position: position || { x: 610, y: 70 + count * 90 }, data: { kind: 'object', object } }])
+      setNodes(current => [...current, { id: nodeId, type: 'object', position: position || { x: targetLaneX(), y: nextLaneY(current, 'target') }, data: { kind: 'object', object } }])
     } else {
       const relation = data.linkTypes.find(item => item.id === id)
       if (!relation) return
       const sourceObject = objectById.get(relation.sourceObjectTypeId)
       const targetObject = objectById.get(relation.targetObjectTypeId)
       setNodes(current => [...current, {
-        id: nodeId, type: 'relation', position: position || { x: 610, y: 70 + count * 90 },
+        id: nodeId, type: 'relation', position: position || { x: targetLaneX(), y: nextLaneY(current, 'target') },
         data: {
           kind: 'relation', relation,
           sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0],
@@ -242,20 +259,29 @@ export default function MappingConfigurationPage() {
       }
     }
 
-    ;[...usedDatasets].forEach((datasetId, index) => {
+    let datasetY = 55
+    ;[...usedDatasets].forEach(datasetId => {
       const dataset = datasetById.get(datasetId)
-      if (dataset) nextNodes.push({ id: `dataset:${dataset.id}`, type: 'dataset', position: { x: 60, y: 55 + index * 105 }, data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId } })
+      if (dataset) {
+        const node: MappingNode = { id: `dataset:${dataset.id}`, type: 'dataset', position: { x: 60, y: datasetY }, data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId } }
+        nextNodes.push(node); datasetY += estimatedNodeHeight(node) + 36
+      }
     })
-    ;[...usedObjects].forEach((objectId, index) => {
+    let targetY = 55
+    ;[...usedObjects].forEach(objectId => {
       const object = objectById.get(objectId)
-      if (object) nextNodes.push({ id: `object:${object.id}`, type: 'object', position: { x: 650, y: 55 + index * 115 }, data: { kind: 'object', object } })
+      if (object) {
+        const node: MappingNode = { id: `object:${object.id}`, type: 'object', position: { x: targetLaneX(), y: targetY }, data: { kind: 'object', object } }
+        nextNodes.push(node); targetY += estimatedNodeHeight(node) + 36
+      }
     })
-    ;[...usedRelations].forEach((relationId, index) => {
+    ;[...usedRelations].forEach(relationId => {
       const relation = data.linkTypes.find(item => item.id === relationId)
       if (!relation) return
       const sourceObject = objectById.get(relation.sourceObjectTypeId)
       const targetObject = objectById.get(relation.targetObjectTypeId)
-      nextNodes.push({ id: `relation:${relation.id}`, type: 'relation', position: { x: 650, y: 90 + (usedObjects.size + index) * 115 }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } })
+      const node: MappingNode = { id: `relation:${relation.id}`, type: 'relation', position: { x: targetLaneX(), y: targetY }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } }
+      nextNodes.push(node); targetY += estimatedNodeHeight(node) + 36
     })
     setNodes(nextNodes); setEdges(nextEdges)
   }, [data, datasetById, objectById, ontologyId, setEdges, setNodes])
@@ -269,6 +295,20 @@ export default function MappingConfigurationPage() {
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
   }, [dirty])
+
+  useEffect(() => {
+    if (tutorialStep === null || !pageRef.current) { setTutorialBounds(null); return }
+    const page = pageRef.current
+    const updateBounds = () => {
+      const rect = page.getBoundingClientRect()
+      setTutorialBounds({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
+    }
+    updateBounds()
+    const observer = new ResizeObserver(updateBounds)
+    observer.observe(page)
+    window.addEventListener('resize', updateBounds)
+    return () => { observer.disconnect(); window.removeEventListener('resize', updateBounds) }
+  }, [tutorialStep])
 
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) return
@@ -392,10 +432,14 @@ export default function MappingConfigurationPage() {
 
   const autoLayout = () => {
     setNodes(current => {
-      let left = 0; let right = 0
-      return current.map(node => node.data.kind === 'dataset'
-        ? { ...node, position: { x: 60, y: 50 + left++ * 115 } }
-        : { ...node, position: { x: 650, y: 50 + right++ * 125 } })
+      let leftY = 55; let rightY = 55
+      return current.map(node => {
+        const datasetLane = node.data.kind === 'dataset'
+        const y = datasetLane ? leftY : rightY
+        if (datasetLane) leftY += estimatedNodeHeight(node) + 36
+        else rightY += estimatedNodeHeight(node) + 36
+        return { ...node, position: { x: datasetLane ? 60 : targetLaneX(), y } }
+      })
     })
   }
   const clearCanvas = () => { if (nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null) } }
@@ -419,7 +463,7 @@ export default function MappingConfigurationPage() {
   const mappedTargetHandles = new Set(edges.map(edge => `${edge.target}:${edge.targetHandle}`))
 
   return (
-    <div className="dmc-page">
+    <div className="dmc-page" ref={pageRef}>
       <header className="dmc-header">
         <div className="dmc-brand"><button onClick={leaveWorkspace} aria-label="返回数据映射"><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射配置</b><small>对象实体、实体关系与数据资产字段映射</small></div></div>
         <label className="dmc-global-search"><Search size={14} /><input placeholder="搜索画布节点、数据集或本体属性…" onChange={event => { setLeftSearch(event.target.value); setRightSearch(event.target.value) }} /></label>
@@ -448,7 +492,7 @@ export default function MappingConfigurationPage() {
             nodes={nodes} edges={edges} nodeTypes={nodeTypes}
             onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
             onEdgesDelete={() => setDirty(true)} onNodesDelete={() => setDirty(true)}
-            fitView fitViewOptions={{ padding: .22 }} minZoom={.25} maxZoom={1.5}
+            fitView fitViewOptions={{ padding: .18 }} minZoom={.3} maxZoom={1.5}
             deleteKeyCode={['Backspace', 'Delete']} connectionLineStyle={{ stroke: '#109486', strokeWidth: 2 }}
           >
             <Background gap={18} size={1} color="#dce3e7" />
@@ -478,7 +522,7 @@ export default function MappingConfigurationPage() {
         </aside>
       </div>
 
-      {tutorialStep !== null && <div className="dmc-tutorial" role="dialog" aria-modal="true"><div className="dmc-tutorial-card"><header><div><span><BookOpen size={15} /></span><div><b>数据映射快速入门</b><small>第 {tutorialStep + 1} 步，共 {tutorial.length} 步</small></div></div><button onClick={closeTutorial}><X size={15} /></button></header><main>{(() => { const StepIcon = tutorial[tutorialStep].icon; return <><span><StepIcon size={27} /></span><h3>{tutorial[tutorialStep].title}</h3><p>{tutorial[tutorialStep].text}</p></> })()}</main><footer><div>{tutorial.map((_, index) => <button key={index} data-active={index === tutorialStep} onClick={() => setTutorialStep(index)} />)}</div><span>{tutorialStep > 0 && <button onClick={() => setTutorialStep(step => (step || 1) - 1)}>上一步</button>}<button className="dmc-tutorial-next" onClick={() => tutorialStep === tutorial.length - 1 ? closeTutorial() : setTutorialStep(step => (step || 0) + 1)}>{tutorialStep === tutorial.length - 1 ? '开始配置' : '下一步'}<ArrowRight size={13} /></button></span></footer></div></div>}
+      {tutorialStep !== null && <div className="dmc-tutorial" style={tutorialBounds || undefined} role="dialog" aria-modal="true"><div className="dmc-tutorial-card"><header><div><span><BookOpen size={15} /></span><div><b>数据映射快速入门</b><small>第 {tutorialStep + 1} 步，共 {tutorial.length} 步</small></div></div><button onClick={closeTutorial}><X size={15} /></button></header><main>{(() => { const StepIcon = tutorial[tutorialStep].icon; return <><span><StepIcon size={27} /></span><h3>{tutorial[tutorialStep].title}</h3><p>{tutorial[tutorialStep].text}</p></> })()}</main><footer><div>{tutorial.map((_, index) => <button key={index} data-active={index === tutorialStep} onClick={() => setTutorialStep(index)} />)}</div><span>{tutorialStep > 0 && <button onClick={() => setTutorialStep(step => (step || 1) - 1)}>上一步</button>}<button className="dmc-tutorial-next" onClick={() => tutorialStep === tutorial.length - 1 ? closeTutorial() : setTutorialStep(step => (step || 0) + 1)}>{tutorialStep === tutorial.length - 1 ? '开始配置' : '下一步'}<ArrowRight size={13} /></button></span></footer></div></div>}
     </div>
   )
 }
