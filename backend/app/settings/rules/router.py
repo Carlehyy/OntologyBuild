@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin
+from app.config import settings
 from app.models.rules_config import RulesConfig
 from app.models.agent_config import AgentConfig
 from app.models.workflow_config import WorkflowConfig
@@ -25,6 +26,7 @@ from app.schemas.workflow_config import (
 )
 from app.services.workflow.n8n_client import (
     N8nApiError,
+    enforce_n8n_url_policy,
     normalize_n8n_api_base,
     test_n8n_connection,
 )
@@ -318,7 +320,7 @@ def get_workflow_config(
 def update_workflow_config(
     _body: WorkflowConfigUpdate,
     _db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    _=Depends(require_admin),
 ):
     raise HTTPException(
         status_code=400,
@@ -330,11 +332,13 @@ def update_workflow_config(
 def test_workflow_connection(
     body: WorkflowConnectionTestRequest,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    _=Depends(require_admin),
 ):
-    api_base = normalize_n8n_api_base(body.api_url)
-    if not api_base:
-        raise HTTPException(status_code=400, detail="Invalid n8n API URL")
+    try:
+        api_base = enforce_n8n_url_policy(
+            body.api_url, environment=settings.environment)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     api_key = body.api_key.strip()
     if not api_key:

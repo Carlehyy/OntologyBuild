@@ -88,26 +88,41 @@ def _seed_db():
         from app.events.models import (  # noqa: F401
             RegisteredEvent, EventAttachment, EventAuditLog, EventIngestKey,
         )
-        Base.metadata.create_all(bind=engine)
+        # 生产 schema 只认 Alembic。create_all 会把漏跑迁移伪装成“可启动”，
+        # 却没有回填、外键与唯一约束；开发/测试仍保留零配置建库便利。
+        if settings.environment != "production":
+            Base.metadata.create_all(bind=engine)
 
         # Lightweight column migrations — create_all skips existing tables
         with engine.connect() as conn:
-
-            columns = {col["name"] for col in inspect(conn).get_columns("extraction_tasks")}
-            if "validation_report" not in columns:
-                conn.execute(text("ALTER TABLE extraction_tasks ADD COLUMN validation_report JSON"))
-                conn.commit()
-            entity_columns = {col["name"] for col in inspect(conn).get_columns("entities")}
-            if "name_abbr" not in entity_columns:
-                conn.execute(text("ALTER TABLE entities ADD COLUMN name_abbr VARCHAR(50)"))
-                conn.commit()
-            if "snomed_id" not in entity_columns:
-                conn.execute(text("ALTER TABLE entities ADD COLUMN snomed_id VARCHAR(50)"))
-                conn.commit()
-            if "canonical_id" not in entity_columns:
-                conn.execute(text("ALTER TABLE entities ADD COLUMN canonical_id VARCHAR(200)"))
-                conn.commit()
-            for stmt in [
+            if settings.environment != "production":
+                columns = {
+                    col["name"]
+                    for col in inspect(conn).get_columns("extraction_tasks")
+                }
+                if "validation_report" not in columns:
+                    conn.execute(text(
+                        "ALTER TABLE extraction_tasks "
+                        "ADD COLUMN validation_report JSON"))
+                    conn.commit()
+                entity_columns = {
+                    col["name"] for col in inspect(conn).get_columns("entities")
+                }
+                if "name_abbr" not in entity_columns:
+                    conn.execute(text(
+                        "ALTER TABLE entities ADD COLUMN name_abbr VARCHAR(50)"))
+                    conn.commit()
+                if "snomed_id" not in entity_columns:
+                    conn.execute(text(
+                        "ALTER TABLE entities ADD COLUMN snomed_id VARCHAR(50)"))
+                    conn.commit()
+                if "canonical_id" not in entity_columns:
+                    conn.execute(text(
+                        "ALTER TABLE entities ADD COLUMN canonical_id VARCHAR(200)"))
+                    conn.commit()
+            # 这些历史兼容 DDL 只服务未迁移的开发库；生产部署已在启动前执行
+            # ``alembic upgrade head``，不得再由应用逐条 ALTER 并吞掉失败。
+            for stmt in ([] if settings.environment == "production" else [
                 "ALTER TABLE model_configs ADD COLUMN config_type VARCHAR(30) DEFAULT 'llm'",
                 "ALTER TABLE model_configs ADD COLUMN options JSON DEFAULT '{}'",
                 "ALTER TABLE model_configs ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
@@ -175,7 +190,7 @@ def _seed_db():
                 " ORDER BY v.version_no DESC LIMIT 1)"
                 " WHERE latest_version_id IS NULL AND EXISTS ("
                 " SELECT 1 FROM v2_dataset_versions v2 WHERE v2.dataset_id = v2_datasets.id)",
-            ]:
+            ]):
                 try:
                     conn.execute(text(stmt))
                     conn.commit()
@@ -191,16 +206,35 @@ def _seed_db():
 
         seed_admin(db)
 
+        # 对象存储删除采用 transactional outbox：上次停机/存储故障遗留的任务在
+        # 启动时重试。空队列不会初始化 MinIO 客户端，不增加健康检查压力。
+        from app.data_channel.datasets.service import drain_storage_deletion_outbox
+        drain_storage_deletion_outbox(
+            db, strict_schema=settings.environment == "production")
+
         # 回填：存量 n8n 治理记录补建影子流水线行（创建即在列表可见的新规则）
         # 幂等——已有 pipeline_id 的记录 ensure 只做同步，不重复建行
         try:
             from app.data_channel.steward.service import ensure_shadow_pipeline
             from app.data_channel.steward.models import N8nPipeline as _N8nRec, STATUS_ARCHIVED as _ARCH
+            from app.models.v2.pipeline import Pipeline as _Pipeline
             orphans = db.query(_N8nRec).filter(
                 _N8nRec.status != _ARCH, _N8nRec.pipeline_id.is_(None)).all()
             for _rec in orphans:
                 ensure_shadow_pipeline(db, _rec)
-            if orphans:
+            owner_repairs = 0
+            managed = db.query(_N8nRec).filter(
+                _N8nRec.status != _ARCH,
+                _N8nRec.pipeline_id.is_not(None),
+                _N8nRec.created_by.is_not(None),
+            ).all()
+            for _rec in managed:
+                shadow = db.query(_Pipeline).filter(
+                    _Pipeline.id == _rec.pipeline_id).first()
+                if shadow is not None and not shadow.created_by:
+                    shadow.created_by = _rec.created_by
+                    owner_repairs += 1
+            if orphans or owner_repairs:
                 db.commit()
         except Exception:  # noqa: BLE001 — 回填失败不阻塞启动
             db.rollback()

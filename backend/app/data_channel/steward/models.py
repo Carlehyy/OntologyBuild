@@ -11,7 +11,7 @@ LLM 在授权工具边界内创建/编辑 n8n workflow。**数据管家只负责
   - StewardConversation  数据管家对话
   - StewardMessage       消息（含工具调用轨迹，全程可审计）
 
-生命周期：发布状态的唯一真源是影子流水线 v2_pipelines.status（draft/published），
+生命周期：发布状态的唯一真源是影子流水线 v2_pipelines.status（draft/published/archived），
 本表 status 只区分「在管 draft / 已归档 archived」——归档即从流水线列表移除，
 记录本身留档可审计。
 """
@@ -53,8 +53,9 @@ class N8nPipeline(Base):
 
     # 最近一次从 n8n 同步/写入的 workflow JSON（nodes/connections/settings）
     workflow_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # 最近一次试跑结果 {rows, columns, sample, at} — 发布时其 columns 固化为
-    # 影子流水线的期望列契约（运行期做漂移检测）
+    # 最近一次试跑结果 + workflow evidence；validate-definitions 成功后追加
+    # validation_attestation（字段契约/版本快照/dry-run 输出校验和）。发布时
+    # 其 columns 固化为影子流水线期望列，attestation 固化进发布版本审计。
     last_test_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # 对应的 v2_pipelines.id（engine=n8n 的影子流水线，创建即登记）

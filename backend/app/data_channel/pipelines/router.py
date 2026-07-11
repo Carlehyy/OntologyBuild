@@ -42,12 +42,77 @@ def pipeline_access_guard(
         return current_user
     pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     # 404 由端点以统一文案返回；guard 只负责已存在资源的授权。
-    if pipeline is not None and pipeline.created_by not in (None, "", current_user.id):
-        raise HTTPException(403, "Only the pipeline owner or an admin may modify it")
+    if pipeline is not None:
+        owner_id = pipeline.created_by
+        if not owner_id and _is_n8n_pipeline(pipeline):
+            governance = db.query(N8nPipeline).filter(
+                N8nPipeline.pipeline_id == pipeline.id
+            ).first()
+            # n8n 影子行没有 owner 时默认拒绝，而不是沿用画布存量的 editor
+            # 接管兼容策略。治理记录能证明 owner 时则按该 owner 授权。
+            owner_id = governance.created_by if governance else "__unowned_n8n__"
+            owner_id = owner_id or "__unowned_n8n__"
+        if owner_id not in (None, "", current_user.id):
+            raise HTTPException(403, "Only the pipeline owner or an admin may modify it")
     return current_user
 
 
-router = APIRouter(dependencies=[Depends(pipeline_access_guard)])
+def pipeline_lifecycle_guard(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """串行化 n8n 远端 active 状态与本地生命周期事务。
+
+    dry-run/正式执行会在 runner 中持有同一把 ``n8n::<workflow_id>`` 锁；这里
+    只覆盖会改变发布/启用/归档状态的 API，避免外层锁与 /run 自身取锁重入。
+    """
+    suffix = request.url.path.rstrip("/")
+    lifecycle_write = (
+        request.method == "DELETE"
+        or suffix.endswith("/publish")
+        or suffix.endswith("/unpublish")
+        or suffix.endswith("/enabled")
+    )
+    pipeline_id = request.path_params.get("pipeline_id")
+    if not lifecycle_write or not pipeline_id:
+        yield
+        return
+    pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if pipeline is None or not _is_n8n_pipeline(pipeline):
+        yield
+        return
+
+    from app.data_channel.steward import service as steward_service
+    from app.data_channel.datasets.lock import (
+        DatasetLockTimeout,
+        dataset_write_lock,
+    )
+
+    rec = steward_service.record_for_pipeline(db, pipeline)
+    if rec is None:
+        # 具体端点会返回面向场景的 409/400；没有可信 workflow id 时不能猜锁键。
+        yield
+        return
+    try:
+        with dataset_write_lock(
+            f"n8n::{rec.n8n_workflow_id}",
+            bind=db.get_bind(),
+            wait_timeout=30,
+            stale_after=900,
+        ):
+            # 等锁期间另一请求可能已提交状态变化，端点必须读到最新真身。
+            db.expire_all()
+            yield
+    except DatasetLockTimeout as exc:
+        raise HTTPException(
+            409, "该 n8n 流水线正在执行预览、运行或切换状态，请稍后重试。"
+        ) from exc
+
+
+router = APIRouter(dependencies=[
+    Depends(pipeline_access_guard),
+    Depends(pipeline_lifecycle_guard),
+])
 
 
 # ── Pydantic Models ────────────────────────────────────────────────
@@ -110,6 +175,14 @@ def _is_n8n_pipeline(pl: Pipeline) -> bool:
     """数据管家托管的 n8n 影子流水线 — 编排在数据管家，画布路径绕行；
     生命周期（发布/撤回/删除）与画布流水线同走本路由。"""
     return ((pl.definition or {}).get("engine") == "n8n")
+
+
+def _column_definitions_hash(definitions: list | None) -> str:
+    """Canonical contract fingerprint used by n8n publish attestations."""
+    from app.data_channel.datasets.lake_gate import normalize_definitions
+    from app.data_channel.steward.service import canonical_json_hash
+
+    return canonical_json_hash(normalize_definitions(definitions))
 
 
 def _require_production_executable(pl: Pipeline) -> None:
@@ -201,6 +274,10 @@ def list_pipelines(
         q = q.filter(Pipeline.domain == domain)
     if status:
         q = q.filter(Pipeline.status == status)
+    else:
+        # 归档保留身份、发布快照与运行审计，但不再出现在日常工作列表；
+        # 审计查询仍可显式传 status=archived 查看。
+        q = q.filter(Pipeline.status != "archived")
     q = q.order_by(Pipeline.updated_at.desc()).limit(100)
     results = []
     for pl in q:
@@ -255,6 +332,23 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
                 f"该流水线由数据管家托管（n8n 引擎），字段 {', '.join(blocked)} "
                 f"请在数据管家对话中修改。")
 
+        # 字段定义校验发生在向导第 3 步，随后前端才 PUT 保存。只有 canonical
+        # hash 完全相同时才保留凭证；任何实质变化都必须重新跑第 2/3 步。
+        if "column_definitions" in update_data:
+            from app.data_channel.steward import service as steward_service
+
+            rec = steward_service.record_for_pipeline(db, pl)
+            attestation = (
+                steward_service.validation_attestation(rec) if rec is not None else None
+            )
+            definitions_changed = (
+                attestation
+                and attestation.get("column_definitions_hash")
+                != _column_definitions_hash(update_data.get("column_definitions"))
+            )
+            if definitions_changed:
+                steward_service.invalidate_validation_attestation(rec)
+
     # ── 已发布封版：definition / column_definitions / spec 不可修改 ──
     # 按 key 存在性判断而非值非空——显式传 null 同样是修改（会把封版字段清空）
     PROTECTED_FIELDS = ("definition", "column_definitions", "spec")
@@ -307,26 +401,23 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     if not pl:
         raise HTTPException(404, "Pipeline not found")
 
-    # ── n8n：删除 = 归档治理记录（停用 workflow + 影子行移除；n8n 侧
-    #    工作流保留，不自动删除）。引用保护在 archive 内统一做。──
+    # ── n8n：删除语义是归档（严格停用远端，保留影子身份、发布版本与
+    #    运行记录）。引用保护在 archive 内统一做。──
     if _is_n8n_pipeline(pl):
         from app.data_channel.steward import service as steward_service
 
         rec = steward_service.record_for_pipeline(db, pl)
         if rec is None:
-            # 治理记录丢失的孤儿影子行：按普通流水线清理，别把删除堵死
-            pass
-        else:
-            client = None
-            try:
-                client = steward_service.get_n8n_client(db)
-            except steward_service.StewardError:
-                pass  # n8n 未配置也允许删除平台侧记录
-            try:
-                steward_service.archive(db, rec, client)
-            except steward_service.StewardError as e:
-                raise HTTPException(400, str(e))
-            return {"status": "deleted", "id": pipeline_id}
+            raise HTTPException(
+                409,
+                "n8n 流水线缺少数据管家治理记录；为避免破坏版本与运行审计链，归档已中止。",
+            )
+        try:
+            client = steward_service.get_n8n_client(db)
+            steward_service.archive(db, rec, client)
+        except steward_service.StewardError as e:
+            raise HTTPException(400, str(e))
+        return {"status": "archived", "id": pipeline_id}
 
     # 引用保护：被调度任务引用的流水线不可删——删了任务会静默失效
     from app.data_channel.pipeline_tasks.models import PipelineTask
@@ -365,19 +456,25 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     #    validate 本来就是发布前置步骤，因此不可调度的 Schedule/Manual-only
     #    工作流应在这里直接给出 error，而不是等发布远端动作阶段才失败。──
     if _is_n8n_pipeline(pl):
-        from app.data_channel.steward.service import find_webhook_path, record_for_pipeline
+        from app.data_channel.steward.service import (
+            StewardError,
+            record_for_pipeline,
+            validate_managed_workflow_contract,
+        )
 
-        n8n_def = (definition or {}).get("n8n") or {}
         rec = record_for_pipeline(db, pl)
         if rec is None:
             errors.append({"node_id": "", "severity": "error",
                            "message": "缺少数据管家治理记录，无法运行。请删除后在数据管家重新新建该流水线。"})
-        elif not (n8n_def.get("webhook_path") or find_webhook_path(rec.workflow_snapshot)):
-            errors.append({
-                "node_id": "",
-                "severity": "error",
-                "message": "工作流没有 Webhook 触发器：平台托管流水线必须由数据任务池经 Webhook 调度，不能发布。",
-            })
+        else:
+            try:
+                validate_managed_workflow_contract(rec.workflow_snapshot)
+            except StewardError as exc:
+                errors.append({
+                    "node_id": "",
+                    "severity": "error",
+                    "message": str(exc),
+                })
         return ValidateResult(valid=len(errors) == 0, errors=errors, warnings=warnings)
 
     # ── 旧格式兼容 ────────────────────────────────────────
@@ -589,14 +686,15 @@ def validate_column_definitions(
     触发生产 workflow，重复执行既有副作用又会导致「校验的数据 ≠ 预览的数据」。
     检查项：
       1. 结构 —— 字段标识命名合法且唯一；原始列在实际产出中存在
-      2. 类型 —— field_type 与全量数据的值类型一致（不符 → 警告）
+      2. 类型 —— field_type 与全量数据的值类型一致（不符 → 错误）
       3. 主键 —— 主键组合在全量数据中非空且唯一（→ 错误）
       4. 空值 —— nullable=false 的列在全量数据中无空值（→ 错误）
-      5. 湖契约 —— 主键与目标资产湖数据集已固化的主键不冲突（→ 错误）
+      5. 湖契约 —— 提示与目标资产湖已固化主键的差异（增量入库仍会硬阻断）
     """
     import json as _json
     from app.data_channel.datasets.lake_gate import (
-        FIELD_KEY_RE, _value_type, normalize_definitions, split_pk)
+        FIELD_KEY_RE, _cell_type_ok, normalize_definitions, split_pk,
+        validate_contract_structure)
     from app.models.v2.dataset import Dataset
 
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
@@ -613,8 +711,27 @@ def validate_column_definitions(
         raise HTTPException(404, "试运行结果不存在或已过期，请回到「执行预览」重新执行流水线")
     if payload.get("pipeline_id") != pipeline_id:
         raise HTTPException(400, "试运行结果与流水线不匹配")
+    stored_dry_run_id = payload.get("dry_run_id")
+    if (stored_dry_run_id not in (None, dry_run_id)
+            or (_is_n8n_pipeline(pl) and stored_dry_run_id != dry_run_id)):
+        raise HTTPException(400, "试运行凭证 id 与暂存内容不匹配，请重新执行预览")
 
     outputs = payload.get("outputs") or []
+    from app.data_channel.steward import service as steward_service
+    output_checksum = str(payload.get("output_checksum") or "")
+    computed_output_checksum = steward_service.canonical_json_hash(outputs)
+    checksum_invalid = bool(output_checksum) and output_checksum != computed_output_checksum
+    checksum_required_but_missing = _is_n8n_pipeline(pl) and not output_checksum
+    if checksum_invalid or checksum_required_but_missing:
+        if _is_n8n_pipeline(pl):
+            rec_for_invalidation = steward_service.record_for_pipeline(db, pl)
+            if rec_for_invalidation is not None:
+                steward_service.invalidate_validation_attestation(rec_for_invalidation)
+                db.commit()
+        raise HTTPException(
+            400,
+            "试运行输出校验和缺失或不匹配，暂存内容不能作为发布依据。请重新执行预览。",
+        )
     if len(outputs) > 1:
         raise HTTPException(
             400, "该流水线单次执行产出多个数据集，流水线级字段契约暂不适用（主键请在任务/资产湖粒度管理）。")
@@ -627,9 +744,18 @@ def validate_column_definitions(
 
     errors: list[dict] = []
     defs = normalize_definitions(body.column_definitions)
+    if _is_n8n_pipeline(pl) and not defs:
+        errors.append({
+            "field_key": "",
+            "severity": "error",
+            "message": "n8n 流水线发布前必须定义至少一个输出字段，并完成主键/类型校验",
+        })
     if payload.get("truncated"):
-        errors.append({"field_key": "", "severity": "warning",
-                       "message": f"试运行输出超过暂存上限，本次校验仅覆盖已暂存的 {len(rows):,} 行（前缀校验，非全量）"})
+        errors.append({"field_key": "", "severity": "error",
+                       "message": f"试运行输出超过暂存上限，本次仅有 {len(rows):,} 行，无法形成全量发布凭证"})
+
+    for message in validate_contract_structure(body.column_definitions):
+        errors.append({"field_key": "", "severity": "error", "message": message})
 
     # ── 1. 结构校验：字段标识命名合法且唯一；原始列存在 ──
     seen_fk: set[str] = set()
@@ -646,23 +772,17 @@ def validate_column_definitions(
             errors.append({"field_key": fk, "severity": "error",
                            "message": f"原始列「{d['source_key']}」在流水线输出中不存在"})
 
-    # ── 2. 类型匹配（全量，警告不阻断）──
+    # ── 2. 类型匹配（全量，契约不符阻断发布）──
     for d in defs:
         expected = d["field_type"]
         sk = d["source_key"]
-        if sk not in actual_columns or expected in ("string", "json"):
+        if sk not in actual_columns:
             continue
-        observed: set[str] = set()
-        for row in rows:
-            actual = _value_type(row.get(sk))
-            if actual is None or actual == expected:
-                continue
-            if expected == "float" and actual == "integer":
-                continue
-            observed.add(actual)
-        if observed:
-            errors.append({"field_key": d["field_key"], "severity": "warning",
-                           "message": f"字段类型声明为「{expected}」，但全量数据中出现「{'、'.join(sorted(observed))}」"})
+        invalid = [i + 1 for i, row in enumerate(rows)
+                   if not _cell_type_ok(row.get(sk), expected)]
+        if invalid:
+            errors.append({"field_key": d["field_key"], "severity": "error",
+                           "message": f"字段类型声明为「{expected}」，但第 {invalid[:5]} 行无法按该类型解析"})
 
     # ── 3. 主键：全量非空 + 组合唯一 ──
     pk_defs = [d for d in defs if d["is_primary_key"] and d["source_key"] in actual_columns]
@@ -713,7 +833,61 @@ def validate_column_definitions(
                                           f"下次「全量覆盖」运行将重写湖中声明并重建实例身份；"
                                           f"增量/合并（append/upsert）入库在对齐前会硬失败"})
 
+    # n8n 发布凭证 = canonical 字段契约 + 本次完整输出 + 试跑时及当前 live
+    # workflow 身份。字段校验通过并不意味着可以拿旧输出发布新 revision。
+    rec = None
+    live_evidence = None
+    if _is_n8n_pipeline(pl):
+        rec = steward_service.record_for_pipeline(db, pl)
+        if rec is None:
+            errors.append({
+                "field_key": "",
+                "severity": "error",
+                "message": "缺少数据管家治理记录，无法形成 n8n 发布凭证",
+            })
+        else:
+            dry_run_evidence = ((payload.get("engine_meta") or {}).get(
+                "workflow_evidence") or {})
+            try:
+                client = steward_service.get_n8n_client(db)
+                live_workflow = client.get_workflow(rec.n8n_workflow_id)
+                live_evidence = steward_service.require_workflow_validation_evidence(
+                    dry_run_evidence,
+                    live_workflow,
+                    context="字段定义校验时",
+                )
+            except steward_service.StewardError as exc:
+                errors.append({
+                    "field_key": "",
+                    "severity": "error",
+                    "message": str(exc),
+                })
+            except Exception as exc:  # noqa: BLE001
+                errors.append({
+                    "field_key": "",
+                    "severity": "error",
+                    "message": f"无法读取当前 n8n workflow，不能形成发布凭证：{exc}",
+                })
+
     has_blocking = any(e["severity"] == "error" for e in errors)
+    if rec is not None:
+        state = dict(rec.last_test_result or {})
+        if has_blocking or live_evidence is None:
+            state.pop("validation_attestation", None)
+        else:
+            state["validation_attestation"] = {
+                "version": 1,
+                "column_definitions_hash": _column_definitions_hash(
+                    body.column_definitions),
+                "workflow_revision": live_evidence["revision"],
+                "workflow_snapshot_hash": live_evidence["snapshot_hash"],
+                "dry_run_id": dry_run_id,
+                "output_checksum": output_checksum,
+                "dry_run_created_at": payload.get("created_at"),
+                "validated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        rec.last_test_result = state
+        db.commit()
     return ValidateDefinitionsResult(valid=not has_blocking, errors=errors)
 
 
@@ -761,6 +935,7 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
 
     # ── n8n：发布 = 激活 workflow + 固化 definition（webhook/期望列/revision）。
     #    激活是远端副作用，后续本地事务若失败必须补偿停用。──
+    desired_enabled = bool(body and body.enable)
     n8n_activation = None
     if _is_n8n_pipeline(pl):
         from app.data_channel.steward import service as steward_service
@@ -768,9 +943,44 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
         rec = steward_service.record_for_pipeline(db, pl)
         if rec is None:
             raise HTTPException(400, "缺少数据管家治理记录，无法发布。请删除后在数据管家重新新建该流水线。")
+        attestation = steward_service.validation_attestation(rec)
+        required_attestation_fields = {
+            "column_definitions_hash",
+            "workflow_revision",
+            "workflow_snapshot_hash",
+            "dry_run_id",
+            "output_checksum",
+        }
+        if not attestation or any(
+            not attestation.get(field) for field in required_attestation_fields
+        ):
+            raise HTTPException(
+                400,
+                "n8n 流水线发布前必须先执行预览，并用该次完整输出成功校验字段定义。"
+                "当前没有可用的发布凭证，请回到向导第 2、3 步重新完成。",
+            )
+        if attestation["column_definitions_hash"] != _column_definitions_hash(
+                pl.column_definitions):
+            steward_service.invalidate_validation_attestation(rec)
+            db.commit()
+            raise HTTPException(
+                400,
+                "字段定义在最近一次校验后发生变化，旧发布凭证已失效。"
+                "请重新执行预览并校验字段定义。",
+            )
         try:
             client = steward_service.get_n8n_client(db)
-            revision = steward_service.activate_for_publish(db, rec, client)
+            revision = steward_service.activate_for_publish(
+                db,
+                rec,
+                client,
+                keep_active=desired_enabled,
+                validation_attestation=attestation,
+            )
+        except steward_service.ValidationAttestationError as e:
+            steward_service.invalidate_validation_attestation(rec)
+            db.commit()
+            raise HTTPException(400, str(e))
         except steward_service.StewardError as e:
             raise HTTPException(400, str(e))
         n8n_activation = (rec, client)
@@ -800,8 +1010,9 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
             PipelineVersion.status == "published").count() > 0
         pl.status = "published"
         pl.version = (pl.version or 1) + (1 if has_prior_published else 0)
-        if body and body.enable:
-            pl.enabled = True
+        # 发布与启用是两个不同状态：未勾选「发布并启用」时，本地 disabled，
+        # n8n 也必须最终 inactive；不能沿用发布前或历史值。
+        pl.enabled = desired_enabled
         pl.updated_at = datetime.now(timezone.utc)
         # 版本快照与状态翻转同一事务提交——分两段 commit 会在中断时留下
         # 「已发布却无快照」的孤儿状态（契约是封版核心工件，必须可回溯）
@@ -824,7 +1035,7 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
                 raise HTTPException(500, str(compensation_error)) from exc
         if isinstance(exc, HTTPException):
             raise
-        raise HTTPException(500, f"平台发布事务失败，n8n 激活已撤销：{exc}") from exc
+        raise HTTPException(500, f"平台发布事务失败，n8n 已恢复为发布前的停用状态：{exc}") from exc
 
     return {
         "id": pl.id,
@@ -864,16 +1075,19 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         from app.data_channel.steward import service as steward_service
 
         rec = steward_service.record_for_pipeline(db, pl)
-        if rec is not None:
-            try:
-                client = steward_service.get_n8n_client(db)
-            except steward_service.StewardError as e:
-                raise HTTPException(400, f"撤回发布需要停用 n8n 工作流：{e}")
-            try:
-                steward_service.deactivate_on_unpublish(rec, client)
-            except steward_service.StewardError as e:
-                raise HTTPException(400, str(e))
-            n8n_unpublish = (rec, client)
+        if rec is None:
+            raise HTTPException(
+                409, "n8n 流水线缺少数据管家治理记录，无法确认并停用远端工作流。"
+            )
+        try:
+            client = steward_service.get_n8n_client(db)
+        except steward_service.StewardError as e:
+            raise HTTPException(400, f"撤回发布需要停用 n8n 工作流：{e}")
+        try:
+            was_active = steward_service.deactivate_on_unpublish(rec, client)
+        except steward_service.StewardError as e:
+            raise HTTPException(400, str(e))
+        n8n_unpublish = (rec, client, was_active)
 
     pl.status = "draft"
     pl.enabled = False
@@ -883,13 +1097,14 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001 — 恢复发布前的远端激活状态
         db.rollback()
         if n8n_unpublish is not None:
-            rec, client = n8n_unpublish
+            rec, client, was_active = n8n_unpublish
             try:
-                client.activate_workflow(rec.n8n_workflow_id)
-            except Exception as compensation_exc:  # noqa: BLE001
+                steward_service.restore_remote_active(
+                    pl, rec, client, enabled=was_active, context="撤回事务补偿")
+            except steward_service.StewardError as compensation_exc:
                 raise HTTPException(
                     500,
-                    f"平台撤回事务失败，且恢复 n8n 激活状态失败：{compensation_exc}。请立即人工核对。",
+                    f"平台撤回事务失败，且恢复 n8n 原状态失败：{compensation_exc}。请立即人工核对。",
                 ) from exc
         raise HTTPException(500, f"平台撤回事务失败，远端状态已恢复：{exc}") from exc
     db.refresh(pl)
@@ -1032,9 +1247,45 @@ def set_pipeline_enabled(pipeline_id: str, body: EnabledBody, db: Session = Depe
         raise HTTPException(404, "Pipeline not found")
     if body.enabled and (pl.status or "") != "published":
         raise HTTPException(400, "只有已发布的流水线才能启用。请先在编辑向导中完成发布。")
+
+    n8n_transition = None
+    if _is_n8n_pipeline(pl):
+        from app.data_channel.steward import service as steward_service
+
+        rec = steward_service.record_for_pipeline(db, pl)
+        if rec is None:
+            raise HTTPException(409, "n8n 流水线缺少数据管家治理记录，无法安全启停。")
+        try:
+            n8n_client = steward_service.get_n8n_client(db)
+            previous_remote_active = steward_service.set_published_enabled(
+                pl, rec, n8n_client, enabled=bool(body.enabled))
+        except steward_service.StewardError as exc:
+            raise HTTPException(400, str(exc))
+        n8n_transition = (rec, n8n_client, previous_remote_active)
+
     pl.enabled = bool(body.enabled)
     pl.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 -- compensate the external side effect
+        db.rollback()
+        if n8n_transition is not None:
+            rec, n8n_client, previous_remote_active = n8n_transition
+            try:
+                steward_service.restore_remote_active(
+                    pl,
+                    rec,
+                    n8n_client,
+                    enabled=previous_remote_active,
+                    context="启停事务补偿",
+                )
+            except steward_service.StewardError as compensation_exc:
+                raise HTTPException(
+                    500,
+                    f"平台启停事务失败（{exc}），且恢复 n8n 原状态失败（{compensation_exc}）。"
+                    "请立即人工核对。",
+                ) from exc
+        raise HTTPException(500, f"平台启停事务失败，n8n 原状态已恢复：{exc}") from exc
     db.refresh(pl)
     return _format_pipeline(pl)
 
@@ -1163,12 +1414,16 @@ def dry_run_pipeline(
         staged_outputs.append({**o, "rows": keep})
 
     dry_run_id = str(_uuid.uuid4())
+    from app.data_channel.steward.service import canonical_json_hash
+    output_checksum = canonical_json_hash(staged_outputs)
     payload = {
         "pipeline_id": pl.id,
+        "dry_run_id": dry_run_id,
         "created_at": _dt.now(_tz.utc).isoformat(),
         "engine_meta": engine_meta,
         "truncated": truncated,
         "outputs": staged_outputs,
+        "output_checksum": output_checksum,
     }
     from app.services.storage_service import get_storage_service
     storage = get_storage_service()

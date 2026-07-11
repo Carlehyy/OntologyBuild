@@ -42,7 +42,21 @@ type CellKey = `${number}::${string}`
 type View = 'changes' | 'previous' | 'current'
 type DataRow = Record<string, unknown>
 
-const cellText = (value: unknown) => (value === null || value === undefined || value === '') ? '' : String(value)
+const cellText = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return ''
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value) } catch { return String(value) }
+  }
+  return String(value)
+}
+
+const cellComparable = (row: DataRow, column: string) => {
+  if (!Object.prototype.hasOwnProperty.call(row, column)) return 'missing:'
+  const value = row[column]
+  return `present:${value === undefined ? 'undefined' : cellText(value)}`
+}
+
+const REVIEW_PAGE_SIZE = 200
 
 function errorText(error: unknown, fallback: string): string {
   if (!error || typeof error !== 'object') return fallback
@@ -85,10 +99,11 @@ function ColumnLabel({ name, primaryKeys }: { name: string; primaryKeys: string[
 }
 
 /** 只读数据表（列取所有行键的并集，保持稳定表头） */
-function ReadonlyTable({ rows, highlight, primaryKeys = [] }: {
+function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0 }: {
   rows: DataRow[]
   highlight?: 'add' | 'del'
   primaryKeys?: string[]
+  startIndex?: number
 }) {
   if (!rows.length) return <div className="p-6 text-center text-xs text-gray-400">无数据</div>
   const cols = columnsFromRows(rows, primaryKeys)
@@ -109,7 +124,7 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [] }: {
         <tbody>
           {rows.map((row, i) => (
             <tr key={i} className={`border-b ${tint}`}>
-              <td className="px-4 py-2 text-gray-300 tabular-nums select-none">{i + 1}</td>
+              <td className="px-4 py-2 text-gray-300 tabular-nums select-none">{startIndex + i + 1}</td>
               {cols.map(c => (
                 <td key={c} className={`px-4 py-2 max-w-[260px] ${primaryKeys.includes(c) ? 'bg-amber-50/50 font-mono' : ''}`}>
                   <span className="block truncate text-gray-700" title={cellText(row[c])}>
@@ -152,7 +167,7 @@ function UpdatedRowsTable({
         <tbody>
           {updates.map((update, index) => {
             const changedColumns = new Set(
-              columns.filter(column => cellText(update.before[column]) !== cellText(update.after[column])),
+              columns.filter(column => cellComparable(update.before, column) !== cellComparable(update.after, column)),
             )
             return (
               <Fragment key={`${primaryKeys.map(key => cellText(update.after[key])).join('::') || 'row'}-${index}`}>
@@ -208,6 +223,7 @@ export default function CuratedDetailPanel({
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>()
+  const [pageOffset, setPageOffset] = useState(0)
   const [switchingReview, setSwitchingReview] = useState(false)
 
   // 「本次全量」可编辑视图的状态
@@ -241,7 +257,7 @@ export default function CuratedDetailPanel({
   const loadDiff = useCallback(() => {
     setLoading(true)
     setLoadError('')
-    curatedApi.reviewDiff(datasetId, 500, selectedReviewId)
+    curatedApi.reviewDiff(datasetId, REVIEW_PAGE_SIZE, pageOffset, selectedReviewId)
       .then(res => {
         const wrapped = res as ReviewDiff & { data?: ReviewDiff }
         const d = wrapped.data ?? res
@@ -252,7 +268,7 @@ export default function CuratedDetailPanel({
       })
       .catch((error: unknown) => setLoadError(errorText(error, '数据加载失败，请稍后重试')))
       .finally(() => setLoading(false))
-  }, [datasetId, selectedReviewId])
+  }, [datasetId, pageOffset, selectedReviewId])
 
   useEffect(() => { void Promise.resolve().then(loadDiff) }, [loadDiff])
 
@@ -326,7 +342,10 @@ export default function CuratedDetailPanel({
         return { row_pk: rowPk, field_name: col, old_value: oldVal, new_value: newVal }
       })
       await curatedApi.saveEdits(reviewId, edits)
-      if (!selectedReviewId) setSelectedReviewId(reviewId)
+      if (!selectedReviewId) {
+        setPageOffset(0)
+        setSelectedReviewId(reviewId)
+      }
       setPendingEdits(new Map())
       setSaveMsg(`已保存 ${edits.length} 处修改`)
       if (selectedReviewId === reviewId) loadDiff()
@@ -347,12 +366,17 @@ export default function CuratedDetailPanel({
     setActionError('')
     try {
       const reviewId = await reviewIdForLoadedVersion()
-      await curatedApi.approveReview(reviewId)
+      const result = await curatedApi.approveReview(reviewId) as {
+        mapping_dispatch?: { status?: string; error?: string }
+      }
       setStatus('approved')
       setDiff(previous => previous?.review
         ? { ...previous, review: { ...previous.review, status: 'approved' } }
         : previous)
       onStatusChange(datasetId, 'approved')
+      if (result?.mapping_dispatch?.status === 'failed') {
+        setActionError(result.mapping_dispatch.error || '数据已批准，但自动灌入本体失败，请检查映射任务。')
+      }
     } catch (error: unknown) {
       setActionError(`批准失败：${errorText(error, '请稍后重试')}`)
     } finally { setApproving(false) }
@@ -388,6 +412,7 @@ export default function CuratedDetailPanel({
     try {
       const session = await curatedApi.startReview(datasetId)
       setLoading(true)
+      setPageOffset(0)
       setSelectedReviewId(session.review_id)
     } catch (error: unknown) {
       setActionError(`切换最新版本失败：${errorText(error, '请稍后重试')}`)
@@ -424,6 +449,20 @@ export default function CuratedDetailPanel({
   const primaryKeys = diff?.pk ?? []
   const canEditRows = primaryKeys.length > 0
   const reviewIsStale = Boolean(diff?.review?.stale)
+  const hasReviewEvidence = Boolean(diff?.review?.id)
+  const pagedView = view === 'current' ? diff?.current : view === 'previous' ? diff?.previous : null
+  const pageStart = pagedView?.total ? (pagedView.offset ?? pageOffset) + 1 : 0
+  const pageEnd = pagedView
+    ? Math.min((pagedView.offset ?? pageOffset) + pagedView.rows.length, pagedView.total)
+    : 0
+
+  const switchPage = (nextOffset: number) => {
+    if (hasPending || editingCell) {
+      setActionError('请先结束编辑并保存或放弃本页修改，再切换审核分页。')
+      return
+    }
+    setPageOffset(Math.max(0, nextOffset))
+  }
 
   const VIEW_TABS: [View, string, number | null][] = [
     ['changes', '变化量', delta ? changeCount : null],
@@ -438,12 +477,15 @@ export default function CuratedDetailPanel({
           className="bg-white rounded-xl shadow-2xl z-50 flex flex-col w-full max-w-5xl"
           style={{ maxHeight: 'calc(100vh - 3rem)' }}
           onClick={e => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="curated-review-title"
         >
           {/* Header */}
           <div className="flex items-start justify-between px-6 py-4 border-b shrink-0">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="font-semibold text-base truncate">{datasetName}</h2>
+                <h2 id="curated-review-title" className="font-semibold text-base truncate">{datasetName}</h2>
                 <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
                   {STATUS_ICON(status)}
                   {STATUS_LABEL[status] || status}
@@ -493,10 +535,10 @@ export default function CuratedDetailPanel({
             </button>
             <button
               onClick={() => { setDeleteErr(''); setShowDeleteConfirm(true) }}
-              disabled={isApproved}
-              title={isApproved ? '已审批通过的数据集不可删除；如需删除请先「撤回审批（拒绝）」' : '删除整个数据集及其全部历史版本'}
+              disabled={hasReviewEvidence}
+              title={hasReviewEvidence ? '该资产已有审核记录；治理证据不可物理删除，请保留资产' : '删除整个数据集及其全部历史版本'}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 text-red-500 rounded-lg hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed">
-              {isApproved ? <Lock size={12} /> : <Trash2 size={12} />} 删除
+              {hasReviewEvidence ? <Lock size={12} /> : <Trash2 size={12} />} 删除
             </button>
           </div>
 
@@ -538,7 +580,14 @@ export default function CuratedDetailPanel({
           {!loading && !loadError && (
             <div className="flex items-center gap-1 px-6 py-2 border-b bg-white shrink-0">
               {VIEW_TABS.map(([v, label, count]) => (
-                <button key={v} onClick={() => setView(v)}
+                <button key={v} onClick={() => {
+                  if ((hasPending || editingCell) && v !== view) {
+                    setActionError('请先结束编辑并保存或放弃本页修改，再切换审核视图。')
+                    return
+                  }
+                  setView(v)
+                  if (v !== 'changes') setPageOffset(0)
+                }}
                   className={`px-3 py-1 text-xs rounded-full border transition-colors ${
                     view === v ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
                   {label}{count !== null && <span className={`ml-1 ${view === v ? 'text-gray-300' : 'text-gray-400'}`}>{count}</span>}
@@ -546,9 +595,20 @@ export default function CuratedDetailPanel({
               ))}
               <span className="ml-2 text-[11px] text-gray-400">
                 {view === 'changes' && '相对上一版的新增/更新/删除，聚焦本次改动'}
-                {view === 'previous' && '上一版本的完整数据（对照用）'}
-                {view === 'current' && (canEditRows ? '本次待审全量（叠加行级编辑）· 双击非主键单元格可编辑' : '本次待审全量 · 未声明主键，无法可靠进行行级编辑')}
+                {view === 'previous' && '上一版本完整数据（分页查看，对照用）'}
+                {view === 'current' && (canEditRows ? '本次待审完整数据（分页查看）· 双击非主键单元格可编辑' : '本次待审完整数据（分页查看）· 未声明主键，无法可靠进行行级编辑')}
               </span>
+              {pagedView && pagedView.total > 0 && (
+                <div className="ml-auto flex items-center gap-2 text-[11px] text-gray-500">
+                  <span>第 {pageStart.toLocaleString()}–{pageEnd.toLocaleString()} 行 / 共 {pagedView.total.toLocaleString()} 行</span>
+                  <button type="button" className="rounded border px-2 py-1 disabled:opacity-40"
+                    disabled={(pagedView.offset ?? pageOffset) <= 0 || loading}
+                    onClick={() => switchPage((pagedView.offset ?? pageOffset) - REVIEW_PAGE_SIZE)}>上一页</button>
+                  <button type="button" className="rounded border px-2 py-1 disabled:opacity-40"
+                    disabled={!pagedView.has_more || loading}
+                    onClick={() => switchPage((pagedView.offset ?? pageOffset) + REVIEW_PAGE_SIZE)}>下一页</button>
+                </div>
+              )}
             </div>
           )}
 
@@ -573,7 +633,7 @@ export default function CuratedDetailPanel({
             ) : view === 'previous' ? (
               diff?.previous?.version_no == null
                 ? <div className="p-8 text-center text-sm text-gray-400">这是首个版本，没有上一版可对照。</div>
-                : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} />
+                : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} />
             ) : (
               /* current — editable */
               rows.length === 0 ? (
@@ -594,7 +654,7 @@ export default function CuratedDetailPanel({
                     <tbody>
                       {rows.map((row, rowIdx) => (
                         <tr key={rowIdx} className="border-b hover:bg-blue-50/30 transition-colors">
-                          <td className="px-4 py-2 text-gray-300 tabular-nums select-none">{rowIdx + 1}</td>
+                          <td className="px-4 py-2 text-gray-300 tabular-nums select-none">{(diff?.current?.offset ?? pageOffset) + rowIdx + 1}</td>
                           {cols.map(col => {
                             const key: CellKey = `${rowIdx}::${col}`
                             const isEditing = editingCell === key

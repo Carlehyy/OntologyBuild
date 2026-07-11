@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   X, Loader2, KeyRound, Plus, Trash2, Undo2, Save,
   ChevronLeft, ChevronRight, CheckCircle2, XCircle, Pencil,
@@ -15,7 +15,13 @@ interface EditableRow {
   deleted: boolean
 }
 
-const toStr = (v: unknown) => (v == null ? '' : String(v))
+const toStr = (v: unknown) => {
+  if (v == null) return ''
+  if (typeof v === 'object') {
+    try { return JSON.stringify(v) } catch { return String(v) }
+  }
+  return String(v)
+}
 
 /** 人工数据集在线维护：声明主键契约 + 改单元格/增删行（保存即生成新版本） */
 export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
@@ -72,8 +78,10 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   }
 
   useEffect(() => {
-    loadPage(0)
-    if (!dataset.primary_key) setPkPanelOpen(true)
+    void Promise.resolve().then(() => {
+      loadPage(0)
+      if (!dataset.primary_key) setPkPanelOpen(true)
+    })
     // 列类型提示：在线建表返回声明类型，上传的数据集返回按数据推断的类型
     datasetsApi.schema(dataset.id)
       .then(r => setColTypes(Object.fromEntries((r.columns ?? []).map(c => [c.name, c.type]))))
@@ -86,14 +94,22 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
     loadPage(Math.max(0, off))
   }
 
-  const requestClose = () => {
+  const requestClose = useCallback(() => {
     if (saving) return
     if (dirty) {
       setConfirmClose(true)
       return
     }
     onClose()
-  }
+  }, [dirty, onClose, saving])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !confirmClose) requestClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [confirmClose, requestClose])
 
   /* ── 主键契约 ── */
   const togglePkCol = (col: string) =>
@@ -178,13 +194,14 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-[min(96vw,1100px)] h-[85vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-xl shadow-xl w-[min(96vw,1100px)] h-[85vh] flex flex-col overflow-hidden"
+        role="dialog" aria-modal="true" aria-labelledby="dataset-editor-title">
         {/* 头部 */}
         <div className="flex items-center gap-3 px-5 py-3.5 border-b">
           <Pencil size={16} className="text-[var(--color-nav-bg)] shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-semibold text-sm truncate">{dataset.name}</h3>
+              <h3 id="dataset-editor-title" className="font-semibold text-sm truncate">{dataset.name}</h3>
               <span className="text-xs text-gray-400">v{versionNo} · 共 {totalRows} 行</span>
               {pkCols.length > 0 ? (
                 <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200"
@@ -311,7 +328,8 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                       {canEdit && (
                         <button onClick={() => toggleDelete(i)}
                           className={`p-1 rounded ${r.deleted ? 'text-gray-400 hover:text-gray-700' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}
-                          title={r.deleted ? '撤销删除' : '删除该行'}>
+                          title={r.deleted ? '撤销删除' : '删除该行'}
+                          aria-label={r.deleted ? `撤销删除第 ${offset + i + 1} 行` : `删除第 ${offset + i + 1} 行`}>
                           {r.deleted ? <Undo2 size={12} /> : <Trash2 size={12} />}
                         </button>
                       )}

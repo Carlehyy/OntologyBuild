@@ -57,8 +57,8 @@ def normalize_rows(body: Any) -> list[dict]:
     return [{"value": body}]
 
 
-def _extract_execution_rows(execution: dict) -> tuple[list[dict], dict]:
-    """从执行详情取末节点输出 items 与元信息。"""
+def _extract_execution_rows(execution: dict, expected_output_node: str) -> tuple[list[dict], dict]:
+    """严格读取发布契约指定输出节点的一次、单 main 分支 items。"""
     meta = {
         "execution_id": execution.get("id"),
         "execution_status": execution.get("status"),
@@ -73,17 +73,39 @@ def _extract_execution_rows(execution: dict) -> tuple[list[dict], dict]:
         meta["error"] = f"{err.get('message', '')}" + (f"（节点 {node_name}）" if node_name else "")
     last_node = result_data.get("lastNodeExecuted")
     meta["last_node"] = last_node
-    rows: list[dict] = []
+    if meta["execution_status"] != "success":
+        return [], meta
+    if not expected_output_node:
+        raise StewardError("发布快照缺少 n8n 输出节点名称，不能安全读取 execution。请撤回并重新发布。")
+    if last_node != expected_output_node:
+        raise StewardError(
+            f"n8n 最后执行节点「{last_node or '无'}」与发布契约输出节点"
+            f"「{expected_output_node}」不一致；拒绝猜测其他节点输出。")
+
     run_data = result_data.get("runData") or {}
-    if last_node and last_node in run_data:
-        try:
-            items = ((run_data[last_node][-1].get("data") or {}).get("main") or [[]])[0] or []
-            rows = normalize_rows(items)
-        except StewardError:
-            raise
-        except Exception:  # noqa: BLE001 — 结构异常由调用方按空输出处理
-            logger.warning("解析执行 %s 末节点输出失败", execution.get("id"), exc_info=True)
-    return rows, meta
+    if not isinstance(run_data, dict):
+        raise StewardError("n8n execution 的 resultData.runData 结构非法。")
+    runs = run_data.get(expected_output_node)
+    if not isinstance(runs, list) or len(runs) != 1:
+        actual = len(runs) if isinstance(runs, list) else 0
+        raise StewardError(
+            f"发布契约输出节点「{expected_output_node}」必须且只能执行 1 次，实际 {actual} 次；"
+            "循环/分批多次执行必须先在 n8n 内汇总为单一输出。")
+    run = runs[0]
+    if not isinstance(run, dict):
+        raise StewardError(f"输出节点「{expected_output_node}」的 execution run 结构非法。")
+    data = run.get("data")
+    if not isinstance(data, dict):
+        raise StewardError(f"输出节点「{expected_output_node}」缺少 execution data。")
+    main = data.get("main")
+    if not isinstance(main, list) or len(main) != 1:
+        actual = len(main) if isinstance(main, list) else 0
+        raise StewardError(
+            f"输出节点「{expected_output_node}」必须且只能产生 1 个 main 分支，实际 {actual} 个。")
+    items = main[0]
+    if not isinstance(items, list):
+        raise StewardError(f"输出节点「{expected_output_node}」的 main[0] 必须是 n8n item 数组。")
+    return normalize_rows(items), meta
 
 
 def _execution_has_run_id(execution: dict, run_id: str) -> bool:
@@ -127,7 +149,8 @@ def _response_execution_id(body: Any) -> str | None:
 
 def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
                         payload: dict | None = None,
-                        wait_seconds: int = _DEFAULT_WAIT) -> tuple[list[dict], dict]:
+                        wait_seconds: int = _DEFAULT_WAIT, *,
+                        expected_output_node: str) -> tuple[list[dict], dict]:
     """POST webhook → 等执行落库 → 返回 (行数据, 执行元信息)。
 
     行数据只取与本次 run_id 精确匹配的 execution 详情。不能验证关联时
@@ -178,7 +201,7 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
             "Webhook 响应体。请确认 n8n 保存成功/失败 execution 数据，且 Webhook 输入中的 "
             "run_id 未被清除。")
 
-    rows, meta = _extract_execution_rows(execution)
+    rows, meta = _extract_execution_rows(execution, expected_output_node)
     meta["run_id"] = run_id
     if meta.get("execution_status") != "success":
         detail = meta.get("error") or f"status={meta.get('execution_status') or 'unknown'}"
@@ -186,7 +209,7 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
     return rows, meta
 
 
-def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str]:
+def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str, str]:
     n8n_def = (pl.definition or {}).get("n8n") or {}
     rec = service.record_for_pipeline(db, pl)
     if rec is None:
@@ -196,7 +219,11 @@ def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str]:
     webhook_path = n8n_def.get("webhook_path") or service.find_webhook_path(rec.workflow_snapshot)
     if not webhook_path:
         raise StewardError("该工作流没有 Webhook 触发器，平台无法主动调度（它只能由 n8n 内部定时自跑）。")
-    return rec, rec.n8n_workflow_id, str(webhook_path)
+    managed_contract = n8n_def.get("managed_contract") or {}
+    output_node_name = str(managed_contract.get("output_node_name") or "").strip()
+    if not output_node_name:
+        raise StewardError("该流水线发布快照缺少唯一 n8n 输出节点，请撤回并重新发布后再运行。")
+    return rec, rec.n8n_workflow_id, str(webhook_path), output_node_name
 
 
 def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list[dict], dict]:
@@ -205,7 +232,7 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
     供列表页 dry-run 预览使用。注意：n8n 没有"只看不跑"的模式——试运行
     依然真实触发生产 workflow（这就是它的执行方式），只是产物先不入湖。
     """
-    rec, workflow_id, webhook_path = _resolve_n8n_context(db, pl)
+    rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(db, pl)
     client = service.get_n8n_client(db)
     service.require_published_revision(pl, client.get_workflow(workflow_id))
     wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
@@ -218,7 +245,8 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
         rows, exec_meta = trigger_and_collect(
             client, workflow_id, webhook_path,
             payload=payload or {"source": "ontoprompt-dry-run"},
-            wait_seconds=wait_seconds)
+            wait_seconds=wait_seconds,
+            expected_output_node=output_node_name)
     if exec_meta.get("error"):
         raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
     return rows, exec_meta
@@ -236,7 +264,7 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
     from app.data_channel.pipelines.external_runner import run_external_pipeline
 
     def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
-        _rec, workflow_id, webhook_path = _resolve_n8n_context(db_, pl_)
+        _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(db_, pl_)
         client = service.get_n8n_client(db_)
         service.require_published_revision(pl_, client.get_workflow(workflow_id))
         wait_seconds = int(((pl_.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
@@ -249,7 +277,8 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
             rows, exec_meta = trigger_and_collect(
                 client, workflow_id, webhook_path,
                 payload={"source": "ontoprompt", "run_id": run.id},
-                wait_seconds=wait_seconds)
+                wait_seconds=wait_seconds,
+                expected_output_node=output_node_name)
         if exec_meta.get("error"):
             raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
         return rows, exec_meta
@@ -267,38 +296,61 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
     生产 webhook 未注册，走 collect_n8n_rows 必 404。数据管家已无试跑入口。
     """
     client = service.get_n8n_client(db)
-    workflow = client.get_workflow(rec.n8n_workflow_id)
-    webhook_path = service.find_webhook_path(workflow)
-    if not webhook_path:
-        raise StewardError("该工作流没有 Webhook 触发器，无法由平台试跑。")
+    from app.data_channel.datasets.lock import dataset_write_lock
+    # 锁必须覆盖 GET active → 临时 activate → 触发 → 恢复 deactivate → 最终 GET。
+    # 只锁 trigger 会让并发 publish 在中途启用成功，随后本预览按旧 was_active
+    # 把正式 workflow 错误停用，形成平台 enabled / 远端 inactive 的裂脑。
+    with dataset_write_lock(
+        f"n8n::{rec.n8n_workflow_id}", bind=db.get_bind(),
+        wait_timeout=float(wait_seconds) + 10,
+        stale_after=float(wait_seconds) + 60,
+    ):
+        workflow = client.get_workflow(rec.n8n_workflow_id)
+        managed_contract = service.validate_managed_workflow_contract(workflow)
+        initial_snapshot_hash = service.canonical_json_hash(
+            N8nClient.sanitize_workflow(workflow))
+        webhook_path = managed_contract["webhook_path"]
+        output_node_name = managed_contract["output_node_name"]
 
-    was_active = bool(workflow.get("active"))
-    if not was_active:
+        was_active = bool(workflow.get("active"))
+        if not was_active:
+            try:
+                client.activate_workflow(rec.n8n_workflow_id)
+            except Exception as exc:  # noqa: BLE001
+                raise StewardError(f"临时激活失败：{exc}") from exc
+            # webhook 注册非即时，稍等再触发
+            time.sleep(1.5)
         try:
-            client.activate_workflow(rec.n8n_workflow_id)
-        except Exception as exc:  # noqa: BLE001
-            raise StewardError(f"临时激活失败：{exc}") from exc
-        # webhook 注册非即时，稍等再触发
-        time.sleep(1.5)
-    try:
-        from app.data_channel.datasets.lock import dataset_write_lock
-        with dataset_write_lock(
-            f"n8n::{rec.n8n_workflow_id}", bind=db.get_bind(),
-            wait_timeout=float(wait_seconds) + 10,
-            stale_after=float(wait_seconds) + 60,
-        ):
             rows, exec_meta = trigger_and_collect(
                 client, rec.n8n_workflow_id, webhook_path,
                 payload=payload or {"source": "ontoprompt-test"},
-                wait_seconds=wait_seconds)
-    finally:
-        if not was_active:
-            try:
-                client.deactivate_workflow(rec.n8n_workflow_id)
-            except Exception as exc:  # noqa: BLE001
+                wait_seconds=wait_seconds,
+                expected_output_node=output_node_name)
+        finally:
+            if not was_active:
+                try:
+                    client.deactivate_workflow(rec.n8n_workflow_id)
+                except Exception as exc:  # noqa: BLE001
+                    raise StewardError(
+                        f"执行预览结束，但恢复 n8n 草稿的停用状态失败：{exc}。"
+                        "为避免未发布工作流继续对外生效，请立即在 n8n 中停用后再继续。") from exc
+        try:
+            final_workflow = client.get_workflow(rec.n8n_workflow_id)
+            final_snapshot = N8nClient.sanitize_workflow(final_workflow)
+            if service.canonical_json_hash(final_snapshot) != initial_snapshot_hash:
                 raise StewardError(
-                    f"执行预览结束，但恢复 n8n 草稿的停用状态失败：{exc}。"
-                    "为避免未发布工作流继续对外生效，请立即在 n8n 中停用后再继续。") from exc
+                    "n8n 工作流在执行预览期间发生编排变化，本次输出不能作为发布凭证。"
+                    "请确认无人同时编辑后重新执行预览。")
+            workflow_evidence = service.workflow_validation_evidence(
+                final_workflow, context="执行预览后")
+        except StewardError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise StewardError(
+                f"执行预览后无法读取 n8n revision，不能形成发布凭证：{exc}"
+            ) from exc
+    rec.workflow_snapshot = final_snapshot
+    exec_meta["workflow_evidence"] = workflow_evidence
     return rows, exec_meta
 
 
@@ -318,6 +370,8 @@ def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_me
         "rows": len(rows),
         "columns": columns,
         "sample": rows[:5],
+        "output_checksum": service.canonical_json_hash(rows),
+        "workflow_evidence": exec_meta.get("workflow_evidence"),
         "at": datetime.now(timezone.utc).isoformat(),
     }
     db.commit()

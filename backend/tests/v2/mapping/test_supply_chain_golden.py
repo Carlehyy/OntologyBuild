@@ -29,6 +29,8 @@ def _add_curated(db, name: str) -> Dataset:
 
 
 def _add_mapping(db, ontology_id: str, dataset_id: str, entity_class: str, pk: str) -> OntologyMapping:
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).one()
+    dataset.schema_json = {**(dataset.schema_json or {}), "primary_key": pk}
     mapping = OntologyMapping(
         ontology_id=ontology_id,
         curated_dataset_id=dataset_id,

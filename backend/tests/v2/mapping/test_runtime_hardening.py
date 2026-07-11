@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -386,6 +387,365 @@ def test_mapping_api_rejects_forged_runtime_lineage_keys(
                 field_mapping={"__last_apply_error__": "hidden"},
             ), db)
     assert create_error.value.status_code == 422
+
+
+def test_mapping_api_derives_primary_key_only_from_lake_contract(
+        db, admin_user, lake_storage):
+    ontology, dataset, _ = _source_graph(
+        db, admin_user, rows=[{"id": "1", "value": "ok"}])
+
+    result = create_mapping(
+        ontology.id,
+        CreateMappingRequest(
+            curated_dataset_id=dataset.id,
+            entity_class="CanonicalIdentity",
+            field_mapping={"value": "value"},
+        ), db)
+
+    created = db.query(OntologyMapping).filter_by(
+        id=result["mapping_id"]).one()
+    assert created.field_mapping["__primary_key__"] == "id"
+    assert created.field_mapping["__pk_source__"] == "lake"
+
+
+def test_mapping_api_persists_explicit_ignored_fields_and_rejects_overwrite(
+    db, admin_user, lake_storage,
+):
+    ontology, dataset, _ = _source_graph(
+        db, admin_user,
+        rows=[{"id": "1", "name": "A", "secret": "do-not-project"}],
+    )
+
+    result = create_mapping(
+        ontology.id,
+        CreateMappingRequest(
+            curated_dataset_id=dataset.id,
+            entity_class="ExplicitProjection",
+            field_mapping={"id": "business_id", "name": "name"},
+            ignored_fields=["secret"],
+        ), db,
+    )
+    created = db.query(OntologyMapping).filter_by(id=result["mapping_id"]).one()
+    MappingService(db)._normalize_mapping(created, [{
+        "id": "1", "name": "A", "secret": "do-not-project",
+    }])
+    assert created.field_mapping["__ignored_fields__"] == ["secret"]
+    assert "secret" not in created.field_mapping
+    replay = create_mapping(
+        ontology.id,
+        CreateMappingRequest(
+            curated_dataset_id=dataset.id,
+            entity_class="ExplicitProjection",
+            field_mapping={"id": "business_id", "name": "name"},
+            ignored_fields=["secret"],
+        ), db,
+    )
+    assert replay["mapping_id"] == created.id
+    assert replay["idempotent_replay"] is True
+
+    with pytest.raises(HTTPException) as duplicate_target:
+        create_mapping(
+            ontology.id,
+            CreateMappingRequest(
+                curated_dataset_id=dataset.id,
+                entity_class="AmbiguousProjection",
+                field_mapping={"id": "same", "name": "same"},
+            ), db,
+        )
+    assert duplicate_target.value.detail["code"] == "duplicate_mapping_targets"
+
+    with pytest.raises(HTTPException) as hidden_identity:
+        create_mapping(
+            ontology.id,
+            CreateMappingRequest(
+                curated_dataset_id=dataset.id,
+                entity_class="HiddenIdentity",
+                field_mapping={"name": "name"},
+                ignored_fields=["id"],
+            ), db,
+        )
+    assert hidden_identity.value.detail["code"] == "primary_key_cannot_be_ignored"
+
+
+def test_mapping_api_rejects_client_primary_key_override(
+        db, admin_user, lake_storage):
+    ontology, dataset, mapping = _source_graph(
+        db, admin_user, rows=[{"id": "1", "other_id": "X"}])
+
+    with pytest.raises(HTTPException) as create_error:
+        create_mapping(
+            ontology.id,
+            CreateMappingRequest(
+                curated_dataset_id=dataset.id,
+                entity_class="ForgedIdentity",
+                field_mapping={},
+                primary_key_column="other_id",
+            ), db)
+    assert create_error.value.status_code == 400
+    assert create_error.value.detail["code"] == "primary_key_contract_mismatch"
+    assert create_error.value.detail["declared_primary_key"] == "id"
+
+    with pytest.raises(HTTPException) as update_error:
+        update_mapping(
+            ontology.id, mapping.id,
+            UpdateMappingRequest(primary_key_column="other_id"), db)
+    assert update_error.value.status_code == 400
+    assert update_error.value.detail["code"] == "primary_key_contract_mismatch"
+
+
+def test_mapping_api_requires_declared_lake_primary_key(db, admin_user):
+    ontology = OntologyProject(
+        name=f"mapping-no-pk-{uuid.uuid4().hex[:8]}",
+        domain="test", created_by=admin_user.id)
+    dataset = Dataset(
+        name=f"source-no-pk-{uuid.uuid4().hex[:8]}",
+        kind="curated", schema_json={"columns": ["value"]})
+    db.add_all([ontology, dataset])
+    db.commit()
+
+    with pytest.raises(HTTPException) as error:
+        create_mapping(
+            ontology.id,
+            CreateMappingRequest(
+                curated_dataset_id=dataset.id,
+                entity_class="NoIdentity",
+                field_mapping={"value": "value"},
+            ), db)
+    assert error.value.status_code == 400
+    assert error.value.detail["code"] == "primary_key_required"
+
+
+def test_link_mapping_rejects_composite_endpoint_and_wrong_object_dataset(
+    db, admin_user,
+):
+    from app.models.ontology_formal import LinkType, ObjectType
+
+    ontology = OntologyProject(
+        name=f"link-contract-{uuid.uuid4().hex[:8]}",
+        domain="test", created_by=admin_user.id,
+    )
+    db.add(ontology)
+    db.flush()
+    source_type = ObjectType(
+        ontology_id=ontology.id, name="Supplier", display_name="供应商",
+        properties=[], interfaces=[],
+    )
+    target_type = ObjectType(
+        ontology_id=ontology.id, name="Order", display_name="订单",
+        properties=[], interfaces=[],
+    )
+    db.add_all([source_type, target_type])
+    db.flush()
+    link_type = LinkType(
+        ontology_id=ontology.id, name="SUPPLIES", display_name="供应",
+        source_object_type_id=source_type.id,
+        target_object_type_id=target_type.id,
+        properties=[],
+    )
+    composite = Dataset(
+        name=f"composite-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "tenant_id,supplier_id"},
+    )
+    target = Dataset(
+        name=f"target-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "order_id"},
+    )
+    wrong = Dataset(
+        name=f"wrong-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "wrong_id"},
+    )
+    edge = Dataset(
+        name=f"edge-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "edge_id"},
+    )
+    db.add_all([link_type, composite, target, wrong, edge])
+    db.flush()
+    db.add_all([
+        OntologyMapping(
+            ontology_id=ontology.id, curated_dataset_id=composite.id,
+            entity_class="Supplier", target_object_type_id=source_type.id,
+            field_mapping={},
+        ),
+        OntologyMapping(
+            ontology_id=ontology.id, curated_dataset_id=target.id,
+            entity_class="Order", target_object_type_id=target_type.id,
+            field_mapping={},
+        ),
+    ])
+    db.commit()
+
+    with pytest.raises(HTTPException) as composite_error:
+        create_link_mapping(
+            ontology.id,
+            LinkMappingCreate(
+                src_dataset_id=composite.id, tgt_dataset_id=target.id,
+                edge_dataset_id=edge.id, relation_type=link_type.name,
+                link_type_id=link_type.id, src_key="supplier_fk",
+                tgt_key="order_fk",
+            ), db,
+        )
+    assert composite_error.value.detail["code"] == "composite_endpoint_fk_not_supported"
+
+    composite.schema_json = {"primary_key": "supplier_id"}
+    db.commit()
+    with pytest.raises(HTTPException) as mismatch:
+        create_link_mapping(
+            ontology.id,
+            LinkMappingCreate(
+                src_dataset_id=wrong.id, tgt_dataset_id=target.id,
+                edge_dataset_id=edge.id, relation_type=link_type.name,
+                link_type_id=link_type.id, src_key="supplier_fk",
+                tgt_key="order_fk",
+            ), db,
+        )
+    assert mismatch.value.detail["code"] == "link_endpoint_dataset_mismatch"
+
+
+def test_link_mapping_selects_exact_dataset_when_object_has_multiple_mappings(
+    db, admin_user,
+):
+    from app.models.ontology_formal import LinkType, ObjectType
+
+    ontology = OntologyProject(
+        name=f"link-multi-mapping-{uuid.uuid4().hex[:8]}",
+        domain="test", created_by=admin_user.id,
+    )
+    db.add(ontology)
+    db.flush()
+    source_type = ObjectType(
+        ontology_id=ontology.id, name="Supplier", display_name="供应商",
+        properties=[], interfaces=[],
+    )
+    target_type = ObjectType(
+        ontology_id=ontology.id, name="Order", display_name="订单",
+        properties=[], interfaces=[],
+    )
+    db.add_all([source_type, target_type])
+    db.flush()
+    link_type = LinkType(
+        ontology_id=ontology.id, name="SUPPLIES", display_name="供应",
+        source_object_type_id=source_type.id,
+        target_object_type_id=target_type.id,
+        properties=[],
+    )
+    other_source = Dataset(
+        name=f"supplier-other-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "supplier_id"},
+    )
+    selected_source = Dataset(
+        name=f"supplier-selected-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "supplier_id"},
+    )
+    target = Dataset(
+        name=f"order-selected-{uuid.uuid4().hex[:6]}", kind="structured",
+        schema_json={"primary_key": "order_id"},
+    )
+    db.add_all([link_type, other_source, selected_source, target])
+    db.flush()
+    # 先写入同 ObjectType 的另一条映射，覆盖旧实现依赖 ``first()`` 的顺序。
+    db.add(OntologyMapping(
+        ontology_id=ontology.id, curated_dataset_id=other_source.id,
+        entity_class="Supplier", target_object_type_id=source_type.id,
+        field_mapping={},
+    ))
+    db.flush()
+    db.add_all([
+        OntologyMapping(
+            ontology_id=ontology.id, curated_dataset_id=selected_source.id,
+            entity_class="Supplier", target_object_type_id=source_type.id,
+            field_mapping={},
+        ),
+        OntologyMapping(
+            ontology_id=ontology.id, curated_dataset_id=target.id,
+            entity_class="Order", target_object_type_id=target_type.id,
+            field_mapping={},
+        ),
+    ])
+    db.commit()
+
+    rows_by_dataset = {
+        selected_source.id: [{"supplier_id": "S-1", "order_fk": "O-1"}],
+        target.id: [{"order_id": "O-1"}],
+    }
+    with patch.object(
+        DatasetService, "preview",
+        side_effect=lambda dataset_id, *_args, **_kwargs: rows_by_dataset[dataset_id],
+    ):
+        result = create_link_mapping(
+            ontology.id,
+            LinkMappingCreate(
+                src_dataset_id=selected_source.id,
+                tgt_dataset_id=target.id,
+                relation_type=link_type.name,
+                link_type_id=link_type.id,
+                src_key="order_fk",
+                tgt_key="order_id",
+            ),
+            db,
+        )
+
+    assert result["match_count"] == 1
+    assert result["link_mapping_id"]
+
+
+def test_composite_lake_primary_key_produces_stable_json_identity(
+        db, admin_user):
+    ontology = OntologyProject(
+        id=str(uuid.uuid4()),
+        name=f"mapping-composite-{uuid.uuid4().hex[:8]}",
+        domain="test", created_by=admin_user.id)
+    dataset = Dataset(
+        id=str(uuid.uuid4()),
+        name=f"source-composite-{uuid.uuid4().hex[:8]}",
+        kind="curated",
+        schema_json={"primary_key": "tenant_id, order_id"})
+    mapping = OntologyMapping(
+        ontology_id=ontology.id,
+        curated_dataset_id=dataset.id,
+        entity_class="TenantOrder",
+        # Historical wrong single-column identity is repaired at runtime.
+        field_mapping={"__primary_key__": "order_id"},
+        status="draft")
+    db.add_all([ontology, dataset, mapping])
+    db.commit()
+    service = MappingService(db)
+    old = {"tenant_id": "T-1", "order_id": "O-7", "amount": "10"}
+    changed = {"tenant_id": "T-1", "order_id": "O-7", "amount": "99"}
+
+    service._normalize_mapping(mapping, [old, {
+        "tenant_id": "T-1", "order_id": "O-8", "amount": "20"}])
+    identity = service._row_identity_value(old, "tenant_id,order_id")
+
+    assert mapping.field_mapping["__primary_key__"] == "tenant_id,order_id"
+    assert mapping.field_mapping["__pk_source__"] == "lake"
+    assert identity.startswith("composite_pk:")
+    assert json.loads(identity.removeprefix("composite_pk:")) == {
+        "columns": ["tenant_id", "order_id"],
+        "values": ["T-1", "O-7"],
+    }
+    assert service._stable_row_id(mapping, old, "tenant_id,order_id") == (
+        service._stable_row_id(mapping, changed, "tenant_id,order_id"))
+    assert service._display_name(
+        mapping, old, "tenant_id,order_id", 0
+    ) == "tenant_id=T-1 / order_id=O-7"
+
+    from app.ontologies.mappings.formal_projection import (
+        _build_object_type_properties)
+    entities = service._rows_to_entities(mapping, [old, {
+        "tenant_id": "T-1", "order_id": "O-8", "amount": "20"}])
+    properties, primary_property = _build_object_type_properties(
+        entities,
+        ["tenant_id", "order_id"],
+        mapping.field_mapping["__properties__"],
+    )
+    by_name = {prop["name"]: prop for prop in properties}
+    assert primary_property == by_name["__composite_identity__"]["id"]
+    assert by_name["__composite_identity__"]["identityComponents"] == [
+        "tenant_id", "order_id"]
+    assert by_name["tenant_id"]["required"] is True
+    assert by_name["tenant_id"]["primaryKeyPart"] == 1
+    assert by_name["order_id"]["required"] is True
+    assert by_name["order_id"]["primaryKeyPart"] == 2
 
 
 def test_apply_refuses_stale_source_version_after_concurrent_publish(

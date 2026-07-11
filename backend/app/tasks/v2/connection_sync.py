@@ -8,10 +8,14 @@ Dataset + DatasetVersion，作为数据流水线的原始输入。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from contextlib import nullcontext
 
 logger = logging.getLogger(__name__)
+
+_RESOURCE_ID_MAX_LENGTH = 500
 
 
 def _decrypt_config(conn) -> dict:
@@ -69,6 +73,22 @@ def sync_connection(connection_id: str, mode: str = "full",
             except Exception:
                 res = ""
 
+        # resource 是 Connection 内部的数据集身份，不是展示名称。保持原字符串
+        # （不 strip/改大小写），同时拒绝无法被 schema 无损保存的连接器返回值。
+        if not isinstance(res, str):
+            return {
+                "status": "error",
+                "error": "connector resource identity must be a string",
+            }
+        if len(res) > _RESOURCE_ID_MAX_LENGTH:
+            return {
+                "status": "error",
+                "error": (
+                    "connector resource identity exceeds "
+                    f"{_RESOURCE_ID_MAX_LENGTH} characters"
+                ),
+            }
+
         # 拉数据
         try:
             if mode == "delta":
@@ -94,16 +114,35 @@ def sync_connection(connection_id: str, mode: str = "full",
             rowcount = None
             kind = "semi"
 
-        # 落 Dataset：复用同名连接数据集（按 connection_id 关联），追加版本
+        # 解析/首建使用稳定的 connection+resource 锁，避免两个进程同时制造双胞胎。
+        # 已有数据集还要进入 dataset 锁，与上传/其他写入共享完整版本序列。
+        from app.data_channel.datasets.lock import dataset_write_lock
         ds_svc = DatasetService(db)
-        ds = (db.query(Dataset)
-              .filter(Dataset.source_connection_id == connection_id)
-              .order_by(Dataset.created_at.desc()).first())
-        if ds is None:
-            ds_name = f"{conn.name}:{res}" if res else conn.name
-            ds = ds_svc.create_dataset(name=ds_name, kind=kind,
-                                       connection_id=connection_id)
-        ver = ds_svc.create_version(ds.id, content, rowcount=rowcount)
+        resource_digest = hashlib.sha256(res.encode("utf-8")).hexdigest()
+        stable_key = f"connection-sync::{connection_id}::{resource_digest}"
+        with dataset_write_lock(stable_key, bind=db.get_bind(), wait_timeout=30):
+            ds = (db.query(Dataset)
+                  .filter(
+                      Dataset.source_connection_id == connection_id,
+                      Dataset.source_resource == res,
+                  )
+                  .order_by(Dataset.created_at.desc()).first())
+            if ds is None:
+                ds_name = f"{conn.name}:{res}" if res else conn.name
+                # name 只用于展示；截断不能影响由 connection+resource 保存的身份。
+                if len(ds_name) > 200:
+                    ds_name = f"{ds_name[:197]}..."
+                ds = ds_svc.create_dataset(
+                    name=ds_name, kind=kind, connection_id=connection_id,
+                    source_resource=res,
+                    commit=False)
+                version_guard = nullcontext()
+            else:
+                version_guard = dataset_write_lock(
+                    f"dataset::{ds.id}", bind=db.get_bind(), wait_timeout=30)
+            with version_guard:
+                ver = ds_svc.create_version(
+                    ds.id, content, rowcount=rowcount, _lock_held=True)
 
         conn.status = "active"
         db.commit()

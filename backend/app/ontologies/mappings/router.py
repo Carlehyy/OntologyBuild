@@ -1,7 +1,7 @@
 """v2 Ontology Mapping API — 含 Link Mapping 手动配置"""
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
@@ -30,6 +30,7 @@ class CreateMappingRequest(BaseModel):
     curated_dataset_id: str
     entity_class: str
     field_mapping: dict
+    ignored_fields: list[str] = Field(default_factory=list)
     primary_key_column: Optional[str] = None
     property_mappings: Optional[list[dict]] = None
     confidence: float = 1.0
@@ -42,6 +43,7 @@ class CreateMappingRequest(BaseModel):
 class UpdateMappingRequest(BaseModel):
     entity_class: Optional[str] = None
     field_mapping: Optional[dict] = None
+    ignored_fields: Optional[list[str]] = None
     primary_key_column: Optional[str] = None
     target_object_type_id: Optional[str] = None
     auto_apply_on_review: Optional[bool] = None
@@ -109,6 +111,95 @@ def _reject_reserved_mapping_keys(value: Optional[dict], field_name: str) -> Non
         })
 
 
+def _validate_user_field_mapping(value: dict, ignored_fields: list[str]) -> None:
+    """字段必须一一对应；忽略列通过独立显式契约表达。"""
+    ignored = [str(item).strip() for item in ignored_fields if str(item).strip()]
+    if len(ignored) != len(set(ignored)):
+        raise HTTPException(422, detail={
+            "code": "duplicate_ignored_fields",
+            "message": "ignored_fields 包含重复字段",
+        })
+    overlap = sorted(set(value) & set(ignored))
+    if overlap:
+        raise HTTPException(422, detail={
+            "code": "mapped_and_ignored_fields",
+            "message": "同一源字段不能同时映射和忽略",
+            "fields": overlap,
+        })
+    targets = [str(target).strip() for target in value.values() if str(target).strip()]
+    duplicates = sorted({target for target in targets if targets.count(target) > 1})
+    if duplicates:
+        raise HTTPException(422, detail={
+            "code": "duplicate_mapping_targets",
+            "message": "字段映射必须一一对应，多个源字段不能写入同一目标属性",
+            "targets": duplicates,
+        })
+
+
+def _assert_ignored_fields_do_not_hide_identity(
+    ignored_fields: list[str], declared_primary_key: str,
+) -> None:
+    from app.data_channel.datasets.lake_gate import split_pk
+
+    hidden_identity = sorted(set(ignored_fields) & set(split_pk(declared_primary_key)))
+    if hidden_identity:
+        raise HTTPException(422, detail={
+            "code": "primary_key_cannot_be_ignored",
+            "message": "资产主键是实例身份契约，不能在本体映射中忽略",
+            "fields": hidden_identity,
+        })
+
+
+def _canonical_primary_key(db: Session, dataset_id: str) -> str:
+    """Return the asset-lake identity contract for a mapping source.
+
+    A mapping is a consumer of a Dataset, not an independent schema authority.
+    Keeping this lookup at the API boundary prevents callers from changing object
+    identity while the lake, review diff and merge paths still use another key.
+    """
+    from app.data_channel.datasets.lake_gate import split_pk
+    from app.models.v2.dataset import Dataset
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if dataset is None:
+        raise HTTPException(404, detail={
+            "code": "mapping_dataset_not_found",
+            "message": f"映射数据集不存在或尚未迁入资产湖：{dataset_id}",
+        })
+    schema = dataset.schema_json if isinstance(dataset.schema_json, dict) else {}
+    columns = split_pk(schema.get("primary_key"))
+    if not columns:
+        raise HTTPException(400, detail={
+            "code": "primary_key_required",
+            "message": f"数据集「{dataset.name}」尚未声明主键契约，无法创建本体映射。"
+                       "请先在数据资产湖维护主键。",
+        })
+    if len(columns) != len(set(columns)):
+        raise HTTPException(400, detail={
+            "code": "invalid_primary_key_contract",
+            "message": f"数据集「{dataset.name}」的复合主键包含重复列，请先修复资产契约。",
+        })
+    return ",".join(columns)
+
+
+def _assert_client_primary_key_matches(
+        supplied: str | None, declared: str, dataset_id: str) -> None:
+    """Accept the legacy request field only as an assertion, never an override."""
+    if supplied is None:
+        return
+    from app.data_channel.datasets.lake_gate import split_pk
+
+    normalized = ",".join(split_pk(supplied))
+    if normalized != declared:
+        raise HTTPException(400, detail={
+            "code": "primary_key_contract_mismatch",
+            "message": "映射主键必须与资产湖已声明主键完全一致，客户端不能覆盖数据身份契约。",
+            "dataset_id": dataset_id,
+            "declared_primary_key": declared,
+            "supplied_primary_key": normalized,
+        })
+
+
 @router.post("/{ontology_id}/mappings")
 def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = Depends(get_db)):
     from app.services.v2.mapping.mapping_service import MappingService
@@ -116,29 +207,78 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
     _validate_target_type(db, ontology_id, body.target_object_type_id)
     _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
 
-    # 人工数据集（非 curated）可直接灌入本体，但必须先声明主键契约——
-    # 无主键时实例身份退化为整行哈希，字段一变就堆积新实例
-    from app.models.v2.dataset import Dataset
-    ds = db.query(Dataset).filter(Dataset.id == body.curated_dataset_id).first()
-    if ds is not None and ds.kind != "curated":
-        declared_pk = str((ds.schema_json or {}).get("primary_key") or "").strip()
-        if not declared_pk:
-            raise HTTPException(400,
-                f"人工数据集「{ds.name}」尚未声明主键契约，无法灌入本体。"
-                f"请先到 数据资产湖 → 人工数据集 → 维护数据 中声明主键")
+    declared_pk = _canonical_primary_key(db, body.curated_dataset_id)
+    _assert_client_primary_key_matches(
+        body.primary_key_column, declared_pk, body.curated_dataset_id)
+    _validate_user_field_mapping(body.field_mapping or {}, body.ignored_fields)
+    _assert_ignored_fields_do_not_hide_identity(body.ignored_fields, declared_pk)
 
     svc = MappingService(db)
     field_mapping = dict(body.field_mapping or {})
+    if body.ignored_fields:
+        field_mapping["__ignored_fields__"] = sorted(set(body.ignored_fields))
     if body.property_mappings:
         field_mapping["__properties__"] = body.property_mappings
     if body.auto_apply_on_review:
         field_mapping["__auto_apply_on_review__"] = True
+    client_definition = {
+        "entity_class": body.entity_class,
+        "field_mapping": dict(body.field_mapping or {}),
+        "ignored_fields": sorted(set(body.ignored_fields)),
+        "auto_apply_on_review": bool(body.auto_apply_on_review),
+        "target_object_type_id": body.target_object_type_id,
+    }
+    field_mapping["__client_definition__"] = client_definition
+    from app.models.v2.mapping import OntologyMapping
+    identity_query = db.query(OntologyMapping).filter(
+        OntologyMapping.ontology_id == ontology_id,
+        OntologyMapping.curated_dataset_id == body.curated_dataset_id,
+    )
+    identity_query = (
+        identity_query.filter(
+            OntologyMapping.target_object_type_id == body.target_object_type_id)
+        if body.target_object_type_id
+        else identity_query.filter(
+            OntologyMapping.target_object_type_id.is_(None),
+            OntologyMapping.entity_class == body.entity_class)
+    )
+    existing = identity_query.first()
+    if existing is not None:
+        existing_map = dict(existing.field_mapping or {})
+        existing_user = {
+            key: value for key, value in existing_map.items()
+            if not str(key).startswith("__")
+        }
+        candidate_user = {
+            key: value for key, value in field_mapping.items()
+            if not str(key).startswith("__")
+        }
+        same_definition = (
+            existing_map.get("__client_definition__") == client_definition
+        ) or (
+            existing.entity_class == body.entity_class
+            and existing_user == candidate_user
+            and sorted(existing_map.get("__ignored_fields__") or [])
+            == sorted(field_mapping.get("__ignored_fields__") or [])
+            and bool(existing_map.get("__auto_apply_on_review__"))
+            == bool(field_mapping.get("__auto_apply_on_review__"))
+        )
+        if same_definition:
+            return {
+                "mapping_id": existing.id, "status": existing.status,
+                "idempotent_replay": True,
+            }
+        raise HTTPException(409, detail={
+            "code": "object_mapping_already_exists",
+            "message": "该数据集到目标对象的映射已存在；请维护现有映射，不要重复创建。",
+            "mapping_id": existing.id,
+        })
     mapping = svc.create_mapping(
         ontology_id=ontology_id,
         curated_dataset_id=body.curated_dataset_id,
         entity_class=body.entity_class,
         field_mapping=field_mapping,
-        primary_key_column=body.primary_key_column,
+        primary_key_column=declared_pk,
         confidence=body.confidence,
         target_object_type_id=body.target_object_type_id,
     )
@@ -156,6 +296,9 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
         OntologyMapping.ontology_id == ontology_id).first()
     if not m:
         raise HTTPException(404, "Mapping not found")
+    declared_pk = _canonical_primary_key(db, m.curated_dataset_id)
+    _assert_client_primary_key_matches(
+        body.primary_key_column, declared_pk, m.curated_dataset_id)
     provided = body.model_fields_set
     if "target_object_type_id" in provided:
         _validate_target_type(db, ontology_id, body.target_object_type_id)
@@ -163,22 +306,54 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
     if body.entity_class is not None:
         m.entity_class = body.entity_class
     fm = dict(m.field_mapping or {})
+    previous_pk = fm.get("__primary_key__")
     if body.field_mapping is not None:
         _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
         # Preserve runtime-owned keys; user payloads containing them are rejected.
         sys_keys = {k: v for k, v in fm.items() if k.startswith("__")}
         fm = {**sys_keys, **body.field_mapping}
-    if body.primary_key_column is not None:
-        fm["__primary_key__"] = body.primary_key_column
+    effective_user_mapping = (
+        body.field_mapping if body.field_mapping is not None
+        else {k: v for k, v in fm.items() if not str(k).startswith("__")}
+    )
+    effective_ignored = (
+        body.ignored_fields if body.ignored_fields is not None
+        else list(fm.get("__ignored_fields__") or [])
+    )
+    _validate_user_field_mapping(effective_user_mapping, effective_ignored)
+    _assert_ignored_fields_do_not_hide_identity(effective_ignored, declared_pk)
+    if body.ignored_fields is not None:
+        if effective_ignored:
+            fm["__ignored_fields__"] = sorted(set(effective_ignored))
+        else:
+            fm.pop("__ignored_fields__", None)
+    # Always repair/read the canonical lake contract. ``primary_key_column`` is
+    # retained in the request schema only for old clients and acts as an assert.
+    fm["__primary_key__"] = declared_pk
+    fm["__pk_source__"] = "lake"
     if body.auto_apply_on_review is not None:
         if body.auto_apply_on_review:
             fm["__auto_apply_on_review__"] = True
         else:
             fm.pop("__auto_apply_on_review__", None)
+    if {
+        "entity_class", "field_mapping", "ignored_fields",
+        "target_object_type_id", "auto_apply_on_review",
+    } & provided:
+        fm["__client_definition__"] = {
+            "entity_class": m.entity_class,
+            "field_mapping": {
+                key: value for key, value in fm.items()
+                if not str(key).startswith("__")
+            },
+            "ignored_fields": sorted(fm.get("__ignored_fields__") or []),
+            "auto_apply_on_review": bool(fm.get("__auto_apply_on_review__")),
+            "target_object_type_id": m.target_object_type_id,
+        }
     projection_changed = bool({
-        "entity_class", "field_mapping", "primary_key_column",
+        "entity_class", "field_mapping", "ignored_fields", "primary_key_column",
         "target_object_type_id",
-    } & provided)
+    } & provided) or previous_pk != declared_pk
     if projection_changed:
         # Any definition change invalidates the previous apply attestation.  The
         # old marker must never be reused by the release gate for new semantics.
@@ -371,10 +546,106 @@ class LinkMappingCreate(BaseModel):
 
 @router.post("/{ontology_id}/link-mappings")
 def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session = Depends(get_db)):
-    from app.models.v2.mapping import OntologyLinkMapping
+    from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
+    from app.models.ontology_formal import LinkType
+    from app.data_channel.datasets.lake_gate import split_pk
     from app.services.v2.dataset_service import DatasetService
     _require_draft_ontology(db, ontology_id)
     _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
+
+    src_pk = split_pk(_canonical_primary_key(db, body.src_dataset_id))
+    tgt_pk = split_pk(_canonical_primary_key(db, body.tgt_dataset_id))
+    if len(src_pk) != 1 or len(tgt_pk) != 1:
+        raise HTTPException(400, detail={
+            "code": "composite_endpoint_fk_not_supported",
+            "message": (
+                "关系连接表当前只支持单列端点主键；复合主键必须先提供多列外键映射，"
+                "平台不会把逗号拼接列名当成真实字段后静默生成 0 条关系。"
+            ),
+            "source_primary_key": src_pk,
+            "target_primary_key": tgt_pk,
+        })
+    if body.link_type_id:
+        link_type = db.query(LinkType).filter(
+            LinkType.id == body.link_type_id,
+            LinkType.ontology_id == ontology_id,
+        ).first()
+        if link_type is None:
+            raise HTTPException(422, "绑定的 LinkType 不存在")
+        # 一个 ObjectType 可以有多条候选数据映射。端点校验必须查询“对象 +
+        # 本次所选数据集”的精确组合；先按对象 ``first()`` 再比较数据集会因
+        # 查询顺序误拒绝同一对象的其他合法映射。
+        src_mapping = db.query(OntologyMapping).filter(
+            OntologyMapping.ontology_id == ontology_id,
+            OntologyMapping.target_object_type_id == link_type.source_object_type_id,
+            OntologyMapping.curated_dataset_id == body.src_dataset_id,
+        ).first()
+        tgt_mapping = db.query(OntologyMapping).filter(
+            OntologyMapping.ontology_id == ontology_id,
+            OntologyMapping.target_object_type_id == link_type.target_object_type_id,
+            OntologyMapping.curated_dataset_id == body.tgt_dataset_id,
+        ).first()
+        if src_mapping is None or tgt_mapping is None:
+            src_candidates = [row[0] for row in db.query(
+                OntologyMapping.curated_dataset_id,
+            ).filter(
+                OntologyMapping.ontology_id == ontology_id,
+                OntologyMapping.target_object_type_id == link_type.source_object_type_id,
+            ).all()]
+            tgt_candidates = [row[0] for row in db.query(
+                OntologyMapping.curated_dataset_id,
+            ).filter(
+                OntologyMapping.ontology_id == ontology_id,
+                OntologyMapping.target_object_type_id == link_type.target_object_type_id,
+            ).all()]
+            if not src_candidates or not tgt_candidates:
+                raise HTTPException(409, detail={
+                    "code": "link_endpoint_mapping_required",
+                    "message": "请先分别为该关系的源对象和目标对象建立显式数据映射。",
+                })
+            raise HTTPException(409, detail={
+                "code": "link_endpoint_dataset_mismatch",
+                "message": "关系端点数据集必须与所选 LinkType 两端对象的映射完全一致。",
+                "expected_src_dataset_ids": src_candidates,
+                "expected_tgt_dataset_ids": tgt_candidates,
+            })
+
+    existing_query = db.query(OntologyLinkMapping).filter(
+        OntologyLinkMapping.ontology_id == ontology_id)
+    if body.link_type_id:
+        existing_query = existing_query.filter(
+            OntologyLinkMapping.link_type_id == body.link_type_id)
+    else:
+        existing_query = existing_query.filter(
+            OntologyLinkMapping.link_type_id.is_(None),
+            OntologyLinkMapping.src_dataset_id == body.src_dataset_id,
+            OntologyLinkMapping.tgt_dataset_id == body.tgt_dataset_id,
+            OntologyLinkMapping.relation_type == body.relation_type,
+        )
+    existing_link = existing_query.first()
+    if existing_link is not None:
+        same_definition = (
+            existing_link.src_dataset_id == body.src_dataset_id
+            and existing_link.tgt_dataset_id == body.tgt_dataset_id
+            and existing_link.edge_dataset_id == body.edge_dataset_id
+            and existing_link.relation_type == body.relation_type
+            and existing_link.src_key == body.src_key
+            and existing_link.tgt_key == body.tgt_key
+            and dict(existing_link.field_mapping or {}) == dict(body.field_mapping or {})
+        )
+        if same_definition:
+            return {
+                "link_mapping_id": existing_link.id,
+                "relation_type": existing_link.relation_type,
+                "edge_dataset_id": existing_link.edge_dataset_id,
+                "edge_properties": list((existing_link.field_mapping or {}).keys()),
+                "idempotent_replay": True,
+            }
+        raise HTTPException(409, detail={
+            "code": "link_mapping_already_exists",
+            "message": "该 LinkType 已存在关系映射；请维护现有映射，不要重复创建。",
+            "link_mapping_id": existing_link.id,
+        })
 
     svc = DatasetService(db)
     try:
@@ -403,9 +674,9 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
         missing = [c for c in (body.field_mapping or {}).values() if c not in edge_cols]
         if missing:
             raise HTTPException(400, f"Edge property columns not found in edge dataset: {missing}")
-        # 两端外键须命中端点数据集（跨所有列做宽松交集，容错端点主键列未知）
-        src_all = {str(r.get(c, "")).strip() for r in src_rows for c in src_rows[0].keys()}
-        tgt_all = {str(r.get(c, "")).strip() for r in tgt_rows for c in tgt_rows[0].keys()}
+        # 两端外键只允许命中端点的 canonical 主键，不能跨所有列做模糊交集。
+        src_all = {str(r.get(src_pk[0], "")).strip() for r in src_rows}
+        tgt_all = {str(r.get(tgt_pk[0], "")).strip() for r in tgt_rows}
         match_count = sum(
             1 for er in edge_rows
             if str(er.get(body.src_key, "")).strip() in src_all

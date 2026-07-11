@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.v2.dataset import Dataset, DatasetVersion
+from app.models.v2.dataset import Dataset, DatasetVersion, StorageDeletionOutbox
 from app.services.storage_service import StorageService, get_storage_service
 
 logger = logging.getLogger(__name__)
@@ -194,22 +194,191 @@ def _parse_stored_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[d
     return rows
 
 
+def stored_columns(raw: bytes) -> list[str]:
+    """读取对象的物理列，即使对象只有表头、没有数据行也能返回。
+
+    主键契约校验不能把“零行”误当成“列一定存在”；否则仅表头文件可在缺少
+    主键列时通过校验，等后续写入才暴露身份断裂。
+    """
+    if raw[:4] == b"PAR1":
+        import io as _io
+        import pyarrow.parquet as pq
+        return [str(name) for name in pq.read_schema(_io.BytesIO(raw)).names]
+    if raw[:2] == b"PK":
+        try:
+            import io as _io
+            import openpyxl
+            wb = openpyxl.load_workbook(_io.BytesIO(raw), read_only=True, data_only=True)
+            try:
+                first = next(wb.active.iter_rows(values_only=True), ())
+                return [str(v) if v is not None else f"col_{i}" for i, v in enumerate(first)]
+            finally:
+                wb.close()
+        except Exception:
+            return []
+    text = raw.decode("utf-8", errors="replace").lstrip("﻿")
+    stripped = text.lstrip()
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return [str(k) for k in parsed.keys()]
+            if isinstance(parsed, list):
+                first = next((row for row in parsed if isinstance(row, dict)), None)
+                return [str(k) for k in first.keys()] if first else []
+        except Exception:
+            return []
+    import csv
+    import io
+    return [str(name) for name in (csv.DictReader(io.StringIO(text)).fieldnames or [])]
+
+
+def enqueue_storage_deletions(db: Session, storage_uris: list[str]) -> list[str]:
+    """把对象清理记录加入调用方当前事务，不在这里提交。
+
+    同一次资产删除里的重复 URI 会合并；跨事务重复记录允许存在，因为删除对象是
+    幂等操作。刻意不使用 URI 唯一约束，避免两个资产历史上误共享同一 URI 时，
+    outbox 唯一键竞争反过来让元数据删除事务失败。
+    """
+    normalized = sorted({
+        str(uri).strip() for uri in storage_uris
+        if uri is not None and str(uri).strip()
+    })
+    for uri in normalized:
+        db.add(StorageDeletionOutbox(storage_uri=uri))
+    if normalized:
+        db.flush()
+    return normalized
+
+
+def enqueue_dataset_storage_deletions(db: Session, dataset_id: str) -> list[str]:
+    """收集 DatasetVersion、媒体原件和 OCR 结果 URI 并写入同事务 outbox。"""
+    from app.models.v2.dataset import MediaItem
+
+    versions = db.query(DatasetVersion.id, DatasetVersion.storage_uri).filter(
+        DatasetVersion.dataset_id == dataset_id).all()
+    version_ids = [row.id for row in versions]
+    uris = [row.storage_uri for row in versions if row.storage_uri]
+    if version_ids:
+        media = db.query(MediaItem.storage_uri, MediaItem.ocr_result_uri).filter(
+            MediaItem.dataset_version_id.in_(version_ids)).all()
+        for row in media:
+            if row.storage_uri:
+                uris.append(row.storage_uri)
+            if row.ocr_result_uri:
+                uris.append(row.ocr_result_uri)
+    return enqueue_storage_deletions(db, uris)
+
+
+def _storage_uri_is_referenced(db: Session, storage_uri: str) -> bool:
+    """共享 URI 防护：只要还有任一资产元数据引用，就暂不物理删除。"""
+    from app.models.v2.dataset import MediaItem
+
+    if db.query(DatasetVersion.id).filter(
+            DatasetVersion.storage_uri == storage_uri).first() is not None:
+        return True
+    return db.query(MediaItem.id).filter(
+        (MediaItem.storage_uri == storage_uri)
+        | (MediaItem.ocr_result_uri == storage_uri)
+    ).first() is not None
+
+
+def drain_storage_deletion_outbox(
+    db: Session,
+    storage: StorageService | None = None,
+    *,
+    limit: int = 100,
+    strict_schema: bool = False,
+) -> dict[str, int]:
+    """机会式清理 outbox；任何单项失败都保留任务供后续重试。
+
+    对象删除成功后才删除 outbox 行。若此后的数据库提交失败，任务仍会回滚保留，
+    下次重试再次删除同一对象也安全。该函数是 best-effort 边界，不把存储故障传播
+    成已经提交的 Dataset 删除请求 5xx。
+    """
+    result = {"deleted": 0, "failed": 0, "deferred": 0}
+    try:
+        entries = db.query(StorageDeletionOutbox).order_by(
+            StorageDeletionOutbox.created_at, StorageDeletionOutbox.id
+        ).limit(max(1, min(int(limit), 1000))).all()
+    except Exception:
+        db.rollback()
+        if strict_schema:
+            raise
+        logger.exception("读取对象存储删除 outbox 失败")
+        result["failed"] += 1
+        return result
+    if not entries:
+        return result
+    storage = storage or get_storage_service()
+
+    for entry in entries:
+        storage_uri = entry.storage_uri
+        try:
+            if _storage_uri_is_referenced(db, storage_uri):
+                entry.last_error = "对象仍被资产元数据引用，已延后物理删除"
+                entry.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                result["deferred"] += 1
+                continue
+
+            try:
+                storage.delete_object(storage_uri)
+            except Exception as exc:
+                entry.attempts = int(entry.attempts or 0) + 1
+                entry.last_error = f"{type(exc).__name__}: {exc}"[:2000]
+                entry.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                result["failed"] += 1
+                logger.warning(
+                    "对象存储删除失败，已保留 outbox 任务（attempt=%s, uri=%s）",
+                    entry.attempts, storage_uri, exc_info=True)
+                continue
+
+            db.delete(entry)
+            db.commit()
+            result["deleted"] += 1
+        except Exception:
+            # 数据库提交失败时回滚；即使对象已经被删，outbox 任务仍在并可幂等重试。
+            db.rollback()
+            result["failed"] += 1
+            logger.exception("更新对象存储删除 outbox 状态失败（uri=%s）", storage_uri)
+    return result
+
+
 class DatasetService:
     def __init__(self, db: Session, storage: StorageService | None = None):
         self._db = db
         self._storage = storage or get_storage_service()
 
     def create_dataset(self, name: str, kind: str, connection_id: str | None = None,
-                       schema_json: dict | None = None) -> Dataset:
+                       schema_json: dict | None = None, *,
+                       source_resource: str | None = None,
+                       producer_pipeline_id: str | None = None,
+                       output_key: str | None = None,
+                       commit: bool = True) -> Dataset:
+        """创建数据集。
+
+        ``commit=False`` 仅供“数据集 + 首版本”原子创建路径使用：先 flush 取得
+        UUID，随后由 ``create_version`` 把数据集、版本、latest_version_id 和
+        schema 一次提交。默认行为保持兼容。
+        """
         ds = Dataset(name=name, kind=kind, source_connection_id=connection_id,
-                     schema_json=schema_json)
+                     source_resource=source_resource,
+                     schema_json=schema_json,
+                     producer_pipeline_id=producer_pipeline_id,
+                     output_key=output_key)
         self._db.add(ds)
-        self._db.commit()
-        self._db.refresh(ds)
+        if commit:
+            self._db.commit()
+            self._db.refresh(ds)
+        else:
+            self._db.flush()
         return ds
 
     def create_version(self, dataset_id: str, data: bytes, rowcount: int | None = None,
-                       *, _lock_held: bool = False) -> DatasetVersion:
+                       *, schema_json: dict | None = None,
+                       _lock_held: bool = False) -> DatasetVersion:
         """将数据存入对象存储并原子发布为 DatasetVersion。
 
         对象键使用预生成的 version UUID，而不是可竞争的 ``version_no``。旧实现
@@ -228,10 +397,12 @@ class DatasetService:
             guard = nullcontext()
 
         with guard:
-            return self._create_version_locked(dataset_id, data, rowcount=rowcount)
+            return self._create_version_locked(
+                dataset_id, data, rowcount=rowcount, schema_json=schema_json)
 
     def _create_version_locked(self, dataset_id: str, data: bytes,
-                               rowcount: int | None = None) -> DatasetVersion:
+                               rowcount: int | None = None,
+                               schema_json: dict | None = None) -> DatasetVersion:
         ds = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not ds:
             raise ValueError(f"Dataset {dataset_id} not found")
@@ -251,7 +422,13 @@ class DatasetService:
             # 另一个已提交版本的内容。
             version_id = str(uuid.uuid4())
             key = f"datasets/{dataset_id}/objects/{version_id}.bin"
-            uri = self._storage.put_bytes("raw-datasets", key, data)
+            try:
+                uri = self._storage.put_bytes("raw-datasets", key, data)
+            except Exception:
+                # 首版本允许 Dataset 与 Version 同事务创建；对象写失败时必须
+                # 回滚尚未提交的 Dataset，不能在湖里留下无版本空壳。
+                self._db.rollback()
+                raise
 
             ver = DatasetVersion(
                 id=version_id,
@@ -265,12 +442,27 @@ class DatasetService:
             try:
                 self._db.flush()
                 ds.latest_version_id = ver.id
+                # 版本内容与解释它的逻辑契约必须同一事务发布。否则消费者可能
+                # 看到新 version，却仍按旧 PK/类型/producer 元数据解释它。
+                if schema_json is not None:
+                    ds.schema_json = schema_json
                 self._db.commit()
                 break
             except IntegrityError:
                 self._db.rollback()
+                try:
+                    self._storage.delete_object(uri)
+                except Exception:
+                    logger.warning("清理未提交版本对象失败: %s", uri, exc_info=True)
                 if attempt == 2:
                     raise
+            except Exception:
+                self._db.rollback()
+                try:
+                    self._storage.delete_object(uri)
+                except Exception:
+                    logger.warning("清理未提交版本对象失败: %s", uri, exc_info=True)
+                raise
         self._db.refresh(ver)
         self._prune_versions_best_effort(dataset_id)
         return ver
@@ -331,15 +523,14 @@ class DatasetService:
             if v.id in media_ver_ids or v.id in reviewed_ver_ids:
                 continue
             if v.storage_uri:
-                try:
-                    self._storage.delete_object(v.storage_uri)
-                except Exception:
-                    logger.warning(f"删除版本对象失败，保留记录下次再试: {v.storage_uri}", exc_info=True)
-                    continue
+                # 元数据删除与 outbox 同事务；对象存储失败不再迫使版本元数据永远
+                # 留在湖里，也不会造成无追踪的对象泄漏。
+                enqueue_storage_deletions(self._db, [v.storage_uri])
             self._db.delete(v)
             removed += 1
         if removed:
             self._db.commit()
+            drain_storage_deletion_outbox(self._db, self._storage)
             logger.info(f"数据集 {dataset_id} 版本保留清理：删除 {removed} 个旧版本（保留最近 {keep} 个）")
 
     def get_dataset(self, dataset_id: str) -> Dataset | None:

@@ -453,6 +453,9 @@ class ToolRunner:
             service.require_orchestrable(self.db, rec, self.client)
             updated = self.client.update_workflow(rec.n8n_workflow_id, payload)
             rec.workflow_snapshot = N8nClient.sanitize_workflow(updated)
+            # 任何编排写入都会使此前“试跑输出 + 字段定义”发布凭证失效。
+            # 即便操作者把节点改回肉眼相同，n8n revision 也已经变化，必须重跑。
+            service.invalidate_validation_attestation(rec)
             if payload.get("name"):
                 rec.name = payload["name"]
         if description is not None:
@@ -472,47 +475,17 @@ class ToolRunner:
         issues: list[dict] = []
         nodes = workflow.get("nodes") or []
         connections = workflow.get("connections") or {}
-        names = {n.get("name") for n in nodes}
 
         summary = service.summarize_workflow(workflow)
-        if not nodes:
-            issues.append({"level": "error", "message": "工作流没有任何节点。"})
-        if not summary["webhook_path"]:
-            issues.append({
-                "level": "error",
-                "message": "缺少 Webhook 触发器：平台托管流水线必须由数据任务池经 Webhook 调度，无法发布。",
-            })
-
         try:
             _validate_connections([{"name": n.get("name")} for n in nodes], connections)
         except StewardError as e:
             issues.append({"level": "error", "message": str(e)})
-
-        # 非触发节点应有入边（孤儿节点通常是漏连线）
-        targets: set[str] = set()
-        for outs in connections.values():
-            for branch in (outs or {}).values():
-                for lane in branch or []:
-                    for t in lane or []:
-                        targets.add((t or {}).get("node"))
-        for n in nodes:
-            ntype = str(n.get("type", ""))
-            if ntype.startswith(service.TRIGGER_TYPE_PREFIXES):
-                continue
-            if n.get("name") not in targets:
-                issues.append({"level": "warning",
-                               "message": f"节点「{n.get('name')}」没有任何入边，可能漏了连线。"})
-
-        webhook_path = summary["webhook_path"]
-        if webhook_path:
-            wh = next(n for n in nodes if str(n.get("type")) == "n8n-nodes-base.webhook")
-            params = wh.get("parameters") or {}
-            if str(params.get("httpMethod", "GET")).upper() != "POST":
-                issues.append({"level": "warning",
-                               "message": "平台调度以 POST 触发 Webhook，建议 httpMethod 设为 POST。"})
-            if params.get("responseMode") not in ("lastNode", "responseNode"):
-                issues.append({"level": "warning",
-                               "message": "Webhook responseMode 建议设为 lastNode：平台触发后可直接取回末节点数据入湖。"})
+        managed_contract = None
+        try:
+            managed_contract = service.validate_managed_workflow_contract(workflow)
+        except StewardError as e:
+            issues.append({"level": "error", "message": str(e)})
 
         for n in nodes:
             if n.get("credentials"):
@@ -522,7 +495,8 @@ class ToolRunner:
 
         ok = not any(i["level"] == "error" for i in issues)
         self._touch(rec.id)
-        return {"ok": ok, "issues": issues, "summary": summary}
+        return {"ok": ok, "issues": issues, "summary": summary,
+                "managedContract": managed_contract}
 
     # ── 只读诊断（服务编排质量，无副作用） ────────────────────────────
 

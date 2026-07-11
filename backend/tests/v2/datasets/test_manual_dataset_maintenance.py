@@ -131,6 +131,21 @@ def test_upload_version_enforces_contract(api, auth_headers):
     assert ok.json()["version_no"] == 2
 
 
+def test_zero_row_upload_must_still_contain_declared_pk_header(api, auth_headers):
+    ds_id = _upload(api, auth_headers)
+    assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
+
+    bad = api.post(
+        f"/api/v2/datasets/{ds_id}/upload",
+        files={"file": ("empty.csv", io.BytesIO("名称,数量\n".encode()), "text/csv")},
+        headers=auth_headers,
+    )
+    assert bad.status_code == 400
+    assert "缺少主键列" in str(bad.json()["detail"])
+    versions = api.get(f"/api/v2/datasets/{ds_id}/versions", headers=auth_headers).json()
+    assert len(versions) == 1
+
+
 # ── 在线行编辑 ───────────────────────────────────────────────
 def test_edit_rows_update_insert_delete(api, auth_headers):
     ds_id = _upload(api, auth_headers)
@@ -192,6 +207,24 @@ def test_edit_rows_rejects_pk_violation(api, auth_headers):
     assert "重复" in str(r.json()["detail"])
     versions = api.get(f"/api/v2/datasets/{ds_id}/versions", headers=auth_headers).json()
     assert len(versions) == 1  # 坏编辑没有落盘
+
+
+def test_mapping_bound_dataset_rejects_primary_key_value_change(api, auth_headers, db):
+    ds_id = _upload(api, auth_headers)
+    assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
+    from app.models.v2.mapping import OntologyMapping
+    db.add(OntologyMapping(
+        ontology_id="ont-pk-lock", curated_dataset_id=ds_id,
+        entity_class="Item", field_mapping={"编号": "code"},
+    ))
+    db.commit()
+
+    response = api.post(f"/api/v2/datasets/{ds_id}/rows/edit", json={
+        "base_version_no": 1,
+        "updates": [{"key": {"编号": "A1"}, "values": {"编号": "A3"}}],
+    }, headers=auth_headers)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mapped_primary_key_rekey_forbidden"
 
 
 def test_edit_rows_rejects_sync_dataset(api, auth_headers, db):

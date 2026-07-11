@@ -331,10 +331,16 @@ def test_contract_pk_uses_field_keys():
 
 
 def test_apply_column_contract_renames_source_to_field_key():
-    rows = [{"username": "张三", "age": 20, "extra": "保留"}]
+    rows = [{"username": "张三", "age": 20}]
     out, warnings = apply_column_contract(rows, DEFS)
-    assert out == [{"user_name": "张三", "age": 20, "extra": "保留"}]
+    assert out == [{"user_name": "张三", "age": 20}]
     assert warnings == []
+
+
+def test_apply_column_contract_rejects_undeclared_output_column():
+    with pytest.raises(LakeGateError, match="未声明字段"):
+        apply_column_contract(
+            [{"username": "张三", "age": 20, "extra": "不可静默入湖"}], DEFS)
 
 
 def test_apply_column_contract_nullable_violation_hard_fails():
@@ -344,11 +350,10 @@ def test_apply_column_contract_nullable_violation_hard_fails():
     assert "不允许为空" in str(e.value)
 
 
-def test_apply_column_contract_type_mismatch_warns_not_blocks():
+def test_apply_column_contract_type_mismatch_blocks_published_contract():
     rows = [{"username": "张三", "age": "不是数字"}]
-    out, warnings = apply_column_contract(rows, DEFS)
-    assert out[0]["user_name"] == "张三"
-    assert any("age" in w and "integer" in w for w in warnings)
+    with pytest.raises(LakeGateError, match="age.*integer"):
+        apply_column_contract(rows, DEFS)
 
 
 def test_apply_column_contract_float_accepts_integer_values():

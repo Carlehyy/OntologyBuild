@@ -181,7 +181,7 @@ def _merge_properties(existing: list[dict], incoming: list[dict]) -> list[dict]:
 
 
 def _build_object_type_properties(
-    entities: list[dict], pk_field: str, property_mappings: list[dict] | None,
+    entities: list[dict], pk_field: str | list[str], property_mappings: list[dict] | None,
     binding_context: dict | None = None,
 ) -> tuple[list[dict], str]:
     """
@@ -205,10 +205,24 @@ def _build_object_type_properties(
         if prop_name:
             meta_by_name[prop_name] = pm
 
+    pk_fields = ([str(item) for item in pk_field if str(item)]
+                 if isinstance(pk_field, list)
+                 else [part.strip() for part in str(pk_field or "").split(",")
+                       if part.strip()])
+    pk_rank = {name: index + 1 for index, name in enumerate(pk_fields)}
+    synthetic_composite = (
+        "__composite_identity__" if len(pk_fields) > 1
+        and "__composite_identity__" in samples else None)
+    storage_pk_fields = [synthetic_composite] if synthetic_composite else pk_fields
     properties: list[dict] = []
     pk_prop_id = ""
-    # 确保主键字段优先出现
-    ordered_keys = sorted(samples.keys(), key=lambda k: (k != pk_field, k))
+    # 确保复合主键各分量按契约顺序优先出现
+    ordered_keys = sorted(
+        samples.keys(),
+        key=lambda k: (
+            (0, 0) if k == synthetic_composite
+            else (1, pk_rank[k]) if k in pk_rank
+            else (2, str(k))))
     for key in ordered_keys:
         pid = f"prop_{re.sub(r'[^A-Za-z0-9_]', '_', str(key))}"
         meta = meta_by_name.get(key, {})
@@ -220,17 +234,27 @@ def _build_object_type_properties(
             "name": str(key),
             "displayName": meta.get("display_name") or meta.get("displayName") or str(key),
             "type": ptype,
-            "required": bool(key == pk_field),
+            "required": bool(key in pk_rank or key in storage_pk_fields),
             "source": "stored",
             "dataBinding": _property_data_binding(str(key), meta, binding_context),
         }
+        if key in pk_rank:
+            prop["primaryKeyPart"] = pk_rank[key]
+        if key == synthetic_composite:
+            prop["technical"] = True
+            prop["identityComponents"] = pk_fields
         properties.append(prop)
-        if key == pk_field:
+        if key in storage_pk_fields and not pk_prop_id:
             pk_prop_id = pid
 
-    # 若无法确定主键属性（常见于源主键被落地为系统 id 而非业务属性），
-    # 优先挑选语义上像标识符的属性（id/code/编号/name/title），否则回退首个。
-    if not pk_prop_id and properties:
+    found_components = {p["name"] for p in properties if p.get("primaryKeyPart")}
+    if pk_fields and found_components != set(pk_fields):
+        missing = [field for field in pk_fields if field not in found_components]
+        raise ValueError(f"正规本体投影缺少主键属性：{missing}")
+
+    # 仅在没有上游身份契约时提供旧数据兼容推断；有契约却找不到列必须失败，
+    # 不能悄悄把第一列变成另一套实例身份。
+    if not pk_fields and not pk_prop_id and properties:
         _id_keywords = ("id", "code", "key", "编号", "编码", "no", "number")
         _name_keywords = ("name", "title", "名称", "标题")
         def _rank(p: dict) -> int:
@@ -338,10 +362,17 @@ def project_to_formal_ontology(
         ent_props_list = [dict(e.properties or {}) for e in ent_list]
         meta = class_meta.get(ec, {})
         # property_mappings 里的 property 名是落地后的属性键
-        pk_field = meta.get("pk_col")
-        # pk_col 是源列名，落地后属性键可能不同；优先用 property 名里的 pk
+        pk_source_fields = [part.strip() for part in str(
+            meta.get("pk_col") or "").split(",") if part.strip()]
+        source_to_property = {
+            str(item.get("column")): str(item.get("property") or item.get("column"))
+            for item in (meta.get("property_mappings") or [])
+            if isinstance(item, dict) and item.get("column")
+        }
+        # pk_col 是源列名，Entity 中使用的是 field mapping 后的属性名。
+        pk_fields = [source_to_property.get(field, field) for field in pk_source_fields]
         data_props, pk_prop_id = _build_object_type_properties(
-            ent_props_list, pk_field or "", meta.get("property_mappings"),
+            ent_props_list, pk_fields, meta.get("property_mappings"),
             meta.get("binding_context"),
         )
         pk_name_from_data = next((p["name"] for p in data_props if p["id"] == pk_prop_id), None)
@@ -386,6 +417,15 @@ def project_to_formal_ontology(
                 merged = list(existing_ot.properties or [])
             else:
                 merged = _merge_properties(existing_ot.properties or [], data_props)
+            merged = [dict(prop) for prop in merged]
+            # Existing hand-authored property metadata remains authoritative,
+            # except that every canonical composite-key component must be
+            # non-null and visibly marked in the final type contract.
+            pk_rank = {name: index + 1 for index, name in enumerate(pk_fields)}
+            for prop in merged:
+                if prop.get("name") in pk_rank:
+                    prop["required"] = True
+                    prop["primaryKeyPart"] = pk_rank[prop["name"]]
             if merged != (existing_ot.properties or []):
                 existing_ot.properties = merged
             existing_ot.display_name = existing_ot.display_name or ec

@@ -14,6 +14,15 @@ from app.models.v2.pipeline import Pipeline
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
+_RETIRED_DETAIL = (
+    "旧版 DataSyncTask 已停用。请先发布并启用 n8n 流水线，"
+    "再到数据任务池创建 PipelineTask；存量任务仅保留只读审计。"
+)
+
+
+def _reject_retired_write() -> None:
+    raise HTTPException(status_code=410, detail=_RETIRED_DETAIL)
+
 
 class SyncTaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
@@ -201,6 +210,7 @@ def preview_source_table(conn_id: str, table: str, db: Session = Depends(get_db)
 
 @router.post("", status_code=201)
 def create_task(body: SyncTaskCreate, db: Session = Depends(get_db)):
+    _reject_retired_write()
     _validate_task(db, body, is_create=True)
     task = DataSyncTask(
         id=str(uuid.uuid4()),
@@ -276,6 +286,7 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
 
 @router.put("/{task_id}")
 def update_task(task_id: str, body: SyncTaskUpdate, db: Session = Depends(get_db)):
+    _reject_retired_write()
     task = db.query(DataSyncTask).filter(DataSyncTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "SyncTask not found")
@@ -302,6 +313,8 @@ def delete_task(task_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{task_id}/toggle")
 def toggle_task(task_id: str, enabled: bool, db: Session = Depends(get_db)):
+    if enabled:
+        _reject_retired_write()
     task = db.query(DataSyncTask).filter(DataSyncTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "SyncTask not found")
@@ -319,6 +332,7 @@ def trigger_task(
     sync: bool = False,
     db: Session = Depends(get_db),
 ):
+    _reject_retired_write()
     task = db.query(DataSyncTask).filter(DataSyncTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "SyncTask not found")

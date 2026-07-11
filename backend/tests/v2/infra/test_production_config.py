@@ -6,7 +6,10 @@ import shutil
 import stat
 import subprocess
 
+import pytest
+
 from app.shared.config import Settings, production_config_errors
+from app.settings.workflows.n8n_client import enforce_n8n_url_policy
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -48,6 +51,41 @@ def test_wildcard_cors_remains_blocked_but_empty_is_same_origin():
     errors = production_config_errors(
         _production_settings(cors_allowed_origins="*"))
     assert "CORS_ALLOWED_ORIGINS" in errors
+
+
+def test_public_plain_http_n8n_is_rejected_in_production():
+    with pytest.raises(ValueError, match="必须使用 HTTPS"):
+        enforce_n8n_url_policy(
+            "http://n8n.example.com:5678/api/v1", environment="production")
+
+
+def test_private_http_and_public_https_n8n_are_allowed_in_production():
+    assert enforce_n8n_url_policy(
+        "http://10.0.0.8:5678", environment="production"
+    ) == "http://10.0.0.8:5678/api/v1"
+    assert enforce_n8n_url_policy(
+        "https://n8n.example.com/api/v1", environment="production"
+    ) == "https://n8n.example.com/api/v1"
+
+
+def test_n8n_global_config_test_requires_admin(client, editor_user):
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "editor", "password": "editor123"},
+    )
+    token = login.json()["data"]["access_token"]
+    response = client.post(
+        "/api/v1/settings/workflow-config/test",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "enabled": True,
+            "api_url": "http://127.0.0.1:5678/api/v1",
+            "api_key": "not-sent-because-authz-runs-first",
+            "timeout_seconds": 1,
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin required"
 
 
 def test_secret_key_derived_encryption_remains_decryptable(monkeypatch):

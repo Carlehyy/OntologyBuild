@@ -6,6 +6,12 @@ export interface CuratedDataset {
   status: string
   row_count: number | null
   quality_score: number | null
+  /** 资产湖固化的主键契约；复合主键以逗号分隔，空串表示未声明。 */
+  primary_key: string
+  /** 数据库约束的稳定产物身份；legacy 资产可能为空。 */
+  producer_pipeline_id: string | null
+  output_key: string | null
+  has_review_evidence: boolean
 }
 
 export interface CuratedPreview {
@@ -27,6 +33,9 @@ export interface ReviewDiffView {
   dataset_version_id?: string | null
   total: number
   rows: Record<string, unknown>[]
+  offset: number
+  limit: number
+  has_more: boolean
 }
 
 export interface ReviewDelta {
@@ -68,9 +77,9 @@ const curatedApi = {
   preview: (id: string, limit = 200) =>
     apiClientV2.get<CuratedPreview>(`/curated/${id}/preview?limit=${limit}`),
   /** 审批三视角：变化量 / 上一版全量 / 本次全量 */
-  reviewDiff: (id: string, limit = 500, reviewId?: string) =>
+  reviewDiff: (id: string, limit = 200, offset = 0, reviewId?: string) =>
     apiClientV2.get<ReviewDiff>(`/curated/${id}/review-diff`, {
-      params: { limit, ...(reviewId ? { review_id: reviewId } : {}) },
+      params: { limit, offset, ...(reviewId ? { review_id: reviewId } : {}) },
     }),
   quality: (id: string) => apiClientV2.get(`/curated/${id}/quality`),
 
@@ -81,8 +90,7 @@ const curatedApi = {
     apiClientV2.post(`/curated/${id}/review?action=reject&notes=${encodeURIComponent(notes)}`),
 
   /** Delete a curated dataset (admin only; approved datasets are blocked) */
-  delete: (id: string, force = false) =>
-    apiClientV2.delete(`/curated/${id}${force ? '?force=true' : ''}`),
+  delete: (id: string) => apiClientV2.delete(`/curated/${id}`),
 
   /** Start a review session for row-level edits */
   startReview: (id: string) =>

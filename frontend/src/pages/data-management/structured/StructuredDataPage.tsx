@@ -24,6 +24,7 @@ interface Row {
   curatedStatus: string
   rowCount: number | null
   quality: number | null
+  hasReviewEvidence: boolean
 }
 
 const STATUS_ICON = (status: string) => {
@@ -51,6 +52,9 @@ const STATUS_STYLE: Record<string, string> = {
 type LakeTab = 'curated' | 'raw'
 
 const isPendingReview = (status: string) => status === 'pending_review' || status === 'pending' || status === 'in_review'
+const ASSET_CHANGED_EVENT = 'ontoprompt:data-assets-changed'
+
+const notifyAssetChanged = () => window.dispatchEvent(new Event(ASSET_CHANGED_EVENT))
 
 function errorText(error: unknown, fallback: string): string {
   if (!error || typeof error !== 'object') return fallback
@@ -109,12 +113,24 @@ function AssetInsightStrip() {
   const [metrics, setMetrics] = useState<Array<{ label: string; value: string; note: string }> | null>(null)
 
   useEffect(() => {
+    const refresh = () => {
+      setLoading(true)
+      setError('')
+      setRetryToken(token => token + 1)
+    }
+    window.addEventListener(ASSET_CHANGED_EVENT, refresh)
+    return () => window.removeEventListener(ASSET_CHANGED_EVENT, refresh)
+  }, [])
+
+  useEffect(() => {
     let alive = true
     Promise.all([curatedApi.list(), datasetsApi.overview()])
       .then(([curatedResult, rawResult]) => {
         if (!alive) return
         const curatedItems = Array.isArray(curatedResult) ? curatedResult : []
         const rawItems = Array.isArray(rawResult?.items) ? rawResult.items : []
+        const manualItems = rawItems.filter(item => item.source === 'upload' || item.source === 'manual')
+        const legacySyncCount = rawItems.filter(item => item.source === 'sync').length
         const scored = curatedItems
           .map(item => item.quality_score)
           .filter((score): score is number => typeof score === 'number' && Number.isFinite(score))
@@ -122,11 +138,11 @@ function AssetInsightStrip() {
           ? `${Math.round((scored.reduce((sum, score) => sum + score, 0) / scored.length) * 100)}%`
           : '—'
         setMetrics([
-          { label: '数据集总数', value: String(curatedItems.length + rawItems.length), note: `成品 ${curatedItems.length} · 人工 ${rawItems.length}` },
+          { label: '数据集总数', value: String(curatedItems.length + rawItems.length), note: `成品 ${curatedItems.length} · 人工 ${manualItems.length}${legacySyncCount ? ` · 历史同步 ${legacySyncCount}` : ''}` },
           { label: '待审核', value: String(curatedItems.filter(item => isPendingReview(item.status)).length), note: '需要人工确认的成品数据集' },
           { label: '平均质量分', value: avgQuality, note: scored.length ? `基于 ${scored.length} 个已评分成品` : '暂无已评分成品' },
-          { label: '人工数据集', value: String(rawItems.length), note: '文件上传或在线维护' },
-          { label: '已声明主键', value: String(rawItems.filter(item => Boolean(item.primary_key)).length), note: '具备主键契约的人工数据集' },
+          { label: '人工数据集', value: String(manualItems.length), note: '文件上传或在线维护' },
+          { label: '已声明主键', value: String(manualItems.filter(item => Boolean(item.primary_key)).length), note: '具备主键契约的人工数据集' },
         ])
       })
       .catch(error => {
@@ -318,20 +334,21 @@ function CuratedView() {
       pipelineId: pl?.id ?? '', pipelineName: pl?.name ?? '—', domain: pl?.domain || '通用',
       curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
       rowCount: c.row_count ?? null, quality: c.quality_score ?? null,
+      hasReviewEvidence: Boolean(c.has_review_evidence),
     })
 
     const curatedById = new Map(curated.map(c => [c.id, c]))
+    pipelines.forEach(pl => {
+      curated.filter(c => !claimed.has(c.id) && c.producer_pipeline_id === pl.id).forEach(c => {
+        claimed.add(c.id); pushRow(c, pl)
+      })
+    })
+    // legacy 资产只接受流水线明确保存的 target id 绑定，名称不再作为身份。
     pipelines.forEach(pl => {
       const ids: string[] = pl.target_curated_ids ?? []
       ids.forEach(cid => {
         const c = curatedById.get(cid)
         if (c && !claimed.has(c.id)) { claimed.add(c.id); pushRow(c, pl) }
-      })
-    })
-    // 名称前缀兜底匹配（旧数据无 target_curated_ids）
-    pipelines.forEach(pl => {
-      curated.filter(c => !claimed.has(c.id) && c.name.startsWith(pl.name)).forEach(c => {
-        claimed.add(c.id); pushRow(c, pl)
       })
     })
     // 无来源流水线的孤儿产物也要可见可管理
@@ -385,12 +402,14 @@ function CuratedView() {
   const handleStatusChange = (id: string, newStatus: string) => {
     setCurated(prev => prev.map(c => c.id === id ? { ...c, status: newStatus } : c))
     if (panelRow?.curatedId === id) setPanelRow(r => r ? { ...r, curatedStatus: newStatus } : r)
+    notifyAssetChanged()
   }
 
   const handleDeleted = (id: string) => {
     setCurated(prev => prev.filter(c => c.id !== id))
     setPanelRow(null)
     setDeleteRow(null)
+    notifyAssetChanged()
   }
 
   const handleQuickApprove = async (e: MouseEvent, row: Row) => {
@@ -399,8 +418,13 @@ function CuratedView() {
     setApprovingId(row.curatedId)
     setActionError('')
     try {
-      await curatedApi.approve(row.curatedId)
+      const result = await curatedApi.approve(row.curatedId) as {
+        mapping_dispatch?: { status?: string; error?: string }
+      }
       handleStatusChange(row.curatedId, 'approved')
+      if (result?.mapping_dispatch?.status === 'failed') {
+        setActionError(result.mapping_dispatch.error || '数据已批准，但自动灌入本体失败，请检查映射任务。')
+      }
     } catch (error) {
       setActionError(`批准失败：${errorText(error, '请稍后重试')}`)
     } finally { setApprovingId(null) }
@@ -609,7 +633,7 @@ function CuratedView() {
                       )}
 
                       {/* 删除 — 待审核 / 已拒绝 */}
-                      {row.curatedId && (isPendingReview(row.curatedStatus) || row.curatedStatus === 'rejected') && (
+                      {row.curatedId && !row.hasReviewEvidence && (isPendingReview(row.curatedStatus) || row.curatedStatus === 'rejected') && (
                         <button
                           onClick={() => setDeleteRow(row)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
@@ -642,6 +666,7 @@ function CuratedView() {
       {/* 详情面板 */}
       {panelRow && (
         <CuratedDetailPanel
+          key={panelRow.curatedId}
           datasetId={panelRow.curatedId}
           datasetName={panelRow.curatedName}
           datasetStatus={panelRow.curatedStatus}

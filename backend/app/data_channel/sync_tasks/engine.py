@@ -304,10 +304,18 @@ def _run_pipeline_if_configured(db: Session, task: DataSyncTask) -> None:
 
 
 def execute_sync_task(task_id: str, trigger_type: str = "MANUAL") -> dict:
-    """
-    执行一个同步任务。
-    Returns: {"status": "ok"|"error", "task_id", "history_id", ...}
-    """
+    """拒绝执行已退休的旧同步任务，不触碰数据库、数据源或资产湖。"""
+    return {
+        "status": "error",
+        "task_id": task_id,
+        "error": (
+            "旧版 DataSyncTask 已停用；请使用已发布 n8n 流水线的数据任务池"
+        ),
+    }
+
+
+def _execute_sync_task_legacy(task_id: str, trigger_type: str = "MANUAL") -> dict:
+    """仅保留旧实现供代码审计；任何产品入口都不得调用。"""
     from app.database import SessionLocal
 
     db = SessionLocal()

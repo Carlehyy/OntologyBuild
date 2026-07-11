@@ -12,6 +12,7 @@ from app.data_channel.pipeline_tasks.router import (
     stats_overview,
     toggle_task,
 )
+from app.data_channel.pipeline_tasks.engine import _claim_task, _release_claim
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
 
@@ -129,3 +130,232 @@ def test_task_cannot_be_enabled_while_pipeline_is_disabled(db, monkeypatch):
 
     with pytest.raises(HTTPException, match="不能启用"):
         toggle_task(task["id"], True, db)
+
+
+def test_invalid_cron_is_rejected_before_task_is_saved(db):
+    _published_pipeline(db)
+
+    with pytest.raises(HTTPException, match="cron 表达式无效"):
+        _validate(db, _body(schedule_type="CRON", cron_expression="99 * * * *"))
+
+
+def test_task_claim_is_atomic_and_expired_lease_can_recover(db, monkeypatch):
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    created = create_task(_body(write_mode="overwrite"), db)
+
+    first, token, error = _claim_task(db, created["id"])
+    assert first is not None and token and error is None
+    second, second_token, error = _claim_task(db, created["id"])
+    assert second is None and second_token is None and error == "任务正在执行中"
+
+    first.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    db.commit()
+    recovered, recovered_token, error = _claim_task(db, created["id"])
+    assert recovered is not None and recovered_token != token and error is None
+    assert _release_claim(db, first, token, status="success") is False
+    assert _release_claim(db, recovered, recovered_token, status="success") is True
+
+
+def test_task_execution_materializes_pipeline_id_before_session_close(
+    db, monkeypatch,
+):
+    """默认 expire_on_commit 会过期 ORM；执行边界不能携带 detached task。"""
+    from sqlalchemy.orm import sessionmaker
+    from app.data_channel.pipeline_tasks import engine as task_engine
+    from app.tasks.v2.pipeline_run import pipeline_run_task
+
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    created = create_task(_body(write_mode="overwrite"), db)
+    runtime_session = sessionmaker(bind=db.get_bind(), expire_on_commit=True)
+    monkeypatch.setattr("app.database.SessionLocal", runtime_session)
+
+    calls = []
+
+    def fake_pipeline_run(pipeline_id, run_id, write_opts):
+        calls.append((pipeline_id, run_id, write_opts))
+        run_db = runtime_session()
+        try:
+            run = run_db.query(PipelineRun).filter(PipelineRun.id == run_id).one()
+            run.status = "success"
+            run.stats = {**(run.stats or {}), "lake_rows": 2, "rows_out": 2}
+            run_db.commit()
+        finally:
+            run_db.close()
+
+    monkeypatch.setattr(pipeline_run_task, "run", fake_pipeline_run)
+
+    result = task_engine.execute_pipeline_task(created["id"])
+
+    assert result["status"] == "ok"
+    assert result["lake_rows"] == 2
+    assert calls[0][0] == "pipe-contract"
+    assert calls[0][2]["primary_key"] == "order_id"
+
+
+def _prepare_fault_injection_runtime(db, monkeypatch):
+    """让执行引擎使用可注入故障的独立 Session。"""
+    from sqlalchemy.orm import sessionmaker
+
+    runtime_factory = sessionmaker(bind=db.get_bind(), expire_on_commit=True)
+    runtime_db = runtime_factory()
+    monkeypatch.setattr("app.database.SessionLocal", lambda: runtime_db)
+    return runtime_factory, runtime_db
+
+
+def _assert_initialization_failed(db, task_id: str, expected_error: str):
+    db.expire_all()
+    task = db.query(PipelineTask).filter(PipelineTask.id == task_id).one()
+    assert task.status == "failed"
+    assert task.execution_token is None
+    assert task.lease_expires_at is None
+    assert task.last_run_at is not None
+    assert expected_error in task.last_error
+
+
+def test_pipeline_run_insert_exception_releases_task_claim(db, monkeypatch):
+    """数据库 INSERT/flush 失败时不能留下 6 小时 running lease。"""
+    from sqlalchemy import event
+    from app.data_channel.pipeline_tasks import engine as task_engine
+
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    created = create_task(_body(write_mode="overwrite"), db)
+    _prepare_fault_injection_runtime(db, monkeypatch)
+
+    def fail_run_insert(_mapper, _connection, _target):
+        raise RuntimeError("insert hook unavailable")
+
+    event.listen(PipelineRun, "before_insert", fail_run_insert)
+    try:
+        result = task_engine.execute_pipeline_task(created["id"])
+    finally:
+        event.remove(PipelineRun, "before_insert", fail_run_insert)
+
+    assert result["status"] == "error"
+    assert "insert hook unavailable" in result["error"]
+    _assert_initialization_failed(db, created["id"], "insert hook unavailable")
+    assert db.query(PipelineRun).filter(PipelineRun.task_id == created["id"]).count() == 0
+
+
+def test_pipeline_run_commit_exception_releases_task_claim(db, monkeypatch):
+    """claim 提交成功、run 提交失败时，清理事务仍应把任务记为 failed。"""
+    from app.data_channel.pipeline_tasks import engine as task_engine
+
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    created = create_task(_body(write_mode="overwrite"), db)
+    _, runtime_db = _prepare_fault_injection_runtime(db, monkeypatch)
+    real_commit = runtime_db.commit
+    commit_calls = 0
+
+    def fail_second_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            raise RuntimeError("run commit unavailable")
+        return real_commit()
+
+    monkeypatch.setattr(runtime_db, "commit", fail_second_commit)
+
+    result = task_engine.execute_pipeline_task(created["id"])
+
+    assert result["status"] == "error"
+    assert commit_calls == 3  # claim、失败的 run commit、claim 清理
+    _assert_initialization_failed(db, created["id"], "run commit unavailable")
+    assert db.query(PipelineRun).filter(PipelineRun.task_id == created["id"]).count() == 0
+
+
+def test_pipeline_run_refresh_exception_marks_run_and_task_failed(db, monkeypatch):
+    """run 已提交但 refresh 失败时，不能留下 pending run 或 running task。"""
+    from app.data_channel.pipeline_tasks import engine as task_engine
+
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    created = create_task(_body(write_mode="overwrite"), db)
+    _, runtime_db = _prepare_fault_injection_runtime(db, monkeypatch)
+    real_refresh = runtime_db.refresh
+
+    def fail_run_refresh(instance, *args, **kwargs):
+        if isinstance(instance, PipelineRun):
+            raise RuntimeError("run refresh unavailable")
+        return real_refresh(instance, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_db, "refresh", fail_run_refresh)
+
+    result = task_engine.execute_pipeline_task(created["id"])
+
+    assert result["status"] == "error"
+    _assert_initialization_failed(db, created["id"], "run refresh unavailable")
+    run = db.query(PipelineRun).filter(PipelineRun.task_id == created["id"]).one()
+    assert run.status == "failed"
+    assert run.finished_at is not None
+    assert "run refresh unavailable" in run.error_log
+
+
+def test_initialization_failure_does_not_release_replacement_token(db, monkeypatch):
+    """旧执行初始化失败时，只能标记自己的 run，不能释放恢复执行的 claim。"""
+    from app.data_channel.pipeline_tasks import engine as task_engine
+
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    created = create_task(_body(write_mode="overwrite"), db)
+    runtime_factory, runtime_db = _prepare_fault_injection_runtime(db, monkeypatch)
+    real_refresh = runtime_db.refresh
+    replacement_token = None
+
+    def replace_claim_then_fail_refresh(instance, *args, **kwargs):
+        nonlocal replacement_token
+        if not isinstance(instance, PipelineRun):
+            return real_refresh(instance, *args, **kwargs)
+
+        takeover_db = runtime_factory()
+        try:
+            takeover_db.query(PipelineTask).filter(
+                PipelineTask.id == created["id"],
+            ).update({
+                PipelineTask.lease_expires_at: datetime.utcnow() - timedelta(seconds=1),
+            }, synchronize_session=False)
+            takeover_db.commit()
+            replacement, replacement_token, error = _claim_task(
+                takeover_db, created["id"],
+            )
+            assert replacement is not None and error is None
+        finally:
+            takeover_db.close()
+        raise RuntimeError("refresh failed after lease takeover")
+
+    monkeypatch.setattr(runtime_db, "refresh", replace_claim_then_fail_refresh)
+
+    result = task_engine.execute_pipeline_task(created["id"])
+
+    assert result["status"] == "error"
+    db.expire_all()
+    task = db.query(PipelineTask).filter(PipelineTask.id == created["id"]).one()
+    assert replacement_token
+    assert task.status == "running"
+    assert task.execution_token == replacement_token
+    assert task.lease_expires_at > datetime.utcnow()
+    assert task.last_error == ""
+    run = db.query(PipelineRun).filter(PipelineRun.task_id == created["id"]).one()
+    assert run.status == "failed"
+    assert "refresh failed after lease takeover" in run.error_log

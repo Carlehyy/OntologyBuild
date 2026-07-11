@@ -94,6 +94,11 @@ def _validate(db: Session, body, existing: PipelineTask | None = None) -> tuple[
             raise HTTPException(400, "CRON 调度必须填写 cron 表达式")
         if len(expr.split()) != 5:
             raise HTTPException(400, "cron 表达式须为 5 段格式：分 时 日 月 周")
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            CronTrigger.from_crontab(expr)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"cron 表达式无效：{exc}") from exc
     elif schedule_type == "INTERVAL":
         iv = g("interval_seconds")
         if not iv or iv < 10:
@@ -472,7 +477,10 @@ def trigger_task(
     if not task:
         raise HTTPException(404, "PipelineTask not found")
     if task.status == "running":
-        raise HTTPException(409, "任务正在执行中，请稍后再试")
+        # 这里只做快速反馈；真正的并发边界在执行引擎的数据库原子租约。
+        # 过期租约允许引擎恢复，不能被页面层的陈旧状态永久拦住。
+        if task.lease_expires_at is None or task.lease_expires_at > datetime.utcnow():
+            raise HTTPException(409, "任务正在执行中，请稍后再试")
     from app.data_channel.pipeline_tasks.engine import execute_pipeline_task
 
     if sync:

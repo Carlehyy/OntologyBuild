@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+import ipaddress
+import re
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -166,16 +169,51 @@ class N8nClient:
         return base[: -len("/api/v1")] if base.endswith("/api/v1") else base
 
     def trigger_webhook(self, webhook_path: str, payload: Any = None,
-                        timeout_seconds: Optional[float] = None) -> tuple[int, Any]:
-        """POST 生产 webhook（仅激活的工作流会响应）。返回 (status_code, body)。"""
+                        timeout_seconds: Optional[float] = None,
+                        headers: Optional[dict[str, str]] = None) -> tuple[int, Any]:
+        """POST 生产 webhook（仅激活的工作流会响应）。返回 (status_code, body)。
+
+        ``headers`` 为未来受控的 Header/JWT 认证预留；默认不发送任何平台
+        自造签名。没有持久化凭据/密钥时，绝不能用固定字符串伪称 HMAC。
+        """
         url = f"{self.instance_root}/webhook/{webhook_path.lstrip('/')}"
+        safe_headers = self.sanitize_webhook_headers(headers)
         with httpx.Client(timeout=timeout_seconds or float(self.timeout_seconds)) as client:
-            resp = client.post(url, json=payload if payload is not None else {})
+            resp = client.post(
+                url,
+                json=payload if payload is not None else {},
+                headers=safe_headers or None,
+            )
         try:
             body = resp.json()
         except ValueError:
             body = resp.text
         return resp.status_code, body
+
+    @staticmethod
+    def sanitize_webhook_headers(headers: Optional[dict[str, str]]) -> dict[str, str]:
+        """Validate optional outbound webhook headers against request smuggling/leaks."""
+        if not headers:
+            return {}
+        if not isinstance(headers, dict):
+            raise ValueError("webhook headers must be a string mapping")
+        token = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+        forbidden = {
+            "host", "content-length", "transfer-encoding", "connection",
+            "cookie", "x-n8n-api-key",
+        }
+        out: dict[str, str] = {}
+        for raw_name, raw_value in headers.items():
+            if not isinstance(raw_name, str) or not isinstance(raw_value, str):
+                raise ValueError("webhook header names and values must be strings")
+            name = raw_name.strip()
+            value = raw_value.strip()
+            if not name or not token.fullmatch(name) or name.lower() in forbidden:
+                raise ValueError(f"unsafe webhook header: {raw_name!r}")
+            if "\r" in value or "\n" in value:
+                raise ValueError(f"unsafe webhook header value: {name}")
+            out[name] = value
+        return out
 
     def test_connection(self) -> N8nConnectionResult:
         data = self.get("/workflows", params={"limit": 1})
@@ -202,6 +240,38 @@ def normalize_n8n_api_base(raw: str) -> str:
     if not url.endswith("/api/v1"):
         url = f"{url}/api/v1"
     return url
+
+
+def enforce_n8n_url_policy(raw: str, *, environment: str = "development") -> str:
+    """规范并校验 n8n 地址，阻断危险 URL 与生产公网明文凭据传输。
+
+    n8n API Key 位于请求 Header；生产环境若向公网 ``http://`` 发送，任何链路
+    监听者都可取得完整管理密钥。内网/loopback HTTP 允许用于同机或受控网络，
+    公网实例必须使用 HTTPS。
+    """
+    api_base = normalize_n8n_api_base(raw)
+    if not api_base:
+        raise ValueError("n8n API URL is required")
+    parsed = urlsplit(api_base)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("n8n API URL must use http or https")
+    if parsed.username or parsed.password:
+        raise ValueError("n8n API URL must not contain embedded credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("n8n API URL must not contain query parameters or fragments")
+
+    if environment == "production" and parsed.scheme != "https":
+        host = parsed.hostname.lower()
+        is_private = host in {"localhost", "host.docker.internal"}
+        try:
+            ip = ipaddress.ip_address(host)
+            is_private = ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            # 普通域名无法可靠证明解析后一直是内网，因此生产明文一律拒绝。
+            pass
+        if not is_private:
+            raise ValueError("生产环境的公网 n8n 地址必须使用 HTTPS，避免 API Key 明文传输")
+    return api_base
 
 
 def test_n8n_connection(api_url: str, api_key: str, timeout_seconds: int = 10) -> N8nConnectionResult:

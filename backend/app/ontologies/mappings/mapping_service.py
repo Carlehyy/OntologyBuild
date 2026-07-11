@@ -83,7 +83,9 @@ class MappingService:
         field_mapping = dict(field_mapping or {})
         if primary_key_column and "__primary_key__" not in field_mapping:
             field_mapping["__primary_key__"] = primary_key_column
-            field_mapping["__pk_source__"] = "mapping"  # 用户在映射里显式指定
+            # API callers can only pass the Dataset.schema_json contract.  This
+            # argument is not an independent identity definition.
+            field_mapping["__pk_source__"] = "lake"
         mapping = OntologyMapping(
             ontology_id=ontology_id, curated_dataset_id=curated_dataset_id,
             entity_class=entity_class, field_mapping=field_mapping,
@@ -239,7 +241,9 @@ class MappingService:
                 "rows": data,
                 "entity_id_map": {
                     self._row_identity_value(row, pk_col):
-                        self._stable_row_id(mapping, row, pk_col if pk_col in row else None)
+                        self._stable_row_id(
+                            mapping, row,
+                            pk_col if self._has_complete_pk(row, pk_col) else None)
                     for row in data
                 },
                 "columns": list(data[0].keys()) if data else [],
@@ -369,7 +373,8 @@ class MappingService:
 
             pk_col = (m.field_mapping or {}).get("__primary_key__") or self._choose_pk_col(rows)
             entity_id_map = {
-                self._row_identity_value(row, pk_col): self._stable_row_id(m, row, pk_col if pk_col in row else None)
+                self._row_identity_value(row, pk_col): self._stable_row_id(
+                    m, row, pk_col if self._has_complete_pk(row, pk_col) else None)
                 for row in rows
             }
             dataset_name = None
@@ -930,30 +935,88 @@ class MappingService:
             return
         sample = rows[0]
         field_map = dict(mapping.field_mapping or {})
+        ignored_fields = {
+            str(item) for item in (field_map.get("__ignored_fields__") or [])
+        }
+        targets = [
+            str(value) for key, value in field_map.items()
+            if not str(key).startswith("__") and str(key) not in ignored_fields
+        ]
+        duplicate_targets = sorted({
+            value for value in targets if targets.count(value) > 1
+        })
+        if duplicate_targets:
+            raise MappingSourceError(
+                "历史字段映射存在多个源列写入同一目标属性，已阻断静默覆盖："
+                + "、".join(duplicate_targets))
         for col in sample.keys():
             if col == "content":
                 continue
-            if col not in field_map:
+            if col not in field_map and col not in ignored_fields:
                 field_map[col] = col
+        # Entity.id/name/source_id are runtime-owned fields.  Mapping a business
+        # column onto one of them used to overwrite the value and then made the
+        # Formal layer guess another primary key.  Preserve the business value
+        # under an explicit, non-reserved property instead.
+        reserved_outputs = {
+            "id", "ontology_id", "source_id", "object_type",
+            "source_row_count", "name", "name_cn", "name_en",
+            "display_name", "__mapping_ids__",
+        }
+        occupied = {
+            str(prop) for source, prop in field_map.items()
+            if not str(source).startswith("__") and str(prop) not in reserved_outputs
+        }
+        for col in sample.keys():
+            prop = str(field_map.get(col) or col)
+            if prop not in reserved_outputs:
+                continue
+            candidate = "business_id" if prop == "id" else f"business_{prop}"
+            if candidate in occupied:
+                candidate = f"source_{re.sub(r'[^A-Za-z0-9_]', '_', str(col))}_value"
+            field_map[col] = candidate
+            occupied.add(candidate)
+        canonical_dataset, declared = self._dataset_primary_key(
+            mapping.curated_dataset_id)
+        if canonical_dataset:
+            if not declared:
+                raise MappingSourceError(
+                    f"映射数据集 {mapping.curated_dataset_id} 尚未声明资产湖主键契约")
+            missing = [col for col in self._pk_columns(declared) if col not in sample]
+            if missing:
+                raise MappingSourceError(
+                    f"映射数据缺少资产湖主键列：{', '.join(missing)}")
+            if not self._is_unique_key(rows, declared):
+                raise MappingSourceError(
+                    f"映射数据违反资产湖主键 {declared}：存在空值或重复值")
+            # Canonical datasets have exactly one identity authority.  Repair
+            # historical mappings that once carried an independently selected key.
+            field_map["__primary_key__"] = declared
+            field_map["__pk_source__"] = "lake"
+
         pk_col = field_map.get("__primary_key__")
         order_pk_can_merge = (
-            pk_col
+            not canonical_dataset
+            and bool(pk_col)
             and pk_col != "__row_hash__"
-            and pk_col in sample
+            and all(col in sample for col in self._pk_columns(pk_col))
             and ("order" in (mapping.entity_class or "").lower() or "订单" in str(mapping.entity_class or ""))
-            and all(self._has_display_value(row.get(pk_col)) for row in rows)
+            and all(self._has_complete_pk(row, pk_col) for row in rows)
         )
         if (
+            not canonical_dataset
+            and (
             not pk_col
             or (
                 pk_col != "__row_hash__"
                 and not order_pk_can_merge
-                and (pk_col not in sample or not self._is_unique_col(rows, pk_col))
+                and (not all(col in sample for col in self._pk_columns(pk_col))
+                     or not self._is_unique_key(rows, pk_col))
+            )
             )
         ):
             # 主键优先级：湖中声明的契约（入湖闸门校验过存在/非空/唯一）
             # > 按本次数据启发式猜测。声明来源打进 __pk_source__ 供下游区分
-            declared = self._declared_pk_col(mapping.curated_dataset_id, rows)
             field_map["__primary_key__"] = declared or self._choose_pk_col(rows)
             field_map["__pk_source__"] = "lake" if declared else "inferred"
         field_map["__properties__"] = self._property_metadata(rows, field_map)
@@ -976,16 +1039,28 @@ class MappingService:
             "source_dataset_id",
         }
         result = []
+        pk_columns = self._pk_columns(field_map.get("__primary_key__"))
+        ignored_fields = {
+            str(item) for item in (field_map.get("__ignored_fields__") or [])
+        }
         for col in sample.keys():
             if col == "content":
                 continue
+            if col in ignored_fields and col not in pk_columns:
+                continue
             current = dict(existing.get(col) or {})
+            pk_part = pk_columns.index(col) + 1 if col in pk_columns else None
             result.append({
                 "column": col,
                 "property": field_map.get(col, col),
                 "type": current.get("type") or self._infer_property_type(rows, col),
-                "hidden": bool(current.get("hidden", col in technical_cols or col.startswith("__"))),
+                # Identity fields must remain projected and inspectable.  Hiding a
+                # PK component would make the Formal type unable to represent its
+                # own canonical identity contract.
+                "hidden": False if pk_part else bool(
+                    current.get("hidden", col in technical_cols or col.startswith("__"))),
                 "technical": bool(current.get("technical", col in technical_cols or col.startswith("__"))),
+                "primaryKeyPart": pk_part,
                 "confidence": float(current.get("confidence", 0.85)),
                 "description": current.get("description", ""),
             })
@@ -1007,25 +1082,39 @@ class MappingService:
                 return SchemaInferenceStep._infer_type(str(value).strip())
         return "string"
 
+    def _dataset_primary_key(self, dataset_id: str | None) -> tuple[bool, str | None]:
+        """Return ``(is_canonical_dataset, canonical_pk_spec)``.
+
+        ``isinstance`` deliberately excludes permissive MagicMock/legacy rows:
+        only v2_datasets is the contract authority.
+        """
+        if not dataset_id:
+            return False, None
+        from app.data_channel.datasets.lake_gate import split_pk
+        from app.models.v2.dataset import Dataset
+
+        dataset = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not isinstance(dataset, Dataset):
+            return False, None
+        schema = dataset.schema_json if isinstance(dataset.schema_json, dict) else {}
+        columns = split_pk(schema.get("primary_key"))
+        return True, ",".join(columns) or None
+
     def _declared_pk_col(self, dataset_id: str | None, rows: list[dict]) -> str | None:
         """资产湖中该数据集声明的主键列（schema_json.primary_key，入湖闸门维护）。
 
         实例身份优先采用湖中契约而非按本次加载的数据猜测——启发式对数据
         敏感（今天唯一的列明天未必），主键一漂移就是一整批实例身份作废。
-        复合主键（逗号分隔多列）暂无法充当单列身份，返回 None 走启发式兜底。
+        复合主键保留规范化后的逗号分隔形式，由 identity 编码为稳定 JSON。
         """
-        if not dataset_id:
+        canonical, pk = self._dataset_primary_key(dataset_id)
+        if not canonical or not pk:
             return None
-        from app.models.v2.dataset import Dataset
-        ds = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
-        # getattr 防御：测试桩/旧数据里查回的对象未必带 schema_json
-        schema = getattr(ds, "schema_json", None) or {}
-        pk = str(schema.get("primary_key") or "").strip()
-        if not pk or "," in pk:
-            return None
-        if rows and pk not in rows[0]:
-            logger.warning("数据集 %s 声明的主键列「%s」不在当前行数据中，退回启发式", dataset_id, pk)
-            return None
+        if rows:
+            missing = [col for col in self._pk_columns(pk) if col not in rows[0]]
+            if missing:
+                raise MappingSourceError(
+                    f"数据集 {dataset_id} 声明的主键列不在当前数据中：{', '.join(missing)}")
         return pk
 
     def _choose_pk_col(self, rows: list[dict]) -> str:
@@ -1053,6 +1142,28 @@ class MappingService:
         values = [str(row.get(col, "")).strip() for row in rows]
         return bool(values) and all(values) and len(set(values)) == len(values)
 
+    @staticmethod
+    def _pk_columns(pk_col: str | None) -> list[str]:
+        if not pk_col or pk_col == "__row_hash__":
+            return []
+        return [part.strip() for part in str(pk_col).split(",") if part.strip()]
+
+    def _has_complete_pk(self, row: dict, pk_col: str | None) -> bool:
+        columns = self._pk_columns(pk_col)
+        return bool(columns) and all(
+            col in row and self._has_display_value(row.get(col)) for col in columns)
+
+    def _is_unique_key(self, rows: list[dict], pk_col: str) -> bool:
+        columns = self._pk_columns(pk_col)
+        if not rows or not columns:
+            return False
+        values: list[tuple[str, ...]] = []
+        for row in rows:
+            if not self._has_complete_pk(row, pk_col):
+                return False
+            values.append(tuple(str(row.get(col)) for col in columns))
+        return len(set(values)) == len(values)
+
     def _row_hash(self, row: dict) -> str:
         return json.dumps(
             {k: v for k, v in row.items() if k != "content"},
@@ -1068,13 +1179,29 @@ class MappingService:
         return re.sub(r'[\s\-_]', '', str(value)).upper()
 
     def _row_identity_value(self, row: dict, pk_col: str | None) -> str:
-        if pk_col and pk_col != "__row_hash__" and row.get(pk_col) not in (None, ""):
-            return f"{pk_col}:{row.get(pk_col)}"
+        columns = self._pk_columns(pk_col)
+        if columns and self._has_complete_pk(row, pk_col):
+            if len(columns) == 1:
+                # Preserve IDs already materialized for single-column keys.
+                return f"{columns[0]}:{row.get(columns[0])}"
+            payload = {
+                "columns": columns,
+                "values": [row.get(col) for col in columns],
+            }
+            return "composite_pk:" + json.dumps(
+                payload, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), default=str)
         return f"row_hash:{self._row_hash(row)}"
 
     def _lookup_identity_value(self, pk_col: str | None, value: str) -> str:
-        if pk_col and pk_col != "__row_hash__":
-            return f"{pk_col}:{value}"
+        columns = self._pk_columns(pk_col)
+        if len(columns) == 1:
+            return f"{columns[0]}:{value}"
+        if len(columns) > 1 and isinstance(value, (list, tuple)) and len(value) == len(columns):
+            return "composite_pk:" + json.dumps(
+                {"columns": columns, "values": list(value)},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                default=str)
         return value
 
     def _stable_row_id(self, mapping: OntologyMapping, row: dict, pk_col: str | None) -> str:
@@ -1137,6 +1264,10 @@ class MappingService:
         if row.get("record_id") not in (None, "") and pk_col == "__row_hash__":
             return str(row.get("record_id"))
 
+        if len(self._pk_columns(pk_col)) > 1 and self._has_complete_pk(row, pk_col):
+            return " / ".join(
+                f"{col}={row.get(col)}" for col in self._pk_columns(pk_col))
+
         entity_class_lower = (mapping.entity_class or "").lower()
         if "order" in entity_class_lower or "订单" in str(mapping.entity_class or ""):
             order_label = self._join_display_parts(row, ("order_id", "order_name"), min_parts=1)
@@ -1163,8 +1294,9 @@ class MappingService:
         if supplier_label:
             return supplier_label
 
-        if pk_col and pk_col != "__row_hash__" and pk_col in row and self._has_display_value(row.get(pk_col)):
-            return str(row.get(pk_col))
+        if self._has_complete_pk(row, pk_col):
+            col = self._pk_columns(pk_col)[0]
+            return str(row.get(col))
 
         candidates = []
         for col in row.keys():
@@ -1196,8 +1328,7 @@ class MappingService:
     def _identity_columns(self, row: dict, pk_col: str | None) -> list[str]:
         cols = list(row.keys())
         result: list[str] = []
-        if pk_col:
-            result.append(pk_col)
+        result.extend(self._pk_columns(pk_col))
         for col in cols:
             lower = col.lower()
             if (
@@ -1255,7 +1386,15 @@ class MappingService:
                     continue
                 if col in row:
                     props[prop] = row[col]
-            props["id"] = self._stable_row_id(mapping, row, pk_col if pk_col in row else None)
+            if len(self._pk_columns(pk_col)) > 1:
+                # Formal ObjectType currently exposes one primary_key property.
+                # Preserve every component as required business fields and add a
+                # deterministic scalar identity solely for that compatibility
+                # slot; instance IDs continue to derive from the same JSON value.
+                props["__composite_identity__"] = self._row_identity_value(
+                    row, pk_col)
+            props["id"] = self._stable_row_id(
+                mapping, row, pk_col if self._has_complete_pk(row, pk_col) else None)
             props["source_id"] = props["id"]
             props.update(self._instance_names(mapping, row, pk_col, index))
             props["name"] = props["name_cn"]
@@ -2128,6 +2267,7 @@ class MappingService:
             logger.info("Link: " + src_meta["entity_class"] + "-[" + str(link.relation_type) + "]->" + tgt_meta["entity_class"] + " " + str(written) + "条")
         return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
                 "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
+                "link_mapping_id": link.id,
                 "count": written, "cardinality": cardinality,
                 "warning": None if written else "No rows matched this link mapping"}
 
@@ -2147,10 +2287,18 @@ class MappingService:
                 if not str(k).startswith("__")}
         edge_version = latest_dataset_version(self._db, link.edge_dataset_id)
         try:
-            if self._db.query(Dataset).filter(Dataset.id == link.edge_dataset_id).first():
-                edge_rows = load_all_rows_with_edits(
-                    self._db, link.edge_dataset_id,
-                    require_approved=True, version=edge_version)
+            edge_dataset = self._db.query(Dataset).filter(
+                Dataset.id == link.edge_dataset_id).first()
+            if edge_dataset:
+                if edge_dataset.kind == "curated":
+                    edge_rows = load_all_rows_with_edits(
+                        self._db, link.edge_dataset_id,
+                        require_approved=True, version=edge_version)
+                else:
+                    from app.services.v2.dataset_service import DatasetService
+                    edge_rows = DatasetService(self._db).load_all_rows(
+                        link.edge_dataset_id,
+                        edge_version.version_no if edge_version is not None else None)
             else:
                 legacy = self._db.query(CuratedDataset).filter(
                     CuratedDataset.id == link.edge_dataset_id).first()
@@ -2225,6 +2373,7 @@ class MappingService:
                         written, list(fmap.keys()))
         return {"src": src_meta["entity_class"], "tgt": tgt_meta["entity_class"],
                 "rel_type": link.relation_type, "src_key": link.src_key, "tgt_key": link.tgt_key,
+                "link_mapping_id": link.id,
                 "edge_dataset_id": link.edge_dataset_id, "edge_properties": list(fmap.keys()),
                 "count": written, "cardinality": cardinality,
                 "warning": None if written else "连接表未匹配到任何两端实体"}

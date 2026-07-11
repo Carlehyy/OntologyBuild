@@ -21,7 +21,7 @@ class Pipeline(Base):
     column_definitions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     target_curated_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    # 生命周期：draft（草稿，可改）| published（封版，仅名称/描述可改）。
+    # 生命周期：draft（草稿，可改）| published（封版）| archived（审计保留、不可运行）。
     # 运行态（running/failed）属于 PipelineRun，不回写此字段；
     # 历史遗留的 editing/running/failed 值由 migration 0008 归一。
     status: Mapped[str] = mapped_column(String(20), default="draft")

@@ -11,7 +11,6 @@ Create Date: 2026-07-11
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 
 from alembic import op
 import sqlalchemy as sa
@@ -169,6 +168,16 @@ def _create_steward_tables() -> None:
     _ensure_index("ix_v2_n8n_pipelines_n8n_workflow_id", "v2_n8n_pipelines", ["n8n_workflow_id"])
     _ensure_index("ix_v2_n8n_pipelines_pipeline_id", "v2_n8n_pipelines", ["pipeline_id"])
     _ensure_index("ix_v2_n8n_pipelines_status", "v2_n8n_pipelines", ["status"])
+    # 治理记录是 n8n 影子流水线 owner 的可证明来源。旧版本漏写 Pipeline.owner
+    # 会让任意 editor 按“legacy 无 owner”规则接管，迁移时必须补齐。
+    op.get_bind().execute(sa.text(
+        "UPDATE v2_pipelines SET created_by=("
+        " SELECT n.created_by FROM v2_n8n_pipelines n"
+        " WHERE n.pipeline_id=v2_pipelines.id AND n.created_by IS NOT NULL"
+        ") WHERE created_by IS NULL AND EXISTS ("
+        " SELECT 1 FROM v2_n8n_pipelines n2"
+        " WHERE n2.pipeline_id=v2_pipelines.id AND n2.created_by IS NOT NULL)"
+    ))
 
     if not _has_table("v2_steward_messages"):
         op.create_table(
@@ -214,6 +223,8 @@ def _create_pipeline_task_table() -> None:
             sa.Column("interval_seconds", sa.Integer(), nullable=True, server_default="0"),
             sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
             sa.Column("status", sa.String(20), nullable=False, server_default="idle"),
+            sa.Column("execution_token", sa.String(36), nullable=True),
+            sa.Column("lease_expires_at", sa.DateTime(), nullable=True),
             sa.Column("last_run_at", sa.DateTime(), nullable=True),
             sa.Column("last_rows", sa.Integer(), nullable=True, server_default="0"),
             sa.Column("last_error", sa.Text(), nullable=True, server_default=""),
@@ -225,6 +236,8 @@ def _create_pipeline_task_table() -> None:
             sa.CheckConstraint("status IN ('idle','running','success','failed')", name="ck_pipeline_tasks_status"),
         )
     else:
+        _ensure_column("v2_pipeline_tasks", sa.Column("execution_token", sa.String(36), nullable=True))
+        _ensure_column("v2_pipeline_tasks", sa.Column("lease_expires_at", sa.DateTime(), nullable=True))
         orphan = op.get_bind().execute(sa.text(
             "SELECT id, pipeline_id FROM v2_pipeline_tasks t WHERE NOT EXISTS "
             "(SELECT 1 FROM v2_pipelines p WHERE p.id=t.pipeline_id) LIMIT 5"
@@ -237,6 +250,50 @@ def _create_pipeline_task_table() -> None:
         _ensure_check("v2_pipeline_tasks", "ck_pipeline_tasks_status", "status IN ('idle','running','success','failed')")
     _ensure_index("ix_v2_pipeline_tasks_name", "v2_pipeline_tasks", ["name"])
     _ensure_index("ix_v2_pipeline_tasks_pipeline_id", "v2_pipeline_tasks", ["pipeline_id"])
+    _ensure_index("ix_v2_pipeline_tasks_execution_token", "v2_pipeline_tasks", ["execution_token"])
+    _ensure_index("ix_v2_pipeline_tasks_lease_expires_at", "v2_pipeline_tasks", ["lease_expires_at"])
+
+
+def _create_storage_deletion_outbox() -> None:
+    """为数据库外对象提供可恢复的删除语义。
+
+    Dataset/Version/Media 元数据与本表记录在同一事务删除/写入；对象存储在提交后
+    幂等清理。这里不对 storage_uri 建唯一约束：历史上若两个资产误共享 URI，
+    并发删除也不能因为 outbox 唯一键冲突而回滚整个元数据事务。
+    """
+    if not _has_table("v2_storage_deletion_outbox"):
+        op.create_table(
+            "v2_storage_deletion_outbox",
+            sa.Column("id", sa.String(), primary_key=True),
+            sa.Column("storage_uri", sa.Text(), nullable=False),
+            sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("last_error", sa.Text(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+            sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+        )
+    else:
+        _ensure_column(
+            "v2_storage_deletion_outbox",
+            sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
+        )
+        _ensure_column(
+            "v2_storage_deletion_outbox",
+            sa.Column("last_error", sa.Text(), nullable=True),
+        )
+        _ensure_column(
+            "v2_storage_deletion_outbox",
+            sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+        )
+        _ensure_column(
+            "v2_storage_deletion_outbox",
+            sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
+        )
+    _ensure_index(
+        "ix_v2_storage_deletion_outbox_storage_uri",
+        "v2_storage_deletion_outbox", ["storage_uri"])
+    _ensure_index(
+        "ix_v2_storage_deletion_outbox_created_at",
+        "v2_storage_deletion_outbox", ["created_at"])
 
 
 def _create_legacy_sync_tables() -> None:
@@ -299,60 +356,241 @@ def _create_legacy_sync_tables() -> None:
     _ensure_index("idx_sync_history_task", "v2_data_sync_histories", ["task_id", "started_at"])
     op.get_bind().execute(sa.text("UPDATE v2_data_sync_tasks SET status=lower(status)"))
     op.get_bind().execute(sa.text("UPDATE v2_data_sync_histories SET status=lower(status)"))
-
-
-def _json_value(value):
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except Exception:
-            return None
-    return value
+    # 旧 DataSyncTask 会绕过“已发布 n8n 流水线 → PipelineTask → 资产湖契约”
+    # 主链路。升级时隔离存量任务，保留配置与历史供人工迁移，不再后台偷跑。
+    op.get_bind().execute(sa.text(
+        "UPDATE v2_data_sync_tasks SET enabled=false, "
+        "last_error='已由 0017 升级隔离：请迁移为已发布 n8n 流水线的数据任务后再启用' "
+        "WHERE enabled=true"
+    ))
 
 
 def _ensure_canonical_dataset_refs(table: str, column: str) -> None:
-    """把旧 curated FK 引用迁到统一 v2_datasets；无法证明归属时硬失败。"""
+    """确认旧引用已经按同一 ID 收敛到 canonical 数据集。
+
+    数据集名称不是身份：同名可能来自重跑、复制或并发创建。这里不能再像旧逻辑
+    那样按名称改写引用，也不能仅凭 legacy 元数据创建一个没有任何版本的空壳
+    ``v2_datasets``。只有相同 ID 已存在于 canonical 表时，引用归属才可证明；
+    否则输出可操作的审计清单并中止迁移。
+    """
     if not _has_table(table) or column not in _columns(table):
         return
     conn = op.get_bind()
     refs = conn.execute(sa.text(
         f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL"
     )).fetchall()
-    datasets = sa.table(
-        "v2_datasets",
-        sa.column("id", sa.String), sa.column("name", sa.String),
-        sa.column("source_connection_id", sa.String), sa.column("kind", sa.String),
-        sa.column("schema_json", sa.JSON), sa.column("latest_version_id", sa.String),
-        sa.column("created_at", sa.DateTime(timezone=True)),
-        sa.column("updated_at", sa.DateTime(timezone=True)),
-    )
+    unresolved: list[dict] = []
     for (ref_id,) in refs:
         if conn.execute(sa.text("SELECT 1 FROM v2_datasets WHERE id=:i"), {"i": ref_id}).first():
             continue
         legacy = conn.execute(sa.text(
-            "SELECT id,name,schema_json,created_at,updated_at FROM v2_curated_datasets WHERE id=:i"
+            "SELECT id,name,latest_version_id FROM v2_curated_datasets WHERE id=:i"
         ), {"i": ref_id}).mappings().first()
-        if not legacy:
-            raise RuntimeError(f"{table}.{column} 引用了不存在的数据集 {ref_id}，拒绝静默断开血缘")
-        same_name = conn.execute(sa.text(
-            "SELECT id FROM v2_datasets WHERE kind='curated' AND name=:n LIMIT 1"
-        ), {"n": legacy["name"]}).first()
-        if same_name:
-            conn.execute(sa.text(
-                f"UPDATE {table} SET {column}=:new WHERE {column}=:old"
-            ), {"new": same_name[0], "old": ref_id})
+        exact_versions = conn.execute(sa.text(
+            "SELECT id,version_no FROM v2_dataset_versions "
+            "WHERE dataset_id=:i ORDER BY version_no,id LIMIT 10"
+        ), {"i": ref_id}).fetchall()
+        same_name_candidates = []
+        if legacy and legacy["name"]:
+            candidates = conn.execute(sa.text(
+                "SELECT d.id,d.latest_version_id,COUNT(v.id) AS version_count "
+                "FROM v2_datasets d LEFT JOIN v2_dataset_versions v ON v.dataset_id=d.id "
+                "WHERE d.kind='curated' AND d.name=:n "
+                "GROUP BY d.id,d.latest_version_id ORDER BY d.id LIMIT 10"
+            ), {"n": legacy["name"]}).mappings().all()
+            same_name_candidates = [dict(candidate) for candidate in candidates]
+        unresolved.append({
+            "reference": f"{table}.{column}",
+            "referenced_id": ref_id,
+            "legacy_dataset": dict(legacy) if legacy else None,
+            "versions_with_exact_id": [
+                {"id": row[0], "version_no": row[1]} for row in exact_versions],
+            "same_name_candidates_not_used": same_name_candidates,
+            "required_action": (
+                "restore/migrate the canonical v2_datasets row with this exact id and "
+                "verify its DatasetVersion lineage before retrying"
+            ),
+        })
+
+    if unresolved:
+        raise RuntimeError(
+            "数据集身份预检失败：以下引用无法通过相同 ID 证明归属；迁移不会按名称猜测，"
+            "也不会创建无版本的空 canonical 数据集。请完成逐项血缘审计后重试。"
+            f" 审计清单={unresolved}"
+        )
+
+
+def _schema_object(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _upgrade_dataset_output_identity() -> None:
+    """把流水线产物身份从展示 JSON 提升为数据库约束。
+
+    只回填能够同时证明 pipeline 真实存在、且 JSON 同时给出 output_key 的记录。
+    名称不参与身份推断；残缺/悬空的显式列以及重复身份都会中止迁移。
+    """
+    _ensure_column(
+        "v2_datasets",
+        sa.Column("producer_pipeline_id", sa.String(), nullable=True),
+    )
+    _ensure_column(
+        "v2_datasets",
+        sa.Column("output_key", sa.String(500), nullable=True),
+    )
+    conn = op.get_bind()
+    rows = conn.execute(sa.text(
+        "SELECT id,schema_json,producer_pipeline_id,output_key FROM v2_datasets"
+    )).mappings().all()
+    for row in rows:
+        if row["producer_pipeline_id"] is not None or row["output_key"] is not None:
             continue
-        now = datetime.now(timezone.utc)
-        conn.execute(datasets.insert().values(
-            id=ref_id,
-            name=legacy["name"],
-            source_connection_id=None,
-            kind="curated",
-            schema_json=_json_value(legacy["schema_json"]),
-            latest_version_id=None,
-            created_at=legacy["created_at"] or now,
-            updated_at=legacy["updated_at"] or now,
-        ))
+        schema = _schema_object(row["schema_json"])
+        pipeline_id = str(schema.get("pipeline_id") or "").strip()
+        output_key = str(schema.get("output_key") or "").strip()
+        if not pipeline_id or not output_key:
+            continue
+        if not conn.execute(sa.text(
+            "SELECT 1 FROM v2_pipelines WHERE id=:pipeline_id"
+        ), {"pipeline_id": pipeline_id}).first():
+            # 悬空 JSON 只是历史展示元数据，不足以建立真实外键。
+            continue
+        conn.execute(sa.text(
+            "UPDATE v2_datasets SET producer_pipeline_id=:pipeline_id,output_key=:output_key "
+            "WHERE id=:dataset_id AND producer_pipeline_id IS NULL AND output_key IS NULL"
+        ), {
+            "dataset_id": row["id"],
+            "pipeline_id": pipeline_id,
+            "output_key": output_key,
+        })
+
+    incomplete = conn.execute(sa.text(
+        "SELECT id,producer_pipeline_id,output_key FROM v2_datasets "
+        "WHERE (producer_pipeline_id IS NULL AND output_key IS NOT NULL) "
+        "OR (producer_pipeline_id IS NOT NULL AND (output_key IS NULL OR TRIM(output_key)='')) "
+        "LIMIT 20"
+    )).fetchall()
+    if incomplete:
+        raise RuntimeError(
+            "流水线产物身份必须同时包含 producer_pipeline_id 与非空 output_key；"
+            f"请先修复以下资产：{incomplete}"
+        )
+
+    dangling = conn.execute(sa.text(
+        "SELECT d.id,d.producer_pipeline_id,d.output_key FROM v2_datasets d "
+        "WHERE d.producer_pipeline_id IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM v2_pipelines p WHERE p.id=d.producer_pipeline_id) LIMIT 20"
+    )).fetchall()
+    if dangling:
+        raise RuntimeError(
+            "流水线产物身份引用了不存在的 producer pipeline，拒绝删除/猜测归属；"
+            f"审计清单={dangling}"
+        )
+
+    duplicates = conn.execute(sa.text(
+        "SELECT producer_pipeline_id,output_key,COUNT(*) AS n FROM v2_datasets "
+        "WHERE producer_pipeline_id IS NOT NULL AND output_key IS NOT NULL "
+        "GROUP BY producer_pipeline_id,output_key HAVING COUNT(*) > 1 LIMIT 20"
+    )).fetchall()
+    if duplicates:
+        audit = []
+        for pipeline_id, output_key, count in duplicates:
+            ids = conn.execute(sa.text(
+                "SELECT id FROM v2_datasets WHERE producer_pipeline_id=:pipeline_id "
+                "AND output_key=:output_key ORDER BY id LIMIT 20"
+            ), {"pipeline_id": pipeline_id, "output_key": output_key}).scalars().all()
+            audit.append({
+                "producer_pipeline_id": pipeline_id,
+                "output_key": output_key,
+                "count": count,
+                "dataset_ids": list(ids),
+            })
+        raise RuntimeError(
+            "同一流水线产物槽位对应多个数据资产，无法建立唯一约束；"
+            f"审计清单={audit}"
+        )
+
+    _replace_fk(
+        "v2_datasets", "producer_pipeline_id",
+        "v2_pipelines", ondelete="RESTRICT")
+    if "uq_datasets_producer_output" not in _index_names("v2_datasets"):
+        op.create_index(
+            "uq_datasets_producer_output",
+            "v2_datasets",
+            ["producer_pipeline_id", "output_key"],
+            unique=True,
+            sqlite_where=sa.text("producer_pipeline_id IS NOT NULL"),
+            postgresql_where=sa.text("producer_pipeline_id IS NOT NULL"),
+        )
+
+
+def _upgrade_connection_resource_identity() -> None:
+    """把连接同步身份从 connection 提升为 connection + resource。
+
+    同一个连接可暴露多个表、集合、端点或文件。历史版本没有持久化 resource，
+    因而不能从 Dataset.name 反推（名称可改、可截断、也可能重名）；这些记录保留
+    ``NULL`` 供审计，新同步会建立具有明确双键身份的数据集。
+    """
+    _ensure_column(
+        "v2_datasets",
+        sa.Column("source_resource", sa.String(500), nullable=True),
+    )
+    conn = op.get_bind()
+    invalid = conn.execute(sa.text(
+        "SELECT id,source_connection_id,source_resource FROM v2_datasets "
+        "WHERE source_resource IS NOT NULL AND source_connection_id IS NULL LIMIT 20"
+    )).fetchall()
+    if invalid:
+        raise RuntimeError(
+            "数据集 source_resource 缺少所属 connection，无法证明来源身份；"
+            f"审计清单={invalid}"
+        )
+
+    duplicates = conn.execute(sa.text(
+        "SELECT source_connection_id,source_resource,COUNT(*) AS n FROM v2_datasets "
+        "WHERE source_connection_id IS NOT NULL AND source_resource IS NOT NULL "
+        "GROUP BY source_connection_id,source_resource HAVING COUNT(*) > 1 LIMIT 20"
+    )).fetchall()
+    if duplicates:
+        audit = []
+        for connection_id, resource, count in duplicates:
+            ids = conn.execute(sa.text(
+                "SELECT id FROM v2_datasets WHERE source_connection_id=:connection_id "
+                "AND source_resource=:resource ORDER BY id LIMIT 20"
+            ), {
+                "connection_id": connection_id,
+                "resource": resource,
+            }).scalars().all()
+            audit.append({
+                "source_connection_id": connection_id,
+                "source_resource": resource,
+                "count": count,
+                "dataset_ids": list(ids),
+            })
+        raise RuntimeError(
+            "同一连接资源对应多个数据集，无法建立唯一身份约束；"
+            f"审计清单={audit}"
+        )
+
+    if "uq_datasets_connection_resource" not in _index_names("v2_datasets"):
+        op.create_index(
+            "uq_datasets_connection_resource",
+            "v2_datasets",
+            ["source_connection_id", "source_resource"],
+            unique=True,
+            sqlite_where=sa.text(
+                "source_connection_id IS NOT NULL AND source_resource IS NOT NULL"),
+            postgresql_where=sa.text(
+                "source_connection_id IS NOT NULL AND source_resource IS NOT NULL"),
+        )
 
 
 def _upgrade_asset_references() -> None:
@@ -378,7 +616,9 @@ def _upgrade_asset_references() -> None:
     _replace_fk("v2_ontology_link_mappings", "src_dataset_id", "v2_datasets")
     _replace_fk("v2_ontology_link_mappings", "tgt_dataset_id", "v2_datasets")
     _replace_fk("v2_ontology_link_mappings", "edge_dataset_id", "v2_datasets")
-    _replace_fk("v2_curated_reviews", "curated_dataset_id", "v2_datasets", ondelete="CASCADE")
+    # 审核记录是不可变的治理证据。删除数据集或版本必须先经过显式审计流程，
+    # 不能级联删除审核，也不能把版本引用静默置空。
+    _replace_fk("v2_curated_reviews", "curated_dataset_id", "v2_datasets", ondelete="RESTRICT")
 
     dangling_review_versions = op.get_bind().execute(sa.text(
         "SELECT id,dataset_version_id FROM v2_curated_reviews r "
@@ -387,12 +627,29 @@ def _upgrade_asset_references() -> None:
     )).fetchall()
     if dangling_review_versions:
         raise RuntimeError(f"审核记录引用了不存在的数据版本：{dangling_review_versions}")
-    _replace_fk("v2_curated_reviews", "dataset_version_id", "v2_dataset_versions")
+    _replace_fk(
+        "v2_curated_reviews", "dataset_version_id",
+        "v2_dataset_versions", ondelete="RESTRICT")
     _ensure_index(
         "ix_v2_curated_reviews_dataset_version_id",
         "v2_curated_reviews",
         ["dataset_version_id"],
     )
+
+    # 复合主键以 canonical JSON 保存，多个业务键/UUID 可能超过 200 字符；
+    # 截断会让审核修改命中错误行。
+    row_pk_column = next(
+        (item for item in _inspector().get_columns("v2_curated_row_edits")
+         if item["name"] == "row_pk"),
+        None,
+    )
+    if row_pk_column is not None and str(row_pk_column["type"]).upper() != "TEXT":
+        with op.batch_alter_table(
+            "v2_curated_row_edits", naming_convention=_NAMING
+        ) as batch:
+            batch.alter_column(
+                "row_pk", existing_type=row_pk_column["type"],
+                type_=sa.Text(), existing_nullable=False)
 
 
 def _upgrade_run_and_release_integrity() -> None:
@@ -413,16 +670,37 @@ def _upgrade_run_and_release_integrity() -> None:
     )
 
 
+def _upgrade_latest_version_integrity() -> None:
+    dangling = op.get_bind().execute(sa.text(
+        "SELECT id,latest_version_id FROM v2_datasets d "
+        "WHERE latest_version_id IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM v2_dataset_versions v "
+        " WHERE v.id=d.latest_version_id AND v.dataset_id=d.id) LIMIT 20"
+    )).fetchall()
+    if dangling:
+        raise RuntimeError(
+            "数据集 latest_version_id 指向不存在或属于其他数据集的版本；"
+            f"拒绝静默清空当前版本身份，审计清单={dangling}"
+        )
+    _replace_fk(
+        "v2_datasets", "latest_version_id",
+        "v2_dataset_versions", ondelete="SET NULL")
+
+
 def upgrade() -> None:
     _create_steward_tables()
     _create_pipeline_task_table()
+    _create_storage_deletion_outbox()
     _create_legacy_sync_tables()
+    _upgrade_connection_resource_identity()
+    _upgrade_dataset_output_identity()
     _upgrade_asset_references()
     _upgrade_run_and_release_integrity()
+    _upgrade_latest_version_integrity()
 
 
 def downgrade() -> None:
     # 本迁移会把旧/新双资产引用收敛到一个 canonical id。自动逆转将重新制造双
     # 真源并可能让人工数据集映射无处可挂，因此选择显式阻止破坏性降级。
     raise RuntimeError(
-        "0011 是数据身份收敛的前向迁移，禁止自动降级；如需回退请从迁移前备份恢复。")
+        "0017 是数据身份收敛的前向迁移，禁止自动降级；如需回退请从迁移前备份恢复。")

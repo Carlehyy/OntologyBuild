@@ -11,14 +11,47 @@ class Dataset(Base):
         Index("uq_datasets_curated_name", "name", unique=True,
               sqlite_where=text("kind = 'curated'"),
               postgresql_where=text("kind = 'curated'")),
+        Index(
+            "uq_datasets_producer_output", "producer_pipeline_id", "output_key",
+            unique=True,
+            sqlite_where=text("producer_pipeline_id IS NOT NULL"),
+            postgresql_where=text("producer_pipeline_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_datasets_connection_resource",
+            "source_connection_id", "source_resource",
+            unique=True,
+            sqlite_where=text(
+                "source_connection_id IS NOT NULL AND source_resource IS NOT NULL"),
+            postgresql_where=text(
+                "source_connection_id IS NOT NULL AND source_resource IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     source_connection_id: Mapped[str | None] = mapped_column(String, ForeignKey("v2_connections.id"), nullable=True)
+    # Connection 只是数据源容器，resource（表/集合/端点/文件）才是其中的稳定
+    # 数据集身份。历史记录允许 NULL，但新连接同步必须同时写入这两列。
+    source_resource: Mapped[str | None] = mapped_column(String(500), nullable=True)
     kind: Mapped[str] = mapped_column(String(30), nullable=False)  # structured|semi|unstructured|curated
+    # 成品资产的稳定生产者身份必须是数据库列和唯一约束，不能藏在 JSON 里靠
+    # “先查再插”维持。人工/原始数据集两列均为 NULL。
+    producer_pipeline_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey(
+            "v2_pipelines.id", ondelete="RESTRICT", use_alter=True,
+            name="fk_v2_datasets_producer_pipeline_id_v2_pipelines",
+        ), nullable=True)
+    output_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     schema_json: Mapped[dict] = mapped_column(JSON, nullable=True)
-    latest_version_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    latest_version_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey(
+            "v2_dataset_versions.id", ondelete="SET NULL", use_alter=True,
+            name="fk_v2_datasets_latest_version_id_v2_dataset_versions",
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -60,3 +93,28 @@ class MediaItem(Base):
     ocr_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|processing|done|failed
     ocr_result_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class StorageDeletionOutbox(Base):
+    """已删除资产对应的对象存储清理任务。
+
+    数据库与对象存储无法共享事务。删除 Dataset 时先在同一个数据库事务中写入
+    outbox，再删除版本/媒体元数据；提交成功后机会式清理对象。对象存储暂时不可用
+    时记录会保留，避免出现“数据库显示已删除，但对象永久泄漏”的静默成功。
+    """
+    __tablename__ = "v2_storage_deletion_outbox"
+    __table_args__ = (
+        Index("ix_v2_storage_deletion_outbox_storage_uri", "storage_uri"),
+        Index("ix_v2_storage_deletion_outbox_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False)

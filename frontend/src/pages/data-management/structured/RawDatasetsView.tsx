@@ -19,6 +19,10 @@ const PIPELINE_STATUS_LABEL: Record<string, string> = {
   draft: '草稿', editing: '编辑中', running: '运行中', failed: '失败', published: '已发布',
 }
 
+const notifyAssetChanged = () => window.dispatchEvent(
+  new Event('ontoprompt:data-assets-changed'),
+)
+
 function formatTime(iso?: string | null): string {
   if (!iso) return '—'
   try {
@@ -68,7 +72,11 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
     setLoading(true)
     setLoadError('')
     datasetsApi.overview()
-      .then(res => setItems(res.items ?? []))
+      .then(res => {
+        setItems((res.items ?? []).filter(
+          item => item.source === 'upload' || item.source === 'manual'))
+        notifyAssetChanged()
+      })
       .catch((error: unknown) => {
         const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
         const detail = e?.detail ?? e?.data?.detail
@@ -198,12 +206,12 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   }
 
   /** 删除 */
-  const handleDelete = async (force = false) => {
+  const handleDelete = async () => {
     const target = deleteTarget || deleteBlocked?.item
     if (!target) return
     setDeleting(true)
     try {
-      await datasetsApi.delete(target.id, force)
+      await datasetsApi.delete(target.id)
       setDeleteTarget(null)
       setDeleteBlocked(null)
       setBanner({ type: 'success', text: `数据集「${target.name}」已删除` })
@@ -533,17 +541,17 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         title="删除人工数据集"
         message={`确认删除「${deleteTarget?.name}」及其全部 ${deleteTarget?.version_count ?? 0} 个版本？此操作不可撤销。`}
         confirmLabel={deleting ? '删除中...' : '确认删除'}
-        onConfirm={() => handleDelete(false)}
+        onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
 
-      {/* 被引用时的强制删除确认 */}
+      {/* 被引用时只展示依赖；必须先解除，不能绕过真实外键强删 */}
       {deleteBlocked && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-lg p-6 w-[440px]">
             <h3 className="font-semibold text-lg mb-2">数据集正在被使用</h3>
             <p className="text-gray-600 text-sm mb-3">
-              「{deleteBlocked.item.name}」被以下对象引用，删除后它们将无法运行或断源：
+              「{deleteBlocked.item.name}」被以下对象引用。为保护流水线与本体血缘，请先解除这些依赖：
             </p>
             <div className="space-y-1 mb-5">
               {deleteBlocked.consumers.map(c => (
@@ -562,14 +570,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
               ))}
             </div>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setDeleteBlocked(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">取消</button>
-              <button
-                onClick={() => handleDelete(true)}
-                disabled={deleting}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 disabled:opacity-50"
-              >
-                {deleting ? '删除中...' : '仍要删除'}
-              </button>
+              <button onClick={() => setDeleteBlocked(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">我知道了</button>
             </div>
           </div>
         </div>

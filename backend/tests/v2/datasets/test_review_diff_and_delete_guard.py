@@ -1,7 +1,7 @@
 """审批三视角 + 删除安全加固。
 
 对应本轮需求：
-1. 已审批通过的成品数据集不可删除（审批即背书）
+1. 存在任何审核证据的成品数据集不可物理删除
 2. 审批可看三视角：变化量 / 上一版全量 / 本次全量
 3. 删除权限收敛：人工删除限管理员；成品/人工删除被本体映射引用时拦截
 """
@@ -104,6 +104,31 @@ def test_review_diff_three_views(api, auth_headers, db):
     assert delta["updated_sample"][0]["after"]["name"] == "A"
 
 
+def test_review_full_views_are_explicitly_paginated(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[
+        {"id": "1", "name": "a"},
+        {"id": "2", "name": "b"},
+        {"id": "3", "name": "c"},
+    ]])
+
+    response = api.get(
+        f"/api/v2/curated/{ds_id}/review-diff?limit=1&offset=1",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json().get("data", response.json())
+    current = payload["current"]
+    assert current == {
+        "version_no": 1,
+        "dataset_version_id": current["dataset_version_id"],
+        "total": 3,
+        "rows": [{"id": "2", "name": "b"}],
+        "offset": 1,
+        "limit": 1,
+        "has_more": True,
+    }
+
+
 def test_review_diff_first_version_all_added(api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [
         [{"id": "1", "name": "a"}, {"id": "2", "name": "b"}],   # 仅 v1
@@ -149,6 +174,84 @@ def test_review_edit_with_wrong_row_key_is_not_silently_ignored(db, fake_storage
             "old_value": None, "new_value": "错误目标",
         }])
     assert exc.value.detail["code"] == "review_row_not_found"
+
+
+def test_review_edit_rejects_unknown_field_and_type_mismatch(db, fake_storage):
+    svc = DatasetService(db)
+    ds = Dataset(
+        name="typed-review", kind="curated",
+        schema_json={
+            "primary_key": "id",
+            "columns": ["id", "amount"],
+            "columns_typed": [
+                {"name": "id", "type": "string"},
+                {"name": "amount", "type": "integer"},
+            ],
+        },
+    )
+    db.add(ds)
+    db.commit()
+    svc.create_version(
+        ds.id, rows_to_parquet_bytes([{"id": "1", "amount": "10"}]), rowcount=1)
+    review = ReviewService(db).start_review(ds.id)
+
+    with pytest.raises(HTTPException) as unknown:
+        ReviewService(db).batch_edit_rows(review.id, [{
+            "row_pk": "1", "field_name": "injected", "new_value": "x",
+        }])
+    assert unknown.value.detail["code"] == "review_unknown_field"
+    with pytest.raises(HTTPException) as mismatch:
+        ReviewService(db).batch_edit_rows(review.id, [{
+            "row_pk": "1", "field_name": "amount", "new_value": "不是整数",
+        }])
+    assert mismatch.value.detail["code"] == "review_type_mismatch"
+
+
+def test_review_edit_enforces_nullable_and_applies_canonical_types(db, fake_storage):
+    svc = DatasetService(db)
+    schema = {
+        "primary_key": "id",
+        "columns": ["id", "amount", "active", "metadata"],
+        "columns_typed": [
+            {"name": "id", "type": "string"},
+            {"name": "amount", "type": "integer"},
+            {"name": "active", "type": "boolean"},
+            {"name": "metadata", "type": "json"},
+        ],
+        "contract_definitions": [
+            {"field_key": "id", "field_type": "string", "nullable": False},
+            {"field_key": "amount", "field_type": "integer", "nullable": False},
+            {"field_key": "active", "field_type": "boolean", "nullable": False},
+            {"field_key": "metadata", "field_type": "json", "nullable": True},
+        ],
+    }
+    ds = Dataset(name="typed-canonical-review", kind="curated", schema_json=schema)
+    db.add(ds)
+    db.commit()
+    original = {"id": "1", "amount": 10, "active": True, "metadata": {}}
+    svc.create_version(
+        ds.id, rows_to_parquet_bytes([original]), rowcount=1,
+        schema_json=schema,
+    )
+    review_svc = ReviewService(db)
+    review = review_svc.start_review(ds.id)
+
+    with pytest.raises(HTTPException) as null_edit:
+        review_svc.batch_edit_rows(review.id, [{
+            "row_pk": "1", "field_name": "amount", "new_value": None,
+        }])
+    assert null_edit.value.detail["code"] == "review_null_forbidden"
+
+    review_svc.batch_edit_rows(review.id, [
+        {"row_pk": "1", "field_name": "amount", "new_value": "1,234"},
+        {"row_pk": "1", "field_name": "active", "new_value": "false"},
+        {"row_pk": "1", "field_name": "metadata", "new_value": '{"source":"review"}'},
+    ])
+    edited = review_svc.apply_edits_to_snapshot(review.id, [original])[0]
+    assert edited["amount"] == 1234
+    assert isinstance(edited["amount"], int)
+    assert edited["active"] is False
+    assert edited["metadata"] == {"source": "review"}
 
 
 def test_review_edit_supports_composite_primary_key_without_collision(db, fake_storage):
@@ -281,6 +384,33 @@ def test_repeated_start_review_reuses_pending_session_for_same_version(db, fake_
     assert exported["amount"] == "11"
 
 
+def test_review_session_approve_uses_same_mapping_dispatch(api, auth_headers, db, monkeypatch):
+    ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "a"}]])
+    session = api.post(
+        f"/api/v2/curated/{ds_id}/reviews", headers=auth_headers).json()
+    review_id = session.get("data", session)["review_id"]
+    called: list[str] = []
+
+    class FakeOrchestrator:
+        def __init__(self, _db):
+            pass
+
+        def on_review_approved(self, value):
+            called.append(value)
+            return {"triggered_mappings": []}
+
+    monkeypatch.setattr(
+        "app.services.v2.incremental.orchestrator.IncrementalOrchestrator",
+        FakeOrchestrator,
+    )
+    response = api.post(
+        f"/api/v2/curated/reviews/{review_id}/approve", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    payload = response.json().get("data", response.json())
+    assert payload["mapping_dispatch"]["status"] == "success"
+    assert called == [review_id]
+
+
 # ── 禁删已审批 ─────────────────────────────────────────────────
 def test_approved_curated_cannot_be_deleted(api, auth_headers, db, admin_user):
     ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "a"}]])
@@ -290,7 +420,7 @@ def test_approved_curated_cannot_be_deleted(api, auth_headers, db, admin_user):
     # 删除应被硬拦截
     r = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
     assert r.status_code == 409, r.text
-    assert "approved_locked" in r.text
+    assert "review_evidence_locked" in r.text
     # force 也不能绕
     r = api.delete(f"/api/v2/curated/{ds_id}?force=true", headers=auth_headers)
     assert r.status_code == 409, r.text
@@ -343,7 +473,7 @@ def test_pending_curated_can_be_deleted(api, auth_headers, db):
     assert r.status_code == 204, r.text
 
 
-def test_pending_review_is_removed_before_its_bound_dataset_version(api, auth_headers, db):
+def test_pending_review_and_edits_block_dataset_physical_deletion(api, auth_headers, db):
     from app.models.v2.curated import CuratedReview, CuratedRowEdit
 
     ds_id = _make_curated_with_versions(
@@ -356,9 +486,13 @@ def test_pending_review_is_removed_before_its_bound_dataset_version(api, auth_he
     }])
 
     response = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
-    assert response.status_code == 204, response.text
-    assert db.query(CuratedReview).filter(CuratedReview.id == review_id).first() is None
-    assert db.query(CuratedRowEdit).filter(CuratedRowEdit.review_id == review_id).first() is None
+    assert response.status_code == 409, response.text
+    assert "review_evidence_locked" in response.text
+    assert db.query(CuratedReview).filter(CuratedReview.id == review_id).one()
+    assert db.query(CuratedRowEdit).filter(CuratedRowEdit.review_id == review_id).one()
+    assert db.query(Dataset).filter(Dataset.id == ds_id).one()
+    assert db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == ds_id).count() == 1
 
 
 # ── 依赖检查：被本体映射引用时拦截 ─────────────────────────────
@@ -371,9 +505,10 @@ def test_curated_delete_blocked_by_mapping(api, auth_headers, db):
     r = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
     assert r.status_code == 409, r.text
     assert "in_use" in r.text
-    # force 可强删
+    # force 已禁用：真实外键与 API 语义一致，必须先解除依赖
     r = api.delete(f"/api/v2/curated/{ds_id}?force=true", headers=auth_headers)
-    assert r.status_code == 204, r.text
+    assert r.status_code == 400, r.text
+    assert "force" in r.text
 
 
 # ── 人工数据集删除：限管理员 ───────────────────────────────────

@@ -122,9 +122,9 @@ const datasetsApi = {
   consumers: (datasetId: string): Promise<{ dataset_id: string; consumers: DatasetConsumer[] }> =>
     apiClientV2.get(`/datasets/${datasetId}/consumers`),
 
-  /** 删除数据集（被流水线引用时返回 409，force=true 强制删除） */
-  delete: (datasetId: string, force = false): Promise<{ status: string; id: string }> =>
-    apiClientV2.delete(`/datasets/${datasetId}`, { params: { force } }),
+  /** 删除数据集；存在流水线或本体映射依赖时必须先解除依赖 */
+  delete: (datasetId: string): Promise<{ status: string; id: string }> =>
+    apiClientV2.delete(`/datasets/${datasetId}`),
 
   schema: (datasetId: string): Promise<{ dataset_id: string; columns: DatasetSchemaColumn[] }> =>
     apiClientV2.get(`/datasets/${datasetId}/schema`),

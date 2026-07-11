@@ -180,7 +180,9 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
             # 若已注册为 Celery 任务则派发，否则落到同步
             delay = getattr(_sync, "delay", None)
             if callable(delay):
-                delay(connection_id, body.mode)
+                # 异步入口也必须透传 resource；丢失它会退回“第一个资源”，使调用
+                # 者请求的资源与最终 Dataset 身份不一致。
+                delay(connection_id, body.mode, body.resource)
                 conn.status = "active"
                 db.commit()
                 return {"connection_id": connection_id, "status": "sync_triggered"}

@@ -139,7 +139,7 @@ def test_apply_edits_to_snapshot_uses_declared_primary_key():
     result = ReviewService(db).apply_edits_to_snapshot("rev-1", original)
 
     assert result[0]["name"] == "Alice Smith"
-    assert "age" not in result[1]
+    assert result[1]["age"] is None
 
 
 def test_get_edits_empty():

@@ -1,7 +1,7 @@
 """v2 Curated Dataset API — reads from v2_datasets kind=curated"""
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -12,6 +12,20 @@ from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
+
+
+def _dispatch_approved_review(db: Session, review_id: str) -> dict:
+    """两个批准入口共用同一 Mapping 派发语义，并把失败显式返回给页面。"""
+    try:
+        from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
+        result = IncrementalOrchestrator(db).on_review_approved(review_id)
+        return {"status": "success", **(result or {})}
+    except Exception as exc:  # 批准已落库，自动灌入失败必须可见、不可静默伪成功
+        logger.exception("Mapping trigger failed after review approve %s", review_id)
+        return {
+            "status": "failed",
+            "error": f"审核已批准，但自动灌入本体失败：{str(exc)[:500]}",
+        }
 
 
 def get_db():
@@ -26,8 +40,14 @@ class CuratedDatasetResponse(BaseModel):
     id: str
     name: str
     status: str
+    # Canonical lake identity contract.  Mapping clients must display this value
+    # rather than asking users to define a second, potentially conflicting key.
+    primary_key: str = ""
     row_count: Optional[int] = None
     quality_score: Optional[float] = None
+    producer_pipeline_id: Optional[str] = None
+    output_key: Optional[str] = None
+    has_review_evidence: bool = False
 
     class Config:
         from_attributes = True
@@ -56,8 +76,10 @@ def list_curated(db: Session = Depends(get_db)):
         ).order_by(DatasetVersion.version_no.desc()).first()
         # 从 schema_json 读质量分
         quality = None
-        if r.schema_json and isinstance(r.schema_json, dict):
-            quality = r.schema_json.get("quality_score")
+        schema = r.schema_json if isinstance(r.schema_json, dict) else {}
+        if schema:
+            quality = schema.get("quality_score")
+        from app.data_channel.datasets.lake_gate import split_pk
         from app.data_channel.curated.review_service import review_matches_version
         review = next((rev for rev in reviews_by_dataset.get(r.id, [])
                        if review_matches_version(rev, ver)), None)
@@ -65,8 +87,12 @@ def list_curated(db: Session = Depends(get_db)):
         result.append(CuratedDatasetResponse(
             id=r.id, name=r.name,
             status=real_status,
+            primary_key=",".join(split_pk(schema.get("primary_key"))),
             row_count=ver.rowcount if ver else None,
             quality_score=quality,
+            producer_pipeline_id=r.producer_pipeline_id,
+            output_key=r.output_key,
+            has_review_evidence=bool(reviews_by_dataset.get(r.id)),
         ))
     return result
 
@@ -77,55 +103,56 @@ def delete_curated(dataset_id: str, force: bool = False,
     """删除 Curated Dataset 及其版本数据（仅管理员）。
 
     安全约束：
-    - 已审批通过（approved）的数据集不可删除——审批即背书，删除会让审批失去意义；
-      如确需删除，请先在审核中「拒绝」撤回审批后再删。此约束不受 force 影响。
-    - 被流水线 / 本体映射引用时默认拦截（force=true 强制删除，下游将断源）。
+    - 只要存在任何审核记录就不可物理删除。审核与行级修改是治理证据，不能通过
+    - 被流水线 / 本体映射引用时始终拦截；force 已禁用，避免外键层实际失败却
+      向用户承诺“强删成功”。
     """
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+    from app.data_channel.datasets.service import (
+        drain_storage_deletion_outbox,
+        enqueue_dataset_storage_deletions,
+    )
     ds = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.kind == "curated").first()
     if not ds:
         raise HTTPException(404, "Curated dataset not found")
 
-    # 已审批通过 → 硬禁止删除（force 也不能绕）
-    from app.data_channel.curated.review_service import current_version_review
-    latest_review = current_version_review(db, dataset_id)
-    if latest_review and latest_review.status == "approved":
+    review_count = db.query(CuratedReview).filter(
+        CuratedReview.curated_dataset_id == dataset_id
+    ).count()
+    if review_count:
         raise HTTPException(409, detail={
-            "code": "approved_locked",
-            "message": "该成品数据集已审批通过，不可删除。审批即背书，如确需删除请先在审核中「拒绝」撤回审批。",
+            "code": "review_evidence_locked",
+            "message": (
+                f"该成品数据集存在 {review_count} 条审核记录，不能物理删除治理证据。"
+                "请保留资产；如需退出使用，请等待平台提供归档流程。"
+            ),
+        })
+    if force:
+        raise HTTPException(400, "force 强制删除已禁用；请先解除流水线和本体映射依赖")
+
+    # 依赖检查：真实 FK 不允许绕过，API 也不再提供伪强删。
+    from app.data_channel.datasets.router import _dataset_consumers
+    from app.ontologies.mappings.consumers import dataset_mapping_bindings
+    pipelines = _dataset_consumers(db, dataset_id)
+    mappings = dataset_mapping_bindings(db, dataset_id)
+    if pipelines or mappings:
+        raise HTTPException(409, detail={
+            "code": "in_use",
+            "message": f"该数据集被 {len(pipelines)} 条流水线、{len(mappings)} 个本体映射引用，"
+                       "请先解除依赖后再删除。",
+            "pipelines": pipelines, "mappings": mappings,
         })
 
-    # 依赖检查：被流水线 / 本体映射引用时拦截（force 可绕）
-    if not force:
-        from app.data_channel.datasets.router import _dataset_consumers
-        from app.ontologies.mappings.consumers import dataset_mapping_bindings
-        pipelines = _dataset_consumers(db, dataset_id)
-        mappings = dataset_mapping_bindings(db, dataset_id)
-        if pipelines or mappings:
-            raise HTTPException(409, detail={
-                "code": "in_use",
-                "message": f"该数据集被 {len(pipelines)} 条流水线、{len(mappings)} 个本体映射引用，"
-                           f"删除会导致下游断源。确认无碍可强制删除（force=true）。",
-                "pipelines": pipelines, "mappings": mappings,
-            })
-
-    # Review 同时引用 Dataset 与 DatasetVersion，必须先删行编辑/审核，再删版本；
-    # 反过来在开启 FK 的 PostgreSQL 会被 dataset_version_id 约束拒绝。
-    review_ids = [r.id for r in db.query(CuratedReview).filter(
-        CuratedReview.curated_dataset_id == dataset_id).all()]
-    if review_ids:
-        db.query(CuratedRowEdit).filter(
-            CuratedRowEdit.review_id.in_(review_ids)).delete(synchronize_session=False)
-    db.query(CuratedReview).filter(
-        CuratedReview.curated_dataset_id == dataset_id).delete(synchronize_session=False)
-
-    # 清理关联版本和媒体项
+    # 清理关联版本和媒体项。对象 URI 先在同一个数据库事务写入 outbox；提交
+    # 成功后再物理删除，存储暂时不可用时保留任务供后续重试。
+    enqueue_dataset_storage_deletions(db, dataset_id)
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
         db.query(MediaItem).filter(MediaItem.dataset_version_id.in_(ver_ids)).delete(synchronize_session=False)
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()
+    drain_storage_deletion_outbox(db)
 
 
 @router.get("/{dataset_id}", response_model=CuratedDatasetResponse)
@@ -141,18 +168,33 @@ def get_curated(dataset_id: str, db: Session = Depends(get_db)):
             DatasetVersion.dataset_id == dataset_id
         ).order_by(DatasetVersion.version_no.desc()).first()
         schema = dataset.schema_json if isinstance(dataset.schema_json, dict) else {}
+        from app.data_channel.datasets.lake_gate import split_pk
         return CuratedDatasetResponse(
             id=dataset.id,
             name=dataset.name,
             status=review.status if review else "pending_review",
+            primary_key=",".join(split_pk(schema.get("primary_key"))),
             row_count=version.rowcount if version else 0,
             quality_score=schema.get("quality_score"),
+            producer_pipeline_id=dataset.producer_pipeline_id,
+            output_key=dataset.output_key,
+            has_review_evidence=db.query(CuratedReview).filter(
+                CuratedReview.curated_dataset_id == dataset.id).first() is not None,
         )
 
     # legacy 只读兼容；新审核和写入已禁止再制造镜像记录。
     legacy = db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
     if legacy:
-        return legacy
+        legacy_schema = legacy.schema_json if isinstance(legacy.schema_json, dict) else {}
+        from app.data_channel.datasets.lake_gate import split_pk
+        return CuratedDatasetResponse(
+            id=legacy.id,
+            name=legacy.name,
+            status=legacy.status,
+            primary_key=",".join(split_pk(legacy_schema.get("primary_key"))),
+            row_count=legacy_schema.get("row_count"),
+            quality_score=legacy.quality_score,
+        )
     raise HTTPException(404, "Curated dataset not found")
 
 
@@ -177,7 +219,11 @@ def preview_curated(dataset_id: str, limit: int = 100, db: Session = Depends(get
 
 
 @router.get("/{dataset_id}/review-diff")
-def review_diff(dataset_id: str, limit: int = 500, review_id: str | None = None,
+def review_diff(
+    dataset_id: str,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    review_id: str | None = None,
                 db: Session = Depends(get_db)):
     """审批三视角：① 变化量（相对上一版）② 上一版全量 ③ 本次全量（叠加审核编辑）。
 
@@ -200,7 +246,10 @@ def review_diff(dataset_id: str, limit: int = 500, review_id: str | None = None,
 
     svc = DatasetService(db)
     versions = svc.list_versions(dataset_id)  # 按 version_no 升序
-    empty = {"version_no": None, "total": 0, "rows": []}
+    empty = {
+        "version_no": None, "total": 0, "rows": [],
+        "offset": offset, "limit": limit, "has_more": False,
+    }
     if not versions:
         return {"pk": pk_cols, "current": empty, "previous": empty, "delta": None}
 
@@ -264,9 +313,14 @@ def review_diff(dataset_id: str, limit: int = 500, review_id: str | None = None,
         "row_pk_encoding": "plain-string" if len(pk_cols) == 1 else "json-array",
         "current": {"version_no": current.version_no,
                     "dataset_version_id": current.id, "total": len(current_full),
-                    "rows": current_full[:limit]},
+                    "rows": current_full[offset:offset + limit],
+                    "offset": offset, "limit": limit,
+                    "has_more": offset + limit < len(current_full)},
         "previous": {"version_no": prev.version_no if prev else None,
-                     "total": len(prev_full), "rows": prev_full[:limit]},
+                     "total": len(prev_full),
+                     "rows": prev_full[offset:offset + limit],
+                     "offset": offset, "limit": limit,
+                     "has_more": offset + limit < len(prev_full)},
         "delta": delta,
         "review": ({
             "id": selected_review.id,
@@ -328,15 +382,9 @@ def submit_review(
     review = svc.start_review(dataset_id)
     review = svc.approve(review.id, notes) if action == "approve" else svc.reject(review.id, notes)
 
-    if action == "approve":
-        try:
-            from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
-            orch = IncrementalOrchestrator(db)
-            orch.on_review_approved(review.id)
-        except Exception as e:
-            logger.warning(f"Mapping trigger failed after review approve {review.id}: {e}")
-
-    return {"review_id": review.id, "status": review.status}
+    dispatch = _dispatch_approved_review(db, review.id) if action == "approve" else None
+    return {"review_id": review.id, "status": review.status,
+            "mapping_dispatch": dispatch}
 
 
 # ── 审核工作流端点 ─────────────────────────────────────────────────────
@@ -388,7 +436,11 @@ def approve_review(review_id: str, notes: str = "", db: Session = Depends(get_db
     from app.services.v2.curated.review_service import ReviewService
     svc = ReviewService(db)
     review = svc.approve(review_id, notes)
-    return {"review_id": review.id, "status": review.status}
+    return {
+        "review_id": review.id,
+        "status": review.status,
+        "mapping_dispatch": _dispatch_approved_review(db, review.id),
+    }
 
 
 @router.post("/reviews/{review_id}/reject")

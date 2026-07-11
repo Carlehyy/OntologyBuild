@@ -68,6 +68,7 @@ def test_all_v2_tables_registered():
         "v2_datasets",
         "v2_dataset_versions",
         "v2_dataset_write_locks",
+        "v2_storage_deletion_outbox",
         "v2_media_items",
         "v2_pipelines",
         "v2_pipeline_versions",

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from app.models.ontology import OntologyProject
 from app.models.relation import Relation
 from app.models.v2.dataset import Dataset, DatasetVersion
+from app.models.v2.curated import CuratedReview
 from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
 from app.ontologies.formal_modeling.models import LinkInstance, LinkType
 from app.services.v2.mapping.mapping_service import MappingService
@@ -18,9 +19,16 @@ def _add_curated(db, name: str) -> Dataset:
     ds = Dataset(name=name, kind="curated", schema_json={"review_status": "approved"})
     db.add(ds)
     db.flush()
-    db.add(DatasetVersion(
+    version = DatasetVersion(
         dataset_id=ds.id, version_no=1, rowcount=1,
         storage_uri=f"s3://test/{ds.id}/v1.parquet",
+    )
+    db.add(version)
+    db.flush()
+    db.add(CuratedReview(
+        curated_dataset_id=ds.id,
+        dataset_version_id=version.id,
+        status="approved",
     ))
     db.commit()
     db.refresh(ds)
@@ -76,6 +84,7 @@ def test_fat_relationship_via_junction_table(db, admin_user):
 
     # 只给两个端点建对象映射；连接表不是对象，仅作关系数据源
     for ds, cls, pk in [(ds_order, "Order", "order_id"), (ds_product, "Product", "sku")]:
+        ds.schema_json = {**(ds.schema_json or {}), "primary_key": pk}
         db.add(OntologyMapping(ontology_id=onto.id, curated_dataset_id=ds.id,
                                entity_class=cls, field_mapping={"__primary_key__": pk},
                                status="draft", confidence=0.9))
@@ -142,6 +151,7 @@ def test_thin_fk_link_still_works(db, admin_user):
         ],
     }
     for ds, cls, pk in [(ds_order, "PurchaseOrder", "order_id"), (ds_sup, "Supplier", "supplier_id")]:
+        ds.schema_json = {**(ds.schema_json or {}), "primary_key": pk}
         db.add(OntologyMapping(ontology_id=onto.id, curated_dataset_id=ds.id,
                                entity_class=cls, field_mapping={"__primary_key__": pk},
                                status="draft", confidence=0.9))

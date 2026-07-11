@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClientV2 } from '@/api/client'
+import type { CuratedDataset } from '@/api/v2/curated'
+import type { DatasetOverviewItem } from '@/api/v2/datasets'
 import {
   AlertCircle, ArrowLeftRight, ArrowRight, Boxes, Check, CheckCircle2,
   ChevronDown, ChevronRight, Database, Eye,
@@ -65,20 +67,12 @@ interface LinkMapping {
   is_fat: boolean
 }
 
-interface CuratedDataset {
-  id: string
-  name: string
-  status: string
-  row_count: number | null
-  quality_score: number | null
-}
-
 interface DatasetAsset {
   id: string
   name: string
   rows: number | null
   quality: number | null
-  primaryKey: string
+  primaryKeyColumns: string[]
   source: 'curated' | 'manual'
   sourceLabel: string
 }
@@ -104,12 +98,12 @@ interface ProjectionResult {
 interface SuggestResult {
   entity_class?: string
   entity_class_cn?: string
-  primary_key_column?: string
   field_mappings?: Array<{ column_name: string; property_name: string }>
 }
 
 interface MappingCreateResult { mapping_id?: string }
-interface RelationBuildItem { count?: number }
+interface LinkMappingCreateResult { link_mapping_id?: string; match_count?: number }
+interface RelationBuildItem { count?: number; link_mapping_id?: string; warning?: string | null }
 interface RelationBuildResult { relations?: RelationBuildItem[]; relation_results?: RelationBuildItem[] }
 
 const IGNORE = '__ignore__'
@@ -119,6 +113,31 @@ const UNMAPPED = '__unmapped__'
 
 function normalized(value: string) {
   return value.trim().toLowerCase().replace(/[\s_-]+/g, '')
+}
+
+function primaryKeyColumns(value: unknown): string[] {
+  if (typeof value !== 'string') return []
+  return value.split(',').map(column => column.trim()).filter(Boolean)
+}
+
+function PrimaryKeyContract({ asset, compact = false }: {
+  asset: DatasetAsset | null | undefined
+  compact?: boolean
+}) {
+  const columns = asset?.primaryKeyColumns ?? []
+  return (
+    <div className={`dms-key-contract ${columns.length ? '' : 'dms-key-contract--missing'} ${compact ? 'dms-key-contract--compact' : ''}`}>
+      <span className="dms-key-contract__label"><KeyRound size={12} />资产主键</span>
+      {columns.length ? (
+        <span className="dms-key-contract__badges">
+          {columns.map(column => <code key={column}>{column}</code>)}
+          {columns.length > 1 && <small>复合主键</small>}
+        </span>
+      ) : (
+        <span className="dms-key-contract__empty">未声明，不能创建映射</span>
+      )}
+    </div>
+  )
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -200,7 +219,14 @@ function DatasetPreview({ asset, preview, loading, compact = false }: {
       </div>
       <div className="dms-preview__table-wrap">
         <table className="dms-preview__table">
-          <thead><tr>{visibleColumns.map(col => <th key={col}>{col}</th>)}</tr></thead>
+          <thead><tr>{visibleColumns.map(col => (
+            <th key={col}>
+              <span className="dms-column-heading">
+                {col}
+                {asset.primaryKeyColumns.includes(col) && <em><KeyRound size={8} />主键</em>}
+              </span>
+            </th>
+          ))}</tr></thead>
           <tbody>
             {visibleRows.map((row, index) => (
               <tr key={index}>{visibleColumns.map(col => <td key={col} title={displayValue(row[col])}>{displayValue(row[col])}</td>)}</tr>
@@ -224,29 +250,29 @@ export default function DataMappingStudio({ ontologyId }: { ontologyId: string }
   const [busyId, setBusyId] = useState<string | null>(null)
   const [toast, setToast] = useState<{ tone: 'good' | 'bad'; message: string } | null>(null)
 
-  const { data: objectTypes = [], isLoading: loadingTypes } = useQuery<ObjectType[]>({
+  const { data: objectTypes = [], isLoading: loadingTypes, isError: objectTypesFailed } = useQuery<ObjectType[]>({
     queryKey: ['formal-object-types', ontologyId],
     queryFn: () => apiClientV2.get<ObjectType[]>(`/formal/ontologies/${ontologyId}/object-types`),
   })
-  const { data: linkTypes = [] } = useQuery<LinkType[]>({
+  const { data: linkTypes = [], isError: linkTypesFailed } = useQuery<LinkType[]>({
     queryKey: ['formal-link-types', ontologyId],
     queryFn: () => apiClientV2.get<LinkType[]>(`/formal/ontologies/${ontologyId}/link-types`),
   })
-  const { data: mappings = [], isLoading: loadingMappings } = useQuery<ObjectMapping[]>({
+  const { data: mappings = [], isLoading: loadingMappings, isError: mappingsFailed } = useQuery<ObjectMapping[]>({
     queryKey: ['mappings', ontologyId],
     queryFn: () => apiClientV2.get<ObjectMapping[]>(`/ontologies/${ontologyId}/mappings`),
   })
-  const { data: linkMappings = [] } = useQuery<LinkMapping[]>({
+  const { data: linkMappings = [], isError: linkMappingsFailed } = useQuery<LinkMapping[]>({
     queryKey: ['link-mappings', ontologyId],
     queryFn: () => apiClientV2.get<LinkMapping[]>(`/ontologies/${ontologyId}/link-mappings`),
   })
-  const { data: curated = [] } = useQuery<CuratedDataset[]>({
+  const { data: curated = [], isError: curatedFailed } = useQuery<CuratedDataset[]>({
     queryKey: ['curated-all'],
     queryFn: () => apiClientV2.get<CuratedDataset[]>('/curated'),
   })
-  const { data: manualOverview } = useQuery<{ items: Array<Record<string, unknown>> }>({
+  const { data: manualOverview, isError: manualOverviewFailed } = useQuery<{ items: DatasetOverviewItem[] }>({
     queryKey: ['manual-datasets-overview'],
-    queryFn: () => apiClientV2.get<{ items: Array<Record<string, unknown>> }>('/datasets/overview'),
+    queryFn: () => apiClientV2.get<{ items: DatasetOverviewItem[] }>('/datasets/overview'),
   })
 
   const datasets = useMemo<DatasetAsset[]>(() => {
@@ -254,13 +280,16 @@ export default function DataMappingStudio({ ontologyId }: { ontologyId: string }
       .filter(item => item.status === 'approved')
       .map(item => ({
         id: item.id, name: item.name, rows: item.row_count, quality: item.quality_score,
-        primaryKey: '', source: 'curated' as const, sourceLabel: 'Curated',
+        primaryKeyColumns: primaryKeyColumns(item.primary_key),
+        source: 'curated' as const, sourceLabel: '成品数据',
       }))
     const manual = (manualOverview?.items ?? [])
-      .filter(item => (item.source === 'upload' || item.source === 'manual') && item.primary_key)
+      .filter(item => item.source === 'upload' || item.source === 'manual')
       .map(item => ({
-        id: String(item.id), name: String(item.name), rows: (item.rowcount as number | null) ?? null,
-        quality: null, primaryKey: String(item.primary_key), source: 'manual' as const, sourceLabel: '人工数据',
+        id: item.id, name: item.name, rows: item.rowcount,
+        quality: null,
+        primaryKeyColumns: primaryKeyColumns(item.primary_key),
+        source: 'manual' as const, sourceLabel: '人工数据',
       }))
     return [...approved, ...manual]
   }, [curated, manualOverview])
@@ -280,6 +309,7 @@ export default function DataMappingStudio({ ontologyId }: { ontologyId: string }
     + Math.max(0, linkTypes.length - mappedRelations) + warningMappings
   const objectCoverage = objectTypes.length ? Math.round(mappedObjects / objectTypes.length * 100) : 0
   const relationCoverage = linkTypes.length ? Math.round(mappedRelations / linkTypes.length * 100) : 0
+  const mappableDatasetCount = datasets.filter(item => item.primaryKeyColumns.length > 0).length
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ['mappings', ontologyId] })
@@ -288,6 +318,8 @@ export default function DataMappingStudio({ ontologyId }: { ontologyId: string }
     qc.invalidateQueries({ queryKey: ['formal-link-types', ontologyId] })
     qc.invalidateQueries({ queryKey: ['entities', ontologyId] })
     qc.invalidateQueries({ queryKey: ['stats'] })
+    qc.invalidateQueries({ queryKey: ['curated-all'] })
+    qc.invalidateQueries({ queryKey: ['manual-datasets-overview'] })
   }
 
   const applyMapping = async (mapping: ObjectMapping) => {
@@ -344,6 +376,16 @@ export default function DataMappingStudio({ ontologyId }: { ontologyId: string }
     return <div className="dms-loading"><Loader2 className="animate-spin" size={20} />正在整理映射状态…</div>
   }
 
+  if (objectTypesFailed || linkTypesFailed || mappingsFailed || linkMappingsFailed || curatedFailed || manualOverviewFailed) {
+    return (
+      <div className="dms-loading dms-loading--error">
+        <AlertCircle size={20} />
+        <span>映射状态加载失败。为避免把接口故障误判成“尚未映射”，当前已停止新建操作。</span>
+        <button className="dms-button dms-button--ghost" onClick={refreshAll}><RefreshCw size={14} />重试</button>
+      </div>
+    )
+  }
+
   return (
     <section className="dms-root">
       <header className="dms-hero">
@@ -371,8 +413,8 @@ export default function DataMappingStudio({ ontologyId }: { ontologyId: string }
         </button>
         <div className="dms-metric">
           <span className="dms-metric__icon dms-metric__icon--blue"><Database size={17} /></span>
-          <span><small>可用数据源</small><strong>{datasets.length}<i> 个</i></strong></span>
-          <span className="dms-metric__caption">已审批 / 有主键</span>
+          <span><small>可用数据源</small><strong>{mappableDatasetCount}<i> 个</i></strong></span>
+          <span className="dms-metric__caption">主键契约完整</span>
         </div>
         <div className={`dms-metric ${issueCount ? 'dms-metric--attention' : ''}`}>
           <span className="dms-metric__icon dms-metric__icon--amber"><AlertCircle size={17} /></span>
@@ -547,6 +589,7 @@ function MappingInventory({ mappings, objectTypes, datasets, search, onSearch, e
             const fields = Object.entries(mapping.field_mapping || {}).filter(([key]) => !key.startsWith('__'))
             const open = expanded === mapping.id
             const asset = datasets.find(item => item.id === mapping.curated_dataset_id)
+            const primaryKeyUnavailable = !asset || asset.primaryKeyColumns.length === 0
             return (
               <article key={mapping.id} className="dms-inventory-card">
                 <div className="dms-inventory-card__main">
@@ -560,13 +603,13 @@ function MappingInventory({ mappings, objectTypes, datasets, search, onSearch, e
                   <em className={`dms-state dms-state--${mapping.binding_mode === 'bound' ? 'good' : 'warn'}`}><StatusDot tone={mapping.binding_mode === 'bound' ? 'good' : 'warn'} />{mapping.binding_mode === 'bound' ? '明确绑定' : mapping.binding_mode === 'name_match' ? '按名匹配' : '自动建类'}</em>
                   <div className="dms-card-actions">
                     <button className="dms-icon-button" title="展开核对字段" onClick={() => onExpand(open ? null : mapping.id)}><Eye size={15} /></button>
-                    <button className="dms-button dms-button--dark" disabled={busyId === mapping.id} onClick={() => onApply(mapping)}>{busyId === mapping.id ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}灌入本体</button>
+                    <button className="dms-button dms-button--dark" disabled={busyId === mapping.id || primaryKeyUnavailable} title={primaryKeyUnavailable ? '资产主键不可用，不能执行灌入' : '按资产湖主键执行灌入'} onClick={() => onApply(mapping)}>{busyId === mapping.id ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}灌入本体</button>
                   </div>
                 </div>
                 {open && (
                   <div className="dms-inventory-card__detail">
                     <div><h4>字段对应</h4><div className="dms-field-chips">{fields.map(([source, target]) => <span key={source}><code>{source}</code><ArrowRight size={11} /><code>{target}</code></span>)}</div></div>
-                    <div className="dms-detail-meta"><span><KeyRound size={13} />主键：{mapping.field_mapping?.__primary_key__ || '未标记'}</span><span><RefreshCw size={13} />{mapping.auto_apply_on_review ? '审核通过后自动灌入' : '手动灌入'}</span></div>
+                    <div className="dms-detail-meta"><PrimaryKeyContract asset={asset} compact /><span><RefreshCw size={13} />{mapping.auto_apply_on_review ? '审核通过后自动灌入' : '手动灌入'}</span></div>
                     <button className="dms-danger-button" onClick={() => onDelete(mapping)}><Trash2 size={13} />删除映射</button>
                   </div>
                 )}
@@ -623,11 +666,11 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [fieldMap, setFieldMap] = useState<Record<string, string>>({})
-  const [pkColumn, setPkColumn] = useState('')
   const [autoApply, setAutoApply] = useState(false)
   const [applyNow, setApplyNow] = useState(true)
   const [suggesting, setSuggesting] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savedMappingId, setSavedMappingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [suggestedClass, setSuggestedClass] = useState('')
   const previewRequest = useRef(0)
@@ -635,12 +678,21 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
   const target = objectTypes.find(item => item.id === targetTypeId) || null
   const properties = (target?.properties || []).filter(item => item.source !== 'computed')
   const columns = preview?.columns || []
+  const assetPrimaryKey = asset?.primaryKeyColumns ?? []
+  const missingPrimaryKeyColumns = preview
+    ? assetPrimaryKey.filter(column => !preview.columns.includes(column))
+    : []
+  const primaryKeyIssue = asset && assetPrimaryKey.length === 0
+    ? '该数据集未在资产湖声明主键，无法创建对象映射。请先回到数据资产湖补齐主键契约。'
+    : missingPrimaryKeyColumns.length > 0
+      ? `资产主键列 ${missingPrimaryKeyColumns.join('、')} 未出现在当前版本中，契约已漂移，不能创建映射。`
+      : ''
 
-  const createInitialMap = (cols: string[], type: ObjectType | null) => {
+  const createInitialMap = (cols: string[], type: ObjectType | null, primaryKeys = assetPrimaryKey) => {
     const next: Record<string, string> = {}
     for (const col of cols) {
       const hit = type?.properties.find(prop => normalized(prop.name) === normalized(col) || normalized(prop.displayName || '') === normalized(col))
-      next[col] = hit ? hit.name : type ? IGNORE : `${NEW_PREFIX}${col}`
+      next[col] = hit ? hit.name : type && !primaryKeys.includes(col) ? IGNORE : `${NEW_PREFIX}${col}`
     }
     return next
   }
@@ -650,7 +702,6 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
     setDatasetId(id)
     setPreview(null)
     setFieldMap({})
-    setPkColumn('')
     setSuggestedClass('')
     setError('')
     const nextAsset = datasets.find(item => item.id === id)
@@ -664,9 +715,7 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
       const rows = raw.rows || []
       const cols = raw.columns?.length ? raw.columns : (rows[0] ? Object.keys(rows[0]) : [])
       setPreview({ columns: cols, rows, total: raw.total_rows ?? raw.count ?? nextAsset.rows ?? rows.length })
-      setFieldMap(createInitialMap(cols, target))
-      const declared = nextAsset.primaryKey && !nextAsset.primaryKey.includes(',') && cols.includes(nextAsset.primaryKey) ? nextAsset.primaryKey : ''
-      setPkColumn(declared || cols[0] || '')
+      setFieldMap(createInitialMap(cols, target, nextAsset.primaryKeyColumns))
     } catch (error: unknown) {
       if (requestId === previewRequest.current) setError(errorMessage(error, '读取数据样例失败。'))
     } finally {
@@ -677,11 +726,11 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
   const pickTarget = (id: string) => {
     setTargetTypeId(id)
     const nextTarget = objectTypes.find(item => item.id === id) || null
-    setFieldMap(createInitialMap(columns, nextTarget))
+    setFieldMap(createInitialMap(columns, nextTarget, assetPrimaryKey))
   }
 
   const smartMatch = async () => {
-    if (!asset || !preview) return
+    if (!asset || !preview || primaryKeyIssue) return
     setSuggesting(true); setError('')
     try {
       const result = await apiClientV2.post<SuggestResult>(`/ontologies/${ontologyId}/mappings/suggest`, {
@@ -702,7 +751,6 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
         next[col] = hit ? hit.name : chosen ? `${NEW_PREFIX}${wanted}` : `${NEW_PREFIX}${wanted}`
       }
       setFieldMap(next)
-      if (!asset.primaryKey) setPkColumn(result.primary_key_column || pkColumn || preview.columns[0] || '')
     } catch (error: unknown) {
       setError(errorMessage(error, '智能匹配暂时不可用，你仍可手工完成配置。'))
     } finally {
@@ -711,9 +759,20 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
   }
 
   const mappedCount = columns.filter(col => fieldMap[col] && fieldMap[col] !== IGNORE).length
+  const mappedTargets = columns
+    .map(col => fieldMap[col])
+    .filter(value => value && value !== IGNORE)
+    .map(value => value.startsWith(NEW_PREFIX) ? value.slice(NEW_PREFIX.length) : value)
+  const duplicateTargets = Array.from(new Set(
+    mappedTargets.filter((targetName, index) => mappedTargets.indexOf(targetName) !== index),
+  ))
+  const mappingConflict = duplicateTargets.length
+    ? `字段必须一一对应，目标属性 ${duplicateTargets.join('、')} 被多个源字段重复选择。`
+    : ''
   const save = async () => {
-    if (!asset || !preview || !targetTypeId || mappedCount === 0 || !pkColumn) return
+    if (!asset || !preview || !targetTypeId || mappedCount === 0 || primaryKeyIssue || mappingConflict) return
     setSaving(true); setError('')
+    let persistedMappingId = savedMappingId
     try {
       const payloadMap: Record<string, string> = {}
       for (const col of columns) {
@@ -722,18 +781,28 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
         payloadMap[col] = value.startsWith(NEW_PREFIX) ? value.slice(NEW_PREFIX.length) : value
       }
       const entityClass = target?.name || suggestedClass || asset.name.replace(/\W+/g, '_')
-      const created = await apiClientV2.post<MappingCreateResult>(`/ontologies/${ontologyId}/mappings`, {
-        curated_dataset_id: asset.id, entity_class: entityClass, field_mapping: payloadMap,
-        primary_key_column: pkColumn,
-        confidence: .9, target_object_type_id: targetTypeId === NEW_TYPE ? null : targetTypeId,
-        auto_apply_on_review: autoApply,
-      })
+      const ignoredFields = columns.filter(col => fieldMap[col] === IGNORE)
+      let mappingId = persistedMappingId
+      if (!mappingId) {
+        const created = await apiClientV2.post<MappingCreateResult>(`/ontologies/${ontologyId}/mappings`, {
+          curated_dataset_id: asset.id, entity_class: entityClass, field_mapping: payloadMap,
+          ignored_fields: ignoredFields,
+          confidence: .9, target_object_type_id: targetTypeId === NEW_TYPE ? null : targetTypeId,
+          auto_apply_on_review: autoApply,
+        })
+        mappingId = created.mapping_id ?? null
+        if (!mappingId) throw new Error('映射已提交，但服务端未返回 mapping_id，无法继续灌入。')
+        setSavedMappingId(mappingId)
+        persistedMappingId = mappingId
+      }
       let result: ProjectionResult | null = null
-      if (applyNow && created.mapping_id) result = await apiClientV2.post<ProjectionResult>(`/ontologies/${ontologyId}/mappings/${created.mapping_id}/apply-from-dataset`)
+      if (applyNow) result = await apiClientV2.post<ProjectionResult>(`/ontologies/${ontologyId}/mappings/${mappingId}/apply-from-dataset`)
       const total = result?.total_rows ?? preview.total
       onSaved(applyNow ? `映射已保存并灌入 ${total.toLocaleString()} 行数据。` : '对象映射已保存，可随时执行灌入。')
     } catch (error: unknown) {
-      setError(errorMessage(error, '保存映射失败。'))
+      setError(persistedMappingId
+        ? `映射已保存，但灌入失败：${errorMessage(error, '请修复后重试；再次点击只会重试灌入，不会重复创建映射。')}`
+        : errorMessage(error, '保存映射失败。'))
     } finally {
       setSaving(false)
     }
@@ -741,14 +810,17 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
 
   return (
     <div className="dms-composer">
-      <div className="dms-composer__head"><div><span className="dms-step-badge">对象实体</span><h3>配置对象映射</h3><p>选择数据和目标对象，然后用真实样例逐字段核对。</p></div><button className="dms-icon-button" onClick={onClose}><X size={16} /></button></div>
+      <div className="dms-composer__head"><div><span className="dms-step-badge">对象实体</span><h3>配置对象映射</h3><p>选择数据和目标对象，然后用真实样例逐字段核对。</p></div><button className="dms-icon-button" onClick={onClose} aria-label="关闭对象映射配置"><X size={16} /></button></div>
       <div className="dms-composer__selectors">
-        <label><span><b>1</b>选择数据集</span><select value={datasetId} onChange={e => void pickDataset(e.target.value)}><option value="">选择已审批 / 有主键的数据…</option>{datasets.map(item => <option key={item.id} value={item.id}>{item.name} · {item.sourceLabel}{item.rows != null ? ` · ${item.rows.toLocaleString()} 行` : ''}</option>)}</select></label>
+        <label><span><b>1</b>选择数据集</span><select disabled={Boolean(savedMappingId)} value={datasetId} onChange={e => void pickDataset(e.target.value)}><option value="">选择已审批成品 / 人工数据…</option>{datasets.map(item => <option key={item.id} value={item.id}>{item.name} · {item.sourceLabel}{item.rows != null ? ` · ${item.rows.toLocaleString()} 行` : ''}{item.primaryKeyColumns.length ? ` · 主键 ${item.primaryKeyColumns.join(' + ')}` : ' · 未声明主键（不可创建）'}</option>)}</select></label>
         <ArrowRight size={18} />
-        <label><span><b>2</b>绑定对象实体</span><select value={targetTypeId} onChange={e => pickTarget(e.target.value)}><option value="">选择本体中的对象实体…</option>{objectTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}（{item.properties.length} 属性）</option>)}<option value={NEW_TYPE}>＋ 由数据创建新的对象类型</option></select></label>
-        <button className="dms-button dms-button--spark" disabled={!preview || suggesting} onClick={smartMatch}>{suggesting ? <Loader2 className="animate-spin" size={14} /> : <WandSparkles size={14} />}智能匹配</button>
+        <label><span><b>2</b>绑定对象实体</span><select disabled={Boolean(savedMappingId)} value={targetTypeId} onChange={e => pickTarget(e.target.value)}><option value="">选择本体中的对象实体…</option>{objectTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}（{item.properties.length} 属性）</option>)}<option value={NEW_TYPE}>＋ 由数据创建新的对象类型</option></select></label>
+        <button className="dms-button dms-button--spark" disabled={!preview || suggesting || Boolean(primaryKeyIssue) || Boolean(savedMappingId)} onClick={smartMatch}>{suggesting ? <Loader2 className="animate-spin" size={14} /> : <WandSparkles size={14} />}智能匹配</button>
       </div>
       {error && <div className="dms-form-error"><AlertCircle size={14} />{error}</div>}
+      {primaryKeyIssue && <div className="dms-form-error"><KeyRound size={14} />{primaryKeyIssue}</div>}
+      {mappingConflict && <div className="dms-form-error"><AlertCircle size={14} />{mappingConflict}</div>}
+      {savedMappingId && <div className="dms-inline-contract"><CheckCircle2 size={14} />映射已保存；当前仅重试灌入，不会重复创建。</div>}
       <div className="dms-composer__workspace">
         <div className="dms-field-map">
           <div className="dms-workspace-title"><div><h4>字段对应</h4><p>源字段与本体属性一一对应；悬停样例即可查看完整值。</p></div><span>{mappedCount}/{columns.length} 已映射</span></div>
@@ -760,12 +832,12 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
                 return <div className="dms-map-row" key={col} data-ignored={fieldMap[col] === IGNORE}>
                   <span><b>{col}</b><small title={sample}>{sample || '暂无样例'}</small></span>
                   <i><ArrowRight size={13} /></i>
-                  <select value={fieldMap[col] || IGNORE} onChange={e => setFieldMap(map => ({ ...map, [col]: e.target.value }))}>
+                  <select disabled={Boolean(savedMappingId)} value={fieldMap[col] || IGNORE} onChange={e => setFieldMap(map => ({ ...map, [col]: e.target.value }))}>
                     {properties.map(prop => <option key={prop.id} value={prop.name}>{prop.displayName || prop.name} · {prop.type || 'string'}</option>)}
                     <option value={`${NEW_PREFIX}${col}`}>＋ 新建属性「{col}」</option>
-                    <option value={IGNORE}>忽略此字段</option>
+                    <option value={IGNORE} disabled={assetPrimaryKey.includes(col)}>忽略此字段{assetPrimaryKey.includes(col) ? '（主键不可忽略）' : ''}</option>
                   </select>
-                  {pkColumn === col && <em><KeyRound size={10} />身份主键</em>}
+                  {assetPrimaryKey.includes(col) && <em><KeyRound size={10} />{assetPrimaryKey.length > 1 ? '复合主键' : '身份主键'}</em>}
                 </div>
               })}
             </div>
@@ -775,11 +847,11 @@ function ObjectComposer({ ontologyId, objectTypes, datasets, onClose, onSaved }:
       </div>
       <div className="dms-composer__footer">
         <div className="dms-options">
-          <label><span>身份主键</span><select value={pkColumn} disabled={!!asset?.primaryKey && !asset.primaryKey.includes(',')} onChange={e => setPkColumn(e.target.value)}><option value="">选择唯一字段…</option>{columns.map(col => <option key={col} value={col}>{col}</option>)}</select>{asset?.primaryKey && <small>数据契约已锁定</small>}</label>
-          <label className="dms-check"><input type="checkbox" checked={autoApply} onChange={e => setAutoApply(e.target.checked)} /><span>数据审核通过后自动灌入</span></label>
-          <label className="dms-check"><input type="checkbox" checked={applyNow} onChange={e => setApplyNow(e.target.checked)} /><span>保存后立即灌入</span></label>
+          <PrimaryKeyContract asset={asset} />
+          <label className="dms-check"><input type="checkbox" disabled={Boolean(savedMappingId)} checked={autoApply} onChange={e => setAutoApply(e.target.checked)} /><span>数据审核通过后自动灌入</span></label>
+          <label className="dms-check"><input type="checkbox" disabled={Boolean(savedMappingId)} checked={applyNow} onChange={e => setApplyNow(e.target.checked)} /><span>保存后立即灌入</span></label>
         </div>
-        <div><button className="dms-button dms-button--ghost" onClick={onClose}>取消</button><button className="dms-button dms-button--primary" disabled={saving || !asset || !targetTypeId || !pkColumn || mappedCount === 0} onClick={save}>{saving ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}{saving ? '正在保存…' : applyNow ? '保存并灌入' : '保存映射'}</button></div>
+        <div><button className="dms-button dms-button--ghost" onClick={onClose}>取消</button><button className="dms-button dms-button--primary" disabled={saving || !asset || !targetTypeId || Boolean(primaryKeyIssue) || Boolean(mappingConflict) || mappedCount === 0} onClick={save}>{saving ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}{saving ? '正在保存…' : savedMappingId ? '重试灌入' : applyNow ? '保存并灌入' : '保存映射'}</button></div>
       </div>
     </div>
   )
@@ -799,19 +871,40 @@ function RelationComposer({ ontologyId, linkTypes, objectTypes, mappings, datase
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savedLinkMappingId, setSavedLinkMappingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const previewRequest = useRef(0)
   const type = linkTypes.find(item => item.id === typeId) || null
   const asset = datasets.find(item => item.id === edgeDatasetId) || null
+  const sourceAsset = datasets.find(item => item.id === srcDatasetId) || null
+  const targetAsset = datasets.find(item => item.id === tgtDatasetId) || null
   const columns = preview?.columns || []
+  const objectMappingFor = (objectTypeId: string) => mappings.find(item =>
+    item.target_object_type_id === objectTypeId)
+  const sourceObjectMapping = type ? objectMappingFor(type.sourceObjectTypeId) : null
+  const targetObjectMapping = type ? objectMappingFor(type.targetObjectTypeId) : null
+  const missingEdgePrimaryKeyColumns = asset && preview
+    ? asset.primaryKeyColumns.filter(column => !preview.columns.includes(column))
+    : []
+  const relationPrimaryKeyIssue = asset && asset.primaryKeyColumns.length === 0
+    ? '连接表未声明资产主键，无法稳定识别关系记录。请先在数据资产湖补齐主键契约。'
+    : missingEdgePrimaryKeyColumns.length > 0
+      ? `连接表主键列 ${missingEdgePrimaryKeyColumns.join('、')} 在当前版本中缺失，不能创建关系映射。`
+      : type && (!sourceObjectMapping || !targetObjectMapping)
+        ? '该关系的源对象或目标对象尚未建立明确的数据映射，请先完成两端对象映射。'
+        : srcDatasetId && (!sourceAsset || sourceAsset.primaryKeyColumns.length !== 1)
+          ? '源对象数据集必须声明单列资产主键；复合主键的多列外键映射尚未开放。'
+          : tgtDatasetId && (!targetAsset || targetAsset.primaryKeyColumns.length !== 1)
+            ? '目标对象数据集必须声明单列资产主键；复合主键的多列外键映射尚未开放。'
+          : ''
   const objectName = (id: string) => objectTypes.find(item => item.id === id)?.displayName || objectTypes.find(item => item.id === id)?.name || '未知对象'
 
   const pickType = (id: string) => {
     setTypeId(id); setSrcKey(''); setTgtKey(''); setPropMap({})
     const next = linkTypes.find(item => item.id === id)
     if (!next) return
-    setSrcDatasetId(mappings.find(item => item.target_object_type_id === next.sourceObjectTypeId)?.curated_dataset_id || '')
-    setTgtDatasetId(mappings.find(item => item.target_object_type_id === next.targetObjectTypeId)?.curated_dataset_id || '')
+    setSrcDatasetId(objectMappingFor(next.sourceObjectTypeId)?.curated_dataset_id || '')
+    setTgtDatasetId(objectMappingFor(next.targetObjectTypeId)?.curated_dataset_id || '')
   }
 
   const pickEdgeDataset = async (id: string) => {
@@ -846,22 +939,37 @@ function RelationComposer({ ontologyId, linkTypes, objectTypes, mappings, datase
     }
   }
 
-  const canSave = !!type && !!asset && !!srcDatasetId && !!tgtDatasetId && !!srcKey && !!tgtKey && srcKey !== tgtKey
+  const canSave = !!type && !!asset && !!srcDatasetId && !!tgtDatasetId
+    && !!srcKey && !!tgtKey && srcKey !== tgtKey && !relationPrimaryKeyIssue
   const save = async () => {
     if (!type || !asset || !canSave) return
     setSaving(true); setError('')
+    let persistedLinkMappingId = savedLinkMappingId
     try {
       const fieldMapping: Record<string, string> = {}
       for (const [prop, col] of Object.entries(propMap)) if (col && col !== UNMAPPED) fieldMapping[prop] = col
-      await apiClientV2.post(`/ontologies/${ontologyId}/link-mappings`, {
-        src_dataset_id: srcDatasetId, tgt_dataset_id: tgtDatasetId, edge_dataset_id: asset.id,
-        relation_type: type.name, link_type_id: type.id, src_key: srcKey, tgt_key: tgtKey, field_mapping: fieldMapping,
-      })
+      if (!persistedLinkMappingId) {
+        const created = await apiClientV2.post<LinkMappingCreateResult>(`/ontologies/${ontologyId}/link-mappings`, {
+          src_dataset_id: srcDatasetId, tgt_dataset_id: tgtDatasetId, edge_dataset_id: asset.id,
+          relation_type: type.name, link_type_id: type.id, src_key: srcKey, tgt_key: tgtKey, field_mapping: fieldMapping,
+        })
+        persistedLinkMappingId = created.link_mapping_id ?? null
+        if (!persistedLinkMappingId) throw new Error('关系映射已提交，但服务端未返回 link_mapping_id。')
+        setSavedLinkMappingId(persistedLinkMappingId)
+      }
       const result = await apiClientV2.post<RelationBuildResult>(`/ontologies/${ontologyId}/mappings/build-all`)
-      const count = (result.relations || result.relation_results || []).reduce((sum, item) => sum + (item.count || 0), 0)
-      onSaved(`关系映射已保存${typeof count === 'number' ? `，已生成 ${count} 条关系边` : '并完成投影'}。`)
+      const built = (result.relations || result.relation_results || []).find(
+        item => item.link_mapping_id === persistedLinkMappingId,
+      )
+      const count = built?.count ?? 0
+      if (!built || count <= 0) throw new Error(
+        built?.warning || '关系映射已保存，但本次投影未返回该映射的有效关系边；请核对两端外键值与对象主键。',
+      )
+      onSaved(`关系映射已保存，已生成 ${count} 条关系边。`)
     } catch (error: unknown) {
-      setError(errorMessage(error, '保存关系映射失败。'))
+      setError(persistedLinkMappingId
+        ? `关系映射已保存，但投影失败：${errorMessage(error, '请修复后重试；再次点击不会重复创建映射。')}`
+        : errorMessage(error, '保存关系映射失败。'))
     } finally {
       setSaving(false)
     }
@@ -869,25 +977,28 @@ function RelationComposer({ ontologyId, linkTypes, objectTypes, mappings, datase
 
   return (
     <div className="dms-composer">
-      <div className="dms-composer__head"><div><span className="dms-step-badge dms-step-badge--indigo">实体关系</span><h3>配置关系映射</h3><p>先确认关系语义，再用连接表中的两端外键把对象实例连起来。</p></div><button className="dms-icon-button" onClick={onClose}><X size={16} /></button></div>
+      <div className="dms-composer__head"><div><span className="dms-step-badge dms-step-badge--indigo">实体关系</span><h3>配置关系映射</h3><p>先确认关系语义，再用连接表中的两端外键把对象实例连起来。</p></div><button className="dms-icon-button" onClick={onClose} aria-label="关闭关系映射配置"><X size={16} /></button></div>
       <div className="dms-relation-builder">
-        <label><span><b>1</b>选择本体关系</span><select value={typeId} onChange={e => pickType(e.target.value)}><option value="">选择实体关系…</option>{linkTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}（{objectName(item.sourceObjectTypeId)} → {objectName(item.targetObjectTypeId)}）</option>)}</select></label>
-        <label><span><b>2</b>选择连接表</span><select value={edgeDatasetId} onChange={e => void pickEdgeDataset(e.target.value)}><option value="">选择含两端外键的数据集…</option>{datasets.map(item => <option key={item.id} value={item.id}>{item.name} · {item.sourceLabel}</option>)}</select></label>
+        <label><span><b>1</b>选择本体关系</span><select disabled={Boolean(savedLinkMappingId)} value={typeId} onChange={e => pickType(e.target.value)}><option value="">选择实体关系…</option>{linkTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}（{objectName(item.sourceObjectTypeId)} → {objectName(item.targetObjectTypeId)}）</option>)}</select></label>
+        <label><span><b>2</b>选择连接表</span><select disabled={Boolean(savedLinkMappingId)} value={edgeDatasetId} onChange={e => void pickEdgeDataset(e.target.value)}><option value="">选择含两端外键的数据集…</option>{datasets.map(item => <option key={item.id} value={item.id}>{item.name} · {item.sourceLabel}{item.primaryKeyColumns.length ? ` · 主键 ${item.primaryKeyColumns.join(' + ')}` : ' · 未声明主键（不可创建）'}</option>)}</select></label>
       </div>
       {error && <div className="dms-form-error"><AlertCircle size={14} />{error}</div>}
+      {savedLinkMappingId && <div className="dms-inline-contract"><CheckCircle2 size={14} />关系映射已保存；当前仅重试投影，不会重复创建。</div>}
+      {asset && <div className="dms-inline-contract"><PrimaryKeyContract asset={asset} /></div>}
+      {relationPrimaryKeyIssue && <div className="dms-form-error"><KeyRound size={14} />{relationPrimaryKeyIssue}</div>}
       {type && (
         <div className="dms-endpoints">
-          <div className="dms-endpoint"><span className="dms-endpoint__node"><Boxes size={15} /><b>{objectName(type.sourceObjectTypeId)}</b><small>源对象</small></span><label>连接表外键<select value={srcKey} onChange={e => setSrcKey(e.target.value)}><option value="">选择源端外键…</option>{columns.map(col => <option key={col} value={col}>{col}</option>)}</select></label><label>对象数据集<select value={srcDatasetId} onChange={e => setSrcDatasetId(e.target.value)}><option value="">选择已映射数据…</option>{datasets.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
+          <div className="dms-endpoint"><span className="dms-endpoint__node"><Boxes size={15} /><b>{objectName(type.sourceObjectTypeId)}</b><small>源对象</small></span><label>连接表外键<select disabled={Boolean(savedLinkMappingId)} value={srcKey} onChange={e => setSrcKey(e.target.value)}><option value="">选择源端外键…</option>{columns.map(col => <option key={col} value={col}>{col}</option>)}</select></label><label>对象数据集<select disabled value={srcDatasetId}><option value="">尚未建立对象映射</option>{sourceAsset && <option value={sourceAsset.id}>{sourceAsset.name} · 主键 {sourceAsset.primaryKeyColumns.join(' + ')}</option>}</select></label></div>
           <div className="dms-endpoints__relation"><span>{type.displayName || type.name}</span><ArrowRight size={20} /></div>
-          <div className="dms-endpoint"><span className="dms-endpoint__node dms-endpoint__node--target"><Boxes size={15} /><b>{objectName(type.targetObjectTypeId)}</b><small>目标对象</small></span><label>连接表外键<select value={tgtKey} onChange={e => setTgtKey(e.target.value)}><option value="">选择目标端外键…</option>{columns.map(col => <option key={col} value={col}>{col}</option>)}</select></label><label>对象数据集<select value={tgtDatasetId} onChange={e => setTgtDatasetId(e.target.value)}><option value="">选择已映射数据…</option>{datasets.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
+          <div className="dms-endpoint"><span className="dms-endpoint__node dms-endpoint__node--target"><Boxes size={15} /><b>{objectName(type.targetObjectTypeId)}</b><small>目标对象</small></span><label>连接表外键<select disabled={Boolean(savedLinkMappingId)} value={tgtKey} onChange={e => setTgtKey(e.target.value)}><option value="">选择目标端外键…</option>{columns.map(col => <option key={col} value={col}>{col}</option>)}</select></label><label>对象数据集<select disabled value={tgtDatasetId}><option value="">尚未建立对象映射</option>{targetAsset && <option value={targetAsset.id}>{targetAsset.name} · 主键 {targetAsset.primaryKeyColumns.join(' + ')}</option>}</select></label></div>
         </div>
       )}
       {srcKey && srcKey === tgtKey && <div className="dms-form-error"><AlertCircle size={14} />关系两端不能使用同一个外键字段。</div>}
       <div className="dms-composer__workspace dms-composer__workspace--relation">
-        <div className="dms-field-map"><div className="dms-workspace-title"><div><h4>关系属性</h4><p>外键负责连接，其他列可以写入关系本身。</p></div></div>{!type || !preview ? <div className="dms-preview-placeholder"><GitBranch size={20} /><span>选择关系和连接表后配置</span></div> : (type.properties || []).length === 0 ? <div className="dms-preview-placeholder"><CheckCircle2 size={20} /><span>这个关系没有属性，只需确认两端外键</span></div> : <div className="dms-map-table">{(type.properties || []).map(prop => <div className="dms-map-row" key={prop.id}><span><b>{prop.displayName || prop.name}</b><small>{prop.type || 'string'}</small></span><i><ArrowLeftRight size={13} /></i><select value={propMap[prop.name] || UNMAPPED} onChange={e => setPropMap(map => ({ ...map, [prop.name]: e.target.value }))}><option value={UNMAPPED}>不写入此属性</option>{columns.filter(col => col !== srcKey && col !== tgtKey).map(col => <option key={col} value={col}>{col}</option>)}</select></div>)}</div>}</div>
+        <div className="dms-field-map"><div className="dms-workspace-title"><div><h4>关系属性</h4><p>外键负责连接，其他列可以写入关系本身。</p></div></div>{!type || !preview ? <div className="dms-preview-placeholder"><GitBranch size={20} /><span>选择关系和连接表后配置</span></div> : (type.properties || []).length === 0 ? <div className="dms-preview-placeholder"><CheckCircle2 size={20} /><span>这个关系没有属性，只需确认两端外键</span></div> : <div className="dms-map-table">{(type.properties || []).map(prop => <div className="dms-map-row" key={prop.id}><span><b>{prop.displayName || prop.name}</b><small>{prop.type || 'string'}</small></span><i><ArrowLeftRight size={13} /></i><select disabled={Boolean(savedLinkMappingId)} value={propMap[prop.name] || UNMAPPED} onChange={e => setPropMap(map => ({ ...map, [prop.name]: e.target.value }))}><option value={UNMAPPED}>不写入此属性</option>{columns.filter(col => col !== srcKey && col !== tgtKey).map(col => <option key={col} value={col}>{col}</option>)}</select></div>)}</div>}</div>
         <div className="dms-composer__preview"><div className="dms-workspace-title"><div><h4>连接数据核对</h4><p>重点检查两端外键能否对应到对象主键。</p></div></div><DatasetPreview asset={asset} preview={preview} loading={loadingPreview} compact /></div>
       </div>
-      <div className="dms-composer__footer"><p className="dms-footer-hint"><Link2 size={13} />保存后会立即投影关系，可到图谱编辑器核对结果。</p><div><button className="dms-button dms-button--ghost" onClick={onClose}>取消</button><button className="dms-button dms-button--primary" disabled={!canSave || saving} onClick={save}>{saving ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}{saving ? '保存并投影…' : '保存并生成关系'}</button></div></div>
+      <div className="dms-composer__footer"><p className="dms-footer-hint"><Link2 size={13} />保存后会立即投影关系，可到图谱编辑器核对结果。</p><div><button className="dms-button dms-button--ghost" onClick={onClose}>取消</button><button className="dms-button dms-button--primary" disabled={!canSave || saving} onClick={save}>{saving ? <Loader2 className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}{saving ? '保存并投影…' : savedLinkMappingId ? '重试关系投影' : '保存并生成关系'}</button></div></div>
     </div>
   )
 }

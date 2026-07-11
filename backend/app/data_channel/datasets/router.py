@@ -107,8 +107,10 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
         kind = "unstructured"
 
     svc = DatasetService(db)
-    ds = svc.create_dataset(name=name, kind=kind)
-    svc.create_version(ds.id, content, rowcount=_estimate_rowcount(content, ext))
+    # 数据集与首版本必须原子出现；首版本失败时不能在资产湖留下空壳。
+    ds = svc.create_dataset(name=name, kind=kind, commit=False)
+    svc.create_version(
+        ds.id, content, rowcount=_estimate_rowcount(content, ext), _lock_held=True)
     return {"data": {"id": ds.id, "name": ds.name, "kind": ds.kind, "dataset_type": "raw_dataset", "schema_type": "tabular"}}
 
 
@@ -175,7 +177,8 @@ def create_online_table(body: CreateTableRequest, db: Session = Depends(get_db))
         schema["pk_source"] = "manual"
 
     svc = DatasetService(db)
-    ds = svc.create_dataset(name=name, kind="structured", schema_json=schema)
+    ds = svc.create_dataset(
+        name=name, kind="structured", schema_json=schema, commit=False)
 
     # 初始版本 = 只有表头的空表：保持「数据集至少有一个版本」的不变式，
     # 存储对象自描述列结构（解析后 0 行，是合法的空数据集状态）
@@ -183,7 +186,9 @@ def create_online_table(body: CreateTableRequest, db: Session = Depends(get_db))
     import io
     buf = io.StringIO()
     csv.writer(buf).writerow(schema["columns"])
-    ver = svc.create_version(ds.id, buf.getvalue().encode("utf-8"), rowcount=0)
+    ver = svc.create_version(
+        ds.id, buf.getvalue().encode("utf-8"), rowcount=0,
+        schema_json=schema, _lock_held=True)
 
     return {"data": {
         "id": ds.id, "name": ds.name, "kind": ds.kind,
@@ -230,6 +235,8 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
     schema = dict(ds.schema_json or {})
     declared_pk = str(schema.get("primary_key") or "").strip()
     full_rows: list[dict] | None = None
+    from app.data_channel.datasets.service import stored_columns
+    physical_columns = stored_columns(content)
     if declared_pk or schema.get("columns"):
         from app.data_channel.datasets.service import _parse_stored_rows
         try:
@@ -244,6 +251,12 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
     # 已声明主键契约的数据集：新文件先过三校验，坏身份的数据不落盘
     if declared_pk:
         from app.data_channel.datasets.lake_gate import LakeGateError, split_pk, validate_pk
+        missing_pk_columns = [c for c in split_pk(declared_pk) if c not in physical_columns]
+        if missing_pk_columns:
+            raise HTTPException(
+                400,
+                f"上传的新版本缺少主键列 {missing_pk_columns}；即使文件为零行，表头也必须包含完整主键",
+            )
         try:
             validate_pk(full_rows or [], split_pk(declared_pk), dataset_name=ds.name, scope="上传的新版本")
         except LakeGateError as e:
@@ -265,10 +278,8 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
         old_cols = set(old_rows[0].keys()) if old_rows else set()
 
     rowcount = len(full_rows) if full_rows is not None else _estimate_rowcount(content, ext)
-    ver = svc.create_version(dataset_id, content, rowcount=rowcount)
-
-    new_rows = svc.preview(dataset_id, None, limit=1)
-    new_cols = set(new_rows[0].keys()) if new_rows else set()
+    # full_rows 已是将要发布的内容；先算 schema，再与版本同一事务提交。
+    new_cols = set(full_rows[0].keys()) if full_rows else set(physical_columns)
     columns_added = sorted(new_cols - old_cols) if old_cols else []
     columns_removed = sorted(old_cols - new_cols) if old_cols else []
 
@@ -284,8 +295,11 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
                         for c in inferred]
         schema["columns"] = [c["name"] for c in inferred]
         schema["columns_typed"] = inferred
-        ds.schema_json = schema
-        db.commit()
+
+    ver = svc.create_version(
+        dataset_id, content, rowcount=rowcount,
+        schema_json=schema if schema.get("columns") and full_rows is not None else None,
+        _lock_held=True)
 
     return {
         "dataset_id": dataset_id,
@@ -348,6 +362,7 @@ def declare_contract(dataset_id: str, body: ContractRequest, db: Session = Depen
         rows = svc.load_all_rows(dataset_id)
     except DatasetReadError as e:
         raise HTTPException(502, str(e))
+    declared_columns = list(schema.get("columns") or [])
     if rows:
         try:
             validate_pk(rows, pk_cols, dataset_name=ds.name, scope="现有数据")
@@ -355,6 +370,13 @@ def declare_contract(dataset_id: str, body: ContractRequest, db: Session = Depen
             raise HTTPException(400, str(e))
         schema["columns"] = list(rows[0].keys())
         schema["columns_typed"] = infer_columns_typed(rows)
+    else:
+        missing = [c for c in pk_cols if c not in declared_columns]
+        if missing:
+            raise HTTPException(
+                400,
+                f"空数据集也必须先声明包含主键的列结构；当前缺少主键列 {missing}",
+            )
 
     schema["primary_key"] = new_pk
     schema["pk_source"] = "manual"
@@ -452,6 +474,29 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
                 return idx
 
             work = [dict(r) for r in rows]
+            # 已绑定本体后，主键值就是实例身份。普通改单元格不能暗中 re-key，
+            # 否则会生成新实例并可能遗留旧关系；应先解除映射或走显式迁移流程。
+            from app.models.v2.mapping import OntologyMapping
+            mapping_count = db.query(OntologyMapping).filter(
+                OntologyMapping.curated_dataset_id == dataset_id).count()
+            if mapping_count:
+                for op in body.updates:
+                    values = op.values or {}
+                    key = op.key or {}
+                    changed_pk = [
+                        col for col in pk_cols
+                        if col in values
+                        and str(values.get(col, "") or "").strip()
+                        != str(key.get(col, "") or "").strip()
+                    ]
+                    if changed_pk:
+                        raise HTTPException(409, detail={
+                            "code": "mapped_primary_key_rekey_forbidden",
+                            "message": (
+                                f"该数据集已被 {mapping_count} 条本体映射绑定，不能直接修改主键列 {changed_pk}。"
+                                "请先解除映射，或使用可迁移下游实例与关系的显式 re-key 流程。"
+                            ),
+                        })
             for op in body.updates:
                 check_known_cols(op.values or {}, "修改的行")
                 work[locate(op, "修改")].update(op.values or {})
@@ -477,16 +522,16 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
                 except LakeGateError as e:
                     raise HTTPException(400, str(e))
 
-            ver = svc.create_version(
-                dataset_id, rows_to_csv_bytes(new_rows, columns),
-                rowcount=len(new_rows), _lock_held=True)
             if new_rows:
                 schema["columns"] = columns
                 # 用户声明的类型是契约，不随数据重新推断（否则录入 "123" 会把文本列翻成整数）
                 if schema.get("types_source") != "declared":
                     schema["columns_typed"] = infer_columns_typed(new_rows)
-                ds.schema_json = schema
-            db.commit()
+            ver = svc.create_version(
+                dataset_id, rows_to_csv_bytes(new_rows, columns),
+                rowcount=len(new_rows),
+                schema_json=schema if new_rows else None,
+                _lock_held=True)
     except DatasetLockTimeout as e:
         raise HTTPException(423, str(e))
 
@@ -555,11 +600,16 @@ def dataset_consumers(dataset_id: str, db: Session = Depends(get_db)):
 def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(get_db),
                    _admin=Depends(require_admin)):
     """删除原始数据集及其版本（仅管理员，与成品数据集删除权限对齐）。
-    被流水线 / 本体映射引用时返回 409（force=true 强制删除）。
+    被流水线 / 本体映射引用时始终返回 409；force 已禁用，避免数据库外键与页面
+    “强删成功”语义不一致。
     若数据集由旧版同步任务（DataSyncTask）驱动，自动禁用该任务防止重建。"""
     import logging
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
     from app.models.v2.sync_task import DataSyncTask
+    from app.data_channel.datasets.service import (
+        drain_storage_deletion_outbox,
+        enqueue_dataset_storage_deletions,
+    )
 
     _logger = logging.getLogger(__name__)
 
@@ -568,11 +618,13 @@ def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(g
         raise HTTPException(404, "Dataset not found")
     if ds.kind == "curated":
         raise HTTPException(400, "成品数据集请在资产湖「成品数据集」中删除")
+    if force:
+        raise HTTPException(400, "force 强制删除已禁用；请先解除流水线和本体映射依赖")
 
     consumers = _dataset_consumers(db, dataset_id)
     from app.ontologies.mappings.consumers import dataset_mapping_bindings
     mappings = dataset_mapping_bindings(db, dataset_id)
-    if (consumers or mappings) and not force:
+    if consumers or mappings:
         raise HTTPException(409, detail={
             "message": f"数据集被 {len(consumers)} 条流水线、{len(mappings)} 个本体映射引用，"
                        f"删除后这些流水线将无法运行、本体投影将断源",
@@ -601,14 +653,21 @@ def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(g
             except Exception:
                 _logger.warning("DELETE dataset %s → 调度器 reload 失败，任务可能仍会执行一次", dataset_id)
 
+    # 必须在删版本/媒体元数据之前收集 URI，并与这些删除共用一次 commit。
+    # commit 失败则 outbox 与元数据删除一起回滚；commit 成功后再 best-effort drain。
+    enqueue_dataset_storage_deletions(db, dataset_id)
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
         db.query(MediaItem).filter(MediaItem.dataset_version_id.in_(ver_ids)).delete(synchronize_session=False)
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()
+    storage_cleanup = drain_storage_deletion_outbox(db)
 
-    result: dict = {"status": "deleted", "id": dataset_id}
+    result: dict = {
+        "status": "deleted", "id": dataset_id,
+        "storage_cleanup": storage_cleanup,
+    }
     if disabled_sync_task:
         result["disabled_sync_task"] = disabled_sync_task
         result["message"] = f"已同时禁用同步任务「{disabled_sync_task}」，该数据集不会在下次调度时重建"

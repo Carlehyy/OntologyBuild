@@ -78,6 +78,10 @@ class PipelineTask(Base):
 
     # 运行状态（最近一次）
     status = Column(String(20), default=PipelineTaskStatus.IDLE.value, nullable=False)
+    # 数据库执行租约：调度器/HTTP/多进程必须先原子领取，不能依赖进程内
+    # ``status == running`` 检查。token 防止旧执行者在租约过期后覆盖新执行结果。
+    execution_token = Column(String(36), nullable=True, index=True)
+    lease_expires_at = Column(DateTime, nullable=True, index=True)
     last_run_at = Column(DateTime, nullable=True)
     last_rows = Column(Integer, default=0)
     last_error = Column(Text, default="")
@@ -115,6 +119,7 @@ class PipelineTask(Base):
             "interval_seconds": self.interval_seconds,
             "enabled": bool(self.enabled),
             "status": self.status,
+            "lease_expires_at": self.lease_expires_at.isoformat() if self.lease_expires_at else None,
             "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
             "last_rows": self.last_rows,
             "last_error": self.last_error,

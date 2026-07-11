@@ -76,6 +76,7 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
         ],
     }
     for ds, cls, pk in [(ds_sup, "Supplier", "供应商ID"), (ds_doc, "StrategyClause", "doc_id")]:
+        ds.schema_json = {**(ds.schema_json or {}), "primary_key": pk}
         db.add(OntologyMapping(ontology_id=onto.id, curated_dataset_id=ds.id,
                                entity_class=cls, field_mapping={"__primary_key__": pk},
                                status="draft", confidence=0.9))
@@ -99,8 +100,8 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
     assert "alternate_key" in via
 
 
-def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
-    """同一主键展开多行 (JSON items explode) 时不应重复 INSERT 同一关系"""
+def test_exploded_rows_use_composite_lake_identity_for_relation_pairs(db, admin_user):
+    """展开行必须以复合湖主键保持身份，不能把重复 order_id 当作单列主键。"""
     onto = OntologyProject(name="去重测试", domain="供应链",
                            build_mode="pipeline_mapping", created_by=admin_user.id)
     db.add(onto)
@@ -121,7 +122,11 @@ def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
             {"order_id": "PO2", "supplier_id": "SUP-002", "items.sku": "B1"},
         ],
     }
-    for ds, cls, pk in [(ds_sup, "Supplier", "supplier_id"), (ds_po, "PurchaseOrder", "order_id")]:
+    for ds, cls, pk in [
+        (ds_sup, "Supplier", "supplier_id"),
+        (ds_po, "PurchaseOrder", "order_id,items.sku"),
+    ]:
+        ds.schema_json = {**(ds.schema_json or {}), "primary_key": pk}
         db.add(OntologyMapping(ontology_id=onto.id, curated_dataset_id=ds.id,
                                entity_class=cls, field_mapping={"__primary_key__": pk},
                                status="draft", confidence=0.9))
@@ -138,4 +143,4 @@ def test_exploded_rows_dedupe_relation_pairs(db, admin_user):
 
     rels = db.query(Relation).filter(Relation.ontology_id == onto.id).all()
     pairs = {(r.source_entity, r.target_entity) for r in rels}
-    assert len(pairs) == 2  # PO1→SUP001, PO2→SUP002, 无重复
+    assert len(pairs) == 3  # PO1/A1、PO1/A2、PO2/B1 各自拥有稳定实体身份

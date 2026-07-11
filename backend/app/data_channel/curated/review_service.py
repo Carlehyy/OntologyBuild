@@ -93,6 +93,45 @@ def _dataset_schema(db: Session, dataset_id: str) -> dict:
     return dict(legacy.schema_json or {}) if legacy else {}
 
 
+def _field_contract(schema: dict, field_name: str) -> dict:
+    return next((
+        item for item in (schema.get("contract_definitions") or [])
+        if str(item.get("field_key") or "") == field_name
+    ), {})
+
+
+def _field_type(schema: dict, field_name: str) -> str:
+    contract = _field_contract(schema, field_name)
+    if contract.get("field_type"):
+        return str(contract["field_type"]).lower()
+    typed = next((
+        item for item in (schema.get("columns_typed") or [])
+        if str(item.get("name") or "") == field_name
+    ), {})
+    return str(typed.get("type") or "string").lower()
+
+
+def _coerce_review_value(schema: dict, field_name: str, value):
+    """把审核表中的文本值恢复为发布契约声明的运行时类型。"""
+    if value is None:
+        return None
+    expected = _field_type(schema, field_name)
+    if expected == "string":
+        return str(value)
+    if expected == "json":
+        return value if isinstance(value, (dict, list)) else json.loads(str(value))
+    if expected == "integer":
+        return int(str(value).strip().replace(",", ""))
+    if expected == "float":
+        return float(str(value).strip().replace(",", ""))
+    if expected == "boolean":
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"true", "yes", "1"}
+    # timestamp 仍以 ISO 文本进入 Parquet/投影，与流水线原始时间列保持一致。
+    return value
+
+
 def dataset_pk_columns(db: Session, dataset_id: str) -> list[str]:
     """审核行身份只认 schema 中固化的真实主键，支持复合主键。"""
     return split_pk(_dataset_schema(db, dataset_id).get("primary_key"))
@@ -213,6 +252,7 @@ def apply_all_row_edits(
     for edit in edits:
         edit_map.setdefault(edit.row_pk, {})[edit.field_name] = edit.new_value
 
+    schema = _dataset_schema(db, dataset_id)
     output: list[dict] = []
     matched_keys: set[str] = set()
     for source_row in rows:
@@ -223,10 +263,8 @@ def apply_all_row_edits(
             matched_keys.add(row_pk)
             row = dict(source_row)
             for field, value in patch.items():
-                if value is None:
-                    row.pop(field, None)
-                else:
-                    row[field] = value
+                # NULL 是单元格值，不是“从这一行删除 schema 字段”。
+                row[field] = _coerce_review_value(schema, field, value)
         output.append(row)
 
     unmatched = sorted(set(edit_map) - matched_keys)
@@ -335,7 +373,11 @@ class ReviewService:
                 "message": f"列「{field_name}」属于主键 {pk_cols}，审核编辑不能改变行身份。"
                            f"如需变更主键，请修改流水线源数据并重新入湖。",
             })
-        self._assert_row_keys_exist(review, [row_pk], pk_cols)
+        rows_by_pk = self._assert_row_keys_exist(review, [row_pk], pk_cols)
+        self._validate_edit_contract(
+            review, field_name, new_value,
+            rows_by_pk.get(row_pk) if rows_by_pk else None,
+        )
 
         edit = CuratedRowEdit(
             review_id=review_id,
@@ -371,7 +413,13 @@ class ReviewService:
                 normalize_row_pk(source.get("row_pk"), pk_cols, dataset_name=dataset_name),
                 field_name,
             ))
-        self._assert_row_keys_exist(review, [item[1] for item in prepared], pk_cols)
+        rows_by_pk = self._assert_row_keys_exist(
+            review, [item[1] for item in prepared], pk_cols)
+        for source, row_pk, field_name in prepared:
+            self._validate_edit_contract(
+                review, field_name, source.get("new_value"),
+                rows_by_pk.get(row_pk) if rows_by_pk else None,
+            )
 
         results: list[CuratedRowEdit] = []
         for source, row_pk, field_name in prepared:
@@ -438,6 +486,7 @@ class ReviewService:
         for edit in edits:
             edit_map.setdefault(edit.row_pk, {})[edit.field_name] = edit.new_value
 
+        schema = _dataset_schema(self._db, review.curated_dataset_id)
         result: list[dict] = []
         matched_keys: set[str] = set()
         for source_row in original_data:
@@ -452,10 +501,7 @@ class ReviewService:
                 matched_keys.add(row_pk)
                 row = dict(source_row)
                 for field, value in edit_map[row_pk].items():
-                    if value is None:
-                        row.pop(field, None)
-                    else:
-                        row[field] = value
+                    row[field] = _coerce_review_value(schema, field, value)
             result.append(row)
 
         unmatched = sorted(set(edit_map) - matched_keys)
@@ -498,10 +544,10 @@ class ReviewService:
         review: CuratedReview,
         row_pks: list[str],
         pk_cols: list[str],
-    ) -> None:
+    ) -> dict[str, dict]:
         """验证编辑目标行真实存在于审核绑定版本。"""
         if not row_pks or not review.dataset_version_id:
-            return
+            return {}
         from app.models.v2.dataset import DatasetVersion
         from app.services.v2.dataset_service import DatasetReadError, DatasetService
 
@@ -520,16 +566,56 @@ class ReviewService:
         except DatasetReadError as exc:
             raise HTTPException(422, f"审核版本数据读取失败：{exc}") from None
         existing = {
-            encode_row_pk(row, pk_cols, dataset_name=review.curated_dataset_id)
+            encode_row_pk(row, pk_cols, dataset_name=review.curated_dataset_id): row
             for row in rows
         }
-        missing = sorted(set(row_pks) - existing)
+        missing = sorted(set(row_pks) - set(existing))
         if missing:
             raise HTTPException(409, detail={
                 "code": "review_row_not_found",
                 "message": f"行主键 {missing[:5]} 不存在于审核绑定的数据版本。"
                            f"请刷新审核页面后重新选择行。",
             })
+        return existing
+
+    def _validate_edit_contract(
+        self,
+        review: CuratedReview,
+        field_name: str,
+        new_value,
+        source_row: dict | None,
+    ) -> None:
+        """审核修改只能改真实列，且新值服从资产湖固化的逻辑类型。"""
+        schema = _dataset_schema(self._db, review.curated_dataset_id)
+        known = {str(c) for c in (schema.get("columns") or [])}
+        if source_row:
+            known.update(str(c) for c in source_row.keys())
+        if known and field_name not in known:
+            raise HTTPException(400, detail={
+                "code": "review_unknown_field",
+                "message": f"字段「{field_name}」不在审核绑定的数据版本中，不能通过 API 新增任意列。",
+            })
+        contract = _field_contract(schema, field_name)
+        if contract and contract.get("nullable") is False and (
+            new_value is None
+            or (isinstance(new_value, str) and not new_value.strip())
+        ):
+            raise HTTPException(400, detail={
+                "code": "review_null_forbidden",
+                "message": f"字段「{field_name}」的发布契约不允许为空，审核修改不能清空该值。",
+            })
+        from app.data_channel.datasets.lake_gate import (
+            LakeGateError, validate_declared_types)
+        try:
+            validate_declared_types(
+                [{field_name: new_value}], schema.get("columns_typed"),
+                dataset_name=self._dataset_name(review.curated_dataset_id),
+            )
+        except LakeGateError as exc:
+            raise HTTPException(400, detail={
+                "code": "review_type_mismatch",
+                "message": str(exc),
+            }) from None
 
     def _get_dataset_or_raise(self, dataset_id: str):
         """统一资产表是审核唯一权威源；legacy 表仅只读兼容。"""

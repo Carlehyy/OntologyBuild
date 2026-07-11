@@ -469,12 +469,11 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
     output_key = _curated_output_key(source, multi_source, table_name)
     target_ids = [c for c in (pl.target_curated_ids or []) if c]
 
-    # JSON 路径过滤由 SQLite/PostgreSQL 方言分别编译，避免每次运行把全湖资产
-    # 拉进 Python 扫描；资产数量增长后身份解析仍是索引/数据库侧查询。
+    # 稳定身份是数据库真实列 + 唯一索引；JSON 仅保留展示/兼容元数据。
     stable = db.query(_DS).filter(
         _DS.kind == "curated",
-        _DS.schema_json["pipeline_id"].as_string() == pl.id,
-        _DS.schema_json["output_key"].as_string() == output_key,
+        _DS.producer_pipeline_id == pl.id,
+        _DS.output_key == output_key,
     ).all()
     if len(stable) > 1:
         ids = [c.id for c in stable]
@@ -484,12 +483,29 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
     if stable:
         return stable[0], ds_name
 
+    # 迁移前 JSON 身份只作为一次性 legacy 兼容：命中后写入路径会在同一事务补齐
+    # 真实列。不能用名称替代，也不能容忍一对多。
+    legacy_stable = db.query(_DS).filter(
+        _DS.kind == "curated",
+        _DS.producer_pipeline_id.is_(None),
+        _DS.schema_json["pipeline_id"].as_string() == pl.id,
+        _DS.schema_json["output_key"].as_string() == output_key,
+    ).all()
+    if len(legacy_stable) > 1:
+        raise LakeGateError(
+            f"流水线「{pl.name}」的 legacy 产物身份 ({pl.id}, {output_key}) 存在重复 "
+            f"{[c.id for c in legacy_stable]}，拒绝按名称猜测。")
+    if legacy_stable:
+        return legacy_stable[0], ds_name
+
     # 兼容历史数据：只从流水线显式绑定的 target ids 中认领没有 output_key 的资产。
     legacy_bound = []
     bound_candidates = (db.query(_DS).filter(
         _DS.kind == "curated", _DS.id.in_(target_ids)).all()
         if target_ids else [])
     for c in bound_candidates:
+        if c.producer_pipeline_id not in (None, "", pl.id):
+            continue
         schema = dict(c.schema_json or {})
         owner = schema.get("pipeline_id")
         if owner not in (None, "", pl.id):
@@ -510,7 +526,7 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
     if by_name is None:
         return None, ds_name
     schema = dict(by_name.schema_json or {})
-    if (schema.get("pipeline_id") == pl.id
+    if ((by_name.producer_pipeline_id == pl.id or schema.get("pipeline_id") == pl.id)
             and _legacy_output_matches(schema, source, multi_source, table_name)):
         return by_name, ds_name
     return None, _disambiguated_curated_name(db, ds_name, pl.id, output_key)
@@ -532,7 +548,11 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
         write_opts = {**write_opts, "mode": normalize_write_mode(write_opts.get("mode"))}
 
     bound_ds, ds_name = resolve_curated_target(db, pl, source, multi_source, table_name)
-    lock_key = f"curated::{bound_ds.id}" if bound_ds is not None else f"curated::{ds_name}"
+    # 已有资产与 DatasetService/人工维护共用 dataset::{id} 锁；首建尚无 id，
+    # 以稳定产物身份（pipeline + output key）锁住创建竞争，而非展示名。
+    output_key = _curated_output_key(source, multi_source, table_name)
+    lock_key = (f"dataset::{bound_ds.id}" if bound_ds is not None
+                else f"curated-output::{pl.id}::{output_key}")
     with dataset_write_lock(lock_key, bind=db.get_bind()):
         return _save_curated_dataset_in_lock(
             db, svc, pl, source, data, ctx, multi_source, table_name,
@@ -571,7 +591,12 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
                 "output_key": output_key,
                 "source_dataset_id": source.get("dataset_id"),
                 **({"transform_output_table": table_name} if table_name else {}),
-            })
+            }, producer_pipeline_id=pl.id, output_key=output_key, commit=False)
+    elif curated_ds.producer_pipeline_id is None:
+        # 仅对经过 target id / 同 owner 校验的 legacy 资产补齐稳定身份；随本次
+        # 新版本同事务提交，唯一约束会拒绝任何并发重复认领。
+        curated_ds.producer_pipeline_id = pl.id
+        curated_ds.output_key = output_key
 
     # ── 资产湖准入闸门：行格式规范化 + 主键契约（声明仲裁/三校验）+ 列漂移检测。
     # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
@@ -632,34 +657,31 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         # 审计：本次入库对资产湖的行级影响（入库前后 diff：新增/更新/删除）
         lake_impact = compute_lake_impact(prev_rows, lake_rows, split_pk(effective_pk))
 
-    from app.data_channel.datasets.service import rows_to_parquet_bytes
-    ver = svc.create_version(curated_ds.id, rows_to_parquet_bytes(lake_rows), rowcount=len(lake_rows))
-
+    schema_to_publish: dict | None = None
     if data or lake_rows:
-        try:
-            # 赋新 dict, 原地修改 JSON 列不会被 SQLAlchemy 跟踪
-            # 契约字段（primary_key/columns/columns_typed/last_output_columns）由闸门统一维护
-            schema = persist_contract(
-                curated_ds, pk=effective_pk,
-                pk_source=gate["pk_source"],
-                lake_rows=lake_rows, output_rows=data,
-                column_definitions=column_defs,
-                # 全量覆盖重建 = 变更主键声明的唯一受控通道（与 gate_rows 同一口径）
-                allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
-            sample = data or lake_rows
-            schema["quality_score"] = _compute_quality_score(sample, source["route"], ctx.meta)
-            schema["route"] = source["route"]
-            schema["source_dataset_id"] = source["dataset_id"]
-            schema["pipeline_id"] = pl.id
-            schema["output_key"] = output_key
-            if merge_meta:
-                schema["write_mode"] = merge_meta.get("mode")
-            if table_name:
-                schema["transform_output_table"] = table_name
-            curated_ds.schema_json = schema
-            db.commit()
-        except Exception:
-            logger.warning("curated schema_json 更新失败（不影响数据版本）", exc_info=True)
+        # 契约字段与当前版本内容一起发布；任何错误都必须让整次入湖失败。
+        schema_to_publish = persist_contract(
+            curated_ds, pk=effective_pk,
+            pk_source=gate["pk_source"],
+            lake_rows=lake_rows, output_rows=data,
+            column_definitions=column_defs,
+            allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
+        sample = data or lake_rows
+        schema_to_publish["quality_score"] = _compute_quality_score(
+            sample, source["route"], ctx.meta)
+        schema_to_publish["route"] = source["route"]
+        schema_to_publish["source_dataset_id"] = source["dataset_id"]
+        schema_to_publish["pipeline_id"] = pl.id
+        schema_to_publish["output_key"] = output_key
+        if merge_meta:
+            schema_to_publish["write_mode"] = merge_meta.get("mode")
+        if table_name:
+            schema_to_publish["transform_output_table"] = table_name
+
+    from app.data_channel.datasets.service import rows_to_parquet_bytes
+    ver = svc.create_version(
+        curated_ds.id, rows_to_parquet_bytes(lake_rows), rowcount=len(lake_rows),
+        schema_json=schema_to_publish, _lock_held=True)
 
     # 审计：本次流水线输出样本（入库前的产物），供执行记录追溯「流水线的输出是什么」
     from app.data_channel.pipeline_tasks.merge import _slim_row

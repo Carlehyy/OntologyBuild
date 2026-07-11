@@ -104,14 +104,29 @@ def validate_contract_structure(defs: list | None) -> list[str]:
     两条发布路径上都拦住，而不是只拦画布流水线。
     """
     errors: list[str] = []
+    for raw in defs or []:
+        if not isinstance(raw, dict):
+            errors.append("字段契约项必须是对象")
+            continue
+        raw_type = str(raw.get("field_type") or "string").strip().lower()
+        normalized_type = _LEGACY_TYPE_ALIASES.get(raw_type, raw_type)
+        if normalized_type not in CONTRACT_FIELD_TYPES:
+            errors.append(
+                f"字段「{raw.get('field_key') or raw.get('source_key') or '未命名'}」"
+                f"的数据类型「{raw_type}」不受支持；可选：{', '.join(CONTRACT_FIELD_TYPES)}")
     seen: set[str] = set()
+    seen_sources: set[str] = set()
     for d in normalize_definitions(defs):
         fk = d["field_key"]
+        sk = d["source_key"]
         if not FIELD_KEY_RE.match(fk):
             errors.append(f"字段标识「{fk}」不合法：须以字母或下划线开头，仅含字母/数字/下划线（入湖列名约束）")
         if fk in seen:
             errors.append(f"字段标识「{fk}」重复：多个列映射到了同一个入湖列名")
         seen.add(fk)
+        if sk in seen_sources:
+            errors.append(f"原始列「{sk}」重复定义：同一输出列不能映射为多个入湖字段")
+        seen_sources.add(sk)
     return errors
 
 
@@ -138,17 +153,14 @@ def _value_type(v) -> str | None:
     return None if t == "null" else (t if t in CONTRACT_FIELD_TYPES else "string")
 
 
-_TYPE_CHECK_SAMPLE = 200  # 类型检查采样行数——只产警告，无需全量扫描
-
-
 def apply_column_contract(rows: list[dict], definitions: list | None, *,
                           dataset_name: str = "") -> tuple[list[dict], list[str]]:
     """按流水线字段契约处理行数据：source_key→field_key 改名 + 约束校验。
 
     - 改名：契约声明的原始列统一重命名为入湖列名（湖内只认 field_key）
     - 非空：nullable=False 的列出现空值 → LakeGateError 硬失败（契约即承诺）
-    - 类型：与契约类型不符 → 警告不阻断（值类型推断本身是模糊的）
-    - 契约外的输出列原样保留：源端加列是常态，交给漂移检测提醒
+    - 类型：按统一六类逻辑类型做全量可解析校验，不符则硬失败
+    - 契约外列：硬失败，要求重新试跑和发布，防止 schema 静默漂移
     返回 (处理后的行, 警告列表)。
     """
     defs = normalize_definitions(definitions)
@@ -174,7 +186,21 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
             raise LakeGateError(
                 f"数据集「{dataset_name}」应用字段契约改名后出现列名冲突：{collided}。"
                 f"改名目标列与实际输出中的既有列同名会导致数据互相覆盖，请调整字段标识或流水线输出。")
-        rows = [{rename.get(str(k), str(k)): v for k, v in row.items()} for row in rows]
+    source_keys = {d["source_key"] for d in defs}
+    # 已发布契约是完整输出 schema，不是“若干提示列”。运行时出现未声明列必须
+    # 重新试跑/审核/发布，不能悄悄把新列写进正式资产。
+    actual_keys = {str(k) for row in rows for k in row.keys()}
+    undeclared = sorted(actual_keys - source_keys)
+    if undeclared:
+        raise LakeGateError(
+            f"数据集「{dataset_name}」的流水线输出出现未声明字段 {undeclared[:20]}。"
+            "已发布数据契约不允许额外列静默入湖；请撤回发布、重新试跑并更新字段契约。")
+
+    # 契约列按定义顺序重建；nullable 列缺值时显式补 None，保证物理快照仍有列。
+    rows = [
+        {d["field_key"]: row.get(d["source_key"]) for d in defs}
+        for row in rows
+    ]
 
     for d in defs:
         if d["nullable"]:
@@ -187,25 +213,13 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
                     f"数据集「{dataset_name}」第 {i + 1} 行的列「{col}」为空，但流水线契约声明该列不允许为空。"
                     f"请在流水线中过滤/补全该列，或回到流水线（草稿态）放宽该列的空值约束。")
 
-    warnings: list[str] = []
-    for d in defs:
-        expected = d["field_type"]
-        if expected in ("string", "json"):
-            continue
-        col = d["field_key"]
-        observed: set[str] = set()
-        for row in rows[:_TYPE_CHECK_SAMPLE]:
-            actual = _value_type(row.get(col))
-            if actual is None or actual == expected:
-                continue
-            if expected == "float" and actual == "integer":
-                continue
-            observed.add(actual)
-        if observed:
-            warnings.append(
-                f"列「{col}」契约类型为 {expected}，本次数据出现 {'/'.join(sorted(observed))} 值"
-                f"（采样前 {_TYPE_CHECK_SAMPLE} 行）")
-    return rows, warnings
+    # 流水线与人工数据集共用同一个逻辑类型校验器，并校验全量而非抽样。
+    validate_declared_types(
+        rows,
+        [{"name": d["field_key"], "type": d["field_type"]} for d in defs],
+        dataset_name=dataset_name,
+    )
+    return rows, []
 
 
 def normalize_rows_for_lake(rows: list[dict], *, dataset_name: str = "") -> list[dict]:
@@ -419,11 +433,10 @@ def _cell_type_ok(v, expected: str) -> bool:
 
 def validate_declared_types(ops_values: list[dict], columns_typed: list | None, *,
                             dataset_name: str = "") -> None:
-    """人工数据集声明类型的写入校验：本次写入的值必须能按声明类型解析。
+    """统一逻辑类型校验：人工录入、批量上传与流水线入湖共用。
 
-    只校验调用方传入的「本次修改的值」（在线编辑是交互式录入，错值当场拦下）；
-    文件上传等批量路径不走此校验，与入湖闸门「类型不符仅警告」的哲学一致。
-    任一违规抛 LakeGateError，攒齐前几条一次性报出，避免用户逐个试错。
+    调用方决定传入“改动值”还是“全量行”；任一违规均硬失败，避免同一份
+    integer/json 契约在不同入口呈现不同语义。
     """
     types = {str(c.get("name")): normalize_field_type(c.get("type"))
              for c in (columns_typed or []) if isinstance(c, dict) and c.get("name")}
@@ -550,12 +563,19 @@ def persist_contract(curated_ds, *, pk: str, pk_source: str,
     """
     schema = dict(getattr(curated_ds, "schema_json", None) or {})
     typed = infer_columns_typed(lake_rows)
+    defs = normalize_definitions(column_definitions)
+    if defs:
+        declared_types = {d["field_key"]: d["field_type"] for d in defs}
+        typed = [
+            {"name": item["name"], "type": declared_types.get(item["name"], item["type"])}
+            for item in typed
+        ]
+        schema["types_source"] = "published_pipeline_contract"
     schema["columns"] = [c["name"] for c in typed]
     schema["columns_typed"] = typed
     if output_rows:
         schema["last_output_columns"] = [
             c["name"] for c in infer_columns_typed(output_rows)]
-    defs = normalize_definitions(column_definitions)
     if defs:
         schema["field_names"] = {d["field_key"]: d["field_name"] for d in defs}
         schema["contract_definitions"] = defs

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { X, Loader2, Plus, Trash2, KeyRound, Table2, XCircle } from 'lucide-react'
 import datasetsApi, { FIELD_TYPE_LABELS, type CreateTableResult } from '@/api/v2/datasets'
 import { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
@@ -20,6 +20,14 @@ export default function CreateTableModal({ onClose, onCreated }: {
   const [cols, setCols] = useState<ColDraft[]>([emptyCol(), emptyCol()])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !submitting) onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, submitting])
 
   const setCol = (i: number, patch: Partial<ColDraft>) =>
     setCols(list => list.map((c, idx) => (idx === i ? { ...c, ...patch } : c)))
@@ -65,17 +73,18 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-[min(94vw,640px)] max-h-[85vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-xl shadow-xl w-[min(94vw,640px)] max-h-[85vh] flex flex-col overflow-hidden"
+        role="dialog" aria-modal="true" aria-labelledby="create-table-title">
         {/* 头部 */}
         <div className="flex items-start gap-3 px-5 py-3.5 border-b">
           <Table2 size={16} className="text-[var(--color-nav-bg)] shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-sm">在线新建表格</h3>
+            <h3 id="create-table-title" className="font-semibold text-sm">在线新建表格</h3>
             <p className="text-xs text-gray-400 mt-0.5">
               没有现成文件也能建人工数据集：定义列结构后逐行录入，声明主键即可被本体映射灌入，也可作为流水线数据源
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 shrink-0"><X size={16} /></button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 shrink-0" aria-label="关闭在线新建表格"><X size={16} /></button>
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-4 space-y-4">
@@ -145,6 +154,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                           disabled={cols.length <= 1}
                           className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:hover:text-gray-300 disabled:hover:bg-transparent"
                           title="移除该列"
+                          aria-label={`移除第 ${i + 1} 列`}
                         >
                           <Trash2 size={12} />
                         </button>
