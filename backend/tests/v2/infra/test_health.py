@@ -7,7 +7,7 @@ needed). External services (Neo4j, MinIO, ChromaDB) will be reported as
 "unavailable" in a pure-unit context — that is the expected, safe fallback.
 """
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, _probe_http_service
 
 client = TestClient(app)
 
@@ -87,3 +87,39 @@ def test_production_readiness_fails_closed(monkeypatch):
     else:
         assert response.status_code == 200
         assert data["status"] == "ok"
+
+
+def test_http_probe_closes_every_response(monkeypatch):
+    """Regression: repeated readiness probes must release every HTTP socket."""
+    responses = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def read(self, _limit):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        response = FakeResponse()
+        response.closed = False
+        response.request = request
+        response.timeout = timeout
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr("app.main.urllib.request.urlopen", fake_urlopen)
+
+    for _ in range(1100):
+        _probe_http_service("http://chroma:8000/api/v1/heartbeat")
+
+    assert len(responses) == 1100
+    assert all(response.closed for response in responses)
+    assert all(response.timeout == 3.0 for response in responses)
+    assert all(response.request.get_header("Connection") == "close"
+               for response in responses)

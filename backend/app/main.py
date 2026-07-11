@@ -8,6 +8,7 @@ v1 兼容：/api/v1/* 路由全部保留
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
 import json
+import urllib.request
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -309,6 +310,23 @@ def liveness():
     """Process liveness only; dependency readiness is exposed separately."""
     return {"status": "ok"}
 
+
+def _probe_http_service(url: str, *, timeout: float = 3.0) -> None:
+    """Probe an internal HTTP service without leaving a pooled socket behind.
+
+    Readiness runs repeatedly in production.  Constructing a new Chroma
+    ``HttpClient`` for every probe leaked its underlying HTTP connection into
+    CLOSE_WAIT until the backend exhausted its 1024 file descriptors.  A
+    short-lived stdlib request with ``Connection: close`` keeps this path
+    bounded and makes ownership of the socket explicit.
+    """
+    request = urllib.request.Request(url, headers={"Connection": "close"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        if response.status >= 400:
+            raise RuntimeError(f"health probe returned HTTP {response.status}")
+        # Consume a bounded response so the connection can close cleanly.
+        response.read(4096)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -482,28 +500,25 @@ def health(db: Session = Depends(get_db)):
             except Exception:
                 pass
 
-    # MinIO check
+    # MinIO check.  The unauthenticated liveness endpoint is sufficient here:
+    # credential correctness is exercised by real storage operations, while
+    # readiness must not create a new unclosed urllib3 pool every few seconds.
     try:
-        from minio import Minio
-        client = Minio(
-            settings.minio_endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
-            secure=settings.minio_use_ssl,
-        )
-        client.list_buckets()
+        minio_endpoint = settings.minio_endpoint.rstrip("/")
+        if "://" not in minio_endpoint:
+            scheme = "https" if settings.minio_use_ssl else "http"
+            minio_endpoint = f"{scheme}://{minio_endpoint}"
+        _probe_http_service(f"{minio_endpoint}/minio/health/live")
         checks["minio"] = "ok"
     except Exception:
         checks["minio"] = "unavailable"
 
-    # ChromaDB check
+    # ChromaDB check.  Do not instantiate chromadb.HttpClient here: Chroma
+    # 0.5.x does not expose deterministic client shutdown and repeated health
+    # probes accumulate CLOSE_WAIT sockets.
     try:
-        import chromadb
-        client = chromadb.HttpClient(
-            host=settings.chroma_host,
-            port=settings.chroma_port,
-        )
-        client.heartbeat()
+        _probe_http_service(
+            f"http://{settings.chroma_host}:{settings.chroma_port}/api/v1/heartbeat")
         checks["chroma"] = "ok"
     except Exception:
         checks["chroma"] = "unavailable"

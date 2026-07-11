@@ -106,10 +106,17 @@ services:
       - uploads:/uploads
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)\""]
+      # Liveness must stay dependency-free.  Deep readiness is checked once by
+      # deploy-prod.sh via /api/health; probing every dependency every 15s can
+      # amplify a slow downstream service and previously leaked Chroma sockets.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://localhost:8000/health/live', timeout=5); r.close()\""]
       interval: 15s
       timeout: 10s
       retries: 20
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     restart: unless-stopped
 
   celery_worker:
