@@ -173,7 +173,14 @@ function OntologyFormModal({
       footer={(
         <>
           <Button variant="ghost" onClick={onClose} disabled={saving}>取消</Button>
-          <Button onClick={submit} loading={saving} disabled={!name.trim() || !selectedDomain}>{submitText}</Button>
+          <Button
+            onClick={submit}
+            loading={saving}
+            disabled={!name.trim() || !selectedDomain}
+            className="bg-teal-600 text-white hover:bg-teal-700 active:bg-teal-800"
+          >
+            {submitText}
+          </Button>
         </>
       )}
     >
@@ -268,7 +275,7 @@ function CreateOntologyCard({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="group flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+      className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
     >
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
         <Plus size={25} />
@@ -294,23 +301,23 @@ function OntologyCard({
   onDelete: () => void
 }) {
   return (
-    <article className="group flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
-      <div className="flex flex-1 flex-col p-4 pb-3">
-        <div className="flex items-start gap-3">
+    <article className="group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
+      <div className="flex flex-col p-4 pb-2.5">
+        <div className="flex min-h-11 items-start gap-3 overflow-hidden">
           <OntologyAvatar icon={item.icon} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+          <div className="flex min-h-11 min-w-0 flex-1 flex-col justify-center overflow-hidden">
+            <div className="flex min-w-0 items-center gap-2 overflow-hidden">
               <button
                 type="button"
                 onClick={onDetail}
-                className="truncate text-left text-[15px] font-semibold text-slate-800 transition-colors hover:text-teal-700"
+                className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold leading-5 text-slate-800 transition-colors hover:text-teal-700"
                 title={item.name}
               >
                 {item.name}
               </button>
-              <span className="shrink-0 font-mono text-[11px] text-slate-400">{item.version || 'v0.1'}</span>
+              <span className="shrink-0 self-center font-mono text-[11px] leading-5 text-slate-400">{item.version || 'v0.1'}</span>
             </div>
-            <span className="mt-1.5 inline-flex max-w-full truncate rounded-md bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+            <span className="mt-1 inline-flex w-fit max-w-full truncate rounded-md bg-slate-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-slate-500">
               {item.domain || '未设置领域'}
             </span>
           </div>
@@ -324,7 +331,7 @@ function OntologyCard({
           {item.description || '暂无描述'}
         </p>
 
-        <div className="mt-4 grid grid-cols-3 gap-2">
+        <div className="mt-3 grid grid-cols-3 gap-2">
           {[
             { label: '对象实体', value: item.entity_count ?? 0 },
             { label: '实体关系', value: item.relation_count ?? 0 },
@@ -338,18 +345,18 @@ function OntologyCard({
         </div>
       </div>
 
-      <footer className="flex min-h-12 items-center gap-1 border-t border-slate-100 px-3 py-2">
+      <footer className="mt-auto flex min-h-11 items-center gap-1 border-t border-slate-100 px-3 py-1.5">
         <button
           type="button"
           onClick={onEdit}
-          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
         >
           <Pencil size={12} /> 编辑
         </button>
         <button
           type="button"
           onClick={onDetail}
-          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
         >
           <Search size={12} /> 详情
         </button>
@@ -446,12 +453,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
 
   return (
     <div className="min-h-full">
-      <div className="mb-5">
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900">本体管理</h1>
-        <p className="mt-1 text-sm text-slate-500">管理业务本体、结构规模与版本信息</p>
-      </div>
-
-      <section className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="本体筛选">
+      <section className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="本体筛选">
         <div className="relative w-full sm:w-72">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
@@ -490,9 +492,6 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
             <X size={13} /> 清除筛选
           </button>
         )}
-        <span className="text-xs text-slate-400">
-          {nameFilter || domainFilter ? `${filteredItems.length} / ${allItems.length} 个本体` : `共 ${allItems.length} 个本体`}
-        </span>
         <button
           type="button"
           onClick={openCreate}
@@ -532,15 +531,17 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         )}
       </div>
 
-      <OntologyFormModal
-        open={createOpen}
-        title="新建本体"
-        submitText="创建本体"
-        domains={configuredDomains}
-        onClose={closeCreate}
-        onSubmit={value => createMutation.mutateAsync(value)}
-        onManageDomains={() => navigate('/settings/domains')}
-      />
+      {createOpen && (
+        <OntologyFormModal
+          open
+          title="新建本体"
+          submitText="创建本体"
+          domains={configuredDomains}
+          onClose={closeCreate}
+          onSubmit={value => createMutation.mutateAsync(value)}
+          onManageDomains={() => navigate('/settings/domains')}
+        />
+      )}
 
       {editTarget && (
         <OntologyFormModal
