@@ -157,6 +157,8 @@ def run_interface(iface: dict) -> dict:
         result["response_headers"] = dict(resp.headers)
         result["content_type"] = resp.headers.get("Content-Type", "")
         result["response_body"] = _safe_text(resp)
+        if not 200 <= resp.status_code < 300:
+            result["error"] = result["error"] or f"上游返回 HTTP {resp.status_code}"
         result["ok"] = result["error"] is None
     except requests.RequestException as e:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)

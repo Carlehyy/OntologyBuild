@@ -115,6 +115,57 @@ def test_run_history_and_response_capture(hub_client, monkeypatch):
     assert overview["seven_day_traffic"] == 1
 
 
+def test_non_2xx_response_is_failure_in_history_and_credential_usage(
+    hub_client, monkeypatch
+):
+    item = hub_client.post("/interfaces", json=_interface(use_w3=True)).json()
+
+    def fake_request(session, method, url, **kwargs):
+        response = requests.Response()
+        response.status_code = 567
+        response.url = url
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps({"error": "blocked"}).encode()
+        response.encoding = "utf-8"
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(
+        credential_service, "build_session_from_saved", lambda: requests.Session()
+    )
+    monkeypatch.setattr(credential_service, "saved_is_expired", lambda: False)
+
+    response = hub_client.post(f"/interfaces/{item['id']}/run")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is False
+    assert result["status_code"] == 567
+    assert result["error"] == "上游返回 HTTP 567"
+    assert json.loads(result["response_body"])["error"] == "blocked"
+
+    history = hub_client.get("/runs").json()
+    assert history["total"] == 1
+    summary = history["items"][0]
+    assert summary["ok"] == 0
+    assert summary["status_code"] == 567
+    assert summary["error"] == "上游返回 HTTP 567"
+
+    detail = hub_client.get(
+        f"/interfaces/{item['id']}/runs/{summary['id']}"
+    ).json()
+    assert detail["ok"] is False
+    assert detail["error"] == "上游返回 HTTP 567"
+    assert json.loads(detail["response_body"])["error"] == "blocked"
+
+    usage = hub_client.get("/credential/usage", params={"limit": 60}).json()
+    assert usage["total"] == 1
+    assert usage["success"] == 0
+    assert usage["failed"] == 1
+    assert usage["success_rate"] == 0
+    assert usage["recent"][0]["ok"] is False
+    assert usage["recent"][0]["error"] == "上游返回 HTTP 567"
+
+
 def test_backup_round_trip_skips_duplicates(hub_client):
     item = hub_client.post("/interfaces", json=_interface()).json()
     exported = hub_client.post(
