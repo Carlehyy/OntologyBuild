@@ -18,11 +18,12 @@ import secrets
 import socket
 import threading
 import time
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Coroutine
-from urllib.parse import parse_qsl, unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
 
 from app.config import settings
 from app.data_channel.steward import workspace
@@ -47,6 +48,70 @@ _CURSOR_KEYS = {"cursor", "nextcursor", "next_cursor", "after", "continuationtok
 
 class BrowserRuntimeError(RuntimeError):
     pass
+
+
+def _resolve_cdp_endpoint(raw_url: str) -> str:
+    """Resolve an internal HTTP CDP hostname to an IP before discovery.
+
+    Modern Chromium rejects ``/json/version`` when the HTTP Host header is a
+    Docker service name (DNS-rebinding protection).  Using the resolved IP both
+    satisfies that check and makes Chromium return a WebSocket URL reachable
+    from the backend container.  HTTPS endpoints retain their hostname so TLS
+    certificate validation is not broken.
+    """
+    parsed = urlparse((raw_url or "").strip())
+    host = parsed.hostname
+    if parsed.scheme != "http" or not host:
+        return raw_url
+    try:
+        ipaddress.ip_address(host)
+        return raw_url
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(
+            host, parsed.port or 80, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return raw_url
+    if not infos:
+        return raw_url
+    resolved = infos[0][4][0]
+    userinfo = parsed.netloc.rsplit("@", 1)[0] + "@" if "@" in parsed.netloc else ""
+    port = f":{parsed.port}" if parsed.port else ""
+    return urlunparse(parsed._replace(netloc=f"{userinfo}{resolved}{port}"))
+
+
+def probe_browser_cdp(timeout: float = 1.5) -> dict[str, Any]:
+    """Cheap CDP readiness probe used by status and production readiness."""
+    configured = bool((settings.steward_browser_cdp_url or "").strip())
+    if not configured:
+        return {"configured": False, "reachable": False, "error": "CDP URL 未配置"}
+    endpoint = _resolve_cdp_endpoint(settings.steward_browser_cdp_url).rstrip("/")
+    if urlparse(endpoint).scheme not in {"http", "https"}:
+        return {
+            "configured": True, "reachable": False,
+            "error": "浏览器健康检查要求 http/https CDP 地址",
+        }
+    request = urllib.request.Request(
+        f"{endpoint}/json/version", headers={"Connection": "close"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read(64_000).decode("utf-8"))
+        websocket_url = str(payload.get("webSocketDebuggerUrl") or "")
+        if not websocket_url.startswith(("ws://", "wss://")):
+            raise ValueError("响应缺少 webSocketDebuggerUrl")
+        return {
+            "configured": True,
+            "reachable": True,
+            "browser": str(payload.get("Browser") or "")[:120],
+            "protocolVersion": str(payload.get("Protocol-Version") or "")[:40],
+        }
+    except Exception as exc:  # noqa: BLE001 — 状态端点必须返回结构化诊断
+        return {
+            "configured": True,
+            "reachable": False,
+            "error": f"{type(exc).__name__}: {exc}"[:300],
+        }
 
 
 def _safe_url(url: str) -> str:
@@ -445,13 +510,14 @@ class BrowserManager:
         if self._pw is None:
             self._pw = await async_playwright().start()
         try:
+            endpoint = _resolve_cdp_endpoint(settings.steward_browser_cdp_url)
             self._browser = await self._pw.chromium.connect_over_cdp(
-                settings.steward_browser_cdp_url,
+                endpoint,
                 timeout=int(settings.steward_browser_timeout_seconds) * 1000,
             )
         except Exception as exc:
             raise BrowserRuntimeError(
-                f"无法连接会话浏览器（{settings.steward_browser_cdp_url}）：{exc}"
+                f"无法连接会话浏览器：{exc}"
             ) from exc
         return self._browser
 

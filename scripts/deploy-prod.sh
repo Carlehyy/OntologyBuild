@@ -241,5 +241,5 @@ for i in $(seq 1 30); do
 done
 log "deployment health check failed"
 compose ps || true
-compose logs --tail=200 backend frontend || true
+compose logs --tail=200 backend browser frontend || true
 exit 1

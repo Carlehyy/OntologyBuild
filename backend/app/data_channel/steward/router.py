@@ -38,7 +38,7 @@ from app.data_channel.steward.models import (
 from app.data_channel.steward.orchestrator import run_steward_turn
 from app.data_channel.steward import workspace
 from app.data_channel.steward.browser_runtime import (
-    BrowserRuntimeError, browser_manager,
+    BrowserRuntimeError, browser_manager, probe_browser_cdp,
 )
 from app.data_channel.steward.service import StewardError
 
@@ -311,7 +311,7 @@ def browser_status(_=Depends(get_current_user)):
             "maxSessionsPerUser": max(1, int(settings.steward_browser_max_sessions_per_user)),
             "idleTimeoutSeconds": max(30, int(settings.steward_browser_idle_timeout_seconds)),
         }
-    return _ok({"configured": bool(settings.steward_browser_cdp_url), **capacity})
+    return _ok({**probe_browser_cdp(), **capacity})
 
 
 @router.post("/conversations/{conversation_id}/browser/start")

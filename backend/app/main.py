@@ -566,6 +566,7 @@ def health(db: Session = Depends(get_db)):
         "neo4j": "unknown",
         "minio": "unknown",
         "chroma": "unknown",
+        "browser": "unknown",
         "sentinel_scheduler": "unknown",
         "data_scheduler": "unknown",
         "ontology_projection": "unknown",
@@ -633,6 +634,14 @@ def health(db: Session = Depends(get_db)):
     except Exception:
         checks["chroma"] = "unavailable"
 
+    # Data-steward Chromium/CDP readiness.  A running container is insufficient:
+    # the image may be alive while its internal CDP bridge is misconfigured.
+    try:
+        from app.data_channel.steward.browser_runtime import probe_browser_cdp
+        checks["browser"] = "ok" if probe_browser_cdp()["reachable"] else "unavailable"
+    except Exception:
+        checks["browser"] = "unavailable"
+
     try:
         from app.ontologies.sentinels.scan_worker import scan_worker_status
         sentinel_status = scan_worker_status()
@@ -665,7 +674,7 @@ def health(db: Session = Depends(get_db)):
         checks["ontology_projection"] = "unavailable"
 
     service_keys = (
-        "db", "redis", "neo4j", "minio", "chroma",
+        "db", "redis", "neo4j", "minio", "chroma", "browser",
         "sentinel_scheduler", "data_scheduler",
         "ontology_projection",
     )

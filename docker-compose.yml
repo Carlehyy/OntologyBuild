@@ -17,7 +17,9 @@ services:
 
   browser:
     image: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
-    command: ["--no-sandbox", "--disable-dev-shm-usage", "--remote-debugging-address=0.0.0.0", "--remote-debugging-port=9222"]
+    # The image wrapper owns its 9223 Chromium -> 9222 socat bridge. Passing a
+    # second remote-debugging-port makes both processes fight for port 9222.
+    command: ["--no-sandbox", "--disable-dev-shm-usage"]
     ports: ["9222:9222"]
     shm_size: 2gb
     restart: unless-stopped

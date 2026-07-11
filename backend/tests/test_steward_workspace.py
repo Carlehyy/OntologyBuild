@@ -12,8 +12,9 @@ from app.api_hub import config as api_hub_config, db as api_hub_db
 from app.config import settings
 from app.data_channel.steward import workspace
 from app.data_channel.steward.browser_runtime import (
-    BrowserManager, BrowserRuntimeError, _validate_navigation_response,
-    analyze_pagination, browser_manager, public_capture, validate_target_url,
+    BrowserManager, BrowserRuntimeError, _resolve_cdp_endpoint,
+    _validate_navigation_response, analyze_pagination, browser_manager,
+    probe_browser_cdp, public_capture, validate_target_url,
 )
 from app.data_channel.steward.toolkit import ToolRunner
 
@@ -103,6 +104,48 @@ def test_url_policy_blocks_loopback_and_metadata(monkeypatch):
     monkeypatch.setattr(settings, "steward_browser_allow_private_networks", False)
     with pytest.raises(BrowserRuntimeError):
         validate_target_url("https://intranet.example/path")
+
+
+def test_internal_cdp_hostname_resolves_to_ip_for_chromium_host_validation(monkeypatch):
+    monkeypatch.setattr(
+        "app.data_channel.steward.browser_runtime.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, None, ("172.19.0.10", 9222))],
+    )
+    assert _resolve_cdp_endpoint("http://browser:9222") == "http://172.19.0.10:9222"
+    assert _resolve_cdp_endpoint("http://127.0.0.1:9222") == "http://127.0.0.1:9222"
+    assert _resolve_cdp_endpoint("https://browser.example/cdp") == "https://browser.example/cdp"
+
+
+def test_browser_cdp_probe_validates_websocket_endpoint(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return json.dumps({
+                "Browser": "Chrome/Test", "Protocol-Version": "1.3",
+                "webSocketDebuggerUrl": "ws://172.19.0.10:9222/devtools/browser/test",
+            }).encode()
+
+    monkeypatch.setattr(settings, "steward_browser_cdp_url", "http://browser:9222")
+    monkeypatch.setattr(
+        "app.data_channel.steward.browser_runtime.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, None, ("172.19.0.10", 9222))],
+    )
+    monkeypatch.setattr(
+        "app.data_channel.steward.browser_runtime.urllib.request.urlopen",
+        lambda request, timeout: FakeResponse(),
+    )
+
+    status = probe_browser_cdp()
+
+    assert status == {
+        "configured": True, "reachable": True,
+        "browser": "Chrome/Test", "protocolVersion": "1.3",
+    }
 
 
 def test_navigation_rejects_waf_error_instead_of_reporting_blank_success():

@@ -45,7 +45,7 @@ def test_health_all_service_keys_present():
     response = client.get("/health")
     data = response.json()
     for key in (
-        "db", "redis", "neo4j", "minio", "chroma",
+        "db", "redis", "neo4j", "minio", "chroma", "browser",
         "sentinel_scheduler", "data_scheduler",
         "ontology_projection",
     ):
@@ -58,7 +58,7 @@ def test_health_service_states_are_valid():
     data = response.json()
     assert data["db"] in VALID_DB_STATES
     for key in (
-        "redis", "neo4j", "minio", "chroma",
+        "redis", "neo4j", "minio", "chroma", "browser",
         "sentinel_scheduler", "data_scheduler",
         "ontology_projection",
     ):
