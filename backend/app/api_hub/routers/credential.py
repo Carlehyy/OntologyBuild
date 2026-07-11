@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import credential, scheduler
+from .. import credential, db, scheduler
 
 router = APIRouter(prefix="/credential", tags=["api-hub-credential"])
 
@@ -34,6 +34,35 @@ def cookie_header():
 
 class CronBody(BaseModel):
     cron: str
+
+
+class CredentialConfigBody(BaseModel):
+    username: str = ""
+    password: str | None = None
+    login_url: str = ""
+    clear_password: bool = False
+
+
+@router.get("/config")
+def get_config():
+    return credential.public_configuration()
+
+
+@router.put("/config")
+def put_config(body: CredentialConfigBody):
+    if not body.username.strip():
+        raise HTTPException(status_code=400, detail="W3 账号不能为空")
+    return credential.update_configuration(
+        username=body.username,
+        password=body.password,
+        login_url=body.login_url,
+        clear_password=body.clear_password,
+    )
+
+
+@router.get("/usage")
+def get_usage(limit: int = 60):
+    return db.credential_usage_stats(limit)
 
 
 @router.get("/schedule")

@@ -205,3 +205,5 @@ def _save_run(iface: dict, result: dict) -> None:
             "(SELECT id FROM runs WHERE interface_id = ? ORDER BY id DESC LIMIT ?)",
             (iid, iid, config.MAX_RUNS_PER_INTERFACE),
         )
+    if iface.get("use_w3"):
+        db.record_credential_usage(iface, result, now)

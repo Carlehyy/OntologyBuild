@@ -17,6 +17,8 @@ import requests
 import urllib3
 
 from . import config
+from . import db
+from app.shared.encryption import decrypt, encrypt
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -48,8 +50,7 @@ def _new_session() -> requests.Session:
 
 def w3_login() -> requests.Session:
     """执行一次华为 W3 SSO 登录。成功返回带登录 Cookie 的 Session，失败抛 RuntimeError。"""
-    username = config.W3_USERNAME
-    password = config.W3_PASSWORD
+    username, password, login_url = runtime_credentials()
     if not username:
         raise RuntimeError("未配置 W3_USERNAME（请在 .env 填写工号）")
     if not password:
@@ -64,7 +65,7 @@ def w3_login() -> requests.Session:
     }
     try:
         resp = s.post(
-            config.W3_LOGIN_URL,
+            login_url,
             json=payload,
             headers={"Content-Type": "application/json; charset=UTF-8"},
             allow_redirects=True,
@@ -142,6 +143,66 @@ def clear_saved() -> None:
         config.SESSION_PATH.unlink()
 
 
+# ── 在线授权配置 ──────────────────────────────────────────
+_MODE_KEY = "w3_config_mode"
+_USER_KEY = "w3_username"
+_PASSWORD_KEY = "w3_password_encrypted"
+_LOGIN_URL_KEY = "w3_login_url"
+
+
+def _online_mode() -> bool:
+    return db.get_setting(_MODE_KEY, "") == "online"
+
+
+def runtime_credentials() -> tuple[str, str, str]:
+    """Return the effective credentials, preferring encrypted online config."""
+    if not _online_mode():
+        return config.W3_USERNAME, config.W3_PASSWORD, config.W3_LOGIN_URL
+    username = db.get_setting(_USER_KEY, "") or ""
+    encrypted = db.get_setting(_PASSWORD_KEY, "") or ""
+    password = ""
+    if encrypted:
+        try:
+            password = decrypt(encrypted)
+        except Exception:  # unreadable ciphertext must fail closed
+            password = ""
+    login_url = db.get_setting(_LOGIN_URL_KEY, "") or config.W3_LOGIN_URL
+    return username, password, login_url
+
+
+def public_configuration() -> dict:
+    username, password, login_url = runtime_credentials()
+    return {
+        "username": username,
+        "password_configured": bool(password),
+        "login_url": login_url,
+        "source": "online" if _online_mode() else "environment",
+    }
+
+
+def update_configuration(
+    username: str,
+    password: str | None,
+    login_url: str,
+    clear_password: bool = False,
+) -> dict:
+    current_user, current_password, _ = runtime_credentials()
+    username = username.strip()
+    login_url = login_url.strip() or config.W3_LOGIN_URL
+    if clear_password:
+        next_password = ""
+    elif password is None or password == "":
+        next_password = current_password
+    else:
+        next_password = password
+    db.set_setting(_MODE_KEY, "online")
+    db.set_setting(_USER_KEY, username or current_user)
+    db.set_setting(_PASSWORD_KEY, encrypt(next_password) if next_password else "")
+    db.set_setting(_LOGIN_URL_KEY, login_url)
+    clear_saved()  # a changed account must not reuse the previous cookie jar
+    return public_configuration()
+
+
 # ── 对外动作 ───────────────────────────────────────────────
 def refresh() -> dict:
     """登录并持久化 Cookie。线程安全。返回最新状态。"""
@@ -213,8 +274,11 @@ def status() -> dict:
         if has_expiry and earliest is not None:
             expires_at = datetime.fromtimestamp(earliest, tz=timezone.utc).isoformat()
             expired = earliest <= datetime.now(timezone.utc).timestamp()
+    public = public_configuration()
     return {
-        "configured": config.is_w3_configured(),
+        "configured": bool(public["username"] and public["password_configured"]),
+        "username": public["username"],
+        "credential_source": public["source"],
         "has_session": saved is not None,
         "expired": expired,            # True = 本地可判定已过期，建议重新登录
         "expires_at": expires_at,      # 已知的最早过期时间（无则为 None）

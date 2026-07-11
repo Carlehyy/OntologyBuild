@@ -76,6 +76,44 @@ export interface CredentialStatus {
   refreshed_at: string | null
   cron: string
   next_run: string | null
+  username: string
+  credential_source: 'online' | 'environment'
+}
+
+export interface CredentialConfig {
+  username: string
+  password_configured: boolean
+  login_url: string
+  source: 'online' | 'environment'
+}
+
+export interface CredentialUsageRecord {
+  id: number
+  interface_id: number | null
+  interface_name: string
+  ok: boolean
+  relogin: boolean
+  status_code: number | null
+  error: string | null
+  created_at: string
+}
+
+export interface CredentialUsage {
+  total: number
+  success: number
+  failed: number
+  relogin: number
+  success_rate: number
+  recent: CredentialUsageRecord[]
+}
+
+export interface RunOverview {
+  total_interfaces: number
+  executed_interfaces: number
+  unexecuted_interfaces: number
+  today_traffic: number
+  seven_day_traffic: number
+  daily: { date: string; count: number }[]
 }
 
 export interface McpInfo {
@@ -104,8 +142,12 @@ export const apiHub = {
   setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
   run: (id: number) => data<RunResult>(http.post(`/interfaces/${id}/run`)),
   listRuns: (params: Record<string, string | number>) => data<{ items: RunSummary[]; total: number; page: number; size: number }>(http.get('/runs', { params })),
+  runOverview: () => data<RunOverview>(http.get('/runs/overview')),
   getRun: (interfaceId: number, runId: number) => data<RunDetail>(http.get(`/interfaces/${interfaceId}/runs/${runId}`)),
   credentialStatus: () => data<CredentialStatus>(http.get('/credential/status')),
+  credentialConfig: () => data<CredentialConfig>(http.get('/credential/config')),
+  updateCredentialConfig: (body: { username: string; password?: string; login_url: string; clear_password?: boolean }) => data<CredentialConfig>(http.put('/credential/config', body)),
+  credentialUsage: (limit = 60) => data<CredentialUsage>(http.get('/credential/usage', { params: { limit } })),
   refreshCredential: () => data<CredentialStatus>(http.post('/credential/refresh')),
   setSchedule: (cron: string) => data<{ cron: string; next_run: string | null }>(http.put('/credential/schedule', { cron })),
   cookieHeader: () => data<{ cookie: string; count: number }>(http.get('/credential/cookie-header')),

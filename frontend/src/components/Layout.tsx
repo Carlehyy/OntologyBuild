@@ -108,7 +108,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { to: '/api-hub', icon: Waypoints, label: '接口代理', subItems: [
       { to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理' },
       { to: '/api-hub/history', icon: History, label: '调用历史' },
-      { to: '/api-hub/operations', icon: KeyRound, label: '登录与发布' },
+      { to: '/api-hub/authorization', icon: KeyRound, label: '授权配置' },
     ]},
     { to: '/models', icon: Cpu, label: '模型配置' },
     { to: '/settings', icon: Settings, label: '系统设置', subItems: [
@@ -147,6 +147,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {navItems.map((item) => {
             const Icon = item.icon
             const groupActive = isGroupActive(item)
+            const groupExpanded = expandedGroup === item.to || groupActive
 
             if (item.subItems) {
               return (
@@ -167,9 +168,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     style={groupActive ? { background: 'var(--color-nav-bg)' } : {}}>
                     <Icon size={18} className="shrink-0" />
                     {!collapsed && <span className="flex-1 text-left font-medium">{item.label}</span>}
-                    {!collapsed && <ChevronDown size={14} className={`transition-transform ${expandedGroup === item.to ? 'rotate-180' : ''}`} />}
+                    {!collapsed && <ChevronDown size={14} className={`transition-transform ${groupExpanded ? 'rotate-180' : ''}`} />}
                   </button>
-                  {expandedGroup === item.to && !collapsed && (
+                  {groupExpanded && !collapsed && (
                     <div className="ml-4 mt-1.5 space-y-1.5 border-l border-[var(--color-border)] pl-3 anim-fade-in-down">
                       {item.subItems.map(sub => {
                         const SubIcon = sub.icon

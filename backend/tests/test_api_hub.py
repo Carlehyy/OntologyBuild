@@ -5,7 +5,7 @@ import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api_hub import config, db
+from app.api_hub import config, credential as credential_service, db
 from app.api_hub.routers import backup, credential, interfaces, mcp
 
 
@@ -72,7 +72,7 @@ def test_interface_crud_group_and_auth_boundary(hub_client):
 
 
 def test_run_history_and_response_capture(hub_client, monkeypatch):
-    item = hub_client.post("/interfaces", json=_interface()).json()
+    item = hub_client.post("/interfaces", json=_interface(use_w3=True)).json()
 
     def fake_request(session, method, url, **kwargs):
         response = requests.Response()
@@ -84,6 +84,10 @@ def test_run_history_and_response_capture(hub_client, monkeypatch):
         return response
 
     monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(
+        credential_service, "build_session_from_saved", lambda: requests.Session()
+    )
+    monkeypatch.setattr(credential_service, "saved_is_expired", lambda: False)
     result = hub_client.post(f"/interfaces/{item['id']}/run")
     assert result.status_code == 200
     assert result.json()["ok"] is True
@@ -97,6 +101,18 @@ def test_run_history_and_response_capture(hub_client, monkeypatch):
     ).json()
     assert detail["request_snapshot"]["url"] == item["url"]
     assert json.loads(detail["response_body"])["ok"] is True
+
+    usage = hub_client.get("/credential/usage", params={"limit": 60}).json()
+    assert usage["total"] == 1
+    assert usage["success"] == 1
+    assert usage["recent"][0]["interface_name"] == "健康检查"
+
+    overview = hub_client.get("/runs/overview").json()
+    assert overview["total_interfaces"] == 1
+    assert overview["executed_interfaces"] == 1
+    assert overview["unexecuted_interfaces"] == 0
+    assert overview["today_traffic"] == 1
+    assert overview["seven_day_traffic"] == 1
 
 
 def test_backup_round_trip_skips_duplicates(hub_client):
@@ -118,3 +134,32 @@ def test_backup_round_trip_skips_duplicates(hub_client):
     restored = hub_client.post("/backup/import", json=payload).json()
     assert restored["imported"] == 1
     assert hub_client.get("/interfaces").json()[0]["name"] == "健康检查"
+
+
+def test_online_credential_config_is_encrypted_and_password_is_never_returned(hub_client):
+    response = hub_client.put(
+        "/credential/config",
+        json={
+            "username": "w3-user",
+            "password": "private-password",
+            "login_url": "https://login.example/session",
+        },
+    )
+    assert response.status_code == 200
+    public = response.json()
+    assert public == {
+        "username": "w3-user",
+        "password_configured": True,
+        "login_url": "https://login.example/session",
+        "source": "online",
+    }
+    assert "password" not in public
+    stored = db.get_setting("w3_password_encrypted")
+    assert stored and stored != "private-password"
+    username, password, login_url = credential_service.runtime_credentials()
+    assert (username, password, login_url) == (
+        "w3-user", "private-password", "https://login.example/session"
+    )
+
+    fetched = hub_client.get("/credential/config").json()
+    assert fetched == public

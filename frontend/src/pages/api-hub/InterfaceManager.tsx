@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Braces, Check, ChevronRight, CirclePlus, Copy, FileCode2, Folder, Play,
-  Plus, Search, Send, Trash2, X,
+  Plus, Search, Send, Trash2, X, Database, Globe2, GripVertical,
 } from 'lucide-react'
 import { apiError, apiHub, emptyHubInterface, type HubInterface, type KV, type RunResult } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import { OpenInterfacesModal, SystemDataModal } from './InterfaceDataModals'
 
 interface Props {
   interfaces: HubInterface[]
@@ -30,6 +31,35 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [result, setResult] = useState<RunResult | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [curl, setCurl] = useState('')
+  const [openInterfaces, setOpenInterfaces] = useState(false)
+  const [systemData, setSystemData] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [sizes, setSizes] = useState<[number, number]>([28, 72])
+
+  const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const startX = event.clientX
+    const start = sizes
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = ((moveEvent.clientX - startX) / rect.width) * 100
+      const left = Math.min(42, Math.max(20, start[0] + delta))
+      setSizes([left, 100 - left])
+    }
+    const onUp = () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [sizes])
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -118,11 +148,11 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   }
 
   return (
-    <div className="flex h-full min-h-0 p-4 gap-3">
-      <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+    <div ref={containerRef} className="scrollbar-none grid h-full min-h-0 overflow-x-auto overflow-y-hidden p-1" style={{ gridTemplateColumns: `minmax(250px, ${sizes[0]}fr) 4px minmax(680px, ${sizes[1]}fr)` }}>
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
         <div className="border-b border-[var(--color-border)] p-3">
-          <Button className="w-full" size="sm" onClick={create}><CirclePlus size={14} />新建接口</Button>
-          <label className="mt-3 flex h-8 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5">
+          <div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-semibold">接口清单</h2><p className="text-[10px] text-[var(--color-text-tertiary)]">{interfaces.length} 个已纳管接口</p></div><Button size="sm" onClick={create}><CirclePlus size={13} />新建</Button></div>
+          <label className="flex h-8 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5">
             <Search size={14} className="text-[var(--color-text-tertiary)]" />
             <input value={search} onChange={event => setSearch(event.target.value)} placeholder="筛选名称、URL 或分组" className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
           </label>
@@ -146,9 +176,15 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           ))}
         </div>
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--color-border)] bg-white/60 p-3">
+          <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />开放接口</Button>
+          <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
+        </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+      <div onPointerDown={startResize} role="separator" aria-orientation="vertical" aria-label="调整接口清单宽度" className="group flex cursor-col-resize items-center justify-center"><span className="flex h-12 w-3 items-center justify-center rounded-full border border-transparent text-[var(--color-text-tertiary)] transition-colors group-hover:border-teal-200 group-hover:bg-teal-50 group-hover:text-teal-600"><GripVertical size={12} /></span></div>
+
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
         <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4 py-3">
           <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-[var(--color-text-tertiary)]" placeholder="接口名称" />
           <input list="api-hub-groups" value={draft.group_name} onChange={event => patchDraft('group_name', event.target.value)} className="h-8 w-36 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 text-xs outline-none" placeholder="默认分组" />
@@ -200,6 +236,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       <Modal open={Boolean(curl)} onClose={() => setCurl('')} title="导出 cURL" description={draft.use_w3 ? '已尽力附带当前 W3 Cookie，请勿将命令分享给无关人员。' : '命令已根据当前编辑器内容生成。'} size="2xl" footer={<Button onClick={() => navigator.clipboard.writeText(curl)}><Copy size={14} />复制命令</Button>}>
         <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-4 text-xs leading-6 text-slate-100">{curl}</pre>
       </Modal>
+      <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reload} onError={onError} />
+      <SystemDataModal open={systemData} onClose={() => setSystemData(false)} interfaces={interfaces} reload={reload} onError={onError} />
     </div>
   )
 }

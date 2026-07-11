@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, HTTPException
@@ -255,6 +255,36 @@ def get_run(iid: int, run_id: int):
 #  独立 router，挂在 /api/runs，与上面的接口 CRUD 分开。
 # ============================================================
 runs_router = APIRouter(prefix="/runs", tags=["api-hub-runs"])
+
+
+@runs_router.get("/overview")
+def run_overview():
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=6)
+    days = [(start + timedelta(days=i)).isoformat() for i in range(7)]
+    with db.get_conn() as conn:
+        total_interfaces = conn.execute("SELECT COUNT(*) FROM interfaces").fetchone()[0]
+        executed = conn.execute("SELECT COUNT(DISTINCT interface_id) FROM runs").fetchone()[0]
+        today_traffic = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE substr(created_at, 1, 10) = ?",
+            (today.isoformat(),),
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count "
+            "FROM runs WHERE substr(created_at, 1, 10) >= ? "
+            "GROUP BY substr(created_at, 1, 10)",
+            (start.isoformat(),),
+        ).fetchall()
+    by_day = {row["day"]: row["count"] for row in rows}
+    daily = [{"date": day, "count": int(by_day.get(day, 0))} for day in days]
+    return {
+        "total_interfaces": int(total_interfaces),
+        "executed_interfaces": int(executed),
+        "unexecuted_interfaces": max(0, int(total_interfaces) - int(executed)),
+        "today_traffic": int(today_traffic),
+        "seven_day_traffic": sum(item["count"] for item in daily),
+        "daily": daily,
+    }
 
 
 @runs_router.get("")
