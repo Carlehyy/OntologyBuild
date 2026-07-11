@@ -43,3 +43,59 @@ def test_update_ontology(client, auth_headers):
     r2 = client.put(f"/api/v1/ontologies/{oid}", json={"description": "updated desc"}, headers=auth_headers)
     assert r2.status_code == 200
     assert r2.json()["data"]["description"] == "updated desc"
+
+
+def test_ontology_card_metadata_uses_configured_domain(client, auth_headers, db):
+    domain_response = client.post(
+        "/api/v1/domains",
+        json={"name": "客户运营", "description": "客户全生命周期"},
+        headers=auth_headers,
+    )
+    assert domain_response.status_code == 201
+
+    created = client.post(
+        "/api/v1/ontologies",
+        json={
+            "name": "客户运营本体",
+            "domain": "客户运营",
+            "description": "统一客户、触点和服务知识。",
+            "icon": "users",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    payload = created.json()["data"]
+    assert payload["icon"] == "users"
+    assert payload["build_mode"] == "manual"
+
+    from app.models.ontology_formal import ActionType
+    db.add(ActionType(
+        ontology_id=payload["id"],
+        name="create_follow_up",
+        display_name="创建跟进任务",
+    ))
+    db.commit()
+
+    listed = client.get("/api/v1/ontologies", headers=auth_headers)
+    assert listed.status_code == 200
+    card = next(item for item in listed.json()["data"]["items"] if item["id"] == payload["id"])
+    assert card["description"] == "统一客户、触点和服务知识。"
+    assert card["icon"] == "users"
+    assert card["action_count"] == 1
+
+
+def test_update_ontology_card_metadata(client, auth_headers):
+    created = client.post(
+        "/api/v1/ontologies",
+        json={"name": "待编辑本体", "domain": "财务"},
+        headers=auth_headers,
+    ).json()["data"]
+
+    updated = client.put(
+        f"/api/v1/ontologies/{created['id']}",
+        json={"name": "财务管理本体", "description": "财务知识模型", "icon": "landmark"},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["name"] == "财务管理本体"
+    assert updated.json()["data"]["icon"] == "landmark"

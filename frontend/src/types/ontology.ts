@@ -4,18 +4,20 @@ export interface OntologyListItem {
   id: string
   name: string
   domain: string
+  description?: string
+  icon?: string
   version: string
   status: OntologyStatus
   build_mode?: string
   entity_count: number
   relation_count: number
+  action_count: number
   created_by: string
   created_at: string
   updated_at: string
 }
 
 export interface OntologyDetail extends OntologyListItem {
-  description?: string
   build_mode?: string
   created_at: string
 }

@@ -2,9 +2,9 @@ import { apiClient } from './client'
 import type { OntologyListItem, OntologyDetail, Entity, LogicRule, Action, UploadedFile, Prompt, ModelConfig } from '@/types/ontology'
 
 export const ontologyApi = {
-  list: (params?: { name?: string; page?: number; page_size?: number }) =>
+  list: (params?: { name?: string; domain?: string; page?: number; page_size?: number }) =>
     apiClient.get<{ items: OntologyListItem[]; total: number; page: number; page_size: number }>('/ontologies', { params }),
-  create: (body: { name: string; domain: string; description?: string; build_mode?: string }) =>
+  create: (body: { name: string; domain: string; description?: string; icon?: string; build_mode?: string }) =>
     apiClient.post<OntologyDetail>('/ontologies', body),
   get: (id: string) => apiClient.get<OntologyDetail>(`/ontologies/${id}`),
   update: (id: string, body: Partial<OntologyDetail>) => apiClient.put<OntologyDetail>(`/ontologies/${id}`, body),

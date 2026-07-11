@@ -11,6 +11,9 @@ class OntologyProject(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     domain: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
+    # A stable built-in icon key (for example ``network`` or ``shopping-cart``).
+    # Keep this nullable so historical rows remain readable without a backfill.
+    icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     version: Mapped[str] = mapped_column(String(20), default="v0.1")
     status: Mapped[str] = mapped_column(String(20), default="draft")
     build_mode: Mapped[str] = mapped_column(String(30), default="simple_llm", nullable=True)

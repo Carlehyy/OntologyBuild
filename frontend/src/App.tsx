@@ -5,7 +5,6 @@ import Layout from '@/components/Layout'
 import LoginPage from '@/pages/login/LoginPage'
 import OverviewPage from '@/pages/overview/OverviewPage'
 import OntologyListPage from '@/pages/ontologies/list/OntologyListPage'
-import OntologyCreateWizard from '@/pages/ontologies/new/OntologyCreateWizard'
 import OntologyDetailPage from '@/pages/ontologies/detail/OntologyDetailPage'
 import MappingConfigurationPage from '@/pages/ontologies/mapping/MappingConfigurationPage'
 import EntityDetailPage from '@/pages/ontologies/detail/entity/EntityDetailPage'
@@ -79,7 +78,7 @@ export default function App() {
           <Route path="/explore" element={<ProtectedRoute><ExplorationPage /></ProtectedRoute>} />
 
           <Route path="/ontologies" element={<ProtectedRoute><OntologyListPage /></ProtectedRoute>} />
-          <Route path="/ontologies/new" element={<ProtectedRoute><OntologyCreateWizard /></ProtectedRoute>} />
+          <Route path="/ontologies/new" element={<ProtectedRoute><OntologyListPage defaultCreateOpen /></ProtectedRoute>} />
           <Route path="/ontologies/:id" element={<ProtectedRoute><OntologyDetailPage /></ProtectedRoute>} />
           <Route path="/ontologies/:id/mapping-config" element={<ProtectedRoute><MappingConfigurationPage /></ProtectedRoute>} />
           <Route path="/ontologies/:id/graph" element={<ProtectedRoute><OntologyGraphPage /></ProtectedRoute>} />

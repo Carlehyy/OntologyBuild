@@ -1,212 +1,569 @@
-import { useState, useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { useTranslation } from 'react-i18next'
-import { ontologyApi } from '@/api/ontologies'
+import { domainApi, ontologyApi } from '@/api/ontologies'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { Badge } from '@/components/ui/Badge'
-import { Card } from '@/components/ui/Card'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/Table'
-import { LoadingState, EmptyState } from '@/components/ui/LoadingState'
-import { ConfirmModal } from '@/components/ui/Modal'
+import { LoadingState } from '@/components/ui/LoadingState'
+import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import type { OntologyListItem } from '@/types/ontology'
-import { Plus, Search, X, Network, FileText, GitBranch } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import {
+  Boxes,
+  Cpu,
+  Database,
+  Factory,
+  GraduationCap,
+  HeartPulse,
+  Landmark,
+  Network,
+  Pencil,
+  Plus,
+  Scale,
+  Search,
+  ShieldCheck,
+  ShoppingCart,
+  Trash2,
+  Users,
+  X,
+  Zap,
+} from 'lucide-react'
 
-const statusMap: Record<string, { label: string; variant: "default" | "success" | "warning" | "danger" | "info" | "outline" | "secondary" }> = {
-  draft: { label: "草稿", variant: "warning" },
-  review: { label: "审核中", variant: "info" },
-  published: { label: "已发布", variant: "success" },
+interface DomainItem {
+  id: string
+  name: string
+  description: string
 }
 
-export default function OntologyListPage() {
+interface OntologyFormValue {
+  name: string
+  domain: string
+  description: string
+  icon: string
+}
+
+interface IconOption {
+  key: string
+  label: string
+  icon: LucideIcon
+  tone: string
+}
+
+const ICON_OPTIONS: IconOption[] = [
+  { key: 'network', label: '通用本体', icon: Network, tone: 'bg-teal-50 text-teal-600' },
+  { key: 'boxes', label: '产品知识', icon: Boxes, tone: 'bg-blue-50 text-blue-600' },
+  { key: 'shopping-cart', label: '采购电商', icon: ShoppingCart, tone: 'bg-emerald-50 text-emerald-600' },
+  { key: 'factory', label: '生产制造', icon: Factory, tone: 'bg-orange-50 text-orange-600' },
+  { key: 'heart-pulse', label: '医疗健康', icon: HeartPulse, tone: 'bg-rose-50 text-rose-600' },
+  { key: 'landmark', label: '金融财务', icon: Landmark, tone: 'bg-amber-50 text-amber-600' },
+  { key: 'scale', label: '法律合规', icon: Scale, tone: 'bg-violet-50 text-violet-600' },
+  { key: 'graduation-cap', label: '教育培训', icon: GraduationCap, tone: 'bg-indigo-50 text-indigo-600' },
+  { key: 'cpu', label: '科技研发', icon: Cpu, tone: 'bg-cyan-50 text-cyan-600' },
+  { key: 'zap', label: '能源动力', icon: Zap, tone: 'bg-yellow-50 text-yellow-600' },
+  { key: 'shield-check', label: '风控安全', icon: ShieldCheck, tone: 'bg-red-50 text-red-600' },
+  { key: 'users', label: '组织客户', icon: Users, tone: 'bg-sky-50 text-sky-600' },
+  { key: 'database', label: '数据资产', icon: Database, tone: 'bg-purple-50 text-purple-600' },
+]
+
+const DEFAULT_ICON = ICON_OPTIONS[0]
+
+function iconOption(key?: string) {
+  return ICON_OPTIONS.find(option => option.key === key) ?? DEFAULT_ICON
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (!error || typeof error !== 'object') return fallback
+  const candidate = error as { detail?: unknown; message?: unknown }
+  if (typeof candidate.detail === 'string') return candidate.detail
+  if (candidate.detail && typeof candidate.detail === 'object') {
+    const detail = candidate.detail as { message?: unknown }
+    if (typeof detail.message === 'string') return detail.message
+  }
+  if (typeof candidate.message === 'string') return candidate.message
+  return fallback
+}
+
+function formatChangedAt(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
+function OntologyAvatar({ icon, size = 'md' }: { icon?: string; size?: 'md' | 'lg' }) {
+  const option = iconOption(icon)
+  const Icon = option.icon
+  return (
+    <div
+      className={`${size === 'lg' ? 'h-14 w-14 rounded-2xl' : 'h-11 w-11 rounded-xl'} ${option.tone} flex shrink-0 items-center justify-center`}
+      aria-hidden="true"
+    >
+      <Icon size={size === 'lg' ? 26 : 21} strokeWidth={1.8} />
+    </div>
+  )
+}
+
+function OntologyFormModal({
+  open,
+  title,
+  submitText,
+  domains,
+  initial,
+  onClose,
+  onSubmit,
+  onManageDomains,
+}: {
+  open: boolean
+  title: string
+  submitText: string
+  domains: DomainItem[]
+  initial?: OntologyListItem | null
+  onClose: () => void
+  onSubmit: (value: OntologyFormValue) => Promise<unknown>
+  onManageDomains: () => void
+}) {
+  const [name, setName] = useState(initial?.name ?? '')
+  const [domain, setDomain] = useState(initial?.domain ?? domains[0]?.name ?? '')
+  const [description, setDescription] = useState(initial?.description ?? '')
+  const [icon, setIcon] = useState(initial?.icon ?? DEFAULT_ICON.key)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const initialDomain = initial?.domain
+  const availableDomains = initialDomain && !domains.some(item => item.name === initialDomain)
+    ? [{ id: `legacy-${initialDomain}`, name: initialDomain, description: '' }, ...domains]
+    : domains
+  const selectedDomain = domain || availableDomains[0]?.name || ''
+
+  const submit = async () => {
+    if (!name.trim()) {
+      setError('请输入本体名称')
+      return
+    }
+    if (!selectedDomain) {
+      setError('请选择所属领域')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit({
+        name: name.trim(),
+        domain: selectedDomain,
+        description: description.trim(),
+        icon,
+      })
+    } catch (submitError) {
+      setError(errorMessage(submitError, `${submitText}失败，请稍后重试`))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => !saving && onClose()}
+      title={title}
+      description="填写基本信息后即可使用，后续可在详情页维护结构与版本。"
+      size="lg"
+      footer={(
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>取消</Button>
+          <Button onClick={submit} loading={saving} disabled={!name.trim() || !selectedDomain}>{submitText}</Button>
+        </>
+      )}
+    >
+      <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Input
+            label="本体名称"
+            required
+            autoFocus
+            maxLength={200}
+            value={name}
+            onChange={event => setName(event.target.value)}
+            placeholder="例如：供应链知识本体"
+          />
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]">
+              所属领域<span className="ml-0.5 text-[var(--color-danger)]">*</span>
+            </label>
+            {availableDomains.length > 0 ? (
+              <select
+                value={selectedDomain}
+                onChange={event => setDomain(event.target.value)}
+                className="h-9 w-full rounded-md border border-[var(--color-border)] bg-white px-3 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+              >
+                {availableDomains.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+              </select>
+            ) : (
+              <button
+                type="button"
+                onClick={onManageDomains}
+                className="flex h-9 w-full items-center justify-between rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 text-sm text-amber-700"
+              >
+                暂无可用领域 <span className="font-medium">前往设置</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]">本体描述</label>
+          <textarea
+            value={description}
+            onChange={event => setDescription(event.target.value)}
+            maxLength={500}
+            rows={3}
+            placeholder="简要说明本体覆盖的业务范围和用途"
+            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+          />
+          <p className="mt-1 text-right text-[11px] text-[var(--color-text-tertiary)]">{description.length}/500</p>
+        </div>
+
+        <fieldset>
+          <legend className="mb-2 text-sm font-medium text-[var(--color-text-primary)]">本体图标</legend>
+          <div className="grid grid-cols-7 gap-2 max-sm:grid-cols-5">
+            {ICON_OPTIONS.map(option => {
+              const Icon = option.icon
+              const selected = icon === option.key
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setIcon(option.key)}
+                  title={option.label}
+                  aria-label={option.label}
+                  aria-pressed={selected}
+                  className={`flex aspect-square items-center justify-center rounded-xl border transition-all ${
+                    selected
+                      ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-sm ring-2 ring-teal-100'
+                      : 'border-slate-200 bg-white text-slate-500 hover:border-teal-300 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon size={20} strokeWidth={1.8} />
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-text-tertiary)]">所选图标将作为本体头像，可随时编辑。</p>
+        </fieldset>
+
+        {error && (
+          <div role="alert" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+function CreateOntologyCard({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+    >
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
+        <Plus size={25} />
+      </div>
+      <h3 className="text-base font-semibold text-slate-800">新建本体</h3>
+      <p className="mt-2 max-w-[210px] text-xs leading-5 text-slate-500">设置名称、描述、图标和所属领域，快速开始建模</p>
+      <span className="mt-5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm">
+        立即创建
+      </span>
+    </button>
+  )
+}
+
+function OntologyCard({
+  item,
+  onEdit,
+  onDetail,
+  onDelete,
+}: {
+  item: OntologyListItem
+  onEdit: () => void
+  onDetail: () => void
+  onDelete: () => void
+}) {
+  return (
+    <article className="group flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
+      <div className="flex flex-1 flex-col p-4 pb-3">
+        <div className="flex items-start gap-3">
+          <OntologyAvatar icon={item.icon} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onDetail}
+                className="truncate text-left text-[15px] font-semibold text-slate-800 transition-colors hover:text-teal-700"
+                title={item.name}
+              >
+                {item.name}
+              </button>
+              <span className="shrink-0 font-mono text-[11px] text-slate-400">{item.version || 'v0.1'}</span>
+            </div>
+            <span className="mt-1.5 inline-flex max-w-full truncate rounded-md bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+              {item.domain || '未设置领域'}
+            </span>
+          </div>
+        </div>
+
+        <p
+          className="mt-4 min-h-[44px] text-sm leading-[22px] text-slate-500"
+          style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+          title={item.description || '暂无描述'}
+        >
+          {item.description || '暂无描述'}
+        </p>
+
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {[
+            { label: '对象实体', value: item.entity_count ?? 0 },
+            { label: '实体关系', value: item.relation_count ?? 0 },
+            { label: '执行动作', value: item.action_count ?? 0 },
+          ].map(metric => (
+            <div key={metric.label} className="rounded-xl bg-slate-50 px-3 py-2.5">
+              <p className="whitespace-nowrap text-[10px] font-medium text-slate-400">{metric.label}</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-800">{metric.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <footer className="flex min-h-12 items-center gap-1 border-t border-slate-100 px-3 py-2">
+        <button
+          type="button"
+          onClick={onEdit}
+          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <Pencil size={12} /> 编辑
+        </button>
+        <button
+          type="button"
+          onClick={onDetail}
+          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <Search size={12} /> 详情
+        </button>
+        <span className="ml-auto whitespace-nowrap text-[10px] tabular-nums text-slate-400" title={`最近更改：${new Date(item.updated_at).toLocaleString('zh-CN')}`}>
+          {formatChangedAt(item.updated_at)}
+        </span>
+        <button
+          type="button"
+          onClick={onDelete}
+          className="ml-1 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+          title="删除本体"
+          aria-label={`删除本体 ${item.name}`}
+        >
+          <Trash2 size={14} />
+        </button>
+      </footer>
+    </article>
+  )
+}
+
+export default function OntologyListPage({ defaultCreateOpen = false }: { defaultCreateOpen?: boolean }) {
   const [nameFilter, setNameFilter] = useState('')
   const [domainFilter, setDomainFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
-  const qc = useQueryClient()
+  const [createOpen, setCreateOpen] = useState(defaultCreateOpen)
+  const [editTarget, setEditTarget] = useState<OntologyListItem | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<OntologyListItem | null>(null)
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { t } = useTranslation()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['ontologies'],
-    queryFn: () => ontologyApi.list({ page_size: 1000 }) as any,
+    queryFn: () => ontologyApi.list({ page_size: 1000 }),
+  })
+  const { data: configuredDomains = [] } = useQuery<DomainItem[]>({
+    queryKey: ['domains'],
+    queryFn: () => domainApi.list(),
   })
 
-  const deleteMut = useMutation({
+  const allItems = useMemo(() => data?.items ?? [], [data?.items])
+  const domains = useMemo(() => {
+    const byName = new Map<string, DomainItem>()
+    configuredDomains.forEach(item => byName.set(item.name, item))
+    // Historical ontology domains remain filterable even if a setting was
+    // later renamed or removed.
+    allItems.forEach(item => {
+      if (item.domain && !byName.has(item.domain)) {
+        byName.set(item.domain, { id: `legacy-${item.domain}`, name: item.domain, description: '' })
+      }
+    })
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  }, [allItems, configuredDomains])
+
+  const filteredItems = useMemo(() => {
+    const keyword = nameFilter.trim().toLocaleLowerCase('zh-CN')
+    return [...allItems]
+      .filter(item => !keyword || item.name.toLocaleLowerCase('zh-CN').includes(keyword))
+      .filter(item => !domainFilter || item.domain === domainFilter)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  }, [allItems, domainFilter, nameFilter])
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['ontologies'] })
+    queryClient.invalidateQueries({ queryKey: ['stats'] })
+  }
+
+  const createMutation = useMutation({
+    mutationFn: (value: OntologyFormValue) => ontologyApi.create(value),
+    onSuccess: () => {
+      refresh()
+      setCreateOpen(false)
+      if (defaultCreateOpen) navigate('/ontologies', { replace: true })
+    },
+  })
+  const updateMutation = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: OntologyFormValue }) => ontologyApi.update(id, value),
+    onSuccess: () => {
+      refresh()
+      setEditTarget(null)
+    },
+  })
+  const deleteMutation = useMutation({
     mutationFn: (id: string) => ontologyApi.delete(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['ontologies'] })
-      qc.invalidateQueries({ queryKey: ['stats'] })
+      refresh()
       setDeleteTarget(null)
     },
   })
 
-  const allItems: OntologyListItem[] = data?.items ?? []
-
-  const domains = useMemo(() => {
-    const d = new Set(allItems.map(o => o.domain).filter(Boolean))
-    return Array.from(d)
-  }, [allItems])
-
-  const filteredItems = useMemo(() => {
-    let list = allItems
-    if (nameFilter.trim())
-      list = list.filter(o => o.name.toLowerCase().includes(nameFilter.trim().toLowerCase()))
-    if (domainFilter)
-      list = list.filter(o => o.domain === domainFilter)
-    if (statusFilter)
-      list = list.filter(o => o.status === statusFilter)
-    return list
-  }, [allItems, nameFilter, domainFilter, statusFilter])
-
-  const hasFilters = nameFilter || domainFilter || statusFilter
-  const totalCount = allItems.length
+  const openCreate = () => setCreateOpen(true)
+  const closeCreate = () => {
+    setCreateOpen(false)
+    if (defaultCreateOpen) navigate('/ontologies', { replace: true })
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Filters + 新建按钮 */}
-      <Card className="p-4">
-        <div className="flex flex-wrap gap-3 items-end">
-          <div className="w-72">
-            <Input
-              placeholder="搜索本体名称..."
-              value={nameFilter}
-              onChange={e => setNameFilter(e.target.value)}
-              className="h-9"
-            />
-          </div>
-          <select
-            value={domainFilter}
-            onChange={e => setDomainFilter(e.target.value)}
-            className="h-9 px-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
-          >
-            <option value="">全部领域</option>
-            {domains.map(d => (
-              <option key={d} value={d}>{d}</option>
-            ))}
-          </select>
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            className="h-9 px-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
-          >
-            <option value="">全部状态</option>
-            <option value="draft">草稿</option>
-            <option value="review">审核中</option>
-            <option value="published">已发布</option>
-          </select>
-          {hasFilters && (
-            <Button variant="ghost" size="sm" onClick={() => { setNameFilter(''); setDomainFilter(''); setStatusFilter('') }}>
-              <X size={14} /> 清除
-            </Button>
-          )}
-          <div className="ml-auto">
-            <button
-              onClick={() => navigate('/ontologies/new')}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-white bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
-            >
-              <Plus size={14} />
-              新建本体
-            </button>
-          </div>
-        </div>
-        {hasFilters && (
-          <p className="text-xs text-[var(--color-text-tertiary)] mt-2">
-            筛选结果：{filteredItems.length} / {totalCount}
-          </p>
-        )}
-      </Card>
+    <div className="min-h-full">
+      <div className="mb-5">
+        <h1 className="text-xl font-semibold tracking-tight text-slate-900">本体管理</h1>
+        <p className="mt-1 text-sm text-slate-500">管理业务本体、结构规模与版本信息</p>
+      </div>
 
-      {/* Table */}
-      <Card>
-        {isLoading ? (
-          <LoadingState message="加载本体列表..." />
-        ) : filteredItems.length === 0 ? (
-          <EmptyState
-            title={hasFilters ? "无匹配结果" : "暂无本体"}
-            description={hasFilters ? "尝试调整筛选条件" : "创建您的第一个本体项目"}
-            action={!hasFilters && (
-              <Button onClick={() => navigate('/ontologies/new')} size="sm">
-                <Plus size={14} /> 新建本体
-              </Button>
-            )}
+      <section className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="本体筛选">
+        <div className="relative w-full sm:w-72">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={nameFilter}
+            onChange={event => setNameFilter(event.target.value)}
+            placeholder="搜索本体名称"
+            aria-label="按本体名称筛选"
+            className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
           />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead className="text-center">领域</TableHead>
-                <TableHead className="text-center">状态</TableHead>
-                <TableHead className="text-center">版本</TableHead>
-                <TableHead className="text-center">构建方式</TableHead>
-                <TableHead className="text-center">实体</TableHead>
-                <TableHead className="text-center">关系</TableHead>
-                <TableHead className="text-center">创建时间</TableHead>
-                <TableHead className="text-center">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredItems.map((item) => {
-                const status = statusMap[item.status] || { label: item.status, variant: "outline" as const }
-                return (
-                  <TableRow key={item.id} className="cursor-pointer" onClick={() => navigate(`/ontologies/${item.id}`)}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Network size={16} className="text-[var(--color-text-tertiary)]" />
-                        <span className="font-medium text-[var(--color-text-primary)]">{item.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-center text-[var(--color-text-secondary)]">{item.domain}</TableCell>
-                    <TableCell className="text-center"><Badge variant={status.variant}>{status.label}</Badge></TableCell>
-                    <TableCell className="text-center font-mono text-xs text-[var(--color-text-tertiary)]">{item.version}</TableCell>
-                    <TableCell className="text-center">
-                      {item.build_mode === 'pipeline_mapping' ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-[var(--color-info)]">
-                          <GitBranch size={12} /> Pipeline
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-[var(--color-warning)]">
-                          <FileText size={12} /> LLM
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-center font-mono text-xs text-[var(--color-text-secondary)]">
-                      {item.entity_count ?? 0}
-                    </TableCell>
-                    <TableCell className="text-center font-mono text-xs text-[var(--color-text-secondary)]">
-                      {item.relation_count ?? 0}
-                    </TableCell>
-                    <TableCell className="text-center text-xs text-[var(--color-text-tertiary)]">
-                      {new Date(item.created_at).toLocaleDateString('zh-CN')}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <div className="flex items-center justify-center gap-2" onClick={e => e.stopPropagation()}>
-                        <Button variant="ghost" size="icon-sm" onClick={() => navigate(`/ontologies/${item.id}`)} title="查看">
-                          <Search size={14} />
-                        </Button>
-                        <Button variant="ghost" size="icon-sm" onClick={() => setDeleteTarget({ id: item.id, name: item.name })} title="删除">
-                          <X size={14} className="text-[var(--color-danger)]" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
+          {nameFilter && (
+            <button
+              type="button"
+              onClick={() => setNameFilter('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              aria-label="清除名称筛选"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <select
+          value={domainFilter}
+          onChange={event => setDomainFilter(event.target.value)}
+          aria-label="按所属领域筛选"
+          className="h-9 min-w-36 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+        >
+          <option value="">全部领域</option>
+          {domains.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
+        </select>
+        {(nameFilter || domainFilter) && (
+          <button
+            type="button"
+            onClick={() => { setNameFilter(''); setDomainFilter('') }}
+            className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+          >
+            <X size={13} /> 清除筛选
+          </button>
         )}
-      </Card>
+        <span className="text-xs text-slate-400">
+          {nameFilter || domainFilter ? `${filteredItems.length} / ${allItems.length} 个本体` : `共 ${allItems.length} 个本体`}
+        </span>
+        <button
+          type="button"
+          onClick={openCreate}
+          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-opacity hover:opacity-90"
+        >
+          <Plus size={15} /> 新建本体
+        </button>
+      </section>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <CreateOntologyCard onClick={openCreate} />
+
+        {isLoading ? (
+          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white sm:col-span-1 lg:col-span-2 xl:col-span-3">
+            <LoadingState message="加载本体列表..." />
+          </div>
+        ) : isError ? (
+          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-red-100 bg-red-50 px-6 text-center text-sm text-red-600 sm:col-span-1 lg:col-span-2 xl:col-span-3">
+            本体列表加载失败，请刷新页面后重试。
+          </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
+            <Network size={28} className="text-slate-300" />
+            <p className="mt-3 text-sm font-medium text-slate-500">{nameFilter || domainFilter ? '没有符合条件的本体' : '还没有创建本体'}</p>
+            <p className="mt-1 text-xs text-slate-400">{nameFilter || domainFilter ? '请调整名称或领域筛选条件' : '点击左侧卡片创建第一个本体'}</p>
+          </div>
+        ) : (
+          filteredItems.map(item => (
+            <OntologyCard
+              key={item.id}
+              item={item}
+              onEdit={() => setEditTarget(item)}
+              onDetail={() => navigate(`/ontologies/${item.id}`)}
+              onDelete={() => setDeleteTarget(item)}
+            />
+          ))
+        )}
+      </div>
+
+      <OntologyFormModal
+        open={createOpen}
+        title="新建本体"
+        submitText="创建本体"
+        domains={configuredDomains}
+        onClose={closeCreate}
+        onSubmit={value => createMutation.mutateAsync(value)}
+        onManageDomains={() => navigate('/settings/domains')}
+      />
+
+      {editTarget && (
+        <OntologyFormModal
+          open
+          title="编辑本体"
+          submitText="保存修改"
+          domains={configuredDomains}
+          initial={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSubmit={value => updateMutation.mutateAsync({ id: editTarget.id, value })}
+          onManageDomains={() => navigate('/settings/domains')}
+        />
+      )}
 
       <ConfirmModal
         open={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
-        onConfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.id)}
-        title="确认删除"
-        description={deleteTarget ? `确定要删除本体「${deleteTarget.name}」吗？此操作不可撤销。` : ''}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+        title="确认删除本体"
+        description={deleteTarget ? `确定要删除本体「${deleteTarget.name}」吗？本体结构、映射与版本数据将一并删除，此操作不可撤销。` : ''}
+        confirmText="确认删除"
         variant="danger"
-        loading={deleteMut.isPending}
+        loading={deleteMutation.isPending}
       />
     </div>
   )

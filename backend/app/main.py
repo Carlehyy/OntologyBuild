@@ -135,6 +135,7 @@ def _seed_db():
                 "ALTER TABLE model_configs ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
                 "ALTER TABLE model_configs ADD COLUMN is_default BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE ontology_projects ADD COLUMN build_mode VARCHAR(30) DEFAULT 'simple_llm'",
+                "ALTER TABLE ontology_projects ADD COLUMN icon VARCHAR(50)",
                 "ALTER TABLE v2_pipelines ADD COLUMN domain VARCHAR(100) DEFAULT '通用'",
                 "ALTER TABLE v2_pipelines ADD COLUMN description TEXT DEFAULT ''",
                 "ALTER TABLE v2_pipelines ADD COLUMN definition JSON",
