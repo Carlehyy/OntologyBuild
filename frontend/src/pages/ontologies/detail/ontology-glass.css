@@ -89,43 +89,6 @@
   box-shadow: var(--glass-shadow);
 }
 
-/* 玻璃分段导航（segmented） */
-.onto-glass-seg {
-  background: var(--glass-bg);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  border: 1px solid var(--glass-border);
-  border-radius: 16px;
-  box-shadow: var(--glass-shadow);
-  padding: 5px;
-  gap: 4px;
-}
-.onto-glass-seg-item {
-  border-radius: 12px;
-  transition: all 200ms ease;
-  color: var(--color-text-secondary);
-}
-.onto-glass-seg-item:hover { color: var(--color-text-primary); background: rgba(255,255,255,0.6); }
-.onto-glass-seg-item[data-active="true"] {
-  background: linear-gradient(135deg, #232347 0%, #1a1a2e 100%);
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(26, 26, 46, 0.28);
-}
-
-/* 主色按钮（玻璃高光） */
-.onto-glass-btn-primary {
-  background: linear-gradient(135deg, #232347 0%, #1a1a2e 100%);
-  color: #fff;
-  border: 1px solid rgba(255,255,255,0.18);
-  border-radius: 12px;
-  box-shadow: 0 6px 18px rgba(26, 26, 46, 0.24);
-  transition: all 200ms ease;
-}
-.onto-glass-btn-primary:hover {
-  box-shadow: 0 10px 26px rgba(26, 26, 46, 0.34);
-  transform: translateY(-1px);
-}
-
 /* 次级玻璃按钮 */
 .onto-glass-btn {
   background: var(--glass-bg);
@@ -140,13 +103,6 @@
   color: var(--color-primary);
   border-color: rgba(26, 26, 46, 0.22);
   background: rgba(255,255,255,0.8);
-}
-
-/* 指标小卡的图标底座 */
-.onto-glass-iconwrap {
-  background: linear-gradient(135deg, rgba(26,26,46,0.10), rgba(99,102,241,0.10));
-  border: 1px solid rgba(255,255,255,0.6);
-  border-radius: 14px;
 }
 
 /* 内容进入动画（柔和上浮） */
