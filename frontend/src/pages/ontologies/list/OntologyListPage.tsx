@@ -531,6 +531,15 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         )}
       </div>
 
+      <div className="mt-5 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-600" aria-hidden="true">
+          <Network size={14} strokeWidth={1.8} />
+        </span>
+        <p className="text-xs font-medium tracking-wide text-slate-500">
+          让业务知识形成统一语言、让数据治理不再成为孤岛
+        </p>
+      </div>
+
       {createOpen && (
         <OntologyFormModal
           open
