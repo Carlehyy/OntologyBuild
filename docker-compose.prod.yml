@@ -91,6 +91,7 @@ services:
       # development CHROMA_PORT (often 8001) must not leak into production.
       CHROMA_PORT: "8000"
       UPLOADS_DIR: ${UPLOADS_DIR:-/uploads}
+      API_HUB_DATA_DIR: /api-hub-data
     depends_on:
       db:
         condition: service_healthy
@@ -104,6 +105,7 @@ services:
         condition: service_healthy
     volumes:
       - uploads:/uploads
+      - api_hub_data:/api-hub-data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       # Liveness must stay dependency-free.  Deep readiness is checked once by
@@ -183,3 +185,4 @@ volumes:
   minio_data:
   chroma_data:
   uploads:
+  api_hub_data:

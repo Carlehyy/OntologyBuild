@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
-import { useTranslation } from 'react-i18next'
 import {
   LayoutDashboard, Network, Cpu, Settings, LogOut,
   Database, ChevronLeft, ChevronRight, GitBranch, Table2,
-  Sparkles, ChevronDown, MessageSquare, Repeat, Bot, PlugZap, Workflow, Compass,
-  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2, ClipboardList, Globe,
+  Sparkles, ChevronDown, Repeat, Bot, PlugZap, Workflow, Compass,
+  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2, ClipboardList, Globe, Waypoints, History, KeyRound,
 } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 
@@ -21,7 +20,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const logout = useAuthStore(s => s.logout)
   const navigate = useNavigate()
   const location = useLocation()
-  const { t } = useTranslation()
   const [collapsed, setCollapsed] = useState(false)
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const [inboxOpen, setInboxOpen] = useState(false)
@@ -76,12 +74,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // 按时间排序（假设已按时间从新到旧排列）
 
   useEffect(() => {
-    if (expandedGroup) {
-      const item = navItems.find(i => i.to === expandedGroup)
-      const stillActive = item?.subItems?.some(s => isActive(s.to)) || isActive(item!.to)
-      if (!stillActive) setExpandedGroup(null)
+    if (!expandedGroup) return
+    const stillActive = location.pathname === expandedGroup || location.pathname.startsWith(expandedGroup + '/')
+    if (!stillActive) {
+      const timer = window.setTimeout(() => setExpandedGroup(null), 0)
+      return () => window.clearTimeout(timer)
     }
-  }, [location.pathname])
+  }, [expandedGroup, location.pathname])
 
   // 点击外部关闭下拉面板
   useEffect(() => {
@@ -106,6 +105,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       { to: '/data/pipelines/sync-tasks', icon: Repeat, label: '数据任务池' },
       { to: '/data/structured', icon: Table2, label: '数据资产湖' },
     ]},
+    { to: '/api-hub', icon: Waypoints, label: '接口代理', subItems: [
+      { to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理' },
+      { to: '/api-hub/history', icon: History, label: '调用历史' },
+      { to: '/api-hub/operations', icon: KeyRound, label: '登录与发布' },
+    ]},
     { to: '/models', icon: Cpu, label: '模型配置' },
     { to: '/settings', icon: Settings, label: '系统设置', subItems: [
       { to: '/settings/extraction', icon: Sparkles, label: '规则设置' },
@@ -121,7 +125,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
   const isGroupActive = (item: NavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events')
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events') || isActive('/api-hub')
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true

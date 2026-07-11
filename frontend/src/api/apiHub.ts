@@ -1,0 +1,144 @@
+import axios from 'axios'
+
+type RuntimeWindow = Window & { __API_BASE_URL__?: string }
+const runtimeBase = (typeof window !== 'undefined' && (window as RuntimeWindow).__API_BASE_URL__) || ''
+const http = axios.create({ baseURL: `${runtimeBase}/api/api-hub` })
+
+http.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+http.interceptors.response.use(
+  response => response,
+  error => Promise.reject(error.response?.data ?? error),
+)
+
+export interface KV { key: string; value: string }
+
+export interface HubInterface {
+  id: number | null
+  name: string
+  description: string
+  group_name: string
+  method: string
+  url: string
+  query_params: KV[]
+  headers: KV[]
+  body_type: 'none' | 'json' | 'form' | 'raw'
+  body_content: string
+  use_w3: boolean
+  mcp_enabled: boolean
+  open_enabled: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface RunResult {
+  run_id?: number
+  ok: boolean
+  status_code: number | null
+  elapsed_ms: number | null
+  response_headers: Record<string, string>
+  response_body: string
+  content_type: string
+  error: string | null
+  relogin: boolean
+}
+
+export interface RunSummary {
+  id: number
+  interface_id: number
+  name: string
+  method: string
+  ok: number | boolean
+  status_code: number | null
+  elapsed_ms: number | null
+  error: string | null
+  relogin: number | boolean
+  created_at: string
+}
+
+export interface RunDetail extends RunSummary {
+  request_snapshot: Record<string, unknown> | null
+  response_headers: Record<string, string> | null
+  response_body: string
+}
+
+export interface CredentialStatus {
+  configured: boolean
+  has_session: boolean
+  expired: boolean
+  expires_at: string | null
+  acquired_at: string | null
+  last_result: 'success' | 'failed' | null
+  message: string
+  refreshed_at: string | null
+  cron: string
+  next_run: string | null
+}
+
+export interface McpInfo {
+  endpoint: string
+  host: string
+  port: number
+  lan_ip: string
+  server_name: string
+  transport: string
+  lan_exposed: boolean
+  token_required: boolean
+  token: string
+  published?: { id: number; name: string; tool_name: string }[]
+  tools?: { name: string; desc: string }[]
+}
+
+const data = <T>(promise: Promise<{ data: T }>) => promise.then(response => response.data)
+
+export const apiHub = {
+  listInterfaces: () => data<HubInterface[]>(http.get('/interfaces')),
+  getInterface: (id: number) => data<HubInterface>(http.get(`/interfaces/${id}`)),
+  createInterface: (body: HubInterface) => data<HubInterface>(http.post('/interfaces', body)),
+  updateInterface: (id: number, body: HubInterface) => data<HubInterface>(http.put(`/interfaces/${id}`, body)),
+  deleteInterface: (id: number) => data<{ ok: boolean }>(http.delete(`/interfaces/${id}`)),
+  deleteGroup: (group_name: string) => data<{ ok: boolean; count: number }>(http.post('/interfaces/groups/delete', { group_name })),
+  setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
+  run: (id: number) => data<RunResult>(http.post(`/interfaces/${id}/run`)),
+  listRuns: (params: Record<string, string | number>) => data<{ items: RunSummary[]; total: number; page: number; size: number }>(http.get('/runs', { params })),
+  getRun: (interfaceId: number, runId: number) => data<RunDetail>(http.get(`/interfaces/${interfaceId}/runs/${runId}`)),
+  credentialStatus: () => data<CredentialStatus>(http.get('/credential/status')),
+  refreshCredential: () => data<CredentialStatus>(http.post('/credential/refresh')),
+  setSchedule: (cron: string) => data<{ cron: string; next_run: string | null }>(http.put('/credential/schedule', { cron })),
+  cookieHeader: () => data<{ cookie: string; count: number }>(http.get('/credential/cookie-header')),
+  mcpInfo: () => data<McpInfo>(http.get('/mcp/info')),
+  systemMcpInfo: () => data<McpInfo>(http.get('/mcp/system/info')),
+  importBackup: (payload: unknown) => data<{ imported: number; skipped: number; total: number; name: string }>(http.post('/backup/import', payload)),
+  exportBackup: (payload: { name: string; mode: 'full' | 'partial'; ids: number[] }) =>
+    http.post('/backup/export', payload, { responseType: 'blob' }),
+}
+
+export function emptyHubInterface(): HubInterface {
+  return {
+    id: null,
+    name: '未命名接口',
+    description: '',
+    group_name: '',
+    method: 'GET',
+    url: '',
+    query_params: [{ key: '', value: '' }],
+    headers: [{ key: '', value: '' }],
+    body_type: 'none',
+    body_content: '',
+    use_w3: true,
+    mcp_enabled: false,
+    open_enabled: false,
+  }
+}
+
+export function apiError(error: unknown): string {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const value = error as { detail?: string; message?: string }
+    return value.detail || value.message || '请求失败'
+  }
+  return '请求失败'
+}

@@ -292,6 +292,12 @@ def _seed_db():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _seed_db()
+    # API-Hub keeps its original isolated SQLite store and refresh scheduler.
+    # It is initialized inside the host application's lifecycle so there is
+    # still only one backend process to operate.
+    from app.api_hub import db as api_hub_db, scheduler as api_hub_scheduler
+    api_hub_db.init_db()
+    api_hub_scheduler.start()
     # 哨兵引擎：注册 CDC(监听对象改动→变化驱动) + 启动定期扫描 worker
     try:
         from app.services.sentinel import register_cdc, start_scan_worker
@@ -330,9 +336,18 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger(__name__).warning(f"SyncScheduler 启动失败: {e}")
     from app import mcp_server as _mcp_server
+    from app.api_hub import mcp_server as api_hub_mcp
     # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建
-    async with _mcp_server.reset_session_manager().run():
-        yield
+    api_hub_public, api_hub_system = api_hub_mcp.reset_session_managers()
+    try:
+        async with (
+            _mcp_server.reset_session_manager().run(),
+            api_hub_public.run(),
+            api_hub_system.run(),
+        ):
+            yield
+    finally:
+        api_hub_scheduler.shutdown()
 
 app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
 
@@ -393,6 +408,32 @@ class McpMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
+        from app.api_hub import config as api_hub_config
+        from app.api_hub import mcp_server as api_hub_mcp
+        if path == api_hub_config.SYSTEM_MCP_PATH or path.startswith(api_hub_config.SYSTEM_MCP_PATH + "/"):
+            if api_hub_config.SYSTEM_MCP_TOKEN:
+                headers = dict(scope.get("headers") or [])
+                auth = headers.get(b"authorization", b"").decode("latin-1")
+                if auth != f"Bearer {api_hub_config.SYSTEM_MCP_TOKEN}":
+                    await _send_json(send, 401, {"error": "unauthorized"})
+                    return
+            hub_scope = dict(scope)
+            hub_scope["path"] = "/"
+            hub_scope["raw_path"] = b"/"
+            await api_hub_mcp.handle_mcp_system(hub_scope, receive, send)
+            return
+        if path == api_hub_config.MCP_PATH or path.startswith(api_hub_config.MCP_PATH + "/"):
+            if api_hub_config.MCP_TOKEN:
+                headers = dict(scope.get("headers") or [])
+                auth = headers.get(b"authorization", b"").decode("latin-1")
+                if auth != f"Bearer {api_hub_config.MCP_TOKEN}":
+                    await _send_json(send, 401, {"error": "unauthorized"})
+                    return
+            hub_scope = dict(scope)
+            hub_scope["path"] = "/"
+            hub_scope["raw_path"] = b"/"
+            await api_hub_mcp.handle_mcp(hub_scope, receive, send)
+            return
         if path == "/mcp" or path.startswith("/mcp/"):
             headers = dict(scope.get("headers") or [])
             auth = headers.get(b"authorization", b"").decode("latin-1")
@@ -433,6 +474,20 @@ app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(mcp_router.router, prefix="/api/v1/mcp", tags=["mcp"])
+
+# 接口代理（API-Hub）管理面统一沿用平台 JWT；对 Agent 的 MCP 端点在
+# /api-hub/mcp 与 /api-hub/mcp/system，继续使用各自独立 token。
+from app.api_hub.routers import backup as api_hub_backup
+from app.api_hub.routers import credential as api_hub_credential
+from app.api_hub.routers import interfaces as api_hub_interfaces
+from app.api_hub.routers import mcp as api_hub_mcp_router
+from app.deps import get_current_user
+api_hub_auth = [Depends(get_current_user)]
+app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_auth)
+app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencies=api_hub_auth)
+app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_auth)
+app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_auth)
+app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_auth)
 asset_lake_guard = [Depends(asset_lake_access_guard)]
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"], dependencies=asset_lake_guard)
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"], dependencies=asset_lake_guard)

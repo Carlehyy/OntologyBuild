@@ -23,12 +23,12 @@ import DatasetsTab from '@/pages/pipelines/datasets/DatasetsTab'
 import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
 import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 import SyncTasksTab from '@/pages/pipelines/sync-tasks/SyncTasksTab'
-import DataManagementPage from '@/pages/data-management/DataManagementPage'
 import StructuredDataPage from '@/pages/data-management/structured/StructuredDataPage'
 import AgentWorkbenchPage from '@/pages/agent/AgentWorkbenchPage'
 import EventRegistryPage from '@/pages/events/EventRegistryPage'
 import ExplorationPage from '@/pages/explore/ExplorationPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
+import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1 } }
@@ -83,6 +83,8 @@ export default function App() {
           <Route path="/ontologies/:id/logic/:lid" element={<ProtectedRoute><LogicDetailPage /></ProtectedRoute>} />
           <Route path="/ontologies/:id/actions/:aid" element={<ProtectedRoute><ActionDetailPage /></ProtectedRoute>} />
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
+          <Route path="/api-hub" element={<Navigate to="/api-hub/interfaces" replace />} />
+          <Route path="/api-hub/:tab" element={<ProtectedRoute><ApiHubPage /></ProtectedRoute>} />
           <Route path="/agent" element={<ProtectedRoute><AgentWorkbenchPage /></ProtectedRoute>} />
           <Route path="/events" element={<ProtectedRoute><EventRegistryPage /></ProtectedRoute>} />
           <Route path="/rag" element={<Navigate to="/agent" replace />} />
