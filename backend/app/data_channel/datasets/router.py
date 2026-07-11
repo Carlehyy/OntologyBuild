@@ -405,11 +405,10 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
     数据重新过主键三校验，坏身份的数据不落盘。base_version_no 不等于当前
     最新版本时返回 409——说明期间有人上传/编辑过，客户端须刷新重做。
     """
-    from app.data_channel.datasets.lake_gate import (
-        LakeGateError, infer_columns_typed, split_pk, validate_declared_types, validate_pk)
     from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
-    from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
+    from app.services.v2.dataset_service import rows_to_csv_bytes
     from app.models.v2.dataset import DatasetVersion
+    from app.data_channel.datasets.edit_service import build_edited_snapshot
 
     svc = DatasetService(db)
     ds = svc.get_dataset(dataset_id)
@@ -418,11 +417,6 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
     _require_manual_dataset(ds, "在线编辑")
     if not (body.updates or body.inserts or body.deletes):
         raise HTTPException(400, "没有任何修改")
-
-    schema = dict(ds.schema_json or {})
-    pk_cols = split_pk(schema.get("primary_key"))
-    if (body.updates or body.deletes) and not pk_cols:
-        raise HTTPException(400, "修改/删除行需要先声明主键契约（用于定位行并保证身份稳定）；未声明主键时仅支持新增行")
 
     try:
         with dataset_write_lock(f"dataset::{dataset_id}", bind=db.get_bind(), wait_timeout=30):
@@ -435,98 +429,7 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
                     "current_version_no": latest_no,
                 })
 
-            try:
-                rows = svc.load_all_rows(dataset_id)
-            except DatasetReadError as e:
-                raise HTTPException(502, str(e))
-
-            columns = list(rows[0].keys()) if rows else list(schema.get("columns") or [])
-            if not columns:
-                # 空数据集首次插入：列 = 全部插入行值键的并集（保持出现顺序）
-                for op in body.inserts:
-                    for k in (op.values or {}).keys():
-                        if k not in columns:
-                            columns.append(k)
-            if not columns:
-                raise HTTPException(400, "无法确定列结构：数据集为空且插入行未携带任何列")
-
-            def check_known_cols(values: dict, what: str):
-                unknown = [k for k in values.keys() if k not in columns]
-                if unknown:
-                    raise HTTPException(400, f"{what}包含不存在的列 {unknown}（在线编辑不支持加列，请通过上传新版本调整列结构）")
-
-            # 主键 → 行号 索引（用编辑前的快照定位，key 是客户端加载时的原值）
-            pk_index: dict[tuple, int] = {}
-            for i, r in enumerate(rows):
-                kt = tuple(str(r.get(c, "") or "").strip() for c in pk_cols) if pk_cols else (i,)
-                if pk_cols:
-                    pk_index[kt] = i
-
-            def locate(op: RowEditOp, what: str) -> int:
-                key = op.key or {}
-                missing = [c for c in pk_cols if str(key.get(c, "") or "").strip() == ""]
-                if missing:
-                    raise HTTPException(400, f"{what}缺少主键列 {missing} 的定位值")
-                kt = tuple(str(key.get(c, "")).strip() for c in pk_cols)
-                idx = pk_index.get(kt)
-                if idx is None:
-                    raise HTTPException(400, f"{what}未找到主键为 {dict(zip(pk_cols, kt))} 的行（可能已被删除，请刷新）")
-                return idx
-
-            work = [dict(r) for r in rows]
-            # 已绑定本体后，主键值就是实例身份。普通改单元格不能暗中 re-key，
-            # 否则会生成新实例并可能遗留旧关系；应先解除映射或走显式迁移流程。
-            from app.models.v2.mapping import OntologyMapping
-            mapping_count = db.query(OntologyMapping).filter(
-                OntologyMapping.curated_dataset_id == dataset_id).count()
-            if mapping_count:
-                for op in body.updates:
-                    values = op.values or {}
-                    key = op.key or {}
-                    changed_pk = [
-                        col for col in pk_cols
-                        if col in values
-                        and str(values.get(col, "") or "").strip()
-                        != str(key.get(col, "") or "").strip()
-                    ]
-                    if changed_pk:
-                        raise HTTPException(409, detail={
-                            "code": "mapped_primary_key_rekey_forbidden",
-                            "message": (
-                                f"该数据集已被 {mapping_count} 条本体映射绑定，不能直接修改主键列 {changed_pk}。"
-                                "请先解除映射，或使用可迁移下游实例与关系的显式 re-key 流程。"
-                            ),
-                        })
-            for op in body.updates:
-                check_known_cols(op.values or {}, "修改的行")
-                work[locate(op, "修改")].update(op.values or {})
-            tombstones = {locate(op, "删除") for op in body.deletes}
-            new_rows = [r for i, r in enumerate(work) if i not in tombstones]
-            for op in body.inserts:
-                check_known_cols(op.values or {}, "新增的行")
-                new_rows.append({c: (op.values or {}).get(c, "") for c in columns})
-
-            # 声明类型的表（在线建表）：本次写入的值必须能按声明类型解析。
-            # 只校验改动值，不全量重扫——历史数据（如文件批量补数）不被追溯阻断
-            if schema.get("types_source") == "declared":
-                try:
-                    validate_declared_types(
-                        [op.values or {} for op in body.updates + body.inserts],
-                        schema.get("columns_typed"), dataset_name=ds.name)
-                except LakeGateError as e:
-                    raise HTTPException(400, str(e))
-
-            if pk_cols:
-                try:
-                    validate_pk(new_rows, pk_cols, dataset_name=ds.name, scope="编辑后的数据")
-                except LakeGateError as e:
-                    raise HTTPException(400, str(e))
-
-            if new_rows:
-                schema["columns"] = columns
-                # 用户声明的类型是契约，不随数据重新推断（否则录入 "123" 会把文本列翻成整数）
-                if schema.get("types_source") != "declared":
-                    schema["columns_typed"] = infer_columns_typed(new_rows)
+            new_rows, columns, schema = build_edited_snapshot(db, svc, ds, body)
             ver = svc.create_version(
                 dataset_id, rows_to_csv_bytes(new_rows, columns),
                 rowcount=len(new_rows),

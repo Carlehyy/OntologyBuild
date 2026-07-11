@@ -39,6 +39,8 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         "v2_storage_deletion_outbox",
         "v2_curated_reviews",
         "v2_ontology_mappings",
+        "v2_manual_dataset_shares",
+        "v2_manual_dataset_changes",
     }
     assert required <= set(inspector.get_table_names())
     assert "task_id" in {c["name"] for c in inspector.get_columns("v2_pipeline_runs")}

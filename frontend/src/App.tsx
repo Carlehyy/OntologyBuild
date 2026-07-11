@@ -30,6 +30,7 @@ import EventRegistryPage from '@/pages/events/EventRegistryPage'
 import ExplorationPage from '@/pages/explore/ExplorationPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
+import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1 } }
@@ -51,6 +52,7 @@ export default function App() {
       <HashRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/share/manual/:token" element={<PublicManualDatasetPage />} />
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
 

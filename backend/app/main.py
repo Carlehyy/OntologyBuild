@@ -41,6 +41,10 @@ from app.data_channel.pipeline_tasks import router as pipeline_tasks_v2
 from app.data_channel.steward import router as steward_v2
 from app.routers.v2 import test_data as test_data_v2
 from app.data_channel.access import asset_lake_access_guard
+from app.data_channel.datasets.sharing_router import (
+    management_router as manual_sharing_router,
+    public_router as public_manual_sharing_router,
+)
 from app.ontologies.access import legacy_ontology_write_guard
 
 def _seed_db():
@@ -59,6 +63,9 @@ def _seed_db():
         from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
         from app.models.v2.sync_task import DataSyncTask, DataSyncHistory  # noqa: F401
         from app.data_channel.pipeline_tasks.models import PipelineTask  # noqa: F401
+        from app.data_channel.datasets.sharing_models import (  # noqa: F401
+            ManualDatasetChange, ManualDatasetShare,
+        )
         from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
         from app.models.ontology_version import OntologyVersion, OntologyChangeLog  # noqa: F401
         from app.models.attribute_schema import AttributeSchema, VocabularyEntry  # noqa: F401
@@ -491,6 +498,8 @@ app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencie
 asset_lake_guard = [Depends(asset_lake_access_guard)]
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"], dependencies=asset_lake_guard)
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"], dependencies=asset_lake_guard)
+app.include_router(manual_sharing_router, prefix="/api/v2/manual-dataset-sharing", tags=["manual-dataset-sharing"], dependencies=asset_lake_guard)
+app.include_router(public_manual_sharing_router, prefix="/api/public/manual-datasets", tags=["public-manual-datasets"])
 app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"])
 app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph"])
 app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"])

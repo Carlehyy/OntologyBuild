@@ -57,6 +57,11 @@
   100% { opacity: 1; }
 }
 
+@keyframes lakeTabIn {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
 .animate-slide-up {
   animation: slideUp 0.3s ease-out;
 }
@@ -67,6 +72,10 @@
 
 .animate-fade-in {
   animation: fadeIn 0.3s ease-out;
+}
+
+.animate-lake-tab-in {
+  animation: lakeTabIn 0.24s ease-out;
 }
 
 @layer utilities {

@@ -2,12 +2,14 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   Upload, RefreshCw, Trash2, ChevronDown, ChevronUp, Loader2,
   CheckCircle2, XCircle, X, FileUp, Repeat, GitBranch,
-  Database, Pencil, KeyRound, Table2,
+  Database, Pencil, KeyRound, Table2, Share2, ShieldCheck,
 } from 'lucide-react'
 import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type DatasetVersionItem, type CreateTableResult } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DatasetEditorModal from './DatasetEditorModal'
 import CreateTableModal from './CreateTableModal'
+import manualSharingApi from '@/api/v2/manual-sharing'
+import { ManualApprovalModal, ManualShareModal } from './ManualDatasetSharingModals'
 
 const KIND_META: Record<string, { label: string; color: string }> = {
   structured:   { label: '结构化',   color: 'bg-blue-50 text-blue-600 border-blue-200' },
@@ -67,6 +69,12 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
 
   // 在线新建表格
   const [createOpen, setCreateOpen] = useState(false)
+  const [shareTarget, setShareTarget] = useState<DatasetOverviewItem | null>(null)
+  const [approvalOpen, setApprovalOpen] = useState(false)
+  const [pendingApprovals, setPendingApprovals] = useState(0)
+
+  const loadPendingApprovals = () => manualSharingApi.changes({ status: 'pending' })
+    .then(rows => setPendingApprovals(rows.length)).catch(() => setPendingApprovals(0))
 
   const load = () => {
     setLoading(true)
@@ -75,7 +83,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       .then(res => {
         setItems((res.items ?? []).filter(
           item => item.source === 'upload' || item.source === 'manual'))
-        notifyAssetChanged()
       })
       .catch((error: unknown) => {
         const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
@@ -89,7 +96,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { void Promise.resolve().then(load) }, [])
+  useEffect(() => { void Promise.resolve().then(() => { load(); loadPendingApprovals() }) }, [])
 
   const loadDetail = async (id: string, refresh = false) => {
     if (previews[id] && !refresh) return
@@ -147,6 +154,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       const res = await datasetsApi.upload(file)
       setBanner({ type: 'success', text: `「${res.name}」上传成功，已创建人工数据集。在「维护数据」中声明主键后可直接灌入本体。` })
       load()
+      notifyAssetChanged()
     } catch (err: unknown) {
       const er = err as { detail?: string; message?: string }
       setBanner({ type: 'error', text: `上传失败：${er?.detail || er?.message || '未知错误'}` })
@@ -163,6 +171,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       text: `「${res.name}」已创建。空表已就绪，现在就可以逐行录入数据${res.primary_key ? '' : '（暂未声明主键，仅能新增行）'}`,
     })
     load()
+    notifyAssetChanged()
     setEditorTarget({
       id: res.id, name: res.name, raw_name: res.name, kind: res.kind,
       primary_key: res.primary_key, source: 'manual', connection_name: '',
@@ -197,6 +206,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       })
       load()
       loadDetail(id, true)
+      notifyAssetChanged()
     } catch (err: unknown) {
       const er = err as { detail?: string; message?: string }
       setBanner({ type: 'error', text: `更新失败：${er?.detail || er?.message || '未知错误'}` })
@@ -216,6 +226,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       setDeleteBlocked(null)
       setBanner({ type: 'success', text: `数据集「${target.name}」已删除` })
       load()
+      notifyAssetChanged()
     } catch (err: unknown) {
       const er = err as { detail?: { message?: string; consumers?: DatasetConsumer[]; mappings?: { name: string }[] } | string }
       const d = er?.detail
@@ -260,6 +271,14 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           >
             {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
             上传数据文件
+          </button>
+          <button
+            onClick={() => setApprovalOpen(true)}
+            className="relative flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+            title="审批外部维护者提交的人工数据集修改；批准后才正式生效"
+          >
+            <ShieldCheck size={12} /> 审批任务
+            {pendingApprovals > 0 && <span className="ml-0.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] leading-none text-white">{pendingApprovals}</span>}
           </button>
         </div>
       </div>
@@ -400,6 +419,15 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                         <div className="flex gap-1 justify-end">
                           {ds.source !== 'sync' && (
                             <button
+                              onClick={() => setShareTarget(ds)}
+                              className="flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50"
+                              title="生成无需登录的查看或编辑链接；编辑结果需平台审批后生效"
+                            >
+                              <Share2 size={12} /> 分享
+                            </button>
+                          )}
+                          {ds.source !== 'sync' && (
+                            <button
                               onClick={() => setEditorTarget(ds)}
                               className="flex items-center gap-1 text-xs px-2 py-1.5 border rounded-lg hover:bg-amber-50 text-amber-700 border-amber-200"
                               title="在线维护：声明主键契约、改单元格、增删行（保存生成新版本）"
@@ -531,9 +559,15 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         <DatasetEditorModal
           dataset={editorTarget}
           onClose={() => setEditorTarget(null)}
-          onSaved={() => { load(); loadDetail(editorTarget.id, true) }}
+          onSaved={() => { load(); loadDetail(editorTarget.id, true); notifyAssetChanged() }}
         />
       )}
+
+      {shareTarget && <ManualShareModal dataset={shareTarget} onClose={() => setShareTarget(null)} />}
+      {approvalOpen && <ManualApprovalModal
+        onClose={() => setApprovalOpen(false)}
+        onChanged={() => { loadPendingApprovals(); load(); notifyAssetChanged() }}
+      />}
 
       {/* 删除确认 */}
       <ConfirmDialog

@@ -227,20 +227,24 @@ export default function StructuredDataPage() {
           </div>
 
           <div className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-            {TABS.map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => switchTab(key)}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  activeTab === key
-                    ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
-                    : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+            <div className="relative grid grid-cols-2 rounded-md">
+              <span
+                aria-hidden="true"
+                className={`absolute inset-y-0 left-0 w-1/2 rounded-md bg-emerald-600 shadow-sm transition-transform duration-300 ease-out ${activeTab === 'raw' ? 'translate-x-full' : 'translate-x-0'}`}
+              />
+              {TABS.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => switchTab(key)}
+                  className={`relative z-10 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-200 ${
+                    activeTab === key ? 'text-white' : 'text-slate-500 hover:text-emerald-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <span className="mx-0.5 h-5 w-px bg-slate-200" aria-hidden="true" />
             <button
               type="button"
@@ -263,9 +267,11 @@ export default function StructuredDataPage() {
 
       {/* 下方内容区域 —— 单页展示，内容区可滚动 */}
       <div className="flex-1 min-h-0">
-        {activeTab === 'raw'
-          ? <RawDatasetsView focusDatasetId={focusDatasetId} />
-          : <CuratedView />}
+        <div key={activeTab} className="h-full animate-lake-tab-in">
+          {activeTab === 'raw'
+            ? <RawDatasetsView focusDatasetId={focusDatasetId} />
+            : <CuratedView />}
+        </div>
       </div>
     </div>
   )

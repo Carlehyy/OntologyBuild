@@ -88,6 +88,8 @@ def test_all_v2_tables_registered():
         "v2_ontology_action_runs",
         "v2_ontology_mappings",
         "v2_ontology_link_mappings",
+        "v2_manual_dataset_shares",
+        "v2_manual_dataset_changes",
     }
 
 
