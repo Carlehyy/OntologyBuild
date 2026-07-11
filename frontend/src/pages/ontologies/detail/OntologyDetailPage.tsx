@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
@@ -9,7 +9,7 @@ import OverviewDashboard from './tabs/OverviewDashboard'
 import GovernanceTab from './tabs/GovernanceTab'
 import ModelStructureView from './tabs/ModelStructureView'
 import FormalInstancesView from './tabs/FormalInstancesView'
-import DataMappingStudio from './tabs/DataMappingStudio'
+import DataMappingOverview from './mapping/DataMappingOverview'
 import VersionsTab from './tabs/VersionsTab'
 import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
@@ -42,9 +42,11 @@ const GROUPS: GroupDef[] = [
 
 export default function OntologyDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { t } = useTranslation()
 
-  const [activeGroup, setActiveGroup] = useState<string>('overview')
+  const requestedTab = searchParams.get('tab')
+  const activeGroup = GROUPS.some(group => group.key === requestedTab) ? requestedTab! : 'overview'
   const groupTabsRef = useRef<HTMLDivElement>(null)
   const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
   const [exportOpen, setExportOpen] = useState(false)
@@ -89,6 +91,11 @@ export default function OntologyDetailPage() {
     })
   }, [activeGroup, ontology?.id])
 
+  const selectGroup = (key: string) => {
+    if (key === 'overview') setSearchParams({}, { replace: true })
+    else setSearchParams({ tab: key }, { replace: true })
+  }
+
   if (isLoading) return <LoadingState message={t('common.loading')} />
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
@@ -111,7 +118,7 @@ export default function OntologyDetailPage() {
                   type="button"
                   data-tab-value={group.key}
                   aria-pressed={isActive}
-                  onClick={() => setActiveGroup(group.key)}
+                  onClick={() => selectGroup(group.key)}
                   className={`relative z-10 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-1 ${
                     isActive ? 'text-white' : 'text-slate-500 hover:text-slate-700'
                   }`}
@@ -148,7 +155,7 @@ export default function OntologyDetailPage() {
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (
         <div className="onto-glass-in">
-          <OverviewDashboard ontologyId={id!} onGoGroup={setActiveGroup} />
+          <OverviewDashboard ontologyId={id!} onGoGroup={selectGroup} />
         </div>
       ) : activeGroup === 'design' ? (
         <div className="onto-glass-card onto-glass-in p-4">
@@ -156,7 +163,7 @@ export default function OntologyDetailPage() {
         </div>
       ) : activeGroup === 'data-mapping' ? (
         <div className="onto-glass-in">
-          <DataMappingStudio ontologyId={id!} />
+          <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
         <div className="onto-glass-card onto-glass-in p-4">

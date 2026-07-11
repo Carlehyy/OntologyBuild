@@ -7,6 +7,7 @@ import OverviewPage from '@/pages/overview/OverviewPage'
 import OntologyListPage from '@/pages/ontologies/list/OntologyListPage'
 import OntologyCreateWizard from '@/pages/ontologies/new/OntologyCreateWizard'
 import OntologyDetailPage from '@/pages/ontologies/detail/OntologyDetailPage'
+import MappingConfigurationPage from '@/pages/ontologies/mapping/MappingConfigurationPage'
 import EntityDetailPage from '@/pages/ontologies/detail/entity/EntityDetailPage'
 import LogicDetailPage from '@/pages/ontologies/detail/logic/LogicDetailPage'
 import ActionDetailPage from '@/pages/ontologies/detail/action/ActionDetailPage'
@@ -78,6 +79,7 @@ export default function App() {
           <Route path="/ontologies" element={<ProtectedRoute><OntologyListPage /></ProtectedRoute>} />
           <Route path="/ontologies/new" element={<ProtectedRoute><OntologyCreateWizard /></ProtectedRoute>} />
           <Route path="/ontologies/:id" element={<ProtectedRoute><OntologyDetailPage /></ProtectedRoute>} />
+          <Route path="/ontologies/:id/mapping-config" element={<ProtectedRoute><MappingConfigurationPage /></ProtectedRoute>} />
           <Route path="/ontologies/:id/graph" element={<ProtectedRoute><OntologyGraphPage /></ProtectedRoute>} />
           <Route path="/ontologies/:id/entities/:eid" element={<ProtectedRoute><EntityDetailPage /></ProtectedRoute>} />
           <Route path="/ontologies/:id/logic/:lid" element={<ProtectedRoute><LogicDetailPage /></ProtectedRoute>} />
