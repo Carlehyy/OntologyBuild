@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.ontologies.agent_runtime import llm_bridge
-from app.data_channel.steward import service
+from app.data_channel.steward import service, workspace
 from app.data_channel.steward.models import (
     N8nPipeline, StewardConversation, StewardMessage, STATUS_ARCHIVED,
 )
@@ -34,7 +34,7 @@ _HISTORY_LIMIT = 12        # 携带的历史消息条数
 _MAX_STEPS = 12            # 单回合最大工具步数
 
 
-def _system_prompt(db: Session) -> str:
+def _system_prompt(db: Session, conversation_id: str | None = None) -> str:
     records = (db.query(N8nPipeline)
                .filter(N8nPipeline.status != STATUS_ARCHIVED)
                .order_by(N8nPipeline.updated_at.desc()).limit(20).all())
@@ -45,14 +45,23 @@ def _system_prompt(db: Session) -> str:
     else:
         inventory = "当前还没有受管流水线。"
 
-    return f"""你是 OntoPrompt 平台的「数据管家」——通过对话帮用户新建、编排基于 n8n 的数据流水线，替代手工画布编排。
+    file_context = workspace.context_block(conversation_id) if conversation_id else ""
 
-# 你的职权（只有两件事，此外没有任何写权限）
-平台把 n8n 作为数据流水线的执行引擎。你通过受限工具集操作 n8n 工作流；每个受管工作流对应流水线列表里的一条 n8n 流水线，生命周期只有「未发布 / 已发布」两态。
+    return f"""你是 OntoPrompt 平台的「数据管家」——在当前会话隔离空间内读取资料、操作同会话浏览器、识别页面数据接口，并把可靠的数据链编排成 n8n 流水线。
+
+# 你的文件与浏览器边界
+1. 当前会话就是唯一工作目录。上传文件、网页下载文件、解析文本和浏览器登录态均隔离到此会话；不得尝试绝对路径、父目录或其他会话。
+2. Word/PPT/Excel/PDF/Markdown 等先用 list_session_files / read_session_file 读取；系统提示末尾也会提供已解析的会话文件摘要和其中发现的网址。
+3. 普通网址优先 browser_open。若需要登录，明确请用户点击页面“实时浏览器”按钮手动输入账号密码，等待用户说登录完成；绝不向用户索要密码，也不使用 browser_type 填密码。
+4. 查页面数据来源时，用 browser_network_requests 比较 XHR/fetch，核对响应样例、字段结构与 pagination。不要只凭 URL 名称猜接口。文件用 download_captured_file 保存到当前会话。
+5. 内网授权接口需要稳定复用时，用 register_proxy_interface 登记到接口代理，再让 n8n 调 proxyUrl。只有确需复用当前浏览器认证时才 include_auth；公司 W3 接口优先 use_w3。
+
+# n8n 写权限边界
+平台把 n8n 作为数据流水线执行引擎。你对 n8n 只有两项写权限；每个受管工作流对应流水线列表里的一条 n8n 流水线，生命周期只有「未发布 / 已发布」两态。
 1. **新建流水线**（create_pipeline）：只需名称+描述，后台自动在 n8n 建好 Webhook→输出 的骨架并登记为未发布流水线（等价于用户在流水线列表点「新建流水线 → n8n」）——不激活、不调度。
 2. **编排完善**（update_workflow）：往骨架里补全取数与整形节点。**只能编排「未发布 且 未启用」的流水线**；已发布（封版）或 n8n 侧已启用的会被拒绝，须引导用户先在编辑向导「撤回发布」或在 n8n 停用。
 
-除此之外你**不能**：发布/撤回发布、启用/停用、试跑/运行、纳管已存在的工作流、查看执行历史、归档/删除。这些要么是用户在流水线编辑向导/列表里的动作，要么不在你的职权内——做不到就直说并给用户指路。**发布是用户在编辑向导里的动作**（发布时激活 n8n 工作流、封版字段契约，此后才可被调度、产物入湖），绝不能声称流水线"已发布/已生效/已激活"。
+除此之外你**不能改动 n8n 生命周期**：不能发布/撤回发布、启用/停用、试跑/运行、纳管已有工作流、归档/删除。**发布是用户在编辑向导里的动作**（发布时激活 n8n 工作流、封版字段契约，此后才可被调度、产物入湖），绝不能声称流水线"已发布/已生效/已激活"。
 
 {inventory}
 
@@ -72,13 +81,15 @@ def _system_prompt(db: Session) -> str:
 - 不确定某节点参数就 describe_node 查 worked example；不知从哪起就 n8n_reference('patterns') 抄骨架；表达式/Code 写法查 n8n_reference('expressions'|'code')。
 
 # 行为准则
-1. 先查证后动手：编排任何工作流前先 get_workflow 看当前定义（新建后先看骨架）；开场用 steward_overview 了解现状。用户给了数据源网址/API 时，先用 probe_url 探测真实形态（是否 JSON、字段结构），再据此设计——你没有通用的浏览网页能力，probe_url 是唯一的对外探测手段；探测不到就如实说，并请用户提供样例数据或 API 文档。拼复杂节点（HTTP 认证 / Set / Code / 数据库）前用 describe_node 查准参数与示例，别凭记忆。
+1. 先查证后动手：编排任何工作流前先 get_workflow 看当前定义（新建后先看骨架）；开场用 steward_overview 了解现状。用户给的是 API 可先 probe_url；给的是页面则 browser_open → browser_state → browser_network_requests，登录受阻就让用户在实时画面完成。拼复杂节点前用 describe_node 查准参数与示例。
 2. 设计先行：新建/大改前，用一段简洁文字（可用列表描述节点链路）向用户确认设计，用户同意后再调工具落地；拿不准结构就 n8n_reference('patterns') 找个验证过的骨架起步。
 3. 小步透明：每次工具调用后向用户说明做了什么、下一步是什么。工具报错时读错误信息自我修正，同一错误不要重复第三次。
 4. 自检与调错：改完用 check_workflow 静态体检（触发器/连线/Webhook 约定）、check_credentials 查凭据缺口。用户说"跑出来不对 / 为什么失败"时用 inspect_runs 读最近执行的报错与末节点数据，定位要改哪个节点。但你仍**不能**试跑或运行流水线——想看真实数据、想发布都在编辑向导完成（向导第 2 步会对未发布流水线做执行预览）；未发布流水线若没有执行记录，请让用户先在 n8n 手动跑一次再回来诊断，**绝不要**让用户自己去点 Execute/手动 curl 当作你的活。
 5. 收尾引导：编排完善、体检通过后，明确告诉用户「到流水线列表，点这条流水线的编辑向导完成发布并启用」——发布不是你的动作，别揽也别漏。
-6. 诚实边界：你只能新建（骨架）与编排未发布未启用的流水线；不能创建凭据、不能发布/撤回发布、不能启用/停用、不能试跑运行、不能纳管已有工作流、不能查执行历史、不能删除。做不到的事直说并指路。
-7. 用中文回答，简洁、结构化。"""
+6. 诚实边界：浏览器不可达、登录未完成、接口样例不足或代理令牌/凭据未配置时要明确指出，不要伪称成功。不能创建 n8n 凭据、不能发布/撤回发布、不能启用/停用、不能试跑运行、不能纳管已有工作流、不能删除。
+7. 用中文回答，简洁、结构化。
+
+{file_context}"""
 
 
 def _summarize(name: str, result: dict) -> str:
@@ -126,6 +137,27 @@ def _summarize(name: str, result: dict) -> str:
         kind = result.get("kind", "")
         extra = result.get("title") or ("含样例行" if result.get("sampleRows") else "")
         return f"HTTP {result.get('status')} · {kind}" + (f" · {extra[:60]}" if extra else "")
+    if name == "list_session_files":
+        return f"会话文件 {result.get('count', 0)} 个"
+    if name == "read_session_file":
+        return f"已读取「{(result.get('file') or {}).get('filename', '')}」"
+    if name in {"browser_open", "browser_navigate"}:
+        return f"已打开 {result.get('title') or result.get('url', '')}"
+    if name == "browser_state":
+        return f"页面 {result.get('title') or result.get('url', '')}"
+    if name == "browser_click_text":
+        return f"已点击，当前页面 {result.get('title') or ''}"
+    if name == "browser_type":
+        return "已填写非敏感输入"
+    if name == "browser_network_requests":
+        requests = result.get("requests", [])
+        paged = sum(1 for item in requests if item.get("pagination"))
+        return f"捕获 {len(requests)} 个请求" + (f" · {paged} 个有分页线索" if paged else "")
+    if name == "download_captured_file":
+        return f"已下载「{(result.get('file') or {}).get('filename', '')}」到会话"
+    if name == "register_proxy_interface":
+        iface = result.get("interface") or {}
+        return f"已登记代理接口「{iface.get('name', '')}」#{iface.get('id', '')}"
     return "完成"
 
 
@@ -172,7 +204,7 @@ def _run(db: Session, user, question: str,
 
     yield {"type": "meta", "conversationId": conv.id, "model": call_kwargs.get("model")}
 
-    messages: list[dict] = [{"role": "system", "content": _system_prompt(db)}]
+    messages: list[dict] = [{"role": "system", "content": _system_prompt(db, conv.id)}]
     for m in history:
         if m.role in ("user", "assistant") and (m.content or "").strip():
             messages.append({"role": m.role, "content": m.content})

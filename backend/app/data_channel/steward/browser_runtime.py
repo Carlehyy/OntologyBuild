@@ -1,0 +1,597 @@
+"""One isolated Playwright browser context per data-steward conversation.
+
+The runtime connects to a separately managed Chromium over CDP.  Human input,
+agent actions, network inspection and downloads all operate on the same page and
+therefore share the login state without ever asking the agent for a password.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import concurrent.futures
+import ipaddress
+import json
+import logging
+import mimetypes
+import re
+import secrets
+import socket
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Coroutine
+from urllib.parse import parse_qsl, unquote, urlparse
+
+from app.config import settings
+from app.data_channel.steward import workspace
+
+logger = logging.getLogger(__name__)
+
+_SENSITIVE_HEADERS = {"authorization", "cookie", "proxy-authorization", "set-cookie", "x-api-key"}
+_FILE_MIMES = {
+    "application/pdf", "application/zip", "application/octet-stream",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/csv",
+}
+_FILE_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".zip", ".json"}
+_PAGE_KEYS = {"page", "pageno", "page_no", "pageindex", "page_index", "current", "currentpage"}
+_SIZE_KEYS = {"size", "pagesize", "page_size", "limit", "per_page", "rows"}
+_OFFSET_KEYS = {"offset", "start", "skip", "from"}
+_CURSOR_KEYS = {"cursor", "nextcursor", "next_cursor", "after", "continuationtoken", "continuation_token"}
+
+
+class BrowserRuntimeError(RuntimeError):
+    pass
+
+
+def _safe_url(url: str) -> str:
+    value = (url or "").strip()
+    if not re.match(r"^https?://", value, re.IGNORECASE):
+        raise BrowserRuntimeError("只允许访问 http/https 网址")
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host or host in {"metadata.google.internal"}:
+        raise BrowserRuntimeError("网址缺少合法主机名")
+    if parsed.username or parsed.password:
+        raise BrowserRuntimeError("网址中不能携带用户名或密码")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise BrowserRuntimeError(f"网址无法解析：{host}") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or str(ip) == "169.254.169.254":
+            raise BrowserRuntimeError("该地址属于本机、链路本地或元数据网段，不允许访问")
+        if ip.is_private and not settings.steward_browser_allow_private_networks:
+            raise BrowserRuntimeError("当前部署未允许访问内网地址")
+    return value
+
+
+def validate_target_url(url: str) -> str:
+    """Public URL-policy entrypoint shared by direct probes and the browser."""
+    return _safe_url(url)
+
+
+def _redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    return {
+        str(k): ("••••••" if str(k).lower() in _SENSITIVE_HEADERS else str(v)[:500])
+        for k, v in (headers or {}).items()
+    }
+
+
+def _json_shape(value: Any, depth: int = 0) -> Any:
+    if depth >= 3:
+        return type(value).__name__
+    if isinstance(value, dict):
+        return {str(k): _json_shape(v, depth + 1) for k, v in list(value.items())[:30]}
+    if isinstance(value, list):
+        return [_json_shape(value[0], depth + 1)] if value else []
+    return type(value).__name__
+
+
+def _find_pagination_fields(value: Any, depth: int = 0) -> dict[str, Any]:
+    if depth > 4:
+        return {}
+    if isinstance(value, dict):
+        found: dict[str, Any] = {}
+        for key, val in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized in {
+                "total", "totalcount", "pages", "totalpages", "hasnext", "hasmore",
+                "nextcursor", "nextpage", "continuationtoken", "page", "pageno", "pagesize",
+            } and isinstance(val, (str, int, float, bool, type(None))):
+                found[str(key)] = val
+            nested = _find_pagination_fields(val, depth + 1)
+            for nested_key, nested_value in nested.items():
+                found.setdefault(nested_key, nested_value)
+        return found
+    if isinstance(value, list) and value:
+        return _find_pagination_fields(value[0], depth + 1)
+    return {}
+
+
+def analyze_pagination(url: str, parsed_body: Any = None) -> dict[str, Any] | None:
+    params = {
+        re.sub(r"[^a-z0-9]", "", k.lower()): v
+        for k, v in parse_qsl(urlparse(url).query, keep_blank_values=True)
+    }
+    keys = set(params)
+    mode = None
+    if keys & _CURSOR_KEYS:
+        mode = "cursor"
+    elif keys & _OFFSET_KEYS:
+        mode = "offset"
+    elif keys & _PAGE_KEYS:
+        mode = "page"
+    fields = _find_pagination_fields(parsed_body)
+    if not mode and fields:
+        lowered = {re.sub(r"[^a-z0-9]", "", k.lower()) for k in fields}
+        mode = "cursor" if lowered & {"nextcursor", "continuationtoken"} else "page"
+    if not mode and not (keys & _SIZE_KEYS):
+        return None
+    return {
+        "mode": mode or "limit",
+        "requestParams": {k: v for k, v in params.items() if k in _PAGE_KEYS | _SIZE_KEYS | _OFFSET_KEYS | _CURSOR_KEYS},
+        "responseFields": fields,
+    }
+
+
+def _is_api(resource_type: str, content_type: str, url: str) -> bool:
+    ctype = content_type.lower()
+    path = urlparse(url).path.lower()
+    return resource_type in {"xhr", "fetch"} or "json" in ctype or "/api/" in path or path.startswith("/api")
+
+
+def _is_file(content_type: str, headers: dict[str, str], url: str) -> bool:
+    mime = content_type.split(";", 1)[0].lower().strip()
+    disposition = (headers.get("content-disposition") or headers.get("Content-Disposition") or "").lower()
+    return "attachment" in disposition or mime in _FILE_MIMES or Path(urlparse(url).path).suffix.lower() in _FILE_EXTS
+
+
+def _validate_navigation_response(response: Any, target: str) -> None:
+    """Fail visibly when a CDN/WAF returns an error document to ``page.goto``.
+
+    Playwright considers any completed HTTP response a successful navigation,
+    including non-standard anti-bot statuses such as EdgeOne's 567.  Without
+    this guard the steward reported an empty blocked page as "opened" and the
+    agent could then invent an interface analysis from no evidence.
+    """
+    if response is None:
+        return
+    status = int(getattr(response, "status", 0) or 0)
+    if status < 400:
+        return
+    raise BrowserRuntimeError(
+        f"页面返回 HTTP {status}，可能被登录门禁、CDN/WAF 或访问策略拦截：{target}。"
+        "请在数据管家的实时浏览器中完成人工验证后重试；若站点提供官方 API，"
+        "也可按其公开接入规则改走 API。"
+    )
+
+
+def public_capture(capture: dict) -> dict:
+    result = {k: v for k, v in capture.items() if k not in {"requestHeaders", "responseHeaders", "responseBody"}}
+    result["requestHeaders"] = _redact_headers(capture.get("requestHeaders"))
+    result["responseHeaders"] = _redact_headers(capture.get("responseHeaders"))
+    body = capture.get("responseBody")
+    if body:
+        result["responsePreview"] = body[:12_000]
+    return result
+
+
+@dataclass
+class BrowserSession:
+    conversation_id: str
+    context: Any
+    page: Any
+    captures: list[dict] = field(default_factory=list)
+    capture_tasks: set[asyncio.Task] = field(default_factory=set)
+    last_state_saved: float = 0.0
+
+    def bind_page(self, page: Any) -> None:
+        self.page = page
+
+        def on_response(response: Any) -> None:
+            task = asyncio.create_task(self._capture_response(response))
+            self.capture_tasks.add(task)
+            task.add_done_callback(self.capture_tasks.discard)
+
+        page.on("response", on_response)
+
+        def on_download(download: Any) -> None:
+            task = asyncio.create_task(self._save_download(download))
+            self.capture_tasks.add(task)
+            task.add_done_callback(self.capture_tasks.discard)
+
+        page.on("download", on_download)
+
+    async def _save_download(self, download: Any) -> None:
+        try:
+            path = await download.path()
+            if not path:
+                return
+            content = Path(path).read_bytes()
+            workspace.save_bytes(
+                self.conversation_id, download.suggested_filename or "download.bin", content,
+                source="download", source_url=download.url, extract=True,
+            )
+        except Exception:
+            logger.warning("browser initiated download could not be saved", exc_info=True)
+
+    async def _capture_response(self, response: Any) -> None:
+        request = response.request
+        try:
+            request_headers = await request.all_headers()
+        except Exception:
+            request_headers = dict(request.headers or {})
+        try:
+            response_headers = await response.all_headers()
+        except Exception:
+            response_headers = dict(response.headers or {})
+        content_type = response_headers.get("content-type", "")
+        api = _is_api(request.resource_type, content_type, response.url)
+        file_candidate = _is_file(content_type, response_headers, response.url)
+        if not api and not file_candidate:
+            return
+        body_text = ""
+        parsed_body = None
+        length = int(response_headers.get("content-length") or 0) if str(response_headers.get("content-length") or "").isdigit() else 0
+        if api and length <= 500_000:
+            try:
+                raw = await response.body()
+                if len(raw) <= 500_000:
+                    body_text = raw.decode("utf-8", errors="replace")
+                    if "json" in content_type or body_text.lstrip()[:1] in {"{", "["}:
+                        try:
+                            parsed_body = json.loads(body_text)
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
+        capture = {
+            "id": str(uuid.uuid4()),
+            "method": request.method,
+            "url": response.url,
+            "resourceType": request.resource_type,
+            "status": response.status,
+            "contentType": content_type,
+            "requestHeaders": request_headers,
+            "requestBody": request.post_data,
+            "responseHeaders": response_headers,
+            "responseBody": body_text,
+            "responseShape": _json_shape(parsed_body) if parsed_body is not None else None,
+            "pagination": analyze_pagination(response.url, parsed_body),
+            "isApi": api,
+            "isFile": file_candidate,
+            "capturedAt": time.time(),
+        }
+        self.captures.append(capture)
+        self.captures = self.captures[-max(20, int(settings.steward_browser_max_captures)):]
+        workspace.append_capture(self.conversation_id, capture)
+
+    async def save_state(self) -> None:
+        try:
+            await self.context.storage_state(path=str(workspace.storage_state_path(self.conversation_id)))
+            self.last_state_saved = time.time()
+        except Exception:
+            logger.debug("browser storage state save failed", exc_info=True)
+
+    async def save_state_if_due(self, seconds: float = 5.0) -> None:
+        if time.time() - self.last_state_saved >= seconds:
+            await self.save_state()
+
+
+class BrowserManager:
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run_loop, name="steward-browser", daemon=True)
+        self._thread.start()
+        self._sessions: dict[str, BrowserSession] = {}
+        self._pw = None
+        self._browser = None
+        self._tickets: dict[str, tuple[str, str | None, float]] = {}
+        self._ticket_lock = threading.Lock()
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _submit(self, coro: Coroutine) -> concurrent.futures.Future:
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+    def call(self, coro: Coroutine, timeout: float | None = None):
+        timeout = timeout or max(5, int(settings.steward_browser_timeout_seconds) + 5)
+        try:
+            return self._submit(coro).result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            raise BrowserRuntimeError("浏览器操作超时") from exc
+
+    async def acall(self, coro: Coroutine, timeout: float | None = None):
+        future = self._submit(coro)
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(future), timeout or 45)
+        except asyncio.TimeoutError as exc:
+            raise BrowserRuntimeError("浏览器操作超时") from exc
+
+    async def _ensure_browser(self):
+        if self._browser and self._browser.is_connected():
+            return self._browser
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise BrowserRuntimeError("服务端未安装 Playwright 浏览器组件") from exc
+        if self._pw is None:
+            self._pw = await async_playwright().start()
+        try:
+            self._browser = await self._pw.chromium.connect_over_cdp(
+                settings.steward_browser_cdp_url,
+                timeout=int(settings.steward_browser_timeout_seconds) * 1000,
+            )
+        except Exception as exc:
+            raise BrowserRuntimeError(
+                f"无法连接会话浏览器（{settings.steward_browser_cdp_url}）：{exc}"
+            ) from exc
+        return self._browser
+
+    async def _route_guard(self, route: Any) -> None:
+        try:
+            scheme = urlparse(route.request.url).scheme.lower()
+            if scheme in {"data", "blob", "about"}:
+                await route.continue_()
+                return
+            _safe_url(route.request.url)
+            await route.continue_()
+        except BrowserRuntimeError:
+            await route.abort("blockedbyclient")
+
+    async def _start(self, conversation_id: str, url: str) -> dict:
+        target = _safe_url(url)
+        session = self._sessions.get(conversation_id)
+        if session is None:
+            browser = await self._ensure_browser()
+            state = workspace.storage_state_path(conversation_id)
+            kwargs = {
+                "accept_downloads": True,
+                "viewport": {"width": 1365, "height": 768},
+                "locale": "zh-CN",
+            }
+            if state.exists():
+                kwargs["storage_state"] = str(state)
+            context = await browser.new_context(**kwargs)
+            await context.route("**/*", self._route_guard)
+            page = await context.new_page()
+            session = BrowserSession(conversation_id, context, page)
+            session.bind_page(page)
+
+            def on_page(new_page: Any) -> None:
+                session.bind_page(new_page)
+
+            context.on("page", on_page)
+            self._sessions[conversation_id] = session
+        try:
+            response = await session.page.goto(
+                target,
+                wait_until="domcontentloaded",
+                timeout=int(settings.steward_browser_timeout_seconds) * 1000,
+            )
+            _validate_navigation_response(response, target)
+        except Exception as exc:
+            if "Download is starting" not in str(exc):
+                raise BrowserRuntimeError(f"页面打开失败：{exc}") from exc
+            await session.page.wait_for_timeout(500)
+            await session.save_state()
+            return {"url": session.page.url, "title": "文件下载已触发",
+                    "downloadStarted": True, "targetUrl": target}
+        await session.save_state_if_due()
+        return await self._state(conversation_id)
+
+    def start(self, conversation_id: str, url: str) -> dict:
+        return self.call(self._start(conversation_id, url))
+
+    async def _require(self, conversation_id: str) -> BrowserSession:
+        session = self._sessions.get(conversation_id)
+        if not session or session.page.is_closed():
+            raise BrowserRuntimeError("当前会话尚未启动浏览器，请先打开目标网址")
+        return session
+
+    async def _state(self, conversation_id: str) -> dict:
+        session = await self._require(conversation_id)
+        page = session.page
+        try:
+            title = await page.title()
+            body = await page.locator("body").inner_text(timeout=3000)
+        except Exception:
+            title, body = "", ""
+        elements = await page.evaluate(r"""() => {
+          const selector = 'a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[contenteditable=true]';
+          return [...document.querySelectorAll(selector)].slice(0, 120).map((el, index) => {
+            const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+            return {index, tag: el.tagName.toLowerCase(), type: el.getAttribute('type') || '',
+              text: (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().replace(/\s+/g,' ').slice(0,160),
+              x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height),
+              visible: r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'};
+          }).filter(x => x.visible);
+        }""")
+        return {"url": page.url, "title": title, "text": body[:20_000], "elements": elements[:100]}
+
+    def state(self, conversation_id: str) -> dict:
+        return self.call(self._state(conversation_id))
+
+    async def _navigate(self, conversation_id: str, url: str) -> dict:
+        session = await self._require(conversation_id)
+        target = _safe_url(url)
+        try:
+            response = await session.page.goto(
+                target,
+                wait_until="domcontentloaded",
+                timeout=int(settings.steward_browser_timeout_seconds) * 1000,
+            )
+            _validate_navigation_response(response, target)
+        except Exception as exc:
+            if "Download is starting" not in str(exc):
+                raise BrowserRuntimeError(f"页面跳转失败：{exc}") from exc
+            await session.page.wait_for_timeout(500)
+            await session.save_state()
+            return {"url": session.page.url, "title": "文件下载已触发",
+                    "downloadStarted": True, "targetUrl": target}
+        await session.save_state()
+        return await self._state(conversation_id)
+
+    def navigate(self, conversation_id: str, url: str) -> dict:
+        return self.call(self._navigate(conversation_id, url))
+
+    async def _click_text(self, conversation_id: str, text: str) -> dict:
+        session = await self._require(conversation_id)
+        query = (text or "").strip()
+        if not query:
+            raise BrowserRuntimeError("点击文本不能为空")
+        locator = session.page.get_by_text(query, exact=True).first
+        if await locator.count() == 0:
+            locator = session.page.get_by_text(query, exact=False).first
+        if await locator.count() == 0:
+            raise BrowserRuntimeError(f"当前页面未找到文本「{query}」")
+        await locator.scroll_into_view_if_needed(timeout=3000)
+        await locator.click(timeout=5000)
+        await session.page.wait_for_timeout(300)
+        await session.save_state()
+        return await self._state(conversation_id)
+
+    def click_text(self, conversation_id: str, text: str) -> dict:
+        return self.call(self._click_text(conversation_id, text))
+
+    async def _type(self, conversation_id: str, selector: str, text: str, press_enter: bool = False) -> dict:
+        session = await self._require(conversation_id)
+        locator = session.page.locator(selector).first
+        if await locator.count() == 0:
+            raise BrowserRuntimeError("未找到要输入的元素")
+        input_type = (await locator.get_attribute("type") or "").lower()
+        if input_type == "password":
+            raise BrowserRuntimeError("密码必须由用户在实时浏览器画面中手动输入，Agent 不读取也不代填")
+        await locator.fill(text)
+        if press_enter:
+            await locator.press("Enter")
+        return await self._state(conversation_id)
+
+    def type_text(self, conversation_id: str, selector: str, text: str, press_enter: bool = False) -> dict:
+        return self.call(self._type(conversation_id, selector, text, press_enter))
+
+    async def _input(self, conversation_id: str, message: dict) -> None:
+        session = await self._require(conversation_id)
+        page = session.page
+        kind = message.get("type")
+        if kind == "mouse":
+            x, y = float(message.get("x", 0)), float(message.get("y", 0))
+            action = message.get("action")
+            if action == "move":
+                await page.mouse.move(x, y)
+            elif action == "down":
+                await page.mouse.move(x, y); await page.mouse.down(button=message.get("button", "left"))
+            elif action == "up":
+                await page.mouse.move(x, y); await page.mouse.up(button=message.get("button", "left"))
+            elif action == "click":
+                await page.mouse.click(x, y, button=message.get("button", "left"), click_count=int(message.get("clickCount", 1)))
+        elif kind == "wheel":
+            await page.mouse.wheel(float(message.get("deltaX", 0)), float(message.get("deltaY", 0)))
+        elif kind == "key":
+            key = str(message.get("key") or "")
+            if key:
+                await page.keyboard.press(key)
+        elif kind == "text":
+            await page.keyboard.insert_text(str(message.get("text") or ""))
+
+    async def input(self, conversation_id: str, message: dict) -> None:
+        await self.acall(self._input(conversation_id, message))
+
+    async def _screenshot(self, conversation_id: str) -> dict:
+        session = await self._require(conversation_id)
+        await session.save_state_if_due()
+        image = await session.page.screenshot(type="jpeg", quality=68, animations="disabled")
+        return {"data": base64.b64encode(image).decode("ascii"), "url": session.page.url}
+
+    async def screenshot(self, conversation_id: str) -> dict:
+        return await self.acall(self._screenshot(conversation_id))
+
+    def list_captures(self, conversation_id: str, keyword: str | None = None, limit: int = 50) -> list[dict]:
+        rows = workspace.load_captures(conversation_id, max(limit * 4, 100))
+        if keyword:
+            needle = keyword.lower()
+            rows = [r for r in rows if needle in str(r.get("url", "")).lower() or needle in str(r.get("responseBody", "")).lower()]
+        return [public_capture(r) for r in rows[-max(1, min(limit, 100)):]]
+
+    async def _download(self, conversation_id: str, capture_id: str) -> dict:
+        session = await self._require(conversation_id)
+        capture = workspace.require_capture(conversation_id, capture_id)
+        if capture.get("method") != "GET":
+            raise BrowserRuntimeError("自动下载只重放 GET 请求，其他方法请先在页面中触发下载")
+        headers = {
+            k: v for k, v in (capture.get("requestHeaders") or {}).items()
+            if k.lower() not in {"host", "content-length", "cookie", "accept-encoding"}
+        }
+        response = await session.context.request.get(capture["url"], headers=headers, timeout=int(settings.steward_browser_timeout_seconds) * 1000)
+        if not response.ok:
+            raise BrowserRuntimeError(f"下载失败：HTTP {response.status}")
+        content = await response.body()
+        response_headers = response.headers
+        disposition = response_headers.get("content-disposition", "")
+        match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.IGNORECASE)
+        filename = unquote(match.group(1).strip()) if match else Path(urlparse(capture["url"]).path).name
+        if not filename:
+            filename = f"download{mimetypes.guess_extension(response_headers.get('content-type', '').split(';')[0]) or '.bin'}"
+        row = workspace.save_bytes(
+            conversation_id, filename, content, source="download",
+            mime_type=response_headers.get("content-type"), source_url=capture["url"], extract=True,
+        )
+        await session.save_state()
+        return row
+
+    def download(self, conversation_id: str, capture_id: str) -> dict:
+        return self.call(self._download(conversation_id, capture_id), timeout=max(60, int(settings.steward_browser_timeout_seconds) + 10))
+
+    async def _close(self, conversation_id: str) -> None:
+        session = self._sessions.pop(conversation_id, None)
+        if session:
+            await session.save_state()
+            if session.capture_tasks:
+                await asyncio.gather(*session.capture_tasks, return_exceptions=True)
+            await session.context.close()
+
+    def close(self, conversation_id: str) -> None:
+        self.call(self._close(conversation_id), timeout=20)
+
+    async def _close_all(self) -> None:
+        for conversation_id in list(self._sessions):
+            try:
+                await self._close(conversation_id)
+            except Exception:
+                logger.warning("failed to close steward browser session %s", conversation_id, exc_info=True)
+        if self._browser and self._browser.is_connected():
+            try:
+                await self._browser.close()  # CDP detach; does not terminate sidecar Chromium
+            except Exception:
+                logger.debug("browser CDP detach failed", exc_info=True)
+        self._browser = None
+
+    def close_all(self) -> None:
+        self.call(self._close_all(), timeout=30)
+
+    def issue_ticket(self, conversation_id: str, user_id: str | None) -> str:
+        ticket = secrets.token_urlsafe(32)
+        with self._ticket_lock:
+            now = time.time()
+            self._tickets = {k: v for k, v in self._tickets.items() if v[2] > now}
+            self._tickets[ticket] = (conversation_id, user_id, now + 60)
+        return ticket
+
+    def redeem_ticket(self, ticket: str, conversation_id: str) -> tuple[bool, str | None]:
+        with self._ticket_lock:
+            value = self._tickets.pop(ticket, None)
+        if not value or value[0] != conversation_id or value[2] < time.time():
+            return False, None
+        return True, value[1]
+
+
+browser_manager = BrowserManager()

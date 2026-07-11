@@ -13,6 +13,9 @@ export default defineConfig({
     port: parseInt(process.env.DEPLOY_RUN_PORT || '5173'),
     // 允许通过沙箱/隧道的任意 host 访问 dev server（开发便利）
     allowedHosts: true,
-    proxy: { '/api': apiTarget, '/api-hub': apiTarget }
+    proxy: {
+      '/api': { target: apiTarget, ws: true },
+      '/api-hub': { target: apiTarget, ws: true },
+    }
   }
 })

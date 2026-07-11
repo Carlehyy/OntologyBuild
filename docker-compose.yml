@@ -15,11 +15,21 @@ services:
     # 外部端口 6380 避免与宿主机本地 redis 冲突; 容器内仍用 6379
     ports: ["6380:6379"]
 
+  browser:
+    image: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
+    command: ["--no-sandbox", "--disable-dev-shm-usage", "--remote-debugging-address=0.0.0.0", "--remote-debugging-port=9222"]
+    ports: ["9222:9222"]
+    shm_size: 2gb
+    restart: unless-stopped
+
   backend:
     build: ./backend
     ports: ["8000:8000"]
     env_file: .env
-    depends_on: [db, redis]
+    depends_on: [db, redis, browser]
+    environment:
+      STEWARD_BROWSER_CDP_URL: http://browser:9222
+      STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
     volumes: [./backend:/app, ./uploads:/uploads]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 

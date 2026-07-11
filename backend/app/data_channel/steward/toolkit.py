@@ -22,14 +22,21 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 import httpx
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
+from app.api_hub import config as api_hub_config, db as api_hub_db
 from app.settings.workflows.n8n_client import N8nApiError, N8nClient
-from app.data_channel.steward import service
+from app.data_channel.steward import service, workspace
+from app.data_channel.steward.browser_runtime import (
+    BrowserRuntimeError, browser_manager, validate_target_url,
+)
 from app.data_channel.steward.models import N8nPipeline, STATUS_ARCHIVED
 from app.data_channel.steward.node_catalog import CATEGORIES, describe_node, find_nodes
 from app.data_channel.steward.references import reference
@@ -178,6 +185,95 @@ TOOL_DEFS: list[dict] = [
             "required": ["url"],
         },
     },
+    {
+        "name": "list_session_files",
+        "description": "列出当前会话隔离空间中的上传文件和网页下载文件。文件只属于本会话，不能访问其他目录。",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "read_session_file",
+        "description": "读取当前会话某个文件的已解析文本（Word/PPT/Excel/PDF/Markdown 等）。先 list_session_files 获取 artifact_id。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string"},
+                "max_chars": {"type": "integer", "description": "最多返回字符数，默认 30000"},
+            },
+            "required": ["artifact_id"],
+        },
+    },
+    {
+        "name": "browser_open",
+        "description": "在当前会话的独立浏览器中打开合法 http/https 网址。浏览器登录态只属于本会话；需要账号密码时应让用户点击页面上的“实时浏览器”按钮手动登录。",
+        "parameters": {
+            "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_state",
+        "description": "读取当前会话浏览器的 URL、标题、可见正文和交互元素。不会读取密码、Cookie 或本地存储。",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_navigate",
+        "description": "让当前会话浏览器跳转到另一个合法 http/https 网址。",
+        "parameters": {
+            "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_click_text",
+        "description": "在当前页面按可见文字点击按钮或链接。点击前先 browser_state 确认页面。",
+        "parameters": {
+            "type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"],
+        },
+    },
+    {
+        "name": "browser_type",
+        "description": "向普通输入框填写非敏感文本；密码框会被系统拒绝，账号密码必须由用户在实时画面中手动输入。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector"},
+                "text": {"type": "string"},
+                "press_enter": {"type": "boolean"},
+            },
+            "required": ["selector", "text"],
+        },
+    },
+    {
+        "name": "browser_network_requests",
+        "description": "查看当前会话浏览器捕获到的 XHR/fetch/API 和文件请求，返回请求 id、响应结构、样例和分页线索；认证头会脱敏。查页面数据来源时必须使用本工具。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "按 URL 或响应内容过滤"},
+                "limit": {"type": "integer", "description": "默认 50，最大 100"},
+            },
+        },
+    },
+    {
+        "name": "download_captured_file",
+        "description": "将已捕获的 GET 文件请求在同一浏览器登录态下重放，并保存到当前会话隔离空间。只能使用 browser_network_requests 返回的 capture_id。",
+        "parameters": {
+            "type": "object", "properties": {"capture_id": {"type": "string"}}, "required": ["capture_id"],
+        },
+    },
+    {
+        "name": "register_proxy_interface",
+        "description": "把已捕获 API 注册到平台接口代理，并返回供 n8n 使用的代理 URL。可选择复制该请求的认证头；认证值不会返回给模型。分页参数会被拆成可覆盖 query。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "capture_id": {"type": "string"},
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "use_w3": {"type": "boolean", "description": "公司 W3 接口设 true；默认 false"},
+                "include_auth": {"type": "boolean", "description": "复制浏览器捕获的 Authorization/Cookie 等认证头"},
+            },
+            "required": ["capture_id", "name"],
+        },
+    },
 ]
 
 _PROBE_BODY_CAP = 200_000       # 读取响应体的字节上限
@@ -280,6 +376,8 @@ class ToolRunner:
             return {"error": str(e)}
         except N8nApiError as e:
             return {"error": f"n8n API 错误 (HTTP {e.status_code}): {e.message}"}
+        except (workspace.WorkspaceError, BrowserRuntimeError) as e:
+            return {"error": str(e)}
         except TypeError as e:
             return {"error": f"参数不合法: {e}"}
 
@@ -349,20 +447,25 @@ class ToolRunner:
         return reference(topic)
 
     def tool_probe_url(self, url: str, headers: dict | None = None) -> dict:
-        url = (url or "").strip()
-        if not url.startswith(("http://", "https://")):
-            raise StewardError("只支持 http/https 地址。")
-        # 云元数据端点一律拒绝（自托管平台允许探测局域网数据源，但不碰实例凭据面）
-        if "169.254.169.254" in url or "metadata.google.internal" in url:
-            raise StewardError("该地址不允许探测。")
+        url = validate_target_url(url)
 
         req_headers = {"User-Agent": "OntoPrompt-DataSteward/1.0", "Accept": "*/*"}
         for k, v in (headers or {}).items():
             if isinstance(k, str) and isinstance(v, str) and k.lower() != "host":
                 req_headers[k] = v
         try:
-            with httpx.Client(timeout=15, follow_redirects=True) as client:
-                resp = client.get(url, headers=req_headers)
+            with httpx.Client(timeout=15, follow_redirects=False) as client:
+                current = url
+                for _ in range(6):
+                    resp = client.get(current, headers=req_headers)
+                    if not resp.is_redirect:
+                        break
+                    location = resp.headers.get("location")
+                    if not location:
+                        break
+                    current = validate_target_url(urljoin(current, location))
+                else:
+                    raise StewardError("探测失败：重定向次数过多")
         except httpx.HTTPError as e:
             raise StewardError(f"探测失败：{e}") from e
 
@@ -407,6 +510,108 @@ class ToolRunner:
                 out["hint"] = ("HTML 页面：优先找它的 JSON API（浏览器开发者工具/常见 /api 路径），"
                                "实在没有再用 HTML 节点(extractHtmlContent) 按 CSS 选择器解析。")
         return out
+
+    # ── 会话文件与同会话浏览器 ─────────────────────────────────────
+
+    def _conversation(self) -> str:
+        if not self.conversation_id:
+            raise StewardError("该操作需要先建立数据管家会话")
+        return self.conversation_id
+
+    def tool_list_session_files(self) -> dict:
+        rows = workspace.list_files(self._conversation())
+        return {"files": rows, "count": len(rows),
+                "note": "所有路径均限制在当前会话；浏览器登录态和内部捕获日志不会出现在文件清单或打包结果中。"}
+
+    def tool_read_session_file(self, artifact_id: str, max_chars: int | None = None) -> dict:
+        cid = self._conversation()
+        row, _ = workspace.require_file(cid, artifact_id)
+        text = workspace.extracted_text(cid, artifact_id, max_chars or 30_000)
+        return {"file": row, "content": text,
+                "truncated": len(text) >= (max_chars or 30_000),
+                "note": None if text else "该文件没有可用的文本解析结果；仍可作为原文件下载。"}
+
+    def tool_browser_open(self, url: str) -> dict:
+        return browser_manager.start(self._conversation(), url)
+
+    def tool_browser_state(self) -> dict:
+        return browser_manager.state(self._conversation())
+
+    def tool_browser_navigate(self, url: str) -> dict:
+        return browser_manager.navigate(self._conversation(), url)
+
+    def tool_browser_click_text(self, text: str) -> dict:
+        return browser_manager.click_text(self._conversation(), text)
+
+    def tool_browser_type(self, selector: str, text: str, press_enter: bool | None = None) -> dict:
+        return browser_manager.type_text(self._conversation(), selector, text, bool(press_enter))
+
+    def tool_browser_network_requests(self, keyword: str | None = None, limit: int | None = None) -> dict:
+        rows = browser_manager.list_captures(self._conversation(), keyword, limit or 50)
+        return {"requests": rows, "count": len(rows),
+                "hint": "优先比较用户操作前后的新增请求；pagination 字段给出页码/offset/cursor 线索。"}
+
+    def tool_download_captured_file(self, capture_id: str) -> dict:
+        row = browser_manager.download(self._conversation(), capture_id)
+        return {"file": row, "notice": "文件已保存到当前会话，可在会话文件面板查看并随会话一键打包。"}
+
+    def tool_register_proxy_interface(self, capture_id: str, name: str,
+                                      description: str | None = None,
+                                      use_w3: bool | None = None,
+                                      include_auth: bool | None = None) -> dict:
+        capture = workspace.require_capture(self._conversation(), capture_id)
+        split = urlsplit(capture["url"])
+        base_url = urlunsplit((split.scheme, split.netloc, split.path, "", ""))
+        query_params = [{"key": k, "value": v} for k, v in parse_qsl(split.query, keep_blank_values=True)]
+
+        keep_headers = {"accept", "content-type", "referer", "origin"}
+        sensitive = {"authorization", "cookie", "proxy-authorization", "x-api-key"}
+        request_headers = capture.get("requestHeaders") or {}
+        headers = []
+        for key, value in request_headers.items():
+            lowered = key.lower()
+            if lowered in keep_headers or lowered.startswith("x-") or (include_auth and lowered in sensitive):
+                if lowered not in {"host", "content-length", "accept-encoding"}:
+                    headers.append({"key": key, "value": value})
+
+        body_content = capture.get("requestBody") or ""
+        content_type = str(request_headers.get("content-type") or request_headers.get("Content-Type") or "").lower()
+        body_type = "none"
+        if body_content:
+            body_type = "json" if "json" in content_type else ("form" if "form" in content_type else "raw")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with api_hub_db.get_conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
+                "body_type, body_content, use_w3, mcp_enabled, open_enabled, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    name.strip()[:200] or "浏览器发现接口",
+                    (description or f"数据管家会话 {self._conversation()[:8]} 从页面网络请求发现").strip(),
+                    "数据管家发现", str(capture.get("method") or "GET").upper(), base_url,
+                    json.dumps(query_params, ensure_ascii=False), json.dumps(headers, ensure_ascii=False),
+                    body_type, body_content, 1 if use_w3 else 0, 0, 1, now, now,
+                ),
+            )
+            interface_id = int(cur.lastrowid)
+        proxy_url = f"{settings.steward_proxy_base_url.rstrip('/')}/{interface_id}"
+        return {
+            "interface": {
+                "id": interface_id, "name": name.strip(), "method": capture.get("method"),
+                "targetUrl": base_url, "queryParams": [item["key"] for item in query_params],
+                "authCopied": bool(include_auth and any(h["key"].lower() in sensitive for h in headers)),
+                "useW3": bool(use_w3),
+            },
+            "proxyUrl": proxy_url,
+            "n8n": {
+                "method": "POST",
+                "body": {"query": {"page": "={{ $json.page }}"}, "body": None},
+                "credential": "Header Auth: Authorization = Bearer <API_HUB_SYSTEM_MCP_TOKEN>",
+            },
+            "warning": None if api_hub_config.SYSTEM_MCP_TOKEN else (
+                "接口已登记，但 API_HUB_SYSTEM_MCP_TOKEN 尚未配置；配置后 n8n 才能调用代理。"),
+        }
 
     # ── 写入（治理规则内嵌） ──────────────────────────────────────
 

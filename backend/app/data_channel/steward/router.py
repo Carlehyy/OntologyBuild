@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_db, get_current_user
 from app.model_configs.selector import select_llm_model_config
 from app.settings.workflows.n8n_client import N8nApiError
@@ -34,6 +36,10 @@ from app.data_channel.steward.models import (
     N8nPipeline, StewardConversation, StewardMessage, STATUS_ARCHIVED,
 )
 from app.data_channel.steward.orchestrator import run_steward_turn
+from app.data_channel.steward import workspace
+from app.data_channel.steward.browser_runtime import (
+    BrowserRuntimeError, browser_manager,
+)
 from app.data_channel.steward.service import StewardError
 
 router = APIRouter()
@@ -82,6 +88,10 @@ class ChatBody(BaseModel):
     conversationId: Optional[str] = None
     modelId: Optional[str] = None
     stream: bool = True
+
+
+class CreateConversationBody(BaseModel):
+    title: str = "新对话"
 
 
 @router.post("/chat")
@@ -153,6 +163,20 @@ def _require_conversation(db: Session, conversation_id: str, current_user) -> St
     return conv
 
 
+@router.post("/conversations", status_code=201)
+def create_conversation(body: CreateConversationBody, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    conv = StewardConversation(
+        user_id=getattr(current_user, "id", None),
+        title=(body.title or "新对话").strip()[:200] or "新对话",
+    )
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+    workspace.session_root(conv.id)
+    return _ok(_conv_out(conv))
+
+
 @router.get("/conversations")
 def list_conversations(db: Session = Depends(get_db),
                        current_user=Depends(get_current_user)):
@@ -178,9 +202,184 @@ def get_conversation(conversation_id: str, db: Session = Depends(get_db),
 def delete_conversation(conversation_id: str, db: Session = Depends(get_db),
                         current_user=Depends(get_current_user)):
     conv = _require_conversation(db, conversation_id, current_user)
+    try:
+        browser_manager.close(conv.id)
+    except Exception:  # noqa: BLE001 — 文件与数据库清理不能被失联浏览器阻塞
+        logger.warning("关闭会话浏览器失败: %s", conv.id, exc_info=True)
     db.query(StewardMessage).filter(StewardMessage.conversation_id == conv.id).delete()
     db.delete(conv)
     db.commit()
+    try:
+        workspace.remove_session(conv.id)
+    except OSError:
+        logger.warning("会话目录清理失败，需后台重试: %s", conv.id, exc_info=True)
+
+
+# ── 会话文件 ──────────────────────────────────────────────────────
+
+@router.get("/conversations/{conversation_id}/files")
+def list_conversation_files(conversation_id: str, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    return _ok(workspace.list_files(conversation_id))
+
+
+@router.post("/conversations/{conversation_id}/files", status_code=201)
+async def upload_conversation_file(conversation_id: str, file: UploadFile = File(...),
+                                   db: Session = Depends(get_db),
+                                   current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
+    allowed = {item.strip().lower() for item in settings.allowed_upload_extensions.split(",") if item.strip()}
+    if ext not in allowed:
+        raise HTTPException(400, f"不支持的文件类型 .{ext}（允许: {settings.allowed_upload_extensions}）")
+    try:
+        row = workspace.save_stream(
+            conversation_id, file.filename or "attachment", file.file,
+            source="upload", mime_type=file.content_type, extract=True,
+        )
+    except workspace.WorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _ok(row)
+
+
+@router.get("/conversations/{conversation_id}/files/{artifact_id}")
+def download_conversation_file(conversation_id: str, artifact_id: str,
+                               db: Session = Depends(get_db),
+                               current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        row, path = workspace.require_file(conversation_id, artifact_id)
+    except workspace.WorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path, filename=row["filename"], media_type=row.get("mimeType"))
+
+
+@router.delete("/conversations/{conversation_id}/files/{artifact_id}", status_code=204)
+def delete_conversation_file(conversation_id: str, artifact_id: str,
+                             db: Session = Depends(get_db),
+                             current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        workspace.delete_file(conversation_id, artifact_id)
+    except workspace.WorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/conversations/{conversation_id}/archive")
+def archive_conversation_files(conversation_id: str, db: Session = Depends(get_db),
+                               current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    path = workspace.archive_path(conversation_id)
+    return FileResponse(path, filename=f"data-steward-{conversation_id[:8]}.zip",
+                        media_type="application/zip")
+
+
+# ── 会话浏览器 ────────────────────────────────────────────────────
+
+class BrowserUrlBody(BaseModel):
+    url: str
+
+
+class BrowserClickBody(BaseModel):
+    text: str
+
+
+class BrowserTypeBody(BaseModel):
+    selector: str
+    text: str
+    pressEnter: bool = False
+
+
+def _browser_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (BrowserRuntimeError, workspace.WorkspaceError)):
+        return HTTPException(422, str(exc))
+    logger.exception("会话浏览器操作失败")
+    return HTTPException(500, "会话浏览器操作失败")
+
+
+@router.get("/browser/status")
+def browser_status(_=Depends(get_current_user)):
+    # CDP URLs may contain a browser-service token; never return them to clients.
+    return _ok({"configured": bool(settings.steward_browser_cdp_url)})
+
+
+@router.post("/conversations/{conversation_id}/browser/start")
+def start_browser(conversation_id: str, body: BrowserUrlBody,
+                  db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.start(conversation_id, body.url))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/navigate")
+def navigate_browser(conversation_id: str, body: BrowserUrlBody,
+                     db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.navigate(conversation_id, body.url))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.get("/conversations/{conversation_id}/browser/state")
+def browser_state(conversation_id: str, db: Session = Depends(get_db),
+                  current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.state(conversation_id))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/click")
+def browser_click(conversation_id: str, body: BrowserClickBody,
+                  db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.click_text(conversation_id, body.text))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/type")
+def browser_type(conversation_id: str, body: BrowserTypeBody,
+                 db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.type_text(
+            conversation_id, body.selector, body.text, body.pressEnter))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.get("/conversations/{conversation_id}/browser/captures")
+def browser_captures(conversation_id: str, keyword: str | None = None,
+                     limit: int = Query(50, ge=1, le=100), db: Session = Depends(get_db),
+                     current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    return _ok(browser_manager.list_captures(conversation_id, keyword, limit))
+
+
+@router.post("/conversations/{conversation_id}/browser/captures/{capture_id}/download")
+def browser_capture_download(conversation_id: str, capture_id: str,
+                             db: Session = Depends(get_db),
+                             current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.download(conversation_id, capture_id))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/ticket")
+def browser_live_ticket(conversation_id: str, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    ticket = browser_manager.issue_ticket(conversation_id, getattr(current_user, "id", None))
+    return _ok({"ticket": ticket, "expiresIn": 60})
 
 
 # ── 受管流水线面板 ────────────────────────────────────────────────

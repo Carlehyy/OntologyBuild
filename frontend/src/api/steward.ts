@@ -72,6 +72,35 @@ export interface StewardConversationDTO {
   messages?: StewardMessageDTO[]
 }
 
+export interface StewardArtifact {
+  id: string
+  filename: string
+  source: 'upload' | 'download' | string
+  sourceUrl?: string | null
+  mimeType: string
+  size: number
+  sha256: string
+  extractedChars: number
+  extractError?: string | null
+  urls: string[]
+  createdAt: string
+}
+
+export interface BrowserCapture {
+  id: string
+  method: string
+  url: string
+  resourceType: string
+  status: number
+  contentType: string
+  responseShape?: unknown
+  responsePreview?: string
+  pagination?: { mode: string; requestParams: Record<string, string>; responseFields: Record<string, unknown> } | null
+  isApi: boolean
+  isFile: boolean
+  capturedAt: number
+}
+
 export type StewardEvent =
   | { type: 'meta'; conversationId: string; model: string }
   | ({ type: 'step' } & StewardStep)
@@ -88,6 +117,27 @@ export const stewardApi = {
     apiClientV2.get<StewardConversationDTO>(`/steward/conversations/${cid}`),
   deleteConversation: (cid: string) =>
     apiClientV2.delete(`/steward/conversations/${cid}`),
+  createConversation: (title = '新对话') =>
+    apiClientV2.post<StewardConversationDTO>('/steward/conversations', { title }),
+  files: (cid: string) =>
+    apiClientV2.get<StewardArtifact[]>(`/steward/conversations/${cid}/files`),
+  uploadFile: (cid: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiClientV2.post<StewardArtifact>(`/steward/conversations/${cid}/files`, form)
+  },
+  deleteFile: (cid: string, artifactId: string) =>
+    apiClientV2.delete(`/steward/conversations/${cid}/files/${artifactId}`),
+  browserStart: (cid: string, url: string) =>
+    apiClientV2.post<{ url: string; title: string }>(`/steward/conversations/${cid}/browser/start`, { url }),
+  browserNavigate: (cid: string, url: string) =>
+    apiClientV2.post<{ url: string; title: string }>(`/steward/conversations/${cid}/browser/navigate`, { url }),
+  browserTicket: (cid: string) =>
+    apiClientV2.post<{ ticket: string; expiresIn: number }>(`/steward/conversations/${cid}/browser/ticket`),
+  browserCaptures: (cid: string, keyword = '') =>
+    apiClientV2.get<BrowserCapture[]>(`/steward/conversations/${cid}/browser/captures`, { params: { keyword, limit: 100 } }),
+  downloadCapture: (cid: string, captureId: string) =>
+    apiClientV2.post<StewardArtifact>(`/steward/conversations/${cid}/browser/captures/${captureId}/download`),
 
   pipelines: () => apiClientV2.get<StewardPipeline[]>('/steward/pipelines'),
   pipeline: (id: string) => apiClientV2.get<StewardPipelineDetail>(`/steward/pipelines/${id}`),
@@ -96,10 +146,33 @@ export const stewardApi = {
     apiClientV2.post<{ record: StewardPipeline }>('/steward/pipelines/bootstrap', { name, description }),
 }
 
+export async function downloadStewardFile(
+  cid: string, artifactId?: string, filename = 'session-files.zip',
+): Promise<void> {
+  const token = localStorage.getItem('token') || ''
+  const path = artifactId
+    ? `/steward/conversations/${cid}/files/${artifactId}`
+    : `/steward/conversations/${cid}/archive`
+  const resp = await fetch(`${apiRoot()}${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!resp.ok) throw new Error(`下载失败 (${resp.status})`)
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 // ---------- SSE 流式 chat ----------
 
 function apiRoot(): string {
-  const runtimeBase = (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) || ''
+  const runtimeWindow = typeof window !== 'undefined'
+    ? window as Window & { __API_BASE_URL__?: string }
+    : undefined
+  const runtimeBase = runtimeWindow?.__API_BASE_URL__ || ''
   return `${runtimeBase}/api/v2`
 }
 

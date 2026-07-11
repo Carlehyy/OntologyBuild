@@ -39,6 +39,7 @@ from app.routers.v2 import extraction as extraction_v2
 from app.routers.v2 import sync_tasks as sync_tasks_v2
 from app.data_channel.pipeline_tasks import router as pipeline_tasks_v2
 from app.data_channel.steward import router as steward_v2
+from app.data_channel.steward import browser_ws as steward_browser_ws
 from app.routers.v2 import test_data as test_data_v2
 from app.data_channel.access import asset_lake_access_guard
 from app.data_channel.datasets.sharing_router import (
@@ -355,6 +356,8 @@ async def lifespan(app: FastAPI):
         ):
             yield
     finally:
+        from app.data_channel.steward.browser_runtime import browser_manager
+        browser_manager.close_all()
         api_hub_scheduler.shutdown()
 
 app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
@@ -489,6 +492,7 @@ from app.api_hub.routers import backup as api_hub_backup
 from app.api_hub.routers import credential as api_hub_credential
 from app.api_hub.routers import interfaces as api_hub_interfaces
 from app.api_hub.routers import mcp as api_hub_mcp_router
+from app.api_hub.routers import proxy as api_hub_proxy
 from app.deps import get_current_user
 api_hub_auth = [Depends(get_current_user)]
 app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_auth)
@@ -496,6 +500,9 @@ app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencie
 app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_auth)
 app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_auth)
 app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_auth)
+# n8n service-to-service calls use API_HUB_SYSTEM_MCP_TOKEN and only reach
+# interfaces explicitly added to the open list.
+app.include_router(api_hub_proxy.router)
 asset_lake_guard = [Depends(asset_lake_access_guard)]
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"], dependencies=asset_lake_guard)
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"], dependencies=asset_lake_guard)
@@ -515,6 +522,10 @@ app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-
 app.include_router(sync_tasks_v2.router, prefix="/api/v2/sync-tasks", tags=["v2-sync-tasks"], dependencies=asset_lake_guard)
 app.include_router(pipeline_tasks_v2.router, prefix="/api/v2/pipeline-tasks", tags=["v2-pipeline-tasks"], dependencies=asset_lake_guard)
 app.include_router(steward_v2.router, prefix="/api/v2/steward", tags=["v2-steward"], dependencies=asset_lake_guard)
+# WebSocket uses a one-time, user-bound ticket issued by the authenticated
+# steward router.  It intentionally sits outside HTTPBearer dependencies because
+# browsers cannot attach that header to a native WebSocket handshake.
+app.include_router(steward_browser_ws.router, prefix="/api/v2/steward", tags=["v2-steward-browser"])
 app.include_router(test_data_v2.router, prefix="/api/v2/test-data", tags=["v2-test-data"], dependencies=asset_lake_guard)
 
 # 正规本体模型 (Palantir 风格) — 平台核心建模 API

@@ -16,6 +16,17 @@ class Settings(BaseSettings):
     uploads_dir: str = "./uploads"
     access_token_expire_minutes: int = 1440
 
+    # Data-steward conversation workspace and its isolated browser runtime.
+    # Empty workspace root resolves to <uploads_dir>/steward-sessions.
+    steward_workspace_root: str = ""
+    steward_browser_cdp_url: str = "http://localhost:9222"
+    steward_browser_timeout_seconds: int = 30
+    steward_browser_max_captures: int = 300
+    steward_browser_frame_interval_ms: int = 250
+    steward_browser_allow_private_networks: bool = True
+    # URL used inside generated n8n workflows to reach this backend.
+    steward_proxy_base_url: str = "http://backend:8000/api-hub/proxy"
+
     max_upload_mb: int = 200
     allowed_upload_extensions: str = "csv,xlsx,xls,json,xml,pdf,docx,doc,pptx,ppt,md,txt"
     # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理

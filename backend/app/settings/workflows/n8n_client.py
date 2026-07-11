@@ -67,7 +67,17 @@ class N8nClient:
                 body = resp.json()
             except ValueError:
                 body = resp.text
-            message = body.get("message", resp.text) if isinstance(body, dict) else resp.text
+            if isinstance(body, dict):
+                raw_message = body.get("message") or body.get("error")
+                if isinstance(raw_message, dict):
+                    raw_message = raw_message.get("message") or raw_message.get("code")
+            else:
+                raw_message = body
+            # Reverse proxies sometimes return a bare 502/503 with an empty body.
+            # Preserve a useful diagnostic instead of surfacing "HTTP 502: ".
+            message = str(raw_message or "").strip()
+            if not message:
+                message = resp.reason_phrase or f"HTTP {resp.status_code}"
             raise N8nApiError(resp.status_code, message, body)
 
         if resp.status_code == 204 or not resp.content:

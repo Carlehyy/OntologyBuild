@@ -63,6 +63,12 @@ services:
       retries: 10
     restart: unless-stopped
 
+  browser:
+    image: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
+    command: ["--no-sandbox", "--disable-dev-shm-usage", "--remote-debugging-address=0.0.0.0", "--remote-debugging-port=9222"]
+    shm_size: 2gb
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -92,6 +98,9 @@ services:
       CHROMA_PORT: "8000"
       UPLOADS_DIR: ${UPLOADS_DIR:-/uploads}
       API_HUB_DATA_DIR: /api-hub-data
+      STEWARD_WORKSPACE_ROOT: /uploads/steward-sessions
+      STEWARD_BROWSER_CDP_URL: http://browser:9222
+      STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
     depends_on:
       db:
         condition: service_healthy
@@ -103,6 +112,8 @@ services:
         condition: service_healthy
       chromadb:
         condition: service_healthy
+      browser:
+        condition: service_started
     volumes:
       - uploads:/uploads
       - api_hub_data:/api-hub-data

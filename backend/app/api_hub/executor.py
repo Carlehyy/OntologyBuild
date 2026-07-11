@@ -49,8 +49,11 @@ def _parse_form(text: str) -> dict:
     return out
 
 
-def _build_kwargs(iface: dict) -> dict:
+def _build_kwargs(iface: dict, query_override: dict | None = None,
+                  body_override: str | None = None) -> dict:
     params = {p["key"]: p["value"] for p in iface.get("query_params", []) if p.get("key")}
+    if query_override:
+        params.update({str(k): str(v) for k, v in query_override.items() if v is not None})
     headers = {h["key"]: h["value"] for h in iface.get("headers", []) if h.get("key")}
 
     kwargs = {
@@ -60,7 +63,7 @@ def _build_kwargs(iface: dict) -> dict:
     }
 
     body_type = iface.get("body_type", "none")
-    body = iface.get("body_content", "") or ""
+    body = body_override if body_override is not None else (iface.get("body_content", "") or "")
 
     if body_type == "json" and body.strip():
         kwargs["data"] = body.encode("utf-8")
@@ -97,7 +100,8 @@ def _blank_result() -> dict:
     }
 
 
-def run_interface(iface: dict) -> dict:
+def run_interface(iface: dict, *, query_override: dict | None = None,
+                  body_override: str | None = None) -> dict:
     method = (iface.get("method") or "GET").upper()
     url = (iface.get("url") or "").strip()
     use_w3 = bool(iface.get("use_w3", 1))
@@ -108,7 +112,7 @@ def run_interface(iface: dict) -> dict:
         _save_run(iface, result)
         return result
 
-    kwargs = _build_kwargs(iface)
+    kwargs = _build_kwargs(iface, query_override=query_override, body_override=body_override)
 
     # 选择会话
     if use_w3:

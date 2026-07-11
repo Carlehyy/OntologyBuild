@@ -134,12 +134,16 @@ bootstrap_production_env() {
   set_env_value MINIO_SECRET_KEY "$minio_secret"
   set_env_value STORAGE_LOCAL_FALLBACK false
   set_env_value ALLOW_PUBLIC_REGISTRATION false
+  set_env_value API_HUB_SYSTEM_MCP_TOKEN "$(random_hex 32)"
   set_env_value STRICT_PRODUCTION_CONFIG false
   chmod 600 .env
   log "generated runtime secrets were stored in ${APP_DIR}/.env (values are not printed to CI logs)"
 }
 [ -f .env ] || bootstrap_production_env
 chmod 600 .env
+if [ -z "$(awk -F= '$1 == "API_HUB_SYSTEM_MCP_TOKEN" {print substr($0, index($0,"=")+1)}' .env | tail -n1)" ]; then
+  set_env_value API_HUB_SYSTEM_MCP_TOKEN "$(random_hex 32)"
+fi
 env_value() {
   local key="$1"
   awk -v key="$key" '
@@ -197,7 +201,7 @@ check_image_digest() {
   fi
 }
 for image_key in \
-  POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE CHROMA_IMAGE \
+  POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE CHROMA_IMAGE BROWSER_IMAGE \
   PYTHON_BASE_IMAGE NODE_BASE_IMAGE NGINX_BASE_IMAGE; do
   check_image_digest "$image_key"
 done

@@ -12,12 +12,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
-  ClipboardCheck, ExternalLink, Eye, GitBranch, Globe, History, KeyRound, Library, Loader2,
-  Pencil, Plus, RefreshCw, Search, Send, Settings, Sparkles, Trash2,
+  ClipboardCheck, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
+  GitBranch, Globe, History, KeyRound, Library, Loader2, Monitor, MousePointer2,
+  Pencil, Plus, RefreshCw, Search, Send, Settings, Sparkles, Trash2, Upload,
   User, Workflow, X, Zap,
 } from 'lucide-react'
 import {
-  stewardApi, streamStewardChat,
+  downloadStewardFile, stewardApi, streamStewardChat,
+  type BrowserCapture, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep,
 } from '@/api/steward'
@@ -48,6 +50,16 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   describe_node:       { label: '查节点详情', icon: BookOpen },
   n8n_reference:       { label: '查编排参考', icon: Library },
   probe_url:           { label: '探测数据源', icon: Globe },
+  list_session_files:  { label: '查看会话文件', icon: FolderOpen },
+  read_session_file:   { label: '读取文件', icon: FileText },
+  browser_open:        { label: '打开会话浏览器', icon: Monitor },
+  browser_state:       { label: '读取页面', icon: Eye },
+  browser_navigate:    { label: '浏览器跳转', icon: Globe },
+  browser_click_text:  { label: '点击页面', icon: MousePointer2 },
+  browser_type:        { label: '填写页面', icon: Pencil },
+  browser_network_requests: { label: '分析页面接口', icon: Activity },
+  download_captured_file: { label: '下载到会话', icon: Download },
+  register_proxy_interface: { label: '登记代理接口', icon: Zap },
 }
 
 const SUGGESTED = [
@@ -142,6 +154,8 @@ export default function DataStewardPage() {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<StewardConversationDTO[]>([])
   const [showHistory, setShowHistory] = useState(false)
+  const [showFiles, setShowFiles] = useState(false)
+  const [showBrowser, setShowBrowser] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -200,7 +214,10 @@ export default function DataStewardPage() {
     stewardApi.conversations().then(res => setConversations(Array.isArray(res) ? res : [])).catch(() => {})
   }, [])
 
-  useEffect(() => { loadStatus(); loadRecords(); loadConversations() }, [loadStatus, loadRecords, loadConversations])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { loadStatus(); void loadRecords(); loadConversations() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadStatus, loadRecords, loadConversations])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => () => abortRef.current?.abort(), [])
 
@@ -230,6 +247,28 @@ export default function DataStewardPage() {
     setConversationId(null)
     setMessages([])
     setShowHistory(false)
+  }
+
+  const ensureConversation = useCallback(async (): Promise<string> => {
+    if (conversationId) return conversationId
+    const conv = await stewardApi.createConversation('新数据采集会话')
+    setConversationId(conv.id)
+    loadConversations()
+    return conv.id
+  }, [conversationId, loadConversations])
+
+  const openFiles = async () => {
+    try {
+      await ensureConversation()
+      setShowFiles(true)
+    } catch { /* 顶部功能保持安静，弹窗由后续请求展示错误 */ }
+  }
+
+  const openBrowser = async () => {
+    try {
+      await ensureConversation()
+      setShowBrowser(true)
+    } catch { /* 同上 */ }
   }
 
   const loadConversation = async (cid: string) => {
@@ -274,8 +313,11 @@ export default function DataStewardPage() {
         e => {
           if (e.type === 'meta') setConversationId(e.conversationId)
           else if (e.type === 'step') {
-            const { type: _t, ...step } = e
-            patchBot(m => ({ steps: [...m.steps, step as StewardStep] }))
+            const step: StewardStep = {
+              tool: e.tool, arguments: e.arguments, summary: e.summary,
+              durationMs: e.durationMs, ...(e.error ? { error: e.error } : {}),
+            }
+            patchBot(m => ({ steps: [...m.steps, step] }))
           } else if (e.type === 'answer') {
             touched = e.touchedPipelineIds || []
             patchBot({ content: e.content, loading: false })
@@ -342,6 +384,14 @@ export default function DataStewardPage() {
               <Sparkles size={15} className="text-violet-600" /> 数据管家
             </h2>
             <div className="flex items-center gap-2 shrink-0">
+              <button onClick={openFiles}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50">
+                <FolderOpen size={13} /> 会话文件
+              </button>
+              <button onClick={openBrowser}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-violet-200 rounded-lg text-xs text-violet-700 hover:bg-violet-50">
+                <Monitor size={13} /> 实时浏览器
+              </button>
               <button onClick={() => navigate('/data/pipelines')}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50">
                 <ArrowLeft size={13} /> 返回流水线
@@ -463,6 +513,13 @@ export default function DataStewardPage() {
         />
       )}
 
+      {showFiles && conversationId && (
+        <WorkspaceModal conversationId={conversationId} onClose={() => setShowFiles(false)} />
+      )}
+      {showBrowser && conversationId && (
+        <BrowserModal conversationId={conversationId} onClose={() => setShowBrowser(false)} />
+      )}
+
       {/* 会话管理弹窗 */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowHistory(false)}>
@@ -496,6 +553,267 @@ export default function DataStewardPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function errorText(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const value = error as { detail?: unknown; message?: unknown }
+    if (typeof value.detail === 'string') return value.detail
+    if (typeof value.message === 'string') return value.message
+  }
+  return fallback
+}
+
+function WorkspaceModal({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+  const [files, setFiles] = useState<StewardArtifact[]>([])
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const reload = useCallback(() => {
+    setLoading(true)
+    return stewardApi.files(conversationId)
+      .then(rows => setFiles(Array.isArray(rows) ? rows : []))
+      .catch(err => setError(errorText(err, '会话文件加载失败')))
+      .finally(() => setLoading(false))
+  }, [conversationId])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void reload(), 0)
+    return () => window.clearTimeout(timer)
+  }, [reload])
+
+  const uploadFiles = async (selected: FileList | null) => {
+    if (!selected?.length) return
+    setUploading(true); setError('')
+    try {
+      for (const file of Array.from(selected)) await stewardApi.uploadFile(conversationId, file)
+      await reload()
+    } catch (err: unknown) {
+      setError(errorText(err, '上传失败'))
+    } finally {
+      setUploading(false)
+      if (inputRef.current) inputRef.current.value = ''
+    }
+  }
+
+  const remove = async (id: string) => {
+    await stewardApi.deleteFile(conversationId, id)
+    await reload()
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-5" onClick={onClose}>
+      <div className="flex max-h-[78vh] w-[760px] max-w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b px-5 py-3.5">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-semibold"><FolderOpen size={16} className="text-violet-600" />会话隔离空间</h3>
+            <p className="mt-0.5 text-[11px] text-gray-400">上传件和网页下载件仅在此会话可见；打包不包含浏览器登录态</p>
+          </div>
+          <button aria-label="关闭会话文件" onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={17} /></button>
+        </div>
+        <div className="flex items-center gap-2 border-b bg-gray-50/70 px-5 py-3">
+          <input ref={inputRef} type="file" multiple className="hidden"
+            accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.pdf,.md,.txt,.csv,.json,.xml"
+            onChange={e => void uploadFiles(e.target.files)} />
+          <button onClick={() => inputRef.current?.click()} disabled={uploading}
+            className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+            {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} 上传文件
+          </button>
+          <button onClick={() => void downloadStewardFile(conversationId, undefined, `data-steward-${conversationId.slice(0, 8)}.zip`)}
+            className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
+            <FileArchive size={13} /> 一键打包
+          </button>
+          <button onClick={() => void reload()} className="ml-auto flex items-center gap-1 text-xs text-gray-500"><RefreshCw size={12} />刷新</button>
+        </div>
+        {error && <div className="border-b bg-red-50 px-5 py-2 text-xs text-red-600">{error}</div>}
+        <div className="min-h-[260px] flex-1 overflow-auto p-4">
+          {loading ? <div className="py-16 text-center text-sm text-gray-400">加载中…</div> : files.length === 0 ? (
+            <div className="rounded-xl border-2 border-dashed py-16 text-center text-sm text-gray-400">当前会话还没有文件</div>
+          ) : (
+            <div className="space-y-2">
+              {files.map(file => (
+                <div key={file.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-600"><FileText size={16} /></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-gray-800">{file.filename}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-gray-400">
+                      {file.source === 'download' ? '网页下载' : '用户上传'} · {formatBytes(file.size)}
+                      {file.extractedChars > 0 ? ` · 已解析 ${file.extractedChars.toLocaleString()} 字` : ''}
+                      {file.urls?.length ? ` · 发现 ${file.urls.length} 个网址` : ''}
+                    </p>
+                    {file.extractError && <p className="mt-0.5 truncate text-[11px] text-amber-600">{file.extractError}</p>}
+                  </div>
+                  <button title="下载" onClick={() => void downloadStewardFile(conversationId, file.id, file.filename)} className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-violet-600"><Download size={14} /></button>
+                  <button title="删除" onClick={() => void remove(file.id)} className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BrowserModal({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+  const [url, setUrl] = useState('https://')
+  const [currentUrl, setCurrentUrl] = useState('')
+  const [frame, setFrame] = useState('')
+  const [connected, setConnected] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [captures, setCaptures] = useState<BrowserCapture[]>([])
+  const [showNetwork, setShowNetwork] = useState(false)
+  const wsRef = useRef<WebSocket | null>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+
+  const connectLive = useCallback(async () => {
+    wsRef.current?.close()
+    const { ticket } = await stewardApi.browserTicket(conversationId)
+    const runtimeBase = ((window as Window & { __API_BASE_URL__?: string }).__API_BASE_URL__ || window.location.origin).replace(/\/$/, '')
+    const wsBase = runtimeBase.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+    const ws = new WebSocket(`${wsBase}/api/v2/steward/conversations/${conversationId}/browser/live?ticket=${encodeURIComponent(ticket)}`)
+    wsRef.current = ws
+    ws.onopen = () => { setConnected(true); setError('') }
+    ws.onclose = () => setConnected(false)
+    ws.onerror = () => setError('实时画面连接失败')
+    ws.onmessage = event => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === 'frame') {
+          setFrame(`data:image/jpeg;base64,${msg.data}`)
+          if (msg.url) { setCurrentUrl(msg.url); setUrl(msg.url) }
+        } else if (msg.type === 'error') setError(msg.message || '浏览器画面异常')
+      } catch { /* 忽略损坏帧 */ }
+    }
+  }, [conversationId])
+
+  useEffect(() => () => wsRef.current?.close(), [])
+
+  const open = async () => {
+    if (!url.trim()) return
+    setBusy(true); setError('')
+    try {
+      const state = currentUrl
+        ? await stewardApi.browserNavigate(conversationId, url.trim())
+        : await stewardApi.browserStart(conversationId, url.trim())
+      setCurrentUrl(state.url); setUrl(state.url)
+      if (!connected) await connectLive()
+    } catch (err: unknown) {
+      setError(errorText(err, '网址打开失败'))
+    } finally { setBusy(false) }
+  }
+
+  const send = (message: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(message))
+  }
+
+  const point = (event: React.MouseEvent<HTMLImageElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const naturalW = event.currentTarget.naturalWidth || 1365
+    const naturalH = event.currentTarget.naturalHeight || 768
+    return { x: (event.clientX - rect.left) * naturalW / rect.width, y: (event.clientY - rect.top) * naturalH / rect.height }
+  }
+
+  const keyName = (event: React.KeyboardEvent<HTMLImageElement>) => {
+    const base = event.key === ' ' ? 'Space' : event.key
+    const mods = [event.ctrlKey || event.metaKey ? 'Control' : '', event.altKey ? 'Alt' : '', event.shiftKey ? 'Shift' : ''].filter(Boolean)
+    return [...mods, base].join('+')
+  }
+
+  const loadCaptures = useCallback(async () => {
+    try {
+      const rows = await stewardApi.browserCaptures(conversationId)
+      setCaptures(rows.filter(row => row.isApi || row.isFile).reverse())
+    } catch { /* 浏览器未启动时为空 */ }
+  }, [conversationId])
+
+  useEffect(() => {
+    if (!showNetwork) return
+    const first = window.setTimeout(() => void loadCaptures(), 0)
+    const timer = window.setInterval(() => void loadCaptures(), 3000)
+    return () => { window.clearTimeout(first); window.clearInterval(timer) }
+  }, [showNetwork, loadCaptures])
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-3" onClick={onClose}>
+      <div className="flex h-[88vh] w-[min(1500px,96vw)] flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-2">
+          <Monitor size={15} className="text-violet-600" />
+          <div className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+          <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && void open()}
+            className="h-8 min-w-0 flex-1 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-violet-400" />
+          <button onClick={() => void open()} disabled={busy}
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs text-white disabled:opacity-50">
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />} 打开
+          </button>
+          <button onClick={() => { setShowNetwork(v => !v); if (!showNetwork) void loadCaptures() }}
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-violet-300 bg-violet-50 text-violet-700' : 'text-gray-600'}`}>
+            <Activity size={12} /> 接口请求
+          </button>
+          <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-gray-400 hover:text-gray-700"><X size={17} /></button>
+        </div>
+        {error && <div className="border-b bg-red-50 px-4 py-2 text-xs text-red-600">{error}</div>}
+        <div className="flex min-h-0 flex-1 bg-[#15171b]">
+          <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-2">
+            {frame ? (
+              <img ref={imageRef} src={frame} draggable={false} tabIndex={0} alt="会话浏览器实时画面"
+                className="max-h-full max-w-full select-none outline-none ring-violet-400 focus:ring-2"
+                onMouseDown={e => { e.currentTarget.focus(); send({ type: 'mouse', action: 'down', ...point(e), button: e.button === 2 ? 'right' : 'left' }) }}
+                onMouseUp={e => send({ type: 'mouse', action: 'up', ...point(e), button: e.button === 2 ? 'right' : 'left' })}
+                onDoubleClick={e => send({ type: 'mouse', action: 'click', ...point(e), clickCount: 2 })}
+                onWheel={e => { e.preventDefault(); send({ type: 'wheel', deltaX: e.deltaX, deltaY: e.deltaY }) }}
+                onContextMenu={e => e.preventDefault()}
+                onKeyDown={e => {
+                  e.preventDefault()
+                  if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) send({ type: 'key', key: keyName(e) })
+                }} />
+            ) : (
+              <div className="text-center text-sm text-gray-400">
+                <Monitor size={38} className="mx-auto mb-3 opacity-40" />
+                输入合法网址并点击“打开”；需要登录时直接在此画面手动操作
+              </div>
+            )}
+          </div>
+          {showNetwork && (
+            <aside className="w-[420px] shrink-0 overflow-auto border-l border-white/10 bg-white">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-3 py-2">
+                <div><p className="text-xs font-semibold">捕获的接口与文件</p><p className="text-[10px] text-gray-400">分页线索会自动标注；认证头不展示</p></div>
+                <button aria-label="刷新接口请求" onClick={() => void loadCaptures()} className="text-gray-400"><RefreshCw size={13} /></button>
+              </div>
+              <div className="space-y-2 p-2">
+                {captures.length === 0 && <p className="py-12 text-center text-xs text-gray-400">操作页面后，请求会显示在这里</p>}
+                {captures.map(item => (
+                  <div key={item.id} className="rounded-lg border p-2.5">
+                    <div className="flex items-center gap-1.5 text-[10px]">
+                      <span className="rounded bg-gray-100 px-1.5 py-0.5 font-semibold">{item.method}</span>
+                      <span className={item.status < 400 ? 'text-green-600' : 'text-red-500'}>{item.status}</span>
+                      {item.pagination && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-600">分页 · {item.pagination.mode}</span>}
+                      {item.isFile && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-600">文件</span>}
+                    </div>
+                    <p className="mt-1.5 break-all font-mono text-[10px] leading-4 text-gray-600">{item.url}</p>
+                    {item.isFile && <button onClick={async () => { await stewardApi.downloadCapture(conversationId, item.id); await loadCaptures() }}
+                      className="mt-2 flex items-center gap-1 text-[11px] font-medium text-violet-600"><Download size={11} />保存到会话</button>}
+                  </div>
+                ))}
+              </div>
+            </aside>
+          )}
+        </div>
+        <div className="border-t bg-white px-4 py-2 text-[11px] text-gray-500">
+          登录凭据由你直接输入到隔离浏览器，数据管家不会读取密码；完成登录后关闭弹窗并在对话中告诉它继续即可。
+        </div>
+      </div>
     </div>
   )
 }
@@ -573,13 +891,21 @@ function layoutGraph(nodes: Node[], edges: Edge[]) {
   })
 }
 
-function buildGraph(workflow: any): { nodes: Node[]; edges: Edge[] } {
+interface MiniWorkflowNode { name: string; type?: string; disabled?: boolean }
+interface MiniWorkflowTarget { node: string; type?: string; index?: number }
+interface MiniWorkflow {
+  nodes?: MiniWorkflowNode[]
+  connections?: Record<string, Record<string, MiniWorkflowTarget[][]>>
+}
+
+function buildGraph(workflow: unknown): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = []
   const edges: Edge[] = []
-  const wfNodes = (workflow?.nodes as any[]) || []
-  const wfConns = (workflow?.connections as Record<string, any>) || {}
+  const value = workflow && typeof workflow === 'object' ? workflow as MiniWorkflow : {}
+  const wfNodes = value.nodes || []
+  const wfConns = value.connections || {}
 
-  wfNodes.forEach((n: any) => {
+  wfNodes.forEach(n => {
     nodes.push({
       id: n.name,
       type: 'default',
@@ -594,22 +920,22 @@ function buildGraph(workflow: any): { nodes: Node[]; edges: Edge[] } {
   })
 
   Object.entries(wfConns).forEach(([source, outputs]) => {
-    Object.entries(outputs as Record<string, any>).forEach(([, targets]) => {
-      (targets as any[]).forEach((t: any) => {
+    Object.values(outputs).forEach(targetLanes => {
+      targetLanes.forEach(targets => targets.forEach(t => {
         edges.push({
           id: `e-${source}-${t.node}`,
           source,
           target: t.node,
           style: { stroke: '#d1d5db', strokeWidth: 1.5 },
         })
-      })
+      }))
     })
   })
 
   return { nodes, edges }
 }
 
-function MiniGraph({ workflow }: { workflow: any }) {
+function MiniGraph({ workflow }: { workflow: unknown }) {
   const { nodes, edges } = buildGraph(workflow)
   const laidOut = layoutGraph([...nodes], [...edges])
 
@@ -652,13 +978,19 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
 
   useEffect(() => {
     if (expanded && !detail && !detailLoading) {
-      setDetailLoading(true)
-      stewardApi.pipeline(r.id).then(setDetail).catch(() => {}).finally(() => setDetailLoading(false))
+      const timer = window.setTimeout(() => {
+        setDetailLoading(true)
+        stewardApi.pipeline(r.id).then(setDetail).catch(() => {}).finally(() => setDetailLoading(false))
+      }, 0)
+      return () => window.clearTimeout(timer)
     }
   }, [expanded, detail, detailLoading, r.id])
 
   // 记录变化后（如发布/撤回/编排更新）重置已缓存的详情
-  useEffect(() => { setDetail(null) }, [r.pipelineStatus, r.updatedAt])
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDetail(null), 0)
+    return () => window.clearTimeout(timer)
+  }, [r.pipelineStatus, r.updatedAt])
 
   const n8nWebUrl = n8nApiUrl ? n8nApiUrl.replace(/\/api\/.*$/, '') : ''
   const canJump = !!(n8nWebUrl && r.n8nWorkflowId)

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api_hub import config, credential as credential_service, db
-from app.api_hub.routers import backup, credential, interfaces, mcp
+from app.api_hub.routers import backup, credential, interfaces, mcp, proxy
 
 
 @pytest.fixture
@@ -20,6 +20,7 @@ def hub_client(tmp_path, monkeypatch):
     app.include_router(interfaces.runs_router)
     app.include_router(backup.router)
     app.include_router(mcp.router)
+    app.include_router(proxy.router)
     return TestClient(app)
 
 
@@ -164,6 +165,43 @@ def test_non_2xx_response_is_failure_in_history_and_credential_usage(
     assert usage["success_rate"] == 0
     assert usage["recent"][0]["ok"] is False
     assert usage["recent"][0]["error"] == "上游返回 HTTP 567"
+
+
+def test_n8n_proxy_is_fail_closed_and_forwards_dynamic_pagination(
+    hub_client, monkeypatch
+):
+    item = hub_client.post("/interfaces", json=_interface(open_enabled=True)).json()
+    monkeypatch.setattr(config, "SYSTEM_MCP_TOKEN", "proxy-token")
+    observed = {}
+
+    def fake_run(iface, *, query_override=None, body_override=None):
+        observed.update({
+            "id": iface["id"], "query": query_override, "body": body_override,
+        })
+        return {
+            "ok": True, "status_code": 200, "response_body": '{"rows":[1]}',
+            "content_type": "application/json", "run_id": 42, "error": None,
+        }
+
+    monkeypatch.setattr("app.api_hub.routers.proxy.executor.run_interface", fake_run)
+    unauthenticated = hub_client.post(
+        f"/api-hub/proxy/{item['id']}", json={"query": {"page": 3}}
+    )
+    assert unauthenticated.status_code == 401
+
+    response = hub_client.post(
+        f"/api-hub/proxy/{item['id']}?tenant=cn",
+        headers={"Authorization": "Bearer proxy-token"},
+        json={"query": {"page": 3, "pageSize": 100}, "body": {"active": True}},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"rows": [1]}
+    assert response.headers["x-api-hub-run-id"] == "42"
+    assert observed == {
+        "id": item["id"],
+        "query": {"tenant": "cn", "page": 3, "pageSize": 100},
+        "body": '{"active": true}',
+    }
 
 
 def test_backup_round_trip_skips_duplicates(hub_client):

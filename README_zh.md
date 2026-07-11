@@ -48,6 +48,14 @@
 - **工具调用架构** — 8 个内置检查工具(摘要、覆盖率、引用校验、模式推断)可链式调用
 - **审查报告** — 按严重级别分类的问题及修复建议,持久化为审计任务
 
+### 数据管家（会话浏览器 + n8n）
+- **会话文件隔离** — 每个数据管家会话拥有独立目录；上传件、网页下载件和解析文本不能跨会话访问，可一键打包，浏览器 Cookie/登录态不会进入压缩包
+- **Office/PDF 资料读取** — Word、PowerPoint、Excel、PDF、Markdown 等沿用平台文档转换链，自动提取正文与其中的网址供 Agent 使用
+- **人工登录接管** — 数据管家页的“实时浏览器”弹窗展示同一 CDP 会话画面；账号密码由用户直接输入，Agent 不读取、不代填密码框
+- **接口与分页发现** — 记录同会话浏览器的 XHR/fetch/文件响应，脱敏展示认证头，并识别 page/offset/cursor 等分页模式及返回结构
+- **授权下载与接口代理** — 在浏览器登录态下重放已捕获的 GET 文件请求；内网接口可登记到接口代理，由 n8n 通过受令牌保护的 `/api-hub/proxy/{id}` 间接调用
+- **受治理的 n8n 编排** — 数据管家仍只新建和编排未发布、未启用的工作流；试跑、字段封版、发布与启用继续由流水线编辑向导把关
+
 ### 平台
 - **LLM 提取** — 支持 OpenAI、Anthropic 及任何 OpenAI 兼容模型;多道防线杜绝模糊关系类型
 - **LiteLLM 代理** — 可选 LiteLLM 集成,统一管理多 LLM 提供商的 API Key 与用量
@@ -95,7 +103,7 @@ cp .env.example .env          # 生产环境务必修改密钥
 docker compose -f docker-compose.v2.yml up --build
 ```
 
-将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。轻量 v1 栈可改用 `docker-compose.yml`。
+将启动 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、会话浏览器、后端与前端。轻量 v1 栈可改用 `docker-compose.yml`。
 
 打开 [http://localhost:5173](http://localhost:5173),默认账号 `admin / admin123`。
 
@@ -118,6 +126,24 @@ npm run dev
 ```
 
 Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 SQLite 图谱回退、本地文件存储与同步管道执行。
+
+手动启动时如需数据管家的实时浏览器，还要准备一个开放 CDP 的 Chromium，并设置
+`STEWARD_BROWSER_CDP_URL`（默认 `http://localhost:9222`）。生产环境应同时配置
+`API_HUB_SYSTEM_MCP_TOKEN`，在 n8n 中以 Header Auth 凭据保存该令牌；不要把令牌直接写入工作流 JSON。
+
+需要对真实 LLM 与外部 n8n 做破坏性端到端验收时，可运行以下脚本。密钥只从终端隐藏输入
+（或临时环境变量 `LLM_API_KEY` / `N8N_API_KEY`）读取；脚本使用隔离数据库，创建、激活、
+执行并最终删除唯一命名的临时工作流：
+
+```bash
+cd backend
+python scripts/steward_live_e2e.py \
+  --n8n-api-url https://n8n.example.com/api/v1 \
+  --llm-api-base https://api.deepseek.com \
+  --models deepseek-v4-pro deepseek-v4-flash
+```
+
+生产环境的 n8n 地址策略要求 HTTPS；仅开发验收允许访问公网 HTTP n8n 地址。
 
 ---
 
