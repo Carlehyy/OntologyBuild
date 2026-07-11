@@ -415,3 +415,49 @@ def test_live_browser_handoff_blocks_agent_but_allows_user_actions():
     with pytest.raises(BrowserRuntimeError, match="手动接管"):
         manager._assert_actor_allowed("conversation", "agent")
     manager._assert_actor_allowed("conversation", "user")
+
+
+def test_browser_session_info_reports_existing_agent_page():
+    class Page:
+        url = "https://example.com/current"
+
+        def is_closed(self):
+            return False
+
+    session = SimpleNamespace(page=Page(), touch=lambda: None)
+    manager = BrowserManager.__new__(BrowserManager)
+    manager._sessions = {"conversation": session}
+    manager._live_clients = {}
+
+    assert asyncio.run(manager._session_info("conversation")) == {
+        "active": True,
+        "url": "https://example.com/current",
+        "live": False,
+    }
+    assert asyncio.run(manager._session_info("missing")) == {
+        "active": False,
+        "url": "",
+        "live": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_live_attach_waits_for_inflight_browser_operation():
+    session = SimpleNamespace(
+        operation_lock=asyncio.Lock(),
+        touch=lambda: None,
+        page=SimpleNamespace(is_closed=lambda: False),
+    )
+    manager = BrowserManager.__new__(BrowserManager)
+    manager._sessions = {"conversation": session}
+    manager._live_clients = {}
+
+    await session.operation_lock.acquire()
+    attach = asyncio.create_task(manager._attach_live("conversation"))
+    await asyncio.sleep(0)
+    assert not attach.done()
+    assert manager._live_clients == {}
+
+    session.operation_lock.release()
+    await attach
+    assert manager._live_clients == {"conversation": 1}

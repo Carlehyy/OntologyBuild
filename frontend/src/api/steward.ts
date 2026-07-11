@@ -156,6 +156,8 @@ export const stewardApi = {
     apiClientV2.post<{ url: string; title: string }>(`/steward/conversations/${cid}/browser/start`, { url }),
   browserNavigate: (cid: string, url: string) =>
     apiClientV2.post<{ url: string; title: string }>(`/steward/conversations/${cid}/browser/navigate`, { url }),
+  browserSession: (cid: string) =>
+    apiClientV2.get<{ active: boolean; url: string; live: boolean }>(`/steward/conversations/${cid}/browser/session`),
   browserTicket: (cid: string) =>
     apiClientV2.post<{ ticket: string; expiresIn: number }>(`/steward/conversations/${cid}/browser/ticket`),
   browserCaptures: (cid: string, keyword = '') =>

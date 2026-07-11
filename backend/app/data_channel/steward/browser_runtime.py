@@ -487,13 +487,34 @@ class BrowserManager:
             )
 
     async def _attach_live(self, conversation_id: str) -> None:
-        self._live_clients[conversation_id] = self._live_clients.get(conversation_id, 0) + 1
-        session = self._sessions.get(conversation_id)
-        if session:
+        session = await self._require(conversation_id)
+        # Do not turn on manual takeover in the middle of an Agent navigation.
+        # Otherwise the in-flight tool can reach its final state read after the
+        # live client attaches and incorrectly fail with "manual takeover".
+        async with session.operation_lock:
+            self._live_clients[conversation_id] = self._live_clients.get(conversation_id, 0) + 1
             session.touch()
 
     async def attach_live(self, conversation_id: str) -> None:
-        await self.acall(self._attach_live(conversation_id), timeout=10)
+        await self.acall(
+            self._attach_live(conversation_id),
+            timeout=max(10, int(settings.steward_browser_timeout_seconds) + 5),
+        )
+
+    async def _session_info(self, conversation_id: str) -> dict:
+        """Return a cheap snapshot without scraping or mutating the page."""
+        session = self._sessions.get(conversation_id)
+        if not session or session.page.is_closed():
+            return {"active": False, "url": "", "live": False}
+        session.touch()
+        return {
+            "active": True,
+            "url": session.page.url,
+            "live": self._is_live(conversation_id),
+        }
+
+    def session_info(self, conversation_id: str) -> dict:
+        return self.call(self._session_info(conversation_id), timeout=10)
 
     async def _detach_live(self, conversation_id: str) -> None:
         count = self._live_clients.get(conversation_id, 0)

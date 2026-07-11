@@ -488,6 +488,17 @@ def browser_state(conversation_id: str, db: Session = Depends(get_db),
         raise _browser_error(exc)
 
 
+@router.get("/conversations/{conversation_id}/browser/session")
+def browser_session(conversation_id: str, db: Session = Depends(get_db),
+                    current_user=Depends(get_current_user)):
+    """Tell the live-view UI whether the Agent already opened this browser."""
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.session_info(conversation_id))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
 @router.post("/conversations/{conversation_id}/browser/click")
 def browser_click(conversation_id: str, body: BrowserClickBody,
                   db: Session = Depends(get_db), current_user=Depends(get_current_user)):

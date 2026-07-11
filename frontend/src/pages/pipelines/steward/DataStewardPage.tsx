@@ -674,6 +674,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
   const [currentUrl, setCurrentUrl] = useState('')
   const [frame, setFrame] = useState('')
   const [connected, setConnected] = useState(false)
+  const [attaching, setAttaching] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [captures, setCaptures] = useState<BrowserCapture[]>([])
@@ -712,20 +713,46 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
     const ws = new WebSocket(`${wsBase}/api/v2/steward/conversations/${conversationId}/browser/live?ticket=${encodeURIComponent(ticket)}`)
     wsRef.current = ws
     ws.onopen = () => { setConnected(true); setError('') }
-    ws.onclose = () => setConnected(false)
-    ws.onerror = () => setError('实时画面连接失败')
+    ws.onclose = () => { setConnected(false); setAttaching(false) }
+    ws.onerror = () => { setAttaching(false); setError('实时画面连接失败') }
     ws.onmessage = event => {
       try {
         const msg = JSON.parse(event.data)
         if (msg.type === 'frame') {
+          setAttaching(false)
           setFrame(`data:image/jpeg;base64,${msg.data}`)
           if (msg.url) { setCurrentUrl(msg.url); setUrl(msg.url) }
-        } else if (msg.type === 'error') setError(msg.message || '浏览器画面异常')
+        } else if (msg.type === 'error') {
+          setAttaching(false)
+          setError(msg.message || '浏览器画面异常')
+        }
       } catch { /* 忽略损坏帧 */ }
     }
   }, [conversationId])
 
-  useEffect(() => () => wsRef.current?.close(), [])
+  useEffect(() => {
+    let cancelled = false
+    const attachExisting = async () => {
+      let waitingForFrame = false
+      setAttaching(true)
+      try {
+        const session = await stewardApi.browserSession(conversationId)
+        if (cancelled || !session.active) return
+        if (session.url) { setCurrentUrl(session.url); setUrl(session.url) }
+        waitingForFrame = true
+        await connectLive()
+      } catch (err: unknown) {
+        if (!cancelled) setError(errorText(err, '现有浏览器画面连接失败'))
+      } finally {
+        if (!cancelled && !waitingForFrame) setAttaching(false)
+      }
+    }
+    void attachExisting()
+    return () => {
+      cancelled = true
+      wsRef.current?.close()
+    }
+  }, [conversationId, connectLive])
 
   const open = async () => {
     if (!url.trim()) return
@@ -920,6 +947,11 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
                   e.preventDefault()
                   if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) send({ type: 'key', key: keyName(e) })
                 }} />
+            ) : attaching ? (
+              <div className="text-center text-sm text-gray-400">
+                <Loader2 size={32} className="mx-auto mb-3 animate-spin opacity-60" />
+                正在连接当前会话的浏览器…
+              </div>
             ) : (
               <div className="text-center text-sm text-gray-400">
                 <Monitor size={38} className="mx-auto mb-3 opacity-40" />
