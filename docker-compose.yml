@@ -16,7 +16,11 @@ services:
     ports: ["6380:6379"]
 
   browser:
-    image: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
+    image: ontologybuild-browser:local
+    build:
+      context: ./docker/browser
+      args:
+        BROWSER_BASE_IMAGE: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
     # The image wrapper owns its 9223 Chromium -> 9222 socat bridge. Passing a
     # second remote-debugging-port makes both processes fight for port 9222.
     command: ["--no-sandbox", "--disable-dev-shm-usage"]

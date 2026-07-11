@@ -64,7 +64,11 @@ services:
     restart: unless-stopped
 
   browser:
-    image: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
+    image: ontologybuild-browser:local
+    build:
+      context: ./docker/browser
+      args:
+        BROWSER_BASE_IMAGE: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
     command: ["--no-sandbox", "--disable-dev-shm-usage"]
     shm_size: 2gb
     restart: unless-stopped
