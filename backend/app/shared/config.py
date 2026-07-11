@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     steward_browser_timeout_seconds: int = 30
     steward_browser_max_captures: int = 300
     steward_browser_frame_interval_ms: int = 250
+    # One Chromium process is shared, while every active conversation owns an
+    # isolated BrowserContext.  Bound those contexts and suspend idle ones so a
+    # user cannot exhaust the sidecar simply by creating conversations.
+    steward_browser_max_sessions: int = 8
+    steward_browser_max_sessions_per_user: int = 3
+    steward_browser_idle_timeout_seconds: int = 900
+    steward_browser_reaper_interval_seconds: int = 30
     steward_browser_allow_private_networks: bool = True
     # URL used inside generated n8n workflows to reach this backend.
     steward_proxy_base_url: str = "http://backend:8000/api-hub/proxy"

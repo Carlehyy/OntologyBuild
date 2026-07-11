@@ -301,15 +301,27 @@ def _browser_error(exc: Exception) -> HTTPException:
 @router.get("/browser/status")
 def browser_status(_=Depends(get_current_user)):
     # CDP URLs may contain a browser-service token; never return them to clients.
-    return _ok({"configured": bool(settings.steward_browser_cdp_url)})
+    try:
+        capacity = browser_manager.capacity_status()
+    except Exception:  # 浏览器 sidecar 未就绪时也应能查看静态配额
+        capacity = {
+            "activeSessions": 0,
+            "liveSessions": 0,
+            "maxSessions": max(1, int(settings.steward_browser_max_sessions)),
+            "maxSessionsPerUser": max(1, int(settings.steward_browser_max_sessions_per_user)),
+            "idleTimeoutSeconds": max(30, int(settings.steward_browser_idle_timeout_seconds)),
+        }
+    return _ok({"configured": bool(settings.steward_browser_cdp_url), **capacity})
 
 
 @router.post("/conversations/{conversation_id}/browser/start")
 def start_browser(conversation_id: str, body: BrowserUrlBody,
                   db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    _require_conversation(db, conversation_id, current_user)
+    conv = _require_conversation(db, conversation_id, current_user)
     try:
-        return _ok(browser_manager.start(conversation_id, body.url))
+        owner_id = conv.user_id or getattr(current_user, "id", None)
+        return _ok(browser_manager.start(
+            conversation_id, body.url, user_id=owner_id, actor="user"))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 
@@ -319,7 +331,7 @@ def navigate_browser(conversation_id: str, body: BrowserUrlBody,
                      db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     _require_conversation(db, conversation_id, current_user)
     try:
-        return _ok(browser_manager.navigate(conversation_id, body.url))
+        return _ok(browser_manager.navigate(conversation_id, body.url, actor="user"))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 
@@ -329,7 +341,7 @@ def browser_state(conversation_id: str, db: Session = Depends(get_db),
                   current_user=Depends(get_current_user)):
     _require_conversation(db, conversation_id, current_user)
     try:
-        return _ok(browser_manager.state(conversation_id))
+        return _ok(browser_manager.state(conversation_id, actor="user"))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 
@@ -339,7 +351,7 @@ def browser_click(conversation_id: str, body: BrowserClickBody,
                   db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     _require_conversation(db, conversation_id, current_user)
     try:
-        return _ok(browser_manager.click_text(conversation_id, body.text))
+        return _ok(browser_manager.click_text(conversation_id, body.text, actor="user"))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 
@@ -350,7 +362,7 @@ def browser_type(conversation_id: str, body: BrowserTypeBody,
     _require_conversation(db, conversation_id, current_user)
     try:
         return _ok(browser_manager.type_text(
-            conversation_id, body.selector, body.text, body.pressEnter))
+            conversation_id, body.selector, body.text, body.pressEnter, actor="user"))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 
@@ -369,7 +381,7 @@ def browser_capture_download(conversation_id: str, capture_id: str,
                              current_user=Depends(get_current_user)):
     _require_conversation(db, conversation_id, current_user)
     try:
-        return _ok(browser_manager.download(conversation_id, capture_id))
+        return _ok(browser_manager.download(conversation_id, capture_id, actor="user"))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 

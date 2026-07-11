@@ -188,12 +188,19 @@ class BrowserSession:
     conversation_id: str
     context: Any
     page: Any
+    user_id: str | None = None
     captures: list[dict] = field(default_factory=list)
     capture_tasks: set[asyncio.Task] = field(default_factory=set)
     last_state_saved: float = 0.0
+    last_active: float = field(default_factory=time.time)
+    operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+    def touch(self) -> None:
+        self.last_active = time.time()
 
     def bind_page(self, page: Any) -> None:
         self.page = page
+        self.touch()
 
         def on_response(response: Any) -> None:
             task = asyncio.create_task(self._capture_response(response))
@@ -295,6 +302,9 @@ class BrowserManager:
         self._browser = None
         self._tickets: dict[str, tuple[str, str | None, float]] = {}
         self._ticket_lock = threading.Lock()
+        self._live_clients: dict[str, int] = {}
+        self._reaper_task: asyncio.Task | None = None
+        self._registry_lock = asyncio.Lock()
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -305,9 +315,11 @@ class BrowserManager:
 
     def call(self, coro: Coroutine, timeout: float | None = None):
         timeout = timeout or max(5, int(settings.steward_browser_timeout_seconds) + 5)
+        future = self._submit(coro)
         try:
-            return self._submit(coro).result(timeout=timeout)
+            return future.result(timeout=timeout)
         except concurrent.futures.TimeoutError as exc:
+            future.cancel()
             raise BrowserRuntimeError("浏览器操作超时") from exc
 
     async def acall(self, coro: Coroutine, timeout: float | None = None):
@@ -315,7 +327,113 @@ class BrowserManager:
         try:
             return await asyncio.wait_for(asyncio.wrap_future(future), timeout or 45)
         except asyncio.TimeoutError as exc:
+            future.cancel()
             raise BrowserRuntimeError("浏览器操作超时") from exc
+
+    def _ensure_reaper(self) -> None:
+        if self._reaper_task is None or self._reaper_task.done():
+            self._reaper_task = asyncio.create_task(self._reaper_loop())
+
+    async def _reaper_loop(self) -> None:
+        while True:
+            try:
+                interval = max(5, int(settings.steward_browser_reaper_interval_seconds))
+                await asyncio.sleep(interval)
+                await self._reap_idle()
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.warning("steward browser idle reaper failed", exc_info=True)
+
+    def _is_live(self, conversation_id: str) -> bool:
+        return self._live_clients.get(conversation_id, 0) > 0
+
+    @staticmethod
+    def _is_busy(session: BrowserSession) -> bool:
+        lock = getattr(session, "operation_lock", None)
+        return bool(lock and lock.locked())
+
+    async def _reap_idle(self, *, now: float | None = None) -> list[str]:
+        idle_seconds = max(30, int(settings.steward_browser_idle_timeout_seconds))
+        current = time.time() if now is None else now
+        expired = [
+            cid for cid, session in self._sessions.items()
+            if not self._is_live(cid) and not self._is_busy(session)
+            and current - session.last_active >= idle_seconds
+        ]
+        for cid in expired:
+            await self._close(cid)
+        return expired
+
+    async def _evict_lru(self, *, user_id: str | None = None) -> str:
+        candidates = [
+            session for cid, session in self._sessions.items()
+            if not self._is_live(cid) and not self._is_busy(session)
+            and (user_id is None or session.user_id == user_id)
+        ]
+        if not candidates:
+            scope = "当前用户" if user_id else "系统"
+            raise BrowserRuntimeError(
+                f"{scope}的浏览器会话已达到上限，且现有会话都在实时接管或执行操作中。"
+                "请先关闭一个实时浏览器窗口，或等待正在执行的浏览器操作结束后重试。"
+            )
+        victim = min(candidates, key=lambda item: item.last_active)
+        await self._close(victim.conversation_id)
+        return victim.conversation_id
+
+    async def _ensure_capacity(self, user_id: str | None) -> list[str]:
+        reclaimed = await self._reap_idle()
+        global_limit = max(1, int(settings.steward_browser_max_sessions))
+        while len(self._sessions) >= global_limit:
+            reclaimed.append(await self._evict_lru())
+
+        if user_id:
+            per_user_limit = max(1, int(settings.steward_browser_max_sessions_per_user))
+            while sum(1 for session in self._sessions.values() if session.user_id == user_id) >= per_user_limit:
+                reclaimed.append(await self._evict_lru(user_id=user_id))
+        return reclaimed
+
+    def _assert_actor_allowed(self, conversation_id: str, actor: str) -> None:
+        if actor == "agent" and self._is_live(conversation_id):
+            raise BrowserRuntimeError(
+                "用户正在实时浏览器中手动接管当前会话，Agent 浏览器操作已暂停。"
+                "请等待用户关闭实时浏览器窗口或明确结束接管后再继续。"
+            )
+
+    async def _attach_live(self, conversation_id: str) -> None:
+        self._live_clients[conversation_id] = self._live_clients.get(conversation_id, 0) + 1
+        session = self._sessions.get(conversation_id)
+        if session:
+            session.touch()
+
+    async def attach_live(self, conversation_id: str) -> None:
+        await self.acall(self._attach_live(conversation_id), timeout=10)
+
+    async def _detach_live(self, conversation_id: str) -> None:
+        count = self._live_clients.get(conversation_id, 0)
+        if count <= 1:
+            self._live_clients.pop(conversation_id, None)
+        else:
+            self._live_clients[conversation_id] = count - 1
+        session = self._sessions.get(conversation_id)
+        if session:
+            session.touch()
+
+    async def detach_live(self, conversation_id: str) -> None:
+        await self.acall(self._detach_live(conversation_id), timeout=10)
+
+    async def _capacity_status(self) -> dict:
+        await self._reap_idle()
+        return {
+            "activeSessions": len(self._sessions),
+            "liveSessions": sum(1 for cid in self._sessions if self._is_live(cid)),
+            "maxSessions": max(1, int(settings.steward_browser_max_sessions)),
+            "maxSessionsPerUser": max(1, int(settings.steward_browser_max_sessions_per_user)),
+            "idleTimeoutSeconds": max(30, int(settings.steward_browser_idle_timeout_seconds)),
+        }
+
+    def capacity_status(self) -> dict:
+        return self.call(self._capacity_status(), timeout=10)
 
     async def _ensure_browser(self):
         if self._browser and self._browser.is_connected():
@@ -348,49 +466,75 @@ class BrowserManager:
         except BrowserRuntimeError:
             await route.abort("blockedbyclient")
 
-    async def _start(self, conversation_id: str, url: str) -> dict:
+    async def _start(self, conversation_id: str, url: str, *, user_id: str | None = None,
+                     actor: str = "agent") -> dict:
         target = _safe_url(url)
+        user_id = str(user_id) if user_id is not None else None
+        self._ensure_reaper()
+        self._assert_actor_allowed(conversation_id, actor)
         session = self._sessions.get(conversation_id)
+        reclaimed: list[str] = []
+        restored = False
         if session is None:
-            browser = await self._ensure_browser()
-            state = workspace.storage_state_path(conversation_id)
-            kwargs = {
-                "accept_downloads": True,
-                "viewport": {"width": 1365, "height": 768},
-                "locale": "zh-CN",
-            }
-            if state.exists():
-                kwargs["storage_state"] = str(state)
-            context = await browser.new_context(**kwargs)
-            await context.route("**/*", self._route_guard)
-            page = await context.new_page()
-            session = BrowserSession(conversation_id, context, page)
-            session.bind_page(page)
+            async with self._registry_lock:
+                # Two requests for the same conversation may arrive together.
+                session = self._sessions.get(conversation_id)
+                if session is None:
+                    reclaimed = await self._ensure_capacity(user_id)
+                    browser = await self._ensure_browser()
+                    state = workspace.storage_state_path(conversation_id)
+                    restored = state.exists()
+                    kwargs = {
+                        "accept_downloads": True,
+                        "viewport": {"width": 1365, "height": 768},
+                        "locale": "zh-CN",
+                    }
+                    if restored:
+                        kwargs["storage_state"] = str(state)
+                    context = await browser.new_context(**kwargs)
+                    await context.route("**/*", self._route_guard)
+                    page = await context.new_page()
+                    session = BrowserSession(
+                        conversation_id, context, page,
+                        user_id=user_id,
+                    )
+                    session.bind_page(page)
 
-            def on_page(new_page: Any) -> None:
-                session.bind_page(new_page)
+                    def on_page(new_page: Any) -> None:
+                        session.bind_page(new_page)
 
-            context.on("page", on_page)
-            self._sessions[conversation_id] = session
-        try:
-            response = await session.page.goto(
-                target,
-                wait_until="domcontentloaded",
-                timeout=int(settings.steward_browser_timeout_seconds) * 1000,
-            )
-            _validate_navigation_response(response, target)
-        except Exception as exc:
-            if "Download is starting" not in str(exc):
-                raise BrowserRuntimeError(f"页面打开失败：{exc}") from exc
-            await session.page.wait_for_timeout(500)
-            await session.save_state()
-            return {"url": session.page.url, "title": "文件下载已触发",
-                    "downloadStarted": True, "targetUrl": target}
-        await session.save_state_if_due()
-        return await self._state(conversation_id)
+                    context.on("page", on_page)
+                    self._sessions[conversation_id] = session
+        elif user_id is not None and session.user_id is None:
+            session.user_id = user_id
 
-    def start(self, conversation_id: str, url: str) -> dict:
-        return self.call(self._start(conversation_id, url))
+        async with session.operation_lock:
+            session.touch()
+            try:
+                response = await session.page.goto(
+                    target,
+                    wait_until="domcontentloaded",
+                    timeout=int(settings.steward_browser_timeout_seconds) * 1000,
+                )
+                _validate_navigation_response(response, target)
+            except Exception as exc:
+                if "Download is starting" not in str(exc):
+                    raise BrowserRuntimeError(f"页面打开失败：{exc}") from exc
+                await session.page.wait_for_timeout(500)
+                await session.save_state()
+                session.touch()
+                return {"url": session.page.url, "title": "文件下载已触发",
+                        "downloadStarted": True, "targetUrl": target,
+                        "restoredSession": restored, "reclaimedSessionCount": len(reclaimed)}
+            await session.save_state_if_due()
+            session.touch()
+            result = await self._state(conversation_id, actor=actor)
+        result.update({"restoredSession": restored, "reclaimedSessionCount": len(reclaimed)})
+        return result
+
+    def start(self, conversation_id: str, url: str, *, user_id: str | None = None,
+              actor: str = "agent") -> dict:
+        return self.call(self._start(conversation_id, url, user_id=user_id, actor=actor))
 
     async def _require(self, conversation_id: str) -> BrowserSession:
         session = self._sessions.get(conversation_id)
@@ -398,8 +542,10 @@ class BrowserManager:
             raise BrowserRuntimeError("当前会话尚未启动浏览器，请先打开目标网址")
         return session
 
-    async def _state(self, conversation_id: str) -> dict:
+    async def _state(self, conversation_id: str, *, actor: str = "agent") -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
+        session.touch()
         page = session.page
         try:
             title = await page.title()
@@ -411,103 +557,123 @@ class BrowserManager:
           return [...document.querySelectorAll(selector)].slice(0, 120).map((el, index) => {
             const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
             return {index, tag: el.tagName.toLowerCase(), type: el.getAttribute('type') || '',
-              text: (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().replace(/\s+/g,' ').slice(0,160),
+              text: ((el.getAttribute('type') || '').toLowerCase() === 'password' ? '' :
+                (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '')).trim().replace(/\s+/g,' ').slice(0,160),
               x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height),
               visible: r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'};
           }).filter(x => x.visible);
         }""")
         return {"url": page.url, "title": title, "text": body[:20_000], "elements": elements[:100]}
 
-    def state(self, conversation_id: str) -> dict:
-        return self.call(self._state(conversation_id))
+    def state(self, conversation_id: str, *, actor: str = "agent") -> dict:
+        return self.call(self._state(conversation_id, actor=actor))
 
-    async def _navigate(self, conversation_id: str, url: str) -> dict:
+    async def _navigate(self, conversation_id: str, url: str, *, actor: str = "agent") -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         target = _safe_url(url)
-        try:
-            response = await session.page.goto(
-                target,
-                wait_until="domcontentloaded",
-                timeout=int(settings.steward_browser_timeout_seconds) * 1000,
-            )
-            _validate_navigation_response(response, target)
-        except Exception as exc:
-            if "Download is starting" not in str(exc):
-                raise BrowserRuntimeError(f"页面跳转失败：{exc}") from exc
-            await session.page.wait_for_timeout(500)
+        async with session.operation_lock:
+            session.touch()
+            try:
+                response = await session.page.goto(
+                    target,
+                    wait_until="domcontentloaded",
+                    timeout=int(settings.steward_browser_timeout_seconds) * 1000,
+                )
+                _validate_navigation_response(response, target)
+            except Exception as exc:
+                if "Download is starting" not in str(exc):
+                    raise BrowserRuntimeError(f"页面跳转失败：{exc}") from exc
+                await session.page.wait_for_timeout(500)
+                await session.save_state()
+                session.touch()
+                return {"url": session.page.url, "title": "文件下载已触发",
+                        "downloadStarted": True, "targetUrl": target}
             await session.save_state()
-            return {"url": session.page.url, "title": "文件下载已触发",
-                    "downloadStarted": True, "targetUrl": target}
-        await session.save_state()
-        return await self._state(conversation_id)
+            session.touch()
+            return await self._state(conversation_id, actor=actor)
 
-    def navigate(self, conversation_id: str, url: str) -> dict:
-        return self.call(self._navigate(conversation_id, url))
+    def navigate(self, conversation_id: str, url: str, *, actor: str = "agent") -> dict:
+        return self.call(self._navigate(conversation_id, url, actor=actor))
 
-    async def _click_text(self, conversation_id: str, text: str) -> dict:
+    async def _click_text(self, conversation_id: str, text: str, *, actor: str = "agent") -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         query = (text or "").strip()
         if not query:
             raise BrowserRuntimeError("点击文本不能为空")
-        locator = session.page.get_by_text(query, exact=True).first
-        if await locator.count() == 0:
-            locator = session.page.get_by_text(query, exact=False).first
-        if await locator.count() == 0:
-            raise BrowserRuntimeError(f"当前页面未找到文本「{query}」")
-        await locator.scroll_into_view_if_needed(timeout=3000)
-        await locator.click(timeout=5000)
-        await session.page.wait_for_timeout(300)
-        await session.save_state()
-        return await self._state(conversation_id)
+        async with session.operation_lock:
+            session.touch()
+            locator = session.page.get_by_text(query, exact=True).first
+            if await locator.count() == 0:
+                locator = session.page.get_by_text(query, exact=False).first
+            if await locator.count() == 0:
+                raise BrowserRuntimeError(f"当前页面未找到文本「{query}」")
+            await locator.scroll_into_view_if_needed(timeout=3000)
+            await locator.click(timeout=5000)
+            await session.page.wait_for_timeout(300)
+            await session.save_state()
+            session.touch()
+            return await self._state(conversation_id, actor=actor)
 
-    def click_text(self, conversation_id: str, text: str) -> dict:
-        return self.call(self._click_text(conversation_id, text))
+    def click_text(self, conversation_id: str, text: str, *, actor: str = "agent") -> dict:
+        return self.call(self._click_text(conversation_id, text, actor=actor))
 
-    async def _type(self, conversation_id: str, selector: str, text: str, press_enter: bool = False) -> dict:
+    async def _type(self, conversation_id: str, selector: str, text: str,
+                    press_enter: bool = False, *, actor: str = "agent") -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
-        locator = session.page.locator(selector).first
-        if await locator.count() == 0:
-            raise BrowserRuntimeError("未找到要输入的元素")
-        input_type = (await locator.get_attribute("type") or "").lower()
-        if input_type == "password":
-            raise BrowserRuntimeError("密码必须由用户在实时浏览器画面中手动输入，Agent 不读取也不代填")
-        await locator.fill(text)
-        if press_enter:
-            await locator.press("Enter")
-        return await self._state(conversation_id)
+        async with session.operation_lock:
+            session.touch()
+            locator = session.page.locator(selector).first
+            if await locator.count() == 0:
+                raise BrowserRuntimeError("未找到要输入的元素")
+            input_type = (await locator.get_attribute("type") or "").lower()
+            if input_type == "password":
+                raise BrowserRuntimeError("密码必须由用户在实时浏览器画面中手动输入，Agent 不读取也不代填")
+            await locator.fill(text)
+            if press_enter:
+                await locator.press("Enter")
+            session.touch()
+            return await self._state(conversation_id, actor=actor)
 
-    def type_text(self, conversation_id: str, selector: str, text: str, press_enter: bool = False) -> dict:
-        return self.call(self._type(conversation_id, selector, text, press_enter))
+    def type_text(self, conversation_id: str, selector: str, text: str,
+                  press_enter: bool = False, *, actor: str = "agent") -> dict:
+        return self.call(self._type(conversation_id, selector, text, press_enter, actor=actor))
 
     async def _input(self, conversation_id: str, message: dict) -> None:
         session = await self._require(conversation_id)
-        page = session.page
-        kind = message.get("type")
-        if kind == "mouse":
-            x, y = float(message.get("x", 0)), float(message.get("y", 0))
-            action = message.get("action")
-            if action == "move":
-                await page.mouse.move(x, y)
-            elif action == "down":
-                await page.mouse.move(x, y); await page.mouse.down(button=message.get("button", "left"))
-            elif action == "up":
-                await page.mouse.move(x, y); await page.mouse.up(button=message.get("button", "left"))
-            elif action == "click":
-                await page.mouse.click(x, y, button=message.get("button", "left"), click_count=int(message.get("clickCount", 1)))
-        elif kind == "wheel":
-            await page.mouse.wheel(float(message.get("deltaX", 0)), float(message.get("deltaY", 0)))
-        elif kind == "key":
-            key = str(message.get("key") or "")
-            if key:
-                await page.keyboard.press(key)
-        elif kind == "text":
-            await page.keyboard.insert_text(str(message.get("text") or ""))
+        async with session.operation_lock:
+            session.touch()
+            page = session.page
+            kind = message.get("type")
+            if kind == "mouse":
+                x, y = float(message.get("x", 0)), float(message.get("y", 0))
+                action = message.get("action")
+                if action == "move":
+                    await page.mouse.move(x, y)
+                elif action == "down":
+                    await page.mouse.move(x, y); await page.mouse.down(button=message.get("button", "left"))
+                elif action == "up":
+                    await page.mouse.move(x, y); await page.mouse.up(button=message.get("button", "left"))
+                elif action == "click":
+                    await page.mouse.click(x, y, button=message.get("button", "left"), click_count=int(message.get("clickCount", 1)))
+            elif kind == "wheel":
+                await page.mouse.wheel(float(message.get("deltaX", 0)), float(message.get("deltaY", 0)))
+            elif kind == "key":
+                key = str(message.get("key") or "")
+                if key:
+                    await page.keyboard.press(key)
+            elif kind == "text":
+                await page.keyboard.insert_text(str(message.get("text") or ""))
+            session.touch()
 
     async def input(self, conversation_id: str, message: dict) -> None:
         await self.acall(self._input(conversation_id, message))
 
     async def _screenshot(self, conversation_id: str) -> dict:
         session = await self._require(conversation_id)
+        session.touch()
         await session.save_state_if_due()
         image = await session.page.screenshot(type="jpeg", quality=68, animations="disabled")
         return {"data": base64.b64encode(image).decode("ascii"), "url": session.page.url}
@@ -522,7 +688,8 @@ class BrowserManager:
             rows = [r for r in rows if needle in str(r.get("url", "")).lower() or needle in str(r.get("responseBody", "")).lower()]
         return [public_capture(r) for r in rows[-max(1, min(limit, 100)):]]
 
-    async def _download(self, conversation_id: str, capture_id: str) -> dict:
+    async def _download(self, conversation_id: str, capture_id: str, *, actor: str = "agent") -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         capture = workspace.require_capture(conversation_id, capture_id)
         if capture.get("method") != "GET":
@@ -531,38 +698,49 @@ class BrowserManager:
             k: v for k, v in (capture.get("requestHeaders") or {}).items()
             if k.lower() not in {"host", "content-length", "cookie", "accept-encoding"}
         }
-        response = await session.context.request.get(capture["url"], headers=headers, timeout=int(settings.steward_browser_timeout_seconds) * 1000)
-        if not response.ok:
-            raise BrowserRuntimeError(f"下载失败：HTTP {response.status}")
-        content = await response.body()
-        response_headers = response.headers
-        disposition = response_headers.get("content-disposition", "")
-        match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.IGNORECASE)
-        filename = unquote(match.group(1).strip()) if match else Path(urlparse(capture["url"]).path).name
-        if not filename:
-            filename = f"download{mimetypes.guess_extension(response_headers.get('content-type', '').split(';')[0]) or '.bin'}"
-        row = workspace.save_bytes(
-            conversation_id, filename, content, source="download",
-            mime_type=response_headers.get("content-type"), source_url=capture["url"], extract=True,
-        )
-        await session.save_state()
-        return row
+        async with session.operation_lock:
+            session.touch()
+            response = await session.context.request.get(capture["url"], headers=headers, timeout=int(settings.steward_browser_timeout_seconds) * 1000)
+            if not response.ok:
+                raise BrowserRuntimeError(f"下载失败：HTTP {response.status}")
+            content = await response.body()
+            response_headers = response.headers
+            disposition = response_headers.get("content-disposition", "")
+            match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.IGNORECASE)
+            filename = unquote(match.group(1).strip()) if match else Path(urlparse(capture["url"]).path).name
+            if not filename:
+                filename = f"download{mimetypes.guess_extension(response_headers.get('content-type', '').split(';')[0]) or '.bin'}"
+            row = workspace.save_bytes(
+                conversation_id, filename, content, source="download",
+                mime_type=response_headers.get("content-type"), source_url=capture["url"], extract=True,
+            )
+            await session.save_state()
+            session.touch()
+            return row
 
-    def download(self, conversation_id: str, capture_id: str) -> dict:
-        return self.call(self._download(conversation_id, capture_id), timeout=max(60, int(settings.steward_browser_timeout_seconds) + 10))
+    def download(self, conversation_id: str, capture_id: str, *, actor: str = "agent") -> dict:
+        return self.call(self._download(conversation_id, capture_id, actor=actor), timeout=max(60, int(settings.steward_browser_timeout_seconds) + 10))
 
     async def _close(self, conversation_id: str) -> None:
-        session = self._sessions.pop(conversation_id, None)
+        session = self._sessions.get(conversation_id)
         if session:
-            await session.save_state()
-            if session.capture_tasks:
-                await asyncio.gather(*session.capture_tasks, return_exceptions=True)
-            await session.context.close()
+            async with session.operation_lock:
+                if self._sessions.get(conversation_id) is not session:
+                    return
+                self._sessions.pop(conversation_id, None)
+                await session.save_state()
+                if session.capture_tasks:
+                    await asyncio.gather(*session.capture_tasks, return_exceptions=True)
+                await session.context.close()
 
     def close(self, conversation_id: str) -> None:
         self.call(self._close(conversation_id), timeout=20)
 
     async def _close_all(self) -> None:
+        if self._reaper_task and not self._reaper_task.done():
+            self._reaper_task.cancel()
+            await asyncio.gather(self._reaper_task, return_exceptions=True)
+        self._reaper_task = None
         for conversation_id in list(self._sessions):
             try:
                 await self._close(conversation_id)

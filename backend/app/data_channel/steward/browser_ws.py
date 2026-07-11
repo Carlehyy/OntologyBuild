@@ -18,6 +18,11 @@ async def browser_live(websocket: WebSocket, conversation_id: str, ticket: str =
         await websocket.close(code=4401, reason="invalid or expired browser ticket")
         return
     await websocket.accept()
+    try:
+        await browser_manager.attach_live(conversation_id)
+    except Exception:
+        await websocket.close(code=1011, reason="browser handoff unavailable")
+        return
     stopped = asyncio.Event()
 
     async def send_frames() -> None:
@@ -55,3 +60,7 @@ async def browser_live(websocket: WebSocket, conversation_id: str, ticket: str =
         sender.cancel()
         receiver.cancel()
         await asyncio.gather(sender, receiver, return_exceptions=True)
+        try:
+            await browser_manager.detach_live(conversation_id)
+        except Exception:
+            pass

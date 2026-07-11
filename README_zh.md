@@ -131,6 +131,14 @@ Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 S
 `STEWARD_BROWSER_CDP_URL`（默认 `http://localhost:9222`）。生产环境应同时配置
 `API_HUB_SYSTEM_MCP_TOKEN`，在 n8n 中以 Header Auth 凭据保存该令牌；不要把令牌直接写入工作流 JSON。
 
+会话浏览器默认最多同时保留 8 个 BrowserContext、每个用户最多 3 个，空闲 15 分钟后自动保存
+登录态并回收；再次访问该会话时会从会话隔离目录恢复登录态并重新分配 Context。可通过
+`STEWARD_BROWSER_MAX_SESSIONS`、`STEWARD_BROWSER_MAX_SESSIONS_PER_USER`、
+`STEWARD_BROWSER_IDLE_TIMEOUT_SECONDS` 调整。实时浏览器窗口打开期间，该会话进入人工接管状态，
+Agent 的页面读取、点击、输入及下载都会暂停；同一会话内的所有变更操作会串行执行。当前调度器是
+进程内状态，生产后端须保持单 worker；如需多 worker/多副本，应先增加基于 Redis 的会话到 worker
+粘性路由和分布式租约。
+
 需要对真实 LLM 与外部 n8n 做破坏性端到端验收时，可运行以下脚本。密钥只从终端隐藏输入
 （或临时环境变量 `LLM_API_KEY` / `N8N_API_KEY`）读取；脚本使用隔离数据库，创建、激活、
 执行并最终删除唯一命名的临时工作流：
@@ -142,6 +150,17 @@ python scripts/steward_live_e2e.py \
   --llm-api-base https://api.deepseek.com \
   --models deepseek-v4-pro deepseek-v4-flash
 ```
+
+单独验收“n8n → 接口代理 → AI HOT cursor 分页”链路可运行：
+
+```bash
+cd backend
+python scripts/steward_proxy_live_e2e.py \
+  --n8n-api-url https://n8n.example.com/api/v1
+```
+
+脚本通过终端隐藏输入 n8n API Key，使用短期随机代理令牌和临时公网隧道；结束时会停用并删除
+临时 n8n 工作流、代理数据库与隧道。运行环境需要 Node.js/npm，以便临时执行 localtunnel。
 
 生产环境的 n8n 地址策略要求 HTTPS；仅开发验收允许访问公网 HTTP n8n 地址。
 

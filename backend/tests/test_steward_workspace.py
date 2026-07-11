@@ -1,7 +1,10 @@
+import asyncio
 import json
 import io
+import time
 import uuid
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,8 +12,8 @@ from app.api_hub import config as api_hub_config, db as api_hub_db
 from app.config import settings
 from app.data_channel.steward import workspace
 from app.data_channel.steward.browser_runtime import (
-    BrowserRuntimeError, _validate_navigation_response, analyze_pagination,
-    browser_manager, public_capture, validate_target_url,
+    BrowserManager, BrowserRuntimeError, _validate_navigation_response,
+    analyze_pagination, browser_manager, public_capture, validate_target_url,
 )
 from app.data_channel.steward.toolkit import ToolRunner
 
@@ -160,3 +163,60 @@ def test_live_browser_ticket_is_single_use():
     ticket = browser_manager.issue_ticket(cid, "user-1")
     assert browser_manager.redeem_ticket(ticket, cid) == (True, "user-1")
     assert browser_manager.redeem_ticket(ticket, cid) == (False, None)
+
+
+def _manager_for_lifecycle_tests(sessions, live=None):
+    manager = BrowserManager.__new__(BrowserManager)
+    manager._sessions = {session.conversation_id: session for session in sessions}
+    manager._live_clients = live or {}
+    closed = []
+
+    async def close(conversation_id):
+        closed.append(conversation_id)
+        manager._sessions.pop(conversation_id, None)
+
+    manager._close = close
+    return manager, closed
+
+
+def test_idle_browser_reaper_preserves_recent_and_live_sessions(monkeypatch):
+    now = time.time()
+    sessions = [
+        SimpleNamespace(conversation_id="expired", user_id="u1", last_active=now - 90),
+        SimpleNamespace(conversation_id="recent", user_id="u1", last_active=now - 10),
+        SimpleNamespace(conversation_id="live", user_id="u2", last_active=now - 90),
+    ]
+    manager, closed = _manager_for_lifecycle_tests(sessions, {"live": 1})
+    monkeypatch.setattr(settings, "steward_browser_idle_timeout_seconds", 30)
+
+    reclaimed = asyncio.run(manager._reap_idle(now=now))
+
+    assert reclaimed == ["expired"]
+    assert closed == ["expired"]
+    assert set(manager._sessions) == {"recent", "live"}
+
+
+def test_browser_capacity_evicts_lru_for_global_and_user_limits(monkeypatch):
+    now = time.time()
+    sessions = [
+        SimpleNamespace(conversation_id="u1-old", user_id="u1", last_active=now - 20),
+        SimpleNamespace(conversation_id="u2-live", user_id="u2", last_active=now - 10),
+    ]
+    manager, closed = _manager_for_lifecycle_tests(sessions, {"u2-live": 1})
+    monkeypatch.setattr(settings, "steward_browser_idle_timeout_seconds", 900)
+    monkeypatch.setattr(settings, "steward_browser_max_sessions", 2)
+    monkeypatch.setattr(settings, "steward_browser_max_sessions_per_user", 1)
+
+    reclaimed = asyncio.run(manager._ensure_capacity("u1"))
+
+    assert reclaimed == ["u1-old"]
+    assert closed == ["u1-old"]
+    assert set(manager._sessions) == {"u2-live"}
+
+
+def test_live_browser_handoff_blocks_agent_but_allows_user_actions():
+    manager, _ = _manager_for_lifecycle_tests([], {"conversation": 1})
+
+    with pytest.raises(BrowserRuntimeError, match="手动接管"):
+        manager._assert_actor_allowed("conversation", "agent")
+    manager._assert_actor_allowed("conversation", "user")

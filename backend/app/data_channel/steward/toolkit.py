@@ -532,19 +532,21 @@ class ToolRunner:
                 "note": None if text else "该文件没有可用的文本解析结果；仍可作为原文件下载。"}
 
     def tool_browser_open(self, url: str) -> dict:
-        return browser_manager.start(self._conversation(), url)
+        return browser_manager.start(
+            self._conversation(), url, user_id=self.user_id, actor="agent")
 
     def tool_browser_state(self) -> dict:
-        return browser_manager.state(self._conversation())
+        return browser_manager.state(self._conversation(), actor="agent")
 
     def tool_browser_navigate(self, url: str) -> dict:
-        return browser_manager.navigate(self._conversation(), url)
+        return browser_manager.navigate(self._conversation(), url, actor="agent")
 
     def tool_browser_click_text(self, text: str) -> dict:
-        return browser_manager.click_text(self._conversation(), text)
+        return browser_manager.click_text(self._conversation(), text, actor="agent")
 
     def tool_browser_type(self, selector: str, text: str, press_enter: bool | None = None) -> dict:
-        return browser_manager.type_text(self._conversation(), selector, text, bool(press_enter))
+        return browser_manager.type_text(
+            self._conversation(), selector, text, bool(press_enter), actor="agent")
 
     def tool_browser_network_requests(self, keyword: str | None = None, limit: int | None = None) -> dict:
         rows = browser_manager.list_captures(self._conversation(), keyword, limit or 50)
@@ -552,7 +554,7 @@ class ToolRunner:
                 "hint": "优先比较用户操作前后的新增请求；pagination 字段给出页码/offset/cursor 线索。"}
 
     def tool_download_captured_file(self, capture_id: str) -> dict:
-        row = browser_manager.download(self._conversation(), capture_id)
+        row = browser_manager.download(self._conversation(), capture_id, actor="agent")
         return {"file": row, "notice": "文件已保存到当前会话，可在会话文件面板查看并随会话一键打包。"}
 
     def tool_register_proxy_interface(self, capture_id: str, name: str,
