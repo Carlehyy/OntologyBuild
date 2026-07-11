@@ -2,13 +2,64 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
 from app.data_channel.steward.browser_runtime import browser_manager
+from app.data_channel.steward.browser_sources import token_hash
+from app.data_channel.steward.companion import companion_hub
+from app.data_channel.steward.models import BROWSER_SOURCE_COMPANION, StewardBrowserSource
+from app.database import SessionLocal
 
 router = APIRouter()
+
+
+def _secure_websocket(websocket: WebSocket) -> bool:
+    forwarded = (websocket.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    return websocket.url.scheme == "wss" or forwarded == "https"
+
+
+@router.websocket("/browser/companion/connect")
+async def browser_companion(websocket: WebSocket):
+    """Authenticate a local companion and expose its CDP on server loopback only."""
+    if settings.environment == "production" and not _secure_websocket(websocket):
+        await websocket.close(code=4403, reason="browser companion requires HTTPS/WSS")
+        return
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        auth = json.loads(raw)
+    except Exception:
+        await websocket.close(code=4401, reason="companion authentication required")
+        return
+    source_id = str(auth.get("sourceId") or "")
+    supplied_hash = token_hash(str(auth.get("token") or ""))
+    db = SessionLocal()
+    try:
+        source = db.query(StewardBrowserSource).filter(
+            StewardBrowserSource.id == source_id,
+            StewardBrowserSource.source_type == BROWSER_SOURCE_COMPANION,
+            StewardBrowserSource.enabled.is_(True),
+        ).first()
+        if not source or not hmac.compare_digest(source.device_token_hash or "", supplied_hash):
+            await websocket.close(code=4401, reason="invalid companion credentials")
+            return
+        source.last_seen_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+    connection = await companion_hub.register(source_id, websocket)
+    try:
+        await websocket.send_json({"type": "ready", "sourceId": source_id})
+        await connection.run()
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        await companion_hub.unregister(source_id, connection)
 
 
 @router.websocket("/conversations/{conversation_id}/browser/live")

@@ -1,7 +1,8 @@
 /**
  * 数据管家 — 对话式新建与编排 n8n 数据流水线
  *
- * 职权只有两件事：新建流水线（Webhook→输出 骨架）与编排未发布未启用的流水线。
+ * 对 n8n 的写权限只有两件事：新建流水线与编排未发布未启用的流水线；
+ * 另可在当前会话隔离空间内创建、编辑和删除文件。
  * 左侧：与数据管家对话（create_pipeline 新建骨架、update_workflow 补全编排）
  * 右侧：受管流水线只读看板（状态与节点链）；试跑/发布/归档都在流水线列表
  *       与编辑向导完成，不在管家里。
@@ -12,14 +13,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
-  ClipboardCheck, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
+  CheckCircle2, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
   GitBranch, Globe, History, KeyRound, Library, Loader2, Monitor, MousePointer2,
   Pencil, Plus, RefreshCw, Search, Send, Settings, Sparkles, Trash2, Upload,
-  User, Workflow, X, Zap,
+  User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
-  downloadStewardFile, stewardApi, streamStewardChat,
-  type BrowserCapture, type StewardArtifact,
+  downloadBrowserCompanion, downloadStewardFile, stewardApi, streamStewardChat,
+  type BrowserCapture, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep,
 } from '@/api/steward'
@@ -52,6 +53,9 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   probe_url:           { label: '探测数据源', icon: Globe },
   list_session_files:  { label: '查看会话文件', icon: FolderOpen },
   read_session_file:   { label: '读取文件', icon: FileText },
+  create_session_file: { label: '创建文件', icon: FileText },
+  edit_session_file:   { label: '编辑文件', icon: Pencil },
+  delete_session_file: { label: '删除文件', icon: Trash2 },
   browser_open:        { label: '打开会话浏览器', icon: Monitor },
   browser_state:       { label: '读取页面', icon: Eye },
   browser_navigate:    { label: '浏览器跳转', icon: Globe },
@@ -647,7 +651,7 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-gray-800">{file.filename}</p>
                     <p className="mt-0.5 truncate text-[11px] text-gray-400">
-                      {file.source === 'download' ? '网页下载' : '用户上传'} · {formatBytes(file.size)}
+                      {file.source === 'download' ? '网页下载' : file.source === 'generated' ? '管家创建' : file.source === 'edited' ? '管家编辑' : '用户上传'} · {formatBytes(file.size)}
                       {file.extractedChars > 0 ? ` · 已解析 ${file.extractedChars.toLocaleString()} 字` : ''}
                       {file.urls?.length ? ` · 发现 ${file.urls.length} 个网址` : ''}
                     </p>
@@ -674,8 +678,31 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
   const [error, setError] = useState('')
   const [captures, setCaptures] = useState<BrowserCapture[]>([])
   const [showNetwork, setShowNetwork] = useState(false)
+  const [showSources, setShowSources] = useState(false)
+  const [sources, setSources] = useState<BrowserSource[]>([])
+  const [selectedSource, setSelectedSource] = useState('managed')
+  const [sourceName, setSourceName] = useState('我的电脑')
+  const [sourceType, setSourceType] = useState<'companion' | 'remote_cdp'>('companion')
+  const [endpointUrl, setEndpointUrl] = useState('')
+  const [headerJson, setHeaderJson] = useState('{}')
+  const [pairing, setPairing] = useState<{ sourceId: string; token: string } | null>(null)
+  const [sourceBusy, setSourceBusy] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const imageRef = useRef<HTMLImageElement>(null)
+
+  const loadSources = useCallback(async () => {
+    try {
+      const [rows, conversation] = await Promise.all([
+        stewardApi.browserSources(), stewardApi.conversation(conversationId),
+      ])
+      setSources(rows)
+      setSelectedSource(conversation.browserSourceId || 'managed')
+    } catch (err: unknown) {
+      setError(errorText(err, '浏览器来源加载失败'))
+    }
+  }, [conversationId])
+
+  useEffect(() => { void loadSources() }, [loadSources])
 
   const connectLive = useCallback(async () => {
     wsRef.current?.close()
@@ -713,6 +740,60 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
       setError(errorText(err, '网址打开失败'))
     } finally { setBusy(false) }
   }
+
+  const bindSource = async (sourceId: string) => {
+    setSourceBusy(true); setError('')
+    try {
+      await stewardApi.bindBrowserSource(conversationId, sourceId)
+      wsRef.current?.close(); setConnected(false); setFrame(''); setCurrentUrl('')
+      setSelectedSource(sourceId)
+    } catch (err: unknown) { setError(errorText(err, '浏览器来源切换失败')) }
+    finally { setSourceBusy(false) }
+  }
+
+  const createSource = async () => {
+    setSourceBusy(true); setError(''); setPairing(null)
+    try {
+      let headers: Record<string, string> | undefined
+      if (sourceType === 'remote_cdp') {
+        const parsed: unknown = JSON.parse(headerJson || '{}')
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('请求头必须是 JSON 对象')
+        headers = parsed as Record<string, string>
+      }
+      const created = await stewardApi.createBrowserSource({
+        name: sourceName.trim() || (sourceType === 'companion' ? '我的电脑' : '远程浏览器'),
+        sourceType, endpointUrl: sourceType === 'remote_cdp' ? endpointUrl.trim() : undefined, headers,
+      })
+      if (created.pairingToken) setPairing({ sourceId: created.id, token: created.pairingToken })
+      await loadSources()
+      await bindSource(created.id)
+    } catch (err: unknown) { setError(errorText(err, '浏览器来源创建失败')) }
+    finally { setSourceBusy(false) }
+  }
+
+  const testSource = async (sourceId: string) => {
+    setSourceBusy(true); setError('')
+    try {
+      const result = await stewardApi.testBrowserSource(sourceId)
+      setError(result.reachable ? `✓ ${result.label}连接正常` : `${result.label}不可达`)
+      await loadSources()
+    } catch (err: unknown) { setError(errorText(err, '连接测试失败')) }
+    finally { setSourceBusy(false) }
+  }
+
+  const removeSource = async (sourceId: string) => {
+    setSourceBusy(true); setError('')
+    try {
+      if (selectedSource === sourceId) await bindSource('managed')
+      await stewardApi.deleteBrowserSource(sourceId)
+      await loadSources()
+    } catch (err: unknown) { setError(errorText(err, '删除浏览器来源失败')) }
+    finally { setSourceBusy(false) }
+  }
+
+  const companionCommand = pairing
+    ? `node openontology-browser-companion.mjs --server ${window.location.origin} --source ${pairing.sourceId} --token ${pairing.token}`
+    : ''
 
   const send = (message: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(message))
@@ -761,9 +842,70 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
             className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-violet-300 bg-violet-50 text-violet-700' : 'text-gray-600'}`}>
             <Activity size={12} /> 接口请求
           </button>
+          <button onClick={() => setShowSources(v => !v)}
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showSources ? 'border-violet-300 bg-violet-50 text-violet-700' : 'text-gray-600'}`}>
+            <Settings size={12} /> 浏览器来源
+          </button>
           <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-gray-400 hover:text-gray-700"><X size={17} /></button>
         </div>
-        {error && <div className="border-b bg-red-50 px-4 py-2 text-xs text-red-600">{error}</div>}
+        {error && <div className={`border-b px-4 py-2 text-xs ${error.startsWith('✓') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>{error}</div>}
+        {showSources && (
+          <div className="grid max-h-[360px] shrink-0 grid-cols-[minmax(260px,0.8fr)_minmax(360px,1.2fr)] overflow-auto border-b bg-[#fafafa]">
+            <div className="border-r p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div><p className="text-xs font-semibold text-gray-800">当前会话的浏览器</p><p className="mt-0.5 text-[11px] text-gray-400">每个会话独立绑定，切换会关闭原浏览器上下文</p></div>
+                {sourceBusy && <Loader2 size={13} className="animate-spin text-violet-600" />}
+              </div>
+              <div className="space-y-2">
+                {sources.map(source => (
+                  <div key={source.id} className={`rounded-xl border bg-white p-3 ${selectedSource === source.id ? 'border-violet-300 ring-1 ring-violet-100' : 'border-gray-200'}`}>
+                    <div className="flex items-start gap-2">
+                      <button onClick={() => void bindSource(source.id)} className="mt-0.5 text-violet-600" aria-label={`选择${source.name}`}>
+                        {selectedSource === source.id ? <CheckCircle2 size={16} /> : <span className="block h-4 w-4 rounded-full border border-gray-300" />}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5"><p className="truncate text-xs font-medium text-gray-800">{source.name}</p>
+                          {source.sourceType === 'companion' && (source.online ? <Wifi size={12} className="text-green-500" /> : <WifiOff size={12} className="text-gray-300" />)}
+                        </div>
+                        <p className="mt-0.5 text-[10px] text-gray-400">{source.sourceType === 'managed' ? '平台 Docker 浏览器' : source.sourceType === 'companion' ? (source.online ? '我的电脑 · 在线' : '我的电脑 · 离线') : '管理员远程 CDP'}</p>
+                      </div>
+                      <button onClick={() => void testSource(source.id)} className="text-[10px] text-violet-600">测试</button>
+                      {source.id !== 'managed' && <button onClick={() => void removeSource(source.id)} aria-label="删除来源" className="text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="p-4">
+              <p className="text-xs font-semibold text-gray-800">添加兜底浏览器</p>
+              <p className="mt-1 text-[11px] leading-5 text-gray-500">云端 IP 被 WAF 拒绝时，使用“我的电脑”可以复用你本机网络；平台不会公开你电脑的调试端口。</p>
+              <div className="mt-3 flex gap-2">
+                <button onClick={() => setSourceType('companion')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'companion' ? 'border-violet-300 bg-violet-50 text-violet-700' : 'bg-white text-gray-500'}`}>我的电脑</button>
+                <button onClick={() => setSourceType('remote_cdp')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'remote_cdp' ? 'border-violet-300 bg-violet-50 text-violet-700' : 'bg-white text-gray-500'}`}>远程 CDP（管理员）</button>
+              </div>
+              <div className="mt-3 grid gap-2">
+                <input value={sourceName} onChange={event => setSourceName(event.target.value)} placeholder="来源名称" className="h-8 rounded-lg border bg-white px-3 text-xs outline-none focus:border-violet-400" />
+                {sourceType === 'remote_cdp' && <>
+                  <input value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://browser.example.com/cdp" className="h-8 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-violet-400" />
+                  <textarea value={headerJson} onChange={event => setHeaderJson(event.target.value)} placeholder='{"Authorization":"Bearer …"}' className="h-16 resize-none rounded-lg border bg-white p-2 font-mono text-[11px] outline-none focus:border-violet-400" />
+                </>}
+                <button onClick={() => void createSource()} disabled={sourceBusy || (sourceType === 'remote_cdp' && !endpointUrl.trim())} className="h-8 rounded-lg bg-violet-600 px-3 text-xs font-medium text-white disabled:opacity-40">{sourceType === 'companion' ? '生成一次性配对信息' : '保存远程浏览器'}</button>
+              </div>
+              {sourceType === 'companion' && window.location.protocol !== 'https:' && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700">当前平台不是 HTTPS。为防止配对令牌和浏览器流量泄露，生产环境助手会拒绝连接；请先为平台配置 HTTPS。</div>
+              )}
+              {pairing && (
+                <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
+                  <p className="text-[11px] font-medium text-violet-800">配对令牌只显示这一次</p>
+                  <ol className="mt-1 list-decimal space-y-1 pl-4 text-[10px] leading-5 text-violet-700"><li>安装 Node.js 22+，下载助手脚本</li><li>在脚本目录运行下面命令，Chrome/Edge 会使用独立资料目录启动</li></ol>
+                  <div className="mt-2 flex gap-2"><button onClick={() => void downloadBrowserCompanion()} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-violet-700 shadow-sm">下载助手</button>
+                    <button onClick={() => void navigator.clipboard.writeText(companionCommand)} className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-violet-700 shadow-sm"><Copy size={10} />复制命令</button></div>
+                  <code className="mt-2 block max-h-16 overflow-auto break-all rounded-lg bg-white/80 p-2 text-[9px] leading-4 text-violet-800">{companionCommand}</code>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <div className="flex min-h-0 flex-1 bg-[#15171b]">
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-2">
             {frame ? (

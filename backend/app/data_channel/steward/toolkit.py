@@ -1,12 +1,13 @@
 """
 数据管家受限工具集 — LLM 与 n8n 交互的全部动词
 
-职权收敛到两件事（除此之外没有任何写权限）：
+职权收敛到流水线编排和当前会话文件两类写权限：
   1. 新建流水线：create_pipeline 只收名称+描述，在 n8n 建 Webhook→输出 骨架并
      登记为未发布流水线（等价于流水线列表「新建 n8n 流水线」），不激活。
   2. 辅助编排：update_workflow 只能改「未发布 且 未启用」的流水线定义。
 
-其余工具全是只读支撑，只服务编排质量、绝不改流水线生命周期与激活状态：查看/
+会话文件工具可以创建、编辑和删除当前会话内的文档，但所有路径解析仍由会话工作区
+完成，不能访问其他会话或主机目录。其余工具全是只读支撑，只服务编排质量：查看/
 列表、节点目录与深挖(describe_node)、表达式&模式参考(n8n_reference)、静态体检
 (check_workflow)、探测数据源(probe_url)、只读执行诊断(inspect_runs)、凭据缺口
 检查(check_credentials)。治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
@@ -33,11 +34,11 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.api_hub import config as api_hub_config, db as api_hub_db
 from app.settings.workflows.n8n_client import N8nApiError, N8nClient
-from app.data_channel.steward import service, workspace
+from app.data_channel.steward import browser_sources, file_tools, service, workspace
 from app.data_channel.steward.browser_runtime import (
     BrowserRuntimeError, browser_manager, validate_target_url,
 )
-from app.data_channel.steward.models import N8nPipeline, STATUS_ARCHIVED
+from app.data_channel.steward.models import N8nPipeline, StewardConversation, STATUS_ARCHIVED
 from app.data_channel.steward.node_catalog import CATEGORIES, describe_node, find_nodes
 from app.data_channel.steward.references import reference
 from app.data_channel.steward.service import StewardError
@@ -199,6 +200,45 @@ TOOL_DEFS: list[dict] = [
                 "artifact_id": {"type": "string"},
                 "max_chars": {"type": "integer", "description": "最多返回字符数，默认 30000"},
             },
+            "required": ["artifact_id"],
+        },
+    },
+    {
+        "name": "create_session_file",
+        "description": "在当前会话隔离空间创建文件。支持 docx/pptx/xlsx/pdf/md/txt/csv；不能传路径，也不能写入其他会话。用户要求生成 Word、报告、表格、演示文稿或 Markdown 时直接使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "带受支持扩展名的文件名，如 报告.docx"},
+                "content": {"type": "string", "description": "文件正文；Excel/CSV 可作为逗号或制表符分隔文本"},
+                "title": {"type": "string", "description": "文档或演示标题（可选）"},
+                "rows": {"type": "array", "items": {}, "description": "Excel/CSV 可选数据，对象数组或二维数组"},
+            },
+            "required": ["filename", "content"],
+        },
+    },
+    {
+        "name": "edit_session_file",
+        "description": "编辑当前会话中的文件并保存为新版本（原文件保留，避免误覆盖）。支持替换或追加正文；只能使用 list_session_files 返回的 artifact_id。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string"},
+                "content": {"type": "string"},
+                "mode": {"type": "string", "enum": ["replace", "append"], "description": "默认 replace"},
+                "output_filename": {"type": "string", "description": "可选的新版本文件名"},
+                "title": {"type": "string"},
+                "rows": {"type": "array", "items": {}},
+            },
+            "required": ["artifact_id", "content"],
+        },
+    },
+    {
+        "name": "delete_session_file",
+        "description": "删除当前会话内的一个文件。删除不可撤销，只有用户明确要求删除时才能使用；只能接收当前会话 artifact_id。",
+        "parameters": {
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string"}},
             "required": ["artifact_id"],
         },
     },
@@ -531,9 +571,31 @@ class ToolRunner:
                 "truncated": len(text) >= (max_chars or 30_000),
                 "note": None if text else "该文件没有可用的文本解析结果；仍可作为原文件下载。"}
 
+    def tool_create_session_file(self, filename: str, content: str,
+                                 title: str | None = None, rows: list | None = None) -> dict:
+        row = file_tools.create(self._conversation(), filename, content, title=title, rows=rows)
+        return {"file": row, "notice": "文件已创建在当前会话隔离空间，可在会话文件面板查看、下载或打包。"}
+
+    def tool_edit_session_file(self, artifact_id: str, content: str,
+                               mode: str | None = None, output_filename: str | None = None,
+                               title: str | None = None, rows: list | None = None) -> dict:
+        row = file_tools.edit(self._conversation(), artifact_id, content, mode=mode or "replace",
+                              output_filename=output_filename, title=title, rows=rows)
+        return {"file": row, "notice": "已另存为当前会话中的新版本，原文件未被覆盖。"}
+
+    def tool_delete_session_file(self, artifact_id: str) -> dict:
+        cid = self._conversation()
+        row, _ = workspace.require_file(cid, artifact_id)
+        workspace.delete_file(cid, artifact_id)
+        return {"deleted": True, "artifactId": artifact_id, "filename": row["filename"]}
+
     def tool_browser_open(self, url: str) -> dict:
+        conv = self.db.query(StewardConversation).filter(
+            StewardConversation.id == self._conversation()).first()
+        target = browser_sources.resolve_target(
+            self.db, conv.browser_source_id if conv else None, self.user_id)
         return browser_manager.start(
-            self._conversation(), url, user_id=self.user_id, actor="agent")
+            self._conversation(), url, user_id=self.user_id, actor="agent", browser_target=target)
 
     def tool_browser_state(self) -> dict:
         return browser_manager.state(self._conversation(), actor="agent")

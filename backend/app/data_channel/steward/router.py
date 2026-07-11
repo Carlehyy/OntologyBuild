@@ -10,8 +10,9 @@
   GET    /pipelines/{id}             记录详情（workflow 摘要，只读）
   POST   /pipelines/bootstrap        流水线列表「新建 n8n 流水线」：骨架工作流登记
 
-职权边界：数据管家只有两项写权限——新建流水线（bootstrap / 对话工具
-create_pipeline）与编排未发布未启用的流水线（对话工具 update_workflow）。
+职权边界：数据管家对 n8n 只有两项写权限——新建流水线（bootstrap / 对话工具
+create_pipeline）与编排未发布未启用的流水线（对话工具 update_workflow）。此外，
+它可在当前会话隔离空间创建、编辑和删除文件，但不能访问任何其他文件路径。
 发布/撤回发布只存在于流水线编辑向导（pipelines 的 publish/unpublish 端点）；
 试跑、归档/删除都不再走 steward，归档在流水线列表（走 service.archive）。
 """
@@ -20,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -33,8 +35,10 @@ from app.model_configs.selector import select_llm_model_config
 from app.settings.workflows.n8n_client import N8nApiError
 from app.data_channel.steward import service
 from app.data_channel.steward.models import (
-    N8nPipeline, StewardConversation, StewardMessage, STATUS_ARCHIVED,
+    BROWSER_SOURCE_REMOTE_CDP, N8nPipeline, StewardBrowserSource,
+    StewardConversation, StewardMessage, STATUS_ARCHIVED,
 )
+from app.data_channel.steward import browser_sources
 from app.data_channel.steward.orchestrator import run_steward_turn
 from app.data_channel.steward import workspace
 from app.data_channel.steward.browser_runtime import (
@@ -141,6 +145,7 @@ def chat(body: ChatBody, db: Session = Depends(get_db),
 
 def _conv_out(c: StewardConversation) -> dict:
     return {"id": c.id, "title": c.title,
+            "browserSourceId": c.browser_source_id or browser_sources.MANAGED_SOURCE_ID,
             "createdAt": c.created_at.isoformat() if c.created_at else None,
             "updatedAt": c.updated_at.isoformat() if c.updated_at else None}
 
@@ -291,8 +296,26 @@ class BrowserTypeBody(BaseModel):
     pressEnter: bool = False
 
 
+class CreateBrowserSourceBody(BaseModel):
+    name: str
+    sourceType: str
+    endpointUrl: str | None = None
+    headers: dict[str, str] | None = None
+
+
+class UpdateBrowserSourceBody(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    endpointUrl: str | None = None
+    headers: dict[str, str] | None = None
+
+
+class BindBrowserSourceBody(BaseModel):
+    sourceId: str | None = None
+
+
 def _browser_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, (BrowserRuntimeError, workspace.WorkspaceError)):
+    if isinstance(exc, (BrowserRuntimeError, StewardError, workspace.WorkspaceError)):
         return HTTPException(422, str(exc))
     logger.exception("会话浏览器操作失败")
     return HTTPException(500, "会话浏览器操作失败")
@@ -314,14 +337,133 @@ def browser_status(_=Depends(get_current_user)):
     return _ok({**probe_browser_cdp(), **capacity})
 
 
+@router.get("/browser/sources")
+def list_browser_sources(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    user_id = getattr(current_user, "id", None)
+    rows = (db.query(StewardBrowserSource)
+            .filter(StewardBrowserSource.user_id == user_id)
+            .order_by(StewardBrowserSource.created_at.asc()).all())
+    return _ok([browser_sources.managed_out(), *[browser_sources.source_out(row) for row in rows]])
+
+
+@router.post("/browser/sources", status_code=201)
+def create_browser_source(body: CreateBrowserSourceBody, db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    if body.sourceType == BROWSER_SOURCE_REMOTE_CDP and getattr(current_user, "role", "") != "admin":
+        raise HTTPException(403, "远程 CDP 是服务器级高权限入口，只允许管理员配置；普通用户请使用本机浏览器助手")
+    try:
+        source, token = browser_sources.create_source(
+            db, getattr(current_user, "id", None), name=body.name,
+            source_type=body.sourceType, endpoint_url=body.endpointUrl, headers=body.headers)
+    except StewardError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _ok({**browser_sources.source_out(source), "pairingToken": token})
+
+
+@router.patch("/browser/sources/{source_id}")
+def update_browser_source(source_id: str, body: UpdateBrowserSourceBody,
+                          db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        source = browser_sources.require_source(
+            db, source_id, getattr(current_user, "id", None),
+            admin=getattr(current_user, "role", "") == "admin")
+        if body.name is not None:
+            source.name = body.name.strip()[:120] or source.name
+        if body.enabled is not None:
+            source.enabled = body.enabled
+        if body.endpointUrl is not None:
+            if source.source_type != BROWSER_SOURCE_REMOTE_CDP:
+                raise StewardError("本机浏览器助手没有可编辑的远程地址")
+            from app.shared.encryption import encrypt
+            source.endpoint_url_encrypted = encrypt(browser_sources.validate_remote_endpoint(body.endpointUrl))
+        if body.headers is not None:
+            if source.source_type != BROWSER_SOURCE_REMOTE_CDP:
+                raise StewardError("本机浏览器助手没有远程请求头")
+            from app.shared.encryption import encrypt
+            source.headers_encrypted = encrypt(json.dumps(
+                browser_sources.normalize_headers(body.headers), ensure_ascii=False))
+        db.commit()
+        db.refresh(source)
+        return _ok(browser_sources.source_out(source))
+    except StewardError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/browser/sources/{source_id}/rotate-token")
+def rotate_browser_source_token(source_id: str, db: Session = Depends(get_db),
+                                current_user=Depends(get_current_user)):
+    try:
+        source = browser_sources.require_source(db, source_id, getattr(current_user, "id", None))
+        return _ok({"sourceId": source.id, "pairingToken": browser_sources.rotate_companion_token(db, source)})
+    except StewardError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete("/browser/sources/{source_id}", status_code=204)
+def delete_browser_source(source_id: str, db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    try:
+        source = browser_sources.require_source(db, source_id, getattr(current_user, "id", None))
+    except StewardError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    conversations = db.query(StewardConversation).filter(
+        StewardConversation.browser_source_id == source.id).all()
+    for conversation in conversations:
+        try:
+            browser_manager.close(conversation.id)
+        except Exception:  # noqa: BLE001 — 删除来源不能被失联浏览器阻塞
+            logger.warning("关闭已删除来源的浏览器会话失败: %s", conversation.id, exc_info=True)
+        conversation.browser_source_id = None
+    db.delete(source)
+    db.commit()
+
+
+@router.post("/browser/sources/{source_id}/test")
+def test_browser_source(source_id: str, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    try:
+        target = browser_sources.resolve_target(
+            db, None if source_id == browser_sources.MANAGED_SOURCE_ID else source_id,
+            getattr(current_user, "id", None), admin=getattr(current_user, "role", "") == "admin")
+        return _ok(browser_manager.test_target(target))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.get("/browser/companion/script")
+def download_browser_companion(_=Depends(get_current_user)):
+    path = Path(__file__).with_name("companion_client.mjs")
+    return FileResponse(path, filename="openontology-browser-companion.mjs",
+                        media_type="text/javascript")
+
+
+@router.put("/conversations/{conversation_id}/browser/source")
+def bind_browser_source(conversation_id: str, body: BindBrowserSourceBody,
+                        db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    conv = _require_conversation(db, conversation_id, current_user)
+    source_id = body.sourceId
+    if source_id and source_id != browser_sources.MANAGED_SOURCE_ID:
+        try:
+            browser_sources.require_source(db, source_id, getattr(current_user, "id", None))
+        except StewardError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    browser_manager.close(conversation_id)
+    conv.browser_source_id = None if source_id in {None, browser_sources.MANAGED_SOURCE_ID} else source_id
+    db.commit()
+    return _ok(_conv_out(conv))
+
+
 @router.post("/conversations/{conversation_id}/browser/start")
 def start_browser(conversation_id: str, body: BrowserUrlBody,
                   db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     conv = _require_conversation(db, conversation_id, current_user)
     try:
         owner_id = conv.user_id or getattr(current_user, "id", None)
+        target = browser_sources.resolve_target(
+            db, conv.browser_source_id, owner_id,
+            admin=getattr(current_user, "role", "") == "admin")
         return _ok(browser_manager.start(
-            conversation_id, body.url, user_id=owner_id, actor="user"))
+            conversation_id, body.url, user_id=owner_id, actor="user", browser_target=target))
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 

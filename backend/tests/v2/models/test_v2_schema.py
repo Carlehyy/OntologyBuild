@@ -78,6 +78,7 @@ def test_all_v2_tables_registered():
         "v2_data_sync_histories",
         "v2_n8n_pipelines",
         "v2_steward_conversations",
+        "v2_steward_browser_sources",
         "v2_steward_messages",
         "v2_curated_datasets",
         "v2_curated_reviews",

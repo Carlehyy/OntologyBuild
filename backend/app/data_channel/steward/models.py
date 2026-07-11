@@ -17,7 +17,7 @@ LLM 在授权工具边界内创建/编辑 n8n workflow。**数据管家只负责
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -33,6 +33,8 @@ def _now() -> datetime:
 # 状态常量 — 迁移都经由 service 层的显式函数，禁止散落赋值
 STATUS_DRAFT = "draft"
 STATUS_ARCHIVED = "archived"
+BROWSER_SOURCE_REMOTE_CDP = "remote_cdp"
+BROWSER_SOURCE_COMPANION = "companion"
 
 
 class N8nPipeline(Base):
@@ -78,6 +80,31 @@ class N8nPipeline(Base):
     )
 
 
+class StewardBrowserSource(Base):
+    """A user-owned browser provider; secrets are always encrypted or hashed."""
+    __tablename__ = "v2_steward_browser_sources"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    endpoint_url_encrypted: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    headers_encrypted: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    device_token_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_type IN ('remote_cdp','companion')",
+            name="ck_steward_browser_sources_type"),
+        Index("ix_steward_browser_sources_user_type", "user_id", "source_type"),
+    )
+
+
 class StewardConversation(Base):
     __tablename__ = "v2_steward_conversations"
 
@@ -85,6 +112,9 @@ class StewardConversation(Base):
     user_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
+    browser_source_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("v2_steward_browser_sources.id", ondelete="SET NULL"),
+        nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

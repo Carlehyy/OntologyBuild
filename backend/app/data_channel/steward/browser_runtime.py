@@ -231,6 +231,12 @@ def _validate_navigation_response(response: Any, target: str) -> None:
     status = int(getattr(response, "status", 0) or 0)
     if status < 400:
         return
+    if status == 567:
+        raise BrowserRuntimeError(
+            f"页面返回 HTTP 567，站点的 CDN/WAF 拒绝了平台云服务器出口：{target}。"
+            "这不是浏览器未安装。请在实时浏览器中切换到“我的电脑”来源，"
+            "由本机网络完成人工验证后再继续；也可按站点规则使用官方 API。"
+        )
     raise BrowserRuntimeError(
         f"页面返回 HTTP {status}，可能被登录门禁、CDN/WAF 或访问策略拦截：{target}。"
         "请在数据管家的实时浏览器中完成人工验证后重试；若站点提供官方 API，"
@@ -248,12 +254,27 @@ def public_capture(capture: dict) -> dict:
     return result
 
 
+@dataclass(frozen=True)
+class BrowserTarget:
+    """Resolved browser provider selected for one conversation."""
+    key: str
+    endpoint_url: str
+    source_type: str = "managed"
+    label: str = "平台浏览器"
+    headers: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+
+
+def managed_browser_target() -> BrowserTarget:
+    return BrowserTarget(key="managed", endpoint_url=settings.steward_browser_cdp_url)
+
+
 @dataclass
 class BrowserSession:
     conversation_id: str
     context: Any
     page: Any
     user_id: str | None = None
+    source_key: str = "managed"
     captures: list[dict] = field(default_factory=list)
     capture_tasks: set[asyncio.Task] = field(default_factory=set)
     last_state_saved: float = 0.0
@@ -364,7 +385,7 @@ class BrowserManager:
         self._thread.start()
         self._sessions: dict[str, BrowserSession] = {}
         self._pw = None
-        self._browser = None
+        self._browsers: dict[str, Any] = {}
         self._tickets: dict[str, tuple[str, str | None, float]] = {}
         self._ticket_lock = threading.Lock()
         self._live_clients: dict[str, int] = {}
@@ -500,9 +521,11 @@ class BrowserManager:
     def capacity_status(self) -> dict:
         return self.call(self._capacity_status(), timeout=10)
 
-    async def _ensure_browser(self):
-        if self._browser and self._browser.is_connected():
-            return self._browser
+    async def _ensure_browser(self, target: BrowserTarget):
+        existing = self._browsers.get(target.key)
+        if existing and existing.is_connected():
+            return existing
+        self._browsers.pop(target.key, None)
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
@@ -510,16 +533,30 @@ class BrowserManager:
         if self._pw is None:
             self._pw = await async_playwright().start()
         try:
-            endpoint = _resolve_cdp_endpoint(settings.steward_browser_cdp_url)
-            self._browser = await self._pw.chromium.connect_over_cdp(
+            endpoint = _resolve_cdp_endpoint(target.endpoint_url)
+            browser = await self._pw.chromium.connect_over_cdp(
                 endpoint,
+                headers=target.headers or None,
                 timeout=int(settings.steward_browser_timeout_seconds) * 1000,
             )
         except Exception as exc:
             raise BrowserRuntimeError(
-                f"无法连接会话浏览器：{exc}"
+                f"无法连接{target.label}：{exc}"
             ) from exc
-        return self._browser
+        self._browsers[target.key] = browser
+        return browser
+
+    async def _test_target(self, target: BrowserTarget) -> dict:
+        browser = await self._ensure_browser(target)
+        return {
+            "reachable": bool(browser.is_connected()),
+            "sourceType": target.source_type,
+            "label": target.label,
+        }
+
+    def test_target(self, target: BrowserTarget) -> dict:
+        return self.call(self._test_target(target), timeout=max(
+            10, int(settings.steward_browser_timeout_seconds) + 5))
 
     async def _route_guard(self, route: Any) -> None:
         try:
@@ -533,12 +570,16 @@ class BrowserManager:
             await route.abort("blockedbyclient")
 
     async def _start(self, conversation_id: str, url: str, *, user_id: str | None = None,
-                     actor: str = "agent") -> dict:
-        target = _safe_url(url)
+                     actor: str = "agent", browser_target: BrowserTarget | None = None) -> dict:
+        navigation_target = _safe_url(url)
+        selected_target = browser_target or managed_browser_target()
         user_id = str(user_id) if user_id is not None else None
         self._ensure_reaper()
         self._assert_actor_allowed(conversation_id, actor)
         session = self._sessions.get(conversation_id)
+        if session is not None and session.source_key != selected_target.key:
+            await self._close(conversation_id)
+            session = None
         reclaimed: list[str] = []
         restored = False
         if session is None:
@@ -547,7 +588,7 @@ class BrowserManager:
                 session = self._sessions.get(conversation_id)
                 if session is None:
                     reclaimed = await self._ensure_capacity(user_id)
-                    browser = await self._ensure_browser()
+                    browser = await self._ensure_browser(selected_target)
                     state = workspace.storage_state_path(conversation_id)
                     restored = state.exists()
                     kwargs = {
@@ -562,7 +603,7 @@ class BrowserManager:
                     page = await context.new_page()
                     session = BrowserSession(
                         conversation_id, context, page,
-                        user_id=user_id,
+                        user_id=user_id, source_key=selected_target.key,
                     )
                     session.bind_page(page)
 
@@ -578,11 +619,11 @@ class BrowserManager:
             session.touch()
             try:
                 response = await session.page.goto(
-                    target,
+                    navigation_target,
                     wait_until="domcontentloaded",
                     timeout=int(settings.steward_browser_timeout_seconds) * 1000,
                 )
-                _validate_navigation_response(response, target)
+                _validate_navigation_response(response, navigation_target)
             except Exception as exc:
                 if "Download is starting" not in str(exc):
                     raise BrowserRuntimeError(f"页面打开失败：{exc}") from exc
@@ -590,17 +631,24 @@ class BrowserManager:
                 await session.save_state()
                 session.touch()
                 return {"url": session.page.url, "title": "文件下载已触发",
-                        "downloadStarted": True, "targetUrl": target,
+                        "downloadStarted": True, "targetUrl": navigation_target,
+                        "browserSource": selected_target.key,
                         "restoredSession": restored, "reclaimedSessionCount": len(reclaimed)}
             await session.save_state_if_due()
             session.touch()
             result = await self._state(conversation_id, actor=actor)
-        result.update({"restoredSession": restored, "reclaimedSessionCount": len(reclaimed)})
+        result.update({
+            "restoredSession": restored,
+            "reclaimedSessionCount": len(reclaimed),
+            "browserSource": selected_target.key,
+        })
         return result
 
     def start(self, conversation_id: str, url: str, *, user_id: str | None = None,
-              actor: str = "agent") -> dict:
-        return self.call(self._start(conversation_id, url, user_id=user_id, actor=actor))
+              actor: str = "agent", browser_target: BrowserTarget | None = None) -> dict:
+        return self.call(self._start(
+            conversation_id, url, user_id=user_id, actor=actor,
+            browser_target=browser_target))
 
     async def _require(self, conversation_id: str) -> BrowserSession:
         session = self._sessions.get(conversation_id)
@@ -812,12 +860,13 @@ class BrowserManager:
                 await self._close(conversation_id)
             except Exception:
                 logger.warning("failed to close steward browser session %s", conversation_id, exc_info=True)
-        if self._browser and self._browser.is_connected():
-            try:
-                await self._browser.close()  # CDP detach; does not terminate sidecar Chromium
-            except Exception:
-                logger.debug("browser CDP detach failed", exc_info=True)
-        self._browser = None
+        for key, browser in list(self._browsers.items()):
+            if browser and browser.is_connected():
+                try:
+                    await browser.close()  # CDP detach; does not terminate remote Chromium
+                except Exception:
+                    logger.debug("browser CDP detach failed for %s", key, exc_info=True)
+        self._browsers.clear()
 
     def close_all(self) -> None:
         self.call(self._close_all(), timeout=30)

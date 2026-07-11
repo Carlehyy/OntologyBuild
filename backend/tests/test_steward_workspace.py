@@ -4,19 +4,22 @@ import io
 import time
 import uuid
 import zipfile
+import struct
 from types import SimpleNamespace
 
 import pytest
 
 from app.api_hub import config as api_hub_config, db as api_hub_db
 from app.config import settings
-from app.data_channel.steward import workspace
+from app.data_channel.steward import browser_sources, file_tools, workspace
 from app.data_channel.steward.browser_runtime import (
     BrowserManager, BrowserRuntimeError, _resolve_cdp_endpoint,
     _validate_navigation_response, analyze_pagination, browser_manager,
     probe_browser_cdp, public_capture, validate_target_url,
 )
 from app.data_channel.steward.toolkit import ToolRunner
+from app.data_channel.steward.models import StewardBrowserSource
+from app.data_channel.steward.companion import CompanionHub
 
 
 @pytest.fixture
@@ -63,6 +66,155 @@ def test_stream_upload_enforces_limit_without_leaving_partial_file(steward_works
         )
     assert workspace.list_files(cid) == []
     assert list((workspace.session_root(cid) / "files").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "prefix"),
+    [
+        ("报告.docx", "第一段\n\n第二段", b"PK"),
+        ("汇报.pptx", "# 结论\n完成验证", b"PK"),
+        ("数据.xlsx", "名称,数量\n甲,2", b"PK"),
+        ("说明.pdf", "中文 PDF 内容", b"%PDF"),
+        ("记录.md", "# 会话记录", b"# "),
+    ],
+)
+def test_generated_documents_are_real_files_inside_session(
+    steward_workspace, filename, content, prefix,
+):
+    cid = str(uuid.uuid4())
+    row = file_tools.create(cid, filename, content, title="数据管家产出")
+    registered, path = workspace.require_file(cid, row["id"])
+
+    assert path.read_bytes().startswith(prefix)
+    assert path.parent == workspace.session_root(cid) / "files"
+    assert registered["source"] == "generated"
+    assert registered["size"] > 0
+
+
+def test_tool_runner_can_create_edit_and_delete_word_without_crossing_session(
+    steward_workspace,
+):
+    first = str(uuid.uuid4())
+    second = str(uuid.uuid4())
+    runner = ToolRunner(None, user_id="u1", conversation_id=first)
+    created = runner.run("create_session_file", {
+        "filename": "200字说明.docx", "title": "说明",
+        "content": "这是由数据管家生成的正文。" * 20,
+    })
+
+    assert "error" not in created
+    artifact_id = created["file"]["id"]
+    assert workspace.list_files(second) == []
+    edited = runner.run("edit_session_file", {
+        "artifact_id": artifact_id, "mode": "append", "content": "追加结论。",
+    })
+    assert "error" not in edited
+    assert edited["file"]["source"] == "edited"
+    assert len(workspace.list_files(first)) == 2
+    assert "追加结论" in workspace.extracted_text(first, edited["file"]["id"])
+
+    deleted = runner.run("delete_session_file", {"artifact_id": artifact_id})
+    assert deleted["deleted"] is True
+    assert [row["id"] for row in workspace.list_files(first)] == [edited["file"]["id"]]
+    with pytest.raises(workspace.WorkspaceError):
+        workspace.require_file(second, edited["file"]["id"])
+
+
+def test_browser_source_secrets_are_encrypted_and_resolve_to_target(db, editor_user, monkeypatch):
+    monkeypatch.setattr(settings, "environment", "development")
+    source, token = browser_sources.create_source(
+        db, editor_user.id, name="测试 CDP", source_type="remote_cdp",
+        endpoint_url="https://browser.example/cdp",
+        headers={"Authorization": "Bearer very-secret"},
+    )
+
+    assert token is None
+    assert "browser.example" not in source.endpoint_url_encrypted
+    assert "very-secret" not in source.headers_encrypted
+    target = browser_sources.resolve_target(db, source.id, editor_user.id)
+    assert target.endpoint_url == "https://browser.example/cdp"
+    assert target.headers == {"Authorization": "Bearer very-secret"}
+    with pytest.raises(Exception, match="他人的浏览器来源"):
+        browser_sources.resolve_target(db, source.id, "another-user")
+
+
+def test_browser_source_api_binds_companion_to_one_conversation(
+    client, auth_headers, db, monkeypatch,
+):
+    monkeypatch.setattr(settings, "environment", "development")
+    conversation = client.post(
+        "/api/v2/steward/conversations", json={"title": "浏览器来源测试"},
+        headers=auth_headers,
+    ).json()["data"]
+    response = client.post(
+        "/api/v2/steward/browser/sources",
+        json={"name": "我的 Mac", "sourceType": "companion"}, headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+    created = response.json()["data"]
+    assert created["pairingToken"]
+    assert created["online"] is False
+
+    listed = client.get("/api/v2/steward/browser/sources", headers=auth_headers).json()["data"]
+    assert [row["id"] for row in listed] == ["managed", created["id"]]
+    assert "pairingToken" not in listed[1]
+    bound = client.put(
+        f"/api/v2/steward/conversations/{conversation['id']}/browser/source",
+        json={"sourceId": created["id"]}, headers=auth_headers,
+    )
+    assert bound.status_code == 200, bound.text
+    assert bound.json()["data"]["browserSourceId"] == created["id"]
+
+    source = db.query(StewardBrowserSource).filter_by(id=created["id"]).one()
+    assert source.device_token_hash != created["pairingToken"]
+    assert len(source.device_token_hash) == 64
+
+
+@pytest.mark.asyncio
+async def test_companion_hub_proxies_loopback_tcp_in_both_directions():
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent = asyncio.Queue()
+            self.incoming = asyncio.Queue()
+
+        async def send_text(self, value):
+            await self.sent.put(("text", value))
+
+        async def send_bytes(self, value):
+            await self.sent.put(("bytes", value))
+
+        async def receive(self):
+            return await self.incoming.get()
+
+    hub = CompanionHub()
+    websocket = FakeWebSocket()
+    connection = await hub.register("source", websocket)
+    run_task = asyncio.create_task(connection.run())
+    reader, writer = await asyncio.open_connection("127.0.0.1", connection.port)
+    try:
+        kind, control_raw = await asyncio.wait_for(websocket.sent.get(), 2)
+        control = json.loads(control_raw)
+        assert kind == "text" and control["type"] == "open"
+        stream_id = control["streamId"]
+
+        writer.write(b"client-to-browser")
+        await writer.drain()
+        kind, packet = await asyncio.wait_for(websocket.sent.get(), 2)
+        assert kind == "bytes"
+        assert struct.unpack("!I", packet[:4])[0] == stream_id
+        assert packet[4:] == b"client-to-browser"
+
+        await websocket.incoming.put({
+            "type": "websocket.receive",
+            "bytes": struct.pack("!I", stream_id) + b"browser-to-client",
+        })
+        assert await asyncio.wait_for(reader.readexactly(17), 2) == b"browser-to-client"
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        run_task.cancel()
+        await asyncio.gather(run_task, return_exceptions=True)
+        await hub.unregister("source", connection)
 
 
 def test_network_capture_redacts_auth_and_detects_page_offset_and_cursor():

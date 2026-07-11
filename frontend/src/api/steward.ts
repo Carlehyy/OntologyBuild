@@ -67,9 +67,23 @@ export interface StewardMessageDTO {
 export interface StewardConversationDTO {
   id: string
   title: string
+  browserSourceId?: string
   createdAt: string
   updatedAt: string
   messages?: StewardMessageDTO[]
+}
+
+export type BrowserSourceType = 'managed' | 'remote_cdp' | 'companion'
+
+export interface BrowserSource {
+  id: string
+  name: string
+  sourceType: BrowserSourceType
+  enabled: boolean
+  online: boolean | null
+  hasSecret: boolean
+  lastSeenAt?: string | null
+  pairingToken?: string | null
 }
 
 export interface StewardArtifact {
@@ -128,6 +142,16 @@ export const stewardApi = {
   },
   deleteFile: (cid: string, artifactId: string) =>
     apiClientV2.delete(`/steward/conversations/${cid}/files/${artifactId}`),
+  browserSources: () => apiClientV2.get<BrowserSource[]>('/steward/browser/sources'),
+  createBrowserSource: (body: { name: string; sourceType: 'remote_cdp' | 'companion'; endpointUrl?: string; headers?: Record<string, string> }) =>
+    apiClientV2.post<BrowserSource>('/steward/browser/sources', body),
+  updateBrowserSource: (id: string, body: { name?: string; enabled?: boolean; endpointUrl?: string; headers?: Record<string, string> }) =>
+    apiClientV2.patch<BrowserSource>(`/steward/browser/sources/${id}`, body),
+  deleteBrowserSource: (id: string) => apiClientV2.delete(`/steward/browser/sources/${id}`),
+  testBrowserSource: (id: string) =>
+    apiClientV2.post<{ reachable: boolean; sourceType: string; label: string }>(`/steward/browser/sources/${id}/test`),
+  bindBrowserSource: (cid: string, sourceId: string) =>
+    apiClientV2.put<StewardConversationDTO>(`/steward/conversations/${cid}/browser/source`, { sourceId }),
   browserStart: (cid: string, url: string) =>
     apiClientV2.post<{ url: string; title: string }>(`/steward/conversations/${cid}/browser/start`, { url }),
   browserNavigate: (cid: string, url: string) =>
@@ -144,6 +168,23 @@ export const stewardApi = {
   /** 列表页 / 数据管家「新建 n8n 流水线」：后台自动在 n8n 创建骨架工作流并登记（未发布） */
   bootstrap: (name: string, description = '') =>
     apiClientV2.post<{ record: StewardPipeline }>('/steward/pipelines/bootstrap', { name, description }),
+}
+
+export async function downloadBrowserCompanion(): Promise<void> {
+  const token = localStorage.getItem('token') || ''
+  const resp = await fetch(`${apiRoot()}/steward/browser/companion/script`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!resp.ok) throw new Error(`助手下载失败 (${resp.status})`)
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = 'openontology-browser-companion.mjs'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 export async function downloadStewardFile(
