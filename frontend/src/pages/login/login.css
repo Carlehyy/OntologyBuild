@@ -36,6 +36,22 @@
   max-width: none;
   object-fit: cover;
   opacity: 1;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    #000 53%,
+    rgba(0, 0, 0, 0.92) 55%,
+    rgba(0, 0, 0, 0.42) 58%,
+    transparent 61.5%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    #000 53%,
+    rgba(0, 0, 0, 0.92) 55%,
+    rgba(0, 0, 0, 0.42) 58%,
+    transparent 61.5%
+  );
   pointer-events: none;
   user-select: none;
 }
@@ -48,16 +64,21 @@
   display: flex;
   align-items: center;
   gap: 14px;
+  isolation: isolate;
 }
 
 .ontology-login__brand::before {
   position: absolute;
-  z-index: -1;
-  inset: -14px -26px;
+  z-index: 0;
+  inset: -44px -100px -22px -30px;
   content: "";
-  background: rgba(255, 255, 255, 0.8);
-  filter: blur(14px);
+  background: linear-gradient(90deg, #fff 0 92%, rgba(255, 255, 255, 0));
   pointer-events: none;
+}
+
+.ontology-login__brand > * {
+  position: relative;
+  z-index: 1;
 }
 
 .ontology-login__brand-mark {
@@ -90,15 +111,21 @@
   top: 17.65%;
   left: 3.5%;
   width: 33.5%;
+  isolation: isolate;
 }
 
 .ontology-login__story::before {
   position: absolute;
-  z-index: -1;
-  inset: -12px -42px -14px -18px;
+  z-index: 0;
+  inset: -35px -70px -25px -20px;
   content: "";
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0 82%, rgba(255, 255, 255, 0));
+  background: linear-gradient(90deg, #fff 0 88%, rgba(255, 255, 255, 0));
   pointer-events: none;
+}
+
+.ontology-login__story > * {
+  position: relative;
+  z-index: 1;
 }
 
 .ontology-login__story h1 {
@@ -140,18 +167,21 @@
   margin: 0;
   padding: 0;
   list-style: none;
+  isolation: isolate;
 }
 
 .ontology-login__features::before {
   position: absolute;
-  z-index: -1;
-  inset: -16px -118px -18px -18px;
+  z-index: 0;
+  inset: -20px -150px -60px -20px;
   content: "";
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0 67%, rgba(255, 255, 255, 0));
+  background: linear-gradient(90deg, #fff 0 72%, rgba(255, 255, 255, 0));
   pointer-events: none;
 }
 
 .ontology-login__features li {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 16px;
