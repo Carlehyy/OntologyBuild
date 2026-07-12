@@ -70,7 +70,6 @@ def pipeline_lifecycle_guard(
     lifecycle_write = (
         request.method == "DELETE"
         or suffix.endswith("/publish")
-        or suffix.endswith("/unpublish")
         or suffix.endswith("/enabled")
     )
     pipeline_id = request.path_params.get("pipeline_id")
@@ -128,7 +127,7 @@ class PipelineCreate(BaseModel):
 
 
 class PipelineUpdate(BaseModel):
-    # 状态经 publish/unpublish 端点、启用经 PATCH /enabled——通用更新不允许
+    # 状态经 publish/归档端点、启用经 PATCH /enabled——通用更新不允许
     # 携带 status/enabled，防止绕过状态机（封版/启用约束）。
     name: Optional[str] = None
     domain: Optional[str] = None
@@ -173,7 +172,7 @@ class ValidateResult(BaseModel):
 
 def _is_n8n_pipeline(pl: Pipeline) -> bool:
     """数据管家托管的 n8n 影子流水线 — 编排在数据管家，画布路径绕行；
-    生命周期（发布/撤回/删除）与画布流水线同走本路由。"""
+    生命周期（发布/停启用/归档）与画布流水线同走本路由。"""
     return ((pl.definition or {}).get("engine") == "n8n")
 
 
@@ -196,10 +195,7 @@ def _require_production_executable(pl: Pipeline) -> None:
 
 
 def _reject_if_sync_chain_refs(db: Session, pipeline_id: str, *, action: str) -> None:
-    """同步任务把该流水线设为链式触发目标时拦截删除/撤回发布。
-
-    与任务池引用同一道理：删除靠 FK SET NULL、撤回靠运行期跳过兜底，
-    但两者都只剩日志可见——链路静默断掉不如让操作者当场看见并解绑。"""
+    """同步任务把该流水线设为链式触发目标时拦截删除/归档。"""
     from app.data_channel.sync_tasks.models import DataSyncTask
 
     refs = db.query(DataSyncTask).filter(
@@ -349,17 +345,14 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
             if definitions_changed:
                 steward_service.invalidate_validation_attestation(rec)
 
-    # ── 已发布封版：definition / column_definitions / spec 不可修改 ──
-    # 按 key 存在性判断而非值非空——显式传 null 同样是修改（会把封版字段清空）
-    PROTECTED_FIELDS = ("definition", "column_definitions", "spec")
-    if (pl.status or "") == "published":
-        protected_present = [k for k in PROTECTED_FIELDS if k in update_data]
-        if protected_present:
-            raise HTTPException(
-                400,
-                f"流水线已发布，封版字段不可修改：{', '.join(protected_present)}。"
-                f"如需修改，请先撤回发布（要求没有调度任务引用），或复制为新流水线。"
-            )
+    # ── 已发布封版：所有内容字段均不可修改 ──
+    # 发布是单向版本边界，不允许通过改名/描述等看似无害的入口改变审计身份。
+    if (pl.status or "") == "published" and update_data:
+        raise HTTPException(
+            409,
+            "流水线已发布并永久封版，名称、描述、字段契约与编排均不可修改。"
+            "如需调整，请新建流水线；旧版本可停用或归档。",
+        )
 
     # ── 改名重名校验（与创建同一口径）──
     if "name" in update_data:
@@ -901,7 +894,7 @@ class PublishBody(BaseModel):
 def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
                      db: Session = Depends(get_db),
                      current_user=Depends(get_current_user)):
-    """发布 Pipeline：封版编排与字段契约，此后仅名称/描述可修改。
+    """发布 Pipeline：永久封版身份、编排与字段契约，之后不可修改或撤回。
 
     发布是所有引擎共同的生命周期唯一入口（画布与 n8n 一致）。n8n 引擎
     发布时附加：校验触发器 → 激活 n8n workflow → 固化 webhook/期望列。
@@ -991,6 +984,13 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
             # revision 来自激活后再次读取的远端真身，和本地状态/版本快照同事务固化。
             steward_service.ensure_shadow_pipeline(
                 db, rec, published_revision=revision)
+            release = ((pl.definition or {}).get("n8n") or {})
+            contract = release.get("managed_contract") or {}
+            frozen_revision = release.get("revision") or {}
+            if not contract.get("output_node_name") or not contract.get("webhook_path"):
+                raise HTTPException(500, "发布事务未形成完整 n8n 输入/输出契约，发布已中止。")
+            if not all(frozen_revision.get(field) for field in ("versionId", "activeVersionId", "updatedAt")):
+                raise HTTPException(500, "发布事务未形成完整 n8n revision 快照，发布已中止。")
 
         # 契约主键 vs 湖中已固化主键：不一致 → 警告随响应返回（不再拦截）
         warnings: list[str] = []
@@ -1048,67 +1048,17 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
 
 @router.post("/{pipeline_id}/unpublish")
 def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
-    """撤回发布（封版的受控逃生通道）：仅允许未被任何调度任务引用的流水线。
-
-    撤回后回到草稿态并自动停用，维持「只有已发布才能启用」的不变量。
-    n8n 引擎同走此口（同时停用 n8n workflow）——撤回后即可回数据管家继续编排。
-    """
-    from app.data_channel.pipeline_tasks.models import PipelineTask
-
+    """兼容旧客户端的明确拒绝端点：发布是不可逆版本边界。"""
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
     if (pl.status or "") != "published":
-        raise HTTPException(400, "流水线未发布，无需撤回。")
-    refs = db.query(PipelineTask).filter(PipelineTask.pipeline_id == pipeline_id).all()
-    if refs:
-        names = "、".join(t.name for t in refs[:3])
-        raise HTTPException(
-            400,
-            f"流水线已被 {len(refs)} 个调度任务引用（{names}{'…' if len(refs) > 3 else ''}），不能撤回发布。"
-            f"请先在数据任务池删除或改绑这些任务。")
-    _reject_if_sync_chain_refs(db, pipeline_id, action="撤回发布")
-
-    # n8n：必须先确认远端已停用；失败时不允许提交本地 draft。
-    n8n_unpublish = None
-    if _is_n8n_pipeline(pl):
-        from app.data_channel.steward import service as steward_service
-
-        rec = steward_service.record_for_pipeline(db, pl)
-        if rec is None:
-            raise HTTPException(
-                409, "n8n 流水线缺少数据管家治理记录，无法确认并停用远端工作流。"
-            )
-        try:
-            client = steward_service.get_n8n_client(db)
-        except steward_service.StewardError as e:
-            raise HTTPException(400, f"撤回发布需要停用 n8n 工作流：{e}")
-        try:
-            was_active = steward_service.deactivate_on_unpublish(rec, client)
-        except steward_service.StewardError as e:
-            raise HTTPException(400, str(e))
-        n8n_unpublish = (rec, client, was_active)
-
-    pl.status = "draft"
-    pl.enabled = False
-    pl.updated_at = datetime.now(timezone.utc)
-    try:
-        db.commit()
-    except Exception as exc:  # noqa: BLE001 — 恢复发布前的远端激活状态
-        db.rollback()
-        if n8n_unpublish is not None:
-            rec, client, was_active = n8n_unpublish
-            try:
-                steward_service.restore_remote_active(
-                    pl, rec, client, enabled=was_active, context="撤回事务补偿")
-            except steward_service.StewardError as compensation_exc:
-                raise HTTPException(
-                    500,
-                    f"平台撤回事务失败，且恢复 n8n 原状态失败：{compensation_exc}。请立即人工核对。",
-                ) from exc
-        raise HTTPException(500, f"平台撤回事务失败，远端状态已恢复：{exc}") from exc
-    db.refresh(pl)
-    return _format_pipeline(pl)
+        raise HTTPException(409, "流水线尚未发布，不存在撤回操作。")
+    raise HTTPException(
+        409,
+        "已发布流水线是不可变版本，不支持撤回或重新编辑。"
+        "如需变更，请新建流水线；旧版本可先停用，确认替代版本稳定后归档。",
+    )
 
 
 # ── Versions ──────────────────────────────────────────────────────

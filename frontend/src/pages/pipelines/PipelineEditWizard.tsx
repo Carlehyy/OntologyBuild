@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   X, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronLeft, ChevronRight,
-  KeyRound, Eye, Save, Rocket, Info, Lock, Sparkles, Undo2, Table2, GitBranch,
+  KeyRound, Eye, Save, Rocket, Info, Lock, Sparkles, Table2, GitBranch, ShieldCheck,
 } from 'lucide-react'
 import pipelinesApi, { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult, DryRunRowsPage, ColumnDefinition, ValidateDefinitionsResult } from '@/api/v2/pipelines'
@@ -61,8 +61,6 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [publishEnable, setPublishEnable] = useState(true)
-  const [confirmUnpublish, setConfirmUnpublish] = useState(false)
-  const [unpublishing, setUnpublishing] = useState(false)
   const [actionError, setActionError] = useState('')
 
   // ── 初始化字段契约：按原始列合并已有定义（旧数据缺 source_key 时回退 field_key）──
@@ -174,7 +172,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
     }
   }
 
-  // ── 阶段 4: 保存 / 发布 / 撤回发布 ──
+  // ── 阶段 4: 保存 / 发布（发布后永久只读） ──
   const handleSave = async () => {
     setSaving(true)
     setActionError('')
@@ -182,7 +180,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
       await pipelinesApi.update(pipeline.id, {
         name,
         description,
-        column_definitions: (isPublished || multiOutput) ? undefined : columnDefs,
+        column_definitions: multiOutput ? undefined : columnDefs,
       })
       onSaved()
       onClose()
@@ -214,22 +212,6 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
     }
   }
 
-  const handleUnpublish = async () => {
-    setUnpublishing(true)
-    setActionError('')
-    try {
-      await pipelinesApi.unpublish(pipeline.id)
-      onSaved()
-      onClose()
-    } catch (e: unknown) {
-      const err = e as { detail?: string; message?: string }
-      setActionError(err?.detail || err?.message || '撤回发布失败')
-      setConfirmUnpublish(false)
-    } finally {
-      setUnpublishing(false)
-    }
-  }
-
   // ── 辅助 ──
   const pkFields = columnDefs.filter(d => d.is_primary_key)
   const hasErrors = validateResult && !validateResult.valid
@@ -237,7 +219,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const contractEditable = !isPublished && !multiOutput
 
   // 名称/描述到第 4 步保存才落库——中途关窗要提醒，避免静默丢改动
-  const infoDirty = name !== (pipeline.name || '') || description !== (pipeline.description || '')
+  const infoDirty = !isPublished && (name !== (pipeline.name || '') || description !== (pipeline.description || ''))
   const handleClose = () => {
     if (infoDirty && !window.confirm('流水线名称/描述有未保存的修改，关闭后将丢失。确认关闭？')) return
     onClose()
@@ -255,18 +237,18 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   ]
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6" onClick={handleClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px] sm:p-6" onClick={handleClose}>
       <div
-        className="bg-white rounded-xl shadow-xl w-[900px] max-w-full max-h-[90vh] flex flex-col"
+        className="flex max-h-[92vh] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
         onClick={e => e.stopPropagation()}
       >
         {/* 头部 */}
-        <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-gray-100 shrink-0">
-          <div>
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-              编辑流水线「{pipeline.name}」
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+          <div className="min-w-0">
+            <h3 className="flex items-center gap-2.5 truncate text-base font-semibold tracking-tight text-slate-950">
+              {isPublished ? '查看已发布流水线' : '配置流水线'}「{pipeline.name}」
               {isN8n ? (
-                <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[11px] font-normal text-violet-600">
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700">
                   <Sparkles size={10} /> n8n流水线
                 </span>
               ) : (
@@ -275,37 +257,37 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 </span>
               )}
             </h3>
+            <p className="mt-1 text-xs text-slate-500">{isPublished ? '只读核对发布版本与字段契约' : '按顺序完成执行验证、字段契约和发布确认'}</p>
           </div>
-          <button onClick={handleClose} className="text-gray-400 hover:text-black shrink-0">
-            <X size={16} />
+          <button onClick={handleClose} aria-label="关闭" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-900">
+            <X size={18} />
           </button>
         </div>
 
         {/* 步骤指示器 */}
-        <div className="flex items-center justify-center px-6 py-3 gap-1 shrink-0 border-b border-gray-50">
-          {steps.map((s, i) => (
-            <div key={s.num} className="flex items-center gap-1">
-              {i > 0 && <div className={`h-px w-6 ${step > i + 1 ? 'bg-[var(--color-nav-bg)]' : 'bg-gray-200'}`} />}
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-slate-100 bg-slate-50/70 px-6 py-3 sm:grid-cols-4">
+          {steps.map(s => (
+            <div key={s.num} className="flex min-w-0 items-center gap-2">
               <button
                 disabled={s.num > step || (s.num === 3 && !cachedColumns.length)}
                 onClick={() => setStep(s.num as 1 | 2 | 3 | 4)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                className={`flex w-full min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
                   step === s.num
-                    ? 'bg-[var(--color-nav-bg)] text-white'
+                    ? 'border-teal-700 bg-teal-700 text-white shadow-sm'
                     : step > s.num
-                      ? 'bg-emerald-50 text-emerald-700 cursor-pointer'
-                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                      ? 'cursor-pointer border-teal-200 bg-white text-teal-800 hover:border-teal-300'
+                      : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
                 }`}
               >
-                {step > s.num ? <CheckCircle2 size={12} /> : <span className="w-4 h-4 rounded-full border border-current flex items-center justify-center text-[10px]">{s.num}</span>}
-                {s.label}
+                {step > s.num ? <CheckCircle2 size={14} className="shrink-0" /> : <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current text-[10px]">{s.num}</span>}
+                <span className="truncate">{s.label}</span>
               </button>
             </div>
           ))}
         </div>
 
         {/* 内容区 */}
-        <div className="flex-1 overflow-auto p-6">
+        <div className="scrollbar-thin flex-1 overflow-auto bg-white p-6 sm:p-7">
           {/* ──────── 阶段 1: 流水线信息 ──────── */}
           {step === 1 && (
             <div className="space-y-4">
@@ -313,8 +295,9 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 <label className="block text-sm font-medium text-gray-700 mb-1">流水线名称</label>
                 <input
                   value={name}
+                  disabled={isPublished}
                   onChange={e => setName(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   placeholder="输入流水线名称"
                 />
               </div>
@@ -322,12 +305,18 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 <label className="block text-sm font-medium text-gray-700 mb-1">描述</label>
                 <textarea
                   value={description}
+                  disabled={isPublished}
                   onChange={e => setDescription(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg text-sm h-24 resize-none"
+                  className="h-24 w-full resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   placeholder="输入流水线描述（可选）"
                 />
               </div>
-              <p className="text-xs text-gray-400">名称和描述在任何状态下都可以修改，不影响契约、编排与已产出资产的归属（在第 4 步确认后保存）。</p>
+              <div className={`flex items-start gap-2 rounded-xl border px-3.5 py-3 text-xs leading-5 ${isPublished ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                {isPublished ? <ShieldCheck size={14} className="mt-0.5 shrink-0" /> : <Info size={14} className="mt-0.5 shrink-0" />}
+                <span>{isPublished
+                  ? '该版本已经发布并永久封版，名称、描述、编排与字段契约均为只读。需要调整时请新建流水线。'
+                  : '名称与描述会在最后一步随草稿一起保存；发布后这些信息也会成为版本身份的一部分。'}</span>
+              </div>
             </div>
           )}
 
@@ -596,11 +585,11 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               <div className="grid grid-cols-2 gap-3">
                 <div className="border rounded-lg p-3">
                   <p className="text-xs text-gray-400 mb-1">流水线名称</p>
-                  <p className="text-sm font-medium text-gray-800">{name || '—'}</p>
+                  <p className="text-sm font-medium text-gray-800">{name || '未设置'}</p>
                 </div>
                 <div className="border rounded-lg p-3">
                   <p className="text-xs text-gray-400 mb-1">描述</p>
-                  <p className="text-sm text-gray-800">{description || '—'}</p>
+                  <p className="text-sm text-gray-800">{description || '未填写'}</p>
                 </div>
                 <div className="border rounded-lg p-3">
                   <p className="text-xs text-gray-400 mb-1">列数</p>
@@ -642,7 +631,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                               <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[11px]">{d.field_type}</span>
                             </td>
                             <td className="px-3 py-1 text-center">
-                              {d.is_primary_key ? <KeyRound size={12} className="text-amber-500 inline" /> : '—'}
+                              {d.is_primary_key ? <KeyRound size={12} className="text-amber-500 inline" /> : '-'}
                             </td>
                             <td className="px-3 py-1 text-center">
                               {d.nullable ? '是' : <span className="text-red-500 font-medium">否</span>}
@@ -677,32 +666,24 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {!isPublished && isN8n && (
-                <div className="bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 text-xs text-violet-700 flex items-start gap-1.5">
+                <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-3 text-xs leading-5 text-teal-800">
                   <Sparkles size={13} className="mt-0.5 shrink-0" />
                   <span>
-                    发布 n8n 流水线会激活 n8n 侧工作流并封版字段契约；发布后编排只读，
-                    如需修改可随时撤回发布，再回数据管家继续编排。
+                    发布会锁定当前 n8n 版本、唯一输入输出节点与字段契约。发布后不可撤回或编辑；
+                    如需变更，请新建流水线并在验证通过后替换旧版本。
                   </span>
                 </div>
               )}
 
               {isPublished && (
-                <div className="flex items-start justify-between gap-3 border border-gray-100 rounded-lg px-3 py-2.5 bg-gray-50/60">
-                  <p className="text-xs text-gray-500 leading-relaxed">
-                    已发布（封版）：契约与编排不可修改。仅当没有任务引用时可撤回发布回到草稿态（会自动停用{isN8n ? '，并停用 n8n 侧工作流' : ''}）。
-                  </p>
-                  <button
-                    onClick={() => confirmUnpublish ? handleUnpublish() : setConfirmUnpublish(true)}
-                    disabled={unpublishing}
-                    className={`shrink-0 flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border transition-colors ${
-                      confirmUnpublish
-                        ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100'
-                        : 'border-gray-200 text-gray-500 hover:text-red-600 hover:border-red-200'
-                    }`}
-                  >
-                    {unpublishing ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />}
-                    {confirmUnpublish ? '确认撤回发布？' : '撤回发布'}
-                  </button>
+                <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-3">
+                  <ShieldCheck size={15} className="mt-0.5 shrink-0 text-teal-700" />
+                  <div>
+                    <p className="text-xs font-semibold text-teal-900">已发布，版本已锁定</p>
+                    <p className="mt-1 text-xs leading-5 text-teal-700">
+                      该版本只能执行、停用或归档，不能撤回到草稿。需要变更时请创建新的流水线版本。
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -717,7 +698,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         </div>
 
         {/* 底部按钮 */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 shrink-0">
+        <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-6 py-4">
           <div>
             {step > 1 && (
               <button
@@ -785,12 +766,10 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
             )}
             {step === 4 && isPublished && (
               <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg font-medium bg-[var(--color-nav-bg)] text-white hover:opacity-90 disabled:opacity-60"
+                onClick={onClose}
+                className="flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-800 active:translate-y-px"
               >
-                {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                保存
+                完成
               </button>
             )}
           </div>

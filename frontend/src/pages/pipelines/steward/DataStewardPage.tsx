@@ -4,8 +4,7 @@
  * 对 n8n 的写权限只有两件事：新建流水线与编排未发布未启用的流水线；
  * 另可在当前会话隔离空间内创建、编辑和删除文件。
  * 左侧：与数据管家对话（create_pipeline 新建骨架、update_workflow 补全编排）
- * 右侧：受管流水线只读看板（状态与节点链）；试跑/发布/归档都在流水线列表
- *       与编辑向导完成，不在管家里。
+ * 右侧：可编排草稿看板（状态与节点链）；发布后永久封版，只能停用或归档。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -34,8 +33,8 @@ import dagre from '@dagrejs/dagre'
 // ---------- 状态样式（发布状态 = 影子流水线，与流水线列表同一口径） ----------
 
 const PUBLISH_META: Record<string, { label: string; cls: string }> = {
-  draft:     { label: '未发布', cls: 'bg-gray-100 text-gray-600 border-gray-200' },
-  published: { label: '已发布', cls: 'bg-green-50 text-green-600 border-green-200' },
+  draft:     { label: '草稿', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+  published: { label: '已发布', cls: 'bg-teal-50 text-teal-700 border-teal-200' },
 }
 
 const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
@@ -119,30 +118,30 @@ function Md({ text }: { text: string }) {
 function StepTrace({ steps, running }: { steps: StewardStep[]; running?: boolean }) {
   if (steps.length === 0 && !running) return null
   return (
-    <div className="mb-3 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 space-y-2">
+    <div className="mb-3 space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
       {steps.map((s, i) => {
         const meta = TOOL_META[s.tool] || { label: s.tool, icon: Zap }
         const Icon = meta.icon
         return (
           <div key={i} className="flex items-start gap-2.5">
             <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
-              s.error ? 'bg-red-50 text-red-500' : 'bg-violet-50 text-violet-600'}`}>
+              s.error ? 'bg-red-50 text-red-500' : 'bg-teal-100 text-teal-700'}`}>
               <Icon size={11} />
             </div>
             <div className="min-w-0 text-xs leading-5">
               <span className={`font-medium ${s.error ? 'text-red-600' : 'text-gray-800'}`}>{meta.label}</span>
-              <span className="text-gray-400"> · {s.summary}</span>
+              <span className="text-slate-400"> · {s.summary}</span>
             </div>
           </div>
         )
       })}
       {running && (
         <div className="flex items-center gap-2.5">
-          <div className="w-5 h-5 rounded-md bg-violet-50 flex items-center justify-center shrink-0">
-            <Loader2 size={11} className="animate-spin text-violet-600" />
+          <div className="w-5 h-5 rounded-md bg-teal-50 flex items-center justify-center shrink-0">
+            <Loader2 size={11} className="animate-spin text-teal-600" />
           </div>
           <span className="text-xs text-gray-400">
-            {steps.length === 0 ? '正在了解流水线现状，规划操作…' : '正在综合工具结果继续…'}
+            {steps.length === 0 ? '正在识别你的意图并选择最合适的处理路径…' : '正在综合工具结果继续…'}
           </span>
         </div>
       )}
@@ -353,7 +352,7 @@ export default function DataStewardPage() {
   const n8nReady = !!status && status.n8n.configured && status.n8n.enabled && status.n8n.reachable !== false
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-slate-50/70">
       {/* 前置条件提示 */}
       {status && !n8nReady && (
         <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-800 shrink-0">
@@ -380,23 +379,27 @@ export default function DataStewardPage() {
         </div>
       )}
 
-      {/* 主体：对话 + 审批面板（窄屏纵向堆叠，避免挤压对话区） */}
-      <div ref={chatContainerRef} className="flex flex-1 min-h-0 max-xl:flex-col m-1">
+      {/* 主体：对话 + 草稿面板（窄屏纵向堆叠） */}
+      <div ref={chatContainerRef} className="flex min-h-0 flex-1 gap-2 p-2 max-xl:flex-col">
         {/* 对话区 */}
         <section style={isWide ? { width: `${chatWidthPct}%` } : undefined}
-          className="flex h-full min-w-0 min-h-0 flex-col bg-white border overflow-hidden max-xl:w-full max-xl:min-h-[55%]">
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] max-xl:min-h-[55%] max-xl:w-full">
           {/* 抬头：标题 + 操作按钮 */}
-          <div className="flex items-center justify-between border-b px-4 py-2.5 shrink-0">
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-800">
-              <Sparkles size={15} className="text-violet-600" /> 数据管家
-            </h2>
+          <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3.5">
+            <div>
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-700 text-white"><Sparkles size={14} /></span>
+                数据管家
+              </h2>
+              <p className="mt-1 pl-9 text-[11px] text-slate-400">先识别意图，再按需读取、诊断或编排</p>
+            </div>
             <div className="flex items-center gap-2 shrink-0">
               <button onClick={openFiles}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50">
                 <FolderOpen size={13} /> 会话文件
               </button>
               <button onClick={openBrowser}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-violet-200 rounded-lg text-xs text-violet-700 hover:bg-violet-50">
+                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-teal-200 rounded-lg text-xs text-teal-700 hover:bg-teal-50">
                 <Monitor size={13} /> 实时浏览器
               </button>
               <button onClick={() => navigate('/data/pipelines')}
@@ -408,26 +411,26 @@ export default function DataStewardPage() {
                 <History size={13} /> 会话
               </button>
               <button onClick={resetChat}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-violet-600 text-white text-xs font-medium rounded-lg hover:bg-violet-700">
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-teal-600 text-white text-xs font-medium rounded-lg hover:bg-teal-700">
                 <Plus size={13} /> 新会话
               </button>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto px-5 py-4">
+          <div className="scrollbar-none flex-1 overflow-y-auto px-5 py-5">
             {messages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center px-6">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-violet-100 bg-violet-50 text-violet-600">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-teal-200 bg-teal-50 text-teal-700 shadow-sm">
                   <Bot size={26} />
                 </div>
                 <h2 className="text-base font-semibold text-gray-900">让数据管家替你编排流水线</h2>
                 <p className="mt-1.5 max-w-md text-sm leading-relaxed text-gray-500">
-                  描述数据从哪来、怎么加工、多久跑一次——数据管家会在 n8n 里搭好工作流并录入流水线列表。
+                  描述数据从哪来、怎么加工、多久跑一次，数据管家会在 n8n 里搭好工作流并录入流水线列表。
                   编排满意后，到流水线列表的编辑向导中发布并启用。
                 </p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
                   {SUGGESTED.map(q => (
                     <button key={q} onClick={() => send(q)} disabled={busy}
-                      className="rounded-full border bg-white px-3 py-1.5 text-xs text-gray-600 transition-all hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:opacity-50">
+                      className="rounded-full border bg-white px-3 py-1.5 text-xs text-gray-600 transition-all hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50">
                       {q}
                     </button>
                   ))}
@@ -437,16 +440,16 @@ export default function DataStewardPage() {
               <div className="space-y-5">
                 {messages.map(msg => msg.role === 'user' ? (
                   <div key={msg.id} className="flex justify-end gap-3">
-                    <div className="max-w-[85%] rounded-lg rounded-br-sm bg-violet-600 px-3.5 py-2.5 text-white shadow-sm">
+                    <div className="max-w-[82%] rounded-2xl rounded-br-md bg-teal-700 px-4 py-3 text-white shadow-sm">
                       <p className="whitespace-pre-line text-sm leading-relaxed">{msg.content}</p>
                     </div>
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-violet-200 bg-violet-50 text-violet-700">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700">
                       <User size={14} />
                     </div>
                   </div>
                 ) : (
                   <div key={msg.id} className="flex gap-3">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-violet-600 text-white">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
                       <Bot size={14} />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -468,8 +471,8 @@ export default function DataStewardPage() {
             )}
           </div>
 
-          <div className="border-t bg-gray-50/60 px-4 pb-3 pt-3">
-            <div className="flex items-center gap-2 rounded-lg border bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+          <div className="border-t border-slate-100 bg-white px-4 py-3.5">
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white py-2 pl-3.5 pr-2 shadow-sm transition focus-within:border-teal-500 focus-within:ring-4 focus-within:ring-teal-500/10">
               <input
                 placeholder={n8nReady ? '描述你要的数据流水线，或让管家检查/修改现有流水线…' : '请先完成 n8n 配置'}
                 value={input}
@@ -479,22 +482,20 @@ export default function DataStewardPage() {
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400 disabled:opacity-50"
               />
               <button onClick={() => send()} disabled={!input.trim() || busy}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-600 text-white transition-all hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-25">
+                aria-label="发送消息"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition hover:bg-teal-800 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-25">
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-gray-400">
-              管家只负责新建与编排未发布未启用的流水线；试跑、发布、归档都在流水线列表与编辑向导完成
-            </p>
           </div>
         </section>
 
         {/* 拖拽分隔条（仅宽屏，拖动调整对话区与受管流水线面板宽度） */}
         <div
           onMouseDown={startResize}
-          className="hidden xl:flex shrink-0 cursor-col-resize items-center justify-center group"
+          className="hidden shrink-0 cursor-col-resize items-center justify-center xl:flex"
         >
-          <div className="h-16 w-1 rounded-full bg-gray-200 group-hover:h-24 group-hover:bg-violet-400 transition-all" />
+          <div className="h-16 w-1 rounded-full bg-slate-200 transition-all hover:h-24 hover:bg-teal-400" />
         </div>
 
         {/* 受管流水线面板 */}
@@ -536,7 +537,7 @@ export default function DataStewardPage() {
               <button onClick={() => setShowHistory(false)} className="text-gray-400 hover:text-black"><X size={16} /></button>
             </div>
             <button onClick={resetChat}
-              className="w-full rounded-lg border border-violet-600 bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700">
+              className="w-full rounded-lg border border-teal-600 bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700">
               + 创建新会话
             </button>
             <div className="mt-3 flex-1 overflow-auto space-y-1.5">
@@ -546,7 +547,7 @@ export default function DataStewardPage() {
               {conversations.map(c => (
                 <div key={c.id} className="group flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-gray-200 hover:bg-gray-50">
                   <button onClick={() => loadConversation(c.id)}
-                    className={`min-w-0 flex-1 text-left ${c.id === conversationId ? 'text-violet-700' : 'text-gray-800'}`}>
+                    className={`min-w-0 flex-1 text-left ${c.id === conversationId ? 'text-teal-700' : 'text-gray-800'}`}>
                     <p className="truncate text-sm font-medium">{c.title}</p>
                     <p className="mt-0.5 text-[11px] text-gray-400">{new Date(c.updatedAt).toLocaleString()}</p>
                   </button>
@@ -623,7 +624,7 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
       <div className="flex max-h-[78vh] w-[760px] max-w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b px-5 py-3.5">
           <div>
-            <h3 className="flex items-center gap-2 text-sm font-semibold"><FolderOpen size={16} className="text-violet-600" />会话隔离空间</h3>
+            <h3 className="flex items-center gap-2 text-sm font-semibold"><FolderOpen size={16} className="text-teal-600" />会话隔离空间</h3>
             <p className="mt-0.5 text-[11px] text-gray-400">上传件和网页下载件仅在此会话可见；打包不包含浏览器登录态</p>
           </div>
           <button aria-label="关闭会话文件" onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={17} /></button>
@@ -633,7 +634,7 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
             accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.pdf,.md,.txt,.csv,.json,.xml"
             onChange={e => void uploadFiles(e.target.files)} />
           <button onClick={() => inputRef.current?.click()} disabled={uploading}
-            className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+            className="flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-2 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-50">
             {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} 上传文件
           </button>
           <button onClick={() => void downloadStewardFile(conversationId, undefined, `data-steward-${conversationId.slice(0, 8)}.zip`)}
@@ -650,7 +651,7 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
             <div className="space-y-2">
               {files.map(file => (
                 <div key={file.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-600"><FileText size={16} /></div>
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600"><FileText size={16} /></div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-gray-800">{file.filename}</p>
                     <p className="mt-0.5 truncate text-[11px] text-gray-400">
@@ -660,7 +661,7 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
                     </p>
                     {file.extractError && <p className="mt-0.5 truncate text-[11px] text-amber-600">{file.extractError}</p>}
                   </div>
-                  <button title="下载" onClick={() => void downloadStewardFile(conversationId, file.id, file.filename)} className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-violet-600"><Download size={14} /></button>
+                  <button title="下载" onClick={() => void downloadStewardFile(conversationId, file.id, file.filename)} className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-teal-600"><Download size={14} /></button>
                   <button title="删除" onClick={() => void remove(file.id)} className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>
                 </div>
               ))}
@@ -860,20 +861,20 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-3" onClick={onClose}>
       <div className="flex h-[88vh] w-[min(1500px,96vw)] flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-2">
-          <Monitor size={15} className="text-violet-600" />
+          <Monitor size={15} className="text-teal-600" />
           <div className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-300'}`} />
           <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && void open()}
-            className="h-8 min-w-0 flex-1 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-violet-400" />
+            className="h-8 min-w-0 flex-1 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-teal-400" />
           <button onClick={() => void open()} disabled={busy}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs text-white disabled:opacity-50">
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs text-white disabled:opacity-50">
             {busy ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />} 打开
           </button>
           <button onClick={() => { setShowNetwork(v => !v); if (!showNetwork) void loadCaptures() }}
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-violet-300 bg-violet-50 text-violet-700' : 'text-gray-600'}`}>
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600'}`}>
             <Activity size={12} /> 接口请求
           </button>
           <button onClick={() => setShowSources(v => !v)}
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showSources ? 'border-violet-300 bg-violet-50 text-violet-700' : 'text-gray-600'}`}>
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showSources ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600'}`}>
             <Settings size={12} /> 浏览器来源
           </button>
           <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-gray-400 hover:text-gray-700"><X size={17} /></button>
@@ -884,13 +885,13 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
             <div className="border-r p-4">
               <div className="mb-3 flex items-center justify-between">
                 <div><p className="text-xs font-semibold text-gray-800">当前会话的浏览器</p><p className="mt-0.5 text-[11px] text-gray-400">每个会话独立绑定，切换会关闭原浏览器上下文</p></div>
-                {sourceBusy && <Loader2 size={13} className="animate-spin text-violet-600" />}
+                {sourceBusy && <Loader2 size={13} className="animate-spin text-teal-600" />}
               </div>
               <div className="space-y-2">
                 {sources.map(source => (
-                  <div key={source.id} className={`rounded-xl border bg-white p-3 ${selectedSource === source.id ? 'border-violet-300 ring-1 ring-violet-100' : 'border-gray-200'}`}>
+                  <div key={source.id} className={`rounded-xl border bg-white p-3 ${selectedSource === source.id ? 'border-teal-300 ring-1 ring-teal-100' : 'border-gray-200'}`}>
                     <div className="flex items-start gap-2">
-                      <button onClick={() => void bindSource(source.id)} className="mt-0.5 text-violet-600" aria-label={`选择${source.name}`}>
+                      <button onClick={() => void bindSource(source.id)} className="mt-0.5 text-teal-600" aria-label={`选择${source.name}`}>
                         {selectedSource === source.id ? <CheckCircle2 size={16} /> : <span className="block h-4 w-4 rounded-full border border-gray-300" />}
                       </button>
                       <div className="min-w-0 flex-1">
@@ -899,7 +900,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
                         </div>
                         <p className="mt-0.5 text-[10px] text-gray-400">{source.sourceType === 'managed' ? '平台 Docker 浏览器' : source.sourceType === 'companion' ? (source.online ? '我的电脑 · 在线' : '我的电脑 · 离线') : '管理员远程 CDP'}</p>
                       </div>
-                      <button onClick={() => void testSource(source.id)} className="text-[10px] text-violet-600">测试</button>
+                      <button onClick={() => void testSource(source.id)} className="text-[10px] text-teal-600">测试</button>
                       {source.id !== 'managed' && <button onClick={() => void removeSource(source.id)} aria-label="删除来源" className="text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>}
                     </div>
                   </div>
@@ -910,27 +911,27 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
               <p className="text-xs font-semibold text-gray-800">添加兜底浏览器</p>
               <p className="mt-1 text-[11px] leading-5 text-gray-500">云端 IP 被 WAF 拒绝时，使用“我的电脑”可以复用你本机网络；平台不会公开你电脑的调试端口。</p>
               <div className="mt-3 flex gap-2">
-                <button onClick={() => setSourceType('companion')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'companion' ? 'border-violet-300 bg-violet-50 text-violet-700' : 'bg-white text-gray-500'}`}>我的电脑</button>
-                <button onClick={() => setSourceType('remote_cdp')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'remote_cdp' ? 'border-violet-300 bg-violet-50 text-violet-700' : 'bg-white text-gray-500'}`}>远程 CDP（管理员）</button>
+                <button onClick={() => setSourceType('companion')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'companion' ? 'border-teal-300 bg-teal-50 text-teal-700' : 'bg-white text-gray-500'}`}>我的电脑</button>
+                <button onClick={() => setSourceType('remote_cdp')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'remote_cdp' ? 'border-teal-300 bg-teal-50 text-teal-700' : 'bg-white text-gray-500'}`}>远程 CDP（管理员）</button>
               </div>
               <div className="mt-3 grid gap-2">
-                <input value={sourceName} onChange={event => setSourceName(event.target.value)} placeholder="来源名称" className="h-8 rounded-lg border bg-white px-3 text-xs outline-none focus:border-violet-400" />
+                <input value={sourceName} onChange={event => setSourceName(event.target.value)} placeholder="来源名称" className="h-8 rounded-lg border bg-white px-3 text-xs outline-none focus:border-teal-400" />
                 {sourceType === 'remote_cdp' && <>
-                  <input value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://browser.example.com/cdp" className="h-8 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-violet-400" />
-                  <textarea value={headerJson} onChange={event => setHeaderJson(event.target.value)} placeholder='{"Authorization":"Bearer …"}' className="h-16 resize-none rounded-lg border bg-white p-2 font-mono text-[11px] outline-none focus:border-violet-400" />
+                  <input value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://browser.example.com/cdp" className="h-8 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-teal-400" />
+                  <textarea value={headerJson} onChange={event => setHeaderJson(event.target.value)} placeholder='{"Authorization":"Bearer …"}' className="h-16 resize-none rounded-lg border bg-white p-2 font-mono text-[11px] outline-none focus:border-teal-400" />
                 </>}
-                <button onClick={() => void createSource()} disabled={sourceBusy || (sourceType === 'remote_cdp' && !endpointUrl.trim())} className="h-8 rounded-lg bg-violet-600 px-3 text-xs font-medium text-white disabled:opacity-40">{sourceType === 'companion' ? '生成一次性配对信息' : '保存远程浏览器'}</button>
+                <button onClick={() => void createSource()} disabled={sourceBusy || (sourceType === 'remote_cdp' && !endpointUrl.trim())} className="h-8 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white disabled:opacity-40">{sourceType === 'companion' ? '生成一次性配对信息' : '保存远程浏览器'}</button>
               </div>
               {sourceType === 'companion' && window.location.protocol !== 'https:' && (
                 <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700">当前平台不是 HTTPS。为防止配对令牌和浏览器流量泄露，生产环境助手会拒绝连接；请先为平台配置 HTTPS。</div>
               )}
               {pairing && (
-                <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
-                  <p className="text-[11px] font-medium text-violet-800">配对令牌只显示这一次</p>
-                  <ol className="mt-1 list-decimal space-y-1 pl-4 text-[10px] leading-5 text-violet-700"><li>安装 Node.js 22+，下载助手脚本</li><li>在脚本目录运行下面命令，Chrome/Edge 会使用独立资料目录启动</li></ol>
-                  <div className="mt-2 flex gap-2"><button onClick={() => void downloadBrowserCompanion()} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-violet-700 shadow-sm">下载助手</button>
-                    <button onClick={() => void navigator.clipboard.writeText(companionCommand)} className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-violet-700 shadow-sm"><Copy size={10} />复制命令</button></div>
-                  <code className="mt-2 block max-h-16 overflow-auto break-all rounded-lg bg-white/80 p-2 text-[9px] leading-4 text-violet-800">{companionCommand}</code>
+                <div className="mt-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
+                  <p className="text-[11px] font-medium text-teal-800">配对令牌只显示这一次</p>
+                  <ol className="mt-1 list-decimal space-y-1 pl-4 text-[10px] leading-5 text-teal-700"><li>安装 Node.js 22+，下载助手脚本</li><li>在脚本目录运行下面命令，Chrome/Edge 会使用独立资料目录启动</li></ol>
+                  <div className="mt-2 flex gap-2"><button onClick={() => void downloadBrowserCompanion()} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm">下载助手</button>
+                    <button onClick={() => void navigator.clipboard.writeText(companionCommand)} className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm"><Copy size={10} />复制命令</button></div>
+                  <code className="mt-2 block max-h-16 overflow-auto break-all rounded-lg bg-white/80 p-2 text-[9px] leading-4 text-teal-800">{companionCommand}</code>
                 </div>
               )}
             </div>
@@ -940,7 +941,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-2">
             {frame ? (
               <img ref={imageRef} src={frame} draggable={false} tabIndex={0} alt="会话浏览器实时画面"
-                className="max-h-full max-w-full select-none outline-none ring-violet-400 focus:ring-2"
+                className="max-h-full max-w-full select-none outline-none ring-teal-400 focus:ring-2"
                 onMouseDown={e => { e.currentTarget.focus(); send({ type: 'mouse', action: 'down', ...point(e), button: e.button === 2 ? 'right' : 'left' }) }}
                 onMouseUp={e => send({ type: 'mouse', action: 'up', ...point(e), button: e.button === 2 ? 'right' : 'left' })}
                 onDoubleClick={e => send({ type: 'mouse', action: 'click', ...point(e), clickCount: 2 })}
@@ -980,7 +981,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
                     </div>
                     <p className="mt-1.5 break-all font-mono text-[10px] leading-4 text-gray-600">{item.url}</p>
                     {item.isFile && <button onClick={async () => { await stewardApi.downloadCapture(conversationId, item.id); await loadCaptures() }}
-                      className="mt-2 flex items-center gap-1 text-[11px] font-medium text-violet-600"><Download size={11} />保存到会话</button>}
+                      className="mt-2 flex items-center gap-1 text-[11px] font-medium text-teal-600"><Download size={11} />保存到会话</button>}
                   </div>
                 ))}
               </div>
@@ -1007,13 +1008,13 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
   onOpenWizard: (pipelineId: string) => void
 }) {
   return (
-    <aside className="flex xl:flex-1 xl:min-w-0 shrink-0 flex-col bg-white border overflow-hidden max-xl:max-h-[42%] max-xl:min-h-[180px]">
-      <div className="flex items-center justify-between border-b px-4 py-3">
+    <aside className="flex shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] max-xl:max-h-[42%] max-xl:min-h-[180px] xl:min-w-0 xl:flex-1">
+      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3.5">
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-800 shrink-0">
-            <Workflow size={15} className="text-violet-600" /> 流水线清单
+            <Workflow size={15} className="text-teal-700" /> 可编排草稿
           </h2>
-          <span className="truncate text-[11px] text-gray-400">当前只纳管处于未发布状态的流水线</span>
+          <span className="truncate text-[11px] text-slate-400">发布后自动退出此工作区</span>
         </div>
         <button onClick={onChanged}
           className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50 shrink-0">
@@ -1021,11 +1022,11 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+      <div className="scrollbar-none flex-1 space-y-4 overflow-y-auto px-3 py-3">
         {loading ? (
           <div className="p-6 text-center text-sm text-gray-400">加载中…</div>
         ) : records.length === 0 ? (
-          <div className="border-2 border-dashed rounded-xl p-8 text-center text-gray-400 space-y-2">
+          <div className="space-y-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-8 text-center text-slate-400">
             <Workflow size={28} className="mx-auto opacity-30" />
             <p className="text-sm">还没有可编排的 n8n 流水线</p>
             <p className="text-xs">在左侧对话里让数据管家新建一条试试</p>
@@ -1163,7 +1164,7 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
     }
   }, [expanded, detail, detailLoading, r.id])
 
-  // 记录变化后（如发布/撤回/编排更新）重置已缓存的详情
+  // 记录变化后（如发布/编排更新）重置已缓存的详情
   useEffect(() => {
     const timer = window.setTimeout(() => setDetail(null), 0)
     return () => window.clearTimeout(timer)
@@ -1173,37 +1174,39 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
   const canJump = !!(n8nWebUrl && r.n8nWorkflowId)
 
   return (
-    <div className={`rounded-lg border transition-shadow ${expanded ? 'shadow-sm border-violet-200' : 'hover:border-gray-300'}`}>
-      <button onClick={onToggle} className="flex w-full items-start gap-2 px-3 py-2.5 text-left">
-        {expanded ? <ChevronDown size={14} className="mt-0.5 shrink-0 text-gray-400" /> : <ChevronRight size={14} className="mt-0.5 shrink-0 text-gray-400" />}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
+    <div className={`overflow-hidden rounded-xl border transition ${expanded ? 'border-teal-200 bg-teal-50/20 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'}`}>
+      <div className="flex items-start gap-2 px-3.5 py-3">
+        <button onClick={onToggle} className="flex min-w-0 flex-1 items-start gap-2 text-left" aria-expanded={expanded}>
+          {expanded ? <ChevronDown size={14} className="mt-0.5 shrink-0 text-gray-400" /> : <ChevronRight size={14} className="mt-0.5 shrink-0 text-gray-400" />}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
             <p className="truncate text-sm font-medium text-gray-900">{r.name}</p>
             {published && <span className={`shrink-0 rounded border px-1.5 py-px text-[10px] ${meta.cls}`}>{meta.label}</span>}
             {r.active && <span className="shrink-0 rounded border border-green-200 bg-green-50 px-1.5 py-px text-[10px] text-green-600">n8n 已激活</span>}
-            <button onClick={(e) => { e.stopPropagation(); if (r.pipelineId) onOpenWizard(r.pipelineId) }}
-              className="flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors border-violet-200 text-violet-700 hover:bg-violet-50 shrink-0 ml-auto"
-              title="打开编辑向导">
-              <Pencil size={11} /> 编辑
-            </button>
-            {canJump && (
-              <button onClick={(e) => { e.stopPropagation(); window.open(`${n8nWebUrl}/workflow/${r.n8nWorkflowId}`, '_blank') }}
-                className="flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors border-blue-200 text-blue-600 hover:bg-blue-50 shrink-0"
-                title="跳转 n8n 工作流">
-                <ExternalLink size={11} /> 访问
-              </button>
-            )}
+            </div>
+            {r.description && <p className="mt-0.5 truncate text-[11px] text-gray-500">{r.description}</p>}
+            <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
+              {r.summary?.node_count ?? 0} 个节点
+              {r.summary?.webhook_path ? ` · webhook:/${r.summary.webhook_path}` : ' · 无 Webhook（平台不可调度）'}
+            </p>
           </div>
-          {r.description && <p className="mt-0.5 truncate text-[11px] text-gray-500">{r.description}</p>}
-          <p className="mt-0.5 truncate text-[11px] text-gray-400">
-            {r.summary?.node_count ?? 0} 个节点
-            {r.summary?.webhook_path ? ` · webhook:/${r.summary.webhook_path}` : ' · 无 Webhook（平台不可调度）'}
-          </p>
-        </div>
-      </button>
+        </button>
+        <button onClick={() => { if (r.pipelineId) onOpenWizard(r.pipelineId) }}
+          className="flex shrink-0 items-center gap-1 rounded-lg border border-teal-200 px-2 py-1 text-xs text-teal-700 transition hover:bg-teal-50"
+          title="打开编辑向导">
+          <Pencil size={11} /> 编辑
+        </button>
+        {canJump && (
+          <button onClick={() => window.open(`${n8nWebUrl}/workflow/${r.n8nWorkflowId}`, '_blank')}
+            className="flex shrink-0 items-center gap-1 rounded-lg border border-blue-200 px-2 py-1 text-xs text-blue-600 transition-colors hover:bg-blue-50"
+            title="跳转 n8n 工作流">
+            <ExternalLink size={11} /> 访问
+          </button>
+        )}
+      </div>
 
       {expanded && (
-        <div className="border-t px-3 py-2.5 space-y-2">
+        <div className="space-y-2 border-t border-slate-100 px-3 py-2.5">
           {/* 节点连线图 */}
           <div className="h-[180px] w-full rounded-lg overflow-hidden border bg-gray-50/30">
             {detailLoading ? (

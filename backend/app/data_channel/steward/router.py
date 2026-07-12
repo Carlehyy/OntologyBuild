@@ -13,7 +13,7 @@
 职权边界：数据管家对 n8n 只有两项写权限——新建流水线（bootstrap / 对话工具
 create_pipeline）与编排未发布未启用的流水线（对话工具 update_workflow）。此外，
 它可在当前会话隔离空间创建、编辑和删除文件，但不能访问任何其他文件路径。
-发布/撤回发布只存在于流水线编辑向导（pipelines 的 publish/unpublish 端点）；
+发布只存在于流水线编辑向导，且发布后永久封版；
 试跑、归档/删除都不再走 steward，归档在流水线列表（走 service.archive）。
 """
 from __future__ import annotations
@@ -616,9 +616,10 @@ def get_pipeline_record(record_id: str, db: Session = Depends(get_db),
     try:
         client = service.get_n8n_client(db)
         workflow = client.get_workflow(rec.n8n_workflow_id)
-        rec.workflow_snapshot = client.sanitize_workflow(workflow)
-        db.commit()
-        out["workflow"] = rec.workflow_snapshot
+        live_snapshot, changed = service.refresh_draft_snapshot(db, rec, workflow)
+        if changed:
+            db.commit()
+        out["workflow"] = live_snapshot
         out["active"] = bool(workflow.get("active"))
         out["summary"] = service.summarize_workflow(rec.workflow_snapshot)
     except Exception as e:  # noqa: BLE001 — n8n 不可达时返回快照视图

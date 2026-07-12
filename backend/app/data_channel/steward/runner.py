@@ -76,7 +76,7 @@ def _extract_execution_rows(execution: dict, expected_output_node: str) -> tuple
     if meta["execution_status"] != "success":
         return [], meta
     if not expected_output_node:
-        raise StewardError("发布快照缺少 n8n 输出节点名称，不能安全读取 execution。请撤回并重新发布。")
+        raise StewardError("已发布运行契约缺少 n8n 输出节点名称，平台已拒绝猜测其他节点输出。")
     if last_node != expected_output_node:
         raise StewardError(
             f"n8n 最后执行节点「{last_node or '无'}」与发布契约输出节点"
@@ -209,21 +209,24 @@ def trigger_and_collect(client: N8nClient, workflow_id: str, webhook_path: str,
     return rows, meta
 
 
-def _resolve_n8n_context(db: Session, pl) -> tuple[N8nPipeline, str, str, str]:
-    n8n_def = (pl.definition or {}).get("n8n") or {}
+def _resolve_n8n_context(db: Session, pl, client: N8nClient, *,
+                         require_active: bool = True) -> tuple[N8nPipeline, str, str, str]:
     rec = service.record_for_pipeline(db, pl)
     if rec is None:
-        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请删除后在数据管家重新新建该流水线。")
-    if (pl.status or "") != "published":
-        raise StewardError("该 n8n 流水线尚未发布，不能被调度运行。请先在流水线列表的编辑向导中完成发布。")
-    webhook_path = n8n_def.get("webhook_path") or service.find_webhook_path(rec.workflow_snapshot)
-    if not webhook_path:
-        raise StewardError("该工作流没有 Webhook 触发器，平台无法主动调度（它只能由 n8n 内部定时自跑）。")
-    managed_contract = n8n_def.get("managed_contract") or {}
-    output_node_name = str(managed_contract.get("output_node_name") or "").strip()
-    if not output_node_name:
-        raise StewardError("该流水线发布快照缺少唯一 n8n 输出节点，请撤回并重新发布后再运行。")
-    return rec, rec.n8n_workflow_id, str(webhook_path), output_node_name
+        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请停用并归档后新建流水线替代。")
+    try:
+        remote_workflow = client.get_workflow(rec.n8n_workflow_id)
+    except Exception as exc:  # noqa: BLE001
+        raise StewardError(f"读取 n8n 已发布工作流失败：{exc}") from exc
+    release = service.resolve_published_runtime_release(
+        pl, rec, remote_workflow, require_active=require_active)
+    contract = release["managed_contract"]
+    return (
+        rec,
+        rec.n8n_workflow_id,
+        str(contract["webhook_path"]),
+        str(contract["output_node_name"]),
+    )
 
 
 def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list[dict], dict]:
@@ -232,9 +235,11 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
     供列表页 dry-run 预览使用。注意：n8n 没有"只看不跑"的模式——试运行
     依然真实触发生产 workflow（这就是它的执行方式），只是产物先不入湖。
     """
-    rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(db, pl)
+    rec = service.record_for_pipeline(db, pl)
+    if rec is None:
+        raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请停用并归档后新建流水线替代。")
     client = service.get_n8n_client(db)
-    service.require_published_revision(pl, client.get_workflow(workflow_id))
+    workflow_id = rec.n8n_workflow_id
     wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
     from app.data_channel.datasets.lock import dataset_write_lock
     with dataset_write_lock(
@@ -242,11 +247,34 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
         wait_timeout=float(wait_seconds) + 10,
         stale_after=float(wait_seconds) + 60,
     ):
-        rows, exec_meta = trigger_and_collect(
-            client, workflow_id, webhook_path,
-            payload=payload or {"source": "ontoprompt-dry-run"},
-            wait_seconds=wait_seconds,
-            expected_output_node=output_node_name)
+        _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(
+            db, pl, client, require_active=False)
+        before = client.get_workflow(workflow_id)
+        was_active = bool(before.get("active"))
+        if not was_active:
+            try:
+                activated = service.set_remote_active_for_preview(
+                    rec, client, enabled=True)
+                service.resolve_published_runtime_release(
+                    pl, rec, activated, require_active=True)
+                time.sleep(1.5)
+            except Exception as exc:  # noqa: BLE001
+                raise StewardError(f"为执行预览临时启用已发布工作流失败：{exc}") from exc
+        try:
+            rows, exec_meta = trigger_and_collect(
+                client, workflow_id, webhook_path,
+                payload=payload or {"source": "ontoprompt-dry-run"},
+                wait_seconds=wait_seconds,
+                expected_output_node=output_node_name)
+        finally:
+            if not was_active:
+                try:
+                    service.set_remote_active_for_preview(
+                        rec, client, enabled=False)
+                except Exception as exc:  # noqa: BLE001
+                    raise StewardError(
+                        f"执行预览结束，但恢复已发布流水线的停用状态失败：{exc}。"
+                        "请立即在 n8n 中停用并核对平台启用开关。") from exc
     if exec_meta.get("error"):
         raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
     return rows, exec_meta
@@ -264,9 +292,11 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
     from app.data_channel.pipelines.external_runner import run_external_pipeline
 
     def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
-        _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(db_, pl_)
         client = service.get_n8n_client(db_)
-        service.require_published_revision(pl_, client.get_workflow(workflow_id))
+        rec = service.record_for_pipeline(db_, pl_)
+        if rec is None:
+            raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。")
+        workflow_id = rec.n8n_workflow_id
         wait_seconds = int(((pl_.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
         from app.data_channel.datasets.lock import dataset_write_lock
         with dataset_write_lock(
@@ -274,6 +304,8 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
             wait_timeout=float(wait_seconds) + 10,
             stale_after=float(wait_seconds) + 60,
         ):
+            _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(
+                db_, pl_, client, require_active=True)
             rows, exec_meta = trigger_and_collect(
                 client, workflow_id, webhook_path,
                 payload={"source": "ontoprompt", "run_id": run.id},

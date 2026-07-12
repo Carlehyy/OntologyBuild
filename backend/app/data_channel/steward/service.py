@@ -4,8 +4,7 @@
 集中三件事，router / toolkit / runner 都只经这里触碰状态：
   1. 从系统设置加载 n8n 客户端（解密 API Key，未配置给出可操作的报错）
   2. 受管记录的生命周期辅助（创建/纳管登记影子行、归档、发布封版守卫）
-  3. 发布/撤回发布时的 n8n 激活与停用（被 pipelines 的 publish/unpublish
-     端点调用——发布唯一入口在流水线编辑向导，数据管家只编排不发布）
+  3. 发布与启停时的 n8n 远端状态同步（发布是单向封版，数据管家只编排草稿）
 """
 from __future__ import annotations
 
@@ -157,7 +156,11 @@ _HIGH_ENTROPY_PATH_RE = re.compile(
 )
 
 
-def validate_managed_workflow_contract(workflow: dict | None) -> dict:
+def validate_managed_workflow_contract(
+    workflow: dict | None,
+    *,
+    allow_legacy_webhook_path: bool = False,
+) -> dict:
     """Validate the deliberately narrow n8n profile the platform can ingest safely.
 
     n8n stores flow edges as ``connections[source].main[output_index]``.  The
@@ -209,7 +212,7 @@ def validate_managed_workflow_contract(workflow: dict | None) -> dict:
     path = str(params.get("path") or "").strip()
     if not path or not _STATIC_WEBHOOK_PATH_RE.fullmatch(path):
         raise StewardError("Webhook path 必须是非空静态安全路径，不能包含 :variable、模板、查询串或首尾斜杠。")
-    if not _HIGH_ENTROPY_PATH_RE.search(path):
+    if not allow_legacy_webhook_path and not _HIGH_ENTROPY_PATH_RE.search(path):
         raise StewardError("Webhook path 必须以至少 128 bit 的随机 token（32 位十六进制或 UUID）结尾。")
 
     for node in enabled_nodes:
@@ -370,18 +373,32 @@ def shadow_status(db: Session, rec: N8nPipeline) -> str:
     return (pl.status or "draft") if pl is not None else "draft"
 
 
+def refresh_draft_snapshot(db: Session, rec: N8nPipeline, workflow: dict) -> tuple[dict, bool]:
+    """Refresh the mutable working snapshot without touching a published release.
+
+    Read-only detail, health and credential checks used to overwrite
+    ``workflow_snapshot`` unconditionally.  Once published, that field is the
+    only retained topology evidence for legacy releases and must be immutable.
+    """
+    snapshot = N8nClient.sanitize_workflow(workflow)
+    if shadow_status(db, rec) == "published":
+        return snapshot, False
+    rec.workflow_snapshot = snapshot
+    return snapshot, True
+
+
 def require_unpublished(db: Session, rec: N8nPipeline) -> None:
-    """编排守卫：已发布的流水线封版，编排前必须先在编辑向导撤回发布。"""
+    """编排守卫：发布是不可逆封版，已发布记录永远不能回到可编排状态。"""
     if shadow_status(db, rec) == "published":
         raise StewardError(
             f"流水线「{rec.name}」已发布（封版），不能修改编排。"
-            f"请先在流水线列表的编辑向导中「撤回发布」，再回来继续编排。")
+            "如需调整，请新建一条流水线并在验证通过后发布；旧版本可停用或归档。")
 
 
 def require_orchestrable(db: Session, rec: N8nPipeline, client: N8nClient) -> None:
     """编排守卫（数据管家仅有的写权限边界）：只允许编排「未发布 且 未启用」的流水线。
 
-    - 未发布：影子流水线 status != published（发布=封版，改前须撤回发布）
+    - 未发布：影子流水线 status != published（发布后不可逆、不可再编排）
     - 未启用：n8n 侧 active == False（发布会激活；若有人在 n8n 界面手动开了
       开关，会出现"未发布却已激活"的漂移，此处 live 校验一并拦住）
 
@@ -396,10 +413,10 @@ def require_orchestrable(db: Session, rec: N8nPipeline, client: N8nClient) -> No
     if active:
         raise StewardError(
             f"流水线「{rec.name}」在 n8n 侧处于已启用状态，数据管家只能编排未启用的流水线。"
-            f"请先在 n8n 界面停用该工作流（或在流水线编辑向导中撤回发布）后再编排。")
+            "如果它尚未发布，请先在 n8n 界面停用；如果已经发布，请新建流水线完成变更。")
 
 
-# ── 发布 / 撤回发布的 n8n 侧动作（被 pipelines publish/unpublish 调用） ──
+# ── 发布与启停的 n8n 侧动作 ────────────────────────────────────
 
 _REVISION_FIELDS = ("versionId", "activeVersionId", "updatedAt")
 
@@ -517,6 +534,18 @@ def _set_remote_active(
     return was_active, confirmed
 
 
+def set_remote_active_for_preview(rec: N8nPipeline, client: N8nClient, *,
+                                  enabled: bool) -> dict:
+    """Confirmed temporary switch used by a lock-protected manual preview."""
+    _was_active, confirmed = _set_remote_active(
+        rec,
+        client,
+        enabled=enabled,
+        context="执行预览临时启用" if enabled else "执行预览恢复停用",
+    )
+    return confirmed
+
+
 def activate_for_publish(
     db: Session,
     rec: N8nPipeline,
@@ -601,16 +630,6 @@ def compensate_failed_publish(rec: N8nPipeline, client: N8nClient) -> None:
             "远端可能仍处于激活状态，请立即人工核对。") from exc
 
 
-def deactivate_on_unpublish(rec: N8nPipeline, client: N8nClient) -> bool:
-    """撤回发布：确认远端停用，并返回切换前状态供事务补偿。"""
-    try:
-        was_active, _confirmed = _set_remote_active(
-            rec, client, enabled=False, context="撤回发布已中止")
-        return was_active
-    except StewardError as exc:
-        raise StewardError(f"停用 n8n 工作流失败，撤回发布已中止：{exc}") from exc
-
-
 def require_published_revision(
     pl,
     remote_workflow: dict,
@@ -623,7 +642,7 @@ def require_published_revision(
     if missing_published:
         raise StewardError(
             "该流水线的发布快照缺少 n8n revision 信息，不能安全运行。"
-            "请先撤回并重新发布。")
+            "请停用并归档该历史版本，然后新建流水线替代。")
     current = _require_complete_revision(remote_workflow, context="运行前")
     drift = [field for field in _REVISION_FIELDS if current.get(field) != published.get(field)]
     if drift:
@@ -632,10 +651,72 @@ def require_published_revision(
             for field in drift)
         raise StewardError(
             f"检测到 n8n 工作流在平台发布后发生版本漂移（{details}）。"
-            "为避免按旧数据契约执行新逻辑，本次运行已中止；请撤回发布、检查并重新发布。")
+            "为避免按旧数据契约执行新逻辑，本次运行已中止；请停用并归档旧版本，再新建流水线替代。")
     if require_active and not bool(remote_workflow.get("active")):
         raise StewardError("n8n 工作流已在远端被停用，与平台发布快照不一致，本次运行已中止。")
     return current
+
+
+def resolve_published_runtime_release(pl, rec: N8nPipeline,
+                                      remote_workflow: dict, *,
+                                      require_active: bool = True) -> dict:
+    """Resolve the immutable n8n runtime contract, including safe legacy releases.
+
+    Releases created before managed_contract/revision were introduced cannot be
+    sent back to draft now that publish is irreversible.  They are accepted only
+    when the live writable workflow is byte-for-byte equivalent (canonical JSON)
+    to the snapshot retained at publish time.  In that narrow case we can derive
+    the unique output and current active revision without guessing topology.
+
+    New releases always take the strict path and must carry both artifacts in the
+    pipeline definition.  The legacy path deliberately permits old short webhook
+    paths; new publish validation continues to require 128-bit paths.
+    """
+    if (pl.status or "") != "published":
+        raise StewardError("该 n8n 流水线尚未发布，不能被调度运行。请先完成发布。")
+
+    n8n_def = ((pl.definition or {}).get("n8n") or {})
+    managed_contract = n8n_def.get("managed_contract") or {}
+    published_revision = n8n_def.get("revision") or {}
+    complete_contract = bool(
+        managed_contract.get("webhook_path")
+        and managed_contract.get("output_node_name")
+        and managed_contract.get("output_node_id")
+    )
+    complete_revision = all(published_revision.get(field) for field in _REVISION_FIELDS)
+    if complete_contract and complete_revision:
+        require_published_revision(pl, remote_workflow, require_active=require_active)
+        return {
+            "managed_contract": managed_contract,
+            "revision": published_revision,
+            "legacy_compatibility": False,
+        }
+
+    published_snapshot = rec.workflow_snapshot or {}
+    if not published_snapshot:
+        raise StewardError(
+            "该历史发布版本缺少可核验的 n8n 工作流快照，平台已拒绝猜测输出节点。"
+            "请停用并归档该版本，然后新建流水线替代。")
+    live_snapshot = N8nClient.sanitize_workflow(remote_workflow)
+    if canonical_json_hash(live_snapshot) != canonical_json_hash(published_snapshot):
+        raise StewardError(
+            "该历史发布版本缺少完整运行契约，且 n8n 当前定义与发布时保留的快照不一致。"
+            "为避免执行未经审核的逻辑，本次运行已中止；请停用并归档旧版本，再新建流水线替代。")
+
+    contract = validate_managed_workflow_contract(
+        published_snapshot, allow_legacy_webhook_path=True)
+    revision = _require_complete_revision(remote_workflow, context="历史发布版本兼容校验时")
+    if revision["versionId"] != revision["activeVersionId"]:
+        raise StewardError(
+            "该历史发布版本的 n8n 当前编辑版本与激活版本不一致，不能安全执行。"
+            "请先停用旧版本并新建流水线替代。")
+    if require_active and not bool(remote_workflow.get("active")):
+        raise StewardError("n8n 工作流已在远端被停用，与平台启用状态不一致，本次运行已中止。")
+    return {
+        "managed_contract": contract,
+        "revision": revision,
+        "legacy_compatibility": True,
+    }
 
 
 def set_published_enabled(

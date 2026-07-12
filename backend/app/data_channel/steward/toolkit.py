@@ -13,7 +13,7 @@
 检查(check_credentials)。治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
   - 创建的 workflow 一律不激活；激活只发生在用户于流水线编辑向导「发布」时
     ——发布是生命周期的唯一入口，工具集里没有这个动词。
-  - 已发布或已启用的流水线：编排一律拒绝（须先在编辑向导撤回发布 / 在 n8n 停用）。
+  - 已发布流水线永久封版；需要变更时新建流水线。未发布但在 n8n 侧启用的草稿须先停用。
   - 纳管、试跑、执行观测、归档/删除都不再是管家职权（归档在流水线列表操作）。
   - 凭据(credentials)无法经 API 创建 — 工具只能引用用户在 n8n 界面配好的凭据。
 """
@@ -94,7 +94,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "update_workflow",
-        "description": "编排/修改受管流水线的 workflow 定义（整体替换 nodes/connections，先 get_workflow 取当前值改后回传）。只能修改「未发布 且 未启用」的流水线；已发布或 n8n 侧已启用的会被拒绝，需引导用户先在流水线列表的编辑向导中「撤回发布」或在 n8n 停用。",
+        "description": "编排/修改受管流水线的 workflow 定义（整体替换 nodes/connections，先 get_workflow 取当前值改后回传）。只能修改「未发布 且 未启用」的流水线；已发布版本永久封版，变更应新建流水线；草稿若在 n8n 侧启用则先停用。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -495,9 +495,10 @@ class ToolRunner:
     def tool_get_workflow(self, record_id: str) -> dict:
         rec = service.require_record(self.db, record_id)
         workflow = self.client.get_workflow(rec.n8n_workflow_id)
-        # 顺手刷新快照，保持平台视图与 n8n 真身一致
-        rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
-        self.db.commit()
+        # 草稿快照随远端更新；已发布快照是不可变发布证据，任何只读查看都不能覆盖。
+        _snapshot, changed = service.refresh_draft_snapshot(self.db, rec, workflow)
+        if changed:
+            self.db.commit()
         return {
             "record": service.record_out(self.db, rec, active=bool(workflow.get("active"))),
             "workflow": {
@@ -787,8 +788,9 @@ class ToolRunner:
     def tool_check_workflow(self, record_id: str) -> dict:
         rec = service.require_record(self.db, record_id)
         workflow = self.client.get_workflow(rec.n8n_workflow_id)
-        rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
-        self.db.commit()
+        _snapshot, changed = service.refresh_draft_snapshot(self.db, rec, workflow)
+        if changed:
+            self.db.commit()
 
         issues: list[dict] = []
         nodes = workflow.get("nodes") or []
@@ -861,8 +863,9 @@ class ToolRunner:
     def tool_check_credentials(self, record_id: str) -> dict:
         rec = service.require_record(self.db, record_id)
         workflow = self.client.get_workflow(rec.n8n_workflow_id)
-        rec.workflow_snapshot = N8nClient.sanitize_workflow(workflow)
-        self.db.commit()
+        _snapshot, changed = service.refresh_draft_snapshot(self.db, rec, workflow)
+        if changed:
+            self.db.commit()
 
         referenced = []
         for node in workflow.get("nodes") or []:

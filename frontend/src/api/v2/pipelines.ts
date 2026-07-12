@@ -125,7 +125,7 @@ const pipelinesApi = {
     apiClientV2.get<Pipeline>(`/pipelines/${id}`).then(r => r),
   create: (body: PipelineCreateBody) =>
     apiClientV2.post<Pipeline>('/pipelines', body).then(r => r),
-  // 状态经 publish/unpublish、启用经 setEnabled——update 不再接受 status/enabled
+  // 发布是单向封版；启用经 setEnabled，通用 update 不接受 status/enabled
   update: (id: string, body: Partial<PipelineCreateBody>) =>
     apiClientV2.put<Pipeline>(`/pipelines/${id}`, body).then(r => r),
   delete: (id: string) =>
@@ -137,9 +137,6 @@ const pipelinesApi = {
   /** 发布（封版）；enable=true 同时启用 */
   publish: (id: string, enable = false) =>
     apiClientV2.post<{ id: string; status: string; version: number; enabled: boolean }>(`/pipelines/${id}/publish`, { enable }).then(r => r),
-  /** 撤回发布（仅未被任务引用时允许；自动停用） */
-  unpublish: (id: string) =>
-    apiClientV2.post<Pipeline>(`/pipelines/${id}/unpublish`).then(r => r),
   versions: (id: string) =>
     apiClientV2.get<Array<{ id: string; version: number; status: string; created_at: string | null }>>(`/pipelines/${id}/versions`).then(r => r),
 

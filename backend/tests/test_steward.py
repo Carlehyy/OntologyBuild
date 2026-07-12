@@ -1,8 +1,8 @@
 """数据管家（steward）的治理与集成测试：
 
-  1. 生命周期（发布唯一入口 = 流水线编辑向导的 publish/unpublish 端点）：
+  1. 生命周期（发布唯一入口 = 流水线编辑向导的 publish 端点）：
      新建即未发布（不激活）→ publish 激活 + 封版 + 固化 definition →
-     已发布编排封版（数据管家修改被拒）→ unpublish 停用回草稿可继续编排
+     已发布永久封版（数据管家修改与旧 unpublish 端点均被拒）
   2. 职权边界（管家只有两项写权限）：新建骨架（create_pipeline）+ 编排
      「未发布 且 未启用」的流水线（update_workflow）。已启用即拒编排；
      试跑 / 纳管 / 执行观测 / 归档删除都不再是管家职权。
@@ -27,6 +27,15 @@ from app.data_channel.steward.service import StewardError
 from app.data_channel.steward.toolkit import ToolRunner
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 from app.settings.workflows.n8n_client import N8nClient
+
+
+def test_steward_intent_router_does_not_default_every_turn_to_overview():
+    from app.data_channel.steward.orchestrator import classify_steward_intent
+
+    assert classify_steward_intent("现在有哪些流水线")["code"] == "inventory"
+    assert classify_steward_intent("帮我修改订单流水线的整形节点")["code"] == "edit"
+    assert classify_steward_intent("为什么昨晚执行失败")["code"] == "diagnose"
+    assert classify_steward_intent("你好，先聊聊需求")["code"] == "consult"
 
 
 # ── 假 n8n 客户端 ──────────────────────────────────────────────────
@@ -567,7 +576,7 @@ def test_published_is_sealed_for_steward_edit(
             "整理字段": {"main": [[{"node": "过滤", "type": "main", "index": 0}]]},
         },
     })
-    assert "error" in out and "撤回发布" in out["error"]
+    assert "error" in out and "新建" in out["error"]
     # 封版未被破坏：workflow 仍激活、影子仍 published、节点未变
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
     assert len(fake_n8n.workflows[draft_record.n8n_workflow_id]["nodes"]) == 2
@@ -590,20 +599,21 @@ def test_active_workflow_rejected_for_orchestration(db, fake_n8n, draft_record):
     assert len(fake_n8n.workflows[draft_record.n8n_workflow_id]["nodes"]) == 2
 
 
-def test_unpublish_deactivates_and_reopens_editing(
+def test_published_release_cannot_be_unpublished_or_reopened(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
-    """撤回发布：停用 workflow + 回草稿 + 停用启用开关，之后可继续编排。"""
+    """发布是单向封版：旧端点拒绝且本地/远端状态都不变化。"""
     pid = draft_record.pipeline_id
     assert _publish(client, auth_headers, pid, enable=True).status_code == 200
 
     r = client.post(f"/api/v2/pipelines/{pid}/unpublish", headers=auth_headers)
-    assert r.status_code == 200, r.text
-    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    assert r.status_code == 409
+    assert "不可变版本" in r.json()["detail"]
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
     db.expire_all()
     pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
-    assert pl.status == "draft" and pl.enabled is False
+    assert pl.status == "published" and pl.enabled is True
 
-    # 回草稿（未发布 且 未启用）后编排恢复可写
+    # 任何编排与内容字段修改都继续被封版保护。
     runner = ToolRunner(db, None, None)
     out = runner.run("update_workflow", {
         "record_id": draft_record.id,
@@ -614,13 +624,13 @@ def test_unpublish_deactivates_and_reopens_editing(
             "整理字段": {"main": [[{"node": "过滤", "type": "main", "index": 0}]]},
         },
     })
-    assert "error" not in out, out
-
-    # 再次发布：版本号语义 = 已发布快照序号，第二次发布才递增
-    assert _publish(client, auth_headers, pid).status_code == 200
-    db.expire_all()
-    pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
-    assert pl.version == 2
+    assert "error" in out and "新建" in out["error"]
+    update = client.put(
+        f"/api/v2/pipelines/{pid}", headers=auth_headers,
+        json={"name": "不应成功的改名", "description": "不可改"},
+    )
+    assert update.status_code == 409
+    assert "永久封版" in update.json()["detail"]
 
 
 def test_publish_requires_trigger(pipelines_client, client, auth_headers, db, fake_n8n):
@@ -828,7 +838,7 @@ def test_publish_local_commit_failure_compensates_remote_activation(
     assert f"deactivate:{draft_record.n8n_workflow_id}" in fake_n8n.calls
 
 
-def test_unpublish_remote_deactivation_failure_keeps_local_published(
+def test_unpublish_never_calls_remote_n8n(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record, monkeypatch):
     pid = draft_record.pipeline_id
     assert _publish(client, auth_headers, pid, enable=True).status_code == 200
@@ -840,13 +850,13 @@ def test_unpublish_remote_deactivation_failure_keeps_local_published(
     )
     response = client.post(f"/api/v2/pipelines/{pid}/unpublish", headers=auth_headers)
 
-    assert response.status_code == 400
-    assert "撤回发布已中止" in response.json()["detail"]
+    assert response.status_code == 409
+    assert "不可变版本" in response.json()["detail"]
     db.expire_all()
     assert db.query(Pipeline).filter(Pipeline.id == pid).first().status == "published"
 
 
-def test_unpublish_missing_governance_record_never_lies_about_remote_state(
+def test_unpublish_rejection_does_not_depend_on_governance_record(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
     pid = draft_record.pipeline_id
     workflow_id = draft_record.n8n_workflow_id
@@ -858,28 +868,25 @@ def test_unpublish_missing_governance_record_never_lies_about_remote_state(
         f"/api/v2/pipelines/{pid}/unpublish", headers=auth_headers)
 
     assert response.status_code == 409
-    assert "治理记录" in response.json()["detail"]
+    assert "不可变版本" in response.json()["detail"]
     db.expire_all()
     assert db.query(Pipeline).filter(Pipeline.id == pid).one().status == "published"
     assert fake_n8n.workflows[workflow_id]["active"] is True
 
 
-def test_unpublish_local_commit_failure_reactivates_remote(
+def test_unpublish_rejection_performs_no_database_commit(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record, monkeypatch):
     from fastapi import HTTPException
     from app.data_channel.pipelines.router import unpublish_pipeline
 
     pid = draft_record.pipeline_id
     assert _publish(client, auth_headers, pid, enable=True).status_code == 200
-    real_commit = db.commit
     monkeypatch.setattr(db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
 
     with pytest.raises(HTTPException) as error:
         unpublish_pipeline(pid, db)
-    monkeypatch.setattr(db, "commit", real_commit)
-
-    assert error.value.status_code == 500
-    assert "远端状态已恢复" in str(error.value.detail)
+    assert error.value.status_code == 409
+    assert "不可变版本" in str(error.value.detail)
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
     db.expire_all()
     assert db.query(Pipeline).filter(Pipeline.id == pid).first().status == "published"
@@ -998,11 +1005,11 @@ def test_shadow_pipeline_guards(pipelines_client, client, auth_headers, db, fake
     pid = draft_record.pipeline_id
     assert _publish(client, auth_headers, pid).status_code == 200
 
-    # 名称/描述/契约平台侧放行，且回同步管家记录
+    # 发布后身份与契约全部封版，不再回同步管家记录。
     r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"name": "改名"})
-    assert r.status_code == 200
+    assert r.status_code == 409
     db.refresh(draft_record)
-    assert draft_record.name == "改名"
+    assert draft_record.name == "订单同步流水线"
     # 编排字段仍归数据管家托管
     r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"definition": {"nodes": []}})
     assert r.status_code == 400
@@ -1092,8 +1099,7 @@ def test_archive_local_commit_failure_restores_remote_state(
 
 def test_panel_lists_only_orchestrable(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
-    """受管流水线面板只列可编排的（未发布 且 未启用）——与 require_orchestrable 同口径：
-    草稿可见 → 发布（封版+激活）后隐藏 → 撤回发布恢复 → n8n 侧漂移激活也隐藏。"""
+    """面板只列可编排草稿；发布后永久退出，漂移激活的草稿也隐藏。"""
     rid = draft_record.id
     panel_ids = lambda: [item["id"] for item in
                          client.get("/api/v2/steward/pipelines", headers=auth_headers).json()["data"]]
@@ -1105,14 +1111,18 @@ def test_panel_lists_only_orchestrable(
     assert _publish(client, auth_headers, draft_record.pipeline_id, enable=True).status_code == 200
     assert rid not in panel_ids()
 
-    # 撤回发布回草稿（未发布 且 未启用）→ 面板恢复可见
+    # 发布不可撤回，仍不会重新出现在编排面板。
     assert client.post(f"/api/v2/pipelines/{draft_record.pipeline_id}/unpublish",
-                       headers=auth_headers).status_code == 200
-    assert rid in panel_ids()
-
-    # 漂移：影子仍未发布，但有人在 n8n 侧手动激活 → 也从面板隐藏
-    fake_n8n.activate_workflow(draft_record.n8n_workflow_id)
+                       headers=auth_headers).status_code == 409
     assert rid not in panel_ids()
+
+    # 另一条草稿在 n8n 侧被手动激活，也应从面板隐藏。
+    created = ToolRunner(db, None, None).run("create_pipeline", {"name": "漂移激活草稿"})
+    drift_id = created["record"]["id"]
+    drift = db.query(N8nPipeline).filter(N8nPipeline.id == drift_id).one()
+    assert drift_id in panel_ids()
+    fake_n8n.activate_workflow(drift.n8n_workflow_id)
+    assert drift_id not in panel_ids()
 
 
 # ── 编排工具边界 ──────────────────────────────────────────────────
@@ -1280,6 +1290,69 @@ def test_normalize_rows_rejects_oversized_result_without_truncation():
     }
     with pytest.raises(service.StewardError):
         _extract_execution_rows(oversized_execution, "Output")
+
+
+def test_published_read_tools_never_overwrite_release_snapshot(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    assert _publish(client, auth_headers, draft_record.pipeline_id, enable=True).status_code == 200
+    db.refresh(draft_record)
+    frozen = deepcopy(draft_record.workflow_snapshot)
+    fake_n8n.workflows[draft_record.n8n_workflow_id]["name"] = "远端被人工改名"
+
+    result = ToolRunner(db, None, None).run("get_workflow", {"record_id": draft_record.id})
+
+    assert result["workflow"]["name"] == "远端被人工改名"
+    db.expire_all()
+    persisted = db.query(N8nPipeline).filter(N8nPipeline.id == draft_record.id).one()
+    assert persisted.workflow_snapshot == frozen
+
+
+def test_legacy_published_release_derives_unique_output_only_when_snapshot_matches(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """旧发布记录缺 contract/revision 时仍可安全运行，不要求撤回重发。"""
+    assert _publish(client, auth_headers, draft_record.pipeline_id, enable=True).status_code == 200
+    pl = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).one()
+    legacy_definition = deepcopy(pl.definition)
+    legacy_definition["n8n"].pop("managed_contract", None)
+    legacy_definition["n8n"].pop("revision", None)
+    pl.definition = legacy_definition
+    db.refresh(draft_record)
+    legacy_snapshot = deepcopy(draft_record.workflow_snapshot)
+    legacy_snapshot["nodes"][0]["parameters"]["path"] = "ob-legacy-a1b2c3"
+    draft_record.workflow_snapshot = legacy_snapshot
+    legacy_remote = deepcopy(fake_n8n.workflows[draft_record.n8n_workflow_id])
+    legacy_remote["nodes"][0]["parameters"]["path"] = "ob-legacy-a1b2c3"
+    fake_n8n.workflows[draft_record.n8n_workflow_id] = legacy_remote
+    db.commit()
+
+    rows, meta = collect_n8n_rows(db, pl)
+
+    assert rows == [{"currency": "USD", "rate": 1.0}, {"currency": "CNY", "rate": 7.1}]
+    assert meta["execution_status"] == "success"
+
+    # 相同的缺失契约一旦伴随拓扑漂移，必须在 webhook 触发前失败。
+    drifted_remote = deepcopy(fake_n8n.workflows[draft_record.n8n_workflow_id])
+    drifted_remote["nodes"][1]["name"] = "未经审核的输出"
+    fake_n8n.workflows[draft_record.n8n_workflow_id] = drifted_remote
+    webhook_calls = sum(call.startswith("webhook:") for call in fake_n8n.calls)
+    with pytest.raises(service.StewardError, match="当前定义与发布时保留的快照不一致"):
+        collect_n8n_rows(db, pl)
+    assert sum(call.startswith("webhook:") for call in fake_n8n.calls) == webhook_calls
+
+
+def test_disabled_published_pipeline_can_preview_and_restores_remote_inactive(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    assert _publish(client, auth_headers, draft_record.pipeline_id, enable=False).status_code == 200
+    pl = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).one()
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+
+    rows, _meta = collect_n8n_rows(db, pl)
+
+    assert len(rows) == 2
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    calls = fake_n8n.calls
+    assert f"activate:{draft_record.n8n_workflow_id}" in calls
+    assert calls[-1] == f"deactivate:{draft_record.n8n_workflow_id}"
 
 
 def test_run_rejects_remote_revision_drift_before_webhook(
