@@ -8,7 +8,7 @@ interface ModelStatsPanelProps {
   modelName?: string
 }
 
-export default function ModelStatsPanel({ dailyStats, modelName }: ModelStatsPanelProps) {
+export default function ModelStatsPanel({ dailyStats, modelName: _modelName }: ModelStatsPanelProps) {
   // 计算汇总指标
   const summary = useMemo(() => {
     const totalCalls = dailyStats.reduce((sum, d) => sum + d.callCount, 0)

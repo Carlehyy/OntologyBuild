@@ -151,7 +151,9 @@ export function loadValidationStates(): Record<string, boolean> {
   try {
     const saved = localStorage.getItem(VALIDATION_STORAGE_KEY)
     if (saved) return JSON.parse(saved)
-  } catch {}
+  } catch {
+    // Ignore unavailable storage or malformed persisted user settings.
+  }
   return Object.fromEntries(VALIDATION_RULES.map(r => [r.id, true]))
 }
 
@@ -165,7 +167,9 @@ export function loadRuleStates(): Record<string, ExtractionRuleState> {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) return JSON.parse(saved)
-  } catch {}
+  } catch {
+    // Ignore unavailable storage or malformed persisted user settings.
+  }
   return Object.fromEntries(
     EXTRACTION_RULES.map(r => [r.id, { enabled: r.default_enabled, value: r.default_value }])
   )

@@ -36,7 +36,7 @@ export default function RunPreviewModal({ pipeline, onClose, onSaved }: {
     }
   }
 
-  useEffect(() => { runPreview() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { runPreview() }, [])
 
   const handleSave = async () => {
     if (!result) return

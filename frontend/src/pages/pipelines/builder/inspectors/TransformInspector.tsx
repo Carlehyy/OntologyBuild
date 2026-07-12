@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Plus, Trash2, Eye, Loader2, AlertTriangle, ExternalLink } from 'lucide-react'
+import { Plus, Trash2, Eye } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
 const AVAILABLE_OPS = [
@@ -26,8 +26,8 @@ export default function TransformInspector({ config, onChange, readOnly = false,
   const currentPath = String(config.path || 'auto')
   const steps = (config.steps || []) as Array<{ op: string; params?: Record<string, unknown> }>
   const [showCatalog, setShowCatalog] = useState(false)
-  const [previewMap, setPreviewMap] = useState<Record<number, { loading: boolean; data?: any[]; error?: string }>>({})
-  const [models, setModels] = useState<Array<{ id: string; name: string; provider: string; models: string[] }>>([])
+  const [_previewMap, setPreviewMap] = useState<Record<number, { loading: boolean; data?: any[]; error?: string }>>({})
+  const [_models, setModels] = useState<Array<{ id: string; name: string; provider: string; models: string[] }>>([])
   const filteredOps = useMemo(() => PATH_OPS_MAP[currentPath] || AVAILABLE_OPS, [currentPath])
   useEffect(() => { apiClientV2.get('/models').then((r: any) => setModels(Array.isArray(r) ? r : r?.data ?? [])).catch(() => {}) }, [])
 

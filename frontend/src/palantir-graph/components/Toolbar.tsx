@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   CubeIcon,
-  PuzzlePieceIcon,
   LinkIcon,
   BoltIcon,
   CodeBracketIcon,
@@ -75,30 +74,30 @@ export default function Toolbar() {
   };
 
   const tools = [
-    { 
-      icon: CubeIcon, 
-      label: '对象实体', 
+    {
+      icon: CubeIcon,
+      label: '对象实体',
       onClick: () => openPanel('create', 'objectType'),
       color: 'text-indigo-400',
       bgColor: 'bg-indigo-500/10 hover:bg-indigo-500/20',
     },
-    { 
-      icon: LinkIcon, 
-      label: '实体关系', 
+    {
+      icon: LinkIcon,
+      label: '实体关系',
       onClick: () => openPanel('create', 'linkType'),
       color: 'text-cyan-400',
       bgColor: 'bg-cyan-500/10 hover:bg-cyan-500/20',
     },
-    { 
-      icon: BoltIcon, 
-      label: '执行动作', 
+    {
+      icon: BoltIcon,
+      label: '执行动作',
       onClick: () => openPanel('create', 'action'),
       color: 'text-yellow-400',
       bgColor: 'bg-yellow-500/10 hover:bg-yellow-500/20',
     },
-    { 
-      icon: CodeBracketIcon, 
-      label: '激活函数', 
+    {
+      icon: CodeBracketIcon,
+      label: '激活函数',
       onClick: () => openPanel('create', 'function'),
       color: 'text-pink-400',
       bgColor: 'bg-pink-500/10 hover:bg-pink-500/20',
@@ -113,9 +112,9 @@ export default function Toolbar() {
           <div className="flex items-center justify-center w-12 h-12 mb-2">
             <SparklesIcon className="w-7 h-7 text-onto-400" />
           </div>
-          
+
           <div className="h-px bg-surface-700 mx-1" />
-          
+
           {/* Tools */}
           {tools.map((tool, index) => (
             <button
@@ -134,7 +133,7 @@ export default function Toolbar() {
               </span>
             </button>
           ))}
-          
+
           <div className="h-px bg-surface-700 mx-1" />
 
           {/* Undo / Redo */}
@@ -175,20 +174,20 @@ export default function Toolbar() {
                 自动布局
               </span>
             </button>
-            
+
             {/* Layout Menu */}
             {showLayoutMenu && (
               <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 bg-surface-800 border border-surface-600 rounded-xl shadow-2xl p-4 min-w-[280px] z-50 animate-fade-in">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-white">自动布局</h3>
-                  <button 
+                  <button
                     onClick={() => setShowLayoutMenu(false)}
                     className="text-gray-400 hover:text-white"
                   >
                     ×
                   </button>
                 </div>
-                
+
                 {/* Algorithm Selection */}
                 <div className="mb-4">
                   <label className="text-xs text-gray-400 mb-2 block">布局算法</label>
@@ -198,8 +197,8 @@ export default function Toolbar() {
                         key={algo.id}
                         onClick={() => setSelectedAlgorithm(algo.id)}
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors
-                          ${selectedAlgorithm === algo.id 
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                          ${selectedAlgorithm === algo.id
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                             : 'bg-surface-700/50 text-gray-300 hover:bg-surface-700 border border-transparent'}`}
                       >
                         <span className="text-lg">{algo.icon}</span>
@@ -214,7 +213,7 @@ export default function Toolbar() {
                     ))}
                   </div>
                 </div>
-                
+
                 {/* Direction (only for dagre) */}
                 {selectedAlgorithm === 'dagre' && (
                   <div className="mb-4">
@@ -225,8 +224,8 @@ export default function Toolbar() {
                           key={dir.id}
                           onClick={() => setSelectedDirection(dir.id)}
                           className={`flex-1 flex flex-col items-center gap-1 px-2 py-2 rounded-lg transition-colors
-                            ${selectedDirection === dir.id 
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                            ${selectedDirection === dir.id
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                               : 'bg-surface-700/50 text-gray-400 hover:bg-surface-700 border border-transparent'}`}
                           title={dir.name}
                         >
@@ -237,7 +236,7 @@ export default function Toolbar() {
                     </div>
                   </div>
                 )}
-                
+
                 {/* Apply Button */}
                 <button
                   onClick={handleAutoLayout}
@@ -249,9 +248,9 @@ export default function Toolbar() {
               </div>
             )}
           </div>
-          
+
           <div className="h-px bg-surface-700 mx-1" />
-          
+
           {/* Actions */}
           <button
             onClick={handleExport}
@@ -263,7 +262,7 @@ export default function Toolbar() {
               导出
             </span>
           </button>
-          
+
           <button
             onClick={() => setShowImportModal(true)}
             className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
@@ -274,9 +273,9 @@ export default function Toolbar() {
               导入
             </span>
           </button>
-          
+
           <div className="h-px bg-surface-700 mx-1" />
-          
+
           <button
             onClick={handleReset}
             className="w-12 h-12 flex items-center justify-center rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-all duration-200 group relative"

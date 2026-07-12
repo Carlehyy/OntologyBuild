@@ -117,7 +117,7 @@ const objectSet = objects;
 ${executableBody}
 `;
 
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+
   const raw = new Function('ctx', ...Object.keys(SAFE_GLOBALS), wrapped) as (
     ctx: ExecutionContext,
     ...globals: unknown[]
@@ -132,16 +132,12 @@ function runWithTimeout<T>(fn: () => T, timeoutMs = 1000): T {
   // 简化版超时保护：对于浏览器单线程环境，无法真正中断死循环，
   // 但可做同步调用 + 时间检查——这里只做基础执行（合理函数都应是同步且很快）
   const start = Date.now();
-  try {
-    const result = fn();
-    const duration = Date.now() - start;
-    if (duration > timeoutMs) {
-      console.warn(`[FunctionEngine] function took ${duration}ms (limit ${timeoutMs}ms)`);
-    }
-    return result;
-  } catch (err) {
-    throw err;
+  const result = fn();
+  const duration = Date.now() - start;
+  if (duration > timeoutMs) {
+    console.warn(`[FunctionEngine] function took ${duration}ms (limit ${timeoutMs}ms)`);
   }
+  return result;
 }
 
 // ======================
@@ -228,7 +224,7 @@ export function executeFunction(
     const ctx = buildContext(ontology, input);
 
     // 4. 执行
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
     const { object, objects, params, ontology: _o, utils } = ctx;
     // 传给 new Function 的额外参数都是安全全局值，通过 compileFunction 内接收
     void object; void objects; void params; void _o; void utils;
@@ -414,7 +410,7 @@ function evalExpression(
     throw new Error('表达式只能包含 params.xxx / object.xxx 引用与比较运算符');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+
   const fn = new Function(`"use strict"; return (${safe});`);
   return Boolean(fn());
 }

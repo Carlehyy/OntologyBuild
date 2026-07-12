@@ -93,7 +93,7 @@ export default function SyncTasksTab() {
       setShowForm(true)
       setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('pipeline'); return n }, { replace: true })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [])
 
   // 筛选 & 分页
@@ -129,7 +129,7 @@ export default function SyncTasksTab() {
       setLoading(false)
       setRefreshing(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [page, pageSize, activeTab, search])
 
   useEffect(() => { load() }, [load])
@@ -285,7 +285,6 @@ export default function SyncTasksTab() {
     }],
   }), [trendData])
 
-  const runningCount = stats?.running ?? 0
   const failedCount = stats?.failed ?? 0
 
   return (

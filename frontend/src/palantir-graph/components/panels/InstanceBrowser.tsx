@@ -5,8 +5,6 @@ import {
   PlusIcon,
   TrashIcon,
   PencilSquareIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
   KeyIcon,
   CpuChipIcon,
   ClockIcon,
@@ -26,7 +24,7 @@ interface InstanceBrowserProps {
   onRunAction?: (actionId?: string, instanceId?: string) => void;
 }
 
-export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initialObjectTypeId, onRunAction }: InstanceBrowserProps) {
+export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initialObjectTypeId, onRunAction: _onRunAction }: InstanceBrowserProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
   const handleClose = () => (onClose ? onClose() : setInternalIsOpen(false));
@@ -99,7 +97,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
   const instances = selectedTypeId ? getInstancesForType(selectedTypeId) : [];
 
   // Derived (computed) properties definition
-  const computedProps = useMemo(() => {
+  const _computedProps = useMemo(() => {
     if (!selectedType) return [] as { prop: Property; fnId: string }[];
     return selectedType.properties
       .filter((p) => p.source === 'computed' && p.functionId)

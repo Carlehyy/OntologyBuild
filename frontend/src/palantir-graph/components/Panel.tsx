@@ -5,7 +5,7 @@ import PropertyEditor from './editors/PropertyEditor';
 import ParameterEditor from './editors/ParameterEditor';
 import RuleEditor from './editors/RuleEditor';
 import FunctionParameterEditor from './editors/FunctionParameterEditor';
-import type { Property, ActionParameter, ActionRule, OntologyFunction, FunctionParameter, FunctionType, FunctionLanguage, CacheStrategy as FunctionCacheStrategy, PropertyType } from '../types/ontology';
+import type { Property, ActionParameter, ActionRule, FunctionParameter, FunctionType, FunctionLanguage, CacheStrategy as FunctionCacheStrategy, PropertyType } from '../types/ontology';
 import { sanitizeIdentifier } from '../utils/identifier';
 
 // Color options for objects
@@ -41,22 +41,22 @@ export default function Panel() {
     <div className="fixed right-0 top-0 bottom-0 w-[420px] z-50 panel-enter">
       <div className="h-full glass border-l border-surface-700 flex flex-col">
         {panelType === 'objectType' && (
-          <ObjectTypePanel 
-            mode={panelMode!} 
+          <ObjectTypePanel
+            mode={panelMode!}
             onClose={closePanel}
             selectedId={selectedNodeId}
           />
         )}
         {panelType === 'linkType' && (
-          <LinkTypePanel 
-            mode={panelMode!} 
+          <LinkTypePanel
+            mode={panelMode!}
             onClose={closePanel}
             selectedId={selectedEdgeId}
           />
         )}
         {panelType === 'action' && (
-          <ActionPanel 
-            mode={panelMode!} 
+          <ActionPanel
+            mode={panelMode!}
             onClose={closePanel}
             selectedId={selectedActionId}
           />
@@ -74,20 +74,20 @@ export default function Panel() {
 }
 
 // Object Type Panel
-function ObjectTypePanel({ 
-  mode, 
-  onClose, 
-  selectedId 
-}: { 
-  mode: 'create' | 'edit'; 
-  onClose: () => void; 
+function ObjectTypePanel({
+  mode,
+  onClose,
+  selectedId
+}: {
+  mode: 'create' | 'edit';
+  onClose: () => void;
   selectedId: string | null;
 }) {
   const { ontology, addObjectType, updateObjectType, deleteObjectType } = useOntologyStore();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  
-  const existingObject = mode === 'edit' && selectedId 
-    ? ontology?.objectTypes.find(o => o.id === selectedId) 
+
+  const existingObject = mode === 'edit' && selectedId
+    ? ontology?.objectTypes.find(o => o.id === selectedId)
     : null;
 
   const [name, setName] = useState(existingObject?.name || '');
@@ -176,11 +176,11 @@ function ObjectTypePanel({
 
   return (
     <>
-      <PanelHeader 
-        title={mode === 'create' ? '创建对象实体' : '编辑对象实体'} 
-        onClose={onClose} 
+      <PanelHeader
+        title={mode === 'create' ? '创建对象实体' : '编辑对象实体'}
+        onClose={onClose}
       />
-      
+
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {/* Basic Info */}
         <div className="space-y-4">
@@ -234,7 +234,7 @@ function ObjectTypePanel({
               ))}
             </div>
           </div>
-          
+
           <div>
             <label className="input-label">图标</label>
             <div className="flex gap-2 flex-wrap">
@@ -263,8 +263,8 @@ function ObjectTypePanel({
         />
       </div>
 
-      <PanelFooter 
-        onSave={handleSave} 
+      <PanelFooter
+        onSave={handleSave}
         onDelete={mode === 'edit' ? handleDelete : undefined}
         saveDisabled={!name || !displayName}
       />
@@ -376,19 +376,19 @@ function ObjectTypePanel({
   );
 }
 
-function LinkTypePanel({ 
-  mode, 
-  onClose, 
-  selectedId 
-}: { 
-  mode: 'create' | 'edit'; 
-  onClose: () => void; 
+function LinkTypePanel({
+  mode,
+  onClose,
+  selectedId
+}: {
+  mode: 'create' | 'edit';
+  onClose: () => void;
   selectedId: string | null;
 }) {
   const { ontology, addLinkType, updateLinkType, deleteLinkType } = useOntologyStore();
-  
-  const existingLink = mode === 'edit' && selectedId 
-    ? ontology?.linkTypes.find(l => l.id === selectedId) 
+
+  const existingLink = mode === 'edit' && selectedId
+    ? ontology?.linkTypes.find(l => l.id === selectedId)
     : null;
 
   const [name, setName] = useState(existingLink?.name || '');
@@ -455,11 +455,11 @@ function LinkTypePanel({
 
   return (
     <>
-      <PanelHeader 
+      <PanelHeader
         title={mode === 'create' ? '创建实体关系' : '编辑实体关系'}
-        onClose={onClose} 
+        onClose={onClose}
       />
-      
+
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <div className="space-y-4">
           <div>
@@ -472,7 +472,7 @@ function LinkTypePanel({
               placeholder="link_type_name"
             />
           </div>
-          
+
           <div>
             <label className="input-label">显示名称 *</label>
             <input
@@ -483,7 +483,7 @@ function LinkTypePanel({
               placeholder="实体关系显示名称"
             />
           </div>
-          
+
           <div>
             <label className="input-label">描述</label>
             <textarea
@@ -546,8 +546,8 @@ function LinkTypePanel({
         />
       </div>
 
-      <PanelFooter 
-        onSave={handleSave} 
+      <PanelFooter
+        onSave={handleSave}
         onDelete={mode === 'edit' ? handleDelete : undefined}
         saveDisabled={!name || !displayName || !sourceObjectTypeId || !targetObjectTypeId}
       />
@@ -556,19 +556,19 @@ function LinkTypePanel({
 }
 
 // Action Panel
-function ActionPanel({ 
-  mode, 
+function ActionPanel({
+  mode,
   onClose,
   selectedId
-}: { 
-  mode: 'create' | 'edit'; 
+}: {
+  mode: 'create' | 'edit';
   onClose: () => void;
   selectedId?: string | null;
 }) {
   const { ontology, addAction, updateAction, deleteAction } = useOntologyStore();
-  
-  const existingAction = mode === 'edit' && selectedId 
-    ? ontology?.actions.find(a => a.id === selectedId) 
+
+  const existingAction = mode === 'edit' && selectedId
+    ? ontology?.actions.find(a => a.id === selectedId)
     : null;
 
   const [name, setName] = useState(existingAction?.name || '');
@@ -627,11 +627,11 @@ function ActionPanel({
 
   return (
     <>
-      <PanelHeader 
-        title={mode === 'create' ? '创建动作' : '编辑动作'} 
-        onClose={onClose} 
+      <PanelHeader
+        title={mode === 'create' ? '创建动作' : '编辑动作'}
+        onClose={onClose}
       />
-      
+
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <div className="space-y-4">
           <div>
@@ -644,7 +644,7 @@ function ActionPanel({
               placeholder="action_name"
             />
           </div>
-          
+
           <div>
             <label className="input-label">显示名称 *</label>
             <input
@@ -655,7 +655,7 @@ function ActionPanel({
               placeholder="动作显示名称"
             />
           </div>
-          
+
           <div>
             <label className="input-label">描述</label>
             <textarea
@@ -714,7 +714,7 @@ function ActionPanel({
         )}
       </div>
 
-      <PanelFooter 
+      <PanelFooter
         onSave={handleSave}
         onDelete={mode === 'edit' ? handleDelete : undefined}
         saveDisabled={!name || !displayName || !objectTypeId}
@@ -822,7 +822,7 @@ function FunctionPanel({
     } else {
       setBody(defaultBodyFor(functionType, language));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [existingFn]);
 
   // 切换函数类型/语言时重置 body（仅新建时）
@@ -830,7 +830,7 @@ function FunctionPanel({
     if (mode === 'create' && !existingFn) {
       setBody(defaultBodyFor(functionType, language));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [functionType, language]);
 
   const handleSave = () => {
@@ -1115,13 +1115,13 @@ function FunctionPanel({
   );
 }
 
-function PanelFooter({ 
-  onSave, 
-  onDelete, 
-  saveDisabled 
-}: { 
-  onSave: () => void; 
-  onDelete?: () => void; 
+function PanelFooter({
+  onSave,
+  onDelete,
+  saveDisabled
+}: {
+  onSave: () => void;
+  onDelete?: () => void;
   saveDisabled?: boolean;
 }) {
   return (

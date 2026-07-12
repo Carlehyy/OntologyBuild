@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { HardDrive, Loader2 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 
 export default function StorageInspector({ config, onChange, readOnly = false, pipelineId }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void; readOnly?: boolean; pipelineId?: string }) {

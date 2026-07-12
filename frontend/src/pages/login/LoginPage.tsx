@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { authApi } from '@/api/auth'
 import { useTranslation } from 'react-i18next'
 import { useState, useEffect, useRef } from 'react'
-import { Network, Layers, Brain, Zap, Eye, EyeOff, BookOpen, GitBranch } from 'lucide-react'
+import { Network, Layers, Brain, Eye, EyeOff, GitBranch } from 'lucide-react'
 
 /* ── 动态背景粒子 ── */
 function ParticleBackground() {
@@ -71,7 +71,7 @@ export default function LoginPage() {
   const { register, handleSubmit } = useForm<{ username: string; password: string }>()
   const setAuth = useAuthStore(s => s.setAuth)
   const navigate = useNavigate()
-  const { t } = useTranslation()
+  const { t: _t } = useTranslation()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)

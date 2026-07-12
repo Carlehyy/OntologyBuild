@@ -12,9 +12,9 @@ import {
   GlobeAltIcon,
   BellIcon,
 } from '@heroicons/react/24/outline';
-import type { 
-  ActionRule, 
-  ActionRuleType, 
+import type {
+  ActionRule,
+  ActionRuleType,
   ActionRuleConfig,
   CreateObjectConfig,
   UpdatePropertyConfig,
@@ -80,7 +80,7 @@ export default function RuleEditor({
   const moveRule = (index: number, direction: 'up' | 'down') => {
     const newIndex = direction === 'up' ? index - 1 : index + 1;
     if (newIndex < 0 || newIndex >= rules.length) return;
-    
+
     const newRules = [...rules];
     [newRules[index], newRules[newIndex]] = [newRules[newIndex], newRules[index]];
     // Update order
@@ -137,7 +137,7 @@ export default function RuleEditor({
             onClick={() => addRule(rt.value)}
             className={`
               flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg
-              bg-surface-800 border border-surface-600 
+              bg-surface-800 border border-surface-600
               hover:border-surface-500 transition-all
               ${rt.color}
             `}
@@ -161,8 +161,8 @@ export default function RuleEditor({
                 key={rule.id}
                 className={`
                   border rounded-lg transition-all duration-200
-                  ${expandedId === rule.id 
-                    ? 'border-green-500/50 bg-green-500/5' 
+                  ${expandedId === rule.id
+                    ? 'border-green-500/50 bg-green-500/5'
                     : 'border-surface-600 bg-surface-800/50'
                   }
                   ${!rule.enabled ? 'opacity-50' : ''}
@@ -189,11 +189,11 @@ export default function RuleEditor({
                       <ChevronDownIcon className="w-3 h-3" />
                     </button>
                   </div>
-                  
+
                   <div className={`p-1.5 rounded ${getRuleColor(rule.type)} bg-current/10`}>
                     <Icon className={`w-4 h-4 ${getRuleColor(rule.type)}`} />
                   </div>
-                  
+
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-surface-200 truncate">
@@ -207,7 +207,7 @@ export default function RuleEditor({
                       {ruleTypes.find(r => r.value === rule.type)?.label}
                     </span>
                   </div>
-                  
+
                   <label className="flex items-center" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
@@ -216,7 +216,7 @@ export default function RuleEditor({
                       className="w-4 h-4 rounded bg-surface-700 border-surface-600 text-green-500 focus:ring-green-500"
                     />
                   </label>
-                  
+
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteRule(rule.id); }}
                     className="p-1 text-surface-500 hover:text-red-400 transition-colors"
@@ -238,7 +238,7 @@ export default function RuleEditor({
                         placeholder="规则名称"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="input-label">描述</label>
                       <input
@@ -294,7 +294,7 @@ function RuleConfigEditor({
   ];
 
   switch (config.type) {
-    case 'create_object':
+    case 'create_object': {
       const createConfig = config as CreateObjectConfig;
       const targetObjectType = ontology?.objectTypes.find((ot: ObjectType) => ot.id === createConfig.targetObjectTypeId);
       const updateMapping = (index: number, updates: Partial<CreateObjectConfig['propertyMappings'][number]>) => {
@@ -414,6 +414,7 @@ function RuleConfigEditor({
           </div>
         </div>
       );
+    }
 
     case 'update_property':
       return (

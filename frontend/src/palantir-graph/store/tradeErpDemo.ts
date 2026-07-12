@@ -1,7 +1,7 @@
 /**
  * 公司管理系统 - 本体模型
  * Company Management System Ontology Model
- * 
+ *
  * 布局设计:
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │  [顶部] 基础数据：部门、员工、币种、汇率     [接口] IAuditable, IApprovable │
@@ -15,7 +15,7 @@
  * │  ↓               │  ↓               │  ↓                │  ↓                │
  * │  应收 → 收款      │  报关 / 发票      │  应付 → 付款      │  竞拍 → 成交       │
  * └──────────────────┴──────────────────┴──────────────────┴────────────────────┘
- * 
+ *
  * 模块划分:
  * === 企业管理模块 ===
  * 1. 基础数据 (部门、员工、币种)
@@ -28,7 +28,7 @@
  * 8. 财务管理 (应收、应付、收付款)
  * 9. 物流管理 (物流公司、运输单)
  * 10. 外贸管理 (报关、汇率)
- * 
+ *
  * === 拍卖业务模块 ===
  * 11. 委托管理 (委托人、委托合同)
  * 12. 拍品管理 (拍卖品、分类、鉴定)
@@ -81,7 +81,7 @@ const IDS = {
   // 外贸
   CUSTOMS_DECLARATION: 'erp-customs-declaration',
   EXCHANGE_RATE: 'erp-exchange-rate',
-  
+
   // ========== 拍卖系统 ==========
   // 委托管理
   CONSIGNOR: 'auc-consignor',
@@ -102,7 +102,7 @@ const IDS = {
   AUCTION_RESULT: 'auc-auction-result',
   SETTLEMENT: 'auc-settlement',
   COMMISSION: 'auc-commission',
-  
+
   // 接口
   AUDITABLE: 'erp-auditable',
   APPROVABLE: 'erp-approvable',
@@ -377,14 +377,14 @@ const exchangeRateProps: Property[] = [
 ];
 
 // 接口属性
-const auditableProps: Property[] = [
+const _auditableProps: Property[] = [
   { id: 'aud-created', name: 'created_at', displayName: '创建时间', type: 'datetime', required: true },
   { id: 'aud-updated', name: 'updated_at', displayName: '更新时间', type: 'datetime', required: true },
   { id: 'aud-created-by', name: 'created_by', displayName: '创建人', type: 'reference', required: true },
   { id: 'aud-updated-by', name: 'updated_by', displayName: '更新人', type: 'reference', required: false },
 ];
 
-const approvableProps: Property[] = [
+const _approvableProps: Property[] = [
   { id: 'appr-status', name: 'approval_status', displayName: '审批状态', type: 'string', required: true },
   { id: 'appr-by', name: 'approved_by', displayName: '审批人', type: 'reference', required: false },
   { id: 'appr-at', name: 'approved_at', displayName: '审批时间', type: 'datetime', required: false },
@@ -709,7 +709,7 @@ export const tradeErpObjectTypes: ObjectType[] = [
     icon: '📈', color: '#dc2626', primaryKey: 'er-from', properties: exchangeRateProps,
     createdAt: now(), updatedAt: now(),
   },
-  
+
   // ========== 拍卖系统 Object Types ==========
   // 委托管理
   {
@@ -835,7 +835,7 @@ export const tradeErpLinkTypes: LinkType[] = [
   // 报关关系
   { id: 'link-cd-so', name: 'customs_sales', displayName: '报关销售单', sourceObjectTypeId: IDS.CUSTOMS_DECLARATION, targetObjectTypeId: IDS.SALES_ORDER, cardinality: 'many-to-one', sourceRole: '来源订单', targetRole: '报关记录', createdAt: now(), updatedAt: now() },
   { id: 'link-cd-to', name: 'customs_transport', displayName: '报关运输单', sourceObjectTypeId: IDS.CUSTOMS_DECLARATION, targetObjectTypeId: IDS.TRANSPORT_ORDER, cardinality: 'many-to-one', sourceRole: '关联运输', targetRole: '报关记录', createdAt: now(), updatedAt: now() },
-  
+
   // ========== 拍卖系统 Entity Relations ==========
   // 委托关系
   { id: 'link-contract-consignor', name: 'contract_consignor', displayName: '合同委托人', sourceObjectTypeId: IDS.CONSIGNMENT_CONTRACT, targetObjectTypeId: IDS.CONSIGNOR, cardinality: 'many-to-one', sourceRole: '委托人', targetRole: '委托合同', createdAt: now(), updatedAt: now() },
@@ -948,7 +948,7 @@ export const tradeErpActions: Action[] = [
     ],
     createdAt: now(), updatedAt: now(),
   },
-  
+
   // ========== 拍卖系统 Actions ==========
   // 委托征集
   {
@@ -1117,21 +1117,21 @@ export const tradeErpNodes: OntologyNode[] = [
   { id: IDS.CONSIGNOR, type: 'objectType', position: { x: 2000, y: 200 }, data: tradeErpObjectTypes[26] },
   { id: IDS.CONSIGNMENT_CONTRACT, type: 'objectType', position: { x: 2300, y: 200 }, data: tradeErpObjectTypes[27] },
   { id: IDS.AUCTION_CATEGORY, type: 'objectType', position: { x: 2600, y: 200 }, data: tradeErpObjectTypes[29] },
-  
+
   // 第二行 - 拍品
   { id: IDS.AUCTION_ITEM, type: 'objectType', position: { x: 2000, y: 400 }, data: tradeErpObjectTypes[28] },
   { id: IDS.APPRAISAL, type: 'objectType', position: { x: 2300, y: 400 }, data: tradeErpObjectTypes[30] },
-  
+
   // 第三行 - 拍卖活动
   { id: IDS.AUCTION_EVENT, type: 'objectType', position: { x: 2000, y: 600 }, data: tradeErpObjectTypes[31] },
   { id: IDS.AUCTION_SESSION, type: 'objectType', position: { x: 2300, y: 600 }, data: tradeErpObjectTypes[32] },
   { id: IDS.AUCTION_LOT, type: 'objectType', position: { x: 2600, y: 600 }, data: tradeErpObjectTypes[33] },
-  
+
   // 第四行 - 竞拍
   { id: IDS.BIDDER, type: 'objectType', position: { x: 2000, y: 800 }, data: tradeErpObjectTypes[34] },
   { id: IDS.DEPOSIT, type: 'objectType', position: { x: 2300, y: 800 }, data: tradeErpObjectTypes[36] },
   { id: IDS.BID, type: 'objectType', position: { x: 2600, y: 800 }, data: tradeErpObjectTypes[35] },
-  
+
   // 第五行 - 成交结算
   { id: IDS.AUCTION_RESULT, type: 'objectType', position: { x: 2000, y: 1000 }, data: tradeErpObjectTypes[37] },
   { id: IDS.SETTLEMENT, type: 'objectType', position: { x: 2300, y: 1000 }, data: tradeErpObjectTypes[38] },
@@ -1417,7 +1417,7 @@ const demoInstances: ObjectInstance[] = [
   { id: 'inst-recv-001', objectTypeId: IDS.RECEIVABLE, properties: { receivable_no: 'AR001', customer_id: 'inst-cust-001', order_id: 'inst-order-001', amount: 34200, balance: 34200, status: 'outstanding', due_date: '2025-02-15' }, createdAt: now(), updatedAt: now() },
 ];
 
-const demoLinkInstances: LinkInstance[] = [
+const _demoLinkInstances: LinkInstance[] = [
   // 产品 - 分类
   { id: 'li-001', linkTypeId: 'link-product-category', sourceObjectId: 'inst-prod-001', targetObjectId: 'inst-cat-001', properties: {}, createdAt: now() },
   { id: 'li-002', linkTypeId: 'link-product-category', sourceObjectId: 'inst-prod-002', targetObjectId: 'inst-cat-001', properties: {}, createdAt: now() },
@@ -1446,7 +1446,7 @@ const _ensureActionIds = () => {
 };
 _ensureActionIds();
 
-const demoAuditLogs: ActionExecutionLog[] = [];
+const _demoAuditLogs: ActionExecutionLog[] = [];
 
 // ============================================
 // Complete Ontology

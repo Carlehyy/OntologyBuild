@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiClientV2 } from '@/api/client'
 import {
-  CheckCircle, Loader2, GitBranch, Trash2, ExternalLink, Play, Sparkles,
+  CheckCircle, Loader2, GitBranch, Trash2, ExternalLink, Play,
 } from 'lucide-react'
 
 /* ============ 类型 ============ */

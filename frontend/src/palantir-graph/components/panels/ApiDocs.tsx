@@ -311,11 +311,6 @@ function gqlType(t: string): string {
   }
 }
 
-function gqlReturnType(t: string): string {
-  if (t === 'object_set') return '[OntologyObject!]!';
-  return gqlType(t) + '!';
-}
-
 function toPascal(s: string): string {
   return s.split(/[_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }

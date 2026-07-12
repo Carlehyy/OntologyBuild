@@ -86,7 +86,7 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
     datasetsApi.schema(dataset.id)
       .then(r => setColTypes(Object.fromEntries((r.columns ?? []).map(c => [c.name, c.type]))))
       .catch(() => setColTypes({}))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [dataset.id])
 
   const switchPage = (off: number) => {

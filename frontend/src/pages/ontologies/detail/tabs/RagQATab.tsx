@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
-import { LoadingState, EmptyState } from '@/components/ui/LoadingState'
 import { Send, Bot, UserCircle, Sparkles, Database, FileText, Zap, Lightbulb } from 'lucide-react'
 import axios from 'axios'
 

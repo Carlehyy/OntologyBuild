@@ -70,7 +70,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
   // 有待审批时默认落到审批页——决策等着人做，别藏在第二个 tab 后面
   useEffect(() => {
     if (isOpen && pending.length > 0) setTab('approvals');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [isOpen, pending.length > 0]);
 
   if (!isOpen) return null;

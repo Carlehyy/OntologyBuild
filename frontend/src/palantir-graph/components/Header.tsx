@@ -6,7 +6,6 @@ import {
   CodeBracketIcon,
   CubeIcon,
   LinkIcon,
-  Squares2X2Icon,
   CloudArrowUpIcon,
   CheckCircleIcon,
   ExclamationCircleIcon,
@@ -388,16 +387,16 @@ function formatVersion(version?: string) {
   return version.trim().toLowerCase().startsWith('v') ? version : `v${version}`;
 }
 
-function StatBadge({ 
+function StatBadge({
   icon: Icon,
-  label, 
-  value, 
+  label,
+  value,
   color,
   active,
-}: { 
+}: {
   icon: React.ElementType;
-  label: string; 
-  value: number; 
+  label: string;
+  value: number;
   color: 'indigo' | 'cyan' | 'purple' | 'yellow' | 'violet';
   active?: boolean;
 }) {
@@ -434,13 +433,13 @@ function formatTime(isoString: string): string {
   const date = new Date(isoString);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
-  
+
   if (diff < 60000) return '刚刚';
   if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
-  
-  return date.toLocaleDateString('zh-CN', { 
-    month: 'short', 
+
+  return date.toLocaleDateString('zh-CN', {
+    month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',

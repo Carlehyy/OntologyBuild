@@ -31,7 +31,7 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
   const allItems = useMemo(() => [
     ...draft.draft.objectTypes, ...draft.draft.linkTypes, ...draft.draft.actions,
     ...functions, ...sentinels,
-  ], [draft])  // eslint-disable-line react-hooks/exhaustive-deps
+  ], [draft])
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(allItems.filter(i => !i.conflict).map(i => i.key)))
   const [newName, setNewName] = useState('')

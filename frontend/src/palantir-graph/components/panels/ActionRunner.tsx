@@ -26,9 +26,8 @@ interface ActionRunnerProps {
   initialInstanceId?: string;
 }
 
-export default function ActionRunner({ isOpen: externalIsOpen, onClose, initialActionId, initialInstanceId }: ActionRunnerProps) {
-  const [internalIsOpen, setInternalIsOpen] = useState(false);
-  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
+export default function ActionRunner({ isOpen: _externalIsOpen, onClose, initialActionId, initialInstanceId: _initialInstanceId }: ActionRunnerProps) {
+  const [_internalIsOpen, setInternalIsOpen] = useState(false);
   const ontology = useOntologyStore((s) => s.ontology);
   const getInstancesForType = useOntologyStore((s) => s.getInstancesForType);
   const openActionExecutor = useOntologyStore((s) => s.openActionExecutor);

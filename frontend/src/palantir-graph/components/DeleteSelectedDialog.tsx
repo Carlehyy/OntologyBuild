@@ -27,8 +27,8 @@ export default function DeleteSelectedDialog({ target, onClose }: { target: Dele
 
   if (!ontology) return null;
 
-  let title = '';
-  let impacts: { label: string; count: number }[] = [];
+  let title: string;
+  let impacts: { label: string; count: number }[];
 
   if (target.kind === 'objectType') {
     const ot = ontology.objectTypes.find((o) => o.id === target.id);

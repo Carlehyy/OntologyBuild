@@ -50,7 +50,7 @@ function resolveMappingValue(
   params: Record<string, unknown>,
   sourceInstance: Record<string, unknown> | undefined,
   ontology: Ontology,
-  createdInstances: Map<string, ObjectInstance> // 用于 created_object 引用
+  _createdInstances: Map<string, ObjectInstance> // 用于 created_object 引用
 ): unknown {
   switch (mapping.sourceType) {
     case 'parameter':
@@ -64,7 +64,7 @@ function resolveMappingValue(
       } catch {
         return mapping.sourceValue;
       }
-    case 'expression':
+    case 'expression': {
       // 使用函数引擎评估表达式
       const fn = ontology.functions.find(f => f.id === mapping.functionId);
       if (fn) {
@@ -72,13 +72,15 @@ function resolveMappingValue(
         return r.success ? r.data : undefined;
       }
       return undefined;
-    case 'function':
+    }
+    case 'function': {
       const fn2 = ontology.functions.find(f => f.id === mapping.functionId);
       if (fn2) {
         const r = executeFunction(fn2, ontology, { object: sourceInstance, params });
         return r.success ? r.data : undefined;
       }
       return undefined;
+    }
   }
 }
 
@@ -182,7 +184,7 @@ function executeRule(
       } else if (cfg.valueSource === 'expression') {
         try {
           // 简单表达式：直接在沙箱里算
-          // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+
           const fn = new Function('object', 'params', `"use strict"; return (${cfg.value});`);
           newValue = fn(sourceInstance.properties, params);
         } catch (e) {

@@ -31,7 +31,7 @@ export default function RunHistory() {
   }, [end, keyword, page, start])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- query changes hydrate server results
+
     void load()
   }, [load])
 

@@ -31,7 +31,7 @@ const CURATED_STATUS_ICON = (status: string) => {
   return <Clock size={13} className="text-yellow-400" />
 }
 
-const CURATED_STATUS_LABEL: Record<string, string> = {
+const _CURATED_STATUS_LABEL: Record<string, string> = {
   pending_review: '待审核', approved: '已审核', rejected: '已拒绝',
 }
 

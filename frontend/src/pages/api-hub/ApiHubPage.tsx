@@ -24,7 +24,7 @@ export default function ApiHubPage() {
   }, [])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate independent navigation page data
+
     Promise.all([reloadInterfaces(), reloadCredential()])
       .catch(error => setError(apiError(error)))
       .finally(() => setLoading(false))

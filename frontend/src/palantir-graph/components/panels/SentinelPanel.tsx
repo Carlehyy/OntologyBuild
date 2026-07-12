@@ -40,7 +40,7 @@ interface Draft {
   enabled: boolean
 }
 
-const OPS = ['==', '!=', '>', '>=', '<', '<=', 'contains']
+const _OPS = ['==', '!=', '>', '>=', '<', '<=', 'contains']
 
 // 运算符的中文称谓
 const OP_LABEL: Record<string, string> = {
@@ -520,7 +520,8 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
                         <input type="checkbox" checked={checked}
                           onChange={e => {
                             const set = new Set(draft.actionIds)
-                            e.target.checked ? set.add(a.id) : set.delete(a.id)
+                            if (e.target.checked) set.add(a.id)
+                            else set.delete(a.id)
                             setDraft({ ...draft, actionIds: [...set] })
                           }} />
                         <span className="text-surface-200">{a.displayName}</span>

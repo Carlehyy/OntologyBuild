@@ -79,7 +79,7 @@ function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
 export default function OntologyCreateWizard() {
   const navigate = useNavigate()
-  const { t } = useTranslation()
+  const { t: _t } = useTranslation()
   const qc = useQueryClient()
 
   const [step, setStep] = useState<Step>('select_mode')
@@ -173,7 +173,12 @@ export default function OntologyCreateWizard() {
   }, [approvedRows, pipelineFilter, curatedFilter])
 
   const toggleDataset = (id: string) => {
-    setSelectedDatasetIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+    setSelectedDatasetIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
   }
 
   const allFilteredSelected =

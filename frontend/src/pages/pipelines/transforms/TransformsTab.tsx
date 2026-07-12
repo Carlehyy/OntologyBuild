@@ -316,7 +316,6 @@ export default function TransformsTab() {
           {pipelines.map(pl => {
             const isExpanded = expanded === pl.id
             const detail = runDetails[pl.id]
-            const steps = isExpanded && detail ? buildSteps(pl.route, detail.stats) : []
             const isRunning = running === pl.id
 
             return (

@@ -4,7 +4,6 @@ import {
   XMarkIcon,
   QuestionMarkCircleIcon,
   CodeBracketIcon,
-  BeakerIcon,
   PlayIcon,
   CommandLineIcon,
   ShieldExclamationIcon,

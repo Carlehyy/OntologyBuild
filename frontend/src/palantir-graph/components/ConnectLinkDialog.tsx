@@ -36,7 +36,7 @@ export default function ConnectLinkDialog({ sourceId, targetId, onClose }: Props
       setName(`${source.name}_to_${target.name}`);
       setDisplayName(`${source.displayName} → ${target.displayName}`);
     }
-  }, [sourceId, targetId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sourceId, targetId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

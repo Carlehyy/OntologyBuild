@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { PlusIcon, TrashIcon, KeyIcon } from '@heroicons/react/24/outline';
 import type { Property, PropertyType } from '../../types/ontology';
@@ -34,7 +33,7 @@ export default function PropertyEditor({
   showPrimaryKey = true,
   allowComputed = true,
   showDataBinding = true,
-  objectTypeId,
+  objectTypeId: _objectTypeId,
 }: PropertyEditorProps) {
   const { ontology } = useOntologyStore();
   const propertyLabel = (prop: Property) => prop.displayName || prop.name;
@@ -93,7 +92,7 @@ export default function PropertyEditor({
             暂无属性，点击上方按钮添加
           </div>
         ) : (
-          properties.map((prop, index) => (
+          properties.map((prop) => (
             <div
               key={prop.id}
               className={`rounded-lg border p-3 transition-colors ${

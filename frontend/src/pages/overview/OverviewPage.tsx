@@ -180,7 +180,6 @@ export default function OverviewPage() {
   }
 
   const entities = stats.entity_count || 0
-  const relations = stats.relation_count ?? Math.round(entities * 1.7)
   const ruleHits = stats.rule_hits ?? Math.max(128, stats.logic_count * 17 + 128)
   const domains = useMemo(() => {
     const dc = stats.domain_counts && Object.keys(stats.domain_counts).length

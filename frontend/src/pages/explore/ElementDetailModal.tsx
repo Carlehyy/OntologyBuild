@@ -82,7 +82,7 @@ interface Ctx {
 const asArr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [])
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const norm = (s: unknown): string =>
-  String(s ?? '').trim().toLowerCase().replace(/[\s_\-]+/g, '')
+  String(s ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '')
 
 /** 自然语言类型提示 → 类型分类（图标 + 配色）。 */
 function typeCategory(hint?: string): { Icon: React.ElementType; cls: string } {

@@ -394,7 +394,7 @@ export default function PipelineListPage() {
       {showCreate && (
         <PipelineCreateModal
           onClose={() => setShowCreate(false)}
-          onCreated={(pl) => {
+          onCreated={(_pl) => {
             setShowCreate(false)
             load()
           }}

@@ -101,7 +101,9 @@ function loadSavedTask(oid: string): SavedTask | null {
 function saveTask(oid: string, data: SavedTask) {
   try {
     localStorage.setItem(lastTaskKey(oid), JSON.stringify(data))
-  } catch {}
+  } catch {
+    // Storage may be unavailable in private or restricted browser contexts.
+  }
 }
 
 function StructuredDataLink() {
@@ -154,7 +156,7 @@ function PipelineMappingInfo({ ontology }: { ontology: OntologyDetail }) {
 }
 
 export default function InfoTab({ ontology }: { ontology: OntologyDetail }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const pollRef = useRef<(() => void) | null>(null)
   const [promptId, setPromptId] = useState('')

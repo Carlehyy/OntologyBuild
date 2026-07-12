@@ -362,7 +362,7 @@ async function runSimpleLLM(
   await shot(page, outDir, `${domainCn}_llm_08_graph`)
 
   // 统计
-  const statsBody = await api(request, 'GET', `/api/v1/overview/stats`, token)
+  await api(request, 'GET', `/api/v1/overview/stats`, token)
   const entities = await api(request, 'GET', `/api/v1/ontologies/${ontologyId}/entities?page=1&page_size=1`, token)
   const totalEntities: number = entities.data?.total ?? 0
 

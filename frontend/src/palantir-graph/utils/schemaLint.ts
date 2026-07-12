@@ -162,6 +162,9 @@ export function lintOntology(ontology: Ontology | null): LintIssue[] {
 
 export function lintSummary(issues: LintIssue[]): { errors: number; warnings: number } {
   let errors = 0, warnings = 0;
-  for (const i of issues) (i.severity === 'error' ? errors++ : warnings++);
+  for (const i of issues) {
+    if (i.severity === 'error') errors++;
+    else warnings++;
+  }
   return { errors, warnings };
 }

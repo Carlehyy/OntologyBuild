@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useParams } from 'react-router-dom'
 import { settingsApi, usersApi, promptApi, domainApi } from '@/api/ontologies'
-import { Trash2, Plus, Pencil, X, Check, Sparkles, Search, Loader2, Target, Bot, Wifi, RefreshCw, Workflow, Globe } from 'lucide-react'
+import { Trash2, Plus, Pencil, X, Check, Sparkles, Search, Loader2, Target, Bot, Wifi, RefreshCw, Workflow } from 'lucide-react'
 import {
   EXTRACTION_RULES,
   VALIDATION_RULES,

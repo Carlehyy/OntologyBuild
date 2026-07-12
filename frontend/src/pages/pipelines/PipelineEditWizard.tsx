@@ -152,7 +152,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         }
       }).catch(() => setLastRun('none'))
     }
-  }, [step])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step])
 
   // ── 阶段 3: 校验（全量，基于第 2 步暂存数据）──
   const runValidate = async () => {
