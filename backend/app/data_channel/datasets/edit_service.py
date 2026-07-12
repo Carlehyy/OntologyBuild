@@ -86,10 +86,42 @@ def build_edited_snapshot(db, svc, ds, body) -> tuple[list[dict], list[str], dic
         check_known_cols(op.values or {}, "新增的行")
         new_rows.append({col: (op.values or {}).get(col, "") for col in columns})
 
-    if schema.get("types_source") == "declared":
+    # 主键是行身份，只能用于定位，在线维护不提供 re-key 能力。
+    for op in body.updates:
+        values, key = op.values or {}, op.key or {}
+        changed_pk = [
+            col for col in pk_cols
+            if col in values and str(values.get(col, "") or "").strip()
+            != str(key.get(col, "") or "").strip()
+        ]
+        if changed_pk:
+            raise HTTPException(
+                400,
+                f"主键列 {changed_pk} 不允许修改；如业务身份发生变化，请新增一行并删除原行",
+            )
+
+    # 主键与显式 nullable=False 字段都属于非空契约。保存时校验完整快照，
+    # 避免只校验当前分页而让其他页上的坏数据随新版本一起发布。
+    required_columns = set(pk_cols)
+    for column in schema.get("columns_typed") or []:
+        if isinstance(column, dict) and column.get("name") and column.get("nullable") is False:
+            required_columns.add(str(column["name"]))
+    for definition in schema.get("contract_definitions") or []:
+        if isinstance(definition, dict) and definition.get("field_key") and definition.get("nullable") is False:
+            required_columns.add(str(definition["field_key"]))
+    for row_index, row in enumerate(new_rows):
+        for column in sorted(required_columns):
+            value = row.get(column)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                raise HTTPException(
+                    400,
+                    f"第 {row_index + 1} 行的非空列「{column}」不能为空，请补全后再保存",
+                )
+
+    if schema.get("columns_typed"):
         try:
             validate_declared_types(
-                [op.values or {} for op in body.updates + body.inserts],
+                new_rows,
                 schema.get("columns_typed"), dataset_name=ds.name)
         except LakeGateError as exc:
             raise HTTPException(400, str(exc))

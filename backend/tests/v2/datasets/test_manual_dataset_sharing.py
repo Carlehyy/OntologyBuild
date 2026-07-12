@@ -114,7 +114,8 @@ def test_external_edit_is_validated_then_waits_for_approval_before_new_version(a
         "updates": [{"key": {"编号": "A1"}, "values": {"编号": "A2"}}],
     })
     assert invalid.status_code == 400
-    assert "重复" in str(invalid.json()["detail"])
+    assert "主键列" in str(invalid.json()["detail"])
+    assert "不允许修改" in str(invalid.json()["detail"])
     assert db.query(ManualDatasetChange).count() == 0
 
     submitted = api.post(f"/api/public/manual-datasets/{token}/changes", json={

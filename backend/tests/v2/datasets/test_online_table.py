@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -92,6 +93,64 @@ def test_create_table_basic(api, auth_headers):
     sc = api.get(f"/api/v2/datasets/{ds_id}/schema", headers=auth_headers).json()
     assert {c["name"]: c["type"] for c in sc["columns"]} == {
         "编号": "string", "名称": "string", "数量": "integer"}
+
+
+def test_configured_upload_creates_first_version_with_field_contract(api, auth_headers):
+    payload = {
+        "name": "设备台账导入",
+        "columns": [
+            {"name": "id", "display_name": "设备编号", "type": "string", "nullable": False},
+            {"name": "name", "display_name": "设备名称", "type": "string", "nullable": False},
+            {"name": "quantity", "display_name": "数量", "type": "integer", "nullable": True},
+        ],
+        "primary_key": "id",
+    }
+    content = "id,name,quantity\nA1,泵机,10\nA2,阀门,5\n"
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": ("原始文件.csv", io.BytesIO(content.encode()), "text/csv")},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+    result = response.json()["data"]
+    assert result["name"] == "设备台账导入"
+    assert result["version_no"] == 1
+    assert result["rowcount"] == 2
+    assert result["source"] == "upload"
+
+    schema_response = api.get(
+        f"/api/v2/datasets/{result['id']}/schema", headers=auth_headers)
+    columns = {item["name"]: item for item in schema_response.json()["columns"]}
+    assert columns["id"]["display_name"] == "设备编号"
+    assert columns["id"]["is_primary_key"] is True
+    assert columns["name"]["nullable"] is False
+    assert columns["quantity"]["type"] == "integer"
+
+
+@pytest.mark.parametrize("content, expected", [
+    ("id,name,quantity\nA1,,10\n", "非空列「name」"),
+    ("id,name,quantity\nA1,泵机,很多\n", "类型校验未通过"),
+    ("id,name,quantity\nA1,泵机,10\nA1,阀门,5\n", "主键重复"),
+])
+def test_configured_upload_rejects_contract_violations(api, auth_headers, content, expected):
+    payload = {
+        "name": "错误数据",
+        "columns": [
+            {"name": "id", "display_name": "编号", "type": "string", "nullable": False},
+            {"name": "name", "display_name": "名称", "type": "string", "nullable": False},
+            {"name": "quantity", "display_name": "数量", "type": "integer", "nullable": True},
+        ],
+        "primary_key": "id",
+    }
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": ("bad.csv", io.BytesIO(content.encode()), "text/csv")},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert expected in str(response.json()["detail"])
 
 
 def test_create_table_validation(api, auth_headers):

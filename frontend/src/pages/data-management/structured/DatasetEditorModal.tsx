@@ -1,106 +1,166 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  X, Loader2, KeyRound, Plus, Trash2, Undo2, Save,
-  ChevronLeft, ChevronRight, CheckCircle2, XCircle, Pencil,
+  CheckCircle2, ChevronLeft, ChevronRight, Download, FileSpreadsheet,
+  KeyRound, Loader2, LockKeyhole, Pencil, Plus, Save, Trash2, Undo2, X, XCircle,
 } from 'lucide-react'
-import datasetsApi, { FIELD_TYPE_LABELS, type DatasetOverviewItem } from '@/api/v2/datasets'
+import datasetsApi, {
+  FIELD_TYPE_LABELS,
+  type DatasetOverviewItem,
+  type DatasetSchemaColumn,
+} from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
-const PAGE_SIZE = 50
+const PAGE_SIZES = [20, 50, 100, 200, 500, 1000] as const
+const DEFAULT_PAGE_SIZE = 50
 
 type CellMap = Record<string, string>
 interface EditableRow {
-  orig: CellMap   // 加载时的原值（update/delete 用它定位，主键改值也不丢定位）
+  orig: CellMap
   cur: CellMap
   deleted: boolean
 }
 
-const toStr = (v: unknown) => {
-  if (v == null) return ''
-  if (typeof v === 'object') {
-    try { return JSON.stringify(v) } catch { return String(v) }
+const toStr = (value: unknown) => {
+  if (value == null) return ''
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value) } catch { return String(value) }
   }
-  return String(v)
+  return String(value)
 }
 
-/** 人工数据集在线维护：声明主键契约 + 改单元格/增删行（保存即生成新版本） */
+const displayWidth = (value: string) => Array.from(value).reduce(
+  (width, char) => width + ((char.codePointAt(0) ?? 0) > 0xff ? 2 : 1),
+  0,
+)
+
+const columnLabel = (column: DatasetSchemaColumn | undefined, identifier: string) => {
+  const displayName = column?.display_name?.trim()
+  return displayName && displayName !== identifier ? `${displayName}（${identifier}）` : identifier
+}
+
+const jsonShape = (column: DatasetSchemaColumn | undefined): 'array' | 'object' | null => {
+  for (const sample of column?.sample_values ?? []) {
+    if (Array.isArray(sample)) return 'array'
+    if (sample && typeof sample === 'object') return 'object'
+    if (typeof sample !== 'string' || !sample.trim()) continue
+    try {
+      const parsed = JSON.parse(sample)
+      if (Array.isArray(parsed)) return 'array'
+      if (parsed && typeof parsed === 'object') return 'object'
+    } catch { /* 样本只用于判断结构，不因旧样本异常中断编辑器 */ }
+  }
+  return null
+}
+
+const validateValue = (value: string, column: DatasetSchemaColumn | undefined): string => {
+  const text = value.trim()
+  if (!column) return ''
+  if (!column.nullable && !text) return '此列不允许为空'
+  if (!text || column.type === 'string') return ''
+  if (column.type === 'integer' && !/^[+-]?[\d,]+$/.test(text)) return '请输入整数'
+  if (column.type === 'float' && !Number.isFinite(Number(text.replaceAll(',', '')))) return '请输入数字'
+  if (column.type === 'boolean' && !['true', 'false', 'yes', 'no', '1', '0'].includes(text.toLowerCase())) {
+    return '请输入 true / false、yes / no 或 1 / 0'
+  }
+  if (column.type === 'timestamp' && !(
+    /^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(text)
+    || /^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(text)
+    || /^\d{8}$/.test(text)
+  )) return '请输入有效日期或时间'
+  if (column.type === 'json') {
+    try {
+      const parsed = JSON.parse(text)
+      const shape = jsonShape(column)
+      if (shape === 'array' && !Array.isArray(parsed)) return '此列要求 JSON 数组，例如 ["a", "b"]'
+      if (shape === 'object' && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
+        return '此列要求 JSON 对象，例如 {"key": "value"}'
+      }
+    } catch {
+      return '请输入合法 JSON'
+    }
+  }
+  return ''
+}
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** 人工数据集在线维护：分页查询、全量导出、逐格校验与行级编辑。 */
 export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   dataset: DatasetOverviewItem
   onClose: () => void
   onSaved: () => void
 }) {
   const [pk, setPk] = useState(dataset.primary_key || '')
-  const pkCols = useMemo(() => pk.split(',').map(s => s.trim()).filter(Boolean), [pk])
-
+  const pkCols = useMemo(() => pk.split(',').map(item => item.trim()).filter(Boolean), [pk])
   const [columns, setColumns] = useState<string[]>([])
-  const [colTypes, setColTypes] = useState<Record<string, string>>({})
+  const [schemaColumns, setSchemaColumns] = useState<Record<string, DatasetSchemaColumn>>({})
   const [rows, setRows] = useState<EditableRow[]>([])
   const [inserts, setInserts] = useState<CellMap[]>([])
   const [versionNo, setVersionNo] = useState(0)
   const [totalRows, setTotalRows] = useState(0)
   const [offset, setOffset] = useState(0)
-
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
+  const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
   const [confirmClose, setConfirmClose] = useState(false)
-
-  // 主键契约声明面板
-  const [pkPanelOpen, setPkPanelOpen] = useState(false)
+  const [pkPanelOpen, setPkPanelOpen] = useState(!dataset.primary_key)
   const [pkDraft, setPkDraft] = useState<string[]>([])
   const [declaring, setDeclaring] = useState(false)
 
-  const dirty = inserts.length > 0 || rows.some(r =>
-    r.deleted || columns.some(c => r.cur[c] !== r.orig[c]))
+  const dirty = inserts.length > 0 || rows.some(row =>
+    row.deleted || columns.some(column => row.cur[column] !== row.orig[column]))
 
-  const loadPage = async (off: number) => {
+  const loadPage = async (nextOffset: number, limit = pageSize) => {
     setLoading(true)
     setError('')
+    setCellErrors({})
     try {
-      const res = await datasetsApi.previewLatest(dataset.id, PAGE_SIZE, off)
-      const cols = res.columns ?? []
-      setColumns(cols)
-      setRows((res.rows ?? []).map(raw => {
-        const m: CellMap = {}
-        cols.forEach(c => { m[c] = toStr(raw[c]) })
-        return { orig: { ...m }, cur: { ...m }, deleted: false }
+      const result = await datasetsApi.previewLatest(dataset.id, limit, nextOffset)
+      const nextColumns = result.columns ?? []
+      setColumns(nextColumns)
+      setRows((result.rows ?? []).map(raw => {
+        const values: CellMap = {}
+        nextColumns.forEach(column => { values[column] = toStr(raw[column]) })
+        return { orig: { ...values }, cur: { ...values }, deleted: false }
       }))
       setInserts([])
-      setVersionNo(res.version_no ?? 0)
-      setTotalRows(res.total_rows ?? 0)
-      setOffset(off)
-    } catch {
-      setError('数据加载失败，请重试')
+      setVersionNo(result.version_no ?? 0)
+      setTotalRows(result.total_rows ?? 0)
+      setOffset(nextOffset)
+    } catch (loadError) {
+      const detail = (loadError as { detail?: string; message?: string })?.detail
+      setError(detail || '数据加载失败，请重试')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    void Promise.resolve().then(() => {
-      loadPage(0)
-      if (!dataset.primary_key) setPkPanelOpen(true)
-    })
-    // 列类型提示：在线建表返回声明类型，上传的数据集返回按数据推断的类型
+    void Promise.resolve().then(() => loadPage(0, DEFAULT_PAGE_SIZE))
     datasetsApi.schema(dataset.id)
-      .then(r => setColTypes(Object.fromEntries((r.columns ?? []).map(c => [c.name, c.type]))))
-      .catch(() => setColTypes({}))
-
+      .then(result => setSchemaColumns(Object.fromEntries(
+        (result.columns ?? []).map(column => [column.name, column]),
+      )))
+      .catch(() => setSchemaColumns({}))
   }, [dataset.id])
-
-  const switchPage = (off: number) => {
-    if (dirty) { setError('有未保存的修改，请先保存或放弃后再翻页'); return }
-    loadPage(Math.max(0, off))
-  }
 
   const requestClose = useCallback(() => {
     if (saving) return
-    if (dirty) {
-      setConfirmClose(true)
-      return
-    }
-    onClose()
+    if (dirty) setConfirmClose(true)
+    else onClose()
   }, [dirty, onClose, saving])
 
   useEffect(() => {
@@ -111,58 +171,124 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [confirmClose, requestClose])
 
-  /* ── 主键契约 ── */
-  const togglePkCol = (col: string) =>
-    setPkDraft(d => d.includes(col) ? d.filter(c => c !== col) : [...d, col])
+  const columnWidths = useMemo(() => Object.fromEntries(columns.map(column => {
+    const metadata = schemaColumns[column]
+    const values = [
+      columnLabel(metadata, column),
+      ...rows.map(row => row.cur[column] ?? ''),
+      ...inserts.map(row => row[column] ?? ''),
+    ]
+    const width = Math.max(14, ...values.map(value => displayWidth(value) + 4))
+    return [column, width]
+  })), [columns, inserts, rows, schemaColumns])
+
+  const togglePkCol = (column: string) => setPkDraft(current =>
+    current.includes(column) ? current.filter(item => item !== column) : [...current, column])
 
   const handleDeclare = async () => {
-    if (pkDraft.length === 0) return
+    if (!pkDraft.length) return
     setDeclaring(true)
     setError('')
     try {
-      const res = await datasetsApi.declareContract(dataset.id, pkDraft.join(','))
-      setPk(res.primary_key)
+      const result = await datasetsApi.declareContract(dataset.id, pkDraft.join(','))
+      setPk(result.primary_key)
       setPkPanelOpen(false)
-      setInfo(`主键契约已声明：${res.primary_key}（已在 ${res.rows_validated} 行数据上校验通过）`)
+      setSchemaColumns(current => Object.fromEntries(Object.entries(current).map(([name, column]) => [
+        name,
+        { ...column, is_primary_key: pkDraft.includes(name), nullable: pkDraft.includes(name) ? false : column.nullable },
+      ])))
+      setInfo(`主键契约已声明：${result.primary_key}（已校验 ${result.rows_validated} 行）`)
       onSaved()
-    } catch (err: unknown) {
-      const er = err as { detail?: string; message?: string }
-      setError(typeof er?.detail === 'string' ? er.detail : (er?.message || '声明失败'))
+    } catch (declareError) {
+      const detail = (declareError as { detail?: string; message?: string })?.detail
+      setError(detail || '主键声明失败')
     } finally {
       setDeclaring(false)
     }
   }
 
-  /* ── 行编辑 ── */
-  const setCell = (i: number, col: string, val: string) =>
-    setRows(rs => rs.map((r, idx) => idx === i ? { ...r, cur: { ...r.cur, [col]: val } } : r))
+  const clearCellError = (key: string) => setCellErrors(current => {
+    if (!current[key]) return current
+    const next = { ...current }
+    delete next[key]
+    return next
+  })
 
-  const toggleDelete = (i: number) =>
-    setRows(rs => rs.map((r, idx) => idx === i ? { ...r, deleted: !r.deleted } : r))
+  const setCell = (rowIndex: number, column: string, value: string) => {
+    setRows(current => current.map((row, index) => index === rowIndex
+      ? { ...row, cur: { ...row.cur, [column]: value } }
+      : row))
+    clearCellError(`row:${rowIndex}:${column}`)
+  }
 
-  const addInsert = () =>
-    setInserts(list => [...list, Object.fromEntries(columns.map(c => [c, ''])) as CellMap])
+  const toggleDelete = (rowIndex: number) => setRows(current => current.map(
+    (row, index) => index === rowIndex ? { ...row, deleted: !row.deleted } : row,
+  ))
 
-  const setInsertCell = (i: number, col: string, val: string) =>
-    setInserts(list => list.map((r, idx) => idx === i ? { ...r, [col]: val } : r))
+  const addInsert = () => setInserts(current => [
+    ...current,
+    Object.fromEntries(columns.map(column => [column, ''])) as CellMap,
+  ])
 
-  const removeInsert = (i: number) =>
-    setInserts(list => list.filter((_, idx) => idx !== i))
+  const setInsertCell = (rowIndex: number, column: string, value: string) => {
+    setInserts(current => current.map((row, index) => index === rowIndex
+      ? { ...row, [column]: value }
+      : row))
+    clearCellError(`insert:${rowIndex}:${column}`)
+  }
 
-  const pickKey = (orig: CellMap): Record<string, string> =>
-    Object.fromEntries(pkCols.map(c => [c, orig[c] ?? '']))
+  const removeInsert = (rowIndex: number) => setInserts(current =>
+    current.filter((_, index) => index !== rowIndex))
+
+  const pickKey = (original: CellMap) => Object.fromEntries(
+    pkCols.map(column => [column, original[column] ?? '']),
+  )
+
+  const validateVisibleChanges = () => {
+    const problems: Record<string, string> = {}
+    rows.forEach((row, rowIndex) => {
+      if (row.deleted) return
+      columns.forEach(column => {
+        const message = validateValue(row.cur[column], schemaColumns[column])
+        if (message) problems[`row:${rowIndex}:${column}`] = message
+      })
+    })
+    inserts.forEach((row, rowIndex) => columns.forEach(column => {
+      const metadata = schemaColumns[column] ?? {
+        name: column,
+        display_name: column,
+        type: 'string',
+        nullable: !pkCols.includes(column),
+        is_primary_key: pkCols.includes(column),
+        sample_values: [],
+      }
+      const message = validateValue(row[column], metadata)
+      if (message) problems[`insert:${rowIndex}:${column}`] = message
+    }))
+    setCellErrors(problems)
+    const first = Object.entries(problems)[0]
+    if (first) {
+      const [, rowType, rowNumber, column] = first[0].match(/^(row|insert):(\d+):(.+)$/) ?? []
+      const line = rowType === 'insert' ? `新增行 ${Number(rowNumber) + 1}` : `第 ${offset + Number(rowNumber) + 1} 行`
+      setError(`${line}的「${columnLabel(schemaColumns[column], column)}」${first[1]}`)
+      return false
+    }
+    return true
+  }
 
   const handleSave = async () => {
+    if (!validateVisibleChanges()) return
     const updates = rows
-      .filter(r => !r.deleted && columns.some(c => r.cur[c] !== r.orig[c]))
-      .map(r => ({
-        key: pickKey(r.orig),
-        values: Object.fromEntries(columns.filter(c => r.cur[c] !== r.orig[c]).map(c => [c, r.cur[c]])),
+      .filter(row => !row.deleted && columns.some(column =>
+        !pkCols.includes(column) && row.cur[column] !== row.orig[column]))
+      .map(row => ({
+        key: pickKey(row.orig),
+        values: Object.fromEntries(columns
+          .filter(column => !pkCols.includes(column) && row.cur[column] !== row.orig[column])
+          .map(column => [column, row.cur[column]])),
       }))
-    const deletes = rows.filter(r => r.deleted).map(r => ({ key: pickKey(r.orig) }))
-    const insertOps = inserts
-      .filter(row => Object.values(row).some(v => v !== ''))
-      .map(values => ({ values }))
+    const deletes = rows.filter(row => row.deleted).map(row => ({ key: pickKey(row.orig) }))
+    const insertOps = inserts.map(values => ({ values }))
     if (!updates.length && !deletes.length && !insertOps.length) {
       setInfo('没有需要保存的修改')
       return
@@ -171,188 +297,214 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
     setError('')
     setInfo('')
     try {
-      const res = await datasetsApi.editRows(dataset.id, {
+      const result = await datasetsApi.editRows(dataset.id, {
         base_version_no: versionNo,
-        updates, deletes, inserts: insertOps,
+        updates,
+        deletes,
+        inserts: insertOps,
       })
-      setInfo(`已保存为 v${res.version_no}（共 ${res.rowcount} 行：修改 ${res.updated}、新增 ${res.inserted}、删除 ${res.deleted}）`)
+      setInfo(`已保存为 v${result.version_no}：修改 ${result.updated} 行，新增 ${result.inserted} 行，删除 ${result.deleted} 行`)
       onSaved()
-      await loadPage(offset)
-    } catch (err: unknown) {
-      const er = err as { detail?: string | { message?: string }; message?: string }
-      const msg = typeof er?.detail === 'object'
-        ? (er.detail?.message || '数据已被更新，请刷新后重试')
-        : (typeof er?.detail === 'string' ? er.detail : (er?.message || '保存失败'))
-      setError(msg)
+      const lastPageOffset = result.rowcount > 0
+        ? Math.floor((result.rowcount - 1) / pageSize) * pageSize
+        : 0
+      await loadPage(Math.min(offset, lastPageOffset), pageSize)
+    } catch (saveError) {
+      const detail = (saveError as { detail?: string | { message?: string }; message?: string })?.detail
+      setError(typeof detail === 'object' ? detail.message || '数据已更新，请刷新后重试' : detail || '保存失败')
     } finally {
       setSaving(false)
     }
   }
 
-  const canEdit = pkCols.length > 0
+  const changePage = (nextOffset: number) => {
+    if (dirty) { setError('有未保存的修改，请先保存或关闭后再翻页'); return }
+    void loadPage(Math.max(0, nextOffset), pageSize)
+  }
+
+  const changePageSize = (nextSize: number) => {
+    if (dirty) { setError('有未保存的修改，请先保存或关闭后再调整分页大小'); return }
+    setPageSize(nextSize)
+    void loadPage(0, nextSize)
+  }
+
+  const handleExport = async (format: 'csv' | 'xlsx') => {
+    setExporting(format)
+    setError('')
+    try {
+      const blob = await datasetsApi.export(dataset.id, format)
+      downloadBlob(blob, `${dataset.name}.${format}`)
+      setInfo(`已导出全部 ${totalRows} 行数据`)
+    } catch (exportError) {
+      const detail = (exportError as { detail?: string; message?: string })?.detail
+      setError(detail || `${format.toUpperCase()} 导出失败`)
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const canEditRows = pkCols.length > 0
   const pageEnd = Math.min(offset + rows.length, totalRows)
+  const currentPage = totalRows ? Math.floor(offset / pageSize) + 1 : 1
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-[min(96vw,1100px)] h-[85vh] flex flex-col overflow-hidden"
-        role="dialog" aria-modal="true" aria-labelledby="dataset-editor-title">
-        {/* 头部 */}
-        <div className="flex items-center gap-3 px-5 py-3.5 border-b">
-          <Pencil size={16} className="text-[var(--color-nav-bg)] shrink-0" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 id="dataset-editor-title" className="font-semibold text-sm truncate">{dataset.name}</h3>
-              <span className="text-xs text-gray-400">v{versionNo} · 共 {totalRows} 行</span>
-              {pkCols.length > 0 ? (
-                <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200"
-                  title="主键契约：定位行、保证实例身份稳定；被本体映射绑定后锁定">
-                  <KeyRound size={10} /> 主键：{pk}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]">
+      <div
+        className="flex h-[78vh] max-h-[760px] min-h-[520px] w-[min(96vw,1440px)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dataset-editor-title"
+      >
+        <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-5 py-4">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">
+            <Pencil size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 id="dataset-editor-title" className="truncate text-sm font-semibold text-slate-900">{dataset.name}</h3>
+              <span className="text-xs tabular-nums text-slate-400">v{versionNo} · {totalRows} 行</span>
+              {pkCols.length ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700" title="现有行的主键值已锁定">
+                  <LockKeyhole size={10} /> 主键：{pk}
                 </span>
               ) : (
-                <span className="text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200">
-                  未声明主键
-                </span>
-              )}
-              {pkCols.length > 0 && (
-                <button onClick={() => { setPkDraft(pkCols); setPkPanelOpen(v => !v) }}
-                  className="text-xs text-gray-400 hover:text-gray-700 underline">
-                  修改
-                </button>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-500">未声明主键</span>
               )}
             </div>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {canEdit
-                ? '点击单元格直接修改；保存后整体生成一个新版本，历史可回溯'
-                : '先声明主键契约才能修改/删除行（否则行没有稳定身份）；声明后还可直接被本体映射灌入'}
+            <p className="mt-1 text-xs text-slate-400">
+              {canEditRows ? '现有行主键不可修改；其他字段可直接编辑，保存后生成可回溯的新版本。' : '请先声明主键以修改或删除现有行；当前仍可新增行。'}
             </p>
           </div>
-          <button onClick={requestClose} disabled={saving}
-            className="text-gray-400 hover:text-gray-700 shrink-0 disabled:opacity-40"
-            aria-label="关闭数据维护窗口"><X size={16} /></button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={() => void handleExport('csv')} disabled={Boolean(exporting)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50">
+              {exporting === 'csv' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} 导出 CSV
+            </button>
+            <button type="button" onClick={() => void handleExport('xlsx')} disabled={Boolean(exporting)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50">
+              {exporting === 'xlsx' ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />} 导出 Excel
+            </button>
+            <button type="button" onClick={requestClose} disabled={saving}
+              className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+              aria-label="关闭数据维护窗口"><X size={16} /></button>
+          </div>
         </div>
 
-        {/* 主键契约声明面板 */}
-        {pkPanelOpen && (
-          <div className="px-5 py-3 border-b bg-amber-50/50 space-y-2">
-            <p className="text-xs text-gray-600">
-              <KeyRound size={11} className="inline mr-1 text-amber-600" />
-              选择能唯一标识一行的列作为主键（可多选组成复合主键，将校验：列存在 · 值非空 · 组合唯一）
-            </p>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {columns.map(c => {
-                const idx = pkDraft.indexOf(c)
+        {pkPanelOpen && !pkCols.length && (
+          <div className="shrink-0 border-b border-amber-100 bg-amber-50/60 px-5 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="mr-2 text-xs text-slate-600"><KeyRound size={11} className="mr-1 inline text-amber-600" />选择一个或多个列作为主键，声明后主键值将锁定。</p>
+              {columns.map(column => {
+                const selectedIndex = pkDraft.indexOf(column)
                 return (
-                  <button key={c} onClick={() => togglePkCol(c)}
-                    className={`text-xs px-2 py-1 rounded-lg border font-mono transition-colors ${
-                      idx >= 0
-                        ? 'bg-amber-100 border-amber-300 text-amber-800'
-                        : 'bg-white border-gray-200 text-gray-600 hover:border-amber-300'
-                    }`}>
-                    {idx >= 0 && <span className="mr-1 text-[10px] bg-amber-600 text-white rounded px-1">{idx + 1}</span>}
-                    {c}
+                  <button key={column} type="button" onClick={() => togglePkCol(column)}
+                    className={`rounded-lg border px-2 py-1 text-xs transition ${selectedIndex >= 0 ? 'border-amber-300 bg-white text-amber-800' : 'border-slate-200 bg-white/70 text-slate-500 hover:border-amber-200'}`}>
+                    {selectedIndex >= 0 && <span className="mr-1 font-semibold">{selectedIndex + 1}.</span>}{columnLabel(schemaColumns[column], column)}
                   </button>
                 )
               })}
-              {columns.length === 0 && <span className="text-xs text-gray-400">暂无数据列（先上传数据）</span>}
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={handleDeclare} disabled={declaring || pkDraft.length === 0}
-                className="flex items-center gap-1 text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90 disabled:opacity-50">
-                {declaring ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-                声明主键{pkDraft.length > 0 ? `（${pkDraft.join(', ')}）` : ''}
+              <button type="button" onClick={() => void handleDeclare()} disabled={declaring || !pkDraft.length}
+                className="inline-flex h-7 items-center gap-1 rounded-lg bg-teal-700 px-3 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">
+                {declaring ? <Loader2 size={11} className="animate-spin" /> : <KeyRound size={11} />} 声明主键
               </button>
-              {pk && (
-                <button onClick={() => setPkPanelOpen(false)} className="text-xs text-gray-400 hover:text-gray-600">取消</button>
-              )}
             </div>
           </div>
         )}
 
-        {/* 提示条 */}
         {(error || info) && (
-          <div className={`mx-5 mt-3 px-3 py-2 rounded-lg border text-xs flex items-center gap-2 ${
-            error ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'
-          }`}>
+          <div className={`mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
             {error ? <XCircle size={13} className="shrink-0" /> : <CheckCircle2 size={13} className="shrink-0" />}
             <span className="flex-1">{error || info}</span>
-            <button onClick={() => { setError(''); setInfo('') }} className="text-gray-400 hover:text-gray-600"><X size={12} /></button>
+            <button type="button" onClick={() => { setError(''); setInfo('') }} className="text-current opacity-50 hover:opacity-100"><X size={12} /></button>
           </div>
         )}
 
-        {/* 数据表 */}
-        <div className="flex-1 overflow-auto px-5 py-3">
+        <div className="min-h-0 flex-1 overflow-auto px-5 py-3">
           {loading ? (
-            <p className="text-xs text-gray-400 flex items-center gap-1 p-6"><Loader2 size={13} className="animate-spin" /> 加载数据...</p>
-          ) : columns.length === 0 ? (
-            <p className="text-xs text-gray-400 p-6">暂无数据。请先通过「上传新版本」导入表格。</p>
+            <div className="flex h-full items-center justify-center text-xs text-slate-400"><Loader2 size={14} className="mr-2 animate-spin" />正在查询数据…</div>
+          ) : !columns.length ? (
+            <div className="grid h-full place-items-center text-xs text-slate-400">暂无列结构，请通过“上传新版本”导入表格。</div>
           ) : (
-            <table className="text-xs w-full min-w-max border-separate border-spacing-0">
-              <thead className="sticky top-0 z-10">
+            <table className="min-w-max border-separate border-spacing-0 text-xs">
+              <thead className="sticky top-0 z-20">
                 <tr>
-                  <th className="bg-gray-50 border-b border-r px-2 py-1.5 text-gray-400 font-normal w-8">#</th>
-                  {columns.map(c => (
-                    <th key={c} className="bg-gray-50 border-b px-3 py-1.5 text-left font-medium text-gray-600 whitespace-nowrap">
-                      {c}
-                      {pkCols.includes(c) && <KeyRound size={9} className="inline ml-1 text-amber-500" />}
-                      {colTypes[c] && colTypes[c] !== 'string' && (
-                        <span className="ml-1 px-1 py-px bg-gray-100 rounded text-[10px] text-gray-400 font-normal"
-                          title={`该列类型：${colTypes[c]}（${FIELD_TYPE_LABELS[colTypes[c]] ?? colTypes[c]}）`}>
-                          {FIELD_TYPE_LABELS[colTypes[c]] ?? colTypes[c]}
+                  <th className="sticky left-0 z-30 w-11 border-b border-r border-slate-200 bg-slate-50 px-2 py-2 font-normal text-slate-400">#</th>
+                  {columns.map(column => {
+                    const metadata = schemaColumns[column]
+                    const isPrimaryKey = pkCols.includes(column)
+                    const isRequired = isPrimaryKey || metadata?.nullable === false
+                    return (
+                      <th key={column} style={{ minWidth: `${columnWidths[column]}ch` }}
+                        className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-left font-medium text-slate-700">
+                        <span className="inline-flex flex-wrap items-center gap-1.5 whitespace-nowrap">
+                          {columnLabel(metadata, column)}
+                          {isPrimaryKey && <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700"><KeyRound size={8} />主键</span>}
+                          {!isPrimaryKey && isRequired && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-600">非空</span>}
+                          {metadata?.type && <span className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[9px] font-normal text-slate-500">{FIELD_TYPE_LABELS[metadata.type] ?? metadata.type}</span>}
                         </span>
-                      )}
-                    </th>
-                  ))}
-                  <th className="bg-gray-50 border-b px-2 py-1.5 w-10" />
+                      </th>
+                    )
+                  })}
+                  <th className="sticky right-0 z-30 w-12 border-b border-l border-slate-200 bg-slate-50 px-2 py-2" />
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i} className={r.deleted ? 'opacity-40' : ''}>
-                    <td className="border-b border-r px-2 py-0.5 text-gray-300 text-center">{offset + i + 1}</td>
-                    {columns.map(c => {
-                      const changed = r.cur[c] !== r.orig[c]
+                {rows.map((row, rowIndex) => (
+                  <tr key={`${offset}-${rowIndex}`} className={row.deleted ? 'opacity-40' : 'hover:bg-slate-50/50'}>
+                    <td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-2 py-1.5 text-center tabular-nums text-slate-300">{offset + rowIndex + 1}</td>
+                    {columns.map(column => {
+                      const primaryKey = pkCols.includes(column)
+                      const changed = row.cur[column] !== row.orig[column]
+                      const validationError = cellErrors[`row:${rowIndex}:${column}`]
                       return (
-                        <td key={c} className="border-b p-0">
+                        <td key={column} className="border-b border-slate-100 p-0 align-top">
                           <input
-                            value={r.cur[c]}
-                            disabled={!canEdit || r.deleted}
-                            onChange={e => setCell(i, c, e.target.value)}
-                            className={`w-full min-w-[7rem] px-3 py-1.5 bg-transparent outline-none focus:bg-blue-50/60 disabled:cursor-not-allowed ${
-                              changed ? 'bg-amber-50 text-amber-900' : 'text-gray-700'
-                            } ${r.deleted ? 'line-through' : ''}`}
+                            value={row.cur[column]}
+                            disabled={!canEditRows || primaryKey || row.deleted}
+                            onChange={event => setCell(rowIndex, column, event.target.value)}
+                            title={validationError || (primaryKey ? '主键值不可修改' : row.cur[column])}
+                            aria-invalid={Boolean(validationError)}
+                            style={{ width: `${columnWidths[column]}ch` }}
+                            className={`min-h-9 bg-transparent px-3 py-2 outline-none transition focus:bg-teal-50/60 ${changed ? 'bg-amber-50 text-amber-900' : 'text-slate-700'} ${primaryKey ? 'cursor-not-allowed bg-slate-50/70 font-medium text-slate-500' : ''} ${validationError ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''} ${row.deleted ? 'line-through' : ''}`}
                           />
+                          {validationError && <span className="block bg-red-50 px-3 pb-1.5 text-[10px] text-red-600">{validationError}</span>}
                         </td>
                       )
                     })}
-                    <td className="border-b px-1 text-center">
-                      {canEdit && (
-                        <button onClick={() => toggleDelete(i)}
-                          className={`p-1 rounded ${r.deleted ? 'text-gray-400 hover:text-gray-700' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}
-                          title={r.deleted ? '撤销删除' : '删除该行'}
-                          aria-label={r.deleted ? `撤销删除第 ${offset + i + 1} 行` : `删除第 ${offset + i + 1} 行`}>
-                          {r.deleted ? <Undo2 size={12} /> : <Trash2 size={12} />}
+                    <td className="sticky right-0 z-10 border-b border-l border-slate-100 bg-white px-2 text-center">
+                      {canEditRows && (
+                        <button type="button" onClick={() => toggleDelete(rowIndex)}
+                          className={`grid h-7 w-7 place-items-center rounded-lg transition ${row.deleted ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-700' : 'text-slate-300 hover:bg-red-50 hover:text-red-600'}`}
+                          title={row.deleted ? '撤销删除' : '删除该行'}>
+                          {row.deleted ? <Undo2 size={13} /> : <Trash2 size={13} />}
                         </button>
                       )}
                     </td>
                   </tr>
                 ))}
-                {inserts.map((row, i) => (
-                  <tr key={`ins-${i}`} className="bg-green-50/40">
-                    <td className="border-b border-r px-2 py-0.5 text-green-500 text-center">新</td>
-                    {columns.map(c => (
-                      <td key={c} className="border-b p-0">
-                        <input
-                          value={row[c]}
-                          placeholder={pkCols.includes(c) ? '主键，必填' : ''}
-                          onChange={e => setInsertCell(i, c, e.target.value)}
-                          className="w-full min-w-[7rem] px-3 py-1.5 bg-transparent outline-none focus:bg-blue-50/60 text-gray-700 placeholder:text-amber-400/70"
-                        />
-                      </td>
-                    ))}
-                    <td className="border-b px-1 text-center">
-                      <button onClick={() => removeInsert(i)} className="p-1 rounded text-gray-300 hover:text-red-500" title="移除该新增行">
-                        <Trash2 size={12} />
-                      </button>
+                {inserts.map((row, rowIndex) => (
+                  <tr key={`insert-${rowIndex}`} className="bg-emerald-50/35">
+                    <td className="sticky left-0 z-10 border-b border-r border-emerald-100 bg-emerald-50 px-2 py-1.5 text-center font-medium text-emerald-600">新</td>
+                    {columns.map(column => {
+                      const validationError = cellErrors[`insert:${rowIndex}:${column}`]
+                      return (
+                        <td key={column} className="border-b border-emerald-100 p-0 align-top">
+                          <input
+                            value={row[column]}
+                            placeholder={(pkCols.includes(column) || schemaColumns[column]?.nullable === false) ? '必填' : ''}
+                            onChange={event => setInsertCell(rowIndex, column, event.target.value)}
+                            title={validationError || row[column]}
+                            aria-invalid={Boolean(validationError)}
+                            style={{ width: `${columnWidths[column]}ch` }}
+                            className={`min-h-9 bg-transparent px-3 py-2 text-slate-700 outline-none transition placeholder:text-amber-500/70 focus:bg-teal-50/70 ${validationError ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}
+                          />
+                          {validationError && <span className="block bg-red-50 px-3 pb-1.5 text-[10px] text-red-600">{validationError}</span>}
+                        </td>
+                      )
+                    })}
+                    <td className="sticky right-0 z-10 border-b border-l border-emerald-100 bg-emerald-50 px-2 text-center">
+                      <button type="button" onClick={() => removeInsert(rowIndex)} className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600" title="移除新增行"><Trash2 size={13} /></button>
                     </td>
                   </tr>
                 ))}
@@ -361,29 +513,34 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
           )}
         </div>
 
-        {/* 底部操作栏 */}
-        <div className="flex items-center gap-2 px-5 py-3 border-t bg-gray-50/60">
-          <button onClick={addInsert} disabled={loading || columns.length === 0}
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-50">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+          <button type="button" onClick={addInsert} disabled={loading || !columns.length}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-40">
             <Plus size={12} /> 新增行
           </button>
-          <div className="flex items-center gap-1 ml-2 text-xs text-gray-400">
-            <button onClick={() => switchPage(offset - PAGE_SIZE)} disabled={offset === 0 || loading}
-              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronLeft size={13} /></button>
-            <span>{totalRows === 0 ? '0' : `${offset + 1}–${pageEnd}`} / {totalRows} 行</span>
-            <button onClick={() => switchPage(offset + PAGE_SIZE)} disabled={pageEnd >= totalRows || loading}
-              className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronRight size={13} /></button>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            每页
+            <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
+              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+              aria-label="维护数据每页显示条数">
+              {PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
+            条
+          </label>
+          <div className="flex items-center gap-1 text-xs text-slate-500">
+            <button type="button" onClick={() => changePage(offset - pageSize)} disabled={!offset || loading}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-35"><ChevronLeft size={13} /></button>
+            <span className="min-w-40 text-center tabular-nums">第 {currentPage} / {totalPages} 页 · {totalRows ? `${offset + 1}–${pageEnd}` : 0} / {totalRows} 行</span>
+            <button type="button" onClick={() => changePage(offset + pageSize)} disabled={pageEnd >= totalRows || loading}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-35"><ChevronRight size={13} /></button>
           </div>
-          {dirty && <span className="text-xs text-amber-600">有未保存的修改</span>}
+          {dirty && <span className="text-xs font-medium text-amber-600">有未保存的修改</span>}
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={requestClose} disabled={saving}
-              className="text-xs px-3 py-1.5 border rounded-lg bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-40">
-              关闭
-            </button>
-            <button onClick={handleSave} disabled={saving || !dirty}
-              className="flex items-center gap-1.5 text-xs px-3.5 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90 disabled:opacity-50">
-              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              保存为新版本
+            <button type="button" onClick={requestClose} disabled={saving}
+              className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-40">关闭</button>
+            <button type="button" onClick={() => void handleSave()} disabled={saving || !dirty}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">
+              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 保存为新版本
             </button>
           </div>
         </div>

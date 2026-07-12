@@ -1,211 +1,343 @@
-import { useEffect, useState } from 'react'
-import { X, Loader2, Plus, Trash2, KeyRound, Table2, XCircle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
+import {
+  CheckCircle2, ChevronLeft, ChevronRight, Eye, FileSpreadsheet,
+  KeyRound, Loader2, Plus, Table2, Trash2, Upload, X, XCircle,
+} from 'lucide-react'
 import datasetsApi, { FIELD_TYPE_LABELS, type CreateTableResult } from '@/api/v2/datasets'
 import { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 
+const PREVIEW_PAGE_SIZES = [20, 50, 100, 200] as const
+const ACCEPTED_EXTENSIONS = ['csv', 'xlsx', 'xls']
+
 interface ColDraft {
   name: string
+  displayName: string
   type: string
   pk: boolean
+  nullable: boolean
 }
 
-const emptyCol = (): ColDraft => ({ name: '', type: 'string', pk: false })
+const emptyColumn = (): ColDraft => ({
+  name: '', displayName: '', type: 'string', pk: false, nullable: true,
+})
 
-/** 在线新建空表格（人工数据集）：定义列名/类型/主键，创建后在「维护数据」中逐行录入 */
+const fileExtension = (file: File) => file.name.split('.').pop()?.toLowerCase() ?? ''
+const withoutExtension = (filename: string) => filename.replace(/\.[^.]+$/, '')
+const cellText = (value: unknown) => {
+  if (value == null) return ''
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value) } catch { return String(value) }
+  }
+  return String(value)
+}
+
+const inferValueType = (value: string) => {
+  const text = value.trim()
+  if (!text) return null
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(text) || /^\d{8}$/.test(text)) return 'timestamp'
+  if (['true', 'false', 'yes', 'no', '1', '0'].includes(text.toLowerCase())) return 'boolean'
+  if (/^[+-]?[\d,]+$/.test(text)) return 'integer'
+  if (Number.isFinite(Number(text.replaceAll(',', '')))) return 'float'
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed && typeof parsed === 'object') return 'json'
+  } catch { /* 普通文本 */ }
+  return 'string'
+}
+
+const inferColumnType = (rows: string[][], columnIndex: number) => {
+  const votes: Record<string, number> = {}
+  rows.slice(0, 50).forEach(row => {
+    const type = inferValueType(row[columnIndex] ?? '')
+    if (type) votes[type] = (votes[type] ?? 0) + 1
+  })
+  const entries = Object.entries(votes)
+  if (!entries.length) return 'string'
+  return entries.sort((left, right) => right[1] - left[1])[0][0]
+}
+
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 统一建表流程：上传一个表格自动识别，或直接定义空表。 */
 export default function CreateTableModal({ onClose, onCreated }: {
   onClose: () => void
-  onCreated: (res: CreateTableResult) => void
+  onCreated: (result: CreateTableResult) => void
 }) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [blankMode, setBlankMode] = useState(false)
   const [name, setName] = useState('')
-  const [cols, setCols] = useState<ColDraft[]>([emptyCol(), emptyCol()])
+  const [columns, setColumns] = useState<ColDraft[]>([])
+  const [rows, setRows] = useState<string[][]>([])
+  const [sheetName, setSheetName] = useState('')
+  const [parsing, setParsing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewPage, setPreviewPage] = useState(1)
+  const [previewPageSize, setPreviewPageSize] = useState<number>(20)
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !submitting) onClose()
+      if (event.key === 'Escape' && !submitting && !parsing) onClose()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, submitting])
+  }, [onClose, parsing, submitting])
 
-  const setCol = (i: number, patch: Partial<ColDraft>) =>
-    setCols(list => list.map((c, idx) => (idx === i ? { ...c, ...patch } : c)))
-  const addCol = () => setCols(list => [...list, emptyCol()])
-  const removeCol = (i: number) => setCols(list => list.filter((_, idx) => idx !== i))
+  const previewPages = Math.max(1, Math.ceil(rows.length / previewPageSize))
+  const previewRows = useMemo(() => rows.slice(
+    (previewPage - 1) * previewPageSize,
+    previewPage * previewPageSize,
+  ), [previewPage, previewPageSize, rows])
 
-  const filledCols = () =>
-    cols.map(c => ({ ...c, name: c.name.trim() })).filter(c => c.name)
+  const parseFile = async (selected: File): Promise<boolean> => {
+    setParsing(true)
+    setError('')
+    setNotice('')
+    try {
+      const workbook = XLSX.read(await selected.arrayBuffer(), { type: 'array' })
+      const firstSheetName = workbook.SheetNames[0]
+      if (!firstSheetName) throw new Error('表格中没有可读取的工作表')
+      const matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheetName], {
+        header: 1,
+        defval: '',
+        raw: false,
+        blankrows: false,
+      })
+      if (!matrix.length) throw new Error('表格为空，请至少保留一行列名')
+      const identifiers = (matrix[0] ?? []).map(cellText).map(value => value.trim())
+      if (!identifiers.length || identifiers.every(identifier => !identifier)) {
+        throw new Error('未识别到列名，请把第一行设置为表头')
+      }
+      const blankIndex = identifiers.findIndex(identifier => !identifier)
+      if (blankIndex >= 0) throw new Error(`第 ${blankIndex + 1} 列的列名为空，请先补全表头`)
+      const duplicate = identifiers.find((identifier, index) => identifiers.indexOf(identifier) !== index)
+      if (duplicate) throw new Error(`列名「${duplicate}」重复，请先修改表格表头`)
 
-  const validate = (): string => {
-    if (!name.trim()) return '请填写表格名称'
-    const filled = filledCols()
-    if (filled.length === 0) return '至少需要定义一列'
+      const parsedRows = matrix.slice(1).map(raw => identifiers.map((_, index) => cellText(raw[index])))
+      setFile(selected)
+      setBlankMode(false)
+      setName(withoutExtension(selected.name))
+      setRows(parsedRows)
+      setSheetName(firstSheetName)
+      setColumns(identifiers.map((identifier, index) => ({
+        name: identifier,
+        displayName: identifier,
+        type: inferColumnType(parsedRows, index),
+        pk: false,
+        nullable: true,
+      })))
+      setPreviewPage(1)
+      setPreviewOpen(false)
+      if (workbook.SheetNames.length > 1) {
+        setNotice(`检测到 ${workbook.SheetNames.length} 个工作表，本次仅导入第一个工作表「${firstSheetName}」`)
+      }
+      return true
+    } catch (parseError) {
+      setFile(null)
+      setRows([])
+      setColumns([])
+      setError(parseError instanceof Error ? parseError.message : '表格解析失败')
+      return false
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const acceptFiles = (incoming: File[]) => {
+    const accepted = incoming.filter(candidate => ACCEPTED_EXTENSIONS.includes(fileExtension(candidate)))
+    if (!accepted.length) {
+      setError('仅支持 CSV、XLSX 或 XLS 表格')
+      return
+    }
+    if (accepted[0].size > 200 * 1024 * 1024) {
+      setError('文件超过 200 MB，请压缩或拆分后再上传')
+      return
+    }
+    const ignoredMessage = incoming.length > 1
+      ? `一次只能保留一个表格，已选用「${accepted[0].name}」，其余 ${incoming.length - 1} 个文件已忽略`
+      : ''
+    void parseFile(accepted[0]).then(success => {
+      if (success && ignoredMessage) setNotice(ignoredMessage)
+    })
+  }
+
+  const removeFile = () => {
+    setFile(null)
+    setRows([])
+    setColumns([])
+    setName('')
+    setSheetName('')
+    setPreviewOpen(false)
+    setNotice('')
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const enterBlankMode = () => {
+    removeFile()
+    setBlankMode(true)
+    setColumns([emptyColumn(), emptyColumn()])
+  }
+
+  const setColumn = (index: number, patch: Partial<ColDraft>) => setColumns(current =>
+    current.map((column, columnIndex) => columnIndex === index ? { ...column, ...patch } : column))
+
+  const addColumn = () => setColumns(current => [...current, emptyColumn()])
+  const removeColumn = (index: number) => setColumns(current =>
+    current.filter((_, columnIndex) => columnIndex !== index))
+
+  const validate = () => {
+    if (!file && !blankMode) return '请上传一个表格，或选择直接定义空表'
+    if (!name.trim()) return '请填写数据集名称'
+    const configured = columns.filter(column => column.name.trim())
+    if (!configured.length) return '至少需要定义一列'
     const seen = new Set<string>()
-    for (const c of filled) {
-      if (seen.has(c.name)) return `列名「${c.name}」重复`
-      seen.add(c.name)
+    for (const column of configured) {
+      const identifier = column.name.trim()
+      if (seen.has(identifier)) return `字段标识「${identifier}」重复`
+      seen.add(identifier)
     }
     return ''
   }
 
   const handleSubmit = async () => {
-    const msg = validate()
-    if (msg) { setError(msg); return }
-    const filled = filledCols()
+    const validationError = validate()
+    if (validationError) { setError(validationError); return }
+    const configured = columns.filter(column => column.name.trim())
+    const payload = {
+      name: name.trim(),
+      columns: configured.map(column => ({
+        name: column.name.trim(),
+        display_name: column.displayName.trim() || column.name.trim(),
+        type: column.type,
+        nullable: column.pk ? false : column.nullable,
+      })),
+      primary_key: configured.filter(column => column.pk).map(column => column.name.trim()).join(','),
+    }
     setSubmitting(true)
     setError('')
     try {
-      const res = await datasetsApi.createTable({
-        name: name.trim(),
-        columns: filled.map(c => ({ name: c.name, type: c.type })),
-        primary_key: filled.filter(c => c.pk).map(c => c.name).join(','),
-      })
-      onCreated(res)
-    } catch (err: unknown) {
-      const er = err as { detail?: string; message?: string }
-      setError(typeof er?.detail === 'string' ? er.detail : (er?.message || '创建失败，请重试'))
+      const result = file
+        ? await datasetsApi.uploadConfigured(file, payload)
+        : await datasetsApi.createTable(payload)
+      onCreated(result)
+    } catch (submitError) {
+      const detail = (submitError as { detail?: string; message?: string })?.detail
+      setError(detail || '创建失败，请检查字段设置后重试')
       setSubmitting(false)
     }
   }
 
-  const pkNames = filledCols().filter(c => c.pk).map(c => c.name)
+  const hasSource = Boolean(file || blankMode)
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-[min(94vw,640px)] max-h-[85vh] flex flex-col overflow-hidden"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]">
+      <div className="flex max-h-[86vh] w-[min(96vw,1120px)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
         role="dialog" aria-modal="true" aria-labelledby="create-table-title">
-        {/* 头部 */}
-        <div className="flex items-start gap-3 px-5 py-3.5 border-b">
-          <Table2 size={16} className="text-[var(--color-nav-bg)] shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <h3 id="create-table-title" className="font-semibold text-sm">在线新建表格</h3>
-            <p className="text-xs text-gray-400 mt-0.5">
-              没有现成文件也能建人工数据集：定义列结构后逐行录入，声明主键即可被本体映射灌入，也可作为流水线数据源
-            </p>
+        <header className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-5 py-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700"><Table2 size={16} /></span>
+          <div className="min-w-0 flex-1">
+            <h3 id="create-table-title" className="text-sm font-semibold text-slate-900">在线新建表格</h3>
+            <p className="mt-1 text-xs text-slate-400">上传一个现有表格自动识别名称与字段，或直接定义一张空表；创建前可统一检查字段契约。</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 shrink-0" aria-label="关闭在线新建表格"><X size={16} /></button>
-        </div>
+          <button type="button" onClick={onClose} disabled={submitting || parsing}
+            className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+            aria-label="关闭在线新建表格"><X size={16} /></button>
+        </header>
 
-        <div className="flex-1 overflow-auto px-5 py-4 space-y-4">
-          {/* 名称 */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">表格名称</label>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="例如：设备台账"
-              autoFocus
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:border-[var(--color-nav-bg)]"
-            />
-          </div>
-
-          {/* 列定义 */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-medium text-gray-600">列定义</label>
-              <span className="text-[11px] text-gray-400">类型在录入时校验（如整数列不接受文字），空白列名会被忽略</span>
+        <main className="min-h-0 flex-1 overflow-auto">
+          <section className="border-b border-slate-100 px-5 py-4">
+            <div className="mb-2 flex items-center justify-between">
+              <div><h4 className="text-xs font-semibold text-slate-700">数据来源</h4><p className="mt-0.5 text-[11px] text-slate-400">最多保留一个 CSV 或 Excel 表格</p></div>
+              {!blankMode && <button type="button" onClick={enterBlankMode} className="text-xs font-medium text-teal-700 hover:text-teal-900">没有文件，直接定义空表</button>}
             </div>
-            <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <th className="text-left px-3 py-1.5 font-medium text-gray-500">列名</th>
-                    <th className="text-left px-3 py-1.5 font-medium text-gray-500 w-36">类型</th>
-                    <th className="px-2 py-1.5 font-medium text-gray-500 w-14" title="勾选后创建即声明主键契约（列存在 · 值非空 · 组合唯一）">
-                      <span className="inline-flex items-center gap-0.5"><KeyRound size={10} className="text-amber-500" />主键</span>
-                    </th>
-                    <th className="w-9" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {cols.map((c, i) => (
-                    <tr key={i}>
-                      <td className="px-1 py-1">
-                        <input
-                          value={c.name}
-                          onChange={e => setCol(i, { name: e.target.value })}
-                          placeholder={i === 0 ? '例如：编号' : '列名'}
-                          className="w-full px-2 py-1.5 border rounded font-mono focus:outline-none focus:border-[var(--color-nav-bg)]"
-                        />
-                      </td>
-                      <td className="px-1 py-1">
-                        <select
-                          value={c.type}
-                          onChange={e => setCol(i, { type: e.target.value })}
-                          className="w-full px-2 py-1.5 border rounded bg-white focus:outline-none"
-                        >
-                          {CONTRACT_FIELD_TYPES.map(t => (
-                            <option key={t} value={t}>{t}（{FIELD_TYPE_LABELS[t] ?? t}）</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-1 text-center">
-                        <input
-                          type="checkbox"
-                          checked={c.pk}
-                          onChange={e => setCol(i, { pk: e.target.checked })}
-                          className="accent-amber-500"
-                        />
-                      </td>
-                      <td className="px-1 py-1 text-center">
-                        <button
-                          onClick={() => removeCol(i)}
-                          disabled={cols.length <= 1}
-                          className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:hover:text-gray-300 disabled:hover:bg-transparent"
-                          title="移除该列"
-                          aria-label={`移除第 ${i + 1} 列`}
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <button
-              onClick={addCol}
-              className="mt-2 flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg bg-white hover:bg-gray-50 text-gray-600"
-            >
-              <Plus size={12} /> 添加列
-            </button>
-          </div>
+            <input ref={fileInputRef} type="file" multiple className="hidden" accept=".csv,.xlsx,.xls"
+              onChange={event => { acceptFiles(Array.from(event.target.files ?? [])); event.target.value = '' }} />
+            {file ? (
+              <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-100 text-emerald-700"><FileSpreadsheet size={18} /></span>
+                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-800">{file.name}</p><p className="mt-0.5 text-[11px] text-slate-400">{formatBytes(file.size)} · 工作表「{sheetName}」 · {columns.length} 列 · {rows.length} 行</p></div>
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="text-xs font-medium text-teal-700 hover:text-teal-900">替换</button>
+                <button type="button" onClick={removeFile} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600" aria-label="移除当前表格"><Trash2 size={14} /></button>
+              </div>
+            ) : blankMode ? (
+              <div className="flex items-center gap-3 rounded-xl bg-teal-50/60 px-4 py-3 text-xs text-teal-800"><CheckCircle2 size={15} />已选择直接定义空表，创建后可在“维护数据”中逐行录入。<button type="button" onClick={() => { setBlankMode(false); setColumns([]) }} className="ml-auto font-medium hover:text-teal-950">重新选择</button></div>
+            ) : (
+              <div onDragEnter={event => { event.preventDefault(); setDragging(true) }} onDragOver={event => event.preventDefault()}
+                onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); acceptFiles(Array.from(event.dataTransfer.files)) }}
+                className={`flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${dragging ? 'border-teal-400 bg-teal-50' : 'border-slate-300 bg-slate-50/50 hover:border-teal-300 hover:bg-teal-50/40'}`}
+                onClick={() => fileInputRef.current?.click()}>
+                {parsing ? <Loader2 size={20} className="mb-2 animate-spin text-teal-700" /> : <Upload size={20} className="mb-2 text-teal-700" />}
+                <p className="text-sm font-medium text-slate-700">{parsing ? '正在解析表格…' : '拖入表格，或点击选择文件'}</p>
+                <p className="mt-1 text-[11px] text-slate-400">同时选择多个文件时只保留第一个，其余文件自动忽略</p>
+              </div>
+            )}
+          </section>
 
-          {/* 主键提示 */}
-          <p className="text-xs text-gray-400 flex items-start gap-1.5">
-            <KeyRound size={12} className="text-amber-500 shrink-0 mt-0.5" />
-            <span>
-              {pkNames.length > 0
-                ? <>创建后即声明主键契约：<span className="font-mono text-amber-700">{pkNames.join(', ')}</span>（修改/删除行、被本体映射灌入都依赖它）</>
-                : '暂未选择主键：创建后仅能新增行，之后可随时在「维护数据」中声明主键契约'}
-            </span>
-          </p>
+          {hasSource && (
+            <>
+              <section className="border-b border-slate-100 px-5 py-4">
+                <label className="mb-1.5 block text-xs font-semibold text-slate-700">数据集名称</label>
+                <input value={name} onChange={event => setName(event.target.value)} placeholder="例如：设备台账"
+                  className="h-9 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10" />
+              </section>
 
-          {/* 错误提示 */}
-          {error && (
-            <div className="px-3 py-2 rounded-lg border text-xs flex items-center gap-2 bg-red-50 border-red-200 text-red-600">
-              <XCircle size={13} className="shrink-0" />
-              <span className="flex-1">{error}</span>
-              <button onClick={() => setError('')} className="text-gray-400 hover:text-gray-600"><X size={12} /></button>
-            </div>
+              <section className="border-b border-slate-100 px-5 py-4">
+                <div className="mb-2 flex items-end justify-between gap-4">
+                  <div><h4 className="text-xs font-semibold text-slate-700">字段设置</h4><p className="mt-0.5 text-[11px] text-slate-400">中文名用于界面展示；字段标识对应文件表头。主键与非空约束会在创建时校验全部数据。</p></div>
+                  {blankMode && <button type="button" onClick={addColumn} className="inline-flex h-7 items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900"><Plus size={12} />添加字段</button>}
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full min-w-[780px] text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-50 text-slate-500"><tr>
+                      <th className="px-3 py-2 text-left font-medium">中文名</th>
+                      <th className="px-3 py-2 text-left font-medium">字段标识</th>
+                      <th className="w-40 px-3 py-2 text-left font-medium">数据类型</th>
+                      <th className="w-20 px-3 py-2 text-center font-medium">非空</th>
+                      <th className="w-20 px-3 py-2 text-center font-medium"><span className="inline-flex items-center gap-1"><KeyRound size={10} className="text-amber-500" />主键</span></th>
+                      {blankMode && <th className="w-12" />}
+                    </tr></thead>
+                    <tbody className="divide-y divide-slate-100">{columns.map((column, index) => (
+                      <tr key={`${column.name}-${index}`} className="hover:bg-slate-50/60">
+                        <td className="p-1.5"><input value={column.displayName} onChange={event => setColumn(index, { displayName: event.target.value })} placeholder="例如：设备名称" className="h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 outline-none focus:border-teal-500" /></td>
+                        <td className="p-1.5"><input value={column.name} readOnly={Boolean(file)} onChange={event => setColumn(index, { name: event.target.value })} placeholder="例如：device_name" title={file ? '上传文件的字段标识来自表头，不可在此修改' : ''} className={`h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 font-mono outline-none focus:border-teal-500 ${file ? 'cursor-not-allowed bg-slate-50 text-slate-500' : ''}`} /></td>
+                        <td className="p-1.5"><select value={column.type} onChange={event => setColumn(index, { type: event.target.value })} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 outline-none focus:border-teal-500">{CONTRACT_FIELD_TYPES.map(type => <option key={type} value={type}>{FIELD_TYPE_LABELS[type] ?? type}（{type}）</option>)}</select></td>
+                        <td className="p-1.5 text-center"><input type="checkbox" checked={!column.nullable || column.pk} disabled={column.pk} onChange={event => setColumn(index, { nullable: !event.target.checked })} className="accent-teal-600" aria-label={`${column.name} 非空`} /></td>
+                        <td className="p-1.5 text-center"><input type="checkbox" checked={column.pk} onChange={event => setColumn(index, { pk: event.target.checked, nullable: event.target.checked ? false : column.nullable })} className="accent-amber-500" aria-label={`${column.name} 主键`} /></td>
+                        {blankMode && <td className="p-1.5 text-center"><button type="button" onClick={() => removeColumn(index)} disabled={columns.length <= 1} className="grid h-7 w-7 place-items-center rounded-md text-slate-300 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><Trash2 size={12} /></button></td>}
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </section>
+
+              {file && (
+                <section className="px-5 py-4">
+                  <button type="button" onClick={() => setPreviewOpen(current => !current)} className="inline-flex h-8 items-center gap-1.5 text-xs font-medium text-teal-700 hover:text-teal-900"><Eye size={13} />{previewOpen ? '收起数据预览' : `查看全部数据（${rows.length} 行）`}</button>
+                  {previewOpen && <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
+                    <div className="max-h-72 overflow-auto"><table className="min-w-max text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50"><tr><th className="px-3 py-2 text-left font-medium text-slate-400">#</th>{columns.map(column => <th key={column.name} className="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600">{column.displayName && column.displayName !== column.name ? `${column.displayName}（${column.name}）` : column.name}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{previewRows.map((row, rowIndex) => <tr key={`${previewPage}-${rowIndex}`} className="hover:bg-slate-50/60"><td className="px-3 py-2 tabular-nums text-slate-300">{(previewPage - 1) * previewPageSize + rowIndex + 1}</td>{columns.map((column, columnIndex) => <td key={column.name} className="whitespace-nowrap px-3 py-2 text-slate-600" title={row[columnIndex]}>{row[columnIndex]}</td>)}</tr>)}</tbody></table></div>
+                    <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-xs text-slate-500"><label className="flex items-center gap-1">每页<select value={previewPageSize} onChange={event => { setPreviewPageSize(Number(event.target.value)); setPreviewPage(1) }} className="h-7 rounded-md border border-slate-200 bg-white px-1.5 outline-none">{PREVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select>条</label><button type="button" onClick={() => setPreviewPage(page => Math.max(1, page - 1))} disabled={previewPage <= 1} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronLeft size={12} /></button><span className="min-w-20 text-center tabular-nums">{previewPage} / {previewPages}</span><button type="button" onClick={() => setPreviewPage(page => Math.min(previewPages, page + 1))} disabled={previewPage >= previewPages} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronRight size={12} /></button></div>
+                  </div>}
+                </section>
+              )}
+            </>
           )}
-        </div>
+        </main>
 
-        {/* 底部操作栏 */}
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t bg-gray-50/60">
-          <button onClick={onClose} className="text-xs px-3 py-1.5 border rounded-lg bg-white hover:bg-gray-50 text-gray-600">
-            取消
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={submitting}
-            className="flex items-center gap-1.5 text-xs px-3.5 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90 disabled:opacity-50"
-          >
-            {submitting ? <Loader2 size={12} className="animate-spin" /> : <Table2 size={12} />}
-            创建表格
-          </button>
-        </div>
+        {(error || notice) && <div className={`mx-5 mb-3 flex shrink-0 items-start gap-2 rounded-lg border px-3 py-2 text-xs ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{error ? <XCircle size={13} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={13} className="mt-0.5 shrink-0" />}<span className="flex-1">{error || notice}</span><button type="button" onClick={() => { setError(''); setNotice('') }}><X size={12} /></button></div>}
+
+        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+          <button type="button" onClick={onClose} disabled={submitting} className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-40">取消</button>
+          <button type="button" onClick={() => void handleSubmit()} disabled={submitting || parsing || !hasSource} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">{submitting ? <Loader2 size={12} className="animate-spin" /> : file ? <Upload size={12} /> : <Table2 size={12} />}{file ? '导入并创建' : '创建空表'}</button>
+        </footer>
       </div>
     </div>
   )

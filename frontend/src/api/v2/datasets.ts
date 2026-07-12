@@ -57,8 +57,11 @@ export interface DatasetVersionItem {
 
 export interface DatasetSchemaColumn {
   name: string
+  display_name: string
   type: string
-  sample_values: string[]
+  nullable: boolean
+  is_primary_key: boolean
+  sample_values: unknown[]
 }
 
 /** 平台类型词表的中文提示（与后端 lake_gate.FIELD_TYPE_LABELS 一致） */
@@ -69,8 +72,10 @@ export const FIELD_TYPE_LABELS: Record<string, string> = {
 
 export interface CreateTableColumn {
   name: string
+  display_name?: string
   /** 平台类型词表 CONTRACT_FIELD_TYPES，非法值会被后端明确拒绝 */
   type: string
+  nullable?: boolean
 }
 
 export interface CreateTableResult {
@@ -80,6 +85,8 @@ export interface CreateTableResult {
   columns: string[]
   primary_key: string
   version_no: number
+  rowcount: number
+  source: 'upload' | 'manual'
 }
 
 export interface UploadVersionResult {
@@ -122,6 +129,19 @@ const datasetsApi = {
   createTable: (payload: { name: string; columns: CreateTableColumn[]; primary_key?: string }): Promise<CreateTableResult> =>
     apiClientV2.post('/datasets/create-table', payload),
 
+  /** 在统一建表弹窗中上传表格，并将字段设置与文件一起创建为 v1 */
+  uploadConfigured: (
+    file: File,
+    payload: { name: string; columns: CreateTableColumn[]; primary_key?: string },
+  ): Promise<CreateTableResult> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('metadata', JSON.stringify(payload))
+    return apiClientV2.post('/datasets/upload', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
   /** 给已有数据集上传新版本（数据集 ID 不变，流水线绑定不受影响） */
   uploadVersion: (datasetId: string, file: File): Promise<UploadVersionResult> => {
     const fd = new FormData()
@@ -141,6 +161,13 @@ const datasetsApi = {
 
   schema: (datasetId: string): Promise<{ dataset_id: string; columns: DatasetSchemaColumn[] }> =>
     apiClientV2.get(`/datasets/${datasetId}/schema`),
+
+  /** 导出最新版本的全部数据，不受维护弹窗分页限制 */
+  export: (datasetId: string, format: 'csv' | 'xlsx'): Promise<Blob> =>
+    apiClientV2.get(`/datasets/${datasetId}/export`, {
+      params: { format },
+      responseType: 'blob',
+    }),
 
   /** 最新版本数据预览（支持 offset 分页） */
   previewLatest: (datasetId: string, limit = 20, offset = 0): Promise<{

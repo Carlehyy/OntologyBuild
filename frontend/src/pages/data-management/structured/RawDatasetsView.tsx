@@ -1,22 +1,16 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Upload, RefreshCw, Trash2, ChevronDown, ChevronUp, Loader2,
-  CheckCircle2, XCircle, X, FileUp, Repeat, GitBranch,
+  Upload, RefreshCw, Trash2, Loader2,
+  CheckCircle2, XCircle, X, GitBranch,
   Database, Pencil, KeyRound, Table2, Share2, ShieldCheck,
   ChevronLeft, ChevronRight,
 } from 'lucide-react'
-import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type DatasetVersionItem, type CreateTableResult } from '@/api/v2/datasets'
+import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type CreateTableResult } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import DatasetEditorModal from './DatasetEditorModal'
 import CreateTableModal from './CreateTableModal'
 import manualSharingApi from '@/api/v2/manual-sharing'
 import { ManualApprovalModal, ManualShareModal } from './ManualDatasetSharingModals'
-
-const KIND_META: Record<string, { label: string; color: string }> = {
-  structured:   { label: '结构化',   color: 'bg-blue-50 text-blue-600 border-blue-200' },
-  semi:         { label: '半结构化', color: 'bg-amber-50 text-amber-600 border-amber-200' },
-  unstructured: { label: '非结构化', color: 'bg-purple-50 text-purple-600 border-purple-200' },
-}
 
 const PIPELINE_STATUS_LABEL: Record<string, string> = {
   draft: '草稿', editing: '编辑中', running: '运行中', failed: '失败', published: '已发布',
@@ -44,23 +38,14 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   const [items, setItems] = useState<DatasetOverviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const [expanded, setExpanded] = useState<string | null>(focusDatasetId ?? null)
   const [banner, setBanner] = useState<Banner | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
 
-  // 预览缓存
-  const [previews, setPreviews] = useState<Record<string, { columns: string[]; rows: Record<string, unknown>[]; total: number; versionNo?: number }>>({})
-  const [versions, setVersions] = useState<Record<string, DatasetVersionItem[]>>({})
-  const [previewLoading, setPreviewLoading] = useState<string | null>(null)
-  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({})
-
-  // 上传（新建 / 新版本）
-  const newFileRef = useRef<HTMLInputElement>(null)
+  // 上传新版本
   const versionFileRef = useRef<HTMLInputElement>(null)
   const versionTargetRef = useRef<string | null>(null)
-  const [uploading, setUploading] = useState(false)
   const [uploadingVersionId, setUploadingVersionId] = useState<string | null>(null)
 
   // 删除
@@ -119,84 +104,30 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   }
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
-  const loadDetail = async (id: string, refresh = false) => {
-    if (previews[id] && !refresh) return
-    setPreviewLoading(id)
-    setDetailErrors(previous => {
-      const next = { ...previous }
-      delete next[id]
-      return next
-    })
-    try {
-      const [pv, vers] = await Promise.all([
-        datasetsApi.previewLatest(id, 20),
-        datasetsApi.versions(id),
-      ])
-      setPreviews(p => ({ ...p, [id]: { columns: pv.columns ?? [], rows: pv.rows ?? [], total: pv.total_rows ?? 0, versionNo: pv.version_no } }))
-      setVersions(p => ({ ...p, [id]: Array.isArray(vers) ? vers : [] }))
-    } catch (error: unknown) {
-      const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
-      const detail = e?.detail ?? e?.data?.detail
-      const message = typeof detail === 'string'
-        ? detail
-        : typeof e?.message === 'string' ? e.message : '数据预览加载失败'
-      setDetailErrors(previous => ({ ...previous, [id]: message }))
-    } finally {
-      setPreviewLoading(null)
-    }
-  }
-
-  // 深链定位：?dataset=xxx 自动展开并加载预览。
+  // 深链定位：?dataset=xxx 直接打开维护窗口，不再在列表行下方展开详情。
   useEffect(() => {
     if (!focusDatasetId) return
-    const timer = window.setTimeout(() => {
-      setExpanded(focusDatasetId)
-      void loadDetail(focusDatasetId)
-    }, 0)
-    return () => window.clearTimeout(timer)
-    // loadDetail 只消费当前缓存；深链仅应在目标 ID 变化时重新定位。
+    const target = items.find(item => item.id === focusDatasetId)
+    if (target) setEditorTarget(target)
+  }, [focusDatasetId, items])
 
-  }, [focusDatasetId])
-
-  const handleExpand = (id: string) => {
-    if (expanded === id) { setExpanded(null); return }
-    setExpanded(id)
-    loadDetail(id)
-  }
-
-  /** 上传文件新建数据集 */
-  const handleNewUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setUploading(true)
-    setBanner(null)
-    try {
-      const res = await datasetsApi.upload(file)
-      setBanner({ type: 'success', text: `「${res.name}」上传成功，已创建人工数据集。在「维护数据」中声明主键后可直接灌入本体。` })
-      refreshFirstPage()
-      notifyAssetChanged()
-    } catch (err: unknown) {
-      const er = err as { detail?: string; message?: string }
-      setBanner({ type: 'error', text: `上传失败：${er?.detail || er?.message || '未知错误'}` })
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  /** 在线新建表格成功：刷新列表并直接进入维护编辑器开始录入 */
+  /** 统一建表成功：文件导入直接回列表，空表进入维护编辑器开始录入。 */
   const handleTableCreated = (res: CreateTableResult) => {
+    const imported = res.source === 'upload'
     setCreateOpen(false)
     setBanner({
       type: 'success',
-      text: `「${res.name}」已创建。空表已就绪，现在就可以逐行录入数据${res.primary_key ? '' : '（暂未声明主键，仅能新增行）'}`,
+      text: imported
+        ? `「${res.name}」已导入并创建，共 ${res.rowcount} 行，当前版本 v${res.version_no}`
+        : `「${res.name}」已创建。空表已就绪，现在可以逐行录入${res.primary_key ? '' : '（暂未声明主键，仅能新增行）'}`,
     })
     refreshFirstPage()
     notifyAssetChanged()
+    if (imported) return
     setEditorTarget({
       id: res.id, name: res.name, raw_name: res.name, kind: res.kind,
-      primary_key: res.primary_key, source: 'manual', connection_name: '',
-      version_count: 1, latest_version_no: res.version_no, rowcount: 0,
+      primary_key: res.primary_key, source: res.source, connection_name: '',
+      version_count: 1, latest_version_no: res.version_no, rowcount: res.rowcount,
       consumers: [], created_at: null, updated_at: null,
     })
   }
@@ -226,7 +157,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         text: `「${res.dataset_name}」已更新至 v${res.version_no}${res.rowcount != null ? `（${res.rowcount} 行）` : ''}${colChange ? `。注意，${colChange}` : ''}`,
       })
       load()
-      loadDetail(id, true)
       notifyAssetChanged()
     } catch (err: unknown) {
       const er = err as { detail?: string; message?: string }
@@ -267,7 +197,6 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
-      <input ref={newFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleNewUpload} />
       <input ref={versionFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleVersionUpload} />
 
       {/* 工具行 + 提示条：删除重复说明文字，首屏直接聚焦可执行操作。 */}
@@ -280,18 +209,10 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           <button
             onClick={() => setCreateOpen(true)}
             className="flex items-center gap-1 px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-xs font-medium rounded-lg hover:bg-gray-50"
-            title="没有现成文件时，在线定义列结构建一张空表，逐行录入并维护"
+            title="上传一个 CSV/Excel 自动识别并设置字段，或直接定义空表"
           >
             <Table2 size={12} />
             在线新建表格
-          </button>
-          <button
-            onClick={() => newFileRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center gap-1 px-3 py-1.5 bg-[var(--color-nav-bg)] text-white text-xs font-medium rounded-lg hover:opacity-90 disabled:opacity-50"
-          >
-            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-            上传数据文件
           </button>
           <button
             onClick={() => setApprovalOpen(true)}
@@ -340,17 +261,11 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Database size={32} className="mx-auto opacity-30" />
           <p className="text-sm font-medium">暂无人工数据集</p>
-          <p className="text-xs">上传 Excel/CSV 导入现成数据，或在线新建空表格从零录入；之后均可在线维护、声明主键并直接灌入本体</p>
-          <div className="flex justify-center gap-2 pt-1">
-            <button
-              onClick={() => newFileRef.current?.click()}
-              className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90"
-            >
-              上传文件
-            </button>
+          <p className="text-xs">在一个流程中上传 Excel/CSV 或定义空表，完成字段设置后即可在线维护</p>
+          <div className="flex justify-center pt-1">
             <button
               onClick={() => setCreateOpen(true)}
-              className="text-xs px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] rounded-lg hover:bg-gray-50"
+              className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90"
             >
               在线新建表格
             </button>
@@ -362,26 +277,16 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">来源</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">类型</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">最新数据</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">被流水线使用</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">版本号</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">有效数据</th>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">创建时间</th>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">更新时间</th>
                 <th className="text-right px-4 py-2.5 font-medium text-gray-600 text-xs">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
-              {items.map(ds => {
-                const meta = KIND_META[ds.kind] ?? { label: ds.kind, color: 'bg-gray-50 text-gray-600 border-gray-200' }
-                const isOpen = expanded === ds.id
-                const preview = previews[ds.id]
-                const vers = versions[ds.id] ?? []
-                return (
-                  <Fragment key={ds.id}>
-                    <tr
-                      className={`hover:bg-gray-50 transition-colors cursor-pointer ${isOpen ? 'bg-gray-50' : ''}`}
-                      onClick={() => handleExpand(ds.id)}
-                    >
+              {items.map(ds => (
+                    <tr key={ds.id} className="transition-colors hover:bg-slate-50/80">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium text-gray-900">{ds.name}</span>
@@ -391,176 +296,64 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                               <KeyRound size={9} /> {ds.primary_key}
                             </span>
                           )}
-                          {isOpen ? <ChevronUp size={13} className="text-gray-400" /> : <ChevronDown size={13} className="text-gray-400" />}
                         </div>
                         <p className="text-xs text-gray-400 font-mono">{ds.id.slice(0, 8)}</p>
                       </td>
                       <td className="px-4 py-3">
-                        {ds.source === 'sync' ? (
-                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-purple-50 text-purple-600 border-purple-200" title={ds.connection_name ? `连接：${ds.connection_name}` : '由同步任务落地'}>
-                            <Repeat size={10} /> 同步任务
-                          </span>
-                        ) : ds.source === 'manual' ? (
-                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-teal-50 text-teal-600 border-teal-200" title="在线新建的表格，列类型由创建时声明">
-                            <Table2 size={10} /> 在线创建
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border bg-gray-50 text-gray-600 border-gray-200">
-                            <FileUp size={10} /> 文件上传
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-1.5 py-0.5 rounded border ${meta.color}`}>{meta.label}</span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-600">
                         {ds.version_count > 0 ? (
-                          <>
-                            <span className="font-medium">v{ds.latest_version_no}</span>
-                            <span className="text-gray-400"> · {ds.rowcount != null ? `${ds.rowcount} 行` : '行数未知'} · 共 {ds.version_count} 个版本</span>
-                          </>
-                        ) : (
-                          <span className="text-gray-300">暂无数据</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {ds.consumers.length > 0 ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-xs text-[var(--color-nav-bg)]"
-                            title={ds.consumers.map(c => `${c.name}（${PIPELINE_STATUS_LABEL[c.status] || c.status}）`).join('\n')}
-                          >
-                            <GitBranch size={11} /> {ds.consumers.length} 条流水线
+                          <span className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-medium text-teal-700" title={`共 ${ds.version_count} 个版本`}>
+                            <Database size={10} /> v{ds.latest_version_no}
                           </span>
                         ) : (
-                          <span className="text-xs text-gray-300">未使用</span>
+                          <span className="text-xs text-gray-300">暂无版本</span>
                         )}
                       </td>
+                      <td className="px-4 py-3 text-xs font-medium tabular-nums text-slate-700">{ds.rowcount != null ? `${ds.rowcount.toLocaleString('zh-CN')} 行` : '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.created_at)}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.updated_at)}</td>
-                      <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
-                        <div className="flex gap-1 justify-end">
-                          {ds.source !== 'sync' && (
-                            <button
-                              onClick={() => setShareTarget(ds)}
-                              className="flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50"
-                              title="生成无需登录的查看或编辑链接；编辑结果需平台审批后生效"
-                            >
-                              <Share2 size={12} /> 分享
-                            </button>
-                          )}
-                          {ds.source !== 'sync' && (
-                            <button
-                              onClick={() => setEditorTarget(ds)}
-                              className="flex items-center gap-1 text-xs px-2 py-1.5 border rounded-lg hover:bg-amber-50 text-amber-700 border-amber-200"
-                              title="在线维护：声明主键契约、改单元格、增删行（保存生成新版本）"
-                            >
-                              <Pencil size={12} />
-                              维护数据
-                            </button>
-                          )}
-                          {ds.source !== 'sync' && (
-                            <button
-                              onClick={() => pickVersionFile(ds.id)}
-                              disabled={uploadingVersionId === ds.id}
-                              className="flex items-center gap-1 text-xs px-2 py-1.5 border rounded-lg hover:bg-blue-50 text-blue-600 border-blue-200 disabled:opacity-50"
-                              title="上传新的数据文件，追加为新版本（数据集 ID 不变，流水线绑定不受影响）"
-                            >
-                              {uploadingVersionId === ds.id ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                              上传新版本
-                            </button>
-                          )}
-                          {/*
-                            旧版同步任务（DataSyncTask）已废弃，sync 数据集为遗留数据。
-                            用户如需同类数据，请通过新版任务池（PipelineTask）重建。
-                          */}
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-0.5" aria-label={`数据集 ${ds.name} 的操作`}>
                           <button
-                            onClick={() => setDeleteTarget(ds)}
-                            className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
-                            title="删除数据集"
+                            type="button"
+                            onClick={() => setShareTarget(ds)}
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                            title="分享"
+                            aria-label={`分享数据集 ${ds.name}`}
                           >
-                            <Trash2 size={13} />
+                            <Share2 size={15} strokeWidth={1.8} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditorTarget(ds)}
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                            title="维护数据"
+                            aria-label={`维护数据集 ${ds.name}`}
+                          >
+                            <Pencil size={15} strokeWidth={1.8} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => pickVersionFile(ds.id)}
+                            disabled={uploadingVersionId === ds.id}
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-wait disabled:opacity-45"
+                            title="上传新版本"
+                            aria-label={`为数据集 ${ds.name} 上传新版本`}
+                          >
+                            {uploadingVersionId === ds.id ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} strokeWidth={1.8} />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(ds)}
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/35"
+                            title="删除"
+                            aria-label={`删除数据集 ${ds.name}`}
+                          >
+                            <Trash2 size={15} strokeWidth={1.8} />
                           </button>
                         </div>
                       </td>
                     </tr>
-
-                    {/* 展开详情 */}
-                    {isOpen && (
-                      <tr>
-                        <td colSpan={7} className="bg-gray-50/70 border-t px-6 py-4">
-                          {detailErrors[ds.id] ? (
-                            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                              <XCircle size={13} className="shrink-0" />
-                              <span className="flex-1">详情加载失败：{detailErrors[ds.id]}</span>
-                              <button type="button" onClick={() => loadDetail(ds.id, true)} className="rounded border border-red-200 bg-white px-2 py-1 hover:bg-red-100">重试</button>
-                            </div>
-                          ) : previewLoading === ds.id && !preview ? (
-                            <p className="text-xs text-gray-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> 加载数据...</p>
-                          ) : (
-                            <div className="space-y-4">
-                              {/* 数据预览 */}
-                              <div>
-                                <p className="text-xs font-medium text-gray-500 mb-1.5">
-                                  数据预览{preview?.versionNo ? `（v${preview.versionNo}，共 ${preview.total} 行，显示前 ${preview.rows.length} 行）` : ''}
-                                </p>
-                                {!preview || preview.rows.length === 0 ? (
-                                  <p className="text-xs text-gray-400">暂无可预览的数据</p>
-                                ) : (
-                                  <div className="overflow-x-auto bg-white border rounded-lg">
-                                    <table className="text-xs w-full min-w-max">
-                                      <thead className="bg-gray-50 border-b">
-                                        <tr>
-                                          {preview.columns.map(c => (
-                                            <th key={c} className="text-left px-3 py-1.5 font-medium text-gray-500 whitespace-nowrap">
-                                              <span className="inline-flex items-center gap-1">
-                                                {c}
-                                                {ds.primary_key?.split(',').map(key => key.trim()).includes(c) && (
-                                                  <span className="inline-flex items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] text-amber-700" title="主键列">
-                                                    <KeyRound size={8} /> 主键
-                                                  </span>
-                                                )}
-                                              </span>
-                                            </th>
-                                          ))}
-                                        </tr>
-                                      </thead>
-                                      <tbody className="divide-y">
-                                        {preview.rows.slice(0, 10).map((row, i) => (
-                                          <tr key={i} className="hover:bg-gray-50">
-                                            {preview.columns.map(c => (
-                                              <td key={c} className="px-3 py-1.5 text-gray-600 max-w-[10rem] truncate" title={String(row[c] ?? '')}>
-                                                {String(row[c] ?? '')}
-                                              </td>
-                                            ))}
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* 版本历史 */}
-                              {vers.length > 0 && (
-                                <div>
-                                  <p className="text-xs font-medium text-gray-500 mb-1.5">版本历史</p>
-                                  <div className="flex gap-2 flex-wrap">
-                                    {[...vers].reverse().map(v => (
-                                      <span key={v.id} className={`text-xs px-2 py-1 rounded-lg border bg-white ${v.version_no === ds.latest_version_no ? 'border-green-300 text-green-700' : 'text-gray-500'}`}>
-                                        v{v.version_no}{v.rowcount != null ? ` · ${v.rowcount} 行` : ''}
-                                        {v.version_no === ds.latest_version_no && ' · 当前'}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
+              ))}
             </tbody>
           </table>
         </div>
@@ -603,7 +396,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         <DatasetEditorModal
           dataset={editorTarget}
           onClose={() => setEditorTarget(null)}
-          onSaved={() => { load(); loadDetail(editorTarget.id, true); notifyAssetChanged() }}
+          onSaved={() => { load(); notifyAssetChanged() }}
         />
       )}
 
