@@ -82,12 +82,37 @@ class AttachmentOut(CamelModel):
     id: str
     session_id: str
     filename: str
+    relative_path: str = ""
     mime_type: Optional[str] = None
     file_size: int = 0
     char_count: int = 0
+    sha256: Optional[str] = None
+    version: int = 1
+    source: str = "upload"
+    editable: bool = False
     status: str = "ready"
     error: Optional[str] = None
     created_at: datetime
+    updated_at: datetime
+
+
+class WorkspaceTextCreate(CamelModel):
+    path: str
+    content: str = ""
+    mime_type: Optional[str] = None
+
+
+class WorkspaceTextUpdate(CamelModel):
+    content: str
+    expected_version: Optional[int] = None
+
+
+class WorkspaceTextOut(CamelModel):
+    id: str
+    relative_path: str
+    content: str
+    version: int
+    sha256: Optional[str] = None
 
 
 class NewOntologySpec(CamelModel):
@@ -100,3 +125,7 @@ class ApplyDraftRequest(CamelModel):
     # None = 全部应用；[] = 一个都不选（校验拒绝）
     selected_keys: Optional[list[str]] = None
     new_ontology: Optional[NewOntologySpec] = None
+
+
+class DraftValidationRequest(CamelModel):
+    selected_keys: Optional[list[str]] = None

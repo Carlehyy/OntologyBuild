@@ -5,11 +5,17 @@ import {
   SquareFunction, ShieldAlert, Trash2,
 } from 'lucide-react'
 import {
-  explorationApi, type ApplyDraftResult, type BxDraft,
+  explorationApi, type ApplyDraftResult, type BxDraft, type DraftValidation,
 } from '@/api/exploration'
 
 const CARDINALITY_LABEL: Record<string, string> = {
   'one-to-one': '1:1', 'one-to-many': '1:N', 'many-to-one': 'N:1', 'many-to-many': 'N:N',
+}
+
+const errorMessage = (error: unknown, fallback: string): string => {
+  if (!error || typeof error !== 'object') return fallback
+  const value = error as { detail?: string | { message?: string }; message?: string }
+  return typeof value.detail === 'string' ? value.detail : value.detail?.message || value.message || fallback
 }
 
 /** 本体草稿人审抽屉：分组预览 + 逐项勾选 + 报告，应用后跳图谱编辑器。
@@ -33,10 +39,12 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<ApplyDraftResult | null>(null)
+  const [validation, setValidation] = useState<DraftValidation | null>(draft.report?.validation || null)
   const discarded = draft.status === 'discarded'
 
   const toggle = (key: string, conflict?: boolean) => {
     if (conflict || result) return
+    setValidation(null)
     setSelected(prev => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
@@ -54,6 +62,12 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
     if (needsNewName && !newName.trim()) { setError('请填写新本体名称'); return }
     setBusy(true)
     try {
+      const checked = await explorationApi.validateDraft(draft.id, [...selected])
+      setValidation(checked)
+      if (!checked.valid) {
+        setError(`选择集预检未通过（${checked.errors.length} 项错误），请先补齐依赖或取消对应元素`)
+        return
+      }
       const res = await explorationApi.applyDraft(draft.id, {
         selectedKeys: [...selected],
         newOntology: needsNewName
@@ -62,8 +76,8 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
       })
       setResult(res)
       onApplied?.(res)
-    } catch (e: any) {
-      setError(e?.detail || e?.message || '应用失败')
+    } catch (error: unknown) {
+      setError(errorMessage(error, '应用失败'))
     } finally {
       setBusy(false)
     }
@@ -77,8 +91,8 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
       await explorationApi.discardDraft(draft.id)
       onDiscarded?.()
       onClose()
-    } catch (e: any) {
-      setError(e?.detail || e?.message || '废弃失败')
+    } catch (error: unknown) {
+      setError(errorMessage(error, '废弃失败'))
     } finally {
       setBusy(false)
     }
@@ -148,6 +162,22 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
             </div>
           ) : (
             <>
+              {validation && (
+                <div className={`rounded-lg border px-3.5 py-2.5 ${validation.valid
+                  ? 'border-teal-200 bg-teal-50/60' : 'border-rose-200 bg-rose-50/60'}`}>
+                  <div className={`flex items-center gap-1.5 text-xs font-medium ${validation.valid ? 'text-teal-700' : 'text-rose-700'}`}>
+                    {validation.valid ? <ShieldCheck size={13} /> : <CircleAlert size={13} />}
+                    选择集契约预检 {validation.valid ? '通过' : `未通过 · ${validation.errors.length} 项错误`}
+                  </div>
+                  {!validation.valid && (
+                    <ul className="mt-1 max-h-28 space-y-0.5 overflow-y-auto">
+                      {validation.errors.slice(0, 12).map((issue, i) => (
+                        <li key={`${issue.code}-${i}`} className="text-[11px] leading-relaxed text-rose-800/90">· {issue.message}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               {gateOverridden && (
                 <div className="rounded-lg border border-rose-200 bg-rose-50/60 px-3.5 py-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-rose-700">

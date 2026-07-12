@@ -21,29 +21,24 @@
 import json
 import logging
 import os
-import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.deps import get_db, get_current_user
 from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.models.ontology import OntologyProject
-from app.services.document_service import convert_document
 from app.exploration import canvas as C
 from app.exploration import converter, readiness as R, schemas as S
+from app.exploration import workspace as W
 from app.exploration.diagram import DIAGRAM_KINDS, DiagramError, build_diagram
 from app.exploration.document import generate_document
 from app.exploration.models import (ExplorationAttachment, ExplorationDocument,
                                     ExplorationDraft, ExplorationMessage,
                                     ExplorationSession)
 from app.exploration.orchestrator import run_exploration_turn
-
-# 会话附件：上限与存文本截断（注入上下文的截断更小，在 orchestrator 控制）
-_ATTACH_MAX_PER_SESSION = 20
-_ATTACH_STORED_TEXT_CAP = 200_000
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -172,6 +167,9 @@ def _remove_attachment_file(path: str | None) -> None:
 
 
 def _attachment_out(a: ExplorationAttachment) -> dict:
+    # 迁移前记录没有逻辑路径；对外始终给出可展示路径。
+    if not a.relative_path:
+        a.relative_path = a.filename
     return S.AttachmentOut.model_validate(a).model_dump(by_alias=True)
 
 
@@ -193,59 +191,68 @@ async def upload_attachment(session_id: str, file: UploadFile = File(...),
     附件严格绑定本会话，跨会话不可见，随会话删除一并清理。"""
     s = _require_session(db, session_id, current_user)
 
-    count = db.query(ExplorationAttachment).filter(
-        ExplorationAttachment.session_id == s.id).count()
-    if count >= _ATTACH_MAX_PER_SESSION:
-        raise HTTPException(422, f"本会话附件已达上限（{_ATTACH_MAX_PER_SESSION} 个），请先删除一些再上传")
-
     ext_name = (file.filename or "").rsplit(".", 1)[-1].lower()
     allowed = {e.strip() for e in settings.allowed_upload_extensions.split(",") if e.strip()}
     if ext_name not in allowed:
         raise HTTPException(400, f"不支持的文件类型: .{ext_name}（允许: {settings.allowed_upload_extensions}）")
 
-    upload_dir = os.path.join(settings.uploads_dir, "exploration", s.id)
-    os.makedirs(upload_dir, exist_ok=True)
-
-    aid = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename or "")[1]
-    save_path = os.path.join(upload_dir, f"{aid}{ext}")
-
     content = await file.read()
-    if len(content) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(413, f"文件超过大小限制 {settings.max_upload_mb}MB")
-    with open(save_path, "wb") as f:
-        f.write(content)
-
-    mime = file.content_type or "application/octet-stream"
-    conversion = convert_document(save_path, mime)
-    if not conversion.ok:
-        _remove_attachment_file(save_path)
-        raise HTTPException(422, conversion.error or "文件无法读取为文本，暂不支持作为参考资料")
-
-    text = conversion.content or ""
-    row = ExplorationAttachment(
-        id=aid, session_id=s.id, filename=file.filename or "attachment",
-        mime_type=mime, file_size=len(content), file_path=save_path,
-        extracted_text=text[:_ATTACH_STORED_TEXT_CAP], char_count=len(text),
-        status="ready")
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    row = W.create_bytes(db, s, file.filename or "attachment", content,
+                         file.content_type, source="upload")
     return _ok(_attachment_out(row))
+
+
+@router.post("/sessions/{session_id}/workspace/files", status_code=201)
+def create_workspace_text_file(session_id: str, body: S.WorkspaceTextCreate,
+                               db: Session = Depends(get_db),
+                               current_user=Depends(get_current_user)):
+    """在会话空间中新建文本文件（用户与 Agent 使用同一套并发/隔离契约）。"""
+    s = _require_session(db, session_id, current_user)
+    row = W.create_text(db, s, body.path, body.content, body.mime_type, source="user")
+    return _ok(_attachment_out(row))
+
+
+@router.get("/sessions/{session_id}/attachments/{attachment_id}/content")
+def get_workspace_text_file(session_id: str, attachment_id: str,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    s = _require_session(db, session_id, current_user)
+    row = W.require_file(db, s.id, attachment_id)
+    return _ok(S.WorkspaceTextOut(
+        id=row.id, relative_path=row.relative_path or row.filename,
+        content=W.read_text(row), version=row.version or 1,
+        sha256=row.sha256).model_dump(by_alias=True))
+
+
+@router.put("/sessions/{session_id}/attachments/{attachment_id}/content")
+def update_workspace_text_file(session_id: str, attachment_id: str,
+                               body: S.WorkspaceTextUpdate,
+                               db: Session = Depends(get_db),
+                               current_user=Depends(get_current_user)):
+    s = _require_session(db, session_id, current_user)
+    row = W.require_file(db, s.id, attachment_id)
+    row = W.update_text(db, row, body.content, body.expected_version, source="user")
+    return _ok(_attachment_out(row))
+
+
+@router.get("/sessions/{session_id}/attachments/{attachment_id}/download")
+def download_workspace_file(session_id: str, attachment_id: str,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    s = _require_session(db, session_id, current_user)
+    row = W.require_file(db, s.id, attachment_id)
+    if not row.file_path or not os.path.isfile(row.file_path):
+        raise HTTPException(410, "文件内容已丢失")
+    return FileResponse(row.file_path, media_type=row.mime_type or "application/octet-stream",
+                        filename=row.filename or "download")
 
 
 @router.delete("/sessions/{session_id}/attachments/{attachment_id}", status_code=204)
 def delete_attachment(session_id: str, attachment_id: str, db: Session = Depends(get_db),
                       current_user=Depends(get_current_user)):
     s = _require_session(db, session_id, current_user)
-    row = (db.query(ExplorationAttachment)
-           .filter(ExplorationAttachment.id == attachment_id,
-                   ExplorationAttachment.session_id == s.id).first())
-    if not row:
-        raise HTTPException(404, "附件不存在")
-    _remove_attachment_file(row.file_path)
-    db.delete(row)
-    db.commit()
+    row = W.require_file(db, s.id, attachment_id)
+    W.delete_file(db, row)
 
 
 # ---------------------------------------------------------------- 对话
@@ -420,6 +427,17 @@ def get_draft(draft_id: str, db: Session = Depends(get_db),
     return _ok(S.DraftOut.model_validate(r).model_dump(by_alias=True))
 
 
+@router.post("/drafts/{draft_id}/validate")
+def validate_draft(draft_id: str, body: S.DraftValidationRequest,
+                   db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """按最终选择集执行确定性预检；与 apply 使用完全相同的校验函数。"""
+    r = _require_draft(db, draft_id, current_user)
+    target_id = r.applied_ontology_id or r.target_ontology_id
+    existing = converter.existing_name_sets(db, target_id) if target_id else None
+    return _ok(converter.validate_draft_selection(
+        r.draft or {}, body.selected_keys, existing=existing))
+
+
 @router.post("/drafts/{draft_id}/apply")
 def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
                 db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -433,6 +451,18 @@ def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
         raise HTTPException(409, "该草稿已废弃，不可应用；如需落地请重新生成草稿")
     if body.selected_keys is not None and len(body.selected_keys) == 0:
         raise HTTPException(422, "未勾选任何草稿元素")
+
+    validation_target_id = r.applied_ontology_id or r.target_ontology_id
+    validation_existing = (converter.existing_name_sets(db, validation_target_id)
+                           if validation_target_id else None)
+    validation = converter.validate_draft_selection(
+        r.draft or {}, body.selected_keys, existing=validation_existing)
+    if not validation["valid"]:
+        raise HTTPException(422, detail={
+            "code": "draft_validation_failed",
+            "message": f"本体草稿选择集预检未通过（{len(validation['errors'])} 项错误），已拒绝落地",
+            "validation": validation,
+        })
 
     project = None
     if r.applied_ontology_id:

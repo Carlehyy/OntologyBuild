@@ -96,7 +96,7 @@ def evaluate(canvas: Any) -> dict:
             blk.append(f"对象「{name}」的主键「{key}」不在属性列表中")
         untyped = [a.get("name", "?") for a in attrs if not (a.get("type_hint") or "").strip()]
         if untyped:
-            adv.append(f"对象「{name}」的属性 {', '.join(untyped[:6])} 缺类型提示（转化将按 string 兜底）")
+            blk.append(f"对象「{name}」的属性 {', '.join(untyped[:6])} 缺类型提示（必须与图谱编辑器类型契约对齐）")
         for a in attrs:
             hint = (a.get("type_hint") or "")
             if ("枚举" in hint or "enum" in hint.lower()) and not a.get("enum"):
@@ -107,7 +107,11 @@ def evaluate(canvas: Any) -> dict:
             if not (a.get("attributes") or []):
                 blk.append(f"主体「{name}」是 {a.get('kind')} 类数据实体，还没有识别/档案属性")
             elif not a.get("key_attribute"):
-                adv.append(f"主体「{name}」未指定业务主键（转化将按 name 兜底）")
+                blk.append(f"主体「{name}」未指定业务主键")
+            untyped = [p.get("name", "?") for p in (a.get("attributes") or [])
+                       if not (p.get("type_hint") or "").strip()]
+            if untyped:
+                blk.append(f"主体「{name}」的属性 {', '.join(untyped[:6])} 缺类型提示")
     gate("objects", blk, adv)
 
     # -- relations：链接端点必须可解析、基数必须已确认（基数是典型 B 类口径）

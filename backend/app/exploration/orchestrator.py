@@ -31,19 +31,26 @@ from app.capabilities.models import CapSkill
 from app.exploration import canvas as C
 from app.exploration import questions as Q
 from app.exploration import readiness as R
+from app.exploration import officecli as O
 from app.exploration.models import (ExplorationAttachment, ExplorationMessage,
                                     ExplorationSession)
-from app.exploration.toolkit import TOOL_DEFS, USE_SKILL_TOOL, ExplorationToolRunner
+from app.exploration.toolkit import (OFFICE_TOOL, TOOL_DEFS, USE_SKILL_TOOL,
+                                     ExplorationToolRunner)
 
 logger = logging.getLogger(__name__)
 
 _MAX_STEPS = 8
-_HISTORY_LIMIT = 12
+_RECENT_HISTORY_KEEP = 16
+_HISTORY_QUERY_CAP = 1000
 _TOOL_RESULT_CAP = 6000
 _DEFAULT_TITLE = "新的业务探索"
 # 附件注入上下文的预算：单文件与总量各自截断，避免撑爆上下文
 _ATTACH_PER_FILE_CAP = 12000
 _ATTACH_TOTAL_CAP = 28000
+_DEFAULT_CONTEXT_TOKENS = 64_000
+_DEFAULT_OUTPUT_TOKENS = 4_096
+_COMPACTION_TRIGGER_RATIO = 0.70
+_SUMMARY_CHAR_CAP = 12_000
 
 
 def _load_skills(db: Session) -> dict[str, CapSkill]:
@@ -81,6 +88,7 @@ def _system_prompt(session: ExplorationSession, skills: dict[str, CapSkill] | No
 - **B 类（kind=blocking）**：企业特有口径，必须用户拍板 —— 金额阈值、时限、枚举值清单、审批线、级联/删除策略、业务主键口径、关系基数。堵门问题不清零，质量门不放行。
 - **A 类（kind=advisory）**：行业通用常识（标准属性、常见校验），你**直接补全**进画布并登记 advisory 附建议值，请用户顺带确认即可 —— 不要为常识空耗回合。
 - 提问尽量给 2-4 个候选 options（含具体数值/枚举），用户点选即可回答；避免开放式空问。
+- 候选项必须互斥且会导向不同的业务决策；如果两个公式、数值结果或执行效果相同，只保留一个，绝不能仅换措辞充当 A/B/C。
 - **定量铁律**：「大额/及时/尽快/较多/超时/定期」这类表述一律不接受为结论 —— 追问到数字+单位或枚举清单（如「大额=？」→「≥50000元」）。用户给出模糊答复时，礼貌地给出候选数值让其选择。
 - 用户答复后同一回合完成三件事：resolve_questions 销账 → 把结论 upsert 进画布对应元素 → 提出下一批问题。不要遗留。
 
@@ -97,6 +105,13 @@ def _system_prompt(session: ExplorationSession, skills: dict[str, CapSkill] | No
 - 某对象确认了状态枚举 → kind=state(target=对象名)
 出图后请用户指出与实际不符之处，并按反馈修正画布。同一张图内容没变就不要重复出。
 
+# 会话文件空间
+- 用户上传和你生成的文件都严格隔离在当前会话。用 manage_workspace_file 列出、读取、创建、保存或删除文本工作文件。
+- read/update/delete 优先使用 list 返回的文件 id；若只知道完整相对路径，也可把该 path 作为 file_id 传入。
+- 修改文件必须先读取最新 version，再以 expected_version 保存；冲突时重新读取，禁止盲目覆盖。
+- 不要把物理路径、密钥或其他会话内容写入文件。删除用户文件只在用户明确要求时进行。
+- 如果 manage_office_document 可用，可结构化编辑 docx/xlsx/pptx；不可用时只读取抽取文本或让用户下载原文件，不伪造已修改成功。
+
 # 工作方式
 1. 每回合聚焦 1-2 个堵门问题，循序渐进；不要一次抛出问题清单轰炸用户。
 2. 用户每确认一条信息，立即用 upsert_elements 沉淀 —— 不要攒到最后。同名元素是整体覆盖：更新时带上已有全部字段。
@@ -106,8 +121,89 @@ def _system_prompt(session: ExplorationSession, skills: dict[str, CapSkill] | No
 6. 回答用中文，简洁。每回合结尾汇报进度并提出下一个问题，格式如：「已记录 X；还差 N 项定量：金额阈值、超时时限」。
 7. 全部质量门通过后，明确告诉用户：「所有堵门问题已清零，可以生成需求文档并转本体草稿了」。
 
-# 当前画布
+# 已压缩的早期会话
+{session.context_summary or '（尚未触发压缩；使用最近完整消息）'}
+
+# 当前画布（权威状态，优先于历史自然语言）
 {C.canvas_summary(session.canvas)}{_skills_block(skills or {})}"""
+
+
+def _estimate_tokens(text: str) -> int:
+    """保守估算中英混合 token 数；只用于预算触发，不用于计费。"""
+    value = str(text or "")
+    cjk = sum(1 for ch in value if "\u3400" <= ch <= "\u9fff")
+    other = len(value) - cjk
+    return cjk + (other + 3) // 4
+
+
+def _compact_history(db: Session, session: ExplorationSession,
+                     rows: list[ExplorationMessage]) -> None:
+    """把最早一段消息压成可审计的确定性摘要；画布仍是业务事实权威源。"""
+    if not rows:
+        return
+    lines = [session.context_summary.strip()] if (session.context_summary or "").strip() else []
+    lines.append(f"[已压缩消息 {session.summary_message_count + 1}-"
+                 f"{session.summary_message_count + len(rows)}]")
+    for row in rows:
+        content = " ".join((row.content or "").split())
+        if not content:
+            continue
+        clipped = content[:600] + ("…" if len(content) > 600 else "")
+        lines.append(f"- {'用户' if row.role == 'user' else '引导师'}: {clipped}")
+    merged = "\n".join(lines)
+    # 早期逐字内容可被画布权威快照替代；保留最新的压缩段以避免摘要无限增长。
+    session.context_summary = merged[-_SUMMARY_CHAR_CAP:]
+    session.summary_message_count = (session.summary_message_count or 0) + len(rows)
+    stats = dict(session.context_stats or {})
+    stats["compactions"] = int(stats.get("compactions") or 0) + 1
+    stats["summarizedMessages"] = session.summary_message_count
+    stats["summaryEstimatedTokens"] = _estimate_tokens(session.context_summary)
+    session.context_stats = stats
+    db.commit()
+
+
+def _prepare_history(db: Session, session: ExplorationSession,
+                     call_kwargs: dict, message: str, attachments: str,
+                     skills: dict[str, CapSkill]) -> tuple[str, list[ExplorationMessage]]:
+    summarized = max(0, session.summary_message_count or 0)
+    rows = (db.query(ExplorationMessage)
+            .filter(ExplorationMessage.session_id == session.id)
+            .order_by(ExplorationMessage.created_at.asc())
+            .offset(summarized)
+            .limit(_HISTORY_QUERY_CAP).all())
+    pending = rows
+
+    context_limit = max(8_192, int(call_kwargs.get("max_context_tokens") or _DEFAULT_CONTEXT_TOKENS))
+    output_limit = min(
+        int(call_kwargs.get("max_output_tokens") or _DEFAULT_OUTPUT_TOKENS),
+        max(1_024, context_limit // 4),
+    )
+    call_kwargs["max_context_tokens"] = context_limit
+    call_kwargs["max_output_tokens"] = output_limit
+
+    provisional = _system_prompt(session, skills) + attachments + message
+    provisional += "".join((row.content or "") for row in pending)
+    input_budget = max(4_096, context_limit - output_limit - 2_048)
+    should_compact = (len(pending) > _RECENT_HISTORY_KEEP * 2
+                      or _estimate_tokens(provisional) > int(input_budget * _COMPACTION_TRIGGER_RATIO))
+    if should_compact and len(pending) > _RECENT_HISTORY_KEEP:
+        _compact_history(db, session, pending[:-_RECENT_HISTORY_KEEP])
+        pending = pending[-_RECENT_HISTORY_KEEP:]
+
+    sys_content = _system_prompt(session, skills)
+    if attachments:
+        sys_content += "\n\n" + attachments
+    stats = dict(session.context_stats or {})
+    stats.update({
+        "contextLimit": context_limit,
+        "outputLimit": output_limit,
+        "recentMessages": len(pending),
+        "estimatedInputTokens": _estimate_tokens(
+            sys_content + message + "".join((row.content or "") for row in pending)),
+    })
+    session.context_stats = stats
+    db.commit()
+    return sys_content, pending
 
 
 def _attachments_block(db: Session, session_id: str) -> str:
@@ -163,6 +259,10 @@ def _summarize(name: str, result: dict) -> str:
         return s
     if name == "show_diagram":
         return f"展示{result.get('title', '图表')}"
+    if name == "manage_workspace_file":
+        return "完成会话文件空间操作"
+    if name == "manage_office_document":
+        return "完成 Office 文档操作"
     if name == "use_skill":
         return f"激活技能「{result.get('displayName', result.get('skill', ''))}」"
     return "完成"
@@ -205,25 +305,22 @@ def _run(db: Session, session_id: str, user, message: str,
                "message": "尚未配置可用的 LLM。请先到「模型配置」添加一个对话模型（OpenAI 兼容或 Anthropic）。"}
         return
 
-    history = (db.query(ExplorationMessage)
-               .filter(ExplorationMessage.session_id == session.id)
-               .order_by(ExplorationMessage.created_at.desc())
-               .limit(_HISTORY_LIMIT).all())[::-1]
-
-    if session.title == _DEFAULT_TITLE and not history:
+    has_history = db.query(ExplorationMessage.id).filter(
+        ExplorationMessage.session_id == session.id).first() is not None
+    if session.title == _DEFAULT_TITLE and not has_history:
         session.title = message.strip()[:60] or _DEFAULT_TITLE
-    db.add(ExplorationMessage(session_id=session.id, role="user", content=message))
-    db.commit()
 
     yield {"type": "meta", "sessionId": session.id, "model": call_kwargs.get("model")}
 
     skills = _load_skills(db)
-    tools = TOOL_DEFS + ([USE_SKILL_TOOL] if skills else [])
+    tools = TOOL_DEFS + ([OFFICE_TOOL] if O.available() else []) \
+        + ([USE_SKILL_TOOL] if skills else [])
 
-    sys_content = _system_prompt(session, skills)
     attach_block = _attachments_block(db, session.id)
-    if attach_block:
-        sys_content += "\n\n" + attach_block
+    sys_content, history = _prepare_history(
+        db, session, call_kwargs, message, attach_block, skills)
+    db.add(ExplorationMessage(session_id=session.id, role="user", content=message))
+    db.commit()
     messages: list[dict] = [{"role": "system", "content": sys_content}]
     for m in history:
         if m.role in ("user", "assistant") and (m.content or "").strip():
@@ -234,6 +331,7 @@ def _run(db: Session, session_id: str, user, message: str,
     steps: list[dict] = []
     usage_total = {"inputTokens": 0, "outputTokens": 0}
     answer: Optional[str] = None
+    empty_response_retries = 0
 
     for _ in range(_MAX_STEPS):
         try:
@@ -248,7 +346,18 @@ def _run(db: Session, session_id: str, user, message: str,
                 usage_total[k] += resp["usage"][k]
 
         if not resp["tool_calls"]:
-            answer = resp.get("content") or "（模型未给出回答）"
+            content = str(resp.get("content") or "").strip()
+            if not content and empty_response_retries < 1:
+                empty_response_retries += 1
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "上一响应为空。请继续完成当前用户任务；需要修改画布、文件或出图时"
+                        "必须调用相应工具，若无需工具则给出明确中文答复。"
+                    ),
+                })
+                continue
+            answer = content or "本次模型连续返回空响应，请重试当前消息。"
             break
 
         messages.append({"role": "assistant", "content": resp.get("content"),

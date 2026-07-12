@@ -158,6 +158,31 @@ def test_chat_turn_persists_canvas(client, auth_headers, session, db, admin_user
     assert detail["messages"][1]["steps"][0]["tool"] == "upsert_elements"
 
 
+def test_chat_retries_one_empty_model_response(client, auth_headers, session,
+                                               db, admin_user, monkeypatch):
+    """Provider 偶发返回无文本/无工具的空包时，编排器应自愈一次。"""
+    _fake_model_config(db, admin_user)
+    calls = {"n": 0}
+
+    def fake_chat(_call_kwargs, messages, _tools):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"content": None, "tool_calls": [], "usage": None}
+        assert "上一响应为空" in messages[-1]["content"]
+        return {"content": "已恢复并继续处理。", "tool_calls": [], "usage": None}
+
+    from app.ontologies.agent_runtime import llm_bridge
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+
+    response = client.post(
+        f"{BASE}/sessions/{session['id']}/chat", headers=auth_headers,
+        json={"message": "继续建模", "stream": False},
+    )
+    assert response.status_code == 200, response.text
+    assert calls["n"] == 2
+    assert response.json()["data"]["content"] == "已恢复并继续处理。"
+
+
 def test_chat_invalid_elements_rejected(client, auth_headers, session, db, admin_user, monkeypatch):
     _fake_model_config(db, admin_user)
     calls = {"n": 0}
@@ -236,7 +261,8 @@ def test_converter_actor_carries_attributes():
     assert "Seller" in ot and "Sys" not in ot           # system 主体不建对象
     names = {p["name"] for p in ot["Seller"]["properties"]}
     assert {"shop_name", "credit_score"} <= names        # 属性透传，不再只有 name
-    assert ot["Seller"]["primaryKey"] == "shop_name"     # 业务主键取自 keyAttribute
+    seller_pk = next(p["id"] for p in ot["Seller"]["properties"] if p["name"] == "shop_name")
+    assert ot["Seller"]["primaryKey"] == seller_pk        # 主键按编辑器契约引用 Property.id
 
     # 质量关：person/org 主体空属性 → 缺口，驱动 agent 追问
     cv2, _, _ = C.upsert_elements(C.empty_canvas(), "actor",
@@ -251,12 +277,14 @@ def test_converter_deterministic_mapping():
     # 对象 + 非 system 主体（同名 Supplier 合并、ERP 跳过）
     assert set(ot) == {"Order", "Supplier", "Finance"}
     order = ot["Order"]
-    assert order["primaryKey"] == "order_no"
+    assert order["primaryKey"] == next(p["id"] for p in order["properties"]
+                                        if p["name"] == "order_no")
     types = {p["name"]: p["type"] for p in order["properties"]}
     assert types["amount"] == "number" and types["paid"] == "boolean" \
         and types["order_no"] == "string"
     # Supplier 未指定主键 → 自动补 id 并回退
-    assert ot["Supplier"]["primaryKey"] == "id"
+    assert ot["Supplier"]["primaryKey"] == next(p["id"] for p in ot["Supplier"]["properties"]
+                                                  if p["name"] == "id")
     assert any("Supplier" in w and "主键" in w for w in report["warnings"])
 
     # 悬空关系剔除、合法关系保留基数
@@ -402,7 +430,8 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
     names = {o["name"] for o in full["objectTypes"]}
     assert names == {"Order", "Supplier", "Finance"}
     order = next(o for o in full["objectTypes"] if o["name"] == "Order")
-    assert order["primaryKey"] == "order_no"
+    assert order["primaryKey"] == next(p["id"] for p in order["properties"]
+                                        if p["name"] == "order_no")
     assert full["linkTypes"][0]["cardinality"] == "many-to-one"
     action = full["actions"][0]
     assert action["requiresApproval"] is True
@@ -696,6 +725,77 @@ def test_attachment_cascade_on_session_delete(client, auth_headers, db, tmp_path
     assert db.query(ExplorationAttachment).filter_by(session_id=sid).count() == 0
 
 
+def test_workspace_text_crud_download_and_version_conflict(client, auth_headers, session,
+                                                           tmp_path, monkeypatch):
+    """会话空间：创建/读取/乐观锁保存/下载/路径防穿越。"""
+    from app.config import settings
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    sid = session["id"]
+
+    r = client.post(f"{BASE}/sessions/{sid}/workspace/files", headers=auth_headers,
+                    json={"path": "notes/domain.md", "content": "# v1\n订单模型"})
+    assert r.status_code == 201, r.text
+    item = r.json()["data"]
+    assert item["relativePath"] == "notes/domain.md" and item["editable"] is True
+    assert item["version"] == 1 and len(item["sha256"]) == 64
+
+    aid = item["id"]
+    r = client.get(f"{BASE}/sessions/{sid}/attachments/{aid}/content", headers=auth_headers)
+    assert r.status_code == 200 and "订单模型" in r.json()["data"]["content"]
+
+    r = client.put(f"{BASE}/sessions/{sid}/attachments/{aid}/content", headers=auth_headers,
+                   json={"content": "# v2\n订单与客户", "expectedVersion": 1})
+    assert r.status_code == 200 and r.json()["data"]["version"] == 2
+    r = client.put(f"{BASE}/sessions/{sid}/attachments/{aid}/content", headers=auth_headers,
+                   json={"content": "stale", "expectedVersion": 1})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "workspace_version_conflict"
+
+    r = client.get(f"{BASE}/sessions/{sid}/attachments/{aid}/download", headers=auth_headers)
+    assert r.status_code == 200 and r.content.decode("utf-8") == "# v2\n订单与客户"
+
+    r = client.post(f"{BASE}/sessions/{sid}/workspace/files", headers=auth_headers,
+                    json={"path": "../escape.md", "content": "bad"})
+    assert r.status_code == 422
+
+
+def test_workspace_file_id_isolation(client, auth_headers, tmp_path, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    a = client.post(f"{BASE}/sessions", headers=auth_headers, json={}).json()["data"]["id"]
+    b = client.post(f"{BASE}/sessions", headers=auth_headers, json={}).json()["data"]["id"]
+    item = client.post(f"{BASE}/sessions/{a}/workspace/files", headers=auth_headers,
+                       json={"path": "secret.md", "content": "session-a"}).json()["data"]
+    assert client.get(f"{BASE}/sessions/{b}/attachments/{item['id']}/content",
+                      headers=auth_headers).status_code == 404
+    assert client.get(f"{BASE}/sessions/{b}/attachments/{item['id']}/download",
+                      headers=auth_headers).status_code == 404
+
+
+def test_workspace_agent_tool_round_trip(db, session, tmp_path, monkeypatch):
+    from app.config import settings
+    from app.exploration.models import ExplorationSession
+    from app.exploration.toolkit import ExplorationToolRunner
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    row = db.query(ExplorationSession).filter_by(id=session["id"]).first()
+    runner = ExplorationToolRunner(db, row)
+    created = runner.run("manage_workspace_file", {
+        "action": "create", "path": "agent/summary.md", "content": "v1"})
+    assert created["created"] is True
+    listed = runner.run("manage_workspace_file", {"action": "list"})
+    assert listed["files"][0]["path"] == "agent/summary.md"
+    updated = runner.run("manage_workspace_file", {
+        "action": "update", "file_id": created["id"], "content": "v2",
+        "expected_version": 1})
+    assert updated["version"] == 2
+    assert runner.run("manage_workspace_file", {
+        "action": "read", "file_id": created["id"]})["content"] == "v2"
+    # Real tool-calling models may place list.path in file_id; keep this safe
+    # compatibility inside the current session rather than failing the turn.
+    assert runner.run("manage_workspace_file", {
+        "action": "read", "file_id": "agent/summary.md"})["content"] == "v2"
+
+
 # ---------------------------------------------------------------- 澄清账本（questions）
 
 
@@ -836,7 +936,8 @@ def test_diagram_builders():
     flow = D.build_diagram(cv, "flow", "支付流程")
     assert flow["mermaid"].startswith("flowchart")
     assert "S1" in flow["mermaid"] and "SE" in flow["mermaid"]
-    assert "{" in flow["mermaid"]                      # 「如果…」步骤转菱形判断
+    assert "{" not in flow["mermaid"]                  # 无分支目标时不伪造单出口菱形
+    assert any("分支目标" in w for w in flow["warnings"])
 
     seq = D.build_diagram(cv, "sequence")
     assert seq["mermaid"].startswith("sequenceDiagram")
@@ -903,6 +1004,39 @@ def test_draft_gate_passes_when_ready(client, auth_headers, session, db):
     report = r.json()["data"]["report"]
     assert report["readiness"]["ready"] is True
     assert "gateOverride" not in report
+    assert report["validation"]["valid"] is True
+
+
+def test_draft_selection_validation_enforces_dependency_closure():
+    """关系/动作不能脱离所依赖的对象单独落地；完整选择集通过。"""
+    draft, _ = CV.build_draft(_quantified_canvas())
+    assert CV.validate_draft_selection(draft)["valid"] is True
+    link_key = draft["linkTypes"][0]["key"]
+    invalid = CV.validate_draft_selection(draft, [link_key])
+    assert invalid["valid"] is False
+    codes = {item["code"] for item in invalid["errors"]}
+    assert {"missing_source_dependency", "missing_target_dependency"} <= codes
+
+
+def test_context_compaction_keeps_recent_messages_and_canvas_authority(db, session):
+    from app.exploration.models import ExplorationMessage, ExplorationSession
+    from app.exploration.orchestrator import _prepare_history
+
+    row = db.query(ExplorationSession).filter_by(id=session["id"]).first()
+    for i in range(40):
+        db.add(ExplorationMessage(session_id=row.id,
+                                  role="user" if i % 2 == 0 else "assistant",
+                                  content=f"第 {i + 1} 条业务讨论：订单状态与规则"))
+    db.commit()
+
+    system, recent = _prepare_history(
+        db, row, {"max_context_tokens": 16_384, "max_output_tokens": 2_048},
+        "继续讨论", "", {})
+    assert len(recent) == 16
+    assert row.summary_message_count == 24
+    assert "已压缩消息 1-24" in row.context_summary
+    assert "当前画布（权威状态" in system
+    assert row.context_stats["contextLimit"] == 16_384
 
 
 # ---------------------------------------------------------------- 对话内出图与账本工具

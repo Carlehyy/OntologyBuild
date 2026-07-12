@@ -14,7 +14,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, Text, JSON, Integer
+from sqlalchemy import Boolean, String, DateTime, Text, JSON, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -41,6 +41,12 @@ class ExplorationSession(Base):
     canvas_version: Mapped[int] = mapped_column(Integer, default=0)
 
     status: Mapped[str] = mapped_column(String(20), default="active")
+
+    # 长会话的确定性压缩状态。summary 覆盖最早的 N 条消息；编排器只把摘要、
+    # 画布权威快照与最近消息送入模型，避免简单截断造成“聊几句就忘了”。
+    context_summary: Mapped[str] = mapped_column(Text, default="")
+    summary_message_count: Mapped[int] = mapped_column(Integer, default=0)
+    context_stats: Mapped[dict] = mapped_column(JSON, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -88,9 +94,15 @@ class ExplorationAttachment(Base):
     session_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
     filename: Mapped[str] = mapped_column(String(400), default="")
+    # 会话空间中的逻辑路径；物理路径始终由服务端生成，客户端/Agent 不可指定。
+    relative_path: Mapped[str] = mapped_column(String(500), default="")
     mime_type: Mapped[str] = mapped_column(String(200), nullable=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     file_path: Mapped[str] = mapped_column(String, nullable=True)  # 磁盘路径，删除时清理
+    sha256: Mapped[str] = mapped_column(String(64), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    source: Mapped[str] = mapped_column(String(20), default="upload")  # upload | user | agent
+    editable: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # 转换后的文本（注入对话上下文的内容源）+ 原始字符数（截断前）
     extracted_text: Mapped[str] = mapped_column(Text, default="")
@@ -100,6 +112,7 @@ class ExplorationAttachment(Base):
     error: Mapped[str] = mapped_column(String(500), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
 class ExplorationDraft(Base):

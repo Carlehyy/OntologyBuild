@@ -1,4 +1,4 @@
-"""探索 agent 的受限工具集 — 沉淀/移除画布元素 + 澄清账本 + 确定性出图
+"""探索 agent 的受限工具集 — 画布治理 + 会话文件空间 + 确定性出图
 
 工具即治理：agent 对画布的每一次修改都是一条可审计的 step，前端随
 canvas 事件实时看到模型长出来。元素字段的详细约定写在工具描述里，
@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 from app.exploration import canvas as C
 from app.exploration import diagram as D
 from app.exploration import questions as Q
-from app.exploration.models import ExplorationSession
+from app.exploration import workspace as W
+from app.exploration import officecli as O
+from app.exploration.models import ExplorationAttachment, ExplorationSession
 
 _FIELD_DOC = """元素字段约定（name 用英文 snake_case/PascalCase 标识符，中文放 display_name）：
 - object: {name, display_name, description, key_attribute(业务主键属性名), attributes: [{name, display_name, type_hint(如 文本/数字/金额/日期/是否/枚举), required, enum?, notes?}], relations: [{target(对象名), name?, display_name(如 归属于), cardinality(one-to-one|one-to-many|many-to-one|many-to-many)?, description?}]}
@@ -62,7 +64,8 @@ TOOL_DEFS = [
         "description": ("把你提给用户的关键问题登记进澄清账本（同题自动去重）。"
                         "kind=blocking：企业特有口径，必须用户拍板（阈值/枚举边界/审批线/级联策略/主键口径/基数），"
                         "不销账就过不了质量门；kind=advisory：行业常识，你先给建议值(suggestion)请用户确认。"
-                        "尽量提供 2-4 个候选 options（含具体数值/枚举），用户点选即可作答。"),
+                        "尽量提供 2-4 个互斥候选 options（含具体数值/枚举），用户点选即可作答；"
+                        "计算结果或执行效果相同的表述必须合并，不能伪装成多个选项。"),
         "parameters": {
             "type": "object",
             "properties": {
@@ -128,6 +131,28 @@ TOOL_DEFS = [
             "required": ["kind"],
         },
     },
+    {
+        "name": "manage_workspace_file",
+        "description": (
+            "管理本次探索会话的隔离文件空间。list=列出全部文件；read=读取文本文件；"
+            "create=新建文本文件；update=保存文本文件（必须传 expected_version 防止覆盖并发修改）；"
+            "delete=删除文件。只能操作当前会话，不能访问宿主机路径。"
+            "删除或覆盖用户文件前，必须确认这是用户当前请求所需的操作。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "read", "create", "update", "delete"]},
+                "file_id": {"type": "string", "description": (
+                    "read/update/delete 使用的文件 id；也兼容 list 返回的完整相对 path，"
+                    "例如 supply_chain.md 或 notes/scope.md")},
+                "path": {"type": "string", "description": "create 使用的会话内相对路径"},
+                "content": {"type": "string", "description": "create/update 的 UTF-8 文本内容"},
+                "expected_version": {"type": "integer", "description": "update 必填；来自最近一次 list/read"},
+            },
+            "required": ["action"],
+        },
+    },
 ]
 
 # 技能激活工具 —— 仅当当前作用域有已启用技能时才挂载（见 orchestrator）
@@ -140,6 +165,28 @@ USE_SKILL_TOOL = {
             "name": {"type": "string", "description": "技能 name（见系统提示的可用技能目录）"},
         },
         "required": ["name"],
+    },
+}
+
+OFFICE_TOOL = {
+    "name": "manage_office_document",
+    "description": (
+        "使用已配置的 OfficeCLI 在当前会话空间内创建、查看和编辑 docx/xlsx/pptx。"
+        "operation=create 传 logical_path；view/add/set/remove 传 file_id。"
+        "add/set 用 selector 定位元素并传 props；所有命令均为结构化白名单，不可执行 shell。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "operation": {"type": "string", "enum": ["create", "view", "add", "set", "remove"]},
+            "file_id": {"type": "string"},
+            "logical_path": {"type": "string"},
+            "selector": {"type": "string", "description": "OfficeCLI 元素路径，缺省 /"},
+            "element_type": {"type": "string", "description": "add 操作的元素类型"},
+            "props": {"type": "object", "description": "add/set 的属性键值"},
+            "view": {"type": "string", "enum": ["outline", "text", "html"]},
+        },
+        "required": ["operation"],
     },
 }
 
@@ -170,6 +217,16 @@ class ExplorationToolRunner:
             return self._resolve_questions(args)
         if name == "show_diagram":
             return self._show_diagram(args)
+        if name == "manage_workspace_file":
+            return self._workspace(args)
+        if name == "manage_office_document":
+            return O.operate(
+                self.db, self.session, str(args.get("operation") or ""),
+                file_id=args.get("file_id"), logical_path=args.get("logical_path"),
+                selector=str(args.get("selector") or "/"),
+                element_type=args.get("element_type"), props=args.get("props") or {},
+                view=str(args.get("view") or "outline"),
+            )
         if name == "use_skill":
             return self._use_skill(args)
         return {"error": f"未知工具: {name}"}
@@ -255,3 +312,42 @@ class ExplorationToolRunner:
         return {"kind": diagram["kind"], "title": diagram["title"],
                 "shown": True,
                 "note": "图表已在对话中展示给用户。请提醒用户核对结构是否与实际业务一致，并根据反馈修正画布。"}
+
+    def _workspace(self, args: dict) -> dict:
+        action = str(args.get("action") or "").strip().lower()
+        if action == "list":
+            rows = (self.db.query(ExplorationAttachment)
+                    .filter(ExplorationAttachment.session_id == self.session.id)
+                    .order_by(ExplorationAttachment.updated_at.desc()).all())
+            return {"files": [{
+                "id": row.id, "path": row.relative_path or row.filename,
+                "size": row.file_size, "version": row.version or 1,
+                "editable": bool(row.editable), "status": row.status,
+            } for row in rows]}
+
+        file_id = str(args.get("file_id") or "").strip()
+        if action in ("read", "update", "delete") and not file_id:
+            return {"error": f"{action} 需要 file_id"}
+        if action == "read":
+            row = W.require_file(self.db, self.session.id, file_id)
+            return {"id": row.id, "path": row.relative_path or row.filename,
+                    "version": row.version or 1, "content": W.read_text(row)}
+        if action == "create":
+            row = W.create_text(self.db, self.session, str(args.get("path") or ""),
+                                str(args.get("content") or ""), source="agent")
+            return {"created": True, "id": row.id, "path": row.relative_path,
+                    "version": row.version, "size": row.file_size}
+        if action == "update":
+            if args.get("expected_version") is None:
+                return {"error": "update 必须传 expected_version，先 read 获取最新版本"}
+            row = W.require_file(self.db, self.session.id, file_id)
+            row = W.update_text(self.db, row, str(args.get("content") or ""),
+                                int(args["expected_version"]), source="agent")
+            return {"updated": True, "id": row.id, "path": row.relative_path,
+                    "version": row.version, "size": row.file_size}
+        if action == "delete":
+            row = W.require_file(self.db, self.session.id, file_id)
+            path = row.relative_path or row.filename
+            W.delete_file(self.db, row)
+            return {"deleted": True, "id": file_id, "path": path}
+        return {"error": f"未知文件操作: {action}"}

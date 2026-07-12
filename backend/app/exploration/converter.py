@@ -125,13 +125,16 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
         prop_names = {norm_name(p["name"]) for p in props}
         primary = None
         if key_attr and norm_name(key_attr) in prop_names:
-            primary = next(p["name"] for p in props if norm_name(p["name"]) == norm_name(key_attr))
+            # 图谱编辑器以 Property.id 作为主键引用（兼容读取 name，但新产物必须统一为 id）。
+            primary = next(p["id"] for p in props if norm_name(p["name"]) == norm_name(key_attr))
         if primary is None:
             id_prop = {"id": _pid(), "name": "id", "displayName": "ID",
                        "type": "string", "required": True}
             if "id" not in prop_names:
                 props = [id_prop] + props
-            primary = "id"
+                primary = id_prop["id"]
+            else:
+                primary = next(p["id"] for p in props if norm_name(p["name"]) == "id")
             if key_attr:
                 warnings.append(f"对象「{name}」的主键属性「{key_attr}」不在属性列表中，已回退为 id")
             else:
@@ -299,7 +302,8 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
             "key": f"fn:{norm_name(fname)}", "name": fname,
             "displayName": f"待形式化: {r.get('display_name') or rname}",
             "description": desc,
-            "functionType": "object" if obj_key else "query",
+            # 前端/运行时正式契约不包含 query；即使强制越权也保持 object 草稿且停用。
+            "functionType": "object",
             "language": "expression", "returnType": "string", "body": "",
             "enabled": False,
             "targetObjectTypeKey": obj_key,
@@ -477,7 +481,7 @@ def _merge_patch(draft: dict, patch: _Patch, warnings: list[str]) -> None:
                     if pp.description:
                         tp["description"] = pp.description
                 if item.primaryKey and norm_name(item.primaryKey) in props:
-                    target["primaryKey"] = props[norm_name(item.primaryKey)]["name"]
+                    target["primaryKey"] = props[norm_name(item.primaryKey)]["id"]
 
 
 def refine_draft(draft: dict, canvas: dict, call_kwargs: Optional[dict],
@@ -554,13 +558,24 @@ def _lint(draft: dict, warnings: list[str]) -> None:
             warnings.append(f"链接「{lk['displayName']}」端点缺失，已从草稿剔除")
     draft["linkTypes"] = kept_links
     for ot in draft["objectTypes"]:
-        names = {p["name"] for p in ot["properties"]}
-        if ot["primaryKey"] not in names:
-            ot["primaryKey"] = "id"
-            if "id" not in names:
-                ot["properties"].insert(0, {"id": _pid(), "name": "id", "displayName": "ID",
-                                            "type": "string", "required": True})
-            warnings.append(f"对象「{ot['displayName']}」主键失效，已回退 id")
+        props = ot["properties"]
+        by_id = {p["id"]: p for p in props}
+        by_name = {norm_name(p["name"]): p for p in props}
+        primary = ot.get("primaryKey")
+        if primary in by_id:
+            continue
+        # 兼容补丁/历史草稿传 name，生成时统一规范化成属性 id。
+        named = by_name.get(norm_name(str(primary or "")))
+        if named:
+            ot["primaryKey"] = named["id"]
+            continue
+        id_prop = by_name.get("id")
+        if not id_prop:
+            id_prop = {"id": _pid(), "name": "id", "displayName": "ID",
+                       "type": "string", "required": True}
+            props.insert(0, id_prop)
+        ot["primaryKey"] = id_prop["id"]
+        warnings.append(f"对象「{ot['displayName']}」主键失效，已回退 id")
 
 
 def _mark_conflicts(draft: dict, existing: Optional[dict[str, set[str]]],
@@ -592,6 +607,132 @@ def _scenario_coverage(canvas: dict, draft: dict,
     return out
 
 
+def validate_draft_selection(draft: dict, selected_keys: Optional[list[str]] = None,
+                             existing: Optional[dict[str, set[str]]] = None) -> dict:
+    """按图谱编辑器正式契约校验一次草稿选择集，不依赖 LLM。
+
+    默认选择全部非冲突项；显式选择用于落地前检查依赖闭包，避免“选了关系但
+    没选端点对象”这类静默跳过。返回结构可直接展示在前端质量报告中。
+    """
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    existing = existing or {}
+    collections = ("objectTypes", "linkTypes", "actions", "functions", "sentinels")
+    all_items = [item for coll in collections for item in (draft.get(coll) or [])]
+    by_key = {str(item.get("key") or ""): item for item in all_items if item.get("key")}
+    if selected_keys is None:
+        selected = {k for k, item in by_key.items() if not item.get("conflict")}
+    else:
+        selected = {str(k) for k in selected_keys}
+        for key in sorted(selected - set(by_key)):
+            errors.append({"code": "unknown_draft_key", "key": key,
+                           "message": f"选择项 {key} 不存在于草稿"})
+
+    def err(code: str, item: dict, message: str, field: str = "") -> None:
+        value = {"code": code, "key": item.get("key"), "name": item.get("name"),
+                 "message": message}
+        if field:
+            value["field"] = field
+        errors.append(value)
+
+    chosen_objects = {item["key"] for item in (draft.get("objectTypes") or [])
+                      if item.get("key") in selected and not item.get("conflict")}
+    chosen_names = {norm_name(item.get("name", "")) for item in (draft.get("objectTypes") or [])
+                    if item.get("key") in selected and not item.get("conflict")}
+    known_names = chosen_names | set(existing.get("objectTypes", set()))
+
+    seen_by_collection: dict[str, set[str]] = {name: set() for name in collections}
+    counts = {name: 0 for name in collections}
+    for coll in collections:
+        for item in draft.get(coll) or []:
+            if item.get("key") not in selected:
+                continue
+            counts[coll] += 1
+            if item.get("conflict"):
+                err("conflict_selected", item, "该项与目标本体同名，不能作为新增项落地")
+                continue
+            name = norm_name(item.get("name", ""))
+            if not name:
+                err("name_missing", item, "元素缺少稳定英文名称", "name")
+            elif name in seen_by_collection[coll]:
+                err("duplicate_name", item, f"{coll} 内名称「{item.get('name')}」重复", "name")
+            seen_by_collection[coll].add(name)
+
+    for item in draft.get("objectTypes") or []:
+        if item.get("key") not in selected or item.get("conflict"):
+            continue
+        props = item.get("properties") or []
+        prop_ids: set[str] = set()
+        prop_names: set[str] = set()
+        for prop in props:
+            pid = str(prop.get("id") or "")
+            pname = norm_name(prop.get("name", ""))
+            if not pid or pid in prop_ids:
+                err("invalid_property_id", item, "属性 id 缺失或重复", "properties")
+            if not pname or pname in prop_names:
+                err("duplicate_property", item, "属性 name 缺失或重复", "properties")
+            if prop.get("type") not in PROPERTY_TYPES:
+                err("invalid_property_type", item,
+                    f"属性「{prop.get('name')}」类型「{prop.get('type')}」不受图谱编辑器支持",
+                    "properties.type")
+            prop_ids.add(pid)
+            prop_names.add(pname)
+        if not props:
+            err("properties_missing", item, "对象类型没有属性", "properties")
+        if item.get("primaryKey") not in prop_ids:
+            err("invalid_primary_key", item, "主键必须指向 properties 中的属性 id", "primaryKey")
+
+    def object_dependency_ok(key: str | None, name: str | None) -> bool:
+        return bool((key and key in chosen_objects) or norm_name(name or "") in known_names)
+
+    for item in draft.get("linkTypes") or []:
+        if item.get("key") not in selected or item.get("conflict"):
+            continue
+        if item.get("cardinality") not in CARDINALITIES:
+            err("invalid_cardinality", item, "关系基数不受图谱编辑器支持", "cardinality")
+        if not object_dependency_ok(item.get("sourceKey"), item.get("sourceName")):
+            err("missing_source_dependency", item, "关系源对象未选择且目标本体中不存在", "sourceKey")
+        if not object_dependency_ok(item.get("targetKey"), item.get("targetName")):
+            err("missing_target_dependency", item, "关系目标对象未选择且目标本体中不存在", "targetKey")
+
+    for item in draft.get("actions") or []:
+        if item.get("key") not in selected or item.get("conflict"):
+            continue
+        if not object_dependency_ok(item.get("objectTypeKey"),
+                                    str(item.get("objectTypeKey") or "").split(":", 1)[-1]):
+            err("missing_action_object", item, "动作绑定对象未选择且目标本体中不存在", "objectTypeKey")
+        for prop in item.get("parameters") or []:
+            if prop.get("type") not in PROPERTY_TYPES:
+                err("invalid_parameter_type", item,
+                    f"参数「{prop.get('name')}」类型「{prop.get('type')}」不受支持", "parameters.type")
+
+    for item in draft.get("functions") or []:
+        if item.get("key") not in selected or item.get("conflict"):
+            continue
+        if item.get("functionType") not in {"object", "object_set", "action_validation"}:
+            err("invalid_function_type", item, "函数类型与图谱编辑器契约不一致", "functionType")
+        if not object_dependency_ok(item.get("targetObjectTypeKey"), item.get("targetObjectTypeName")):
+            err("missing_function_object", item, "对象函数缺少可落地的绑定对象", "targetObjectTypeKey")
+        if item.get("enabled"):
+            err("unsafe_function_enabled", item, "探索生成的待形式化函数必须以停用状态落地", "enabled")
+
+    for item in draft.get("sentinels") or []:
+        if item.get("key") not in selected or item.get("conflict"):
+            continue
+        if item.get("enabled") or not item.get("muted") or item.get("status") != "draft":
+            err("unsafe_sentinel_state", item, "探索生成的哨兵必须保持 draft + muted + disabled", "status")
+        if item.get("bindingObjectKey") and not object_dependency_ok(
+                item.get("bindingObjectKey"), item.get("bindingObjectName")):
+            err("missing_sentinel_object", item, "哨兵绑定对象未选择且目标本体中不存在",
+                "bindingObjectKey")
+        if not item.get("bindingObjectKey"):
+            warnings.append({"code": "sentinel_unbound", "key": item.get("key"),
+                             "message": "哨兵尚未绑定对象，将以不可执行影子草稿落地"})
+
+    return {"valid": not errors, "errors": errors, "warnings": warnings,
+            "selectedCount": len(selected), "counts": counts}
+
+
 # ---------------------------------------------------------------- 对外入口
 
 
@@ -621,8 +762,10 @@ def build_draft(canvas: dict, existing: Optional[dict[str, set[str]]] = None,
     _lint(draft, warnings)
     _mark_conflicts(draft, existing, conflicts)
     coverage = _scenario_coverage(canvas, draft, existing)
+    validation = validate_draft_selection(draft, existing=existing)
     report = {"warnings": warnings, "conflicts": conflicts,
-              "scenarioCoverage": coverage, "llmRefined": refined}
+              "scenarioCoverage": coverage, "llmRefined": refined,
+              "validation": validation}
     return draft, report
 
 

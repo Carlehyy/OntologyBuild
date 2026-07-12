@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Bot, CircleHelp, Compass, FileText, History, Loader2, Paperclip, Plus, Send,
+  Bot, CircleHelp, Compass, Download, Files, FileText, History, Loader2, Paperclip, Plus, Send,
   ShieldAlert, ShieldCheck, Sparkles, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -21,6 +21,8 @@ import Md from './Md'
 import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
 import DraftReviewDrawer from './DraftReviewDrawer'
+import FileWorkspaceDrawer from './FileWorkspaceDrawer'
+import type { ModelConfig } from '@/types/ontology'
 
 interface ChatMsg {
   id: string
@@ -47,6 +49,12 @@ const formatSize = (n: number) =>
   n < 1024 ? `${n} B`
     : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB`
       : `${(n / 1024 / 1024).toFixed(1)} MB`
+
+const errorMessage = (error: unknown, fallback: string): string => {
+  if (!error || typeof error !== 'object') return fallback
+  const value = error as { detail?: string | { message?: string }; message?: string }
+  return typeof value.detail === 'string' ? value.detail : value.detail?.message || value.message || fallback
+}
 
 const STEP_LABELS: Record<string, string> = {
   upsert_elements: '沉淀画布',
@@ -83,7 +91,7 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
                 {s.diagram.title}
                 <span className="ml-1.5 font-normal text-[var(--color-text-tertiary)]">由画布确定性生成 · 请核对与实际是否一致</span>
               </div>
-              <MermaidBlock chart={s.diagram.mermaid} />
+              <MermaidBlock chart={s.diagram.mermaid} title={s.diagram.title} warnings={s.diagram.warnings || []} />
             </div>
           )}
         </div>
@@ -151,9 +159,8 @@ export default function ExplorationPage() {
   const [sid, setSid] = useState('')
 
   // -- 模型选择 --
-  const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
-  const llmModels = Array.isArray(models)
-    ? (models as any[]).filter((m: any) => m.config_type === 'llm' || !m.config_type) : []
+  const { data: models = [] } = useQuery<ModelConfig[]>({ queryKey: ['models'], queryFn: () => modelApi.list() })
+  const llmModels = models.filter(m => m.config_type === 'llm' || !m.config_type)
   const [modelId, setModelId] = useState('')
 
   // -- 对话 + 画布 --
@@ -164,6 +171,7 @@ export default function ExplorationPage() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [reviewDraft, setReviewDraft] = useState<BxDraft | null>(null)
   const [genDocBusy, setGenDocBusy] = useState(false)
   const [banner, setBanner] = useState('')
@@ -283,8 +291,8 @@ export default function ExplorationPage() {
       try {
         const att = await explorationApi.uploadAttachment(targetSid, file)
         setAttachments(prev => [...prev, att])
-      } catch (e: any) {
-        setAttachError(`「${file.name}」上传失败：${e?.detail || e?.message || '无法读取文件内容'}`)
+      } catch (error: unknown) {
+        setAttachError(`「${file.name}」上传失败：${errorMessage(error, '无法读取文件内容')}`)
       } finally {
         setUploads(prev => prev.filter(u => u.uid !== uid))
       }
@@ -298,6 +306,21 @@ export default function ExplorationPage() {
     try {
       await explorationApi.deleteAttachment(sid, aid)
     } catch { /* 前端已移除，忽略后端错误 */ }
+  }
+
+  const downloadAttachment = async (att: BxAttachment) => {
+    if (!sid) return
+    try {
+      const blob = await explorationApi.downloadAttachment(sid, att.id)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = att.filename
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error: unknown) {
+      setAttachError(`「${att.filename}」下载失败：${errorMessage(error, '文件不可用')}`)
+    }
   }
 
   const send = async (text?: string) => {
@@ -319,8 +342,11 @@ export default function ExplorationPage() {
     try {
       await streamExplorationChat(targetSid, { message, modelId: modelId || undefined }, e => {
         if (e.type === 'step') {
-          const { type: _t, ...step } = e
-          patchLast(m => ({ ...m, steps: [...m.steps, step as BxStep] }))
+          const step: BxStep = {
+            tool: e.tool, arguments: e.arguments, summary: e.summary,
+            durationMs: e.durationMs, error: e.error, diagram: e.diagram,
+          }
+          patchLast(m => ({ ...m, steps: [...m.steps, step] }))
         } else if (e.type === 'canvas') {
           setCanvas(e.canvas)
           setCompleteness(e.completeness)
@@ -331,11 +357,12 @@ export default function ExplorationPage() {
           patchLast(m => ({ ...m, content: m.content || `⚠️ ${e.message}`, streaming: false }))
         }
       })
-    } catch (e: any) {
-      patchLast(m => ({ ...m, content: `⚠️ ${e?.message || '请求失败'}`, streaming: false }))
+    } catch (error: unknown) {
+      patchLast(m => ({ ...m, content: `⚠️ ${errorMessage(error, '请求失败')}`, streaming: false }))
     } finally {
       patchLast(m => ({ ...m, streaming: false }))
       setBusy(false)
+      explorationApi.attachments(targetSid).then(setAttachments).catch(() => { /* 非致命 */ })
       refetchSessions()   // 标题可能已更新
     }
   }
@@ -347,8 +374,8 @@ export default function ExplorationPage() {
     try {
       await explorationApi.generateDocument(sid, modelId || undefined)
       setDocsOpen(true)
-    } catch (e: any) {
-      setBanner(e?.detail || e?.message || '文档生成失败')
+    } catch (error: unknown) {
+      setBanner(errorMessage(error, '文档生成失败'))
     } finally {
       setGenDocBusy(false)
     }
@@ -437,7 +464,6 @@ export default function ExplorationPage() {
                 >
                   {readiness.ready ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
                   质量门 {readiness.gatesPassed}/{readiness.gatesTotal}
-                  {!readiness.ready && <span className="font-normal">· {readiness.blockingCount} 项待定量</span>}
                 </span>
               )}
               <select
@@ -447,14 +473,22 @@ export default function ExplorationPage() {
                 title="对话模型"
               >
                 <option value="">默认模型</option>
-                {llmModels.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                {llmModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
+              <button
+                onClick={() => setWorkspaceOpen(true)}
+                disabled={!sid}
+                data-testid="workspace-files-button"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
+              >
+                <Files size={13} /> 文件 {attachments.length > 0 && `(${attachments.length})`}
+              </button>
               <button
                 onClick={() => setDocsOpen(true)}
                 disabled={!sid}
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
               >
-                <History size={13} /> 历史需求文档
+                <History size={13} /> 文档
               </button>
               <button
                 onClick={generateDocument}
@@ -524,13 +558,22 @@ export default function ExplorationPage() {
                         </div>
                       </div>
                       {!uploading && (
-                        <button
-                          onClick={() => void removeAttachment(item.att.id)}
-                          title="移除参考资料"
-                          className="shrink-0 p-1 rounded text-[var(--color-text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)]"
-                        >
-                          <X size={13} />
-                        </button>
+                        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                          <button
+                            onClick={() => void downloadAttachment(item.att)}
+                            title="下载文件"
+                            className="p-1 rounded text-[var(--color-text-tertiary)] hover:text-teal-600 hover:bg-[var(--color-bg-hover)]"
+                          >
+                            <Download size={13} />
+                          </button>
+                          <button
+                            onClick={() => void removeAttachment(item.att.id)}
+                            title="移除参考资料"
+                            className="p-1 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)]"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -636,6 +679,14 @@ export default function ExplorationPage() {
           sessionId={sid}
           onClose={() => setDocsOpen(false)}
           onDraftCreated={draft => { setDocsOpen(false); setReviewDraft(draft) }}
+        />
+      )}
+      {workspaceOpen && sid && (
+        <FileWorkspaceDrawer
+          sessionId={sid}
+          files={attachments}
+          onFilesChange={setAttachments}
+          onClose={() => setWorkspaceOpen(false)}
         />
       )}
       {reviewDraft && (

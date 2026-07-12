@@ -72,6 +72,12 @@ export interface BxDiagram {
   title: string
   target?: string
   mermaid: string
+  warnings?: string[]
+  layout?: {
+    baseSize: { width: number; height: number }
+    canvasSize: { width: number; height: number }
+    density: number
+  }
 }
 
 export interface BxStep {
@@ -219,6 +225,23 @@ export interface DraftReport {
   /** 生成时刻的质量门快照；gateOverride=true 表示未就绪被显式越权 */
   readiness?: Pick<Readiness, 'ready' | 'stage' | 'gatesPassed' | 'gatesTotal' | 'blockingCount' | 'advisoryCount'>
   gateOverride?: boolean
+  validation?: DraftValidation
+}
+
+export interface DraftValidationIssue {
+  code: string
+  key?: string
+  name?: string
+  field?: string
+  message: string
+}
+
+export interface DraftValidation {
+  valid: boolean
+  errors: DraftValidationIssue[]
+  warnings: DraftValidationIssue[]
+  selectedCount: number
+  counts: Record<string, number>
 }
 
 export interface BxDraft {
@@ -251,12 +274,26 @@ export interface BxAttachment {
   id: string
   sessionId: string
   filename: string
+  relativePath: string
   mimeType?: string | null
   fileSize: number
   charCount: number
+  sha256?: string | null
+  version: number
+  source: 'upload' | 'user' | 'agent'
+  editable: boolean
   status: 'ready' | 'failed'
   error?: string | null
   createdAt: string
+  updatedAt: string
+}
+
+export interface BxWorkspaceText {
+  id: string
+  relativePath: string
+  content: string
+  version: number
+  sha256?: string | null
 }
 
 // ---------- REST ----------
@@ -303,11 +340,25 @@ export const explorationApi = {
   },
   deleteAttachment: (sid: string, aid: string) =>
     apiClientV2.delete(`/exploration/sessions/${sid}/attachments/${aid}`),
+  downloadAttachment: (sid: string, aid: string) =>
+    apiClientV2.get<Blob>(`/exploration/sessions/${sid}/attachments/${aid}/download`, {
+      responseType: 'blob',
+    }),
+  attachmentContent: (sid: string, aid: string) =>
+    apiClientV2.get<BxWorkspaceText>(`/exploration/sessions/${sid}/attachments/${aid}/content`),
+  createWorkspaceText: (sid: string, body: { path: string; content: string; mimeType?: string }) =>
+    apiClientV2.post<BxAttachment>(`/exploration/sessions/${sid}/workspace/files`, body),
+  updateWorkspaceText: (sid: string, aid: string, body: { content: string; expectedVersion: number }) =>
+    apiClientV2.put<BxAttachment>(`/exploration/sessions/${sid}/attachments/${aid}/content`, body),
   draft: (draftId: string) => apiClientV2.get<BxDraft>(`/exploration/drafts/${draftId}`),
   applyDraft: (draftId: string, body: {
     selectedKeys?: string[] | null
     newOntology?: { name: string; domain?: string; description?: string }
   }) => apiClientV2.post<ApplyDraftResult>(`/exploration/drafts/${draftId}/apply`, body),
+  validateDraft: (draftId: string, selectedKeys?: string[] | null) =>
+    apiClientV2.post<DraftValidation>(`/exploration/drafts/${draftId}/validate`, {
+      selectedKeys: selectedKeys ?? undefined,
+    }),
   discardDraft: (draftId: string) =>
     apiClientV2.post<BxDraft>(`/exploration/drafts/${draftId}/discard`),
 }
@@ -315,7 +366,8 @@ export const explorationApi = {
 // ---------- SSE 流式 chat ----------
 
 function apiRoot(): string {
-  const runtimeBase = (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) || ''
+  const runtimeBase = (typeof window !== 'undefined'
+    && (window as Window & { __API_BASE_URL__?: string }).__API_BASE_URL__) || ''
   return `${runtimeBase}/api/v2`
 }
 

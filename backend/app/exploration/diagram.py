@@ -130,8 +130,8 @@ def _slabel(x: dict) -> str:
 # ---------------------------------------------------------------- 业务流程图
 
 
-def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
-    """场景步骤 → mermaid flowchart。含「如果/若/是否」的步骤用菱形判断节点。"""
+def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]]:
+    """场景步骤 → mermaid flowchart；没有明确分支目标时不伪造判断菱形。"""
     c = _ensure_canvas(canvas)
     s = _pick_scenario(c, target)
     steps = s.get("steps") or []
@@ -142,10 +142,12 @@ def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
                  for b in c["behaviors"]}
     beh_display = {norm_name(b.get("name", "")): _slabel(b) for b in c["behaviors"]}
 
-    lines = ["flowchart TD", f'    S0(["开始：{_text(s.get("goal") or _slabel(s), 30)}"])']
+    direction = "LR" if len(steps) >= 7 else "TD"
+    lines = [f"flowchart {direction}", f'    S0(["开始：{_text(s.get("goal") or _slabel(s), 30)}"])']
+    warnings: list[str] = []
     prev = "S0"
     for i, raw in enumerate(steps, 1):
-        text = _text(raw)
+        text = _text(raw, 44)
         nid = f"S{i}"
         # 步骤文本命中已定义行为 → 标注执行主体（图与模型互相印证）
         hit = next((n for n, disp in beh_display.items()
@@ -153,16 +155,18 @@ def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
                     or (disp and disp != "?" and disp in text)), None)
         if hit and beh_actor.get(hit):
             text = f"{text}｜{beh_actor[hit]}"
-        if any(k in raw for k in ("如果", "若", "是否")):
-            lines.append(f'    {nid}{{"{text}"}}')
-        else:
-            lines.append(f'    {nid}["{text}"]')
+        conditional = any(k in raw for k in ("如果", "若", "是否"))
+        # Scenario.steps 只有线性文本，没有 yes/no 的目标步骤；使用菱形会画出
+        # “看似规范但语义错误”的单出口判断。先按普通步骤画，并显式提示补分支。
+        lines.append(f'    {nid}["{text}"]')
+        if conditional:
+            warnings.append(f"步骤 {i} 含条件语句但尚未定义分支目标，当前按线性步骤展示")
         lines.append(f"    {prev} --> {nid}")
         prev = nid
     outcome = _text(s.get("expected_outcome") or "结束", 30)
     lines.append(f'    SE(["{outcome}"])')
     lines.append(f"    {prev} --> SE")
-    return "\n".join(lines), _slabel(s)
+    return "\n".join(lines), _slabel(s), warnings
 
 
 # ---------------------------------------------------------------- 时序图
@@ -215,7 +219,7 @@ _TRANSITION_RE = re.compile(
     r"(?:从\s*([^\s，。；;、]{1,20})\s*)?(?:变更为|变为|改为|置为|转为|流转到|->|→)\s*([^\s，。；;、]{1,20})")
 
 
-def state_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
+def state_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]]:
     """对象的枚举状态属性 → mermaid stateDiagram；从行为结果文本识别显式迁移。"""
     c = _ensure_canvas(canvas)
     objects = c["objects"]
@@ -251,7 +255,7 @@ def state_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
     by_norm = {norm_name(v): v for v in states}
     ids = {v: f"st{i}" for i, v in enumerate(states)}
 
-    lines = ["stateDiagram-v2"]
+    lines = ["stateDiagram-v2", "    direction LR"]
     for v in states:
         lines.append(f'    {ids[v]} : {_text(v, 20)}')
     if states:
@@ -274,10 +278,18 @@ def state_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
                 edges.add((ids[src_v], ids[dst_v], _slabel(b)))
     for src, dst, label in sorted(edges):
         lines.append(f"    {src} --> {dst} : {_text(label, 20)}")
+    warnings: list[str] = []
     if not edges:
         lines.append("    %% 未能从行为结果中识别状态迁移，仅列出状态；")
         lines.append("    %% 在行为的 outcome 里写明「从X变为Y」即可自动连线")
-    return "\n".join(lines), f"{_slabel(obj)} · {attr.get('display_name') or attr.get('name')}"
+        warnings.append("状态枚举已确认，但没有任何已确认的状态迁移；图中不推断虚假连线")
+    else:
+        connected = {node for src, dst, _ in edges for node in (src, dst)}
+        isolated = [state for state in states if ids[state] not in connected]
+        if isolated:
+            warnings.append("以下状态尚无已确认迁移：" + "、".join(isolated[:8]))
+    return ("\n".join(lines),
+            f"{_slabel(obj)} · {attr.get('display_name') or attr.get('name')}", warnings)
 
 
 # ---------------------------------------------------------------- 统一入口
@@ -289,15 +301,35 @@ def build_diagram(canvas, kind: str, target: str | None = None) -> dict:
     if k not in DIAGRAM_KINDS:
         raise DiagramError(f"不支持的图表类型「{kind}」，可选: {', '.join(DIAGRAM_KINDS)}")
     if k == "er":
-        return {"kind": "er", "title": DIAGRAM_KINDS["er"], "mermaid": er_mermaid(canvas)}
+        c = _ensure_canvas(canvas)
+        density = len(c["objects"]) + sum(len(o.get("relations") or []) for o in c["objects"])
+        return {"kind": "er", "title": DIAGRAM_KINDS["er"], "mermaid": er_mermaid(canvas),
+                "warnings": [], "layout": _layout_budget("er", density)}
     if k == "flow":
-        mermaid, scen = flow_mermaid(canvas, target)
+        mermaid, scen, warnings = flow_mermaid(canvas, target)
+        steps = len(_pick_scenario(_ensure_canvas(canvas), target).get("steps") or [])
         return {"kind": "flow", "title": f"{DIAGRAM_KINDS['flow']} · {scen}",
-                "target": scen, "mermaid": mermaid}
+                "target": scen, "mermaid": mermaid, "warnings": warnings,
+                "layout": _layout_budget("flow", steps)}
     if k == "sequence":
         mermaid, scen = sequence_mermaid(canvas, target)
+        behaviors = len(_pick_scenario(_ensure_canvas(canvas), target).get("behaviors") or [])
         return {"kind": "sequence", "title": f"{DIAGRAM_KINDS['sequence']} · {scen}",
-                "target": scen, "mermaid": mermaid}
-    mermaid, label = state_mermaid(canvas, target)
+                "target": scen, "mermaid": mermaid, "warnings": [],
+                "layout": _layout_budget("sequence", behaviors)}
+    mermaid, label, warnings = state_mermaid(canvas, target)
     return {"kind": "state", "title": f"{DIAGRAM_KINDS['state']} · {label}",
-            "target": label, "mermaid": mermaid}
+            "target": label, "mermaid": mermaid, "warnings": warnings,
+            "layout": _layout_budget("state", mermaid.count(" : "))}
+
+
+def _layout_budget(kind: str, density: int) -> dict:
+    """Flint 风格的目标尺寸 + 有界增长元数据，供前端缩略/预览双态使用。"""
+    base = {"width": 640, "height": 360}
+    if kind in ("er", "sequence"):
+        base = {"width": 720, "height": 400}
+    stretch = min(2.0, 1.0 + max(0, density - 5) * 0.08)
+    return {"baseSize": base,
+            "canvasSize": {"width": min(1440, round(base["width"] * stretch)),
+                           "height": min(900, round(base["height"] * stretch))},
+            "density": density}

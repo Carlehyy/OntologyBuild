@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     max_upload_mb: int = 200
     allowed_upload_extensions: str = "csv,xlsx,xls,json,xml,pdf,docx,doc,pptx,ppt,md,txt"
+    # 可选 OfficeCLI 适配器。核心会话空间不依赖它；配置后才向探索 Agent 暴露
+    # docx/xlsx/pptx 的结构化增删改工具，避免生产镜像隐式下载第三方二进制。
+    exploration_officecli_path: str = ""
     # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理
     dataset_version_keep: int = 20
     # Current transform engine is list-based.  Refuse oversized production

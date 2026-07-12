@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
   CircleCheck, CircleHelp, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2,
@@ -32,6 +32,12 @@ const DIAGRAM_TABS: { kind: DiagramKind; label: string; needsTarget?: 'scenario'
   { kind: 'sequence', label: '时序图', needsTarget: 'scenario' },
   { kind: 'state', label: '状态图', needsTarget: 'object' },
 ]
+
+const errorMessage = (error: unknown, fallback: string): string => {
+  if (!error || typeof error !== 'object') return fallback
+  const value = error as { detail?: string | { message?: string }; message?: string }
+  return typeof value.detail === 'string' ? value.detail : value.detail?.message || value.message || fallback
+}
 
 function elementBadges(key: CanvasKey, el: CanvasElement): string[] {
   const badges: string[] = []
@@ -219,6 +225,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   const [dgTarget, setDgTarget] = useState('')
   const [dgMermaid, setDgMermaid] = useState('')
   const [dgTitle, setDgTitle] = useState('')
+  const [dgWarnings, setDgWarnings] = useState<string[]>([])
   const [dgBusy, setDgBusy] = useState(false)
   const [dgError, setDgError] = useState('')
   const counts = completeness?.counts || {}
@@ -232,27 +239,24 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
     setDgBusy(true)
     setDgError('')
     setDgMermaid('')
+    setDgWarnings([])
     try {
       const d = await explorationApi.diagram(sessionId, kind, target || undefined)
       setDgMermaid(d.mermaid)
       setDgTitle(d.title)
-    } catch (e: any) {
-      setDgError(typeof e?.detail === 'string' ? e.detail : e?.message || '图表生成失败')
+      setDgWarnings(d.warnings || [])
+    } catch (error: unknown) {
+      setDgError(errorMessage(error, '图表生成失败'))
     } finally {
       setDgBusy(false)
     }
   }
 
-  // 打开状态下切换图类/目标 → 重新生成
-  useEffect(() => {
-    if (dgOpen) void loadDiagram(dgKind, dgTarget)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dgOpen, dgKind, dgTarget])
-
   const openDiagram = () => {
     setDgKind('er')
     setDgTarget('')
     setDgOpen(true)
+    void loadDiagram('er', '')
   }
 
   const targetSpec = DIAGRAM_TABS.find(t => t.kind === dgKind)?.needsTarget
@@ -395,7 +399,9 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                 {DIAGRAM_TABS.map(t => (
                   <button
                     key={t.kind}
-                    onClick={() => { setDgKind(t.kind); setDgTarget('') }}
+                    onClick={() => {
+                      setDgKind(t.kind); setDgTarget(''); void loadDiagram(t.kind, '')
+                    }}
                     className={`px-3 py-1.5 text-xs transition-colors ${dgKind === t.kind
                       ? 'bg-teal-600 text-white font-medium'
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
@@ -407,7 +413,9 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
               {targetSpec && (
                 <select
                   value={dgTarget}
-                  onChange={e => setDgTarget(e.target.value)}
+                  onChange={e => {
+                    setDgTarget(e.target.value); void loadDiagram(dgKind, e.target.value)
+                  }}
                   className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs outline-none"
                 >
                   <option value="">
@@ -424,7 +432,9 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                 </div>
               )}
               {dgError && <div className="text-xs text-[var(--color-danger)]">{dgError}</div>}
-              {!dgBusy && !dgError && dgMermaid && <MermaidBlock chart={dgMermaid} />}
+              {!dgBusy && !dgError && dgMermaid && (
+                <MermaidBlock chart={dgMermaid} title={dgTitle} warnings={dgWarnings} compact={false} />
+              )}
             </div>
           </div>
         </div>
