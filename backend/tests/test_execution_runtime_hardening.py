@@ -451,7 +451,7 @@ def test_match_state_has_database_uniqueness_guard(db):
     db.rollback()
 
 
-def test_pending_approval_cannot_cross_ontology_release(db):
+def test_pending_approval_cannot_cross_ontology_version(db):
     ontology_id = "approval-release-binding"
     object_type, instance = _seed_object(db, ontology_id)
     action = ActionType(

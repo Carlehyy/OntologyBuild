@@ -189,9 +189,7 @@ def execute_proposal(ontology_id: str, body: S.ExecuteProposalRequest,
     仍然只放行授权边界内的动作；执行走动作引擎全套治理（校验 / HITL 审批 /
     事实追加），actor 记为确认执行的用户 —— agent 只提案，人签字。
     """
-    project = _require_ontology(db, ontology_id)
-    if (project.status or "") != "published":
-        raise HTTPException(409, "真实动作只能在已发布本体上执行；草稿中的提案仅可预演")
+    _require_ontology(db, ontology_id)
     try:
         _, profile, scope = build_scope(db, ontology_id)
         if not profile.enabled:

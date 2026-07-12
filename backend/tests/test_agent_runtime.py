@@ -67,13 +67,7 @@ def modeled_ontology(client, auth_headers, ontology):
     }
     r = client.put(f"{_fo(oid)}/full", headers=auth_headers, json=body)
     assert r.status_code == 200, r.text
-    # Real actions are a production runtime capability and therefore execute
-    # only against an immutable published ontology release.
-    r = client.post(
-        f"/api/v2/ontologies/{oid}/versions", headers=auth_headers,
-        json={"version_label": "agent-runtime-test"},
-    )
-    assert r.status_code == 201, r.text
+    # 新建本体无需发布即可直接用于查询、预演和真实动作；执行日志绑定当前版本。
     return ontology
 
 
@@ -216,6 +210,10 @@ def test_execute_proposal_respects_boundary_and_hitl(client, auth_headers, model
     oid = modeled_ontology["id"]
     _grant_actions(client, auth_headers, oid, ["act-1", "act-2"])
 
+    from app.models.ontology import OntologyProject
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert project.status == "draft"
+
     # 普通动作：真实执行 → 属性变更 + 事实追加
     r = client.post(f"{_fo(oid)}/agent/execute-proposal", headers=auth_headers,
                     json={"actionId": "act-1", "targetInstanceId": "inst-o1",
@@ -233,15 +231,49 @@ def test_execute_proposal_respects_boundary_and_hitl(client, auth_headers, model
     # 需审批动作 → pending，进 HITL 队列，属性不变
     r = client.post(f"{_fo(oid)}/agent/execute-proposal", headers=auth_headers,
                     json={"actionId": "act-2", "targetInstanceId": "inst-o1"})
-    assert r.json()["data"]["status"] == "pending"
+    pending = r.json()["data"]
+    assert pending["status"] == "pending"
     db.refresh(inst)
     assert inst.properties["status"] == "paid"     # 没被取消
+
+    # 本体无需发布，审批通过后按提案记录的当前版本继续执行。
+    approved = client.post(
+        f"{_fo(oid)}/action-logs/{pending['id']}/decide",
+        headers=auth_headers,
+        json={"decision": "approved", "reason": "版本一致，确认执行"},
+    )
+    assert approved.status_code == 200, approved.text
+    decision = approved.json()["data"]
+    assert decision["pendingLog"]["status"] == "approved"
+    assert decision["executionLog"]["status"] == "success"
 
     # 边界外动作 → 403
     _grant_actions(client, auth_headers, oid, ["act-1"])
     r = client.post(f"{_fo(oid)}/agent/execute-proposal", headers=auth_headers,
                     json={"actionId": "act-2", "targetInstanceId": "inst-o1"})
     assert r.status_code == 403
+
+
+def test_direct_action_execution_uses_current_version_without_publish(
+        client, auth_headers, modeled_ontology, db):
+    """通用动作入口与智能助手一致：新建本体当前版本可直接执行。"""
+    oid = modeled_ontology["id"]
+
+    response = client.post(
+        f"{_fo(oid)}/run-action",
+        headers=auth_headers,
+        json={"actionId": "act-1", "targetInstanceId": "inst-o1", "dryRun": False},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    assert result["status"] == "success"
+    assert result["ontologyVersion"] == "v0.1"
+
+    from app.models.ontology_formal import ObjectInstance
+    instance = db.query(ObjectInstance).filter_by(id="inst-o1").one()
+    db.refresh(instance)
+    assert instance.properties["status"] == "paid"
 
 
 # ---------------------------------------------------------------- 回合编排

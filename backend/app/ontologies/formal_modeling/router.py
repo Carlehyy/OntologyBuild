@@ -976,9 +976,7 @@ def delete_link_instance(ontology_id: str, link_id: str,
 @router.post("/{ontology_id}/run-action")
 def run_action(ontology_id: str, body: S.RunActionRequest,
                db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    project = _require_ontology(db, ontology_id, for_update=True)
-    if not body.dry_run and (project.status or "") != "published":
-        raise HTTPException(409, "真实动作只能在已发布本体上执行；草稿仅允许 dry-run")
+    _require_ontology(db, ontology_id, for_update=True)
     log = execute_action(db, ontology_id, body,
                          actor_id=getattr(current_user, "id", None))
     return _ok(log)
@@ -1015,10 +1013,8 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
     if decision not in ("approved", "rejected"):
         raise HTTPException(422, "decision 必须是 approved 或 rejected")
     if decision == "approved":
-        if (project.status or "") != "published":
-            raise HTTPException(409, "本体已撤回发布，不能批准并执行待办动作；可选择拒绝")
         if not log.ontology_version:
-            raise HTTPException(409, "该待办动作缺少发布版本血缘，不能安全批准；可选择拒绝")
+            raise HTTPException(409, "该待办动作缺少本体版本血缘，不能安全批准；可选择拒绝")
         if log.ontology_version != project.version:
             raise HTTPException(
                 409,
