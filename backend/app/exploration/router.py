@@ -266,8 +266,10 @@ def chat(session_id: str, body: S.ChatRequest,
         raise HTTPException(422, "message 不能为空")
 
     if not body.stream:
-        events = list(run_exploration_turn(db, session_id, current_user, body.message,
-                                           model_id=body.model_id))
+        events = list(run_exploration_turn(
+            db, session_id, current_user, body.message,
+            model_id=body.model_id, web_search=body.web_search,
+        ))
         answer = next((e for e in events if e["type"] == "answer"), None)
         error = next((e for e in events if e["type"] == "error"), None)
         meta = next((e for e in events if e["type"] == "meta"), {})
@@ -291,8 +293,10 @@ def chat(session_id: str, body: S.ChatRequest,
         from app.database import SessionLocal
         session = SessionLocal()
         try:
-            for event in run_exploration_turn(session, session_id, user, body.message,
-                                              model_id=body.model_id):
+            for event in run_exploration_turn(
+                session, session_id, user, body.message,
+                model_id=body.model_id, web_search=body.web_search,
+            ):
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         finally:
             session.close()

@@ -36,6 +36,7 @@ from app.exploration.models import (ExplorationAttachment, ExplorationMessage,
                                     ExplorationSession)
 from app.exploration.toolkit import (OFFICE_TOOL, TOOL_DEFS, USE_SKILL_TOOL,
                                      ExplorationToolRunner)
+from app.exploration.web_search import WebSearchError, search_context, search_web
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +277,11 @@ def _canvas_event(session: ExplorationSession) -> dict:
 
 
 def run_exploration_turn(db: Session, session_id: str, user, message: str,
-                         model_id: Optional[str] = None) -> Iterator[dict]:
+                         model_id: Optional[str] = None,
+                         web_search: bool = False) -> Iterator[dict]:
     """执行一个探索回合。所有异常转 error 事件，绝不让 SSE 裸断。"""
     try:
-        yield from _run(db, session_id, user, message, model_id)
+        yield from _run(db, session_id, user, message, model_id, web_search)
     except Exception as e:  # noqa: BLE001
         logger.exception("业务探索回合失败")
         yield {"type": "error", "message": f"探索回合执行失败: {e}"}
@@ -288,7 +290,7 @@ def run_exploration_turn(db: Session, session_id: str, user, message: str,
 
 
 def _run(db: Session, session_id: str, user, message: str,
-         model_id: Optional[str]) -> Iterator[dict]:
+         model_id: Optional[str], web_search: bool) -> Iterator[dict]:
     session = db.query(ExplorationSession).filter(ExplorationSession.id == session_id).first()
     if not session:
         yield {"type": "error", "message": "会话不存在"}
@@ -312,13 +314,39 @@ def _run(db: Session, session_id: str, user, message: str,
 
     yield {"type": "meta", "sessionId": session.id, "model": call_kwargs.get("model")}
 
+    steps: list[dict] = []
+    web_block = ""
+    if web_search:
+        started = time.time()
+        try:
+            search_results = search_web(message)
+            web_block = search_context(search_results)
+            search_step = {
+                "tool": "web_search",
+                "arguments": {"query": message},
+                "summary": f"检索到 {len(search_results)} 条公开网页结果",
+                "durationMs": int((time.time() - started) * 1000),
+                "searchResults": search_results,
+            }
+        except WebSearchError as exc:
+            search_step = {
+                "tool": "web_search",
+                "arguments": {"query": message},
+                "summary": str(exc),
+                "durationMs": int((time.time() - started) * 1000),
+                "error": str(exc),
+            }
+        steps.append(search_step)
+        yield {"type": "step", **search_step}
+
     skills = _load_skills(db)
     tools = TOOL_DEFS + ([OFFICE_TOOL] if O.available() else []) \
         + ([USE_SKILL_TOOL] if skills else [])
 
     attach_block = _attachments_block(db, session.id)
+    reference_block = "\n\n".join(block for block in (attach_block, web_block) if block)
     sys_content, history = _prepare_history(
-        db, session, call_kwargs, message, attach_block, skills)
+        db, session, call_kwargs, message, reference_block, skills)
     db.add(ExplorationMessage(session_id=session.id, role="user", content=message))
     db.commit()
     messages: list[dict] = [{"role": "system", "content": sys_content}]
@@ -328,7 +356,6 @@ def _run(db: Session, session_id: str, user, message: str,
     messages.append({"role": "user", "content": message})
 
     runner = ExplorationToolRunner(db, session, skills=skills)
-    steps: list[dict] = []
     usage_total = {"inputTokens": 0, "outputTokens": 0}
     answer: Optional[str] = None
     empty_response_retries = 0

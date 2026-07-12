@@ -25,6 +25,7 @@ class SessionOut(CamelModel):
 class ChatRequest(CamelModel):
     message: str
     model_id: Optional[str] = None
+    web_search: bool = False
     stream: bool = True
 
 

@@ -86,6 +86,8 @@ export interface BxStep {
   summary: string
   durationMs: number
   error?: string
+  /** 联网搜索步骤附带的可核验来源。 */
+  searchResults?: { title: string; url: string; snippet: string }[]
   /** show_diagram 的产物：确定性生成的 mermaid，随步骤直接渲染进对话 */
   diagram?: BxDiagram
 }
@@ -373,7 +375,7 @@ function apiRoot(): string {
 
 export async function streamExplorationChat(
   sid: string,
-  body: { message: string; modelId?: string | null },
+  body: { message: string; modelId?: string | null; webSearch?: boolean },
   onEvent: (e: ExploreEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -381,7 +383,12 @@ export async function streamExplorationChat(
   const resp = await fetch(`${apiRoot()}/exploration/sessions/${sid}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ message: body.message, modelId: body.modelId || undefined, stream: true }),
+    body: JSON.stringify({
+      message: body.message,
+      modelId: body.modelId || undefined,
+      webSearch: body.webSearch || undefined,
+      stream: true,
+    }),
     signal,
   })
   if (!resp.ok || !resp.body) {

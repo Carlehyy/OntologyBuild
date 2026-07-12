@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Bot, CircleHelp, Compass, Download, Files, FileText, History, Loader2, Paperclip, Plus, Send,
-  ShieldAlert, ShieldCheck, Sparkles, Trash2, User, Wrench, X,
+  Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, History, List,
+  Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
   explorationApi, streamExplorationChat,
@@ -44,6 +44,10 @@ const SUGGESTIONS = [
 
 // 与后端 allowed_upload_extensions 对齐
 const ATTACH_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt'
+const TEXTAREA_LINE_HEIGHT = 20
+const TEXTAREA_MAX_LINES = 10
+const TEXTAREA_MIN_HEIGHT = 28
+const TEXTAREA_MAX_HEIGHT = TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + 8
 
 const formatSize = (n: number) =>
   n < 1024 ? `${n} B`
@@ -63,6 +67,7 @@ const STEP_LABELS: Record<string, string> = {
   resolve_questions: '销账',
   show_diagram: '生成图表',
   use_skill: '激活技能',
+  web_search: '联网检索',
 }
 
 function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
@@ -75,7 +80,7 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
             <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${s.error
               ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
               : 'bg-teal-50 text-teal-600'}`}>
-              <Wrench size={11} />
+              {s.tool === 'web_search' ? <Globe2 size={11} /> : <Wrench size={11} />}
             </div>
             <div className="min-w-0 text-xs leading-5">
               <span className={`font-medium ${s.error ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]'}`}>
@@ -84,6 +89,24 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
               <span className="text-[var(--color-text-tertiary)]"> · {s.summary}</span>
             </div>
           </div>
+          {s.searchResults && s.searchResults.length > 0 && (
+            <div className="ml-[30px] mt-1.5 space-y-1">
+              {s.searchResults.map((result, index) => (
+                <a
+                  key={`${result.url}-${index}`}
+                  href={result.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={result.snippet || result.title}
+                  className="group/source flex min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-700"
+                >
+                  <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">[{index + 1}]</span>
+                  <span className="min-w-0 flex-1 truncate">{result.title}</span>
+                  <ExternalLink size={10} className="shrink-0 opacity-0 transition-opacity group-hover/source:opacity-100" />
+                </a>
+              ))}
+            </div>
+          )}
           {/* show_diagram 的确定性 mermaid 随步骤直接出现在对话流中，历史可回放 */}
           {s.diagram && (
             <div className="mt-2 ml-[30px]">
@@ -170,6 +193,9 @@ export default function ExplorationPage() {
   const [readiness, setReadiness] = useState<Readiness | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [webSearch, setWebSearch] = useState(false)
+  const [showMessageHistory, setShowMessageHistory] = useState(false)
+  const [composerExpanded, setComposerExpanded] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [reviewDraft, setReviewDraft] = useState<BxDraft | null>(null)
@@ -183,6 +209,29 @@ export default function ExplorationPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
+
+  const myMessages = useMemo(() => messages.filter(m => m.role === 'user'), [messages])
+  const jumpToMessage = useCallback((id: string) => {
+    setShowMessageHistory(false)
+    requestAnimationFrame(() => {
+      document.getElementById(`explore-msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [])
+
+  // 按真实排版高度（含自动换行）伸展；十行后只让 textarea 内部滚动。
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    // 以单行基线测量。0 会与 min-height 叠加，auto 在部分 Chromium
+    // 版本会保留上次的内容高度；显式基线能让清空/发送后的高度可靠复位。
+    textarea.style.height = `${TEXTAREA_MIN_HEIGHT}px`
+    // 空值时 scrollHeight 会把两行 placeholder 也算进去，不能拿它判断扩展。
+    const contentHeight = input ? textarea.scrollHeight : TEXTAREA_MIN_HEIGHT
+    const nextHeight = Math.max(TEXTAREA_MIN_HEIGHT, Math.min(contentHeight, TEXTAREA_MAX_HEIGHT))
+    textarea.style.height = `${nextHeight}px`
+    textarea.style.overflowY = contentHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden'
+    setComposerExpanded(nextHeight > TEXTAREA_MIN_HEIGHT)
+  }, [input])
 
   const updateScrollStickiness = () => {
     const el = chatScrollRef.current
@@ -220,6 +269,7 @@ export default function ExplorationPage() {
 
   const loadSession = useCallback(async (id: string) => {
     setSid(id)
+    setShowMessageHistory(false)
     setBanner('')
     setAttachError('')
     setAttachments([])
@@ -249,6 +299,7 @@ export default function ExplorationPage() {
     setAttachments([])
     setUploads([])
     setAttachError('')
+    setShowMessageHistory(false)
     setSid(s.id)
     const detail = await explorationApi.session(s.id)
     setCanvas(detail.canvas)
@@ -266,6 +317,7 @@ export default function ExplorationPage() {
       setReadiness(null)
       setAttachments([])
       setUploads([])
+      setShowMessageHistory(false)
     }
     refetchSessions()
   }
@@ -340,11 +392,16 @@ export default function ExplorationPage() {
       setMessages(prev => prev.map((m, i) => (i === prev.length - 1 ? fn(m) : m)))
 
     try {
-      await streamExplorationChat(targetSid, { message, modelId: modelId || undefined }, e => {
+      await streamExplorationChat(targetSid, {
+        message,
+        modelId: modelId || undefined,
+        webSearch,
+      }, e => {
         if (e.type === 'step') {
           const step: BxStep = {
             tool: e.tool, arguments: e.arguments, summary: e.summary,
             durationMs: e.durationMs, error: e.error, diagram: e.diagram,
+            searchResults: e.searchResults,
           }
           patchLast(m => ({ ...m, steps: [...m.steps, step] }))
         } else if (e.type === 'canvas') {
@@ -581,7 +638,11 @@ export default function ExplorationPage() {
               }
               const m = item.msg
               return (
-                <div key={item.key} className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                <div
+                  key={item.key}
+                  id={m.role === 'user' ? `explore-msg-${m.id}` : undefined}
+                  className={`flex scroll-mt-4 gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}
+                >
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${m.role === 'user'
                     ? 'bg-[var(--color-nav-bg)] text-white' : 'bg-teal-50 text-teal-600'}`}>
                     {m.role === 'user' ? <User size={14} /> : <Bot size={14} />}
@@ -590,7 +651,7 @@ export default function ExplorationPage() {
                     {m.role === 'assistant' && <StepTrace steps={m.steps} running={m.streaming} />}
                     {m.content && (
                       <div className={`inline-block text-left rounded-xl px-3.5 py-2.5 ${m.role === 'user'
-                        ? 'bg-[var(--color-nav-bg)] text-white text-sm leading-relaxed'
+                        ? 'whitespace-pre-wrap break-words bg-[var(--color-nav-bg)] text-white text-sm leading-relaxed'
                         : 'bg-[var(--color-bg-elevated)] border border-[var(--color-border)]'}`}>
                         {m.role === 'user' ? m.content : <Md text={m.content} />}
                       </div>
@@ -602,7 +663,12 @@ export default function ExplorationPage() {
           </div>
         </div>
 
-        <div className="px-4 pb-4 pt-4 border-t border-[var(--color-border)]">
+        <div className="relative px-4 pb-4 pt-4">
+          <div
+            aria-hidden="true"
+            data-testid="composer-divider"
+            className={`absolute inset-x-0 top-0 h-px bg-[var(--color-border)] transition-opacity duration-200 ${composerExpanded ? 'opacity-0' : 'opacity-100'}`}
+          />
           <input
             ref={fileInputRef}
             type="file"
@@ -630,14 +696,30 @@ export default function ExplorationPage() {
               </div>
             )}
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
-            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] focus-within:border-teal-500">
+            <div className="relative rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-colors focus-within:border-teal-500">
               <div className="flex items-end gap-2 px-3 py-2">
                 <button
+                  type="button"
                   onClick={pickFiles}
                   title="上传参考资料（仅本会话可见，用于辅助澄清业务）"
-                  className="shrink-0 p-2 rounded-lg text-[var(--color-text-tertiary)] hover:text-teal-600 hover:bg-[var(--color-bg-hover)]"
+                  aria-label="上传参考资料"
+                  className="shrink-0 rounded-lg p-2 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-teal-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
                 >
                   <Paperclip size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWebSearch(value => !value)}
+                  aria-pressed={webSearch}
+                  data-testid="web-search-toggle"
+                  title={webSearch ? '联网搜索已开启，点击关闭' : '联网搜索已关闭，点击开启'}
+                  className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${webSearch
+                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    : 'border-transparent text-[var(--color-text-tertiary)] hover:border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+                >
+                  <Globe2 size={15} />
+                  <span>联网</span>
+                  <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-teal-500' : 'bg-[var(--color-border)]'}`} />
                 </button>
                 <textarea
                   ref={textareaRef}
@@ -646,18 +728,63 @@ export default function ExplorationPage() {
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
                   }}
-                  rows={Math.min(4, Math.max(1, input.split('\n').length))}
+                  rows={1}
                   placeholder="描述业务、回答澄清问题…（Enter 发送，Shift+Enter 换行）"
-                  className="flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-[var(--color-text-tertiary)] py-1"
+                  aria-label="业务探索消息"
+                  data-testid="exploration-composer"
+                  className="scrollbar-thin min-h-7 min-w-0 flex-1 resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-[var(--color-text-tertiary)]"
                 />
                 <button
+                  type="button"
                   onClick={() => void send()}
                   disabled={busy || !input.trim()}
-                  className="shrink-0 p-2 rounded-lg bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-40"
+                  title="发送消息"
+                  aria-label="发送消息"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
                 >
                   {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setShowMessageHistory(value => !value)}
+                  disabled={myMessages.length === 0}
+                  title="我发送的消息 · 快速跳转"
+                  aria-label="查看我发送的消息"
+                  aria-expanded={showMessageHistory}
+                  data-testid="message-history-button"
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
+                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+                >
+                  <List size={15} />
+                </button>
               </div>
+
+              {showMessageHistory && (
+                <>
+                  <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
+                  <div className="absolute bottom-full right-0 z-30 mb-2 w-72 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg">
+                    <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
+                      <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">我发送的消息</span>
+                      <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
+                    </div>
+                    <div className="scrollbar-thin max-h-64 overflow-auto py-1">
+                      {[...myMessages].reverse().map((message, index) => (
+                        <button
+                          type="button"
+                          key={message.id}
+                          onClick={() => jumpToMessage(message.id)}
+                          title={message.content}
+                          className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] focus-visible:outline-none"
+                        >
+                          <span className="mt-0.5 shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">#{myMessages.length - index}</span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">{message.content}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
