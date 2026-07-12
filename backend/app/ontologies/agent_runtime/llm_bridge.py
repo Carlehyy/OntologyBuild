@@ -90,7 +90,10 @@ def _strip_think(result: dict) -> dict:
 def _chat_openai(kw: dict, messages: list[dict], tools: list[dict]) -> dict:
     import openai
 
-    client_kwargs: dict = {"api_key": kw.get("api_key") or "sk-none", "timeout": 120}
+    client_kwargs: dict = {
+        "api_key": kw.get("api_key") or "sk-none",
+        "timeout": int(kw.get("timeout_seconds") or 120),
+    }
     if kw.get("api_base"):
         client_kwargs["base_url"] = kw["api_base"]
     client = openai.OpenAI(**client_kwargs)
@@ -142,7 +145,10 @@ def _chat_openai(kw: dict, messages: list[dict], tools: list[dict]) -> dict:
 def _chat_anthropic(kw: dict, messages: list[dict], tools: list[dict]) -> dict:
     import anthropic
 
-    client_kwargs: dict = {"api_key": kw.get("api_key") or ""}
+    client_kwargs: dict = {
+        "api_key": kw.get("api_key") or "",
+        "timeout": int(kw.get("timeout_seconds") or 120),
+    }
     if kw.get("api_base"):
         client_kwargs["base_url"] = kw["api_base"]
     client = anthropic.Anthropic(**client_kwargs)

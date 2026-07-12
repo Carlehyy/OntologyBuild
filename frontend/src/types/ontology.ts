@@ -100,6 +100,9 @@ export interface ModelConfig {
   has_api_key?: boolean
   enabled?: boolean
   is_default?: boolean
+  last_test_status?: 'success' | 'error' | null
+  last_tested_at?: string | null
+  last_test_message?: string | null
   models: string[]
   options?: Record<string, unknown>
   created_by: string

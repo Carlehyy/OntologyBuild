@@ -133,7 +133,7 @@ function latColor(ms: number): string {
 export default function ModelsPage() {
   const { t } = useTranslation()
   const {
-    models, loading, error, defaultModelId, setDefault, createModel, updateModel, deleteModel,
+    models, loading, error, defaultModelId, setDefault, createModel, updateModel, deleteModel, importModels,
     testConnection, getModelDailyStats,
     isEnabled, toggleEnabled, getModelRunStatus, getModelSummary, getModelHeatCells,
   } = useMockModels()
@@ -167,7 +167,6 @@ export default function ModelsPage() {
 
   // Test States
   const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'success' | 'error'>>({})
-  const [testResult, setTestResult] = useState<Record<string, string>>({})
   const [drawerTestStatus, setDrawerTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
   const [drawerTestResult, setDrawerTestResult] = useState('')
 
@@ -209,30 +208,17 @@ export default function ModelsPage() {
     reader.onload = async (e) => {
       try {
         const data = JSON.parse(e.target?.result as string)
-        if (Array.isArray(data)) {
-          const validItems = data.filter((item: any) => item.name && item.provider)
-          for (const item of validItems) {
-            await createModel({
-              name: item.name,
-              config_type: item.config_type || 'llm',
-              provider: item.provider,
-              api_base: item.api_base || '',
-              models: (item.models || []).slice(0, 1),
-              options: item.options || {},
-              enabled: item.enabled !== false,
-              is_default: Boolean(item.is_default),
-            })
-          }
-          addToast('success', `成功导入 ${validItems.length} 个模型配置`)
-        } else {
-          addToast('error', '导入文件格式不正确，应为JSON数组')
-        }
-      } catch {
-        addToast('error', '导入模型配置失败')
+        const items = Array.isArray(data) ? data : data?.configs
+        if (!Array.isArray(items) || items.length === 0) throw new Error('导入文件中没有模型配置')
+        const result = await importModels(items)
+        addToast('success', `成功导入 ${result.imported} 个模型配置`)
+        addToast('warning', result.warning)
+      } catch (error: any) {
+        addToast('error', String(error?.detail || error?.message || '导入模型配置失败'))
       }
     }
     reader.readAsText(file)
-  }, [createModel, addToast])
+  }, [importModels, addToast])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -266,7 +252,7 @@ export default function ModelsPage() {
       await createModel(buildPayload(data))
       setShowCreate(false)
       reset()
-      addToast('success', `模型 "${data.name}" 创建成功`)
+      addToast('success', `模型 "${data.name}" 创建成功，请测试后启用`)
     } catch {
       addToast('error', `模型 "${data.name}" 创建失败`)
     }
@@ -299,7 +285,6 @@ export default function ModelsPage() {
     setTestStatus(prev => ({ ...prev, [id]: 'testing' }))
     const result = await testConnection(id)
     setTestStatus(prev => ({ ...prev, [id]: result.ok ? 'success' : 'error' }))
-    setTestResult(prev => ({ ...prev, [id]: result.message }))
     if (result.ok) addToast('success', result.message)
     else addToast('error', result.message)
     setTimeout(() => setTestStatus(prev => ({ ...prev, [id]: 'idle' })), 3000)
@@ -602,9 +587,6 @@ export default function ModelsPage() {
                   </div>
                 </div>
 
-                {testResult[m.id] && status === 'error' && (
-                  <p className="text-xs mx-4 mb-3 text-red-500 bg-red-50 px-2 py-1 rounded">{testResult[m.id]}</p>
-                )}
               </div>
             )
           })}

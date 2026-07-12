@@ -1,12 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import case, func
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
+import re
 from app.deps import get_db, get_current_user
 from app.models.model_config import ModelConfig
 from app.models.extraction_task import ExtractionTask
 from app.models.user import User
-from app.schemas.model_config import ModelConfigCreate, ModelConfigUpdate, ModelConfigOut
+from app.schemas.model_config import (
+    ModelConfigCreate,
+    ModelConfigImportRequest,
+    ModelConfigOut,
+    ModelConfigUpdate,
+    ModelEnabledRequest,
+)
 from app.services.encryption_service import encrypt
 import uuid
 
@@ -14,23 +22,89 @@ router = APIRouter()
 
 
 def _set_default(db: Session, config: ModelConfig) -> None:
-    db.query(ModelConfig).filter(ModelConfig.id != config.id).update(
+    if (config.config_type or "llm") != "llm":
+        raise HTTPException(409, "只有 LLM 配置可以设为默认模型")
+    db.query(ModelConfig).filter(
+        ModelConfig.config_type == "llm",
+        ModelConfig.id != config.id,
+    ).update(
         {ModelConfig.is_default: False}, synchronize_session=False
     )
     config.is_default = True
 
 
 def _ensure_default(db: Session) -> None:
-    if db.query(ModelConfig).filter(ModelConfig.is_default.is_(True)).first():
+    if db.query(ModelConfig).filter(
+        ModelConfig.config_type == "llm",
+        ModelConfig.enabled.is_(True),
+        ModelConfig.is_default.is_(True),
+    ).first():
         return
-    fallback = db.query(ModelConfig).filter(ModelConfig.enabled.is_(True)).order_by(ModelConfig.updated_at.desc()).first()
+    fallback = db.query(ModelConfig).filter(
+        ModelConfig.config_type == "llm",
+        ModelConfig.enabled.is_(True),
+    ).order_by(
+        case((ModelConfig.last_test_status == "success", 0), else_=1),
+        ModelConfig.updated_at.desc(),
+    ).first()
     if fallback:
         fallback.is_default = True
+
+
+def _name_exists(db: Session, name: str, exclude_id: str | None = None) -> bool:
+    query = db.query(ModelConfig.id).filter(func.lower(ModelConfig.name) == name.strip().lower())
+    if exclude_id:
+        query = query.filter(ModelConfig.id != exclude_id)
+    return query.first() is not None
+
+
+def _require_tested(config: ModelConfig, action: str) -> None:
+    if config.last_test_status != "success":
+        raise HTTPException(409, f"请先完成连通性测试，再{action}")
+
+
+def _safe_test_error(exc: Exception) -> tuple[str, str]:
+    """把 SDK 错误收敛为可操作信息，并避免把令牌或长响应带到前端。"""
+    raw = str(exc)
+    lower = raw.lower()
+    if any(token in lower for token in ("401", "unauthorized", "authentication", "invalid api key")):
+        return "AUTH_FAILED", "认证失败，请检查 API Key 是否正确且仍然有效"
+    if any(token in lower for token in ("404", "model_not_found", "model not found", "does not exist")):
+        return "MODEL_NOT_FOUND", "模型不存在或当前账号无权访问，请检查模型名"
+    if any(token in lower for token in ("429", "rate limit", "too many requests")):
+        return "RATE_LIMITED", "请求被限流，请稍后重试或检查账号额度"
+    if any(token in lower for token in ("timeout", "timed out")):
+        return "TIMEOUT", "连接超时，请检查接入地址和网络后重试"
+    if any(token in lower for token in ("connection", "connect", "dns", "name or service not known")):
+        return "NETWORK_ERROR", "无法连接到服务，请检查 API Base 和网络"
+    scrubbed = re.sub(r"(?i)(sk-[A-Za-z0-9_-]{8,}|bearer\s+[A-Za-z0-9._-]+)", "[已隐藏]", raw)
+    scrubbed = " ".join(scrubbed.split())[:240]
+    return "CONNECTION_FAILED", f"连接失败：{scrubbed or '服务未返回可识别的错误信息'}"
+
+
+def _save_test_result(db: Session, config: ModelConfig, ok: bool, message: str) -> str:
+    tested_at = datetime.now(timezone.utc)
+    config.last_test_status = "success" if ok else "error"
+    config.last_tested_at = tested_at
+    config.last_test_message = message[:500]
+    db.commit()
+    return tested_at.isoformat()
+
+
+def _commit_config_change(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "模型配置状态发生并发变更，请刷新后重试") from exc
 
 
 def _model_out(config: ModelConfig) -> dict:
     data = ModelConfigOut.model_validate(config).model_dump()
     data["has_api_key"] = bool(config.api_key_encrypted)
+    data["created_at"] = _iso_utc(config.created_at)
+    data["updated_at"] = _iso_utc(config.updated_at)
+    data["last_tested_at"] = _iso_utc(config.last_tested_at)
     return data
 
 
@@ -56,6 +130,8 @@ def list_models(db: Session = Depends(get_db), _=Depends(get_current_user)):
 
 @router.post("", status_code=201)
 def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if _name_exists(db, body.name):
+        raise HTTPException(409, "模型配置名称已存在，请使用不同名称")
     config = ModelConfig(
         id=str(uuid.uuid4()),
         name=body.name,
@@ -71,13 +147,62 @@ def create_model(body: ModelConfigCreate, db: Session = Depends(get_db), current
     )
     db.add(config)
     db.flush()
-    if config.is_default:
-        config.enabled = True
-        _set_default(db, config)
-    elif config.enabled and not db.query(ModelConfig).filter(ModelConfig.is_default.is_(True)).first():
-        config.is_default = True
-    db.commit(); db.refresh(config)
+    if config.enabled:
+        _require_tested(config, "启用")
+    _commit_config_change(db); db.refresh(config)
     return {"data": _model_out(config)}
+
+
+@router.post("/import", status_code=201)
+def import_models(
+    body: ModelConfigImportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """原子导入不含密钥的配置。为安全起见，所有导入项均保持停用和待测试。"""
+    names = [item.name.strip().lower() for item in body.configs]
+    if len(names) != len(set(names)):
+        raise HTTPException(409, "导入文件中存在重复的配置名称")
+    conflicts = {
+        name for (name,) in db.query(func.lower(ModelConfig.name)).filter(
+            func.lower(ModelConfig.name).in_(names)
+        ).all()
+    }
+    if conflicts:
+        raise HTTPException(409, f"以下配置名称已存在：{', '.join(sorted(conflicts))}")
+
+    created: list[ModelConfig] = []
+    try:
+        for item in body.configs:
+            config = ModelConfig(
+                id=str(uuid.uuid4()),
+                name=item.name,
+                config_type=item.config_type or "llm",
+                provider=item.provider,
+                api_base=item.api_base,
+                api_key_encrypted=encrypt(""),
+                models=item.models,
+                options=item.options or {},
+                enabled=False,
+                is_default=False,
+                created_by=current_user.id,
+            )
+            db.add(config)
+            created.append(config)
+        db.flush()
+        _commit_config_change(db)
+    except Exception:
+        db.rollback()
+        raise
+    for config in created:
+        db.refresh(config)
+    return {
+        "data": {
+            "imported": len(created),
+            "configs": [_model_out(config) for config in created],
+            "warning": "API Key 不会随配置文件导入，所有导入项已保持停用，请补充密钥并测试后启用。",
+        }
+    }
 
 
 @router.get("/{model_id}")
@@ -93,6 +218,15 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
+    original_connection = (
+        c.config_type,
+        c.provider,
+        c.api_base or "",
+        tuple(c.models or []),
+        c.api_key_encrypted or "",
+    )
+    if body.name is not None and body.name.strip().lower() != c.name.strip().lower() and _name_exists(db, body.name, c.id):
+        raise HTTPException(409, "模型配置名称已存在，请使用不同名称")
     if body.name is not None:
         c.name = body.name
     if body.config_type is not None:
@@ -107,15 +241,41 @@ def update_model(model_id: str, body: ModelConfigUpdate, db: Session = Depends(g
         c.models = body.models
     if body.options is not None:
         c.options = body.options
+    current_connection = (
+        c.config_type,
+        c.provider,
+        c.api_base or "",
+        tuple(c.models or []),
+        c.api_key_encrypted or "",
+    )
+    connection_changed = current_connection != original_connection
+    if (c.config_type or "llm") == "llm" and not (c.models or []):
+        raise HTTPException(422, "LLM 配置必须填写模型名")
+    if connection_changed:
+        c.last_test_status = None
+        c.last_tested_at = None
+        c.last_test_message = "连接参数已变更，请重新测试"
+        if c.enabled:
+            c.enabled = False
+        if c.is_default:
+            c.is_default = False
+            _ensure_default(db)
     if body.enabled is not None:
+        if body.enabled:
+            _require_tested(c, "启用")
         c.enabled = body.enabled
     if body.is_default is True:
-        c.enabled = True
+        if not c.enabled:
+            raise HTTPException(409, "请先启用模型，再设为默认")
+        _require_tested(c, "设为默认")
         _set_default(db, c)
     elif body.is_default is False and c.is_default:
         c.is_default = False
         _ensure_default(db)
-    db.commit(); db.refresh(c)
+    if c.is_default and ((c.config_type or "llm") != "llm" or not c.enabled):
+        c.is_default = False
+        _ensure_default(db)
+    _commit_config_change(db); db.refresh(c)
     return {"data": _model_out(c)}
 
 
@@ -131,7 +291,7 @@ def delete_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_cur
     db.delete(c)
     if was_default:
         _ensure_default(db)
-    db.commit()
+    _commit_config_change(db)
 
 
 @router.post("/{model_id}/default")
@@ -139,24 +299,26 @@ def set_default_model(model_id: str, db: Session = Depends(get_db), _=Depends(ge
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
-    c.enabled = True
+    if not c.enabled:
+        raise HTTPException(409, "请先启用模型，再设为默认")
+    _require_tested(c, "设为默认")
     _set_default(db, c)
-    db.commit(); db.refresh(c)
+    _commit_config_change(db); db.refresh(c)
     return {"data": _model_out(c)}
 
 
 @router.post("/{model_id}/enabled")
-def set_model_enabled(model_id: str, body: dict, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def set_model_enabled(model_id: str, body: ModelEnabledRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
     c = db.query(ModelConfig).filter(ModelConfig.id == model_id).first()
     if not c:
         raise HTTPException(404, "Not found")
-    if "enabled" not in body:
-        raise HTTPException(400, "enabled is required")
-    c.enabled = bool(body["enabled"])
+    if body.enabled:
+        _require_tested(c, "启用")
+    c.enabled = body.enabled
     if not c.enabled and c.is_default:
         c.is_default = False
         _ensure_default(db)
-    db.commit(); db.refresh(c)
+    _commit_config_change(db); db.refresh(c)
     return {"data": _model_out(c)}
 
 
@@ -171,17 +333,18 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
     if not c:
         raise HTTPException(404, "Not found")
     try:
-        if not c.enabled:
-            return {"data": {"ok": False, "response": "Model config is disabled."}}
-
         if (c.config_type or "llm") == "ocr":
             if c.provider == "easyocr":
                 import os
                 enabled = os.getenv("ENABLE_OCR", "").lower() in ("1", "true", "yes") or bool((c.options or {}).get("enabled"))
                 if not enabled:
-                    return {"data": {"ok": False, "response": "EasyOCR is configured but disabled. Enable it in OCR model config or set ENABLE_OCR=1."}}
+                    message = "EasyOCR 运行开关未开启"
+                    tested_at = _save_test_result(db, c, False, message)
+                    return {"data": {"ok": False, "response": message, "code": "OCR_DISABLED", "tested_at": tested_at}}
                 import easyocr  # noqa: F401
-                return {"data": {"ok": True, "response": "EasyOCR import ok"}}
+                message = "连接成功，EasyOCR 运行环境正常"
+                tested_at = _save_test_result(db, c, True, message)
+                return {"data": {"ok": True, "response": message, "code": "OK", "tested_at": tested_at}}
             if c.provider == "paddleocr":
                 import os
                 enabled = (
@@ -190,17 +353,27 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
                     or bool((c.options or {}).get("enabled"))
                 )
                 if not enabled:
-                    return {"data": {"ok": False, "response": "PaddleOCR is configured but disabled. Enable it in OCR model config or set ENABLE_OCR=1."}}
+                    message = "PaddleOCR 运行开关未开启"
+                    tested_at = _save_test_result(db, c, False, message)
+                    return {"data": {"ok": False, "response": message, "code": "OCR_DISABLED", "tested_at": tested_at}}
                 from paddleocr import PaddleOCR  # noqa: F401
-                return {"data": {"ok": True, "response": "PaddleOCR import ok"}}
+                message = "连接成功，PaddleOCR 运行环境正常"
+                tested_at = _save_test_result(db, c, True, message)
+                return {"data": {"ok": True, "response": message, "code": "OK", "tested_at": tested_at}}
             if c.provider == "external_api":
                 if not c.api_base:
-                    raise HTTPException(400, "External OCR requires API Base")
-                return {"data": {"ok": True, "response": "External OCR endpoint configured"}}
-            return {"data": {"ok": True, "response": f"OCR provider configured: {c.provider}"}}
+                    raise ValueError("External OCR requires API Base")
+                message = "配置检查通过，外部 OCR 接入地址有效"
+                tested_at = _save_test_result(db, c, True, message)
+                return {"data": {"ok": True, "response": message, "code": "OK", "tested_at": tested_at}}
+            message = f"配置检查通过，OCR Provider：{c.provider}"
+            tested_at = _save_test_result(db, c, True, message)
+            return {"data": {"ok": True, "response": message, "code": "OK", "tested_at": tested_at}}
 
         if (c.config_type or "llm") != "llm":
-            return {"data": {"ok": True, "response": f"Config type configured: {c.config_type}"}}
+            message = f"配置检查通过：{c.config_type}"
+            tested_at = _save_test_result(db, c, True, message)
+            return {"data": {"ok": True, "response": message, "code": "OK", "tested_at": tested_at}}
 
         from app.services.model_config_selector import llm_call_kwargs
         from app.ontologies.agent_runtime.llm_bridge import chat as llm_chat
@@ -208,12 +381,26 @@ def test_model(model_id: str, db: Session = Depends(get_db), _=Depends(get_curre
         call_kwargs = llm_call_kwargs(c)
         if not call_kwargs:
             raise ValueError("Model config must include at least one model name")
-        resp = llm_chat(call_kwargs, [{"role": "user", "content": "ping"}], [])
-        return {"data": {"ok": True, "response": resp.get("content", "")}}
+        # 连通性测试不计入业务调用统计，并严格限制输出，避免一次测试消耗大量额度。
+        call_kwargs.pop("model_config_id", None)
+        call_kwargs["max_output_tokens"] = min(int(call_kwargs.get("max_output_tokens") or 16), 16)
+        call_kwargs["timeout_seconds"] = 30
+        llm_chat(
+            call_kwargs,
+            [{"role": "user", "content": "Connectivity check. Reply with exactly PONG."}],
+            [],
+        )
+        message = "连接成功，模型响应正常"
+        tested_at = _save_test_result(db, c, True, message)
+        return {"data": {"ok": True, "response": message, "code": "OK", "tested_at": tested_at}}
     except LLMError as e:
-        raise HTTPException(400, f"Connection failed: {e}")
+        code, message = _safe_test_error(e)
+        tested_at = _save_test_result(db, c, False, message)
+        return {"data": {"ok": False, "response": message, "code": code, "tested_at": tested_at}}
     except Exception as e:
-        raise HTTPException(400, f"Connection failed: {e}")
+        code, message = _safe_test_error(e)
+        tested_at = _save_test_result(db, c, False, message)
+        return {"data": {"ok": False, "response": message, "code": code, "tested_at": tested_at}}
 
 
 @router.get("/{model_id}/stats")
@@ -255,6 +442,7 @@ def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_
     avg_latency = db.query(func.avg(ModelCallLog.latency_ms)).filter(
         ModelCallLog.model_config_id == model_id,
         ModelCallLog.created_at >= thirty_days_ago,
+        ModelCallLog.status == "success",
     ).scalar()
     avg_latency = round(avg_latency, 1) if avg_latency else None
 

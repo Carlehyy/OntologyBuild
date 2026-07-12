@@ -89,7 +89,12 @@ export const modelApi = {
   delete: (id: string) => apiClient.delete(`/models/${id}`),
   setDefault: (id: string) => apiClient.post<ModelConfig>(`/models/${id}/default`),
   setEnabled: (id: string, enabled: boolean) => apiClient.post<ModelConfig>(`/models/${id}/enabled`, { enabled }),
-  test: (id: string) => apiClient.post<{ ok: boolean; response: string }>(`/models/${id}/test`),
+  test: (id: string) => apiClient.post<{ ok: boolean; response: string; code?: string; tested_at?: string }>(`/models/${id}/test`),
+  import: (configs: Array<Partial<ModelConfig>>) => apiClient.post<{
+    imported: number
+    configs: ModelConfig[]
+    warning: string
+  }>('/models/import', { configs }),
   stats: (id: string) => apiClient.get<{
     todayCalls: number; availability: string | null; avgLatency: number | null;
     lastCall: string | null; successRate: number | null;

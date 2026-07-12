@@ -1,11 +1,20 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Boolean, Integer, Float
+from sqlalchemy import String, DateTime, ForeignKey, Text, JSON, Boolean, Integer, Float, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 class ModelConfig(Base):
     __tablename__ = "model_configs"
+    __table_args__ = (
+        Index(
+            "uq_model_configs_default_llm",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default = true AND config_type = 'llm'"),
+            sqlite_where=text("is_default = 1 AND config_type = 'llm'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -17,6 +26,9 @@ class ModelConfig(Base):
     options: Mapped[dict] = mapped_column(JSON, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_test_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_test_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

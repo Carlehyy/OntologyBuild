@@ -112,7 +112,8 @@ export function useMockModels() {
 
   useEffect(() => { loadModels() }, [loadModels])
 
-  const defaultModelId = models.find(m => m.is_default)?.id || models[0]?.id || ''
+  // 仅以后端显式默认状态为准，避免把列表第一项错误标成默认模型。
+  const defaultModelId = models.find(m => m.is_default)?.id || ''
 
   const createModel = useCallback(async (data: Partial<ModelConfig> & { api_key?: string }) => {
     const created = await modelApi.create(data)
@@ -133,6 +134,12 @@ export function useMockModels() {
     await modelApi.delete(id)
     await loadModels()
   }, [loadModels])
+
+  const importModels = useCallback(async (configs: Array<Partial<ModelConfig>>) => {
+    const result = await modelApi.import(configs)
+    setModels(prev => [...result.configs, ...prev])
+    return result
+  }, [])
 
   const setDefault = useCallback(async (id: string) => {
     const updated = await modelApi.setDefault(id)
@@ -218,6 +225,7 @@ export function useMockModels() {
     createModel,
     updateModel,
     deleteModel,
+    importModels,
     setDefault,
     testConnection,
     getModelHeatCells,
