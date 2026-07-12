@@ -2,6 +2,7 @@ import { Children, isValidElement, useMemo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import MermaidBlock from '@/components/MermaidBlock'
+import ZoomableImage from '@/components/ZoomableImage'
 
 const isMermaidEl = (child: unknown) =>
   isValidElement(child) && String((child.props as any)?.className || '').includes('language-mermaid')
@@ -38,6 +39,7 @@ export default function Md({ text }: { text: string }) {
     td: p => <td className="px-3 py-1.5 border-b border-[var(--color-border)]" {...p} />,
     a: p => <a className="text-[var(--color-primary)] underline-offset-2 hover:underline" {...p} />,
     blockquote: p => <blockquote className="border-l-2 border-[var(--color-border)] pl-3 my-2 text-[var(--color-text-secondary)]" {...p} />,
+    img: ({ src, alt }) => <ZoomableImage src={src} alt={alt} />,
   }), [])
 
   return (

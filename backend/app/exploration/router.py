@@ -62,6 +62,31 @@ def _session_out(s: ExplorationSession) -> dict:
     return S.SessionOut.model_validate(s).model_dump(by_alias=True)
 
 
+def _message_out(message: ExplorationMessage, canvas: dict) -> dict:
+    """历史图表不能绕过当前质量门：读取时从当前画布重新确定性生成。
+
+    画布已变化或旧版本曾保存半成品时，有效图会刷新为当前投影；质量不合格
+    的图从响应中移除并留下可操作错误。数据库原始审计轨迹保持不变。
+    """
+    data = S.MessageOut.model_validate(message).model_dump(by_alias=True)
+    for step in data.get("steps") or []:
+        stored = step.get("diagram")
+        if not isinstance(stored, dict):
+            continue
+        arguments = step.get("arguments") if isinstance(step.get("arguments"), dict) else {}
+        kind = str(stored.get("kind") or arguments.get("kind") or "")
+        target = arguments.get("target")
+        if not target and "·" not in str(stored.get("target") or ""):
+            target = stored.get("target")
+        try:
+            step["diagram"] = build_diagram(canvas, kind, str(target) if target else None)
+        except DiagramError as error:
+            step.pop("diagram", None)
+            step["error"] = f"历史图表已被质量门拦截：{error}"
+            step["summary"] = "历史图表不再满足当前画布的质量要求，请让 AI 修复后重新生成"
+    return data
+
+
 # ---------------------------------------------------------------- 会话
 
 
@@ -99,7 +124,7 @@ def get_session(session_id: str, db: Session = Depends(get_db),
         "canvas": C._ensure_canvas(s.canvas),
         "completeness": C.completeness(s.canvas),
         "readiness": R.evaluate(s.canvas),
-        "messages": [S.MessageOut.model_validate(m).model_dump(by_alias=True) for m in messages],
+        "messages": [_message_out(message, s.canvas) for message in messages],
     })
 
 

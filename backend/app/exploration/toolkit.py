@@ -27,12 +27,12 @@ _FIELD_DOC = """元素字段约定（name 用英文 snake_case/PascalCase 标识
 - behavior: {name, display_name, actor(主体名), object(对象名), trigger(触发条件), inputs: [{name, display_name, type_hint, required}], outcome(结果，若引起状态变化写明「从X变为Y」), constraints: [str，定量表述], needs_approval(bool)}
 - event: {name, display_name, description, source(行为名|external|time), payload: [str], consequences: [str]}
 - rule: {name, display_name, kind(constraint|validation|derivation|approval|alert), applies_to(对象/行为名), statement(定量表述：阈值/枚举/边界要有具体数字), error_message?}
-- scenario: {name, display_name, goal, actors: [主体名], steps: [str], objects: [涉及对象名], behaviors: [涉及行为名], expected_outcome}"""
+- scenario: {name, display_name, goal, actors: [主体名], steps: [str], objects: [涉及对象名], behaviors: [涉及行为名], branches?: [{from_step(1-based), to_step(1-based|null，null=结束), condition}], expected_outcome}。steps 含如果/若/是否时必须给每个判断至少 2 条 branches，明确每个条件的目标步骤"""
 
 TOOL_DEFS = [
     {
         "name": "upsert_elements",
-        "description": "把对话中已确认的业务知识沉淀/更新到业务画布。同名或同 id 元素会被整体覆盖（请带全字段）。\n" + _FIELD_DOC,
+        "description": "把对话中已确认的业务知识沉淀/更新到业务画布。同名或同 id 元素按已提供字段合并；显式空数组可清空列表。\n" + _FIELD_DOC,
         "parameters": {
             "type": "object",
             "properties": {
@@ -119,7 +119,7 @@ TOOL_DEFS = [
                         "用于让用户「看图挑错」：er=实体关系图（对象+person/org主体）；"
                         "flow=业务流程图（target=场景名，缺省第一个场景）；"
                         "sequence=时序图（场景的主体→对象协作，需场景已关联 behaviors）；"
-                        "state=状态图（target=对象名，需该对象有枚举状态属性）。"
+                        "state=状态图（target=对象名，需状态/阶段枚举与已确认迁移完整闭合、无孤立状态）。"
                         "出图后请用户确认图中结构是否与实际相符，并按反馈修正画布。同一张图内容未变化时不要重复展示。"),
         "parameters": {
             "type": "object",

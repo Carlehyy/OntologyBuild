@@ -19,7 +19,7 @@ import pytest
 
 from app.exploration import canvas as C
 from app.exploration import converter as CV
-from app.exploration.models import ExplorationSession
+from app.exploration.models import ExplorationMessage, ExplorationSession
 
 BASE = "/api/v2/exploration"
 
@@ -87,6 +87,53 @@ def _demo_canvas() -> dict:
          "objects": ["Order", "Invoice"], "behaviors": ["mark_paid", "refund"]},
     ])
     return cv
+
+
+def test_canvas_upsert_merges_fields_and_rejects_bad_enums():
+    cv = C.empty_canvas()
+    cv, ids, errors = C.upsert_elements(cv, "object", [{
+        "name": "Order", "displayName": "订单", "keyAttribute": "order_no",
+        "attributes": [{"name": "order_no", "typeHint": "文本"}],
+        "relations": [{"target": "Customer", "cardinality": "many-to-one"}],
+    }])
+    assert ids and not errors
+
+    # 修描述不能把未随补丁重发的已确认属性/关系清空。
+    cv, _, errors = C.upsert_elements(cv, "object", [{
+        "name": "Order", "description": "订单主数据",
+    }])
+    order = cv["objects"][0]
+    assert not errors and order["description"] == "订单主数据"
+    assert order["attributes"][0]["name"] == "order_no" and order["relations"]
+
+    # 显式空数组仍表示用户/AI 确认清空。
+    cv, _, errors = C.upsert_elements(cv, "object", [{"name": "Order", "relations": []}])
+    assert not errors and cv["objects"][0]["relations"] == []
+
+    _, applied, errors = C.upsert_elements(cv, "object", [{
+        "name": "Broken", "attributes": [{"name": "status", "enum": ["open", " open "]}],
+    }])
+    assert not applied and any("重复" in error for error in errors)
+
+
+def test_completeness_uses_same_entity_reference_contract_as_readiness():
+    """person/org/role 主体是合法实体端点，完整度不能再误报、质量门却放行。"""
+    cv = C.empty_canvas()
+    cv, _, _ = C.upsert_elements(cv, "object", [{
+        "name": "Order", "attributes": [{"name": "id", "typeHint": "文本"}],
+        "keyAttribute": "id",
+        "relations": [{"target": "Customer", "cardinality": "many-to-one"}],
+    }])
+    cv, _, _ = C.upsert_elements(cv, "actor", [
+        {"name": "Customer", "kind": "person", "keyAttribute": "customer_id",
+         "attributes": [{"name": "customer_id", "typeHint": "文本"}]},
+        {"name": "CSR", "kind": "role"},
+    ])
+    cv, _, _ = C.upsert_elements(cv, "behavior", [{
+        "name": "serve_customer", "actor": "CSR", "object": "Customer",
+    }])
+    gaps = C.completeness(cv)["gaps"]
+    assert not any("Customer" in gap and ("未定义" in gap or "尚未" in gap) for gap in gaps)
 
 
 # ---------------------------------------------------------------- 会话
@@ -632,17 +679,14 @@ def test_use_skill_unknown_name(client, auth_headers, session, db, admin_user, m
 
 def test_er_mermaid_deterministic():
     from app.exploration.diagram import er_mermaid
-    text = er_mermaid(_demo_canvas())
+    text = er_mermaid(_quantified_canvas())
     assert text.startswith("erDiagram")
     assert "string order_no PK" in text          # 主键标记
     assert "number amount" in text               # 类型映射
-    assert 'Order }o--|| Supplier : "归属供应商"' in text
-    assert "Ghost" not in text                   # 悬空关系不进图
-    # 主体入图口径与转化管线一致：role/system 不进；person/org 进（它们将转成 ObjectType）；
-    # 与对象同名的主体合并不重复出实体
-    assert "Finance" not in text and "ERP" not in text
-    assert text.count("Supplier {") == 1
+    assert 'Order }o--|| Customer : "下单客户"' in text
     from app.exploration.diagram import DiagramError
+    with pytest.raises(DiagramError, match="质量校验未通过"):
+        er_mermaid(_demo_canvas())                # 悬空端点/缺基数不再静默丢边或猜默认值
     with pytest.raises(DiagramError):
         er_mermaid({})                           # 空画布 → 指明先补什么
 
@@ -652,6 +696,9 @@ def test_er_diagram_endpoint(client, auth_headers, session, db):
     assert r.status_code == 422                  # 空画布拒绝
 
     _seed_canvas(db, session["id"], _demo_canvas())
+    r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/er", headers=auth_headers)
+    assert r.status_code == 422                  # 质量不合格的 ER 图不渲染半成品
+    _seed_canvas(db, session["id"], _quantified_canvas())
     r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/er", headers=auth_headers)
     assert r.status_code == 200
     assert r.json()["data"]["mermaid"].startswith("erDiagram")
@@ -862,6 +909,9 @@ def _quantified_canvas() -> dict:
         {"name": "confirm_pay", "displayName": "确认支付", "actor": "Sales",
          "object": "Order", "trigger": "收到银行回单",
          "outcome": "订单从待支付变为已支付"},
+        {"name": "cancel_order", "displayName": "取消订单", "actor": "Sales",
+         "object": "Order", "trigger": "客户在支付前取消",
+         "outcome": "订单从待支付变为已取消"},
     ])
     cv, _, _ = C.upsert_elements(cv, "rule", [
         {"name": "big_amount", "displayName": "大额审批", "kind": "approval",
@@ -874,7 +924,11 @@ def _quantified_canvas() -> dict:
     cv, _, _ = C.upsert_elements(cv, "scenario", [
         {"name": "pay_flow", "displayName": "支付流程", "goal": "完成订单支付",
          "actors": ["Sales"], "steps": ["销售确认回单", "如果金额 ≥ 50000 元则走审批", "订单变为已支付"],
-         "objects": ["Order", "Customer"], "behaviors": ["confirm_pay"],
+         "objects": ["Order", "Customer"], "behaviors": ["confirm_pay", "cancel_order"],
+         "branches": [
+             {"fromStep": 2, "toStep": 3, "condition": "金额 ≥ 50000 元，审批通过"},
+             {"fromStep": 2, "toStep": 3, "condition": "金额 < 50000 元"},
+         ],
          "expected_outcome": "订单进入已支付状态"}])
     return cv
 
@@ -936,8 +990,8 @@ def test_diagram_builders():
     flow = D.build_diagram(cv, "flow", "支付流程")
     assert flow["mermaid"].startswith("flowchart")
     assert "S1" in flow["mermaid"] and "SE" in flow["mermaid"]
-    assert "{" not in flow["mermaid"]                  # 无分支目标时不伪造单出口菱形
-    assert any("分支目标" in w for w in flow["warnings"])
+    assert 'S2{' in flow["mermaid"] and "金额 ≥ 50000" in flow["mermaid"]
+    assert flow["warnings"] == []
 
     seq = D.build_diagram(cv, "sequence")
     assert seq["mermaid"].startswith("sequenceDiagram")
@@ -956,6 +1010,59 @@ def test_diagram_builders():
         D.build_diagram(cv, "state", "Customer")       # 无枚举状态属性
 
 
+def test_state_diagram_rejects_isolated_and_inconsistent_states():
+    """状态图是质量投影：枚举/行为口径不一致或孤点时先反馈修复，不渲染半成品。"""
+    from app.exploration import diagram as D
+    from app.exploration import readiness as R
+
+    cv = _quantified_canvas()
+    order = next(o for o in cv["objects"] if o["name"] == "Order")
+    status = next(a for a in order["attributes"] if a["name"] == "status")
+    status["enum"] = ["pending", "paid", "cancelled", "archived"]
+    confirm = next(b for b in cv["behaviors"] if b["name"] == "confirm_pay")
+    confirm["outcome"] = "订单状态从待支付变为已支付"
+
+    analysis = D.state_model_analysis(cv, "Order")
+    assert any("不在枚举" in issue for issue in analysis["issues"])
+    assert any("孤立状态" in issue or "没有可验证" in issue for issue in analysis["issues"])
+    with pytest.raises(D.DiagramError, match="质量校验未通过"):
+        D.build_diagram(cv, "state", "Order")
+    lifecycle_gate = next(g for g in R.evaluate(cv)["gates"] if g["id"] == "lifecycles")
+    assert lifecycle_gate["passed"] is False
+
+
+def test_non_state_enum_cannot_be_rendered_as_lifecycle():
+    from app.exploration import diagram as D
+
+    cv = _quantified_canvas()
+    customer = next(o for o in cv["objects"] if o["name"] == "Customer")
+    customer["attributes"].append({"name": "segment", "type_hint": "枚举",
+                                   "enum": ["普通", "重点"]})
+    with pytest.raises(D.DiagramError, match="普通枚举不能自动当作生命周期"):
+        D.build_diagram(cv, "state", "Customer")
+
+
+def test_flow_and_sequence_reject_partial_structures():
+    from app.exploration import diagram as D
+
+    cv = _quantified_canvas()
+    scenario = cv["scenarios"][0]
+    scenario["branches"] = []
+    with pytest.raises(D.DiagramError, match="至少需要 2 条显式 branches"):
+        D.build_diagram(cv, "flow", scenario["name"])
+
+    scenario["branches"] = [
+        {"from_step": 2, "to_step": 3, "condition": "通过"},
+        {"from_step": 2, "to_step": 99, "condition": "驳回"},
+    ]
+    with pytest.raises(D.DiagramError, match="不在步骤范围"):
+        D.build_diagram(cv, "flow", scenario["name"])
+
+    scenario["behaviors"].append("missing_behavior")
+    with pytest.raises(D.DiagramError, match="未定义行为"):
+        D.build_diagram(cv, "sequence", scenario["name"])
+
+
 def test_diagram_endpoint(client, auth_headers, session, db):
     _seed_canvas(db, session["id"], _quantified_canvas())
     r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/er", headers=auth_headers)
@@ -968,6 +1075,29 @@ def test_diagram_endpoint(client, auth_headers, session, db):
     assert r.status_code == 422                        # 条件不足给出可操作提示
     r = client.get(f"{BASE}/sessions/{session['id']}/diagrams/nope", headers=auth_headers)
     assert r.status_code == 422
+
+
+def test_history_revalidates_stored_diagram_against_current_canvas(client, auth_headers, session, db):
+    """旧消息中的半成品图不能绕过新质量门继续回放。"""
+    cv = _quantified_canvas()
+    order = next(o for o in cv["objects"] if o["name"] == "Order")
+    next(a for a in order["attributes"] if a["name"] == "status")["enum"].append("已归档")
+    _seed_canvas(db, session["id"], cv)
+    db.add(ExplorationMessage(
+        session_id=session["id"], role="assistant", content="历史状态图",
+        steps=[{
+            "tool": "show_diagram", "arguments": {"kind": "state", "target": "Order"},
+            "summary": "展示状态图", "durationMs": 1,
+            "diagram": {"kind": "state", "title": "旧图", "target": "Order",
+                        "mermaid": "stateDiagram-v2\n  st0 : 已归档"},
+        }],
+    ))
+    db.commit()
+
+    detail = client.get(f"{BASE}/sessions/{session['id']}", headers=auth_headers).json()["data"]
+    step = detail["messages"][-1]["steps"][0]
+    assert "diagram" not in step
+    assert "历史图表已被质量门拦截" in step["error"]
 
 
 # ---------------------------------------------------------------- 草稿质量门

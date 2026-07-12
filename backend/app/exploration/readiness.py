@@ -1,6 +1,6 @@
 """质量门（readiness gates）— 画布 → 本体草稿的准入检查
 
-八道门与图谱编辑器/转化管线的真实需求一一对应：编辑器里一个"好"的本体
+九道门与图谱编辑器/转化管线的真实需求一一对应：编辑器里一个"好"的本体
 对象需要主键、带类型的属性、可解析且带基数的关系、绑定了对象的动作、
 可形式化（定量）的规则条件、来源可追溯的哨兵。凡是转化时只能靠回退兜底
 （自动补 id 主键、基数默认 one-to-many、规则待形式化却连数字都没有）的，
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.exploration import diagram as D
 from app.exploration.canvas import _ensure_canvas, norm_name
 from app.exploration.converter import CARDINALITIES
 from app.exploration.questions import (KIND_ADVISORY, KIND_BLOCKING, is_quantified,
@@ -27,6 +28,7 @@ _GATE_STAGES = [
     ("objects", "对象齐备", "阶段1 · 对象与主键：属性、类型、业务主键"),
     ("relations", "关系闭合", "阶段2 · 关系与基数：目标可解析、基数已确认"),
     ("behaviors", "行为落位", "阶段3 · 行为：谁(主体)对什么(对象)做"),
+    ("lifecycles", "状态闭环", "阶段3 · 生命周期：枚举与迁移使用同一口径且没有孤立状态"),
     ("rules", "规则定量", "阶段4 · 规则定量：阈值/枚举/边界给到数字"),
     ("events", "事件可追溯", "阶段4 · 事件：来源指向行为/external/time"),
     ("questions", "疑问清零", "阶段5 · 清账：回答账本里剩余的堵门问题"),
@@ -150,6 +152,17 @@ def evaluate(canvas: Any) -> dict:
             blk.append(f"行为「{name}」的约束含未定量表述（{'、'.join(sorted(set(vague))[:3])}）—— 请把口径问成数字/枚举")
     gate("behaviors", blk, adv)
 
+    # -- lifecycles：状态图必须是可验证投影；枚举/行为用词不一致、无迁移、
+    # 孤立状态都堵门，避免把“能画出来”误当成“模型完整”。
+    blk, adv = [], []
+    for obj in objects:
+        if D._status_attr(obj) is None:
+            continue
+        analysis = D.state_model_analysis(c, obj.get("name"))
+        blk.extend(f"对象「{_label(obj)}」：{issue}" for issue in analysis["issues"])
+        adv.extend(f"对象「{_label(obj)}」：{warning}" for warning in analysis["warnings"])
+    gate("lifecycles", blk, adv)
+
     # -- rules：规则将转成校验/函数/哨兵草稿，表述必须可形式化（定量）
     blk, adv = [], []
     for r in rules:
@@ -205,6 +218,12 @@ def evaluate(canvas: Any) -> dict:
                 blk.append(f"场景「{sname}」引用的行为「{x}」未定义")
         if not (s.get("steps") or []):
             adv.append(f"场景「{sname}」还没有步骤")
+        else:
+            try:
+                D.flow_mermaid(c, s.get("name") or s.get("display_name"))
+            except D.DiagramError as error:
+                if "流程图质量校验未通过" in str(error):
+                    blk.append(f"场景「{sname}」的分支结构不完整：{error}")
     if scenarios:
         un_obj = [_label(o) for o in objects if norm_name(o.get("name", "")) not in covered_obj]
         un_beh = [_label(b) for b in behaviors if norm_name(b.get("name", "")) not in covered_beh]

@@ -19,7 +19,7 @@ import re
 import uuid
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 def _to_camel(s: str) -> str:
@@ -30,10 +30,13 @@ def _to_camel(s: str) -> str:
 class _El(BaseModel):
     """元素基类：宽容解析（忽略未知字段，camel/snake 双收），把校验错误
     留给真正结构性的问题，便于 LLM 按错误信息修正后重试。"""
-    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore")
+    model_config = ConfigDict(
+        alias_generator=_to_camel, populate_by_name=True, extra="ignore",
+        str_strip_whitespace=True,
+    )
 
     id: Optional[str] = None
-    name: str
+    name: str = Field(min_length=1)
     display_name: Optional[str] = None
     description: Optional[str] = None
 
@@ -45,14 +48,39 @@ class AttributeSpec(_El):
     enum: Optional[list[str]] = None
     notes: Optional[str] = None
 
+    @field_validator("enum")
+    @classmethod
+    def validate_enum(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return None
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        if len(cleaned) < 2:
+            raise ValueError("枚举至少需要 2 个非空值")
+        normalized = [norm_name(item) for item in cleaned]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("枚举值归一化后存在重复项")
+        return cleaned
+
 
 class RelationSpec(BaseModel):
-    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore")
-    target: str                          # 目标对象名
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
+                              str_strip_whitespace=True)
+    target: str = Field(min_length=1)    # 目标对象名
     name: Optional[str] = None           # 关系标识（英文）
     display_name: Optional[str] = None   # 关系显示名（如「归属于」）
     cardinality: Optional[str] = None    # one-to-one / one-to-many / many-to-one / many-to-many
     description: Optional[str] = None
+
+    @field_validator("cardinality")
+    @classmethod
+    def validate_cardinality(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        normalized = value.strip().lower()
+        allowed = {"one-to-one", "one-to-many", "many-to-one", "many-to-many"}
+        if normalized not in allowed:
+            raise ValueError("基数必须是 one-to-one/one-to-many/many-to-one/many-to-many")
+        return normalized
 
 
 class BusinessObject(_El):
@@ -67,6 +95,14 @@ class Actor(_El):
     # 参与方(person/org)本身也是数据实体 —— 转换后与对象同为 ObjectType，故也带属性
     attributes: list[AttributeSpec] = Field(default_factory=list)
     key_attribute: Optional[str] = None  # 业务主键属性名
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str) -> str:
+        normalized = (value or "role").strip().lower()
+        if normalized not in {"person", "org", "system", "role"}:
+            raise ValueError("kind 必须是 person/org/system/role")
+        return normalized
 
 
 class Behavior(_El):
@@ -91,6 +127,22 @@ class Rule(_El):
     statement: Optional[str] = None
     error_message: Optional[str] = None
 
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str) -> str:
+        normalized = (value or "constraint").strip().lower()
+        if normalized not in {"constraint", "validation", "derivation", "approval", "alert"}:
+            raise ValueError("kind 必须是 constraint/validation/derivation/approval/alert")
+        return normalized
+
+
+class ScenarioBranch(BaseModel):
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
+                              str_strip_whitespace=True)
+    from_step: int = Field(ge=1)          # 1-based steps 下标
+    to_step: Optional[int] = Field(default=None, ge=1)  # None 表示流程结束
+    condition: str = Field(min_length=1)
+
 
 class Scenario(_El):
     goal: Optional[str] = None
@@ -98,6 +150,7 @@ class Scenario(_El):
     steps: list[str] = Field(default_factory=list)
     objects: list[str] = Field(default_factory=list)     # 场景涉及的对象名（覆盖检查用）
     behaviors: list[str] = Field(default_factory=list)   # 场景涉及的行为名（覆盖检查用）
+    branches: list[ScenarioBranch] = Field(default_factory=list)  # 条件分支的显式目标
     expected_outcome: Optional[str] = None
 
 
@@ -156,16 +209,27 @@ def upsert_elements(canvas: Any, kind: str, elements: list[dict]) -> tuple[dict,
                             for err in e.errors()[:3])
             errors.append(f"元素「{raw.get('name', '?')}」不合法: {bad}")
             continue
-        data = el.model_dump(exclude_none=True)
         idx = None
         if el.id and el.id in by_id:
             idx = by_id[el.id]
         elif norm_name(el.name) in by_name:
             idx = by_name[norm_name(el.name)]
         if idx is not None:
+            # 字段级合并保护已确认数据：LLM 只修一个字段时，未提供的属性、
+            # 关系等保持原值；显式传 [] 仍可清空列表。
+            patch = el.model_dump(exclude_none=True, exclude_unset=True)
+            data = {**items[idx], **patch}
             data["id"] = items[idx].get("id") or f"el-{uuid.uuid4().hex[:8]}"
+            try:
+                data = model.model_validate(data).model_dump(exclude_none=True)
+            except ValidationError as e:
+                bad = "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                                for err in e.errors()[:3])
+                errors.append(f"元素「{el.name}」合并后不合法: {bad}")
+                continue
             items[idx] = data
         else:
+            data = el.model_dump(exclude_none=True)
             data["id"] = el.id or f"el-{uuid.uuid4().hex[:8]}"
             by_id[data["id"]] = len(items)
             by_name[norm_name(el.name)] = len(items)
@@ -205,7 +269,14 @@ def completeness(canvas: Any) -> dict:
     counts = {k: len(v) for k, v in c.items() if k in KIND_KEYS.values()}
     gaps: list[str] = []
 
-    obj_names = {norm_name(o.get("name", "")) for o in c["objects"]}
+    obj_names = {norm_name(o.get("name", "")) for o in c["objects"]} \
+        | {norm_name(o.get("display_name", "")) for o in c["objects"] if o.get("display_name")}
+    actor_names = {norm_name(a.get("name", "")) for a in c["actors"]} \
+        | {norm_name(a.get("display_name", "")) for a in c["actors"] if a.get("display_name")}
+    entity_names = obj_names | {
+        n for a in c["actors"] if (a.get("kind") or "role") != "system"
+        for n in (norm_name(a.get("name", "")), norm_name(a.get("display_name", ""))) if n
+    }
     beh_names = {norm_name(b.get("name", "")) for b in c["behaviors"]}
 
     for o in c["objects"]:
@@ -214,8 +285,8 @@ def completeness(canvas: Any) -> dict:
         elif not o.get("key_attribute"):
             gaps.append(f"对象「{o.get('name')}」未指定业务主键属性")
         for r in o.get("relations") or []:
-            if norm_name(r.get("target", "")) not in obj_names:
-                gaps.append(f"对象「{o.get('name')}」的关系指向未定义的对象「{r.get('target')}」")
+            if norm_name(r.get("target", "")) not in entity_names:
+                gaps.append(f"对象「{o.get('name')}」的关系指向未定义的对象/主体「{r.get('target')}」")
     for a in c["actors"]:
         # person/org 类主体是数据实体，应像对象一样有属性（system/role 可无）
         if (a.get("kind") or "role") in ("person", "org") and not a.get("attributes"):
@@ -224,10 +295,12 @@ def completeness(canvas: Any) -> dict:
     for b in c["behaviors"]:
         if not b.get("actor"):
             gaps.append(f"行为「{b.get('name')}」缺少执行主体")
+        elif norm_name(b.get("actor", "")) not in actor_names | obj_names:
+            gaps.append(f"行为「{b.get('name')}」的执行主体「{b.get('actor')}」尚未在主体模型中定义")
         if not b.get("object"):
             gaps.append(f"行为「{b.get('name')}」缺少作用对象")
-        elif norm_name(b.get("object", "")) not in obj_names:
-            gaps.append(f"行为「{b.get('name')}」作用的对象「{b.get('object')}」尚未在对象模型中定义")
+        elif norm_name(b.get("object", "")) not in entity_names:
+            gaps.append(f"行为「{b.get('name')}」作用的对象「{b.get('object')}」尚未在对象/主体模型中定义")
     for r in c["rules"]:
         tgt = norm_name(r.get("applies_to", "") or "")
         if tgt and tgt not in obj_names | beh_names:

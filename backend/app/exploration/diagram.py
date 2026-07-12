@@ -4,7 +4,7 @@
 能确定性生成的绝不交给模型，图与画布严格一致，agent 只负责"何时出图"。
 
   er        实体关系图：对象 + person/org 主体（它们都将转成 ObjectType）
-  flow      业务流程图：某场景的步骤链（含判断分支形状启发）
+  flow      业务流程图：某场景的步骤链 + 显式条件分支
   sequence  时序图：某场景中 主体→对象 的行为协作顺序
   state     状态图：某对象的枚举状态属性 + 从行为结果中识别的状态迁移
 
@@ -74,6 +74,64 @@ def er_mermaid(canvas) -> str:
     if not entities:
         raise DiagramError("画布还没有对象模型 —— 先在对话中沉淀业务对象")
 
+    entity_names = {
+        norm_name(value)
+        for entity in entities
+        for value in (entity.get("name", ""), entity.get("display_name", ""))
+        if value
+    }
+    issues: list[str] = []
+    ident_owners: dict[str, str] = {}
+    for index, entity in enumerate(entities):
+        label = _slabel(entity)
+        ident = _ident(entity.get("name", ""), f"Object{index + 1}")
+        owner = ident_owners.get(ident)
+        if owner and owner != label:
+            issues.append(f"实体「{owner}」与「{label}」生成了相同图标识 {ident}")
+        ident_owners[ident] = label
+    for obj in c["objects"]:
+        label = _slabel(obj)
+        attributes = obj.get("attributes") or []
+        attr_names = {norm_name(attr.get("name", "")) for attr in attributes}
+        key = obj.get("key_attribute")
+        if not attributes:
+            issues.append(f"对象「{label}」没有属性，禁止伪造 id 字段出图")
+        untyped = [attr.get("name", "?") for attr in attributes
+                   if not str(attr.get("type_hint") or "").strip()]
+        if untyped:
+            issues.append(f"对象「{label}」的属性 {', '.join(untyped[:6])} 缺少类型")
+        if not key:
+            issues.append(f"对象「{label}」未指定业务主键")
+        elif norm_name(key) not in attr_names:
+            issues.append(f"对象「{label}」的主键「{key}」不在属性列表")
+        for relation in obj.get("relations") or []:
+            target = relation.get("target", "")
+            if norm_name(target) not in entity_names:
+                issues.append(f"关系「{label} → {target}」目标未定义")
+            cardinality = str(relation.get("cardinality") or "").strip().lower()
+            if cardinality not in _CARDINALITY_MERMAID:
+                issues.append(f"关系「{label} → {target}」缺少或使用了非法基数")
+    for actor in c["actors"]:
+        if (actor.get("kind") or "role") not in ("person", "org"):
+            continue
+        label = _slabel(actor)
+        attributes = actor.get("attributes") or []
+        attr_names = {norm_name(attr.get("name", "")) for attr in attributes}
+        key = actor.get("key_attribute")
+        if not attributes:
+            issues.append(f"主体「{label}」是数据实体但没有属性")
+        elif not key:
+            issues.append(f"主体「{label}」是数据实体但未指定业务主键")
+        elif norm_name(key) not in attr_names:
+            issues.append(f"主体「{label}」的主键「{key}」不在属性列表")
+        untyped = [attr.get("name", "?") for attr in attributes
+                   if not str(attr.get("type_hint") or "").strip()]
+        if untyped:
+            issues.append(f"主体「{label}」的属性 {', '.join(untyped[:6])} 缺少类型")
+    if issues:
+        raise DiagramError("ER 图质量校验未通过：" + "；".join(issues[:8])
+                           + "。请让 AI 修复对象主键、关系端点与基数后重试")
+
     lines = ["erDiagram"]
     entity_by_name: dict[str, str] = {}
     for i, o in enumerate(entities):
@@ -89,17 +147,15 @@ def er_mermaid(canvas) -> str:
             pk = " PK" if key_attr and norm_name(a.get("name", "")) == key_attr else ""
             attr_lines.append(f"        {atype} {aname}{pk}")
         lines.append(f"    {ent} {{")
-        lines.extend(attr_lines or ["        string id PK"])
+        lines.extend(attr_lines)
         lines.append("    }")
 
     for o in c["objects"]:
         src = entity_by_name.get(norm_name(o.get("name", "")))
         for r in o.get("relations") or []:
             tgt = entity_by_name.get(norm_name(r.get("target", "")))
-            if not src or not tgt:
-                continue  # 悬空关系不进图 —— 与质量门同口径
-            edge = _CARDINALITY_MERMAID.get((r.get("cardinality") or "").strip().lower(),
-                                            _CARDINALITY_MERMAID["one-to-many"])
+            # 端点与基数已在出图前统一校验，不再静默丢边或默认 one-to-many。
+            edge = _CARDINALITY_MERMAID[(r.get("cardinality") or "").strip().lower()]
             label = (r.get("display_name") or r.get("name") or "关联").replace('"', "'")
             lines.append(f'    {src} {edge} {tgt} : "{label}"')
 
@@ -131,12 +187,88 @@ def _slabel(x: dict) -> str:
 
 
 def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]]:
-    """场景步骤 → mermaid flowchart；没有明确分支目标时不伪造判断菱形。"""
+    """场景步骤 → flowchart；条件步骤必须有显式、可验证的分支目标。"""
     c = _ensure_canvas(canvas)
     s = _pick_scenario(c, target)
     steps = s.get("steps") or []
     if not steps:
         raise DiagramError(f"场景「{_slabel(s)}」还没有步骤 —— 先与用户把流程步骤问清楚")
+
+    branches = s.get("branches") or []
+    by_source: dict[int, list[dict]] = {}
+    branch_errors: list[str] = []
+    for branch in branches:
+        source = branch.get("from_step")
+        destination = branch.get("to_step")
+        condition = str(branch.get("condition") or "").strip()
+        if not isinstance(source, int) or source < 1 or source > len(steps):
+            branch_errors.append(f"分支起点 {source} 不在步骤 1..{len(steps)} 范围内")
+            continue
+        if destination is not None and (not isinstance(destination, int)
+                                        or destination < 1 or destination > len(steps)):
+            branch_errors.append(f"步骤 {source} 的分支目标 {destination} 不在步骤范围内")
+            continue
+        if not condition:
+            branch_errors.append(f"步骤 {source} 的分支缺少条件标签")
+            continue
+        by_source.setdefault(source, []).append(branch)
+
+    conditional_steps = [i for i, raw in enumerate(steps, 1)
+                         if any(key in str(raw) for key in ("如果", "若", "是否"))]
+    for index in conditional_steps:
+        count = len(by_source.get(index, []))
+        if count < 2:
+            branch_errors.append(f"条件步骤 {index} 至少需要 2 条显式 branches，当前 {count} 条")
+        conditions = [norm_name(branch.get("condition", "")) for branch in by_source.get(index, [])]
+        if len(conditions) != len(set(conditions)):
+            branch_errors.append(f"条件步骤 {index} 存在重复分支条件")
+    if branch_errors:
+        raise DiagramError("流程图质量校验未通过：" + "；".join(branch_errors[:8])
+                           + "。请让 AI 在场景 branches 中补齐 from_step/to_step/condition 后重试")
+
+    # 从第 1 步做可达性检查；被孤立的步骤不能进入平台图表。
+    adjacency: dict[int, set[int]] = {i: set() for i in range(1, len(steps) + 1)}
+    for index in range(1, len(steps) + 1):
+        if index in by_source:
+            adjacency[index].update(int(branch["to_step"])
+                                    for branch in by_source[index]
+                                    if branch.get("to_step") is not None)
+        elif index < len(steps):
+            adjacency[index].add(index + 1)
+    reachable: set[int] = set()
+    stack = [1]
+    while stack:
+        node = stack.pop()
+        if node in reachable:
+            continue
+        reachable.add(node)
+        stack.extend(adjacency[node] - reachable)
+    unreachable = [str(i) for i in range(1, len(steps) + 1) if i not in reachable]
+    if unreachable:
+        raise DiagramError("流程图质量校验未通过：以下步骤从流程起点不可达："
+                           + "、".join(unreachable))
+    reverse: dict[int, set[int]] = {i: set() for i in range(1, len(steps) + 1)}
+    end_predecessors: set[int] = set()
+    for source, destinations in adjacency.items():
+        for destination in destinations:
+            reverse[destination].add(source)
+        if source in by_source:
+            if any(branch.get("to_step") is None for branch in by_source[source]):
+                end_predecessors.add(source)
+        elif source == len(steps):
+            end_predecessors.add(source)
+    can_finish: set[int] = set()
+    stack = list(end_predecessors)
+    while stack:
+        node = stack.pop()
+        if node in can_finish:
+            continue
+        can_finish.add(node)
+        stack.extend(reverse[node] - can_finish)
+    no_exit = [str(i) for i in sorted(reachable) if i not in can_finish]
+    if no_exit:
+        raise DiagramError("流程图质量校验未通过：以下步骤没有通往结束节点的路径："
+                           + "、".join(no_exit))
 
     beh_actor = {norm_name(b.get("name", "")): b.get("actor", "")
                  for b in c["behaviors"]}
@@ -144,10 +276,8 @@ def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]
 
     direction = "LR" if len(steps) >= 7 else "TD"
     lines = [f"flowchart {direction}", f'    S0(["开始：{_text(s.get("goal") or _slabel(s), 30)}"])']
-    warnings: list[str] = []
-    prev = "S0"
     for i, raw in enumerate(steps, 1):
-        text = _text(raw, 44)
+        text = _text(str(raw), 44)
         nid = f"S{i}"
         # 步骤文本命中已定义行为 → 标注执行主体（图与模型互相印证）
         hit = next((n for n, disp in beh_display.items()
@@ -155,18 +285,22 @@ def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]
                     or (disp and disp != "?" and disp in text)), None)
         if hit and beh_actor.get(hit):
             text = f"{text}｜{beh_actor[hit]}"
-        conditional = any(k in raw for k in ("如果", "若", "是否"))
-        # Scenario.steps 只有线性文本，没有 yes/no 的目标步骤；使用菱形会画出
-        # “看似规范但语义错误”的单出口判断。先按普通步骤画，并显式提示补分支。
-        lines.append(f'    {nid}["{text}"]')
-        if conditional:
-            warnings.append(f"步骤 {i} 含条件语句但尚未定义分支目标，当前按线性步骤展示")
-        lines.append(f"    {prev} --> {nid}")
-        prev = nid
+        if i in by_source:
+            lines.append(f'    {nid}{{"{text}"}}')
+        else:
+            lines.append(f'    {nid}["{text}"]')
     outcome = _text(s.get("expected_outcome") or "结束", 30)
     lines.append(f'    SE(["{outcome}"])')
-    lines.append(f"    {prev} --> SE")
-    return "\n".join(lines), _slabel(s), warnings
+    lines.append("    S0 --> S1")
+    for index in range(1, len(steps) + 1):
+        if index in by_source:
+            for branch in by_source[index]:
+                target_node = f"S{branch['to_step']}" if branch.get("to_step") is not None else "SE"
+                lines.append(f'    S{index} -->|"{_text(branch["condition"], 28)}"| {target_node}')
+        else:
+            target_node = f"S{index + 1}" if index < len(steps) else "SE"
+            lines.append(f"    S{index} --> {target_node}")
+    return "\n".join(lines), _slabel(s), []
 
 
 # ---------------------------------------------------------------- 时序图
@@ -181,11 +315,31 @@ def sequence_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
         if b.get("display_name"):
             beh_by_name.setdefault(norm_name(b["display_name"]), b)
 
-    names = [norm_name(x) for x in (s.get("behaviors") or [])]
-    picked = [beh_by_name[n] for n in names if n in beh_by_name]
+    raw_names = [str(value) for value in (s.get("behaviors") or [])]
+    names = [norm_name(value) for value in raw_names]
+    missing = [raw for raw, normalized in zip(raw_names, names) if normalized not in beh_by_name]
+    if missing:
+        raise DiagramError(f"时序图质量校验未通过：场景「{_slabel(s)}」引用了未定义行为："
+                           + "、".join(missing[:8]) + "。请让 AI 修复场景 behaviors 后重试")
+    picked = [beh_by_name[n] for n in names]
     if not picked:
         raise DiagramError(f"场景「{_slabel(s)}」还没有关联行为（behaviors）——"
                            "先把场景涉及的行为补进场景模型，时序图才能反映协作顺序")
+    incomplete = [_slabel(behavior) for behavior in picked
+                  if not behavior.get("actor") or not behavior.get("object")]
+    if incomplete:
+        raise DiagramError("时序图质量校验未通过：以下行为缺少 actor 或 object："
+                           + "、".join(incomplete[:8]) + "。请让 AI 补齐后重试")
+    object_names = {norm_name(value) for obj in c["objects"]
+                    for value in (obj.get("name", ""), obj.get("display_name", "")) if value}
+    actor_names = {norm_name(value) for actor in c["actors"]
+                   for value in (actor.get("name", ""), actor.get("display_name", "")) if value}
+    unresolved = [_slabel(behavior) for behavior in picked
+                  if norm_name(behavior.get("actor", "")) not in actor_names | object_names
+                  or norm_name(behavior.get("object", "")) not in actor_names | object_names]
+    if unresolved:
+        raise DiagramError("时序图质量校验未通过：以下行为的 actor/object 引用未定义："
+                           + "、".join(unresolved[:8]) + "。请让 AI 修复引用后重试")
 
     participants: list[tuple[str, str]] = []   # (ident, display)
     seen: set[str] = set()
@@ -199,8 +353,8 @@ def sequence_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
 
     body: list[str] = []
     for b in picked:
-        actor = part(b.get("actor") or "未指明主体", "Actor")
-        obj = part(b.get("object") or "未指明对象", "Object")
+        actor = part(b["actor"], "Actor")
+        obj = part(b["object"], "Object")
         label = _text(_slabel(b), 40)
         trig = _text(b.get("trigger") or "", 30)
         body.append(f"    {actor}->>+{obj}: {label}" + (f"（{trig}）" if trig else ""))
@@ -215,81 +369,145 @@ def sequence_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
 
 # ---------------------------------------------------------------- 状态图
 
-_TRANSITION_RE = re.compile(
-    r"(?:从\s*([^\s，。；;、]{1,20})\s*)?(?:变更为|变为|改为|置为|转为|流转到|->|→)\s*([^\s，。；;、]{1,20})")
+_FROM_TRANSITION_RE = re.compile(
+    r"从\s*[「『\"']?(.{1,40}?)[」』\"']?\s*"
+    r"(?:变更为|变为|改为|置为|转为|流转到)\s*"
+    r"[「『\"']?([^，。；;\n]{1,40}?)[」』\"']?(?=，|。|；|;|\n|$)")
+_STATUS_VALUE_RE = re.compile(
+    r"(?:\bstatus\b|\bstate\b|状态|阶段)\s*(?:=|为|保持(?:为)?)\s*"
+    r"[「『\"']?([^，。；;、\s时且后前]{1,40})[」』\"']?", re.IGNORECASE)
+
+
+def _status_attr(obj: dict) -> dict | None:
+    """只把显式命名为状态/阶段的枚举当生命周期，不能拿任意枚举冒充状态。"""
+    for attr in obj.get("attributes") or []:
+        if not attr.get("enum"):
+            continue
+        label = f"{attr.get('name', '')}{attr.get('display_name', '')}".lower()
+        if any(k in label for k in ("状态", "status", "state", "阶段", "stage")):
+            return attr
+    return None
+
+
+def _pick_state_object(canvas: dict, target: str | None) -> tuple[dict, dict]:
+    objects = canvas["objects"]
+    if not objects:
+        raise DiagramError("画布还没有对象模型")
+    if target:
+        normalized = norm_name(target)
+        obj = next((item for item in objects
+                    if norm_name(item.get("name", "")) == normalized
+                    or norm_name(item.get("display_name", "")) == normalized), None)
+        if obj is None:
+            raise DiagramError(f"对象「{target}」不存在")
+        attr = _status_attr(obj)
+        if attr is None:
+            raise DiagramError(f"对象「{_slabel(obj)}」没有状态/阶段枚举属性 ——"
+                               "普通枚举不能自动当作生命周期，请先确认状态字段与全部状态值")
+        return obj, attr
+    obj = next((item for item in objects if _status_attr(item)), None)
+    if obj is None:
+        raise DiagramError("没有任何对象拥有状态/阶段枚举属性 —— 先确认哪个对象有生命周期状态")
+    return obj, _status_attr(obj)  # type: ignore[return-value]
+
+
+def _clean_state_value(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^(?:[\w一-鿿]+\.)?(?:status|state|状态|阶段)\s*[:=]?\s*",
+                  "", text, flags=re.IGNORECASE)
+    return text.strip(" \t\r\n「」『』\"'`()[]{}：:")
+
+
+def state_model_analysis(canvas, target: str | None = None) -> dict:
+    """分析生命周期的一致性；结果同时供质量门和状态图生成器使用。"""
+    c = _ensure_canvas(canvas)
+    obj, attr = _pick_state_object(c, target)
+    states = [str(value).strip() for value in (attr.get("enum") or []) if str(value).strip()]
+    by_norm = {norm_name(value): value for value in states}
+    object_names = {norm_name(obj.get("name", "")), norm_name(obj.get("display_name", ""))}
+    object_names.discard("")
+
+    edges: set[tuple[str, str, str]] = set()
+    unknown_refs: set[tuple[str, str]] = set()
+    for behavior in c["behaviors"]:
+        if norm_name(behavior.get("object", "")) not in object_names:
+            continue
+        label = _slabel(behavior)
+        blob = "；".join(str(behavior.get(key) or "")
+                        for key in ("outcome", "description", "trigger"))
+        for match in _FROM_TRANSITION_RE.finditer(blob):
+            raw_src = _clean_state_value(match.group(1))
+            raw_dst = _clean_state_value(match.group(2))
+            src = by_norm.get(norm_name(raw_src))
+            dst = by_norm.get(norm_name(raw_dst))
+            prefix = blob[max(0, match.start() - 40):match.start()]
+            explicit_status = bool(re.search(
+                r"(?:\bstatus\b|\bstate\b|状态|阶段)\s*$", prefix, re.IGNORECASE))
+            if src and dst:
+                if src != dst:
+                    edges.add((src, dst, label))
+            elif explicit_status or bool(src) != bool(dst):
+                # “从false变为true”可能描述的是任意布尔属性；只有显式写了
+                # status/state，或一端已命中状态枚举时，才把未知值判为状态错误。
+                for raw, resolved in ((raw_src, src), (raw_dst, dst)):
+                    if raw and not resolved:
+                        unknown_refs.add((label, raw))
+        # 即使没有形成迁移，status=值 / 状态保持值 也必须属于枚举；否则平台
+        # 会出现“画布已就绪但图上丢节点/丢边”的双重口径。
+        for match in _STATUS_VALUE_RE.finditer(blob):
+            raw = _clean_state_value(match.group(1))
+            if raw and norm_name(raw) not in by_norm:
+                unknown_refs.add((label, raw))
+
+    issues: list[str] = []
+    if len(states) < 2:
+        issues.append(f"对象「{_slabel(obj)}」的状态枚举少于 2 个值")
+    for behavior, value in sorted(unknown_refs):
+        issues.append(f"行为「{behavior}」引用状态「{value}」，但它不在枚举 {states}")
+    if states and not edges:
+        issues.append(f"对象「{_slabel(obj)}」没有可验证的状态迁移；行为 outcome 需写明与枚举完全一致的「从X变为Y」")
+
+    connected = {value for src, dst, _ in edges for value in (src, dst)}
+    isolated = [value for value in states if value not in connected]
+    if edges and isolated:
+        issues.append("存在无任何迁入/迁出的孤立状态：" + "、".join(isolated[:8]))
+
+    sources = {src for src, _, _ in edges}
+    destinations = {dst for _, dst, _ in edges}
+    initial_candidates = sorted(sources - destinations, key=norm_name)
+    warnings: list[str] = []
+    initial = initial_candidates[0] if len(initial_candidates) == 1 else None
+    if edges and initial is None:
+        warnings.append("无法从已确认迁移唯一确定初始状态，图中不绘制虚假的起点")
+    return {
+        "object": obj, "attribute": attr, "states": states,
+        "edges": sorted(edges, key=lambda edge: (norm_name(edge[0]), norm_name(edge[1]), edge[2])),
+        "initial": initial, "isolated": isolated, "issues": issues, "warnings": warnings,
+    }
 
 
 def state_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]]:
     """对象的枚举状态属性 → mermaid stateDiagram；从行为结果文本识别显式迁移。"""
-    c = _ensure_canvas(canvas)
-    objects = c["objects"]
-    if not objects:
-        raise DiagramError("画布还没有对象模型")
-
-    def status_attr(o: dict) -> dict | None:
-        cands = [a for a in (o.get("attributes") or []) if a.get("enum")]
-        for a in cands:
-            label = f"{a.get('name', '')}{a.get('display_name', '')}".lower()
-            if any(k in label for k in ("状态", "status", "state", "阶段", "stage")):
-                return a
-        return cands[0] if cands else None
-
-    obj = None
-    if target:
-        t = norm_name(target)
-        obj = next((o for o in objects
-                    if norm_name(o.get("name", "")) == t
-                    or norm_name(o.get("display_name", "")) == t), None)
-        if obj is None:
-            raise DiagramError(f"对象「{target}」不存在")
-        if status_attr(obj) is None:
-            raise DiagramError(f"对象「{_slabel(obj)}」没有枚举型状态属性 ——"
-                               "先与用户确认它的状态字段与全部状态值（枚举）")
-    else:
-        obj = next((o for o in objects if status_attr(o)), None)
-        if obj is None:
-            raise DiagramError("没有任何对象拥有枚举型状态属性 —— 先确认哪个对象有生命周期状态")
-
-    attr = status_attr(obj)
-    states = [str(v) for v in (attr.get("enum") or [])]
-    by_norm = {norm_name(v): v for v in states}
+    analysis = state_model_analysis(canvas, target)
+    obj = analysis["object"]
+    attr = analysis["attribute"]
+    states = analysis["states"]
+    if analysis["issues"]:
+        detail = "；".join(analysis["issues"][:6])
+        raise DiagramError("状态图质量校验未通过：" + detail
+                           + "。请先修复画布后重试；校验错误会回填给 AI 继续补齐。")
     ids = {v: f"st{i}" for i, v in enumerate(states)}
 
     lines = ["stateDiagram-v2", "    direction LR"]
     for v in states:
         lines.append(f'    {ids[v]} : {_text(v, 20)}')
-    if states:
-        lines.append(f"    [*] --> {ids[states[0]]}")
-
-    # 行为 outcome/描述/触发 里的显式迁移（…变为X / 从X变为Y / X→Y）
-    edges: set[tuple[str, str, str]] = set()
-    for b in c["behaviors"]:
-        if norm_name(b.get("object", "")) not in (norm_name(obj.get("name", "")),
-                                                  norm_name(obj.get("display_name", ""))):
-            continue
-        blob = "；".join(str(b.get(k) or "") for k in ("outcome", "description", "trigger"))
-        for m in _TRANSITION_RE.finditer(blob):
-            src, dst = m.group(1), m.group(2)
-            dst_v = by_norm.get(norm_name(dst or ""))
-            if not dst_v:
-                continue
-            src_v = by_norm.get(norm_name(src or ""))
-            if src_v and src_v != dst_v:
-                edges.add((ids[src_v], ids[dst_v], _slabel(b)))
-    for src, dst, label in sorted(edges):
-        lines.append(f"    {src} --> {dst} : {_text(label, 20)}")
-    warnings: list[str] = []
-    if not edges:
-        lines.append("    %% 未能从行为结果中识别状态迁移，仅列出状态；")
-        lines.append("    %% 在行为的 outcome 里写明「从X变为Y」即可自动连线")
-        warnings.append("状态枚举已确认，但没有任何已确认的状态迁移；图中不推断虚假连线")
-    else:
-        connected = {node for src, dst, _ in edges for node in (src, dst)}
-        isolated = [state for state in states if ids[state] not in connected]
-        if isolated:
-            warnings.append("以下状态尚无已确认迁移：" + "、".join(isolated[:8]))
+    if analysis["initial"]:
+        lines.append(f"    [*] --> {ids[analysis['initial']]}")
+    for src, dst, label in analysis["edges"]:
+        lines.append(f"    {ids[src]} --> {ids[dst]} : {_text(label, 20)}")
     return ("\n".join(lines),
-            f"{_slabel(obj)} · {attr.get('display_name') or attr.get('name')}", warnings)
+            f"{_slabel(obj)} · {attr.get('display_name') or attr.get('name')}",
+            analysis["warnings"])
 
 
 # ---------------------------------------------------------------- 统一入口

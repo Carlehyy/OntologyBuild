@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
   CircleCheck, CircleHelp, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2,
@@ -228,27 +228,34 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   const [dgWarnings, setDgWarnings] = useState<string[]>([])
   const [dgBusy, setDgBusy] = useState(false)
   const [dgError, setDgError] = useState('')
+  const dgRequestSeq = useRef(0)
   const counts = completeness?.counts || {}
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
 
   const scenarioNames = (canvas?.scenarios || []).map(s => String(s.display_name || s.name))
-  const objectNames = (canvas?.objects || []).map(o => String(o.display_name || o.name))
+  const objectNames = (canvas?.objects || [])
+    .filter(o => ((o.attributes as { name?: string; display_name?: string; enum?: string[] }[] | undefined) || [])
+      .some(a => (a.enum?.length || 0) > 0 && /状态|阶段|status|state|stage/i.test(`${a.name || ''}${a.display_name || ''}`)))
+    .map(o => String(o.display_name || o.name))
 
   const loadDiagram = async (kind: DiagramKind, target: string) => {
     if (!sessionId) return
+    const requestSeq = ++dgRequestSeq.current
     setDgBusy(true)
     setDgError('')
     setDgMermaid('')
     setDgWarnings([])
     try {
       const d = await explorationApi.diagram(sessionId, kind, target || undefined)
+      if (requestSeq !== dgRequestSeq.current) return
       setDgMermaid(d.mermaid)
       setDgTitle(d.title)
       setDgWarnings(d.warnings || [])
     } catch (error: unknown) {
+      if (requestSeq !== dgRequestSeq.current) return
       setDgError(errorMessage(error, '图表生成失败'))
     } finally {
-      setDgBusy(false)
+      if (requestSeq === dgRequestSeq.current) setDgBusy(false)
     }
   }
 
@@ -257,6 +264,12 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
     setDgTarget('')
     setDgOpen(true)
     void loadDiagram('er', '')
+  }
+
+  const closeDiagram = () => {
+    dgRequestSeq.current += 1
+    setDgBusy(false)
+    setDgOpen(false)
   }
 
   const targetSpec = DIAGRAM_TABS.find(t => t.kind === dgKind)?.needsTarget
@@ -367,12 +380,12 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
       {/* 图表模态：ER/流程/时序/状态，全部由画布确定性生成 */}
       {dgOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6"
-             onClick={() => setDgOpen(false)}>
+             onClick={closeDiagram}>
           <div className="w-[860px] max-w-[94vw] max-h-[86vh] rounded-xl bg-[var(--color-bg-elevated)] shadow-2xl flex flex-col"
                onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--color-border)]">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
+                <div data-testid="canvas-diagram-title" className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
                   {dgTitle || '业务建模图表'}
                 </div>
                 <div className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">
@@ -388,7 +401,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                     <Copy size={12} /> 复制源码
                   </button>
                 )}
-                <button onClick={() => setDgOpen(false)}
+                <button aria-label="关闭业务建模图表" onClick={closeDiagram}
                         className="p-1.5 rounded-md hover:bg-[var(--color-bg-hover)] text-[var(--color-text-tertiary)]">
                   <X size={15} />
                 </button>
