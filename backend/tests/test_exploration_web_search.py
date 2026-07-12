@@ -59,7 +59,7 @@ def test_parse_duck_results_unwraps_redirect_and_pairs_snippet():
     }]
 
 
-def test_chat_with_web_search_injects_sources_and_persists_step(
+def test_chat_with_web_search_exposes_real_tool_and_persists_sources(
     client, auth_headers, db, admin_user, monkeypatch,
 ):
     from app.models.model_config import ModelConfig
@@ -81,11 +81,30 @@ def test_chat_with_web_search_injects_sources_and_persists_step(
     }]
     monkeypatch.setattr(orchestrator, "search_web", lambda query: sources)
 
-    captured = {}
+    captured = {"calls": 0}
 
-    def fake_chat(_kwargs, messages, _tools):
+    def fake_chat(_kwargs, messages, tools):
+        captured["calls"] += 1
         captured["system"] = messages[0]["content"]
-        return {"content": "已参考公开资料，并继续向你确认企业口径。", "tool_calls": [], "usage": None}
+        if captured["calls"] == 1:
+            search_tools = [tool for tool in tools if tool["name"] == "web_search"]
+            assert len(search_tools) == 1
+            assert "现在具备公开互联网检索能力" in messages[0]["content"]
+            return {
+                "content": None,
+                "tool_calls": [{
+                    "id": "search-1", "name": "web_search",
+                    "arguments": {"query": "企业采购 审批流程 内部控制"},
+                }],
+                "usage": None,
+            }
+        assert messages[-1]["role"] == "tool"
+        assert "https://example.com/industry" in messages[-1]["content"]
+        assert "untrustedExternalContent" in messages[-1]["content"]
+        return {
+            "content": "已联网参考公开资料，并继续向你确认企业口径。",
+            "tool_calls": [], "usage": None,
+        }
 
     monkeypatch.setattr(llm_bridge, "chat", fake_chat)
     response = client.post(
@@ -95,12 +114,47 @@ def test_chat_with_web_search_injects_sources_and_persists_step(
     )
     assert response.status_code == 200, response.text
     data = response.json()["data"]
+    assert captured["calls"] == 2
     assert data["steps"][0]["tool"] == "web_search"
+    assert data["steps"][0]["arguments"]["query"] == "企业采购 审批流程 内部控制"
     assert data["steps"][0]["searchResults"] == sources
-    assert "外部不可信内容" in captured["system"]
-    assert "https://example.com/industry" in captured["system"]
+    assert "开启仅代表能力可用，不代表每条消息都要搜索" in captured["system"]
+    assert "由你根据任务自行判断是否调用" in captured["system"]
 
     detail = client.get(
         f"{BASE}/sessions/{session['id']}", headers=auth_headers,
     ).json()["data"]
     assert detail["messages"][1]["steps"][0]["tool"] == "web_search"
+
+
+def test_chat_without_web_search_does_not_expose_tool(
+    client, auth_headers, db, admin_user, monkeypatch,
+):
+    from app.models.model_config import ModelConfig
+    from app.ontologies.agent_runtime import llm_bridge
+    from app.exploration import orchestrator
+
+    db.add(ModelConfig(
+        id=str(uuid.uuid4()), name="fake-offline-model", provider="openai",
+        config_type="llm", models=["fake-model"], enabled=True,
+        created_by=admin_user.id,
+    ))
+    db.commit()
+    session = client.post(f"{BASE}/sessions", headers=auth_headers, json={}).json()["data"]
+    monkeypatch.setattr(
+        orchestrator, "search_web",
+        lambda _query: (_ for _ in ()).throw(AssertionError("offline turn must not search")),
+    )
+
+    def fake_chat(_kwargs, messages, tools):
+        assert all(tool["name"] != "web_search" for tool in tools)
+        assert "本回合未开启联网检索" in messages[0]["content"]
+        return {"content": "本回合按离线模式继续。", "tool_calls": [], "usage": None}
+
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+    response = client.post(
+        f"{BASE}/sessions/{session['id']}/chat", headers=auth_headers,
+        json={"message": "继续梳理", "webSearch": False, "stream": False},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["steps"] == []
