@@ -52,6 +52,22 @@ export interface StewardStep {
   summary: string
   durationMs: number
   error?: string
+  preview?: StewardTablePreview
+}
+
+export interface StewardTablePreview {
+  title: string
+  node?: string
+  executionId?: string
+  columns: string[]
+  rows: Record<string, string | number | boolean | null>[]
+  totalRows: number
+  shownRows: number
+  totalColumns: number
+  omittedColumns: number
+  missingColumns: string[]
+  redactedColumns: string[]
+  truncated: boolean
 }
 
 export interface StewardMessageDTO {

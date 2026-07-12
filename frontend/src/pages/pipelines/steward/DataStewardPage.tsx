@@ -14,14 +14,14 @@ import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
   CheckCircle2, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
   GitBranch, Globe, History, KeyRound, Library, Loader2, Monitor, MousePointer2,
-  Pencil, Plus, RefreshCw, Search, Send, Settings, Sparkles, Trash2, Upload,
+  Pencil, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Table2, Trash2, Upload,
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
   downloadBrowserCompanion, downloadStewardFile, stewardApi, streamStewardChat,
   type BrowserCapture, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
-  type StewardStatus, type StewardStep,
+  type StewardStatus, type StewardStep, type StewardTablePreview,
 } from '@/api/steward'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
@@ -70,6 +70,7 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
 
 const SUGGESTED = [
   '看看现在有哪些受管的 n8n 流水线',
+  '用表格展示某条流水线最近输出的前 5 条数据',
   '新建一条流水线：定时从一个 REST API 拉取 JSON 数据，整理成表格入湖',
   '帮我完善某条未发布流水线的取数与整形节点',
 ]
@@ -115,6 +116,76 @@ function Md({ text }: { text: string }) {
   )
 }
 
+function PreviewCell({ value }: { value: string | number | boolean | null }) {
+  if (value === null || value === undefined || value === '') {
+    return <span className="text-slate-300">空</span>
+  }
+  if (typeof value === 'boolean') {
+    return <span className={value ? 'text-emerald-700' : 'text-slate-500'}>{value ? '是' : '否'}</span>
+  }
+  const text = String(value)
+  return <span title={text} className="block max-w-[280px] truncate">{text}</span>
+}
+
+function OutputPreviewTable({ preview }: { preview: StewardTablePreview }) {
+  const hasRows = preview.rows.length > 0 && preview.columns.length > 0
+  return (
+    <div className="ml-7 overflow-hidden rounded-xl border border-teal-200 bg-white shadow-[0_8px_24px_-20px_rgba(15,118,110,0.5)]">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 bg-teal-50/60 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-slate-800">
+          <Table2 size={13} className="shrink-0 text-teal-700" />
+          <span className="truncate">{preview.title || '输出样例'}</span>
+        </div>
+        <span className="text-[10px] text-slate-500">
+          {preview.node ? `${preview.node} · ` : ''}{preview.shownRows}/{preview.totalRows} 行
+          {preview.totalColumns > 0 ? ` · ${preview.columns.length}/${preview.totalColumns} 列` : ''}
+        </span>
+        {preview.redactedColumns.length > 0 && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[10px] text-emerald-700">
+            <ShieldCheck size={10} /> 敏感字段已隐藏
+          </span>
+        )}
+      </div>
+      {hasRows ? (
+        <div className="max-h-[320px] overflow-auto">
+          <table className="min-w-full border-separate border-spacing-0 text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur">
+              <tr>
+                <th className="w-10 border-b border-r border-slate-200 px-2.5 py-2 text-center font-medium text-slate-400">#</th>
+                {preview.columns.map(column => (
+                  <th key={column} className="whitespace-nowrap border-b border-r border-slate-200 px-3 py-2 font-semibold text-slate-600 last:border-r-0">
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {preview.rows.map((row, rowIndex) => (
+                <tr key={rowIndex} className="odd:bg-white even:bg-slate-50/45 hover:bg-teal-50/40">
+                  <td className="border-b border-r border-slate-100 px-2.5 py-2 text-center font-mono text-[10px] text-slate-400">{rowIndex + 1}</td>
+                  {preview.columns.map(column => (
+                    <td key={column} className="whitespace-nowrap border-b border-r border-slate-100 px-3 py-2 text-slate-700 last:border-r-0">
+                      <PreviewCell value={row[column]} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="px-3 py-5 text-center text-xs text-slate-400">最近一次执行没有产生可展示的行数据</div>
+      )}
+      {(preview.truncated || preview.missingColumns.length > 0) && (
+        <div className="border-t border-slate-100 px-3 py-2 text-[10px] leading-4 text-slate-500">
+          {preview.truncated && `当前仅展示部分结果${preview.omittedColumns > 0 ? `，另有 ${preview.omittedColumns} 个字段未展开` : ''}。`}
+          {preview.missingColumns.length > 0 && ` 本次输出中未找到：${preview.missingColumns.join('、')}。`}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StepTrace({ steps, running }: { steps: StewardStep[]; running?: boolean }) {
   if (steps.length === 0 && !running) return null
   return (
@@ -123,15 +194,18 @@ function StepTrace({ steps, running }: { steps: StewardStep[]; running?: boolean
         const meta = TOOL_META[s.tool] || { label: s.tool, icon: Zap }
         const Icon = meta.icon
         return (
-          <div key={i} className="flex items-start gap-2.5">
-            <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
-              s.error ? 'bg-red-50 text-red-500' : 'bg-teal-100 text-teal-700'}`}>
-              <Icon size={11} />
+          <div key={i} className="space-y-2">
+            <div className="flex items-start gap-2.5">
+              <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
+                s.error ? 'bg-red-50 text-red-500' : 'bg-teal-100 text-teal-700'}`}>
+                <Icon size={11} />
+              </div>
+              <div className="min-w-0 text-xs leading-5">
+                <span className={`font-medium ${s.error ? 'text-red-600' : 'text-gray-800'}`}>{meta.label}</span>
+                <span className="text-slate-400"> · {s.summary}</span>
+              </div>
             </div>
-            <div className="min-w-0 text-xs leading-5">
-              <span className={`font-medium ${s.error ? 'text-red-600' : 'text-gray-800'}`}>{meta.label}</span>
-              <span className="text-slate-400"> · {s.summary}</span>
-            </div>
+            {s.preview && <OutputPreviewTable preview={s.preview} />}
           </div>
         )
       })}
@@ -322,6 +396,7 @@ export default function DataStewardPage() {
             const step: StewardStep = {
               tool: e.tool, arguments: e.arguments, summary: e.summary,
               durationMs: e.durationMs, ...(e.error ? { error: e.error } : {}),
+              ...(e.preview ? { preview: e.preview } : {}),
             }
             patchBot(m => ({ steps: [...m.steps, step] }))
           } else if (e.type === 'answer') {

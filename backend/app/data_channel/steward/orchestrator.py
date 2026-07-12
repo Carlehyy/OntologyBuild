@@ -36,6 +36,7 @@ _MAX_STEPS = 12            # 单回合最大工具步数
 
 
 _INTENT_RULES = (
+    ("preview", "预览最近输出", ("看看输出", "输出是什么", "具体输出", "输出内容", "表格", "前几条", "前几行", "样例数据")),
     ("diagnose", "诊断运行问题", ("失败", "报错", "异常", "为什么", "跑出来", "诊断", "排查")),
     ("create", "新建流水线", ("新建", "创建", "新增", "搭建一条", "做一条")),
     ("edit", "修改草稿编排", ("修改", "调整", "完善", "编排", "增加节点", "删除节点", "改一下")),
@@ -103,7 +104,7 @@ def _system_prompt(db: Session, conversation_id: str | None = None) -> str:
 1. **先识别意图再选工具**：不要把 steward_overview 当成每轮固定开场。只有用户询问“有哪些流水线、整体状态、连接健康”时才先看全景；修改指定草稿先 list_pipelines/get_workflow，诊断失败先定位流水线并 inspect_runs，新建则先澄清名称与数据来源，给 API 可先 probe_url，给页面则 browser_open → browser_state → browser_network_requests。编排任何已有工作流前必须 get_workflow，复杂节点再 describe_node 查准参数与示例。
 2. 设计先行：新建/大改前，用一段简洁文字（可用列表描述节点链路）向用户确认设计，用户同意后再调工具落地；拿不准结构就 n8n_reference('patterns') 找个验证过的骨架起步。
 3. 小步透明：每次工具调用后向用户说明做了什么、下一步是什么。工具报错时读错误信息自我修正，同一错误不要重复第三次。
-4. 自检与调错：改完用 check_workflow 静态体检（触发器/连线/Webhook 约定）、check_credentials 查凭据缺口。用户说"跑出来不对 / 为什么失败"时用 inspect_runs 读最近执行的报错与末节点数据，定位要改哪个节点。但你仍**不能**试跑或运行流水线——想看真实数据、想发布都在编辑向导完成（向导第 2 步会对未发布流水线做执行预览）；未发布流水线若没有执行记录，请让用户先在 n8n 手动跑一次再回来诊断，**绝不要**让用户自己去点 Execute/手动 curl 当作你的活。
+4. 自检、调错与输出预览：改完用 check_workflow 静态体检（触发器/连线/Webhook 约定）、check_credentials 查凭据缺口。用户说"跑出来不对 / 为什么失败"时用 inspect_runs 读最近执行的报错与末节点数据；用户说"看看输出 / 用表格展示前 N 条 / 只看某些字段"时也直接用 inspect_runs，并按要求填写 sample_limit、columns。工具会在对话中自动渲染结构化表格，最终回答只需解释数据质量和截断情况，不要重复抄整张表。但你仍**不能**触发新的试跑或运行——如果没有执行记录或用户明确要求重新执行，引导其在流水线列表或编辑向导完成试运行后再查看，绝不要让用户自己去 n8n 点 Execute 或手动 curl。
 5. 收尾引导：编排完善、体检通过后，明确告诉用户「到流水线列表，点这条流水线的编辑向导完成发布并启用」——发布不是你的动作，别揽也别漏。
 6. 诚实边界：浏览器不可达、登录未完成、接口样例不足或代理令牌/凭据未配置时要明确指出，不要伪称成功。不能创建 n8n 凭据、不能发布、不能启用/停用、不能试跑运行、不能纳管已有工作流、不能删除。
 7. 用中文回答，简洁、结构化。
@@ -146,7 +147,10 @@ def _summarize(name: str, result: dict) -> str:
     if name == "inspect_runs":
         execs = result.get("executions", [])
         err = ((result.get("latest") or {}).get("error") or {}).get("message")
-        tail = " · 最近有报错" if err else (" · 无执行记录" if not execs else "")
+        preview = result.get("preview") or {}
+        table = (f" · 展示输出 {preview.get('shownRows', 0)}/{preview.get('totalRows', 0)} 行"
+                 if preview else "")
+        tail = " · 最近有报错" if err else (" · 无执行记录" if not execs else table)
         return f"{result.get('pipeline', '')} {len(execs)} 次执行{tail}"
     if name == "check_credentials":
         ref = result.get("referenced", [])
@@ -278,8 +282,10 @@ def _run(db: Session, user, question: str,
 
             step = {"tool": tc["name"], "arguments": tc.get("arguments") or {},
                     "summary": _summarize(tc["name"], result), "durationMs": duration}
-            if "error" in result:
+            if result.get("error"):
                 step["error"] = result["error"]
+            if tc["name"] == "inspect_runs" and isinstance(result.get("preview"), dict):
+                step["preview"] = result["preview"]
             steps.append(step)
             yield {"type": "step", **step}
 

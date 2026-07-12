@@ -45,7 +45,14 @@ from app.data_channel.steward.service import StewardError
 
 logger = logging.getLogger(__name__)
 
-_EXEC_SAMPLE_ROWS = 5   # inspect_runs 回填给 LLM 的末节点样例行数
+_EXEC_SAMPLE_ROWS = 5   # inspect_runs 默认展示的末节点样例行数
+_EXEC_MAX_SAMPLE_ROWS = 20
+_EXEC_MAX_SAMPLE_COLUMNS = 12
+_EXEC_CELL_CHARS = 240
+_SENSITIVE_OUTPUT_KEY = re.compile(
+    r"(?:pass(?:word)?|secret|token|authorization|cookie|api[-_]?key|credential|private[-_]?key)",
+    re.IGNORECASE,
+)
 
 
 TOOL_DEFS: list[dict] = [
@@ -119,12 +126,18 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "inspect_runs",
-        "description": "只读诊断一条受管流水线最近的 n8n 执行：状态、报错、各节点产出行数、末节点样例数据。用户说「跑出来不对 / 为什么失败」时用它定位要改哪个节点。未发布流水线不会被平台调度，若无执行记录会提示用户先在 n8n 手动跑一次。",
+        "description": "只读诊断一条受管流水线最近的 n8n 执行：状态、报错、各节点产出行数，并把末节点真实样例作为在线表格返回。用户说「看看输出 / 展示前几条 / 用表格看字段 / 跑出来不对」时使用；可按要求指定行数和列。它不会触发新执行。未发布流水线若无执行记录，会提示用户先通过编辑向导执行预览。",
         "parameters": {
             "type": "object",
             "properties": {
                 "record_id": {"type": "string"},
                 "limit": {"type": "integer", "description": "取最近几次执行（默认 5）"},
+                "sample_limit": {"type": "integer", "description": "在线表格展示末节点前几行，默认 5，最多 20"},
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "只展示用户点名的字段，最多 12 个；不传则按输出字段顺序展示前 12 个",
+                },
             },
             "required": ["record_id"],
         },
@@ -406,6 +419,83 @@ def _validate_connections(nodes: list[dict], connections: dict) -> None:
                     tgt = (target or {}).get("node")
                     if tgt not in names:
                         raise StewardError(f"connections 引用了不存在的目标节点「{tgt}」。现有节点：{sorted(names)}")
+
+
+def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
+    """Return a bounded, JSON-safe preview value without leaking credential-shaped fields."""
+    if _SENSITIVE_OUTPUT_KEY.search(key):
+        return "[已隐藏]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= _EXEC_CELL_CHARS else value[:_EXEC_CELL_CHARS] + "…"
+    if depth >= 3:
+        return "[嵌套内容已折叠]"
+    if isinstance(value, dict):
+        safe = {str(k): _safe_output_value(v, str(k), depth + 1)
+                for k, v in list(value.items())[:24]}
+        text = json.dumps(safe, ensure_ascii=False, default=str)
+    elif isinstance(value, list):
+        safe = [_safe_output_value(item, "", depth + 1) for item in value[:20]]
+        text = json.dumps(safe, ensure_ascii=False, default=str)
+    else:
+        text = str(value)
+    return text if len(text) <= _EXEC_CELL_CHARS else text[:_EXEC_CELL_CHARS] + "…"
+
+
+def _execution_table_preview(items: list, sample_limit: int | None = None,
+                             columns: list[str] | None = None) -> dict:
+    """Build the small structured table exposed to the browser and the LLM."""
+    if columns is not None and not isinstance(columns, list):
+        raise StewardError("columns 必须是字段名数组。")
+    try:
+        requested_limit = _EXEC_SAMPLE_ROWS if sample_limit is None else int(sample_limit)
+    except (TypeError, ValueError):
+        raise StewardError(f"sample_limit 必须是 1 到 {_EXEC_MAX_SAMPLE_ROWS} 的整数。")
+    if requested_limit < 1:
+        raise StewardError(f"sample_limit 必须是 1 到 {_EXEC_MAX_SAMPLE_ROWS} 的整数。")
+    row_limit = min(requested_limit, _EXEC_MAX_SAMPLE_ROWS)
+
+    raw_rows: list[dict[str, Any]] = []
+    for item in items:
+        value = item.get("json") if isinstance(item, dict) and isinstance(item.get("json"), dict) else item
+        raw_rows.append(value if isinstance(value, dict) else {"value": value})
+
+    available: list[str] = []
+    for row in raw_rows:
+        for key in row:
+            name = str(key)
+            if name not in available:
+                available.append(name)
+
+    requested = []
+    for column in columns or []:
+        name = str(column).strip()
+        if name and name not in requested:
+            requested.append(name)
+    if len(requested) > _EXEC_MAX_SAMPLE_COLUMNS:
+        requested = requested[:_EXEC_MAX_SAMPLE_COLUMNS]
+
+    selected = requested or available[:_EXEC_MAX_SAMPLE_COLUMNS]
+    missing = [column for column in selected if column not in available]
+    selected = [column for column in selected if column in available]
+    safe_rows = [
+        {column: _safe_output_value(row.get(column), column) for column in selected}
+        for row in raw_rows[:row_limit]
+    ]
+    redacted = [column for column in selected if _SENSITIVE_OUTPUT_KEY.search(column)]
+    return {
+        "title": "最近一次执行输出",
+        "columns": selected,
+        "rows": safe_rows,
+        "totalRows": len(raw_rows),
+        "shownRows": len(safe_rows),
+        "totalColumns": len(available),
+        "omittedColumns": max(0, len(available) - len(selected)),
+        "missingColumns": missing,
+        "redactedColumns": redacted,
+        "truncated": len(raw_rows) > len(safe_rows) or len(available) > len(selected),
+    }
 
 
 def _execution_brief(e: dict) -> dict:
@@ -820,14 +910,16 @@ class ToolRunner:
 
     # ── 只读诊断（服务编排质量，无副作用） ────────────────────────────
 
-    def tool_inspect_runs(self, record_id: str, limit: int | None = None) -> dict:
+    def tool_inspect_runs(self, record_id: str, limit: int | None = None,
+                          sample_limit: int | None = None,
+                          columns: list[str] | None = None) -> dict:
         rec = service.require_record(self.db, record_id)
         execs = self.client.list_executions(workflow_id=rec.n8n_workflow_id, limit=limit or 5)
         out: dict[str, Any] = {"pipeline": rec.name,
                                "executions": [_execution_brief(e) for e in execs]}
         if not execs:
             out["note"] = ("这条流水线还没有执行记录（未发布不会被平台调度）。"
-                           "想诊断可在 n8n 界面手动执行它一次，再回来看。")
+                           "请先在流水线列表或编辑向导完成一次试运行，再回来查看输出。")
             return out
         # 展开最近一次的细节：报错 / 各节点行数 / 末节点样例
         latest = self.client.get_execution(str(execs[0].get("id")), include_data=True)
@@ -852,11 +944,17 @@ class ToolRunner:
         detail["nodeItemCounts"] = counts
         last = detail.get("lastNode")
         if last and last in run_data:
+            items = None
             try:
                 items = ((run_data[last][-1].get("data") or {}).get("main") or [[]])[0] or []
-                detail["lastNodeSample"] = [it.get("json") for it in items[:_EXEC_SAMPLE_ROWS]]
             except Exception:  # noqa: BLE001
-                pass
+                logger.exception("failed to read last-node execution output")
+            if items is not None:
+                preview = _execution_table_preview(items, sample_limit, columns)
+                preview["node"] = last
+                preview["executionId"] = str(execs[0].get("id") or "")
+                detail["lastNodeSample"] = preview["rows"]
+                out["preview"] = preview
         out["latest"] = detail
         return out
 

@@ -35,6 +35,7 @@ def test_steward_intent_router_does_not_default_every_turn_to_overview():
     assert classify_steward_intent("现在有哪些流水线")["code"] == "inventory"
     assert classify_steward_intent("帮我修改订单流水线的整形节点")["code"] == "edit"
     assert classify_steward_intent("为什么昨晚执行失败")["code"] == "diagnose"
+    assert classify_steward_intent("用表格看看最近输出的前十条")["code"] == "preview"
     assert classify_steward_intent("你好，先聊聊需求")["code"] == "consult"
 
 
@@ -1176,7 +1177,7 @@ def test_inspect_runs_reads_latest_execution(db, fake_n8n, draft_record):
     """只读诊断：无记录给提示；有记录展开最近一次的报错/节点行数/末节点样例。"""
     runner = ToolRunner(db, None, None)
     empty = runner.run("inspect_runs", {"record_id": draft_record.id})
-    assert empty["executions"] == [] and "手动执行" in empty["note"]
+    assert empty["executions"] == [] and "编辑向导" in empty["note"]
 
     fake_n8n._executions = [{
         "id": "e1", "status": "error", "startedAt": "t1", "stoppedAt": "t2",
@@ -1192,6 +1193,53 @@ def test_inspect_runs_reads_latest_execution(db, fake_n8n, draft_record):
     assert out["latest"]["error"]["message"] == "boom" and out["latest"]["error"]["node"] == "拉取"
     assert out["latest"]["nodeItemCounts"]["整理字段"] == 2
     assert out["latest"]["lastNodeSample"] == [{"a": 1}, {"a": 2}]
+    assert out["preview"] == {
+        "title": "最近一次执行输出",
+        "columns": ["a"],
+        "rows": [{"a": 1}, {"a": 2}],
+        "totalRows": 2,
+        "shownRows": 2,
+        "totalColumns": 1,
+        "omittedColumns": 0,
+        "missingColumns": [],
+        "redactedColumns": [],
+        "truncated": False,
+        "node": "整理字段",
+        "executionId": "e1",
+    }
+
+
+def test_inspect_runs_table_preview_limits_columns_and_redacts_secrets(db, fake_n8n, draft_record):
+    """在线预览按用户要求裁行/选列，并在送到浏览器和 LLM 前隐藏凭据形字段。"""
+    fake_n8n._executions = [{
+        "id": "e-preview", "status": "success", "startedAt": "t1", "stoppedAt": "t2",
+        "data": {"resultData": {
+            "lastNodeExecuted": "输出",
+            "runData": {"输出": [{"data": {"main": [[
+                {"json": {"title": "第一条", "score": 99, "access_token": "raw-secret",
+                          "metadata": {"cookie": "session-secret", "source": "api"}}},
+                {"json": {"title": "第二条", "score": 88, "access_token": "raw-secret-2"}},
+                {"json": {"title": "第三条", "score": 77, "access_token": "raw-secret-3"}},
+            ]]}}]},
+        }},
+    }]
+
+    out = ToolRunner(db, None, None).run("inspect_runs", {
+        "record_id": draft_record.id,
+        "sample_limit": 2,
+        "columns": ["title", "access_token", "metadata", "missing"],
+    })
+    preview = out["preview"]
+    assert preview["shownRows"] == 2 and preview["totalRows"] == 3 and preview["truncated"] is True
+    assert preview["columns"] == ["title", "access_token", "metadata"]
+    assert preview["missingColumns"] == ["missing"]
+    assert preview["redactedColumns"] == ["access_token"]
+    assert preview["rows"][0]["access_token"] == "[已隐藏]"
+    assert "session-secret" not in json.dumps(out, ensure_ascii=False)
+    invalid = ToolRunner(db, None, None).run("inspect_runs", {
+        "record_id": draft_record.id, "sample_limit": 0,
+    })
+    assert "sample_limit" in invalid["error"]
 
 
 def test_check_credentials_flags_missing_and_present(db, fake_n8n, draft_record):
