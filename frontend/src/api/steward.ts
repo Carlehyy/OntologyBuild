@@ -116,6 +116,13 @@ export interface StewardArtifact {
   createdAt: string
 }
 
+export interface StewardFilePreview {
+  file: StewardArtifact
+  content: string
+  truncated: boolean
+  previewable: boolean
+}
+
 export interface BrowserCapture {
   id: string
   method: string
@@ -151,6 +158,8 @@ export const stewardApi = {
     apiClientV2.post<StewardConversationDTO>('/steward/conversations', { title }),
   files: (cid: string) =>
     apiClientV2.get<StewardArtifact[]>(`/steward/conversations/${cid}/files`),
+  filePreview: (cid: string, artifactId: string) =>
+    apiClientV2.get<StewardFilePreview>(`/steward/conversations/${cid}/files/${artifactId}/preview`),
   uploadFile: (cid: string, file: File) => {
     const form = new FormData()
     form.append('file', file)
@@ -223,6 +232,15 @@ export async function downloadStewardFile(
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+export async function getStewardFileBlob(cid: string, artifactId: string): Promise<Blob> {
+  const token = localStorage.getItem('token') || ''
+  const resp = await fetch(`${apiRoot()}/steward/conversations/${cid}/files/${artifactId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!resp.ok) throw new Error(`文件预览加载失败 (${resp.status})`)
+  return resp.blob()
 }
 
 // ---------- SSE 流式 chat ----------

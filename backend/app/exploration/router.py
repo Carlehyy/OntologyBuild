@@ -249,6 +249,25 @@ def get_workspace_text_file(session_id: str, attachment_id: str,
         sha256=row.sha256).model_dump(by_alias=True))
 
 
+@router.get("/sessions/{session_id}/attachments/{attachment_id}/preview")
+def preview_workspace_file(session_id: str, attachment_id: str,
+                           db: Session = Depends(get_db),
+                           current_user=Depends(get_current_user)):
+    """预览常见文件：文本读取原文，Office/PDF 等返回确定性抽取文本。"""
+    s = _require_session(db, session_id, current_user)
+    row = W.require_file(db, s.id, attachment_id)
+    content = W.read_text(row) if row.editable else (row.extracted_text or "")
+    return _ok(S.WorkspacePreviewOut(
+        id=row.id,
+        relative_path=row.relative_path or row.filename,
+        content=content,
+        version=row.version or 1,
+        mime_type=row.mime_type,
+        editable=bool(row.editable),
+        truncated=(row.char_count or 0) > len(content),
+    ).model_dump(by_alias=True))
+
+
 @router.put("/sessions/{session_id}/attachments/{attachment_id}/content")
 def update_workspace_text_file(session_id: str, attachment_id: str,
                                body: S.WorkspaceTextUpdate,

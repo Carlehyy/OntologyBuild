@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Plus, Search, Play, GitBranch, Trash2, Pencil,
+  Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, Sparkles, ExternalLink,
-  ShieldCheck, Workflow, Eye,
+  Eye,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
@@ -71,6 +71,9 @@ export default function PipelineListPage() {
   const [filterSource, setFilterSource] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterEnabled, setFilterEnabled] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [total, setTotal] = useState(0)
   const [pageError, setPageError] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
@@ -81,19 +84,31 @@ export default function PipelineListPage() {
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     setPageError('')
-    pipelinesApi.list({ search })
-      .then(res => setPipelines(Array.isArray(res) ? res : []))
+    pipelinesApi.listPage({
+      search: search || undefined,
+      engine: filterSource || undefined,
+      status: filterStatus || undefined,
+      enabled: filterEnabled ? filterEnabled === 'enabled' : undefined,
+      page,
+      page_size: pageSize,
+    })
+      .then(res => {
+        setPipelines(Array.isArray(res.items) ? res.items : [])
+        setTotal(res.total || 0)
+        if (page > 1 && res.items.length === 0 && res.total > 0) setPage(page - 1)
+      })
       .catch(() => {
         setPipelines([])
+        setTotal(0)
         setPageError('流水线列表加载失败，请检查服务连接后重试。')
       })
       .finally(() => setLoading(false))
-  }
+  }, [filterEnabled, filterSource, filterStatus, page, pageSize, search])
 
-  useEffect(() => { load() }, [search])
+  useEffect(() => { load() }, [load])
 
   useEffect(() => {
     stewardApi.status().then(s => setN8nApiUrl(s.n8n.api_url)).catch(() => {})
@@ -131,42 +146,81 @@ export default function PipelineListPage() {
     }
   }
 
-  const filtered = pipelines.filter(p => {
-    const source = isN8nPipeline(p) ? 'n8n' : 'canvas'
-    if (filterSource && source !== filterSource) return false
-    if (filterStatus && normStatus(p.status) !== filterStatus) return false
-    const enabled = p.enabled ?? true
-    if (filterEnabled === 'enabled' && !enabled) return false
-    if (filterEnabled === 'disabled' && enabled) return false
-    if (search) {
-      const q = search.toLowerCase()
-      return p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
-    }
-    return true
-  })
-
-  const n8nPipelines = pipelines.filter(isN8nPipeline)
-  const publishedCount = n8nPipelines.filter(p => normStatus(p.status) === 'published').length
-  const enabledCount = n8nPipelines.filter(p => normStatus(p.status) === 'published' && (p.enabled ?? true)).length
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const resetFilters = () => {
+    setSearch('')
+    setFilterSource('')
+    setFilterStatus('')
+    setFilterEnabled('')
+    setPage(1)
+  }
+  const refreshFirstPage = () => {
+    if (page === 1) load()
+    else setPage(1)
+  }
 
   return (
     <div className="space-y-4 pb-4">
-      <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-[0_8px_30px_rgba(15,23,42,0.04)] lg:flex-row lg:items-center">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-700 text-white"><Workflow size={17} /></span>
-            <div>
-              <h1 className="text-base font-semibold tracking-tight text-slate-950">数据流水线</h1>
-              <p className="mt-0.5 text-xs text-slate-500">编排、验证并发布可审计的 n8n 数据处理版本</p>
-            </div>
-          </div>
+      {pageError && (
+        <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <XCircle size={15} className="mt-0.5 shrink-0" />
+          <span className="flex-1">{pageError}</span>
+          <button onClick={() => setPageError('')} aria-label="关闭错误提示" className="text-red-400 hover:text-red-700"><X size={14} /></button>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-slate-600">n8n <b className="font-semibold text-slate-900">{n8nPipelines.length}</b></span>
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-teal-800"><ShieldCheck size={12} /> 已发布 <b>{publishedCount}</b></span>
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-emerald-800">运行中 <b>{enabledCount}</b></span>
+      )}
+
+      {/* 搜索、筛选、操作按钮 */}
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
+        <div className="relative w-full sm:w-64 xl:min-w-0 xl:flex-1">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(1) }}
+            placeholder="搜索名称 / ID..."
+            className="w-full rounded-xl border border-slate-200 py-2 pl-8 pr-3 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+          />
+          {search && (
+            <button onClick={() => { setSearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
+              <X size={12} />
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <select
+          value={filterSource}
+          onChange={e => { setFilterSource(e.target.value); setPage(1) }}
+          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
+        >
+          <option value="">全部来源</option>
+          <option value="canvas">系统自定义</option>
+          <option value="n8n">n8n 流水线</option>
+        </select>
+        <select
+          value={filterStatus}
+          onChange={e => { setFilterStatus(e.target.value); setPage(1) }}
+          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
+        >
+          <option value="">全部发布状态</option>
+          <option value="published">已发布</option>
+          <option value="draft">未发布</option>
+        </select>
+        <select
+          value={filterEnabled}
+          onChange={e => { setFilterEnabled(e.target.value); setPage(1) }}
+          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
+        >
+          <option value="">全部启用状态</option>
+          <option value="enabled">已启用</option>
+          <option value="disabled">未启用</option>
+        </select>
+        {(search || filterSource || filterStatus || filterEnabled) && (
+          <button
+            onClick={resetFilters}
+            className="shrink-0 px-2 py-1 text-xs text-gray-500 hover:text-black"
+          >
+            清除筛选
+          </button>
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <button
             onClick={() => navigate('/data/pipelines/steward')}
             className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-2 text-sm font-medium text-teal-800 transition hover:bg-teal-100 active:translate-y-px"
@@ -183,75 +237,13 @@ export default function PipelineListPage() {
         </div>
       </div>
 
-      {pageError && (
-        <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <XCircle size={15} className="mt-0.5 shrink-0" />
-          <span className="flex-1">{pageError}</span>
-          <button onClick={() => setPageError('')} aria-label="关闭错误提示" className="text-red-400 hover:text-red-700"><X size={14} /></button>
-        </div>
-      )}
-
-      {/* 搜索、筛选、操作按钮 */}
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-        <div className="relative w-72">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="搜索名称 / ID..."
-            className="w-full rounded-xl border border-slate-200 py-2 pl-8 pr-3 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
-          />
-          {search && (
-            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        <select
-          value={filterSource}
-          onChange={e => setFilterSource(e.target.value)}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
-        >
-          <option value="">全部来源</option>
-          <option value="canvas">系统自定义</option>
-          <option value="n8n">n8n 流水线</option>
-        </select>
-        <select
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value)}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
-        >
-          <option value="">全部发布状态</option>
-          <option value="published">已发布</option>
-          <option value="draft">未发布</option>
-        </select>
-        <select
-          value={filterEnabled}
-          onChange={e => setFilterEnabled(e.target.value)}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
-        >
-          <option value="">全部启用状态</option>
-          <option value="enabled">已启用</option>
-          <option value="disabled">未启用</option>
-        </select>
-        {(search || filterSource || filterStatus || filterEnabled) && (
-          <button
-            onClick={() => { setSearch(''); setFilterSource(''); setFilterStatus(''); setFilterEnabled('') }}
-            className="text-xs text-gray-500 hover:text-black px-2 py-1"
-          >
-            清除筛选
-          </button>
-        )}
-        <span className="ml-auto text-xs text-slate-400">共 {filtered.length} 条结果</span>
-      </div>
-
       {/* 列表 */}
       {loading ? (
         <div className="text-gray-400 text-sm p-8 text-center">加载中...</div>
-      ) : filtered.length === 0 ? (
+      ) : pipelines.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <GitBranch size={32} className="mx-auto opacity-30" />
-          <p className="text-sm font-medium">{search || filterSource || filterEnabled ? '没有匹配的流水线' : '暂无流水线'}</p>
+          <p className="text-sm font-medium">{search || filterSource || filterStatus || filterEnabled ? '没有匹配的流水线' : '暂无流水线'}</p>
           <p className="text-xs">新建 n8n 流水线后，可到数据管家完善编排，再通过编辑向导验证并发布</p>
         </div>
       ) : (
@@ -271,7 +263,7 @@ export default function PipelineListPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {filtered.map(pl => {
+              {pipelines.map(pl => {
                 const runMeta = pl.last_run_status ? RUN_STATUS_META[pl.last_run_status] : null
                 const runFailed = pl.last_run_status === 'failed' && !!pl.last_run_error
                 const curatedCount = pl.target_curated_ids?.length ?? 0
@@ -347,8 +339,8 @@ export default function PipelineListPage() {
                       {curatedCount > 0 ? (
                         <button
                           onClick={() => navigate(`/data/structured?pipeline=${encodeURIComponent(pl.name)}`)}
-                          className="inline-flex items-center gap-1 text-xs text-[var(--color-nav-bg)] hover:underline"
-                          title="在资产湖查看该流水线的产物数据集"
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-nav-bg)] transition-colors hover:bg-teal-50 hover:text-teal-800"
+                          title="点击查看数据集内容"
                         >
                           <Table2 size={12} /> {curatedCount} 个数据集
                         </button>
@@ -404,6 +396,41 @@ export default function PipelineListPage() {
               })}
             </tbody>
           </table>
+          <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
+            <label className="flex items-center gap-1.5 text-xs text-slate-500">
+              每页
+              <select
+                value={pageSize}
+                onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
+                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                aria-label="每页显示条数"
+              >
+                {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
+              </select>
+              条
+            </label>
+            <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPage(current => Math.max(1, current - 1))}
+                disabled={page <= 1}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="上一页"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage(current => Math.min(totalPages, current + 1))}
+                disabled={page >= totalPages}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="下一页"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -431,13 +458,13 @@ export default function PipelineListPage() {
           onClose={() => setShowCreate(false)}
           onCreated={(_pl) => {
             setShowCreate(false)
-            load()
+            refreshFirstPage()
           }}
           onN8nCreated={() => {
             // 创建即在列表登记为未发布——留在列表让用户看到新行；
             // 编排完善随时进数据管家，发布在本列表的编辑向导
             setShowCreate(false)
-            load()
+            refreshFirstPage()
           }}
         />
       )}

@@ -1,7 +1,8 @@
 """v2 Dataset API"""
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.deps import get_current_user, require_admin
@@ -449,19 +450,47 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
 
 
 @router.get("/overview")
-def datasets_overview(db: Session = Depends(get_db)):
-    """原始数据集总览（资产湖用）：版本、行数、来源、消费流水线"""
-    from app.models.v2.dataset import DatasetVersion
+def datasets_overview(
+    source: str = "",
+    sort_by: str = "updated_at",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    paginated: bool = False,
+    db: Session = Depends(get_db),
+):
+    """原始数据集总览；人工资产可按创建时间倒序分页。"""
+    from app.models.v2.dataset import Dataset, DatasetVersion
     from app.models.v2.connection import Connection
 
-    svc = DatasetService(db)
-    datasets = [d for d in svc.list_datasets() if d.kind != "curated"]
+    q = db.query(Dataset).filter(Dataset.kind != "curated")
+    if source == "manual":
+        # “人工数据集”同时包含文件上传和在线创建，排除历史同步资产。
+        q = q.filter(
+            Dataset.source_connection_id.is_(None),
+            ~Dataset.name.startswith("SYNC::"),
+        )
+    elif source == "sync":
+        q = q.filter(or_(
+            Dataset.source_connection_id.is_not(None),
+            Dataset.name.startswith("SYNC::"),
+        ))
+    total = q.count()
+    order_column = Dataset.created_at if sort_by == "created_at" else Dataset.updated_at
+    ordered = q.order_by(order_column.desc(), Dataset.id.desc())
+    datasets = (ordered.offset((page - 1) * page_size).limit(page_size).all()
+                if paginated else ordered.all())
     consumer_map = _consumer_map(db)
     conn_names = {c.id: c.name for c in db.query(Connection).all()}
 
     # 一次取全部版本，避免 N+1
     versions_by_ds: dict[str, list[DatasetVersion]] = {}
-    for v in db.query(DatasetVersion).order_by(DatasetVersion.version_no).all():
+    dataset_ids = [dataset.id for dataset in datasets]
+    version_query = db.query(DatasetVersion)
+    if dataset_ids:
+        version_query = version_query.filter(DatasetVersion.dataset_id.in_(dataset_ids))
+    else:
+        version_query = version_query.filter(False)
+    for v in version_query.order_by(DatasetVersion.version_no).all():
         versions_by_ds.setdefault(v.dataset_id, []).append(v)
 
     items = []
@@ -486,8 +515,12 @@ def datasets_overview(db: Session = Depends(get_db)):
             "created_at": ds.created_at.isoformat() if ds.created_at else None,
             "updated_at": ds.updated_at.isoformat() if ds.updated_at else None,
         })
-    items.sort(key=lambda x: x["updated_at"] or "", reverse=True)
-    return {"items": items, "total": len(items)}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/{dataset_id}/consumers")

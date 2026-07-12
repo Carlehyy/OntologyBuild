@@ -298,6 +298,16 @@ export interface BxWorkspaceText {
   sha256?: string | null
 }
 
+export interface BxWorkspacePreview {
+  id: string
+  relativePath: string
+  content: string
+  version: number
+  mimeType?: string | null
+  editable: boolean
+  truncated: boolean
+}
+
 // ---------- REST ----------
 
 export const explorationApi = {
@@ -348,6 +358,8 @@ export const explorationApi = {
     }),
   attachmentContent: (sid: string, aid: string) =>
     apiClientV2.get<BxWorkspaceText>(`/exploration/sessions/${sid}/attachments/${aid}/content`),
+  attachmentPreview: (sid: string, aid: string) =>
+    apiClientV2.get<BxWorkspacePreview>(`/exploration/sessions/${sid}/attachments/${aid}/preview`),
   createWorkspaceText: (sid: string, body: { path: string; content: string; mimeType?: string }) =>
     apiClientV2.post<BxAttachment>(`/exploration/sessions/${sid}/workspace/files`, body),
   updateWorkspaceText: (sid: string, aid: string, body: { content: string; expectedVersion: number }) =>

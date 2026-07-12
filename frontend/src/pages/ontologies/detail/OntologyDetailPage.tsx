@@ -19,7 +19,7 @@ import {
 
 /* ═════════════════════════════════════════════════════════════
    信息架构（按用户操作旅程重组，五段式）：
-   ① 总览      —— 进来先看懂"这本体是什么、健康吗"
+   ① 本体总览  —— 进来先看懂"这本体是什么、健康吗"
    ② 本体结构  —— 展示现有本体的对象实体/关系/动作/函数结构；主入口=图谱编辑器
    ③ 数据映射  —— 把 curated 数据集绑定灌入已有对象实体（先建模、再灌数据）
    ④ 实例数据  —— 真实数据进来了吗、长啥样（formal 实例的当前态投影）
@@ -33,7 +33,7 @@ interface GroupDef {
 }
 
 const GROUPS: GroupDef[] = [
-  { key: 'overview', label: '总览' },
+  { key: 'overview', label: '本体总览' },
   { key: 'design', label: '本体结构' },
   { key: 'data-mapping', label: '数据映射' },
   { key: 'data', label: '实例数据' },
@@ -102,12 +102,12 @@ export default function OntologyDetailPage() {
   return (
     <div className="onto-glass-root space-y-4">
       {/* ═══ 功能导航与低频操作 ═══ */}
-      <div className="onto-glass-header flex items-center justify-between gap-3 px-4 py-3">
+      <div className="onto-glass-header flex items-center justify-between gap-3 px-5 py-4">
         <div className="min-w-0 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-          <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+          <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
             <div
               aria-hidden="true"
-              className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+              className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-teal-600 shadow-sm transition-all duration-300 ease-out"
               style={{ left: `${indicatorPos.left}px`, width: `${indicatorPos.width}px` }}
             />
             {GROUPS.map(group => {
@@ -119,7 +119,7 @@ export default function OntologyDetailPage() {
                   data-tab-value={group.key}
                   aria-pressed={isActive}
                   onClick={() => selectGroup(group.key)}
-                  className={`relative z-10 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-1 ${
+                  className={`relative z-10 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-1 ${
                     isActive ? 'text-white' : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
@@ -134,20 +134,20 @@ export default function OntologyDetailPage() {
           <button
             type="button"
             onClick={() => setShowVersionModal(true)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
             title="历史版本"
             aria-label="查看历史版本"
           >
-            <History size={16} />
+            <History size={18} />
           </button>
           <button
             type="button"
             onClick={() => setExportOpen(true)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
             title="导出本体结构"
             aria-label="导出本体结构"
           >
-            <Download size={16} />
+            <Download size={18} />
           </button>
         </div>
       </div>

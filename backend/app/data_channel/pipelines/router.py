@@ -2,6 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
@@ -253,14 +254,23 @@ def create_pipeline(
     return _format_pipeline(pl)
 
 
-@router.get("", response_model=list[dict])
+@router.get("")
 def list_pipelines(
     search: str = "",
     domain: str = "",
     status: str = "",
+    engine: str = "",
+    enabled: Optional[bool] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    paginated: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Pipeline 列表，支持按名称/ID/域/状态搜索。"""
+    """Pipeline 列表：按创建时间倒序，可选服务端分页。
+
+    ``paginated=false`` 保留原有数组返回，兼容其他消费页面；列表工作台
+    显式传 ``paginated=true`` 获取 items/total/page/page_size。
+    """
     q = db.query(Pipeline)
     if search:
         q = q.filter(
@@ -268,13 +278,30 @@ def list_pipelines(
         )
     if domain:
         q = q.filter(Pipeline.domain == domain)
+    if engine in {"n8n", "canvas"}:
+        engine_value = Pipeline.definition["engine"].as_string()
+        if engine == "n8n":
+            q = q.filter(engine_value == "n8n")
+        else:
+            q = q.filter(or_(
+                Pipeline.definition.is_(None),
+                engine_value.is_(None),
+                engine_value != "n8n",
+            ))
+    if enabled is not None:
+        q = q.filter(Pipeline.enabled.is_(enabled))
     if status:
         q = q.filter(Pipeline.status == status)
     else:
         # 归档保留身份、发布快照与运行审计，但不再出现在日常工作列表；
         # 审计查询仍可显式传 status=archived 查看。
         q = q.filter(Pipeline.status != "archived")
-    q = q.order_by(Pipeline.updated_at.desc()).limit(100)
+    total = q.count()
+    q = q.order_by(Pipeline.created_at.desc(), Pipeline.id.desc())
+    if paginated:
+        q = q.offset((page - 1) * page_size).limit(page_size)
+    else:
+        q = q.limit(100)
     results = []
     for pl in q:
         d = _format_pipeline(pl)
@@ -298,6 +325,13 @@ def list_pipelines(
             )
             d["last_run_error"] = last_run.error_log or ""
         results.append(d)
+    if paginated:
+        return {
+            "items": results,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
     return results
 
 

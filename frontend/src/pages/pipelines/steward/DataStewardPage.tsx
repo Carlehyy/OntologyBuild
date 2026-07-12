@@ -4,7 +4,7 @@
  * 对 n8n 的写权限只有两件事：新建流水线与编排未发布未启用的流水线；
  * 另可在当前会话隔离空间内创建、编辑和删除文件。
  * 左侧：与数据管家对话（create_pipeline 新建骨架、update_workflow 补全编排）
- * 右侧：可编排草稿看板（状态与节点链）；发布后永久封版，只能停用或归档。
+ * 右侧：可编排流水线看板（只展示未发布、未启用的 n8n 流水线）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -18,7 +18,7 @@ import {
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
-  downloadBrowserCompanion, downloadStewardFile, stewardApi, streamStewardChat,
+  downloadBrowserCompanion, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
   type BrowserCapture, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep, type StewardTablePreview,
@@ -69,10 +69,8 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
 }
 
 const SUGGESTED = [
-  '看看现在有哪些受管的 n8n 流水线',
-  '用表格展示某条流水线最近输出的前 5 条数据',
-  '新建一条流水线：定时从一个 REST API 拉取 JSON 数据，整理成表格入湖',
-  '帮我完善某条未发布流水线的取数与整形节点',
+  '帮我执行指定n8n流水线并展示结果',
+  '新建一条n8n流水线并进行托管',
 ]
 
 interface ChatMsg {
@@ -455,7 +453,7 @@ export default function DataStewardPage() {
       )}
 
       {/* 主体：对话 + 草稿面板（窄屏纵向堆叠） */}
-      <div ref={chatContainerRef} className="flex min-h-0 flex-1 gap-2 p-2 max-xl:flex-col">
+      <div ref={chatContainerRef} className="flex min-h-0 flex-1 gap-0 p-1 max-xl:flex-col max-xl:gap-1">
         {/* 对话区 */}
         <section style={isWide ? { width: `${chatWidthPct}%` } : undefined}
           className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] max-xl:min-h-[55%] max-xl:w-full">
@@ -466,28 +464,19 @@ export default function DataStewardPage() {
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-700 text-white"><Sparkles size={14} /></span>
                 数据管家
               </h2>
-              <p className="mt-1 pl-9 text-[11px] text-slate-400">先识别意图，再按需读取、诊断或编排</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button onClick={openFiles}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50">
+                className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700 transition hover:bg-amber-100">
                 <FolderOpen size={13} /> 会话文件
               </button>
               <button onClick={openBrowser}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-teal-200 rounded-lg text-xs text-teal-700 hover:bg-teal-50">
+                className="flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-700 transition hover:bg-sky-100">
                 <Monitor size={13} /> 实时浏览器
               </button>
-              <button onClick={() => navigate('/data/pipelines')}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50">
-                <ArrowLeft size={13} /> 返回流水线
-              </button>
               <button onClick={() => { loadConversations(); setShowHistory(true) }}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50">
-                <History size={13} /> 会话
-              </button>
-              <button onClick={resetChat}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-teal-600 text-white text-xs font-medium rounded-lg hover:bg-teal-700">
-                <Plus size={13} /> 新会话
+                className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs text-violet-700 transition hover:bg-violet-100">
+                <History size={13} /> 历史会话
               </button>
             </div>
           </div>
@@ -499,8 +488,7 @@ export default function DataStewardPage() {
                 </div>
                 <h2 className="text-base font-semibold text-gray-900">让数据管家替你编排流水线</h2>
                 <p className="mt-1.5 max-w-md text-sm leading-relaxed text-gray-500">
-                  描述数据从哪来、怎么加工、多久跑一次，数据管家会在 n8n 里搭好工作流并录入流水线列表。
-                  编排满意后，到流水线列表的编辑向导中发布并启用。
+                  数据管家Agent可以帮助您托管和编排流水线
                 </p>
                 <div className="mt-5 flex flex-wrap justify-center gap-2">
                   {SUGGESTED.map(q => (
@@ -546,7 +534,7 @@ export default function DataStewardPage() {
             )}
           </div>
 
-          <div className="border-t border-slate-100 bg-white px-4 py-3.5">
+          <div className="bg-white px-4 py-3.5">
             <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white py-2 pl-3.5 pr-2 shadow-sm transition focus-within:border-teal-500 focus-within:ring-4 focus-within:ring-teal-500/10">
               <input
                 placeholder={n8nReady ? '描述你要的数据流水线，或让管家检查/修改现有流水线…' : '请先完成 n8n 配置'}
@@ -568,7 +556,7 @@ export default function DataStewardPage() {
         {/* 拖拽分隔条（仅宽屏，拖动调整对话区与受管流水线面板宽度） */}
         <div
           onMouseDown={startResize}
-          className="hidden shrink-0 cursor-col-resize items-center justify-center xl:flex"
+          className="hidden w-1 shrink-0 cursor-col-resize items-center justify-center xl:flex"
         >
           <div className="h-16 w-1 rounded-full bg-slate-200 transition-all hover:h-24 hover:bg-teal-400" />
         </div>
@@ -580,6 +568,7 @@ export default function DataStewardPage() {
           expandedId={expandedId}
           onExpand={setExpandedId}
           onChanged={() => { loadRecords(); loadStatus() }}
+          onBack={() => navigate('/data/pipelines')}
           n8nApiUrl={n8nApiUrl}
           onOpenWizard={(pipelineId: string) => {
             pipelinesApi.get(pipelineId).then(setEditTarget).catch(() => {})
@@ -655,17 +644,33 @@ function errorText(error: unknown, fallback: string): string {
   return fallback
 }
 
+type WorkspacePreview = {
+  kind: 'empty' | 'loading' | 'text' | 'image' | 'pdf' | 'unsupported' | 'error'
+  text?: string
+  url?: string
+  message?: string
+  truncated?: boolean
+}
+
 function WorkspaceModal({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
   const [files, setFiles] = useState<StewardArtifact[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [preview, setPreview] = useState<WorkspacePreview>({ kind: 'empty' })
   const inputRef = useRef<HTMLInputElement>(null)
 
   const reload = useCallback(() => {
     setLoading(true)
     return stewardApi.files(conversationId)
-      .then(rows => setFiles(Array.isArray(rows) ? rows : []))
+      .then(rows => {
+        const nextFiles = Array.isArray(rows) ? rows : []
+        setFiles(nextFiles)
+        setSelectedId(current => current && nextFiles.some(file => file.id === current)
+          ? current
+          : nextFiles[0]?.id || null)
+      })
       .catch(err => setError(errorText(err, '会话文件加载失败')))
       .finally(() => setLoading(false))
   }, [conversationId])
@@ -674,6 +679,52 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
     const timer = window.setTimeout(() => void reload(), 0)
     return () => window.clearTimeout(timer)
   }, [reload])
+
+  const selectedFile = files.find(file => file.id === selectedId) || null
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setPreview({ kind: 'empty' })
+      return
+    }
+    let cancelled = false
+    let objectUrl = ''
+    const loadPreview = async () => {
+      setPreview({ kind: 'loading' })
+      try {
+        const mime = (selectedFile.mimeType || '').toLowerCase()
+        if (mime.startsWith('image/')) {
+          const blob = await getStewardFileBlob(conversationId, selectedFile.id)
+          objectUrl = URL.createObjectURL(blob)
+          if (!cancelled) setPreview({ kind: 'image', url: objectUrl })
+          return
+        }
+        if (mime === 'application/pdf' || selectedFile.filename.toLowerCase().endsWith('.pdf')) {
+          const blob = await getStewardFileBlob(conversationId, selectedFile.id)
+          objectUrl = URL.createObjectURL(blob)
+          if (!cancelled) setPreview({ kind: 'pdf', url: objectUrl })
+          return
+        }
+        const result = await stewardApi.filePreview(conversationId, selectedFile.id)
+        if (cancelled) return
+        if (result.content) {
+          setPreview({ kind: 'text', text: result.content, truncated: result.truncated })
+        } else {
+          setPreview({
+            kind: 'unsupported',
+            message: selectedFile.extractError || '此文件暂无可用的在线预览，可下载后使用本地应用打开。',
+          })
+        }
+      } catch (err: unknown) {
+        if (!cancelled) setPreview({ kind: 'error', message: errorText(err, '文件预览加载失败') })
+      }
+    }
+    void loadPreview()
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [conversationId, selectedFile])
 
   const uploadFiles = async (selected: FileList | null) => {
     if (!selected?.length) return
@@ -690,13 +741,18 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
   }
 
   const remove = async (id: string) => {
-    await stewardApi.deleteFile(conversationId, id)
-    await reload()
+    setError('')
+    try {
+      await stewardApi.deleteFile(conversationId, id)
+      await reload()
+    } catch (err: unknown) {
+      setError(errorText(err, '删除失败'))
+    }
   }
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-5" onClick={onClose}>
-      <div className="flex max-h-[78vh] w-[760px] max-w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="flex h-[76vh] min-h-[520px] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b px-5 py-3.5">
           <div>
             <h3 className="flex items-center gap-2 text-sm font-semibold"><FolderOpen size={16} className="text-teal-600" />会话隔离空间</h3>
@@ -704,44 +760,96 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
           </div>
           <button aria-label="关闭会话文件" onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={17} /></button>
         </div>
-        <div className="flex items-center gap-2 border-b bg-gray-50/70 px-5 py-3">
-          <input ref={inputRef} type="file" multiple className="hidden"
-            accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.pdf,.md,.txt,.csv,.json,.xml"
-            onChange={e => void uploadFiles(e.target.files)} />
-          <button onClick={() => inputRef.current?.click()} disabled={uploading}
-            className="flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-2 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-50">
-            {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} 上传文件
-          </button>
-          <button onClick={() => void downloadStewardFile(conversationId, undefined, `data-steward-${conversationId.slice(0, 8)}.zip`)}
-            className="flex items-center gap-1.5 rounded-lg border bg-white px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
-            <FileArchive size={13} /> 一键打包
-          </button>
-          <button onClick={() => void reload()} className="ml-auto flex items-center gap-1 text-xs text-gray-500"><RefreshCw size={12} />刷新</button>
-        </div>
         {error && <div className="border-b bg-red-50 px-5 py-2 text-xs text-red-600">{error}</div>}
-        <div className="min-h-[260px] flex-1 overflow-auto p-4">
-          {loading ? <div className="py-16 text-center text-sm text-gray-400">加载中…</div> : files.length === 0 ? (
-            <div className="rounded-xl border-2 border-dashed py-16 text-center text-sm text-gray-400">当前会话还没有文件</div>
-          ) : (
-            <div className="space-y-2">
-              {files.map(file => (
-                <div key={file.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600"><FileText size={16} /></div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-gray-800">{file.filename}</p>
-                    <p className="mt-0.5 truncate text-[11px] text-gray-400">
-                      {file.source === 'download' ? '网页下载' : file.source === 'generated' ? '管家创建' : file.source === 'edited' ? '管家编辑' : '用户上传'} · {formatBytes(file.size)}
-                      {file.extractedChars > 0 ? ` · 已解析 ${file.extractedChars.toLocaleString()} 字` : ''}
-                      {file.urls?.length ? ` · 发现 ${file.urls.length} 个网址` : ''}
-                    </p>
-                    {file.extractError && <p className="mt-0.5 truncate text-[11px] text-amber-600">{file.extractError}</p>}
-                  </div>
-                  <button title="下载" onClick={() => void downloadStewardFile(conversationId, file.id, file.filename)} className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-teal-600"><Download size={14} /></button>
-                  <button title="删除" onClick={() => void remove(file.id)} className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={14} /></button>
-                </div>
-              ))}
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex w-[300px] shrink-0 flex-col border-r border-slate-200 bg-slate-50/70">
+            <div className="grid grid-cols-2 gap-2 border-b border-slate-200 p-3">
+              <input ref={inputRef} type="file" multiple className="hidden"
+                accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.pdf,.md,.txt,.csv,.json,.xml,.png,.jpg,.jpeg,.webp"
+                onChange={e => void uploadFiles(e.target.files)} />
+              <button onClick={() => inputRef.current?.click()} disabled={uploading}
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3 py-2 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-50">
+                {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} 上传文件
+              </button>
+              <button onClick={() => void downloadStewardFile(conversationId, undefined, `data-steward-${conversationId.slice(0, 8)}.zip`)}
+                className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-teal-200 hover:bg-teal-50">
+                <FileArchive size={13} /> 一键打包
+              </button>
             </div>
-          )}
+            <div className="flex items-center justify-between px-3 pb-2 pt-3">
+              <span className="text-xs font-semibold text-slate-600">文件树 <span className="font-normal text-slate-400">({files.length})</span></span>
+              <button onClick={() => void reload()} aria-label="刷新会话文件" className="rounded-md p-1 text-slate-400 transition hover:bg-white hover:text-teal-700"><RefreshCw size={13} /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+              {loading ? <div className="py-16 text-center text-sm text-slate-400">加载中…</div> : files.length === 0 ? (
+                <div className="mx-1 rounded-xl border border-dashed border-slate-300 bg-white/70 px-3 py-12 text-center text-xs text-slate-400">当前会话还没有文件</div>
+              ) : (
+                <div className="space-y-1">
+                  {files.map(file => (
+                    <button key={file.id} type="button" onClick={() => setSelectedId(file.id)}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition ${selectedId === file.id ? 'bg-white text-teal-800 shadow-sm ring-1 ring-teal-200' : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'}`}>
+                      <FileText size={15} className={selectedId === file.id ? 'shrink-0 text-teal-600' : 'shrink-0 text-slate-400'} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium" title={file.filename}>{file.filename}</span>
+                        <span className="mt-0.5 block text-[10px] text-slate-400">{formatBytes(file.size)}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <section className="flex min-w-0 flex-1 flex-col bg-white">
+            {selectedFile ? (
+              <>
+                <div className="flex min-h-[58px] items-center gap-3 border-b border-slate-200 px-4 py-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><FileText size={16} /></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-800" title={selectedFile.filename}>{selectedFile.filename}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                      {selectedFile.source === 'download' ? '网页下载' : selectedFile.source === 'generated' ? '管家创建' : selectedFile.source === 'edited' ? '管家编辑' : '用户上传'} · {formatBytes(selectedFile.size)}
+                      {selectedFile.extractedChars > 0 ? ` · 已解析 ${selectedFile.extractedChars.toLocaleString()} 字` : ''}
+                    </p>
+                  </div>
+                  <button title="下载文件" onClick={() => void downloadStewardFile(conversationId, selectedFile.id, selectedFile.filename)}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700">
+                    <Download size={13} /> 下载
+                  </button>
+                  <button title="删除文件" onClick={() => void remove(selectedFile.id)}
+                    className="flex items-center gap-1.5 rounded-lg border border-red-100 px-2.5 py-1.5 text-xs text-red-500 transition hover:bg-red-50">
+                    <Trash2 size={13} /> 删除
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-hidden bg-slate-50/50 p-3">
+                  <div className="h-full overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    {preview.kind === 'loading' ? (
+                      <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-400"><Loader2 size={15} className="animate-spin" />正在生成预览…</div>
+                    ) : preview.kind === 'image' && preview.url ? (
+                      <div className="flex h-full items-center justify-center overflow-auto p-4"><img src={preview.url} alt={selectedFile.filename} className="max-h-full max-w-full object-contain" /></div>
+                    ) : preview.kind === 'pdf' && preview.url ? (
+                      <iframe title={`${selectedFile.filename} 预览`} src={preview.url} className="h-full w-full border-0" />
+                    ) : preview.kind === 'text' ? (
+                      <div className="h-full overflow-auto p-4">
+                        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6 text-slate-700">{preview.text}</pre>
+                        {preview.truncated && <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-amber-600">预览内容较长，当前仅展示前 60,000 个字符。</p>}
+                      </div>
+                    ) : preview.kind === 'unsupported' || preview.kind === 'error' ? (
+                      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-sm text-slate-400">
+                        <FileText size={30} className="opacity-35" />
+                        <p>{preview.message}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-400">
+                <FolderOpen size={32} className="opacity-30" />
+                <p>从左侧文件树选择文件后查看内容</p>
+              </div>
+            )}
+          </section>
         </div>
       </div>
     </div>
@@ -1073,28 +1181,35 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
 
 // ---------- 受管流水线面板 ----------
 
-function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged, n8nApiUrl, onOpenWizard }: {
+function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged, onBack, n8nApiUrl, onOpenWizard }: {
   records: StewardPipeline[]
   loading: boolean
   expandedId: string | null
   onExpand: (id: string | null) => void
   onChanged: () => void
+  onBack: () => void
   n8nApiUrl: string
   onOpenWizard: (pipelineId: string) => void
 }) {
   return (
     <aside className="flex shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] max-xl:max-h-[42%] max-xl:min-h-[180px] xl:min-w-0 xl:flex-1">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3.5">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="min-w-0">
           <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-800 shrink-0">
-            <Workflow size={15} className="text-teal-700" /> 可编排草稿
+            <Workflow size={15} className="text-teal-700" /> 可编排流水线
           </h2>
-          <span className="truncate text-[11px] text-slate-400">发布后自动退出此工作区</span>
+          <p className="mt-0.5 whitespace-nowrap text-[10px] text-slate-400">此工作区只展示处于未发布的n8n流水线</p>
         </div>
-        <button onClick={onChanged}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-xs text-gray-600 hover:bg-gray-50 shrink-0">
-          <RefreshCw size={13} /> 手动刷新
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button onClick={onBack}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-50">
+            <ArrowLeft size={13} /> 返回流水线
+          </button>
+          <button onClick={onChanged}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-50">
+            <RefreshCw size={13} /> 手动刷新
+          </button>
+        </div>
       </div>
 
       <div className="scrollbar-none flex-1 space-y-4 overflow-y-auto px-3 py-3">
@@ -1260,10 +1375,6 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
             {r.active && <span className="shrink-0 rounded border border-green-200 bg-green-50 px-1.5 py-px text-[10px] text-green-600">n8n 已激活</span>}
             </div>
             {r.description && <p className="mt-0.5 truncate text-[11px] text-gray-500">{r.description}</p>}
-            <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
-              {r.summary?.node_count ?? 0} 个节点
-              {r.summary?.webhook_path ? ` · webhook:/${r.summary.webhook_path}` : ' · 无 Webhook（平台不可调度）'}
-            </p>
           </div>
         </button>
         <button onClick={() => { if (r.pipelineId) onOpenWizard(r.pipelineId) }}

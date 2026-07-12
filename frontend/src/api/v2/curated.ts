@@ -12,6 +12,15 @@ export interface CuratedDataset {
   producer_pipeline_id: string | null
   output_key: string | null
   has_review_evidence: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface CuratedDatasetPage {
+  items: CuratedDataset[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface CuratedPreview {
@@ -73,6 +82,15 @@ export interface ReviewDiff {
 
 const curatedApi = {
   list: () => apiClientV2.get<CuratedDataset[]>('/curated'),
+  listPage: (params: {
+    pipeline?: string
+    task_id?: string
+    status?: string
+    page?: number
+    page_size?: number
+  }) => apiClientV2.get<CuratedDatasetPage>('/curated', {
+    params: { ...params, paginated: true },
+  }),
   get: (id: string) => apiClientV2.get<CuratedDataset>(`/curated/${id}`),
   preview: (id: string, limit = 200) =>
     apiClientV2.get<CuratedPreview>(`/curated/${id}/preview?limit=${limit}`),

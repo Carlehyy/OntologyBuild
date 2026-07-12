@@ -281,7 +281,7 @@ function CreateOntologyCard({ onClick }: { onClick: () => void }) {
         <Plus size={25} />
       </div>
       <h3 className="text-base font-semibold text-slate-800">新建本体</h3>
-      <p className="mt-2 max-w-[210px] text-xs leading-5 text-slate-500">设置名称、描述、图标和所属领域，快速开始建模</p>
+      <p className="mt-2 max-w-[210px] text-xs leading-5 text-slate-500">快速创建本体模型</p>
       <span className="mt-5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm">
         立即创建
       </span>
@@ -306,7 +306,7 @@ function OntologyCard({
         <div className="flex min-h-11 items-start gap-3 overflow-hidden">
           <OntologyAvatar icon={item.icon} />
           <div className="flex min-h-11 min-w-0 flex-1 flex-col justify-center overflow-hidden">
-            <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+            <div className="flex min-w-0 items-center overflow-hidden">
               <button
                 type="button"
                 onClick={onDetail}
@@ -315,11 +315,15 @@ function OntologyCard({
               >
                 {item.name}
               </button>
-              <span className="shrink-0 self-center font-mono text-[11px] leading-5 text-slate-400">{item.version || 'v0.1'}</span>
             </div>
-            <span className="mt-1 inline-flex w-fit max-w-full truncate rounded-md bg-slate-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-slate-500">
-              {item.domain || '未设置领域'}
-            </span>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              <span className="inline-flex min-w-0 max-w-full truncate rounded-md border border-teal-100 bg-teal-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-teal-700">
+                {item.domain || '未设置领域'}
+              </span>
+              <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
+                {item.version || 'v0.1'}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -345,7 +349,7 @@ function OntologyCard({
         </div>
       </div>
 
-      <footer className="mt-auto flex min-h-11 items-center gap-1 border-t border-slate-100 px-3 py-1.5">
+      <footer className="mt-auto flex min-h-11 items-center gap-1 border-t border-slate-100 px-4 py-1.5">
         <button
           type="button"
           onClick={onEdit}

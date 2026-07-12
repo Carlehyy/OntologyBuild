@@ -5,7 +5,7 @@ import { explorationApi, type BxDocument, type BxDraft, type Readiness } from '@
 import { ontologyApi } from '@/api/ontologies'
 import Md from './Md'
 
-/** 需求文档抽屉：版本列表 + markdown 预览 + 生成本体草稿（选择新建/已有本体） */
+/** 需求文档工作区：历史版本 + markdown 预览 + 生成本体模型。 */
 export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: {
   sessionId: string
   onClose: () => void
@@ -39,6 +39,14 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
     return () => { cancelled = true }
   }, [activeId])
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   const download = () => {
     if (!doc) return
     const blob = new Blob([doc.contentMd], { type: 'text/markdown;charset=utf-8' })
@@ -66,7 +74,7 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
       if (detail?.code === 'quality_gate_blocked' && detail?.readiness) {
         setGateBlock(detail.readiness as Readiness)
       } else {
-        setError((typeof detail === 'string' && detail) || e?.message || '草稿生成失败')
+        setError((typeof detail === 'string' && detail) || e?.message || '本体模型生成失败')
       }
     } finally {
       setGenerating(false)
@@ -77,22 +85,25 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
     .flatMap(g => g.blockingItems.map(item => ({ gate: g.label, item })))
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
       <div
-        className="h-full w-[760px] max-w-[94vw] bg-[var(--color-bg-elevated)] shadow-2xl flex"
-        onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="requirements-dialog-title"
+        className="flex h-[78vh] min-h-[520px] w-[1040px] max-w-[94vw] overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
+        onMouseDown={e => e.stopPropagation()}
       >
         {/* 版本列表 */}
-        <div className="w-52 shrink-0 border-r border-[var(--color-border)] flex flex-col">
+        <div className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
           <div className="px-4 py-4 border-b border-[var(--color-border)]">
-            <div className="text-sm font-semibold text-[var(--color-text-primary)]">需求文档</div>
-            <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">{docs.length} 个版本</div>
+            <div id="requirements-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">需求文档</div>
+            <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">历史版本 · 共 {docs.length} 个</div>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {isLoading && <div className="text-xs text-[var(--color-text-tertiary)] px-2 py-1">加载中…</div>}
             {!isLoading && docs.length === 0 && (
               <div className="text-xs text-[var(--color-text-tertiary)] px-2 py-1 leading-relaxed">
-                还没有文档。回到会话点「生成需求文档」。
+                还没有需求文档。关闭弹窗后点击顶部「生成需求文档」。
               </div>
             )}
             {docs.map(d => (
@@ -130,7 +141,7 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
                   <Download size={12} /> .md
                 </button>
               )}
-              <button onClick={onClose} className="p-1.5 rounded-md hover:bg-[var(--color-bg-hover)] text-[var(--color-text-tertiary)]">
+              <button onClick={onClose} aria-label="关闭需求文档" className="p-1.5 rounded-md hover:bg-[var(--color-bg-hover)] text-[var(--color-text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
                 <X size={16} />
               </button>
             </div>
@@ -193,7 +204,7 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50"
                 >
                   {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-                  生成本体草稿
+                  生成本体模型
                 </button>
               </div>
               <div className="text-[10px] text-[var(--color-text-tertiary)]">

@@ -27,6 +27,13 @@ export interface DatasetOverviewItem {
   updated_at: string | null
 }
 
+export interface DatasetOverviewPage {
+  items: DatasetOverviewItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface RowEditOp {
   key?: Record<string, string>
   values?: Record<string, unknown>
@@ -93,8 +100,14 @@ const datasetsApi = {
     apiClientV2.get(`/datasets/${id}/versions/${versionNo}/preview`, { params: { limit } }),
 
   /** 资产湖原始数据集总览：版本/行数/来源/消费流水线 */
-  overview: (): Promise<{ items: DatasetOverviewItem[]; total: number }> =>
-    apiClientV2.get('/datasets/overview'),
+  overview: (params?: {
+    source?: 'manual' | 'sync'
+    sort_by?: 'created_at' | 'updated_at'
+    page?: number
+    page_size?: number
+    paginated?: boolean
+  }): Promise<DatasetOverviewPage> =>
+    apiClientV2.get('/datasets/overview', { params }),
 
   /** 上传文件新建数据集 */
   upload: (file: File) => {

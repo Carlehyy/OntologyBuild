@@ -506,14 +506,14 @@ function OntologyNetworkView({
   return (
     <div className="relative h-full overflow-hidden bg-[#f8fbff]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.10),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.10),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))]" />
-      <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 flex-wrap items-center gap-2">
+      <div className="absolute inset-x-4 top-4 z-10 flex flex-nowrap items-center justify-center gap-2">
         {[
           { icon: Boxes, label: `${objectTypes.length} 对象实体`, className: 'border-sky-100 bg-white/88 text-sky-700' },
           { icon: Link2, label: `${linkTypes.length} 实体关系`, className: 'border-cyan-100 bg-white/88 text-cyan-700' },
           { icon: Zap, label: `${actions.length} 执行动作`, className: 'border-amber-100 bg-white/88 text-amber-700' },
           { icon: FunctionSquare, label: `${functions.length} 激活函数`, className: 'border-violet-100 bg-white/88 text-violet-700' },
         ].map(stat => (
-          <span key={stat.label} className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur ${stat.className}`}>
+          <span key={stat.label} className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur ${stat.className}`}>
             <stat.icon size={12} />{stat.label}
           </span>
         ))}
@@ -1241,7 +1241,7 @@ export default function AgentWorkbenchPage() {
                   {llmModels.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
                 {isAdmin && (
-                  <button onClick={() => setDrawerOpen(true)} disabled={!oid}
+                  <button onClick={() => setDrawerOpen(true)} disabled={!oid} aria-label="授权边界配置"
                     className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-500 transition-colors hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700 disabled:opacity-30 disabled:cursor-not-allowed">
                     <Shield size={14} />
                     <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">授权边界配置</span>

@@ -1,8 +1,9 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Upload, RefreshCw, Trash2, ChevronDown, ChevronUp, Loader2,
   CheckCircle2, XCircle, X, FileUp, Repeat, GitBranch,
   Database, Pencil, KeyRound, Table2, Share2, ShieldCheck,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type DatasetVersionItem, type CreateTableResult } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -45,6 +46,9 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   const [loadError, setLoadError] = useState('')
   const [expanded, setExpanded] = useState<string | null>(focusDatasetId ?? null)
   const [banner, setBanner] = useState<Banner | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [total, setTotal] = useState(0)
 
   // 预览缓存
   const [previews, setPreviews] = useState<Record<string, { columns: string[]; rows: Record<string, unknown>[]; total: number; versionNo?: number }>>({})
@@ -76,15 +80,25 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   const loadPendingApprovals = () => manualSharingApi.changes({ status: 'pending' })
     .then(rows => setPendingApprovals(rows.length)).catch(() => setPendingApprovals(0))
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     setLoadError('')
-    datasetsApi.overview()
+    datasetsApi.overview({
+      source: 'manual',
+      sort_by: 'created_at',
+      page,
+      page_size: pageSize,
+      paginated: true,
+    })
       .then(res => {
-        setItems((res.items ?? []).filter(
-          item => item.source === 'upload' || item.source === 'manual'))
+        const nextItems = Array.isArray(res.items) ? res.items : []
+        setItems(nextItems)
+        setTotal(res.total || 0)
+        if (page > 1 && nextItems.length === 0 && res.total > 0) setPage(page - 1)
       })
       .catch((error: unknown) => {
+        setItems([])
+        setTotal(0)
         const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
         const detail = e?.detail ?? e?.data?.detail
         setLoadError(
@@ -94,9 +108,16 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         )
       })
       .finally(() => setLoading(false))
-  }
+  }, [page, pageSize])
 
-  useEffect(() => { void Promise.resolve().then(() => { load(); loadPendingApprovals() }) }, [])
+  useEffect(() => { void load() }, [load])
+  useEffect(() => { void loadPendingApprovals() }, [])
+
+  const refreshFirstPage = () => {
+    if (page === 1) load()
+    else setPage(1)
+  }
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   const loadDetail = async (id: string, refresh = false) => {
     if (previews[id] && !refresh) return
@@ -153,7 +174,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
     try {
       const res = await datasetsApi.upload(file)
       setBanner({ type: 'success', text: `「${res.name}」上传成功，已创建人工数据集。在「维护数据」中声明主键后可直接灌入本体。` })
-      load()
+      refreshFirstPage()
       notifyAssetChanged()
     } catch (err: unknown) {
       const er = err as { detail?: string; message?: string }
@@ -170,7 +191,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       type: 'success',
       text: `「${res.name}」已创建。空表已就绪，现在就可以逐行录入数据${res.primary_key ? '' : '（暂未声明主键，仅能新增行）'}`,
     })
-    load()
+    refreshFirstPage()
     notifyAssetChanged()
     setEditorTarget({
       id: res.id, name: res.name, raw_name: res.name, kind: res.kind,
@@ -545,6 +566,29 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         </div>
       )}
       </div>
+
+      {!loading && !loadError && total > 0 && (
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            每页
+            <select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
+              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+              aria-label="人工数据集每页显示条数">
+              {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
+            条
+          </label>
+          <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label="人工数据集上一页"><ChevronLeft size={14} /></button>
+            <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label="人工数据集下一页"><ChevronRight size={14} /></button>
+          </div>
+        </div>
+      )}
 
       {/* 在线新建表格 */}
       {createOpen && (

@@ -80,7 +80,7 @@ function GatePanel({ readiness }: { readiness: Readiness }) {
         {readiness.ready ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
         质量门 {readiness.gatesPassed}/{readiness.gatesTotal}
         <span className="font-normal">
-          {readiness.ready ? '· 可生成本体草稿' : `· ${readiness.blockingCount} 项待定量`}
+          {readiness.ready ? '· 可生成本体模型' : `· ${readiness.blockingCount} 项待定量`}
         </span>
       </div>
       <div className={`text-[11px] mb-1.5 ${readiness.ready ? 'text-teal-800/80' : 'text-amber-800/90'}`}>

@@ -789,6 +789,10 @@ def test_workspace_text_crud_download_and_version_conflict(client, auth_headers,
     aid = item["id"]
     r = client.get(f"{BASE}/sessions/{sid}/attachments/{aid}/content", headers=auth_headers)
     assert r.status_code == 200 and "订单模型" in r.json()["data"]["content"]
+    preview = client.get(f"{BASE}/sessions/{sid}/attachments/{aid}/preview", headers=auth_headers)
+    assert preview.status_code == 200
+    assert preview.json()["data"]["editable"] is True
+    assert "订单模型" in preview.json()["data"]["content"]
 
     r = client.put(f"{BASE}/sessions/{sid}/attachments/{aid}/content", headers=auth_headers,
                    json={"content": "# v2\n订单与客户", "expectedVersion": 1})
@@ -817,6 +821,32 @@ def test_workspace_file_id_isolation(client, auth_headers, tmp_path, monkeypatch
                       headers=auth_headers).status_code == 404
     assert client.get(f"{BASE}/sessions/{b}/attachments/{item['id']}/download",
                       headers=auth_headers).status_code == 404
+    assert client.get(f"{BASE}/sessions/{b}/attachments/{item['id']}/preview",
+                      headers=auth_headers).status_code == 404
+
+
+def test_workspace_binary_preview_uses_extracted_text(client, auth_headers, session,
+                                                       tmp_path, monkeypatch):
+    """Office/PDF 等非可编辑文件在工作区中返回确定性抽取文本。"""
+    from types import SimpleNamespace
+    from app.config import settings
+    from app.exploration import workspace as W
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    monkeypatch.setattr(W, "convert_document", lambda *_: SimpleNamespace(
+        content="售后流程规范：接单、派单、维修、回访。", ok=True, error=None))
+
+    uploaded = _upload(client, auth_headers, session["id"], "manual.pdf",
+                       b"%PDF-visual-preview", "application/pdf")
+    assert uploaded.status_code == 201
+    item = uploaded.json()["data"]
+    assert item["editable"] is False
+
+    preview = client.get(
+        f"{BASE}/sessions/{session['id']}/attachments/{item['id']}/preview",
+        headers=auth_headers)
+    assert preview.status_code == 200
+    assert preview.json()["data"]["editable"] is False
+    assert "接单、派单" in preview.json()["data"]["content"]
 
 
 def test_workspace_agent_tool_round_trip(db, session, tmp_path, monkeypatch):

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle, AlertTriangle, Clock,
   X, Loader2, Trash2, Table2, RefreshCw,
   Eye, XCircle, Workflow, ListChecks, Database,
-  Boxes, Network, ArrowRight, BarChart3,
+  Boxes, Network, ArrowRight, BarChart3, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
 import curatedApi from '@/api/v2/curated'
@@ -70,7 +70,7 @@ function errorText(error: unknown, fallback: string): string {
 
 function FlowArrow() {
   return (
-    <div className="flex items-center min-w-8 flex-1" aria-hidden="true">
+    <div className="flex w-4 shrink-0 items-center" aria-hidden="true">
       <span className="h-px w-full border-t border-dashed border-slate-300" />
       <ArrowRight size={14} className="-ml-1 shrink-0 text-slate-400" />
     </div>
@@ -90,16 +90,16 @@ function FlowNode({
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className={`group flex h-10 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors ${
+      className={`group flex h-9 min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold transition-colors ${
         active
           ? 'border-emerald-400 bg-emerald-50 text-emerald-800 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)]'
           : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300 hover:bg-teal-50/50 disabled:hover:border-slate-200 disabled:hover:bg-white'
       }`}
     >
-      <span className={`grid h-6 w-6 place-items-center rounded-md ${active ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-teal-100 group-hover:text-teal-700'}`}>
+      <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md ${active ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-teal-100 group-hover:text-teal-700'}`}>
         {icon}
       </span>
-      <span className="whitespace-nowrap">{label}</span>
+      <span className="min-w-0 truncate whitespace-nowrap" title={label}>{label}</span>
       {active && <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-medium text-white">当前</span>}
     </button>
   )
@@ -211,9 +211,9 @@ export default function StructuredDataPage() {
     <div className="flex h-full flex-col gap-3">
       {/* 不重复页面标题，首屏直接呈现用户真正需要理解和操作的数据流。 */}
       <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
-        <div className="flex items-center gap-4">
-          <div className="min-w-0 flex-1 overflow-x-auto pb-0.5">
-            <div className="flex min-w-[650px] items-center">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <div className="flex w-full min-w-0 items-center">
               <FlowNode label="n8n 流水线" icon={<Workflow size={14} />} onClick={() => navigate('/data/pipelines')} />
               <FlowArrow />
               <FlowNode label="数据任务池" icon={<ListChecks size={14} />} onClick={() => navigate('/data/pipelines/sync-tasks')} />
@@ -237,7 +237,7 @@ export default function StructuredDataPage() {
                   key={key}
                   type="button"
                   onClick={() => switchTab(key)}
-                  className={`relative z-10 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-200 ${
+                  className={`relative z-10 rounded-md px-4 py-2 text-sm font-medium transition-colors duration-200 ${
                     activeTab === key ? 'text-white' : 'text-slate-500 hover:text-emerald-700'
                   }`}
                 >
@@ -250,14 +250,14 @@ export default function StructuredDataPage() {
               type="button"
               aria-pressed={insightSelected}
               onClick={() => setInsightSelected(selected => !selected)}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
                 insightSelected
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
               }`}
               title={insightSelected ? '隐藏数据洞察' : '显示数据洞察'}
             >
-              <BarChart3 size={13} /> 洞察
+              <BarChart3 size={14} /> 洞察
             </button>
           </div>
         </div>
@@ -291,6 +291,10 @@ function CuratedView() {
   const [actionError, setActionError] = useState('')
   const [taskFilter, setTaskFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [total, setTotal] = useState(0)
+  const pipelineFilter = searchParams.get('pipeline') || ''
 
   const [panelRow, setPanelRow] = useState<Row | null>(null)
   const [approvingId, setApprovingId] = useState<string | null>(null)
@@ -299,13 +303,19 @@ function CuratedView() {
   const [deleting, setDeleting] = useState(false)
   const [deleteErr, setDeleteErr] = useState('')
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setLoadError('')
     const results = await Promise.allSettled([
       pipelinesApi.list(),
       pipelineTasksApi.list(),
-      curatedApi.list() as Promise<CuratedDataset[]>,
+      curatedApi.listPage({
+        pipeline: pipelineFilter || undefined,
+        task_id: taskFilter || undefined,
+        status: statusFilter || undefined,
+        page,
+        page_size: pageSize,
+      }),
     ])
     const [pipelineResult, taskResult, curatedResult] = results
     if (pipelineResult.status === 'fulfilled') {
@@ -315,9 +325,13 @@ function CuratedView() {
       setPipelineTasks(Array.isArray(taskResult.value?.items) ? taskResult.value.items : [])
     }
     if (curatedResult.status === 'fulfilled') {
-      setCurated(Array.isArray(curatedResult.value) ? curatedResult.value : [])
+      const items = Array.isArray(curatedResult.value?.items) ? curatedResult.value.items : []
+      setCurated(items)
+      setTotal(curatedResult.value?.total || 0)
+      if (page > 1 && items.length === 0 && curatedResult.value.total > 0) setPage(page - 1)
       setCuratedLoadFailed(false)
     } else {
+      setTotal(0)
       setCuratedLoadFailed(true)
     }
     const failures = [
@@ -327,9 +341,9 @@ function CuratedView() {
     ].filter(Boolean)
     if (failures.length) setLoadError(failures.join('；'))
     setLoading(false)
-  }
+  }, [page, pageSize, pipelineFilter, statusFilter, taskFilter])
 
-  useEffect(() => { void Promise.resolve().then(load) }, [])
+  useEffect(() => { void load() }, [load])
 
   // 以成品数据集为主视角，关联其来源流水线
   const allRows = useMemo<Row[]>(() => {
@@ -368,13 +382,13 @@ function CuratedView() {
   [pipelines])
 
   // 兼容历史深链传名称和新深链传 ID；筛选内部只使用解析后的稳定 ID。
-  const pipelineFilter = searchParams.get('pipeline') || ''
   const normalizedPipelineFilter = useMemo(() => {
     if (!pipelineFilter) return ''
     return pipelines.find(pipeline => pipeline.id === pipelineFilter || pipeline.name === pipelineFilter)?.id ?? pipelineFilter
   }, [pipelineFilter, pipelines])
 
   const changePipelineFilter = (value: string) => {
+    setPage(1)
     setSearchParams(previous => {
       const next = new URLSearchParams(previous)
       if (value) next.set('pipeline', value)
@@ -403,12 +417,16 @@ function CuratedView() {
     changePipelineFilter('')
     setTaskFilter('')
     setStatusFilter('')
+    setPage(1)
   }
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   const handleStatusChange = (id: string, newStatus: string) => {
     setCurated(prev => prev.map(c => c.id === id ? { ...c, status: newStatus } : c))
     if (panelRow?.curatedId === id) setPanelRow(r => r ? { ...r, curatedStatus: newStatus } : r)
     notifyAssetChanged()
+    void load()
   }
 
   const handleDeleted = (id: string) => {
@@ -416,6 +434,7 @@ function CuratedView() {
     setPanelRow(null)
     setDeleteRow(null)
     notifyAssetChanged()
+    void load()
   }
 
   const handleQuickApprove = async (e: MouseEvent, row: Row) => {
@@ -485,7 +504,7 @@ function CuratedView() {
         {/* 按数据任务筛选 */}
         <select
           value={taskFilter}
-          onChange={e => setTaskFilter(e.target.value)}
+          onChange={e => { setTaskFilter(e.target.value); setPage(1) }}
           className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
         >
           <option value="">全部数据任务</option>
@@ -497,7 +516,7 @@ function CuratedView() {
         {/* 审核状态 */}
         <select
           value={statusFilter}
-          onChange={e => setStatusFilter(e.target.value)}
+          onChange={e => { setStatusFilter(e.target.value); setPage(1) }}
           className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
         >
           <option value="">全部审核状态</option>
@@ -665,6 +684,29 @@ function CuratedView() {
               ))}
             </tbody>
           </table>
+          <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
+            <label className="flex items-center gap-1.5 text-xs text-slate-500">
+              每页
+              <select
+                value={pageSize}
+                onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
+                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                aria-label="成品数据集每页显示条数"
+              >
+                {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
+              </select>
+              条
+            </label>
+            <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="成品数据集上一页"><ChevronLeft size={14} /></button>
+              <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="成品数据集下一页"><ChevronRight size={14} /></button>
+            </div>
+          </div>
         </div>
       )}
       </div>

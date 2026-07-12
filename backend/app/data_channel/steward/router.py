@@ -229,6 +229,26 @@ def list_conversation_files(conversation_id: str, db: Session = Depends(get_db),
     return _ok(workspace.list_files(conversation_id))
 
 
+@router.get("/conversations/{conversation_id}/files/{artifact_id}/preview")
+def preview_conversation_file(conversation_id: str, artifact_id: str,
+                              max_chars: int = Query(60_000, ge=1, le=100_000),
+                              db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    """返回会话文件的安全文本预览；原始二进制仍由下载端点提供。"""
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        row, _ = workspace.require_file(conversation_id, artifact_id)
+        content = workspace.extracted_text(conversation_id, artifact_id, max_chars)
+    except workspace.WorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return _ok({
+        "file": row,
+        "content": content,
+        "truncated": len(content) >= max_chars,
+        "previewable": bool(content),
+    })
+
+
 @router.post("/conversations/{conversation_id}/files", status_code=201)
 async def upload_conversation_file(conversation_id: str, file: UploadFile = File(...),
                                    db: Session = Depends(get_db),

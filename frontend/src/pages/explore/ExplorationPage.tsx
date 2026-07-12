@@ -2,12 +2,12 @@
  * 业务探索 — 对话式业务建模/需求建模工作台
  *
  * 三栏：会话列表 | 探索对话（SSE 流式 + 工具轨迹） | 业务画布（六类模型实时沉淀）
- * 顶部动作：生成需求文档 → 文档抽屉里生成本体草稿 → 草稿人审后落地本体。
+ * 顶部动作：生成需求文档 → 需求文档工作区里生成本体模型 → 人审后落地本体。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, History, List,
+  Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, List,
   Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -195,7 +195,6 @@ export default function ExplorationPage() {
   const [busy, setBusy] = useState(false)
   const [webSearch, setWebSearch] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
-  const [composerExpanded, setComposerExpanded] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [reviewDraft, setReviewDraft] = useState<BxDraft | null>(null)
@@ -230,7 +229,6 @@ export default function ExplorationPage() {
     const nextHeight = Math.max(TEXTAREA_MIN_HEIGHT, Math.min(contentHeight, TEXTAREA_MAX_HEIGHT))
     textarea.style.height = `${nextHeight}px`
     textarea.style.overflowY = contentHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden'
-    setComposerExpanded(nextHeight > TEXTAREA_MIN_HEIGHT)
   }, [input])
 
   const updateScrollStickiness = () => {
@@ -455,18 +453,19 @@ export default function ExplorationPage() {
       {/* 会话列表 */}
       <aside className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] flex flex-col">
           <div className="px-3 pt-4 pb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold text-[var(--color-text-secondary)]">探索会话</div>
+            <div className="text-xs font-semibold text-[var(--color-text-secondary)]">会话记录</div>
             <button
               onClick={newSession}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-teal-700 bg-teal-50 hover:bg-teal-100"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-800 transition-colors hover:brightness-95 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              style={{ backgroundColor: '#A1FEEF' }}
             >
-              <Plus size={12} /> 新会话
+              <Plus size={12} /> 新建会话
             </button>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {sessions.length === 0 && (
               <div className="px-2 py-1 text-xs text-[var(--color-text-tertiary)] leading-relaxed">
-                还没有会话。点「新会话」开始一次业务探索。
+                还没有会话。点击「新建会话」开始一次业务探索。
               </div>
             )}
             {sessions.map(s => (
@@ -536,16 +535,25 @@ export default function ExplorationPage() {
                 onClick={() => setWorkspaceOpen(true)}
                 disabled={!sid}
                 data-testid="workspace-files-button"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
+                title="查看文件清单"
+                aria-label="查看文件清单"
+                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
               >
-                <Files size={13} /> 文件 {attachments.length > 0 && `(${attachments.length})`}
+                <Files size={15} />
+                {attachments.length > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[9px] font-semibold leading-4 text-white">
+                    {attachments.length > 99 ? '99+' : attachments.length}
+                  </span>
+                )}
               </button>
               <button
                 onClick={() => setDocsOpen(true)}
                 disabled={!sid}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
+                title="查看需求文档"
+                aria-label="查看需求文档"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
               >
-                <History size={13} /> 文档
+                <FileText size={15} />
               </button>
               <button
                 onClick={generateDocument}
@@ -663,12 +671,7 @@ export default function ExplorationPage() {
           </div>
         </div>
 
-        <div className="relative px-4 pb-4 pt-4">
-          <div
-            aria-hidden="true"
-            data-testid="composer-divider"
-            className={`absolute inset-x-0 top-0 h-px bg-[var(--color-border)] transition-opacity duration-200 ${composerExpanded ? 'opacity-0' : 'opacity-100'}`}
-          />
+        <div className="relative px-4 pb-4 pt-3">
           <input
             ref={fileInputRef}
             type="file"
@@ -718,7 +721,7 @@ export default function ExplorationPage() {
 
               <div
                 data-testid="exploration-composer-toolbar"
-                className="flex min-h-12 items-center justify-between gap-3 border-t border-[var(--color-border)] px-2.5 py-2"
+                className="flex min-h-12 items-center justify-between gap-3 px-2.5 py-2"
               >
                 <div className="flex min-w-0 items-center gap-1">
                   <button
@@ -804,7 +807,7 @@ export default function ExplorationPage() {
       </div>
 
       {/* 业务画布 */}
-      <aside className="w-[280px] lg:w-[320px] 2xl:w-[340px] shrink-0 ml-3 border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+      <aside className="w-[280px] lg:w-[320px] 2xl:w-[340px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
         <CanvasPanel
           sessionId={sid || undefined}
           canvas={canvas}

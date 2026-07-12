@@ -23,6 +23,13 @@ export interface Pipeline {
   last_run_error?: string
 }
 
+export interface PipelinePage {
+  items: Pipeline[]
+  total: number
+  page: number
+  page_size: number
+}
+
 /** 字段契约——流水线产出列的入湖元数据（发布后封版） */
 export interface ColumnDefinition {
   source_key: string      // 原始列名（流水线输出的列，只读）
@@ -121,6 +128,17 @@ const pipelinesApi = {
   /** Pipeline CRUD */
   list: (params?: { search?: string; domain?: string; status?: string }) =>
     apiClientV2.get<Pipeline[]>('/pipelines', { params }).then(r => r),
+  listPage: (params: {
+    search?: string
+    domain?: string
+    status?: string
+    engine?: string
+    enabled?: boolean
+    page?: number
+    page_size?: number
+  }) => apiClientV2.get<PipelinePage>('/pipelines', {
+    params: { ...params, paginated: true },
+  }).then(r => r),
   get: (id: string) =>
     apiClientV2.get<Pipeline>(`/pipelines/${id}`).then(r => r),
   create: (body: PipelineCreateBody) =>

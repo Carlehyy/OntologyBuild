@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
@@ -48,21 +49,64 @@ class CuratedDatasetResponse(BaseModel):
     producer_pipeline_id: Optional[str] = None
     output_key: Optional[str] = None
     has_review_evidence: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
-@router.get("", response_model=list[CuratedDatasetResponse])
-def list_curated(db: Session = Depends(get_db)):
-    """列出所有 Curated Dataset（从 v2_datasets 读 kind=curated）"""
+@router.get("")
+def list_curated(
+    pipeline: str = "",
+    task_id: str = "",
+    status: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    paginated: bool = False,
+    db: Session = Depends(get_db),
+):
+    """列出成品数据集；分页模式固定按最近更新时间倒序。"""
     from app.models.v2.dataset import Dataset, DatasetVersion
-    rows = db.query(Dataset).filter(Dataset.kind == "curated").order_by(Dataset.created_at.desc()).all()
+    from app.models.v2.pipeline import Pipeline
+    from app.data_channel.pipeline_tasks.models import PipelineTask
+
+    q = db.query(Dataset).filter(Dataset.kind == "curated")
+    pipeline_id = ""
+    if task_id:
+        task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()
+        pipeline_id = task.pipeline_id if task else "__missing_task__"
+    elif pipeline:
+        selected_pipeline = db.query(Pipeline).filter(or_(
+            Pipeline.id == pipeline,
+            Pipeline.name == pipeline,
+        )).first()
+        pipeline_id = selected_pipeline.id if selected_pipeline else pipeline
+
+    if pipeline_id:
+        selected_pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+        legacy_target_ids = selected_pipeline.target_curated_ids or [] if selected_pipeline else []
+        producer_filter = Dataset.producer_pipeline_id == pipeline_id
+        if legacy_target_ids:
+            q = q.filter(or_(producer_filter, Dataset.id.in_(legacy_target_ids)))
+        else:
+            q = q.filter(producer_filter)
+
+    ordered = q.order_by(Dataset.updated_at.desc(), Dataset.id.desc())
+    # 审核状态依赖“当前版本对应的审核记录”，无法只靠 Dataset 单表过滤；
+    # 无状态筛选时直接在数据库层 offset/limit，有筛选时先解析真实状态再切页。
+    if paginated and not status:
+        total = q.count()
+        rows = ordered.offset((page - 1) * page_size).limit(page_size).all()
+    else:
+        rows = ordered.all()
+        total = len(rows)
+
     # Batch fetch all reviews for displayed datasets to avoid N+1
     dataset_ids = [r.id for r in rows]
-    all_reviews = db.query(CuratedReview).filter(
+    all_reviews = (db.query(CuratedReview).filter(
         CuratedReview.curated_dataset_id.in_(dataset_ids)
-    ).order_by(CuratedReview.created_at.desc()).all()
+    ).order_by(CuratedReview.created_at.desc()).all()) if dataset_ids else []
 
     # 按数据集分组后仍需通过 review_matches_version 判断；历史 NULL 版本审核
     # 不能因为 ``NULL in (NULL, latest_id)`` 而永久泄漏到后续版本。
@@ -93,7 +137,20 @@ def list_curated(db: Session = Depends(get_db)):
             producer_pipeline_id=r.producer_pipeline_id,
             output_key=r.output_key,
             has_review_evidence=bool(reviews_by_dataset.get(r.id)),
+            created_at=r.created_at.isoformat() if r.created_at else None,
+            updated_at=r.updated_at.isoformat() if r.updated_at else None,
         ))
+    if status:
+        if status == "pending_review":
+            result = [item for item in result if item.status in {"pending_review", "pending", "in_review"}]
+        else:
+            result = [item for item in result if item.status == status]
+        total = len(result)
+        if paginated:
+            start = (page - 1) * page_size
+            result = result[start:start + page_size]
+    if paginated:
+        return {"items": result, "total": total, "page": page, "page_size": page_size}
     return result
 
 

@@ -116,6 +116,16 @@ class WorkspaceTextOut(CamelModel):
     sha256: Optional[str] = None
 
 
+class WorkspacePreviewOut(CamelModel):
+    id: str
+    relative_path: str
+    content: str
+    version: int
+    mime_type: Optional[str] = None
+    editable: bool = False
+    truncated: bool = False
+
+
 class NewOntologySpec(CamelModel):
     name: str
     domain: Optional[str] = None
