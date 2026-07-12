@@ -14,7 +14,7 @@ from app.config import settings
 from app.data_channel.steward import browser_sources, file_tools, workspace
 from app.data_channel.steward.browser_runtime import (
     BrowserManager, BrowserRuntimeError, _resolve_cdp_endpoint,
-    _validate_navigation_response, analyze_pagination, browser_manager,
+    _is_file, _validate_navigation_response, analyze_pagination, browser_manager,
     probe_browser_cdp, public_capture, validate_target_url,
 )
 from app.data_channel.steward.toolkit import ToolRunner
@@ -319,6 +319,53 @@ def test_navigation_allows_success_and_download_without_response():
 
     _validate_navigation_response(Response(), "https://example.com/all")
     _validate_navigation_response(None, "https://example.com/download")
+
+
+@pytest.mark.parametrize(
+    ("content_type", "url"),
+    [
+        ("image/png", "https://cdn.example/assets/hash"),
+        ("image/webp", "https://cdn.example/banner.webp?sign=abc"),
+        ("video/mp4", "https://cdn.example/media/stream"),
+        ("application/octet-stream", "https://cdn.example/report.pdf"),
+    ],
+)
+def test_static_media_responses_are_downloadable_file_captures(content_type, url):
+    assert _is_file(content_type, {}, url) is True
+
+
+@pytest.mark.asyncio
+async def test_save_page_data_resource_stays_inside_conversation_workspace(
+    steward_workspace,
+):
+    cid = str(uuid.uuid4())
+
+    class Page:
+        url = "https://example.com/gallery"
+
+        def is_closed(self):
+            return False
+
+        async def evaluate(self, _script, _argument):
+            return {
+                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+                "filename": "页面图片",
+            }
+
+    session = SimpleNamespace(
+        page=Page(), operation_lock=asyncio.Lock(), touch=lambda: None,
+    )
+    manager = BrowserManager.__new__(BrowserManager)
+    manager._sessions = {cid: session}
+    manager._live_clients = {}
+
+    row = await manager._save_page_resource(cid, 3, actor="agent")
+    registered, path = workspace.require_file(cid, row["id"])
+
+    assert registered["filename"] == "页面图片.png"
+    assert registered["source"] == "download"
+    assert path.parent == workspace.session_root(cid) / "files"
+    assert path.read_bytes().startswith(b"\x89PNG")
 
 
 def test_register_proxy_interface_uses_capture_without_leaking_auth(

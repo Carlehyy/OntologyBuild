@@ -263,9 +263,41 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "browser_click_text",
-        "description": "在当前页面按可见文字点击按钮或链接。点击前先 browser_state 确认页面。",
+        "description": "在当前页面按可见文字进行真实浏览器点击。点击前先 browser_state；若点击触发原生下载，结果的 downloadedFiles 会列出已保存到会话的文件。",
         "parameters": {
             "type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"],
+        },
+    },
+    {
+        "name": "browser_click_element",
+        "description": "按 browser_state 返回的元素 index 进行真实浏览器点击，适合无文字的图标、图片和下载控件；若触发原生下载，文件会自动保存到当前会话。",
+        "parameters": {
+            "type": "object",
+            "properties": {"element_index": {"type": "integer", "minimum": 0}},
+            "required": ["element_index"],
+        },
+    },
+    {
+        "name": "browser_page_resources",
+        "description": "列出当前页面可保存的图片、音视频和链接资源，返回稳定的元素 index、标签、文字和 resourceUrl；下载页面图片前优先使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "按资源 URL、alt 或可见文字过滤"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+        },
+    },
+    {
+        "name": "browser_save_resource",
+        "description": "把 browser_page_resources 返回的图片、媒体或链接资源直接保存到当前会话；支持 http/https、data: 和 blob:，只能使用该工具返回的元素 index。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element_index": {"type": "integer", "minimum": 0},
+                "filename": {"type": "string", "description": "可选的保存文件名"},
+            },
+            "required": ["element_index"],
         },
     },
     {
@@ -605,6 +637,23 @@ class ToolRunner:
 
     def tool_browser_click_text(self, text: str) -> dict:
         return browser_manager.click_text(self._conversation(), text, actor="agent")
+
+    def tool_browser_click_element(self, element_index: int) -> dict:
+        return browser_manager.click_element(
+            self._conversation(), element_index, actor="agent")
+
+    def tool_browser_page_resources(self, keyword: str | None = None,
+                                    limit: int | None = None) -> dict:
+        rows = browser_manager.page_resources(
+            self._conversation(), keyword, limit or 50, actor="agent")
+        return {"resources": rows, "count": len(rows),
+                "hint": "选择目标资源的 element_index 交给 browser_save_resource。"}
+
+    def tool_browser_save_resource(self, element_index: int,
+                                   filename: str | None = None) -> dict:
+        row = browser_manager.save_page_resource(
+            self._conversation(), element_index, filename, actor="agent")
+        return {"file": row, "notice": "页面资源已保存到当前会话，可在会话文件面板查看并打包。"}
 
     def tool_browser_type(self, selector: str, text: str, press_enter: bool | None = None) -> dict:
         return browser_manager.type_text(

@@ -23,7 +23,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Coroutine
-from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, unquote_to_bytes, urlparse, urlunparse
 
 from app.config import settings
 from app.data_channel.steward import workspace
@@ -40,6 +40,14 @@ _FILE_MIMES = {
     "text/csv",
 }
 _FILE_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".zip", ".json"}
+_FILE_EXTS.update({
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".ico", ".avif",
+    ".mp3", ".wav", ".ogg", ".m4a", ".mp4", ".webm", ".mov", ".avi",
+})
+_PAGE_ELEMENT_SELECTOR = (
+    "a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],"
+    "[contenteditable=true],img[src],video[src],audio[src],source[src]"
+)
 _PAGE_KEYS = {"page", "pageno", "page_no", "pageindex", "page_index", "current", "currentpage"}
 _SIZE_KEYS = {"size", "pagesize", "page_size", "limit", "per_page", "rows"}
 _OFFSET_KEYS = {"offset", "start", "skip", "from"}
@@ -215,7 +223,30 @@ def _is_api(resource_type: str, content_type: str, url: str) -> bool:
 def _is_file(content_type: str, headers: dict[str, str], url: str) -> bool:
     mime = content_type.split(";", 1)[0].lower().strip()
     disposition = (headers.get("content-disposition") or headers.get("Content-Disposition") or "").lower()
-    return "attachment" in disposition or mime in _FILE_MIMES or Path(urlparse(url).path).suffix.lower() in _FILE_EXTS
+    return (
+        "attachment" in disposition
+        or mime in _FILE_MIMES
+        or mime.startswith(("image/", "audio/", "video/"))
+        or Path(urlparse(url).path).suffix.lower() in _FILE_EXTS
+    )
+
+
+def _download_filename(
+    url: str, headers: dict[str, str] | None, mime_type: str | None,
+    preferred: str | None = None,
+) -> str:
+    disposition = ((headers or {}).get("content-disposition")
+                   or (headers or {}).get("Content-Disposition") or "")
+    match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.IGNORECASE)
+    filename = preferred or (unquote(match.group(1).strip()) if match else "")
+    if not filename:
+        filename = Path(urlparse(url).path).name
+    mime = (mime_type or "").split(";", 1)[0].lower().strip()
+    if not filename:
+        filename = "download"
+    if not Path(filename).suffix and mime:
+        filename += mimetypes.guess_extension(mime) or ""
+    return workspace.safe_filename(filename, "download.bin")
 
 
 def _validate_navigation_response(response: Any, target: str) -> None:
@@ -687,21 +718,55 @@ class BrowserManager:
             body = await page.locator("body").inner_text(timeout=3000)
         except Exception:
             title, body = "", ""
-        elements = await page.evaluate(r"""() => {
-          const selector = 'a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[contenteditable=true]';
+        elements = await page.evaluate(r"""(selector) => {
           return [...document.querySelectorAll(selector)].slice(0, 120).map((el, index) => {
             const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+            const resourceUrl = el.currentSrc || el.src || el.href || '';
             return {index, tag: el.tagName.toLowerCase(), type: el.getAttribute('type') || '',
               text: ((el.getAttribute('type') || '').toLowerCase() === 'password' ? '' :
-                (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '')).trim().replace(/\s+/g,' ').slice(0,160),
+                (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title') || el.getAttribute('placeholder') || '')).trim().replace(/\s+/g,' ').slice(0,160),
+              downloadable: Boolean(resourceUrl),
               x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height),
               visible: r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'};
           }).filter(x => x.visible);
-        }""")
+        }""", _PAGE_ELEMENT_SELECTOR)
         return {"url": page.url, "title": title, "text": body[:20_000], "elements": elements[:100]}
 
     def state(self, conversation_id: str, *, actor: str = "agent") -> dict:
         return self.call(self._state(conversation_id, actor=actor))
+
+    async def _page_resources(
+        self, conversation_id: str, keyword: str | None = None, limit: int = 50,
+        *, actor: str = "agent",
+    ) -> list[dict]:
+        self._assert_actor_allowed(conversation_id, actor)
+        session = await self._require(conversation_id)
+        async with session.operation_lock:
+            session.touch()
+            rows = await session.page.evaluate(r"""(selector) => {
+              return [...document.querySelectorAll(selector)].slice(0, 240).map((el, index) => {
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                const url = el.currentSrc || el.src || el.href || '';
+                const text = (el.innerText || el.getAttribute('alt') || el.getAttribute('title') ||
+                  el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 160);
+                return {index, tag: el.tagName.toLowerCase(), text,
+                  resourceUrl: String(url).slice(0, 2000),
+                  visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'};
+              }).filter(item => item.visible && item.resourceUrl);
+            }""", _PAGE_ELEMENT_SELECTOR)
+        needle = (keyword or "").strip().lower()
+        if needle:
+            rows = [row for row in rows if needle in str(row.get("resourceUrl", "")).lower()
+                    or needle in str(row.get("text", "")).lower()]
+        return rows[:max(1, min(int(limit), 100))]
+
+    def page_resources(
+        self, conversation_id: str, keyword: str | None = None, limit: int = 50,
+        *, actor: str = "agent",
+    ) -> list[dict]:
+        return self.call(self._page_resources(
+            conversation_id, keyword, limit, actor=actor))
 
     async def _navigate(self, conversation_id: str, url: str, *, actor: str = "agent") -> dict:
         self._assert_actor_allowed(conversation_id, actor)
@@ -731,6 +796,27 @@ class BrowserManager:
     def navigate(self, conversation_id: str, url: str, *, actor: str = "agent") -> dict:
         return self.call(self._navigate(conversation_id, url, actor=actor))
 
+    async def _finish_click(self, conversation_id: str, session: BrowserSession,
+                            locator: Any, *, actor: str) -> dict:
+        before = {row["id"] for row in workspace.list_files(conversation_id)}
+        await locator.scroll_into_view_if_needed(timeout=3000)
+        await locator.click(timeout=5000)
+        await session.page.wait_for_timeout(500)
+        pending = list(session.capture_tasks)
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+        await session.save_state()
+        session.touch()
+        state = await self._state(conversation_id, actor=actor)
+        state["downloadedFiles"] = [
+            row for row in workspace.list_files(conversation_id) if row["id"] not in before
+        ]
+        return state
+
     async def _click_text(self, conversation_id: str, text: str, *, actor: str = "agent") -> dict:
         self._assert_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
@@ -744,15 +830,104 @@ class BrowserManager:
                 locator = session.page.get_by_text(query, exact=False).first
             if await locator.count() == 0:
                 raise BrowserRuntimeError(f"当前页面未找到文本「{query}」")
-            await locator.scroll_into_view_if_needed(timeout=3000)
-            await locator.click(timeout=5000)
-            await session.page.wait_for_timeout(300)
-            await session.save_state()
-            session.touch()
-            return await self._state(conversation_id, actor=actor)
+            return await self._finish_click(conversation_id, session, locator, actor=actor)
 
     def click_text(self, conversation_id: str, text: str, *, actor: str = "agent") -> dict:
         return self.call(self._click_text(conversation_id, text, actor=actor))
+
+    async def _click_element(self, conversation_id: str, element_index: int,
+                             *, actor: str = "agent") -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
+        session = await self._require(conversation_id)
+        async with session.operation_lock:
+            locator = session.page.locator(_PAGE_ELEMENT_SELECTOR).nth(int(element_index))
+            if await locator.count() == 0:
+                raise BrowserRuntimeError("页面元素已变化，请重新读取 browser_state 后再点击")
+            return await self._finish_click(conversation_id, session, locator, actor=actor)
+
+    def click_element(self, conversation_id: str, element_index: int,
+                      *, actor: str = "agent") -> dict:
+        return self.call(self._click_element(
+            conversation_id, element_index, actor=actor))
+
+    async def _save_page_resource(
+        self, conversation_id: str, element_index: int, filename: str | None = None,
+        *, actor: str = "agent",
+    ) -> dict:
+        self._assert_actor_allowed(conversation_id, actor)
+        session = await self._require(conversation_id)
+        async with session.operation_lock:
+            session.touch()
+            info = await session.page.evaluate(r"""({selector, index}) => {
+              const el = document.querySelectorAll(selector)[index];
+              if (!el) return null;
+              const url = el.currentSrc || el.src || el.href || '';
+              return {url: String(url), filename: el.download || el.alt || el.title || ''};
+            }""", {"selector": _PAGE_ELEMENT_SELECTOR, "index": int(element_index)})
+            if not info or not info.get("url"):
+                raise BrowserRuntimeError(
+                    "该元素没有可保存的 href/src/currentSrc；请重新调用 browser_page_resources")
+            resource_url = str(info["url"])
+            preferred = filename or str(info.get("filename") or "") or None
+            if resource_url.startswith("data:"):
+                header, _, payload = resource_url.partition(",")
+                if not payload:
+                    raise BrowserRuntimeError("图片 data URL 内容为空")
+                mime = header[5:].split(";", 1)[0] or "application/octet-stream"
+                content = base64.b64decode(payload) if ";base64" in header else unquote_to_bytes(payload)
+                source_url = "data:"
+                headers: dict[str, str] = {}
+            elif resource_url.startswith("blob:"):
+                result = await session.page.evaluate(r"""async ({url, maxBytes}) => {
+                  const response = await fetch(url);
+                  const blob = await response.blob();
+                  if (blob.size > maxBytes) return {tooLarge: blob.size, type: blob.type};
+                  const bytes = new Uint8Array(await blob.arrayBuffer());
+                  let binary = '';
+                  for (let i = 0; i < bytes.length; i += 0x8000) {
+                    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+                  }
+                  return {data: btoa(binary), type: blob.type};
+                }""", {
+                    "url": resource_url,
+                    "maxBytes": int(settings.max_upload_mb) * 1024 * 1024,
+                })
+                if result.get("tooLarge"):
+                    raise BrowserRuntimeError(
+                        f"资源超过大小限制 {settings.max_upload_mb}MB")
+                content = base64.b64decode(result.get("data") or "")
+                mime = result.get("type") or "application/octet-stream"
+                source_url = "blob:"
+                headers = {}
+            else:
+                target = _safe_url(resource_url)
+                response = await session.context.request.get(
+                    target,
+                    headers={"Referer": session.page.url},
+                    timeout=int(settings.steward_browser_timeout_seconds) * 1000,
+                )
+                if not response.ok:
+                    raise BrowserRuntimeError(f"页面资源保存失败：HTTP {response.status}")
+                content = await response.body()
+                headers = response.headers
+                mime = headers.get("content-type") or "application/octet-stream"
+                source_url = target
+            saved_name = _download_filename(resource_url, headers, mime, preferred)
+            row = workspace.save_bytes(
+                conversation_id, saved_name, content, source="download",
+                mime_type=mime, source_url=source_url, extract=True,
+            )
+            session.touch()
+            return row
+
+    def save_page_resource(
+        self, conversation_id: str, element_index: int, filename: str | None = None,
+        *, actor: str = "agent",
+    ) -> dict:
+        return self.call(self._save_page_resource(
+            conversation_id, element_index, filename, actor=actor),
+            timeout=max(60, int(settings.steward_browser_timeout_seconds) + 10),
+        )
 
     async def _type(self, conversation_id: str, selector: str, text: str,
                     press_enter: bool = False, *, actor: str = "agent") -> dict:
@@ -840,11 +1015,8 @@ class BrowserManager:
                 raise BrowserRuntimeError(f"下载失败：HTTP {response.status}")
             content = await response.body()
             response_headers = response.headers
-            disposition = response_headers.get("content-disposition", "")
-            match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.IGNORECASE)
-            filename = unquote(match.group(1).strip()) if match else Path(urlparse(capture["url"]).path).name
-            if not filename:
-                filename = f"download{mimetypes.guess_extension(response_headers.get('content-type', '').split(';')[0]) or '.bin'}"
+            filename = _download_filename(
+                capture["url"], response_headers, response_headers.get("content-type"))
             row = workspace.save_bytes(
                 conversation_id, filename, content, source="download",
                 mime_type=response_headers.get("content-type"), source_url=capture["url"], extract=True,
