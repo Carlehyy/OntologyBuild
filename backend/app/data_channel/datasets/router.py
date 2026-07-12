@@ -451,12 +451,12 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
 
 @router.get("/overview")
 def datasets_overview(
+    db: Session = Depends(get_db),
     source: str = "",
     sort_by: str = "updated_at",
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     paginated: bool = False,
-    db: Session = Depends(get_db),
 ):
     """原始数据集总览；人工资产可按创建时间倒序分页。"""
     from app.models.v2.dataset import Dataset, DatasetVersion

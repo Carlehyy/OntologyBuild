@@ -58,13 +58,13 @@ class CuratedDatasetResponse(BaseModel):
 
 @router.get("")
 def list_curated(
+    db: Session = Depends(get_db),
     pipeline: str = "",
     task_id: str = "",
     status: str = "",
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     paginated: bool = False,
-    db: Session = Depends(get_db),
 ):
     """列出成品数据集；分页模式固定按最近更新时间倒序。"""
     from app.models.v2.dataset import Dataset, DatasetVersion

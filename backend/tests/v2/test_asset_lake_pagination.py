@@ -80,3 +80,7 @@ def test_manual_dataset_page_orders_by_creation_and_excludes_sync(db):
         paginated=True, db=db,
     )
     assert [item["name"] for item in second["items"]] == ["最早创建人工数据集"]
+
+    # 保留旧测试和内部调用的首个位置参数约定：datasets_overview(db)。
+    legacy = datasets_overview(db)
+    assert legacy["total"] == 4
