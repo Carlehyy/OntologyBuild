@@ -1,0 +1,512 @@
+.ontology-login {
+  --login-ink: #0e1d31;
+  --login-muted: #76859a;
+  --login-mint: #24a984;
+  --login-mint-dark: #189c78;
+  min-height: 100dvh;
+  padding: clamp(14px, 2.7vh, 28px) clamp(14px, 1.95vw, 30px);
+  overflow: hidden;
+  color: var(--login-ink);
+  background:
+    radial-gradient(circle at 2% 2%, rgba(68, 190, 159, 0.16), transparent 28%),
+    linear-gradient(135deg, #f5fbfa 0%, #f7f9fb 54%, #f3f7f8 100%);
+  font-family: "SF Pro Display", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ontology-login__canvas {
+  position: relative;
+  min-height: calc(100dvh - clamp(28px, 5.4vh, 56px));
+  overflow: hidden;
+  border: 1px solid rgba(202, 214, 218, 0.76);
+  border-radius: clamp(22px, 2vw, 31px);
+  background:
+    radial-gradient(circle at 48% 53%, rgba(174, 237, 220, 0.18), transparent 24%),
+    radial-gradient(circle at 78% 32%, rgba(235, 242, 247, 0.88), transparent 34%),
+    rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 18px 50px rgba(37, 82, 83, 0.05);
+}
+
+.ontology-login__reference-art {
+  position: absolute;
+  top: calc(clamp(14px, 2.7vh, 28px) * -1);
+  left: calc(clamp(14px, 1.95vw, 30px) * -1);
+  z-index: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  object-fit: cover;
+  opacity: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ontology-login__brand {
+  position: absolute;
+  z-index: 2;
+  top: 5.7%;
+  left: 3.5%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ontology-login__brand::before {
+  position: absolute;
+  z-index: -1;
+  inset: -14px -26px;
+  content: "";
+  background: rgba(255, 255, 255, 0.8);
+  filter: blur(14px);
+  pointer-events: none;
+}
+
+.ontology-login__brand-mark {
+  display: grid;
+  width: 58px;
+  height: 60px;
+  place-items: center;
+  color: var(--login-mint);
+  border: 1px solid rgba(64, 196, 162, 0.25);
+  border-radius: 13px;
+  background: linear-gradient(180deg, rgba(249, 255, 253, 0.96), rgba(224, 248, 241, 0.96));
+  box-shadow: 0 7px 18px rgba(36, 169, 132, 0.08);
+}
+
+.ontology-login__brand-name {
+  display: flex;
+  font-size: clamp(20px, 1.72vw, 27px);
+  font-weight: 650;
+  letter-spacing: -0.055em;
+}
+
+.ontology-login__brand-name span:last-child {
+  color: var(--login-mint-dark);
+  font-weight: 520;
+}
+
+.ontology-login__story {
+  position: absolute;
+  z-index: 2;
+  top: 17.65%;
+  left: 3.5%;
+  width: 33.5%;
+}
+
+.ontology-login__story::before {
+  position: absolute;
+  z-index: -1;
+  inset: -12px -42px -14px -18px;
+  content: "";
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0 82%, rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.ontology-login__story h1 {
+  margin: 0;
+  font-size: clamp(35px, 3.45vw, 54px);
+  font-weight: 760;
+  line-height: 1.18;
+  letter-spacing: -0.055em;
+}
+
+.ontology-login__story h1 span,
+.ontology-login__story h1 strong {
+  display: block;
+}
+
+.ontology-login__story h1 strong {
+  margin-top: 4px;
+  color: var(--login-mint);
+  font-weight: inherit;
+}
+
+.ontology-login__story p {
+  max-width: 475px;
+  margin: clamp(18px, 2.1vh, 24px) 0 0;
+  color: #6d7d91;
+  font-size: clamp(13px, 1.08vw, 16px);
+  line-height: 1.85;
+  text-wrap: pretty;
+}
+
+.ontology-login__features {
+  position: absolute;
+  z-index: 2;
+  top: 42.8%;
+  left: 3.45%;
+  display: grid;
+  gap: clamp(13px, 2vh, 21px);
+  width: 270px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ontology-login__features::before {
+  position: absolute;
+  z-index: -1;
+  inset: -16px -118px -18px -18px;
+  content: "";
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0 67%, rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.ontology-login__features li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ontology-login__feature-icon {
+  display: grid;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  color: var(--login-mint);
+  border-radius: 50%;
+  background: rgba(218, 245, 237, 0.91);
+}
+
+.ontology-login__features li > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.ontology-login__features strong {
+  color: #162538;
+  font-size: 15px;
+  font-weight: 660;
+}
+
+.ontology-login__features small {
+  color: #7f8da0;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.ontology-login__card {
+  position: absolute;
+  z-index: 3;
+  top: 16.8%;
+  right: 3.15%;
+  bottom: 6.35%;
+  width: 34.2%;
+  min-width: 430px;
+  overflow: hidden;
+  border: 1px solid rgba(205, 214, 221, 0.92);
+  border-radius: 21px;
+  background: rgba(255, 255, 255, 0.975);
+  box-shadow: 0 20px 50px rgba(34, 61, 73, 0.08), inset 0 1px 0 #fff;
+  backdrop-filter: blur(12px);
+}
+
+.ontology-login__card-content {
+  position: relative;
+  z-index: 2;
+  padding: clamp(72px, 9.8vh, 102px) clamp(34px, 2.58vw, 40px) 34px;
+}
+
+.ontology-login__dots {
+  position: absolute;
+  top: 31px;
+  right: 31px;
+  width: 94px;
+  height: 70px;
+  opacity: 0.72;
+  background-image: radial-gradient(circle, rgba(92, 205, 173, 0.38) 2.2px, transparent 2.5px);
+  background-size: 14px 14px;
+}
+
+.ontology-login__heading h2 {
+  margin: 0;
+  font-size: clamp(28px, 2.22vw, 34px);
+  font-weight: 720;
+  line-height: 1.25;
+  letter-spacing: -0.04em;
+}
+
+.ontology-login__heading p {
+  margin: 12px 0 0;
+  color: #8592a4;
+  font-size: 15px;
+}
+
+.ontology-login__form {
+  display: grid;
+  margin-top: clamp(40px, 4.55vh, 48px);
+}
+
+.ontology-login__form label {
+  margin-bottom: 14px;
+  color: #172537;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.ontology-login__input-wrap {
+  position: relative;
+  display: flex;
+  height: clamp(52px, 5.5vh, 57px);
+  align-items: center;
+  margin-bottom: clamp(27px, 3.45vh, 35px);
+  color: #a7b3c2;
+  border: 1px solid #d6dee5;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 2px rgba(34, 58, 71, 0.02);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.ontology-login__input-wrap:first-of-type {
+  margin-bottom: clamp(24px, 2.7vh, 28px);
+}
+
+.ontology-login__input-wrap:focus-within {
+  color: var(--login-mint-dark);
+  border-color: rgba(36, 169, 132, 0.72);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(36, 169, 132, 0.1);
+}
+
+.ontology-login__input-wrap > svg {
+  flex: 0 0 auto;
+  margin-left: 19px;
+  transition: color 180ms ease;
+}
+
+.ontology-login__input-wrap input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  padding: 0 15px;
+  color: #253449;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+}
+
+.ontology-login__input-wrap input::placeholder {
+  color: #aeb9c8;
+}
+
+.ontology-login__visibility {
+  display: grid;
+  width: 47px;
+  height: 100%;
+  flex: 0 0 47px;
+  padding: 0;
+  place-items: center;
+  color: #9daabd;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.ontology-login__visibility:hover {
+  color: var(--login-mint-dark);
+}
+
+.ontology-login__visibility:focus-visible,
+.ontology-login__submit:focus-visible {
+  outline: 3px solid rgba(36, 169, 132, 0.28);
+  outline-offset: 3px;
+}
+
+.ontology-login__error {
+  margin: -17px 0 20px;
+  padding: 10px 12px;
+  color: #b23a3a;
+  border: 1px solid #f4d2d2;
+  border-radius: 8px;
+  background: #fff6f6;
+  font-size: 13px;
+}
+
+.ontology-login__submit {
+  display: grid;
+  height: clamp(58px, 6.2vh, 63px);
+  margin-top: 10px;
+  place-items: center;
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(100deg, #27b78e 0%, #1c9f7b 100%);
+  box-shadow: 0 11px 24px rgba(28, 159, 123, 0.18);
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.ontology-login__submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 15px 28px rgba(28, 159, 123, 0.24);
+  filter: saturate(1.04);
+}
+
+.ontology-login__submit:active:not(:disabled) {
+  transform: translateY(1px) scale(0.995);
+}
+
+.ontology-login__submit:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.ontology-login__submit span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ontology-login__submit i {
+  width: 17px;
+  height: 17px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: ontology-login-spin 0.7s linear infinite;
+}
+
+.ontology-login__wave {
+  position: absolute;
+  right: -4%;
+  bottom: -8px;
+  left: -3%;
+  height: 170px;
+  opacity: 0.78;
+  background:
+    repeating-radial-gradient(ellipse at 16% 100%, transparent 0 7px, rgba(73, 194, 161, 0.16) 8px 9px, transparent 10px 16px);
+  mask-image: linear-gradient(to top, #000 8%, transparent 82%);
+}
+
+.ontology-login__shield {
+  position: absolute;
+  right: 13%;
+  bottom: 40px;
+  display: grid;
+  width: 60px;
+  height: 66px;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(155deg, rgba(134, 228, 203, 0.96), rgba(83, 198, 168, 0.6));
+  clip-path: polygon(50% 0, 92% 15%, 88% 67%, 72% 85%, 50% 100%, 28% 85%, 12% 67%, 8% 15%);
+  filter: drop-shadow(0 10px 12px rgba(43, 163, 132, 0.12));
+}
+
+@keyframes ontology-login-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1180px) {
+  .ontology-login__story {
+    width: 38%;
+  }
+
+  .ontology-login__card {
+    right: 2.5%;
+    width: 39%;
+    min-width: 400px;
+  }
+}
+
+@media (max-width: 960px) {
+  .ontology-login {
+    overflow: auto;
+  }
+
+  .ontology-login__canvas {
+    display: grid;
+    min-height: calc(100dvh - 28px);
+    place-items: center;
+    padding: 92px 24px 38px;
+  }
+
+  .ontology-login__reference-art,
+  .ontology-login__story,
+  .ontology-login__features {
+    display: none;
+  }
+
+  .ontology-login__brand {
+    top: 25px;
+    left: 28px;
+  }
+
+  .ontology-login__brand-mark {
+    width: 46px;
+    height: 46px;
+  }
+
+  .ontology-login__card {
+    position: relative;
+    inset: auto;
+    width: min(100%, 520px);
+    min-width: 0;
+    min-height: 650px;
+  }
+}
+
+@media (max-width: 540px) {
+  .ontology-login {
+    padding: 0;
+    background: #fff;
+  }
+
+  .ontology-login__canvas {
+    min-height: 100dvh;
+    padding: 82px 17px 18px;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .ontology-login__brand {
+    top: 20px;
+    left: 20px;
+    gap: 10px;
+  }
+
+  .ontology-login__brand-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+
+  .ontology-login__brand-name {
+    font-size: 20px;
+  }
+
+  .ontology-login__card {
+    min-height: 625px;
+    border-radius: 17px;
+  }
+
+  .ontology-login__card-content {
+    padding: 68px 24px 28px;
+  }
+
+  .ontology-login__dots {
+    top: 22px;
+    right: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ontology-login__submit,
+  .ontology-login__input-wrap,
+  .ontology-login__visibility {
+    transition: none;
+  }
+
+  .ontology-login__submit i {
+    animation-duration: 1.5s;
+  }
+}

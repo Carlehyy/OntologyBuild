@@ -1,83 +1,78 @@
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useNavigate } from 'react-router-dom'
-import { useAuthStore } from '@/stores/authStore'
+import {
+  Bot,
+  Eye,
+  EyeOff,
+  Layers3,
+  LockKeyhole,
+  ShieldCheck,
+  UserRound,
+} from 'lucide-react'
 import { authApi } from '@/api/auth'
-import { useTranslation } from 'react-i18next'
-import { useState, useEffect, useRef } from 'react'
-import { Network, Layers, Brain, Eye, EyeOff, GitBranch } from 'lucide-react'
+import { useAuthStore } from '@/stores/authStore'
+import loginReference from '@/assets/login-reference.png'
+import './login.css'
 
-/* ── 动态背景粒子 ── */
-function ParticleBackground() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    let w = canvas.width = canvas.offsetWidth
-    let h = canvas.height = canvas.offsetHeight
-    const particles: { x: number; y: number; vx: number; vy: number; r: number }[] = []
-    const PARTICLE_COUNT = 40
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-      particles.push({
-        x: Math.random() * w, y: Math.random() * h,
-        vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
-        r: Math.random() * 2 + 1,
-      })
-    }
-
-    let animId: number
-    const draw = () => {
-      ctx.clearRect(0, 0, w, h)
-      // Draw connections
-      for (let i = 0; i < particles.length; i++) {
-        for (let j = i + 1; j < particles.length; j++) {
-          const dx = particles[i].x - particles[j].x
-          const dy = particles[i].y - particles[j].y
-          const dist = Math.sqrt(dx * dx + dy * dy)
-          if (dist < 150) {
-            ctx.strokeStyle = `rgba(100, 149, 237, ${0.15 * (1 - dist / 150)})`
-            ctx.lineWidth = 0.8
-            ctx.beginPath()
-            ctx.moveTo(particles[i].x, particles[i].y)
-            ctx.lineTo(particles[j].x, particles[j].y)
-            ctx.stroke()
-          }
-        }
-      }
-      // Draw particles
-      for (const p of particles) {
-        p.x += p.vx; p.y += p.vy
-        if (p.x < 0 || p.x > w) p.vx *= -1
-        if (p.y < 0 || p.y > h) p.vy *= -1
-        ctx.fillStyle = 'rgba(100, 149, 237, 0.6)'
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
-        ctx.fill()
-      }
-      animId = requestAnimationFrame(draw)
-    }
-    draw()
-    const handleResize = () => { w = canvas.width = canvas.offsetWidth; h = canvas.height = canvas.offsetHeight }
-    window.addEventListener('resize', handleResize)
-    return () => { cancelAnimationFrame(animId); window.removeEventListener('resize', handleResize) }
-  }, [])
-  return <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+type LoginForm = {
+  username: string
+  password: string
 }
 
+function OntologyMark({ size = 30 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M16 7.2v6.1M9.8 20.2l4.1-3.3M22.2 20.2l-4.1-3.3" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx="16" cy="5.5" r="4" stroke="currentColor" strokeWidth="2.6" />
+      <circle cx="7.6" cy="22.5" r="4" stroke="currentColor" strokeWidth="2.6" />
+      <circle cx="24.4" cy="22.5" r="4" stroke="currentColor" strokeWidth="2.6" />
+      <circle cx="16" cy="15.6" r="3.2" fill="currentColor" />
+    </svg>
+  )
+}
+
+const features = [
+  {
+    icon: OntologyMark,
+    title: '可视化本体建模',
+    description: '编排对象、关系、动作与规则',
+  },
+  {
+    icon: Layers3,
+    title: '数据资产治理',
+    description: '采集、映射与投影企业数据',
+  },
+  {
+    icon: Bot,
+    title: '智能推理与应用',
+    description: '状态监听、条件判断、自动执行',
+  },
+  {
+    icon: ShieldCheck,
+    title: '安全合规可靠',
+    description: '角色权限控制与可审计接口',
+  },
+]
+
 export default function LoginPage() {
-  const { register, handleSubmit } = useForm<{ username: string; password: string }>()
-  const setAuth = useAuthStore(s => s.setAuth)
+  const { register, handleSubmit } = useForm<LoginForm>()
+  const setAuth = useAuthStore(state => state.setAuth)
   const navigate = useNavigate()
-  const { t: _t } = useTranslation()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
 
-  const onSubmit = async (data: { username: string; password: string }) => {
-    setLoading(true); setError('')
+  const onSubmit = async (data: LoginForm) => {
+    setLoading(true)
+    setError('')
     try {
       const res = await authApi.login(data.username, data.password) as any
       localStorage.setItem('token', res.access_token)
@@ -87,111 +82,106 @@ export default function LoginPage() {
     } catch (e: any) {
       localStorage.removeItem('token')
       setError(e?.response?.data?.detail || '登录失败，请检查用户名和密码')
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+    }
   }
 
-
-  const features = [
-    { icon: Brain, text: 'LLM驱动的多轮知识抽取', delay: '0.1s' },
-    { icon: Network, text: '交互式知识图谱可视化', delay: '0.2s' },
-    { icon: Layers, text: '本体建模与版本管理', delay: '0.3s' },
-    { icon: GitBranch, text: '规则推理与动作发射', delay: '0.4s' },
-  ]
-
   return (
-    <div className="min-h-screen flex" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
-      {/* Left Panel — Brand */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden" style={{ background: 'linear-gradient(160deg, #0f172a 0%, #1e293b 40%, #0f172a 100%)' }}>
-        <ParticleBackground />
-        <div className="relative z-10 flex flex-col justify-between p-12 h-full">
-          <div className="anim-fade-in-down">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(100, 149, 237, 0.2)' }}>
-                <Network size={22} className="text-blue-400" />
-              </div>
-              <span className="text-xl font-semibold tracking-tight text-white">OpenOntology</span>
-            </div>
-          </div>
+    <main className="ontology-login">
+      <section className="ontology-login__canvas" aria-label="OpenOntology 登录">
+        <img
+          className="ontology-login__reference-art"
+          src={loginReference}
+          alt=""
+          aria-hidden="true"
+        />
 
-          <div className="space-y-6 anim-fade-in-up" style={{ animationDelay: '0.2s' }}>
-            <h2 className="text-4xl font-bold text-white leading-tight" style={{ letterSpacing: '-0.02em' }}>
-              智能本体建模<br />
-              <span style={{ color: '#6495ed' }}>知识图谱平台</span>
-            </h2>
-            <p className="text-slate-400 text-base leading-relaxed max-w-md">
-              从本体建模到规则推理，从知识抽取到智能问答，构建领域知识的完整认知框架。支持多领域复用，零配置快速上手。
-            </p>
+        <header className="ontology-login__brand">
+          <span className="ontology-login__brand-mark"><OntologyMark size={31} /></span>
+          <span className="ontology-login__brand-name">
+            <span>Open</span><span>Ontology</span>
+          </span>
+        </header>
 
-            <div className="space-y-3 pt-4">
-              {features.map((f, i) => (
-                <div key={i} className="flex items-center gap-3 anim-fade-in-right" style={{ animationDelay: f.delay }}>
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(100, 149, 237, 0.1)', border: '1px solid rgba(100, 149, 237, 0.2)' }}>
-                    <f.icon size={15} className="text-blue-400" />
-                  </div>
-                  <span className="text-sm text-slate-300">{f.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <p className="text-xs text-slate-600 anim-fade-in" style={{ animationDelay: '0.6s' }}>
-            OpenOntology v2.0 · 企业级知识图谱引擎
+        <section className="ontology-login__story" aria-labelledby="login-story-title">
+          <h1 id="login-story-title">
+            <span>智能本体构建</span>
+            <strong>让知识连接未来</strong>
+          </h1>
+          <p>
+            OpenOntology 是一款新一代本体构建与管理平台，帮助企业快速构建、管理和应用领域本体，让数据变化自动驱动业务运转。
           </p>
-        </div>
-      </div>
+        </section>
 
-      {/* Right Panel — Login Form */}
-      <div className="flex-1 flex items-center justify-center bg-[var(--color-bg-base)] p-6">
-        <div className="w-full max-w-sm anim-scale-in">
-          {/* Mobile Logo */}
-          <div className="lg:hidden flex items-center gap-2 mb-8">
-            <Network size={20} style={{ color: 'var(--color-primary)' }} />
-            <span className="font-semibold text-lg">OpenOntology</span>
-          </div>
+        <ul className="ontology-login__features" aria-label="平台能力">
+          {features.map(({ icon: Icon, title, description }) => (
+            <li key={title}>
+              <span className="ontology-login__feature-icon"><Icon size={21} /></span>
+              <span>
+                <strong>{title}</strong>
+                <small>{description}</small>
+              </span>
+            </li>
+          ))}
+        </ul>
 
-          <div className="mb-8">
-            <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">欢迎回来</h1>
-            <p className="text-sm text-[var(--color-text-tertiary)] mt-1">登录您的知识图谱工作空间</p>
-          </div>
-
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-1.5">用户名</label>
-              <input {...register('username', { required: true })} placeholder="输入用户名"
-                className="w-full h-10 px-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-disabled)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)] transition-all" />
+        <section className="ontology-login__card" aria-labelledby="login-title">
+          <div className="ontology-login__dots" aria-hidden="true" />
+          <div className="ontology-login__card-content">
+            <div className="ontology-login__heading">
+              <h2 id="login-title">欢迎回来</h2>
+              <p>登录您的 OpenOntology 账号</p>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-1.5">密码</label>
-              <div className="relative">
-                <input {...register('password', { required: true })} type={showPassword ? 'text' : 'password'} placeholder="输入密码"
-                  className="w-full h-10 px-3 pr-10 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-disabled)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)] transition-all" />
-                <button type="button" onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors">
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            <form onSubmit={handleSubmit(onSubmit)} className="ontology-login__form">
+              <label htmlFor="login-username">用户名</label>
+              <div className="ontology-login__input-wrap">
+                <UserRound size={20} aria-hidden="true" />
+                <input
+                  id="login-username"
+                  autoComplete="username"
+                  {...register('username', { required: true })}
+                  placeholder="请输入用户名"
+                />
+              </div>
+
+              <label htmlFor="login-password">密码</label>
+              <div className="ontology-login__input-wrap">
+                <LockKeyhole size={19} aria-hidden="true" />
+                <input
+                  id="login-password"
+                  autoComplete="current-password"
+                  {...register('password', { required: true })}
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="请输入密码"
+                />
+                <button
+                  type="button"
+                  className="ontology-login__visibility"
+                  onClick={() => setShowPassword(value => !value)}
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  aria-pressed={showPassword}
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
               </div>
-            </div>
 
-            {error && (
-              <div className="p-3 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm anim-fade-in-down">
-                {error}
-              </div>
-            )}
+              {error && <div className="ontology-login__error" role="alert">{error}</div>}
 
-            <button type="submit" disabled={loading}
-              className="w-full h-10 rounded-lg font-medium text-sm text-white transition-all btn-press disabled:opacity-50"
-              style={{ background: 'var(--color-primary)' }}>
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                  登录中...
-                </span>
-              ) : '登录'}
-            </button>
-          </form>
-        </div>
-      </div>
-    </div>
+              <button type="submit" className="ontology-login__submit" disabled={loading}>
+                {loading ? (
+                  <span><i aria-hidden="true" />登录中...</span>
+                ) : '登录'}
+              </button>
+            </form>
+          </div>
+
+          <div className="ontology-login__wave" aria-hidden="true">
+            <span className="ontology-login__shield"><ShieldCheck size={27} /></span>
+          </div>
+        </section>
+      </section>
+    </main>
   )
 }
