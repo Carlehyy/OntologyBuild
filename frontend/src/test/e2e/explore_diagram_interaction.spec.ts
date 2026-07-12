@@ -23,6 +23,22 @@ const readiness = {
   gates: [],
 }
 
+const htmlAttachment = {
+  id: 'html-1', sessionId: 's1', filename: 'anthropic_timeline.html',
+  relativePath: 'anthropic_timeline.html', mimeType: 'text/html', fileSize: 512,
+  charCount: 512, sha256: 'html-sha', version: 2, source: 'agent', editable: true,
+  status: 'ready', error: null, createdAt: '2026-07-12T00:00:00Z', updatedAt: '2026-07-12T00:00:00Z',
+}
+
+const htmlContent = `<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="utf-8"><title>Anthropic 时间线</title></head>
+  <body>
+    <main><h1>Anthropic 全景时间线</h1><p id="rendered">等待脚本渲染</p></main>
+    <script>document.getElementById('rendered').textContent = 'HTML 脚本已执行'</script>
+  </body>
+</html>`
+
 async function mockExplore(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
@@ -64,7 +80,18 @@ async function mockExplore(page: Page) {
         }],
       })
     }
-    if (path === '/api/v2/exploration/sessions/s1/attachments') return ok([])
+    if (path === '/api/v2/exploration/sessions/s1/attachments') return ok([htmlAttachment])
+    if (path === '/api/v2/exploration/sessions/s1/attachments/html-1/preview') {
+      return ok({
+        id: htmlAttachment.id,
+        relativePath: htmlAttachment.relativePath,
+        content: htmlContent,
+        version: htmlAttachment.version,
+        mimeType: htmlAttachment.mimeType,
+        editable: true,
+        truncated: false,
+      })
+    }
     if (path.startsWith('/api/v2/exploration/sessions/s1/diagrams/')) {
       const kind = path.split('/').pop()
       if (kind === 'er') await new Promise(resolve => setTimeout(resolve, 250))
@@ -147,5 +174,22 @@ test.describe('业务探索图表与图片交互', () => {
     expect(sendBox!.x).toBeLessThan(historyBox!.x)
     expect(toolbarBox!.y).toBeLessThan(uploadBox!.y + uploadBox!.height)
     expect(toolbarBox!.y).toBeLessThan(sendBox!.y + sendBox!.height)
+  })
+
+  test('文件清单中的 HTML 使用隔离网页预览并保留源码编辑', async ({ page }) => {
+    await page.getByRole('button', { name: '查看文件清单' }).click()
+
+    const iframe = page.getByTestId('html-file-preview')
+    await expect(iframe).toBeVisible()
+    await expect(iframe).toHaveAttribute('sandbox', 'allow-scripts')
+    await expect(iframe).not.toHaveAttribute('sandbox', /allow-same-origin/)
+
+    const htmlFrame = page.frameLocator('[data-testid="html-file-preview"]')
+    await expect(htmlFrame.getByRole('heading', { name: 'Anthropic 全景时间线' })).toBeVisible()
+    await expect(htmlFrame.getByText('HTML 脚本已执行')).toBeVisible()
+    await expect(page.getByText('<!doctype html>', { exact: false })).toBeHidden()
+
+    await page.getByRole('button', { name: '编辑' }).click()
+    await expect(page.getByLabel('文件内容编辑器')).toContainText('Anthropic 全景时间线')
   })
 })

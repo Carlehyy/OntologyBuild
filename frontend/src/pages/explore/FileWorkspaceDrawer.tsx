@@ -204,6 +204,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
 
   const extension = (preview?.relativePath || '').split('.').pop()?.toLowerCase()
   const markdownPreview = extension === 'md'
+  const htmlPreview = extension === 'html' || extension === 'htm'
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
@@ -357,7 +358,9 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   </div>
                 </div>
 
-                <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-5">
+                <div className={`scrollbar-thin min-h-0 flex-1 ${htmlPreview && viewMode === 'preview'
+                  ? 'overflow-hidden bg-white p-0'
+                  : 'overflow-auto p-5'}`}>
                   {loadingId === activeFile.id && !preview ? (
                     <div className="flex h-full items-center justify-center gap-2 text-xs text-[var(--color-text-tertiary)]">
                       <Loader2 size={15} className="animate-spin" />正在读取文件…
@@ -366,6 +369,15 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                     <textarea value={draft} onChange={event => setDraft(event.target.value)}
                       aria-label="文件内容编辑器"
                       className="scrollbar-thin h-full min-h-[320px] w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4 font-mono text-xs leading-5 outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+                  ) : preview?.content && htmlPreview ? (
+                    <iframe
+                      data-testid="html-file-preview"
+                      title={`${activeFile.filename} 网页预览`}
+                      srcDoc={preview.content}
+                      sandbox="allow-scripts"
+                      referrerPolicy="no-referrer"
+                      className="h-full min-h-[320px] w-full border-0 bg-white"
+                    />
                   ) : preview?.content ? (
                     <div className="mx-auto max-w-4xl">
                       {!preview.editable && (
