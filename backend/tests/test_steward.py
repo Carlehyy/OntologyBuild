@@ -3,9 +3,9 @@
   1. 生命周期（发布唯一入口 = 流水线编辑向导的 publish 端点）：
      新建即未发布（不激活）→ publish 激活 + 封版 + 固化 definition →
      已发布永久封版（数据管家修改与旧 unpublish 端点均被拒）
-  2. 职权边界（管家只有两项写权限）：新建骨架（create_pipeline）+ 编排
+  2. 职权边界（管家只有两项持久写权限）：新建骨架（create_pipeline）+ 编排
      「未发布 且 未启用」的流水线（update_workflow）。已启用即拒编排；
-     试跑 / 纳管 / 执行观测 / 归档删除都不再是管家职权。
+     用户明确要求时允许受控执行预览；纳管 / 归档删除仍不在管家职权内。
   3. 编排工具边界：connections 引用缺失节点报错回给 LLM；节点字段补全
   4. runner 行数据规整：webhook 响应体 / 执行末节点 items → list[dict]
 """
@@ -35,6 +35,7 @@ def test_steward_intent_router_does_not_default_every_turn_to_overview():
     assert classify_steward_intent("现在有哪些流水线")["code"] == "inventory"
     assert classify_steward_intent("帮我修改订单流水线的整形节点")["code"] == "edit"
     assert classify_steward_intent("为什么昨晚执行失败")["code"] == "diagnose"
+    assert classify_steward_intent("帮我执行一下订单流水线")["code"] == "execute"
     assert classify_steward_intent("用表格看看最近输出的前十条")["code"] == "preview"
     assert classify_steward_intent("你好，先聊聊需求")["code"] == "consult"
 
@@ -527,7 +528,8 @@ def test_publish_fixes_expected_columns_from_wizard_preview(
     """发布固化最近一次执行预览的列集合为期望列契约（运行期漂移检测基线）。
 
     未发布 n8n 的执行预览走 runner.collect_test_rows（临时激活→触发→还原）+
-    persist_test_result，与流水线编辑向导第 2 步同一条通道——管家已无试跑工具。"""
+    persist_test_result，与流水线编辑向导第 2 步同一条通道。数据管家的受控执行
+    也复用 collect_test_rows，但不形成发布所需的字段校验凭证。"""
     monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
     from app.data_channel.steward.runner import collect_test_rows, persist_test_result
 
@@ -1156,7 +1158,7 @@ def test_update_normalizes_nodes(db, fake_n8n, draft_record):
     assert node["id"] and node["position"] and node["typeVersion"] == 1
 
 
-# ── 只读编排辅助工具（作者增强 / 调错，无副作用） ─────────────────
+# ── 执行预览与只读编排辅助工具 ───────────────────────────────────
 
 def test_describe_node_and_reference(db, fake_n8n):
     """describe_node 返回节点深挖详情；n8n_reference 返回表达式/Code/模式骨架。"""
@@ -1173,11 +1175,68 @@ def test_describe_node_and_reference(db, fake_n8n):
     assert "error" in runner.run("n8n_reference", {"topic": "乱写"})
 
 
+def test_execute_pipeline_triggers_fresh_draft_run_and_restores_state(
+        db, fake_n8n, draft_record):
+    """明确执行指令会真实触发 n8n，并展示本次输出，但不发布、不入湖、不遗留激活。"""
+    fake_n8n.calls.clear()
+
+    out = ToolRunner(db, None, None).run("execute_pipeline", {
+        "record_id": draft_record.id,
+        "payload": {"requested_by": "steward-test"},
+        "sample_limit": 1,
+        "columns": ["currency", "rate"],
+    })
+
+    assert "error" not in out, out
+    assert out["pipelineStatus"] == "draft" and out["rows"] == 2
+    assert out["preview"]["title"] == "本次执行输出"
+    assert out["preview"]["columns"] == ["currency", "rate"]
+    assert out["preview"]["rows"] == [{"currency": "USD", "rate": 1.0}]
+    assert out["preview"]["totalRows"] == 2 and out["preview"]["shownRows"] == 1
+    assert out["execution"]["execution_status"] == "success"
+    assert fake_n8n.calls == [
+        f"activate:{draft_record.n8n_workflow_id}",
+        f"webhook:{WEBHOOK_PATH}",
+        f"deactivate:{draft_record.n8n_workflow_id}",
+    ]
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    db.refresh(draft_record)
+    assert service.shadow_status(db, draft_record) == "draft"
+    assert not draft_record.last_test_result
+
+
+def test_execute_pipeline_validates_published_release_and_restores_disabled_state(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
+    """已发布但停用的流水线也可隔离执行；revision 校验仍生效，执行后恢复停用。"""
+    published = _publish(client, auth_headers, draft_record.pipeline_id, enable=False)
+    assert published.status_code == 200, published.text
+    fake_n8n.calls.clear()
+
+    out = ToolRunner(db, None, None).run("execute_pipeline", {
+        "record_id": draft_record.id,
+    })
+
+    assert "error" not in out, out
+    assert out["pipelineStatus"] == "published" and out["rows"] == 2
+    assert fake_n8n.calls == [
+        f"activate:{draft_record.n8n_workflow_id}",
+        f"webhook:{WEBHOOK_PATH}",
+        f"deactivate:{draft_record.n8n_workflow_id}",
+    ]
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+
+    fake_n8n.workflows[draft_record.n8n_workflow_id]["versionId"] = "drifted-version"
+    rejected = ToolRunner(db, None, None).run("execute_pipeline", {
+        "record_id": draft_record.id,
+    })
+    assert "版本漂移" in rejected["error"]
+
+
 def test_inspect_runs_reads_latest_execution(db, fake_n8n, draft_record):
     """只读诊断：无记录给提示；有记录展开最近一次的报错/节点行数/末节点样例。"""
     runner = ToolRunner(db, None, None)
     empty = runner.run("inspect_runs", {"record_id": draft_record.id})
-    assert empty["executions"] == [] and "编辑向导" in empty["note"]
+    assert empty["executions"] == [] and "execute_pipeline" in empty["note"]
 
     fake_n8n._executions = [{
         "id": "e1", "status": "error", "startedAt": "t1", "stoppedAt": "t2",

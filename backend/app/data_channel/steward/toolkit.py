@@ -7,14 +7,16 @@
   2. 辅助编排：update_workflow 只能改「未发布 且 未启用」的流水线定义。
 
 会话文件工具可以创建、编辑和删除当前会话内的文档，但所有路径解析仍由会话工作区
-完成，不能访问其他会话或主机目录。其余工具全是只读支撑，只服务编排质量：查看/
+完成，不能访问其他会话或主机目录。用户明确要求时，execute_pipeline 可以触发一次
+受控执行预览，结束后恢复原启停状态且不写资产湖。其余工具全是只读支撑，只服务编排质量：查看/
 列表、节点目录与深挖(describe_node)、表达式&模式参考(n8n_reference)、静态体检
 (check_workflow)、探测数据源(probe_url)、只读执行诊断(inspect_runs)、凭据缺口
 检查(check_credentials)。治理边界（与本体 agent 同一哲学：agent 干活，人签字）：
   - 创建的 workflow 一律不激活；激活只发生在用户于流水线编辑向导「发布」时
     ——发布是生命周期的唯一入口，工具集里没有这个动词。
   - 已发布流水线永久封版；需要变更时新建流水线。未发布但在 n8n 侧启用的草稿须先停用。
-  - 纳管、试跑、执行观测、归档/删除都不再是管家职权（归档在流水线列表操作）。
+  - 管家可按用户明确指令触发一次执行预览，但不能借此发布、永久启停或写入资产湖。
+  - 纳管、归档/删除都不再是管家职权（归档在流水线列表操作）。
   - 凭据(credentials)无法经 API 创建 — 工具只能引用用户在 n8n 界面配好的凭据。
 """
 from __future__ import annotations
@@ -125,8 +127,31 @@ TOOL_DEFS: list[dict] = [
         },
     },
     {
+        "name": "execute_pipeline",
+        "description": (
+            "触发一条受管 n8n 流水线的新执行，并把本次末节点真实输出作为在线表格返回。"
+            "仅在用户明确说‘执行/运行/重新跑/触发’时使用；不要用 inspect_runs 冒充新执行。"
+            "未发布流水线会在锁内临时激活并在结束后恢复，已发布流水线会先校验发布 revision；"
+            "两者都不会发布、永久启停或把产物写入数据资产湖。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_id": {"type": "string"},
+                "payload": {"type": "object", "description": "可选：POST 给受管 Webhook 的 JSON 载荷"},
+                "sample_limit": {"type": "integer", "description": "在线表格展示前几行，默认 5，最多 20"},
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "只展示用户点名的字段，最多 12 个",
+                },
+            },
+            "required": ["record_id"],
+        },
+    },
+    {
         "name": "inspect_runs",
-        "description": "只读诊断一条受管流水线最近的 n8n 执行：状态、报错、各节点产出行数，并把末节点真实样例作为在线表格返回。用户说「看看输出 / 展示前几条 / 用表格看字段 / 跑出来不对」时使用；可按要求指定行数和列。它不会触发新执行。未发布流水线若无执行记录，会提示用户先通过编辑向导执行预览。",
+        "description": "只读诊断一条受管流水线已有的最近 n8n 执行：状态、报错、各节点产出行数，并把末节点真实样例作为在线表格返回。用户说「看上次输出 / 展示已有结果 / 为什么失败」时使用；它不会触发新执行。用户明确要求重新执行时改用 execute_pipeline。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -908,7 +933,39 @@ class ToolRunner:
         return {"ok": ok, "issues": issues, "summary": summary,
                 "managedContract": managed_contract}
 
-    # ── 只读诊断（服务编排质量，无副作用） ────────────────────────────
+    # ── 受控执行预览（真实触发，不发布、不永久启停、不写资产湖） ──────────
+
+    def tool_execute_pipeline(self, record_id: str, payload: dict | None = None,
+                              sample_limit: int | None = None,
+                              columns: list[str] | None = None) -> dict:
+        from app.data_channel.steward.runner import collect_n8n_rows, collect_test_rows
+
+        if payload is not None and not isinstance(payload, dict):
+            raise StewardError("payload 必须是 JSON 对象。")
+        rec = service.require_record(self.db, record_id)
+        pl = service.shadow_pipeline(self.db, rec)
+        if pl is not None and (pl.status or "") == "published":
+            rows, exec_meta = collect_n8n_rows(self.db, pl, payload=payload)
+            lifecycle = "published"
+        else:
+            rows, exec_meta = collect_test_rows(self.db, rec, payload=payload)
+            lifecycle = "draft"
+
+        preview = _execution_table_preview(rows, sample_limit, columns)
+        preview["title"] = "本次执行输出"
+        preview["node"] = exec_meta.get("last_node")
+        preview["executionId"] = str(exec_meta.get("execution_id") or "")
+        self._touch(rec.id)
+        return {
+            "pipeline": rec.name,
+            "pipelineStatus": lifecycle,
+            "rows": len(rows),
+            "execution": exec_meta,
+            "preview": preview,
+            "note": "本次执行仅用于查看输出，未写入数据资产湖，流水线启停状态已保持或恢复。",
+        }
+
+    # ── 只读诊断（读取已有执行，无副作用） ────────────────────────────
 
     def tool_inspect_runs(self, record_id: str, limit: int | None = None,
                           sample_limit: int | None = None,
@@ -918,8 +975,8 @@ class ToolRunner:
         out: dict[str, Any] = {"pipeline": rec.name,
                                "executions": [_execution_brief(e) for e in execs]}
         if not execs:
-            out["note"] = ("这条流水线还没有执行记录（未发布不会被平台调度）。"
-                           "请先在流水线列表或编辑向导完成一次试运行，再回来查看输出。")
+            out["note"] = ("这条流水线还没有执行记录。若用户希望立即运行，"
+                           "请使用 execute_pipeline 触发一次受控执行预览。")
             return out
         # 展开最近一次的细节：报错 / 各节点行数 / 末节点样例
         latest = self.client.get_execution(str(execs[0].get("id")), include_data=True)

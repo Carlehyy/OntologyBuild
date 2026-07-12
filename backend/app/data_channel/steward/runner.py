@@ -324,8 +324,8 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
                       wait_seconds: int = 60) -> tuple[list[dict], dict]:
     """未发布 workflow 的取数通道：临时激活 → 触发 → 收集完整行 → 恢复原激活状态。
 
-    不写资产湖。供流水线编辑向导对未发布 n8n 的执行预览使用——未发布 n8n 的
-    生产 webhook 未注册，走 collect_n8n_rows 必 404。数据管家已无试跑入口。
+    不写资产湖。供流水线编辑向导和数据管家对未发布 n8n 的执行预览使用——未发布
+    n8n 的生产 webhook 未注册，走 collect_n8n_rows 必 404。
     """
     client = service.get_n8n_client(db)
     from app.data_channel.datasets.lock import dataset_write_lock

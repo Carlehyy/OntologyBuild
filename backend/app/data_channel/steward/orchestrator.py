@@ -36,6 +36,7 @@ _MAX_STEPS = 12            # 单回合最大工具步数
 
 
 _INTENT_RULES = (
+    ("execute", "执行指定流水线", ("帮我执行", "执行一下", "运行一下", "跑一下", "重新执行", "重新运行", "触发执行")),
     ("preview", "预览最近输出", ("看看输出", "输出是什么", "具体输出", "输出内容", "表格", "前几条", "前几行", "样例数据")),
     ("diagnose", "诊断运行问题", ("失败", "报错", "异常", "为什么", "跑出来", "诊断", "排查")),
     ("create", "新建流水线", ("新建", "创建", "新增", "搭建一条", "做一条")),
@@ -76,12 +77,14 @@ def _system_prompt(db: Session, conversation_id: str | None = None) -> str:
 4. 查页面数据来源时，用 browser_network_requests 比较 XHR/fetch，核对响应样例、字段结构与 pagination。不要只凭 URL 名称猜接口。捕获到的附件、图片、音视频用 download_captured_file 保存；页面 `<img>`、data:/blob: 或未形成网络 capture 的资源，先 browser_page_resources 找到目标元素 index，再用 browser_save_resource。需要点无文字下载控件时用 browser_click_element，并核对 downloadedFiles，不能仅凭“点击了”声称下载成功。
 5. 内网授权接口需要稳定复用时，用 register_proxy_interface 登记到接口代理，再让 n8n 调 proxyUrl。只有确需复用当前浏览器认证时才 include_auth；公司 W3 接口优先 use_w3。
 
-# n8n 写权限边界
-平台把 n8n 作为数据流水线执行引擎。你对 n8n 只有两项写权限；每个受管工作流对应流水线列表里的一条 n8n 流水线，生命周期只有「未发布 / 已发布」两态。
+# n8n 写权限与执行边界
+平台把 n8n 作为数据流水线执行引擎。你对 n8n 只有两项持久写权限；每个受管工作流对应流水线列表里的一条 n8n 流水线，生命周期只有「未发布 / 已发布」两态。
 1. **新建流水线**（create_pipeline）：只需名称+描述，后台自动在 n8n 建好 Webhook→输出 的骨架并登记为未发布流水线（等价于用户在流水线列表点「新建流水线 → n8n」）——不激活、不调度。
 2. **编排完善**（update_workflow）：往骨架里补全取数与整形节点。**只能编排「未发布 且 未启用」的流水线**；已发布版本永久封版，变更必须新建流水线。草稿若在 n8n 侧被手动启用，先让用户停用再继续。
 
-除此之外你**不能改动 n8n 生命周期**：不能发布、启用/停用、试跑/运行、纳管已有工作流、归档/删除。**发布是不可逆的版本定版动作**，只由用户在编辑向导完成；发布后如需变更必须新建流水线，旧版本只能停用或归档。绝不能声称流水线"已发布/已生效/已激活"。
+除此之外你**不能改动 n8n 生命周期**：不能发布、永久启用/停用、纳管已有工作流、归档/删除。**发布是不可逆的版本定版动作**，只由用户在编辑向导完成；发布后如需变更必须新建流水线，旧版本只能停用或归档。绝不能声称流水线"已发布/已生效/已激活"。
+
+你可以在用户明确要求「执行、运行、重新跑、触发」某条受管流水线时使用 execute_pipeline：它会真实触发一次 n8n 执行并返回本次输出表格；未发布草稿只会在锁内临时激活并自动恢复，已发布流水线会先核验发布 revision；不会发布、永久改变启停状态或写入数据资产湖。仅想看已有运行记录或排查上次失败时使用 inspect_runs，不要混淆两者。
 
 {inventory}
 
@@ -101,19 +104,19 @@ def _system_prompt(db: Session, conversation_id: str | None = None) -> str:
 - 不确定某节点参数就 describe_node 查 worked example；不知从哪起就 n8n_reference('patterns') 抄骨架；表达式/Code 写法查 n8n_reference('expressions'|'code')。
 
 # 行为准则
-1. **先识别意图再选工具**：不要把 steward_overview 当成每轮固定开场。只有用户询问“有哪些流水线、整体状态、连接健康”时才先看全景；修改指定草稿先 list_pipelines/get_workflow，诊断失败先定位流水线并 inspect_runs，新建则先澄清名称与数据来源，给 API 可先 probe_url，给页面则 browser_open → browser_state → browser_network_requests。编排任何已有工作流前必须 get_workflow，复杂节点再 describe_node 查准参数与示例。
+1. **先识别意图再选工具**：不要把 steward_overview 当成每轮固定开场。只有用户询问“有哪些流水线、整体状态、连接健康”时才先看全景；修改指定草稿先 list_pipelines/get_workflow；明确要求新执行时定位流水线后 execute_pipeline；诊断已有失败时 inspect_runs；新建则先澄清名称与数据来源，给 API 可先 probe_url，给页面则 browser_open → browser_state → browser_network_requests。编排任何已有工作流前必须 get_workflow，复杂节点再 describe_node 查准参数与示例。
 2. 设计先行：新建/大改前，用一段简洁文字（可用列表描述节点链路）向用户确认设计，用户同意后再调工具落地；拿不准结构就 n8n_reference('patterns') 找个验证过的骨架起步。
 3. 小步透明：每次工具调用后向用户说明做了什么、下一步是什么。工具报错时读错误信息自我修正，同一错误不要重复第三次。
-4. 自检、调错与输出预览：改完用 check_workflow 静态体检（触发器/连线/Webhook 约定）、check_credentials 查凭据缺口。用户说"跑出来不对 / 为什么失败"时用 inspect_runs 读最近执行的报错与末节点数据；用户说"看看输出 / 用表格展示前 N 条 / 只看某些字段"时也直接用 inspect_runs，并按要求填写 sample_limit、columns。工具会在对话中自动渲染结构化表格，最终回答只需解释数据质量和截断情况，不要重复抄整张表。但你仍**不能**触发新的试跑或运行——如果没有执行记录或用户明确要求重新执行，引导其在流水线列表或编辑向导完成试运行后再查看，绝不要让用户自己去 n8n 点 Execute 或手动 curl。
+4. 自检、调错与输出预览：改完用 check_workflow 静态体检（触发器/连线/Webhook 约定）、check_credentials 查凭据缺口。用户明确说“执行一下 / 重新跑 / 触发”时用 execute_pipeline 触发本次执行；用户说“看看上次输出 / 为什么失败”时用 inspect_runs 读取已有执行。两者都支持按要求填写 sample_limit、columns，并在对话中自动渲染结构化表格，最终回答只需解释数据质量和截断情况，不要重复抄整张表。绝不要用 probe_url 去打受管 Webhook，也不要让用户自己去 n8n 点 Execute 或手动 curl。
 5. 收尾引导：编排完善、体检通过后，明确告诉用户「到流水线列表，点这条流水线的编辑向导完成发布并启用」——发布不是你的动作，别揽也别漏。
-6. 诚实边界：浏览器不可达、登录未完成、接口样例不足或代理令牌/凭据未配置时要明确指出，不要伪称成功。不能创建 n8n 凭据、不能发布、不能启用/停用、不能试跑运行、不能纳管已有工作流、不能删除。
+6. 诚实边界：浏览器不可达、登录未完成、接口样例不足或代理令牌/凭据未配置时要明确指出，不要伪称成功。不能创建 n8n 凭据、不能发布、不能永久启用/停用、不能纳管已有工作流、不能删除；只有 execute_pipeline 允许在不改变生命周期、不写资产湖的前提下触发一次执行预览。
 7. 用中文回答，简洁、结构化。
 
 {file_context}"""
 
 
 def _summarize(name: str, result: dict) -> str:
-    # 只有真正非空的 error 才算失败：test_run 等工具成功时也带 "error": None 键，
+    # 只有真正非空的 error 才算失败：执行工具成功时也可能带 "error": None 键，
     # 用 "error" in result 会把成功误判成失败（摘要显示 "None"）
     if result.get("error"):
         return str(result["error"])[:120]
@@ -152,6 +155,11 @@ def _summarize(name: str, result: dict) -> str:
                  if preview else "")
         tail = " · 最近有报错" if err else (" · 无执行记录" if not execs else table)
         return f"{result.get('pipeline', '')} {len(execs)} 次执行{tail}"
+    if name == "execute_pipeline":
+        preview = result.get("preview") or {}
+        status = "已发布" if result.get("pipelineStatus") == "published" else "未发布"
+        return (f"已执行「{result.get('pipeline', '')}」（{status}）"
+                f" · 输出 {preview.get('shownRows', 0)}/{preview.get('totalRows', 0)} 行")
     if name == "check_credentials":
         ref = result.get("referenced", [])
         miss = result.get("missing")
@@ -284,7 +292,7 @@ def _run(db: Session, user, question: str,
                     "summary": _summarize(tc["name"], result), "durationMs": duration}
             if result.get("error"):
                 step["error"] = result["error"]
-            if tc["name"] == "inspect_runs" and isinstance(result.get("preview"), dict):
+            if tc["name"] in {"execute_pipeline", "inspect_runs"} and isinstance(result.get("preview"), dict):
                 step["preview"] = result["preview"]
             steps.append(step)
             yield {"type": "step", **step}

@@ -1,7 +1,8 @@
 /**
  * 数据管家 — 对话式新建与编排 n8n 数据流水线
  *
- * 对 n8n 的写权限只有两件事：新建流水线与编排未发布未启用的流水线；
+ * 对 n8n 的持久写权限只有两件事：新建流水线与编排未发布未启用的流水线；
+ * 用户明确要求时可触发一次隔离执行预览，执行后恢复原启停状态且不写资产湖；
  * 另可在当前会话隔离空间内创建、编辑和删除文件。
  * 左侧：与数据管家对话（create_pipeline 新建骨架、update_workflow 补全编排）
  * 右侧：可编排流水线看板（只展示未发布、未启用的 n8n 流水线）。
@@ -44,6 +45,7 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   create_pipeline:     { label: '新建流水线', icon: Plus },
   update_workflow:     { label: '编排工作流', icon: Workflow },
   check_workflow:      { label: '体检', icon: ClipboardCheck },
+  execute_pipeline:    { label: '执行流水线', icon: Zap },
   inspect_runs:        { label: '诊断执行', icon: Activity },
   check_credentials:   { label: '凭据检查', icon: KeyRound },
   list_node_types:     { label: '查节点目录', icon: Zap },
@@ -780,7 +782,7 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
               <span className="text-xs font-semibold text-slate-600">文件树 <span className="font-normal text-slate-400">({files.length})</span></span>
               <button onClick={() => void reload()} aria-label="刷新会话文件" className="rounded-md p-1 text-slate-400 transition hover:bg-white hover:text-teal-700"><RefreshCw size={13} /></button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
               {loading ? <div className="py-16 text-center text-sm text-slate-400">加载中…</div> : files.length === 0 ? (
                 <div className="mx-1 rounded-xl border border-dashed border-slate-300 bg-white/70 px-3 py-12 text-center text-xs text-slate-400">当前会话还没有文件</div>
               ) : (

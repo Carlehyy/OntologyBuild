@@ -10,11 +10,12 @@
   GET    /pipelines/{id}             记录详情（workflow 摘要，只读）
   POST   /pipelines/bootstrap        流水线列表「新建 n8n 流水线」：骨架工作流登记
 
-职权边界：数据管家对 n8n 只有两项写权限——新建流水线（bootstrap / 对话工具
+职权边界：数据管家对 n8n 只有两项持久写权限——新建流水线（bootstrap / 对话工具
 create_pipeline）与编排未发布未启用的流水线（对话工具 update_workflow）。此外，
-它可在当前会话隔离空间创建、编辑和删除文件，但不能访问任何其他文件路径。
+它可按用户明确要求触发一次不入湖、执行后恢复启停状态的预览，也可在当前会话
+隔离空间创建、编辑和删除文件，但不能访问任何其他文件路径。
 发布只存在于流水线编辑向导，且发布后永久封版；
-试跑、归档/删除都不再走 steward，归档在流水线列表（走 service.archive）。
+归档/删除不走 steward，归档在流水线列表（走 service.archive）。
 """
 from __future__ import annotations
 
