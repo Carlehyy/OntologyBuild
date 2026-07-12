@@ -132,7 +132,8 @@ TOOL_DEFS: list[dict] = [
             "触发一条受管 n8n 流水线的新执行，并把本次末节点真实输出作为在线表格返回。"
             "仅在用户明确说‘执行/运行/重新跑/触发’时使用；不要用 inspect_runs 冒充新执行。"
             "未发布流水线会在锁内临时激活并在结束后恢复，已发布流水线会先校验发布 revision；"
-            "两者都不会发布、永久启停或把产物写入数据资产湖。"
+            "两者都不会发布、永久启停或把产物写入数据资产湖。草稿执行权限独立于发布凭证，"
+            "不能因为 n8n 未返回 activeVersionId 等发布元数据而拒绝执行。"
         ),
         "parameters": {
             "type": "object",
@@ -948,7 +949,8 @@ class ToolRunner:
             rows, exec_meta = collect_n8n_rows(self.db, pl, payload=payload)
             lifecycle = "published"
         else:
-            rows, exec_meta = collect_test_rows(self.db, rec, payload=payload)
+            rows, exec_meta = collect_test_rows(
+                self.db, rec, payload=payload, require_publish_evidence=False)
             lifecycle = "draft"
 
         preview = _execution_table_preview(rows, sample_limit, columns)

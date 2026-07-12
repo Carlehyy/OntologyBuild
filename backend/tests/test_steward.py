@@ -1205,6 +1205,48 @@ def test_execute_pipeline_triggers_fresh_draft_run_and_restores_state(
     assert not draft_record.last_test_result
 
 
+def test_execute_pipeline_does_not_require_draft_publish_revision_metadata(
+        db, fake_n8n, draft_record, monkeypatch):
+    """管家执行与发布凭证解耦：n8n 缺 activeVersionId 仍返回真实输出。"""
+    original_activate = fake_n8n.activate_workflow
+
+    def activate_without_version(workflow_id: str):
+        original_activate(workflow_id)
+        fake_n8n.workflows[str(workflow_id)]["activeVersionId"] = None
+
+    monkeypatch.setattr(fake_n8n, "activate_workflow", activate_without_version)
+
+    out = ToolRunner(db, None, None).run("execute_pipeline", {
+        "record_id": draft_record.id,
+    })
+
+    assert "error" not in out, out
+    assert out["rows"] == 2 and out["execution"]["execution_status"] == "success"
+    assert out["preview"]["rows"][0] == {"currency": "USD", "rate": 1.0}
+    assert "workflow_snapshot_hash" in out["execution"]
+    assert "workflow_evidence" not in out["execution"]
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+
+
+def test_wizard_preview_still_requires_complete_publish_revision_metadata(
+        db, fake_n8n, draft_record, monkeypatch):
+    """只有编辑向导的发布前预览继续 fail closed，避免降低发布安全门。"""
+    from app.data_channel.steward.runner import collect_test_rows
+
+    original_activate = fake_n8n.activate_workflow
+
+    def activate_without_version(workflow_id: str):
+        original_activate(workflow_id)
+        fake_n8n.workflows[str(workflow_id)]["activeVersionId"] = None
+
+    monkeypatch.setattr(fake_n8n, "activate_workflow", activate_without_version)
+
+    with pytest.raises(service.StewardError, match="activeVersionId"):
+        collect_test_rows(db, draft_record)
+
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+
+
 def test_execute_pipeline_validates_published_release_and_restores_disabled_state(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
     """已发布但停用的流水线也可隔离执行；revision 校验仍生效，执行后恢复停用。"""

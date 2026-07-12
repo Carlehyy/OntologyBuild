@@ -321,11 +321,16 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
 
 
 def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None,
-                      wait_seconds: int = 60) -> tuple[list[dict], dict]:
+                      wait_seconds: int = 60, *,
+                      require_publish_evidence: bool = True) -> tuple[list[dict], dict]:
     """未发布 workflow 的取数通道：临时激活 → 触发 → 收集完整行 → 恢复原激活状态。
 
     不写资产湖。供流水线编辑向导和数据管家对未发布 n8n 的执行预览使用——未发布
     n8n 的生产 webhook 未注册，走 collect_n8n_rows 必 404。
+
+    编辑向导默认要求完整 revision，形成后续发布凭证；数据管家的普通执行只需要
+    精确关联本次 execution 并确认编排快照未并发变化，不应因为 n8n 版本未返回
+    activeVersionId 而拒绝展示已经成功产生的输出。
     """
     client = service.get_n8n_client(db)
     from app.data_channel.datasets.lock import dataset_write_lock
@@ -368,21 +373,22 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
                         "为避免未发布工作流继续对外生效，请立即在 n8n 中停用后再继续。") from exc
         try:
             final_workflow = client.get_workflow(rec.n8n_workflow_id)
-            final_snapshot = N8nClient.sanitize_workflow(final_workflow)
-            if service.canonical_json_hash(final_snapshot) != initial_snapshot_hash:
-                raise StewardError(
-                    "n8n 工作流在执行预览期间发生编排变化，本次输出不能作为发布凭证。"
-                    "请确认无人同时编辑后重新执行预览。")
+        except Exception as exc:  # noqa: BLE001
+            raise StewardError(f"执行预览后无法读取 n8n 工作流状态：{exc}") from exc
+        final_snapshot = N8nClient.sanitize_workflow(final_workflow)
+        final_snapshot_hash = service.canonical_json_hash(final_snapshot)
+        if final_snapshot_hash != initial_snapshot_hash:
+            raise StewardError(
+                "n8n 工作流在执行预览期间发生编排变化，无法确认本次输出对应同一编排。"
+                "请确认无人同时编辑后重新执行预览。")
+        workflow_evidence = None
+        if require_publish_evidence:
             workflow_evidence = service.workflow_validation_evidence(
                 final_workflow, context="执行预览后")
-        except StewardError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise StewardError(
-                f"执行预览后无法读取 n8n revision，不能形成发布凭证：{exc}"
-            ) from exc
     rec.workflow_snapshot = final_snapshot
-    exec_meta["workflow_evidence"] = workflow_evidence
+    exec_meta["workflow_snapshot_hash"] = final_snapshot_hash
+    if workflow_evidence is not None:
+        exec_meta["workflow_evidence"] = workflow_evidence
     return rows, exec_meta
 
 
