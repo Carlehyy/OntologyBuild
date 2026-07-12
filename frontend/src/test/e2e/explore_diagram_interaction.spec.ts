@@ -122,4 +122,30 @@ test.describe('业务探索图表与图片交互', () => {
     await expectWheelAndDrag(page, 'image-preview-viewport')
     await page.getByRole('button', { name: '关闭图片预览' }).click()
   })
+
+  test('长文本输入与底部操作栏保持独立层级', async ({ page }) => {
+    const composer = page.getByTestId('exploration-composer')
+    const inputLayer = page.getByTestId('exploration-composer-input')
+    const toolbar = page.getByTestId('exploration-composer-toolbar')
+
+    await composer.fill(Array.from({ length: 14 }, (_, index) => `第 ${index + 1} 行业务描述`).join('\n'))
+
+    const inputBox = await inputLayer.boundingBox()
+    const toolbarBox = await toolbar.boundingBox()
+    expect(inputBox).not.toBeNull()
+    expect(toolbarBox).not.toBeNull()
+    expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(toolbarBox!.y + 1)
+    expect(await composer.evaluate(element => element.clientHeight)).toBeLessThanOrEqual(208)
+    expect(await composer.evaluate(element => element.scrollHeight)).toBeGreaterThan(208)
+
+    const uploadBox = await page.getByRole('button', { name: '上传参考资料' }).boundingBox()
+    const webBox = await page.getByTestId('web-search-toggle').boundingBox()
+    const sendBox = await page.getByRole('button', { name: '发送消息' }).boundingBox()
+    const historyBox = await page.getByTestId('message-history-button').boundingBox()
+    expect(uploadBox!.x).toBeLessThan(webBox!.x)
+    expect(webBox!.x).toBeLessThan(sendBox!.x)
+    expect(sendBox!.x).toBeLessThan(historyBox!.x)
+    expect(toolbarBox!.y).toBeLessThan(uploadBox!.y + uploadBox!.height)
+    expect(toolbarBox!.y).toBeLessThan(sendBox!.y + sendBox!.height)
+  })
 })

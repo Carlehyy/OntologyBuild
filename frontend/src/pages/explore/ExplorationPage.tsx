@@ -696,31 +696,11 @@ export default function ExplorationPage() {
               </div>
             )}
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
-            <div className="relative rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-colors focus-within:border-teal-500">
-              <div className="flex items-end gap-2 px-3 py-2">
-                <button
-                  type="button"
-                  onClick={pickFiles}
-                  title="上传参考资料（仅本会话可见，用于辅助澄清业务）"
-                  aria-label="上传参考资料"
-                  className="shrink-0 rounded-lg p-2 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-teal-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                >
-                  <Paperclip size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setWebSearch(value => !value)}
-                  aria-pressed={webSearch}
-                  data-testid="web-search-toggle"
-                  title={webSearch ? '联网搜索已开启，点击关闭' : '联网搜索已关闭，点击开启'}
-                  className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${webSearch
-                    ? 'border-teal-300 bg-teal-50 text-teal-700'
-                    : 'border-transparent text-[var(--color-text-tertiary)] hover:border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
-                >
-                  <Globe2 size={15} />
-                  <span>联网</span>
-                  <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-teal-500' : 'bg-[var(--color-border)]'}`} />
-                </button>
+            <div
+              data-testid="exploration-composer-shell"
+              className="relative overflow-visible rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-colors focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500/10"
+            >
+              <div data-testid="exploration-composer-input" className="px-3 pb-2 pt-2.5">
                 <textarea
                   ref={textareaRef}
                   value={input}
@@ -732,32 +712,65 @@ export default function ExplorationPage() {
                   placeholder="描述业务、回答澄清问题…（Enter 发送，Shift+Enter 换行）"
                   aria-label="业务探索消息"
                   data-testid="exploration-composer"
-                  className="scrollbar-thin min-h-7 min-w-0 flex-1 resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-[var(--color-text-tertiary)]"
+                  className="scrollbar-thin block min-h-7 w-full resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-[var(--color-text-tertiary)]"
                 />
-                <button
-                  type="button"
-                  onClick={() => void send()}
-                  disabled={busy || !input.trim()}
-                  title="发送消息"
-                  aria-label="发送消息"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
-                >
-                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowMessageHistory(value => !value)}
-                  disabled={myMessages.length === 0}
-                  title="我发送的消息 · 快速跳转"
-                  aria-label="查看我发送的消息"
-                  aria-expanded={showMessageHistory}
-                  data-testid="message-history-button"
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
-                    ? 'border-teal-300 bg-teal-50 text-teal-700'
-                    : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
-                >
-                  <List size={15} />
-                </button>
+              </div>
+
+              <div
+                data-testid="exploration-composer-toolbar"
+                className="flex min-h-12 items-center justify-between gap-3 border-t border-[var(--color-border)] px-2.5 py-2"
+              >
+                <div className="flex min-w-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={pickFiles}
+                    title="上传参考资料（仅本会话可见，用于辅助澄清业务）"
+                    aria-label="上传参考资料"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-teal-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  >
+                    <Paperclip size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWebSearch(value => !value)}
+                    aria-pressed={webSearch}
+                    data-testid="web-search-toggle"
+                    title={webSearch ? '联网搜索已开启，点击关闭' : '联网搜索已关闭，点击开启'}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${webSearch
+                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                      : 'border-transparent text-[var(--color-text-tertiary)] hover:border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+                  >
+                    <Globe2 size={15} />
+                    <span>联网</span>
+                    <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-teal-500' : 'bg-[var(--color-border)]'}`} />
+                  </button>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void send()}
+                    disabled={busy || !input.trim()}
+                    title="发送消息"
+                    aria-label="发送消息"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
+                  >
+                    {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowMessageHistory(value => !value)}
+                    disabled={myMessages.length === 0}
+                    title="我发送的消息 · 快速跳转"
+                    aria-label="查看我发送的消息"
+                    aria-expanded={showMessageHistory}
+                    data-testid="message-history-button"
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
+                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                      : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+                  >
+                    <List size={15} />
+                  </button>
+                </div>
               </div>
 
               {showMessageHistory && (
