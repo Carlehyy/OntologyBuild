@@ -29,8 +29,10 @@ class ManualDatasetShare(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     dataset_id: Mapped[str] = mapped_column(
         String, ForeignKey("v2_datasets.id", ondelete="CASCADE"), nullable=False)
-    # Only a digest is persisted. The bearer token is returned once when the share is created.
+    # The digest remains the public-request lookup key.  The encrypted copy lets
+    # authenticated managers retrieve and copy an existing share link again.
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_encrypted: Mapped[str] = mapped_column(Text, nullable=False, default="")
     permission: Mapped[str] = mapped_column(String(10), nullable=False)  # view | edit
     label: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     created_by: Mapped[str | None] = mapped_column(

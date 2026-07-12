@@ -50,6 +50,8 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         c["name"] for c in inspector.get_columns("v2_datasets")}
     assert {"id", "storage_uri", "attempts", "last_error", "created_at", "updated_at"} <= {
         c["name"] for c in inspector.get_columns("v2_storage_deletion_outbox")}
+    assert "token_encrypted" in {
+        c["name"] for c in inspector.get_columns("v2_manual_dataset_shares")}
     assert {"ix_v2_storage_deletion_outbox_storage_uri",
             "ix_v2_storage_deletion_outbox_created_at"} <= {
         i["name"] for i in inspector.get_indexes("v2_storage_deletion_outbox")}

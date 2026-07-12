@@ -15,6 +15,7 @@ from app.data_channel.datasets.sharing_models import ManualDatasetChange, Manual
 from app.deps import get_current_user, get_db
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.services.v2.dataset_service import DatasetService, rows_to_csv_bytes
+from app.shared.encryption import decrypt, encrypt
 
 
 management_router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -45,6 +46,19 @@ def _now() -> datetime:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _recover_token(share: ManualDatasetShare) -> str | None:
+    """Recover a managed share token without weakening public token lookup."""
+    if not share.token_encrypted:
+        return None
+    try:
+        token = decrypt(share.token_encrypted)
+    except Exception:
+        # Legacy rows have no ciphertext; a changed key or damaged ciphertext
+        # must not make the entire share-management dialog unavailable.
+        return None
+    return token if secrets.compare_digest(_hash_token(token), share.token_hash) else None
 
 
 def _as_aware(value: datetime | None) -> datetime | None:
@@ -106,6 +120,7 @@ def create_share(dataset_id: str, body: CreateShareRequest, db: Session = Depend
     share = ManualDatasetShare(
         dataset_id=dataset.id,
         token_hash=_hash_token(token),
+        token_encrypted=encrypt(token),
         permission=permission,
         label=body.label.strip()[:200],
         created_by=user.id,
@@ -132,6 +147,7 @@ def list_shares(dataset_id: str, db: Session = Depends(get_db)):
     ).order_by(ManualDatasetShare.created_at.desc()).all()
     return [{
         "id": row.id,
+        "token": _recover_token(row),
         "permission": row.permission,
         "label": row.label,
         "expires_at": row.expires_at.isoformat() if row.expires_at else None,

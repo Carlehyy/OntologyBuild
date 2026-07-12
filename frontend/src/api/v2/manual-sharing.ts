@@ -6,6 +6,8 @@ export type ChangeStatus = 'pending' | 'approved' | 'rejected'
 
 export interface ManualShare {
   id: string
+  /** null only for legacy shares created before encrypted token persistence */
+  token: string | null
   permission: SharePermission
   label: string
   expires_at: string | null

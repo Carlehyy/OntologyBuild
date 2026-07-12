@@ -11,6 +11,7 @@ const messageOf = (error: unknown, fallback: string) => {
 }
 
 const fmt = (iso?: string | null) => iso ? new Date(iso).toLocaleString('zh-CN') : '长期有效'
+const shareUrl = (token: string) => `${window.location.origin}${window.location.pathname}#/share/manual/${encodeURIComponent(token)}`
 
 export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOverviewItem; onClose: () => void }) {
   const [permission, setPermission] = useState<SharePermission>('view')
@@ -21,6 +22,7 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [copiedShareId, setCopiedShareId] = useState('')
   const [error, setError] = useState('')
 
   const load = useCallback(() => manualSharingApi.list(dataset.id)
@@ -34,8 +36,7 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
       const result = await manualSharingApi.create(dataset.id, {
         permission, label, expires_in_days: days ? Number(days) : null,
       })
-      const url = `${window.location.origin}${window.location.pathname}#/share/manual/${result.token}`
-      setLink(url)
+      setLink(shareUrl(result.token))
       await load()
     } catch (error) { setError(messageOf(error, '创建分享链接失败')) }
     finally { setCreating(false) }
@@ -44,6 +45,13 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
   const copy = async () => {
     await navigator.clipboard.writeText(link)
     setCopied(true); window.setTimeout(() => setCopied(false), 1500)
+  }
+
+  const copyExisting = async (share: ManualShare) => {
+    if (!share.token) return
+    await navigator.clipboard.writeText(shareUrl(share.token))
+    setCopiedShareId(share.id)
+    window.setTimeout(() => setCopiedShareId(current => current === share.id ? '' : current), 1500)
   }
 
   return (
@@ -79,17 +87,23 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
           </div>
 
           {link && <div className="rounded-xl border border-emerald-200 bg-white p-3">
-            <p className="mb-2 text-xs font-medium text-emerald-700">链接已生成（原始访问令牌仅本次展示）</p>
+            <p className="mb-2 text-xs font-medium text-emerald-700">链接已生成，并会保存在下方的分享列表中</p>
             <div className="flex gap-2"><input readOnly value={link} className="min-w-0 flex-1 rounded-lg border bg-slate-50 px-3 py-2 font-mono text-xs" /><button onClick={copy} className="inline-flex items-center gap-1 rounded-lg border px-3 text-xs text-slate-600 hover:bg-slate-50">{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div>
           </div>}
           {error && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
 
           <div><h4 className="mb-2 text-xs font-semibold text-slate-600">已有分享</h4>
             {loading ? <p className="text-xs text-slate-400">加载中...</p> : shares.length === 0 ? <p className="rounded-lg border border-dashed p-4 text-center text-xs text-slate-400">暂无分享链接</p> : <div className="space-y-2">
-              {shares.map(share => <div key={share.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5 text-xs">
-                <span className={`rounded-full px-2 py-0.5 ${share.permission === 'edit' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>{share.permission === 'edit' ? '可编辑' : '仅查看'}</span>
-                <span className="min-w-0 flex-1 truncate text-slate-600">{share.label || '未命名分享'} · {fmt(share.expires_at)}</span>
-                {share.revoked_at ? <span className="text-slate-400">已停用</span> : <button onClick={async () => { await manualSharingApi.revoke(share.id); await load() }} title="停用链接" className="text-slate-400 hover:text-red-500"><Trash2 size={13} /></button>}
+              {shares.map(share => <div key={share.id} className="rounded-lg border px-3 py-2.5 text-xs">
+                <div className="flex items-center gap-3">
+                  <span className={`rounded-full px-2 py-0.5 ${share.permission === 'edit' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>{share.permission === 'edit' ? '可编辑' : '仅查看'}</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-600">{share.label || '未命名分享'} · {fmt(share.expires_at)}</span>
+                  {share.revoked_at ? <span className="text-slate-400">已停用</span> : <button onClick={async () => { await manualSharingApi.revoke(share.id); await load() }} title="停用链接" className="text-slate-400 hover:text-red-500"><Trash2 size={13} /></button>}
+                </div>
+                {!share.revoked_at && (share.token ? <div className="mt-2 flex gap-2">
+                  <input readOnly value={shareUrl(share.token)} className="min-w-0 flex-1 rounded-lg border bg-slate-50 px-3 py-2 font-mono text-[11px]" />
+                  <button onClick={() => void copyExisting(share)} className="inline-flex items-center gap-1 rounded-lg border px-3 text-xs text-slate-600 hover:bg-slate-50">{copiedShareId === share.id ? <Check size={13} /> : <Copy size={13} />}{copiedShareId === share.id ? '已复制' : '复制'}</button>
+                </div> : <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-700">此链接创建于令牌持久化功能上线前，无法恢复原地址；请停用后重新生成。</p>)}
               </div>)}
             </div>}
           </div>

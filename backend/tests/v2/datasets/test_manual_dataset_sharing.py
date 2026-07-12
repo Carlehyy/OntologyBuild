@@ -6,6 +6,7 @@ from app.data_channel.datasets.sharing_models import ManualDatasetChange, Manual
 from app.data_channel.datasets import router as datasets_module
 from app.data_channel.datasets import sharing_router as sharing_module
 from app.main import app
+from app.shared.encryption import decrypt
 
 
 CSV = "编号,名称,数量\nA1,苹果,10\nA2,香蕉,20\n"
@@ -67,7 +68,7 @@ def _share(api, auth_headers, dataset_id, permission="edit"):
     return response.json()
 
 
-def test_view_link_is_anonymous_read_only_and_raw_token_is_not_stored(api, auth_headers, db):
+def test_view_link_is_anonymous_read_only_and_token_is_encrypted_for_reuse(api, auth_headers, db):
     dataset_id = _dataset(api, auth_headers)
     created = _share(api, auth_headers, dataset_id, "view")
 
@@ -85,6 +86,15 @@ def test_view_link_is_anonymous_read_only_and_raw_token_is_not_stored(api, auth_
     record = db.query(ManualDatasetShare).filter(ManualDatasetShare.id == created["id"]).one()
     assert record.token_hash == hashlib.sha256(created["token"].encode()).hexdigest()
     assert created["token"] not in record.token_hash
+    assert created["token"] not in record.token_encrypted
+    assert decrypt(record.token_encrypted) == created["token"]
+
+    listed = api.get(
+        f"/api/v2/manual-dataset-sharing/{dataset_id}/shares",
+        headers=auth_headers,
+    )
+    assert listed.status_code == 200
+    assert listed.json()[0]["token"] == created["token"]
 
     revoked = api.delete(
         f"/api/v2/manual-dataset-sharing/shares/{created['id']}",
