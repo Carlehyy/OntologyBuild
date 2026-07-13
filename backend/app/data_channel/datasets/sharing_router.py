@@ -248,29 +248,69 @@ def public_dataset(token: str, limit: int = 50, offset: int = 0,
                    db: Session = Depends(get_db)):
     share = _active_share(db, token)
     dataset = _dataset(db, share.dataset_id)
-    limit = max(1, min(limit, 200))
+    limit = max(1, min(limit, 500))
     offset = max(0, offset)
     svc = DatasetService(db)
-    all_rows = svc.load_all_rows(dataset.id)
     schema = dict(dataset.schema_json or {})
-    columns = list(all_rows[0].keys()) if all_rows else list(schema.get("columns") or [])
+    latest_version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset.id,
+    ).order_by(DatasetVersion.version_no.desc()).first()
+    version_no = int(latest_version.version_no) if latest_version else 0
+
+    # UI paging should only materialize the requested window. Historical versions
+    # without rowcount keep the strict full-read fallback for backward compatibility.
+    if latest_version and latest_version.rowcount is not None:
+        total_rows = max(0, int(latest_version.rowcount))
+        rows = svc.preview(dataset.id, latest_version.version_no, limit, offset)
+    else:
+        all_rows = svc.load_all_rows(dataset.id)
+        total_rows = len(all_rows)
+        rows = all_rows[offset:offset + limit]
+
+    typed_columns = [
+        item for item in (schema.get("columns_typed") or [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    columns = [str(item) for item in (schema.get("columns") or [])]
+    if not columns and rows:
+        columns = list(rows[0].keys())
+    if not columns and total_rows:
+        first_row = svc.preview(dataset.id, latest_version.version_no, 1, 0) if latest_version else []
+        columns = list(first_row[0].keys()) if first_row else []
+    field_names = schema.get("field_names") if isinstance(schema.get("field_names"), dict) else {}
     types = {
         str(item.get("name")): str(item.get("type") or "string")
-        for item in (schema.get("columns_typed") or []) if isinstance(item, dict) and item.get("name")
+        for item in typed_columns
     }
-    changes = db.query(ManualDatasetChange).filter(
-        ManualDatasetChange.share_id == share.id,
-    ).order_by(ManualDatasetChange.submitted_at.desc()).limit(20).all()
+    column_meta = {
+        str(item.get("name")): {
+            "display_name": str(
+                item.get("display_name")
+                or field_names.get(str(item.get("name")))
+                or item.get("name")
+            ),
+            "nullable": bool(item.get("nullable", True)),
+        }
+        for item in typed_columns
+    }
+
+    # Review history is part of edit capability and is not exposed to view-only links.
+    changes = []
+    if share.permission == "edit":
+        changes = db.query(ManualDatasetChange).filter(
+            ManualDatasetChange.share_id == share.id,
+        ).order_by(ManualDatasetChange.submitted_at.desc()).limit(20).all()
     return {
         "dataset": {
             "id": dataset.id,
             "name": dataset.name,
-            "version_no": _latest_no(db, dataset.id),
-            "total_rows": len(all_rows),
+            "version_no": version_no,
+            "total_rows": total_rows,
             "columns": columns,
             "column_types": types,
+            "column_meta": column_meta,
             "primary_key": str(schema.get("primary_key") or ""),
-            "rows": all_rows[offset:offset + limit],
+            "rows": rows,
         },
         "share": {
             "permission": share.permission,
