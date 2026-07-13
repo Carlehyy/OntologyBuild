@@ -26,6 +26,7 @@ interface LinkMappingRowT {
   id: string; relation_type: string; src_key: string; tgt_key: string
   src_dataset_id: string | null; tgt_dataset_id: string | null
   edge_dataset_id: string | null; field_mapping: Record<string, string>; is_fat: boolean
+  auto_apply_on_version: boolean
 }
 
 const UNMAPPED = '__unmapped__'
@@ -47,6 +48,8 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [doneMsg, setDoneMsg] = useState<any>(null)
+  const [autoApplyOnVersion, setAutoApplyOnVersion] = useState(false)
+  const [policySavingId, setPolicySavingId] = useState('')
 
   const { data: linkTypes = [] } = useQuery<LinkTypeT[]>({
     queryKey: ['formal-link-types', ontologyId],
@@ -144,6 +147,8 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
 
   const canSave = !!linkType && !!edgeDatasetId && !!srcDatasetId && !!tgtDatasetId && !!srcKey && !!tgtKey
     && srcKey !== tgtKey
+  const hasManualLinkDependency = [srcDatasetId, tgtDatasetId, edgeDatasetId]
+    .some(id => !!id && manualIds.has(id))
 
   const handleSave = async () => {
     if (!linkType || !canSave) return
@@ -162,6 +167,7 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
         src_key: srcKey,
         tgt_key: tgtKey,
         field_mapping: fieldMapping,
+        auto_apply_on_version: autoApplyOnVersion,
       })
       // 关系映射经 build-all 投影成 LinkInstance
       const built: any = await apiClientV2.post(`/ontologies/${ontologyId}/mappings/build-all`)
@@ -171,7 +177,7 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
         props: Object.keys(fieldMapping),
       })
       setLinkTypeId(''); setEdgeDatasetId(''); setSrcKey(''); setTgtKey('')
-      setEdgeCols([]); setPropMap({})
+      setEdgeCols([]); setPropMap({}); setAutoApplyOnVersion(false)
       refetchLinks()
       onDone()
     } catch (e: any) {
@@ -185,6 +191,21 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
     if (!window.confirm(`删除关系映射「${rel}」？\n已投影的关系边与历史事实会保留，只是不再有这条灌入通道。`)) return
     await apiClientV2.delete(`/ontologies/${ontologyId}/link-mappings/${id}`)
     refetchLinks()
+  }
+
+  const updateAutomation = async (mapping: LinkMappingRowT, enabled: boolean) => {
+    setPolicySavingId(mapping.id); setError('')
+    try {
+      await apiClientV2.put(
+        `/ontologies/${ontologyId}/link-mappings/${mapping.id}/automation`,
+        { auto_apply_on_version: enabled },
+      )
+      await refetchLinks()
+    } catch (e: any) {
+      setError(e?.detail || e?.message || '更新自动对账策略失败')
+    } finally {
+      setPolicySavingId('')
+    }
   }
 
   return (
@@ -223,6 +244,16 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
               <span className="text-gray-400 font-mono">
                 {lm.is_fat ? `${datasetName(lm.edge_dataset_id)}[${lm.src_key},${lm.tgt_key}]` : `${lm.src_key}=${lm.tgt_key}`}
               </span>
+              {[lm.src_dataset_id, lm.tgt_dataset_id, lm.edge_dataset_id]
+                .some(id => !!id && manualIds.has(id)) && (
+                <label className="inline-flex items-center gap-1 text-gray-500">
+                  <input type="checkbox" checked={lm.auto_apply_on_version}
+                    disabled={policySavingId === lm.id}
+                    onChange={e => void updateAutomation(lm, e.target.checked)}
+                    className="accent-emerald-600" />
+                  人工版本后自动对账
+                </label>
+              )}
               <button onClick={() => handleDelete(lm.id, lm.relation_type)}
                 className="ml-auto text-gray-400 hover:text-red-500" title="删除关系映射">
                 <Trash2 size={13} />
@@ -294,7 +325,7 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
               </div>
 
               {/* ③ 两端外键列 + 端点数据集 */}
-              {edgeCols.length > 0 && (
+              {edgeCols.length > 0 && hasManualLinkDependency && (
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-gray-400 w-5 text-center flex-shrink-0">③</span>
@@ -331,6 +362,16 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
                       <p className="text-[11px] text-red-500">两端外键不能是同一列</p>
                     )}
                   </div>
+                </div>
+              )}
+              {edgeCols.length > 0 && (
+                <div className="pl-7">
+                  <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                    <input type="checkbox" checked={autoApplyOnVersion}
+                      onChange={e => setAutoApplyOnVersion(e.target.checked)}
+                      className="accent-emerald-600" />
+                    人工端点或连接表发布新版本后自动全量对账本体
+                  </label>
                 </div>
               )}
 

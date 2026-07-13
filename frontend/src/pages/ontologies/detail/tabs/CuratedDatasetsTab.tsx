@@ -23,6 +23,9 @@ interface Mapping {
   binding_mode: 'bound' | 'name_match' | 'auto_create'
   resolved_object_type: { id: string; name: string; display_name: string } | null
   auto_apply_on_review: boolean
+  auto_apply_on_version: boolean
+  dataset_kind: string | null
+  dataset_source: string | null
 }
 
 interface CuratedDataset {
@@ -158,6 +161,12 @@ function MappingRow({ mapping, ontologyId, objectTypes, onChanged }: {
                 审核后自动灌入
               </span>
             )}
+            {mapping.auto_apply_on_version && (
+              <span className="text-xs px-2 py-0.5 rounded border bg-emerald-50 border-emerald-200 text-emerald-700"
+                title="人工数据集通过契约校验并发布新版本后，自动全量对账本体，再触发哨兵">
+                人工版本后自动灌入
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-400 truncate mt-0.5">
             {mapping.dataset_name ?? mapping.curated_dataset_id?.slice(0, 8)}
@@ -230,16 +239,30 @@ function MappingRow({ mapping, ontologyId, objectTypes, onChanged }: {
                   <option key={ot.id} value={ot.id}>{ot.displayName || ot.name}</option>
                 ))}
               </select>
-              <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer ml-2">
-                <input
-                  type="checkbox"
-                  checked={mapping.auto_apply_on_review}
-                  disabled={savingMaint}
-                  onChange={e => void updateMapping({ auto_apply_on_review: e.target.checked })}
-                  className="accent-violet-600"
-                />
-                审核通过后自动灌入
-              </label>
+              {mapping.dataset_kind === 'curated' && (
+                <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer ml-2">
+                  <input
+                    type="checkbox"
+                    checked={mapping.auto_apply_on_review}
+                    disabled={savingMaint}
+                    onChange={e => void updateMapping({ auto_apply_on_review: e.target.checked })}
+                    className="accent-violet-600"
+                  />
+                  审核通过后自动灌入
+                </label>
+              )}
+              {mapping.dataset_kind !== 'curated' && (
+                <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer ml-2">
+                  <input
+                    type="checkbox"
+                    checked={mapping.auto_apply_on_version}
+                    disabled={savingMaint}
+                    onChange={e => void updateMapping({ auto_apply_on_version: e.target.checked })}
+                    className="accent-emerald-600"
+                  />
+                  人工版本发布后自动灌入
+                </label>
+              )}
               <button
                 onClick={handleDelete}
                 className="ml-auto inline-flex items-center gap-1 text-xs text-red-500 hover:text-red-700 px-2 py-1"
@@ -401,14 +424,15 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
         if (!v || v === IGNORE) continue
         fieldMapping[c] = v.startsWith(NEW_PREFIX) ? v.slice(NEW_PREFIX.length) : v
       }
-      if (pkColumn) fieldMapping['__primary_key__'] = pkColumn
       const created: any = await apiClientV2.post(`/ontologies/${ontologyId}/mappings`, {
         curated_dataset_id: selectedId,
         entity_class: boundType ? (boundType.name || suggestion.entity_class) : suggestion.entity_class,
         field_mapping: fieldMapping,
+        primary_key_column: pkColumn || null,
         confidence: 0.9,
         target_object_type_id: targetTypeId || null,
-        auto_apply_on_review: autoApply,
+        auto_apply_on_review: !selectedManual && autoApply,
+        auto_apply_on_version: !!selectedManual && autoApply,
       })
       let applied: any = null
       if (applyNow && created?.mapping_id) {
@@ -593,7 +617,7 @@ function LinkDatasetPanel({ ontologyId, objectTypes, onDone }: {
                 <label className="inline-flex items-center gap-1.5 text-gray-600 cursor-pointer">
                   <input type="checkbox" checked={autoApply} onChange={e => setAutoApply(e.target.checked)}
                     className="accent-violet-600" />
-                  审核通过后自动灌入
+                  {selectedManual ? '人工版本发布后自动灌入' : '审核通过后自动灌入'}
                 </label>
                 <label className="inline-flex items-center gap-1.5 text-gray-600 cursor-pointer">
                   <input type="checkbox" checked={applyNow} onChange={e => setApplyNow(e.target.checked)}

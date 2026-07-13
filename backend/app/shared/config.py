@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     exploration_officecli_path: str = ""
     # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理
     dataset_version_keep: int = 20
+    # Immutable DatasetVersion outbox poll interval.  The worker uses database
+    # claims, so multiple API replicas may poll safely.
+    dataset_event_poll_seconds: int = 2
+    dataset_event_claim_timeout_seconds: int = 3600
+    dataset_event_batch_size: int = 20
     # Current transform engine is list-based.  Refuse oversized production
     # inputs explicitly instead of risking process OOM; raise as deployments
     # gain memory or replace with a streaming executor.

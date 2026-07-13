@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Job ID 前缀
 _JOB_PREFIX = "sync_task:"
 _PIPE_JOB_PREFIX = "pipe_task:"
+_DATASET_EVENT_JOB_ID = "dataset_version_events:drain"
 # 正在执行的任务锁
 _running_locks: dict[str, threading.Lock] = {}
 _global_lock = threading.Lock()
@@ -53,6 +54,19 @@ def _pipeline_job_runner(task_id: str) -> None:
         logger.exception(f"PipelineTask {task_id} 调度执行异常: {e}")
     finally:
         lock.release()
+
+
+def _dataset_event_job_runner() -> None:
+    """Continuously drain durable lake-version events."""
+    try:
+        from app.data_channel.datasets.version_events import (
+            drain_dataset_version_events,
+        )
+        result = drain_dataset_version_events()
+        if result.get("processed") or result.get("retried"):
+            logger.info("DatasetVersion event outbox: %s", result)
+    except Exception:
+        logger.exception("DatasetVersion event outbox worker failed")
 
 
 class SyncScheduler:
@@ -99,6 +113,26 @@ class SyncScheduler:
             self._scheduler.start()
             self._started = True
             self.reload_all()
+            from app.config import settings
+            self._scheduler.add_job(
+                _dataset_event_job_runner,
+                trigger=IntervalTrigger(
+                    seconds=max(1, int(settings.dataset_event_poll_seconds or 2))),
+                id=_DATASET_EVENT_JOB_ID,
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=30,
+            )
+            # Fail closed on a missing production migration and recover any
+            # events left behind by the previous process before reporting ready.
+            from app.data_channel.datasets.version_events import (
+                drain_dataset_version_events,
+            )
+            drain_dataset_version_events(
+                limit=int(settings.dataset_event_batch_size or 20),
+                strict_schema=settings.environment == "production",
+            )
             logger.info("DataSyncScheduler 已启动")
         except Exception as e:
             self._last_error = str(e)
@@ -177,7 +211,8 @@ class SyncScheduler:
             try:
                 # 先清除所有相关 job
                 for job in self._scheduler.get_jobs():
-                    if job.id.startswith(_JOB_PREFIX) or job.id.startswith(_PIPE_JOB_PREFIX):
+                    if (job.id.startswith(_JOB_PREFIX)
+                            or job.id.startswith(_PIPE_JOB_PREFIX)):
                         try:
                             self._scheduler.remove_job(job.id)
                         except Exception:

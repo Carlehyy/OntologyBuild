@@ -358,6 +358,11 @@ async def lifespan(app: FastAPI):
     finally:
         from app.data_channel.steward.browser_runtime import browser_manager
         browser_manager.close_all()
+        try:
+            from app.services.v2.sync_scheduler import get_sync_scheduler
+            get_sync_scheduler().shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         api_hub_scheduler.shutdown()
 
 app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)

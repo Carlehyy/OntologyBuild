@@ -27,6 +27,12 @@ from app.services.sentinel.evaluator import in_sentinel_run
 # 编辑器保存等"自己会同步评估哨兵"的路径在 session.info 里置此键，
 # 抑制 CDC 的并行评估（session 随请求结束销毁，无需显式复位）
 SUPPRESS_KEY = "_sentinel_suppress_dispatch"
+# Mapping projection must retain the exact suppressed delta and dispatch it only
+# after every mapping reaches ``applied``.  Editor save suppression intentionally
+# does not capture because that path calls ``run_for_save`` itself.
+CAPTURE_SUPPRESSED_KEY = "_sentinel_capture_suppressed"
+_CAPTURED_KEY = "_sentinel_captured_changes"
+_CAPTURED_LINK_KEY = "_sentinel_captured_link_changes"
 
 AUTO_DISPATCH = os.getenv("SENTINEL_AUTO_DISPATCH", "1") not in ("0", "false", "False")
 _KEY = "_sentinel_changes"        # session.info: {(ontology_id, object_type_id): set(changed_keys)}
@@ -79,6 +85,12 @@ def _after_commit(session: Session) -> None:
     if in_sentinel_run.get():   # 断环：哨兵动作引发的写入不再即时级联
         return
     if session.info.get(SUPPRESS_KEY):  # 保存路径自带同步评估，避免双评估竞态
+        if session.info.get(CAPTURE_SUPPRESSED_KEY):
+            captured = session.info.setdefault(_CAPTURED_KEY, {})
+            for key, changed_keys in (changes or {}).items():
+                captured.setdefault(key, set()).update(changed_keys)
+            session.info.setdefault(_CAPTURED_LINK_KEY, set()).update(
+                link_changes or set())
         return
     from app.services.sentinel.engine import run_for_change, run_for_link_change
     from app.database import SessionLocal
@@ -105,6 +117,77 @@ def _after_commit(session: Session) -> None:
                 db.close()
 
     threading.Thread(target=_run, args=(payload, link_payload), daemon=True).start()
+
+
+def dispatch_captured_changes(session: Session) -> dict:
+    """Synchronously evaluate deltas captured during a mapping projection.
+
+    This is intentionally not a daemon thread: the durable DatasetVersion event
+    must not be acknowledged until sentinel evaluation (and notification/action
+    persistence) has completed or returned an observable error.
+    """
+    changes = session.info.pop(_CAPTURED_KEY, {})
+    link_changes = session.info.pop(_CAPTURED_LINK_KEY, set())
+    session.info.pop(CAPTURE_SUPPRESSED_KEY, None)
+    session.info.pop(SUPPRESS_KEY, None)
+    if not AUTO_DISPATCH or (not changes and not link_changes):
+        return {"evaluated": 0, "fired": 0, "errors": []}
+
+    from app.services.sentinel.engine import run_for_change, run_for_link_change
+    from app.database import SessionLocal
+
+    summary = {"evaluated": 0, "fired": 0, "errors": [], "runs": []}
+    for (ontology_id, object_type_id), keys in sorted(changes.items()):
+        db = SessionLocal()
+        try:
+            result = run_for_change(
+                db, ontology_id, object_type_id, sorted(keys))
+            summary["evaluated"] += int(result.get("evaluated", 0))
+            summary["fired"] += int(result.get("fired", 0))
+            summary["runs"].append({
+                "ontology_id": ontology_id,
+                "object_type_id": object_type_id,
+                "changed_keys": sorted(keys),
+                "result": result,
+            })
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            summary["errors"].append({
+                "ontology_id": ontology_id,
+                "object_type_id": object_type_id,
+                "error": str(exc),
+            })
+        finally:
+            db.close()
+    for ontology_id in sorted(link_changes):
+        db = SessionLocal()
+        try:
+            result = run_for_link_change(db, ontology_id)
+            summary["evaluated"] += int(result.get("evaluated", 0))
+            summary["fired"] += int(result.get("fired", 0))
+            summary["runs"].append({
+                "ontology_id": ontology_id,
+                "link_change": True,
+                "result": result,
+            })
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            summary["errors"].append({
+                "ontology_id": ontology_id,
+                "link_change": True,
+                "error": str(exc),
+            })
+        finally:
+            db.close()
+    return summary
+
+
+def discard_captured_changes(session: Session) -> None:
+    """Clear a failed projection's CDC fence before a Session is reused."""
+    session.info.pop(_CAPTURED_KEY, None)
+    session.info.pop(_CAPTURED_LINK_KEY, None)
+    session.info.pop(CAPTURE_SUPPRESSED_KEY, None)
+    session.info.pop(SUPPRESS_KEY, None)
 
 
 _REGISTERED = False

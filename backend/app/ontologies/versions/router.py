@@ -369,11 +369,6 @@ def _validate_production_mappings(db: Session, ontology_id: str,
                 f"Mapping「{label}」绑定的数据集不存在: {dataset_id or ''}",
                 item_id=mid, name=label, field="curatedDatasetId"))
             continue
-        if dataset.kind != "curated":
-            errors.append(_gate_error(
-                "mapping_dataset_not_curated", "mapping",
-                f"Mapping「{label}」必须消费已治理的 curated 数据集，当前 kind={dataset.kind}",
-                item_id=mid, name=label, field="curatedDatasetId"))
         latest = db.query(DatasetVersion).filter(
             DatasetVersion.dataset_id == dataset.id,
         ).order_by(DatasetVersion.version_no.desc()).first()
@@ -393,15 +388,33 @@ def _validate_production_mappings(db: Session, ontology_id: str,
                 "dataset_latest_pointer_stale", "mapping",
                 f"数据集「{dataset.name}」的 latest_version_id 未指向最新 v{latest.version_no}",
                 item_id=mid, name=label, field="curatedDatasetId"))
-        review = db.query(CuratedReview).filter(
-            CuratedReview.curated_dataset_id == dataset.id,
-            CuratedReview.dataset_version_id == latest.id,
-        ).order_by(CuratedReview.created_at.desc()).first()
-        if review is None or review.status != "approved":
-            errors.append(_gate_error(
-                "latest_dataset_version_not_approved", "mapping",
-                f"Mapping「{label}」的最新数据版本 v{latest.version_no} 未获得当前 approved 审批",
-                item_id=mid, name=label, field="curatedDatasetId"))
+        if dataset.kind == "curated":
+            review = db.query(CuratedReview).filter(
+                CuratedReview.curated_dataset_id == dataset.id,
+                CuratedReview.dataset_version_id == latest.id,
+            ).order_by(CuratedReview.created_at.desc()).first()
+            if review is None or review.status != "approved":
+                errors.append(_gate_error(
+                    "latest_dataset_version_not_approved", "mapping",
+                    f"Mapping「{label}」的最新数据版本 v{latest.version_no} 未获得当前 approved 审批",
+                    item_id=mid, name=label, field="curatedDatasetId"))
+        else:
+            from app.data_channel.datasets.version_events import (
+                manual_dataset_automation_eligibility,
+            )
+            eligible, reason = manual_dataset_automation_eligibility(
+                dataset, latest)
+            if not eligible:
+                errors.append(_gate_error(
+                    "mapping_manual_dataset_not_governed", "mapping",
+                    f"Mapping「{label}」的人工数据版本不满足治理契约：{reason}",
+                    item_id=mid, name=label, field="curatedDatasetId"))
+            if not (mapping.field_mapping or {}).get("__auto_apply_on_version__"):
+                errors.append(_gate_error(
+                    "mapping_manual_automation_not_subscribed", "mapping",
+                    f"Mapping「{label}」消费人工数据，发布前必须显式开启“版本后自动灌入”",
+                    item_id=mid, name=label,
+                    field="fieldMapping.__auto_apply_on_version__"))
         applied_version_id = (mapping.field_mapping or {}).get(
             "__applied_dataset_version_id__")
         if applied_version_id != latest.id:
@@ -439,11 +452,6 @@ def _validate_production_mappings(db: Session, ontology_id: str,
                     f"LinkMapping「{label}」的 {role} 数据集不存在: {dataset_id}",
                     item_id=lid, name=label, field=f"{role}DatasetId"))
                 continue
-            if dataset.kind != "curated":
-                errors.append(_gate_error(
-                    "link_mapping_dataset_not_curated", "linkMapping",
-                    f"LinkMapping「{label}」的 {role} 数据集必须为 curated",
-                    item_id=lid, name=label, field=f"{role}DatasetId"))
             latest = db.query(DatasetVersion).filter(
                 DatasetVersion.dataset_id == dataset_id,
             ).order_by(DatasetVersion.version_no.desc()).first()
@@ -458,15 +466,33 @@ def _validate_production_mappings(db: Session, ontology_id: str,
                     "link_mapping_version_unverifiable", "linkMapping",
                     f"LinkMapping「{label}」的 {role} 版本缺少 storage_uri/checksum",
                     item_id=lid, name=label, field=f"{role}DatasetId"))
-            review = db.query(CuratedReview).filter(
-                CuratedReview.curated_dataset_id == dataset_id,
-                CuratedReview.dataset_version_id == latest.id,
-            ).order_by(CuratedReview.created_at.desc()).first()
-            if review is None or review.status != "approved":
-                errors.append(_gate_error(
-                    "link_mapping_version_not_approved", "linkMapping",
-                    f"LinkMapping「{label}」的 {role} 最新版本 v{latest.version_no} 未审批",
-                    item_id=lid, name=label, field=f"{role}DatasetId"))
+            if dataset.kind == "curated":
+                review = db.query(CuratedReview).filter(
+                    CuratedReview.curated_dataset_id == dataset_id,
+                    CuratedReview.dataset_version_id == latest.id,
+                ).order_by(CuratedReview.created_at.desc()).first()
+                if review is None or review.status != "approved":
+                    errors.append(_gate_error(
+                        "link_mapping_version_not_approved", "linkMapping",
+                        f"LinkMapping「{label}」的 {role} 最新版本 v{latest.version_no} 未审批",
+                        item_id=lid, name=label, field=f"{role}DatasetId"))
+            else:
+                from app.data_channel.datasets.version_events import (
+                    manual_dataset_automation_eligibility,
+                )
+                eligible, reason = manual_dataset_automation_eligibility(
+                    dataset, latest)
+                if not eligible:
+                    errors.append(_gate_error(
+                        "link_mapping_manual_dataset_not_governed", "linkMapping",
+                        f"LinkMapping「{label}」的 {role} 人工数据不满足治理契约：{reason}",
+                        item_id=lid, name=label, field=f"{role}DatasetId"))
+                if not (link.field_mapping or {}).get("__auto_apply_on_version__"):
+                    errors.append(_gate_error(
+                        "link_mapping_manual_automation_not_subscribed", "linkMapping",
+                        f"LinkMapping「{label}」消费人工数据，发布前必须显式开启版本自动对账",
+                        item_id=lid, name=label,
+                        field="fieldMapping.__auto_apply_on_version__"))
             if dataset.latest_version_id != latest.id:
                 errors.append(_gate_error(
                     "link_mapping_latest_pointer_stale", "linkMapping",

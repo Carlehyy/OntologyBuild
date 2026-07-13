@@ -708,7 +708,29 @@ def get_dataset(dataset_id: str, db: Session = Depends(get_db)):
 def list_versions(dataset_id: str, db: Session = Depends(get_db)):
     svc = DatasetService(db)
     versions = svc.list_versions(dataset_id)
-    return [{"id": v.id, "version_no": v.version_no, "rowcount": v.rowcount, "storage_uri": v.storage_uri} for v in versions]
+    from app.models.v2.dataset import DatasetVersionEvent
+    events = {
+        event.dataset_version_id: event
+        for event in db.query(DatasetVersionEvent).filter(
+            DatasetVersionEvent.dataset_id == dataset_id,
+            DatasetVersionEvent.event_type == "version_published",
+        ).all()
+    }
+    return [{
+        "id": version.id,
+        "version_no": version.version_no,
+        "rowcount": version.rowcount,
+        "storage_uri": version.storage_uri,
+        "automation": ({
+            "status": events[version.id].status,
+            "attempts": events[version.id].attempts,
+            "last_error": events[version.id].last_error,
+            "result": events[version.id].result_json,
+            "processed_at": (
+                events[version.id].processed_at.isoformat()
+                if events[version.id].processed_at else None),
+        } if version.id in events else None),
+    } for version in versions]
 
 @router.get("/{dataset_id}/versions/{version_no}/preview")
 def preview_data(dataset_id: str, version_no: int, limit: int = 100, db: Session = Depends(get_db)):

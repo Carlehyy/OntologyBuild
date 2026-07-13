@@ -38,6 +38,8 @@ class CreateMappingRequest(BaseModel):
     target_object_type_id: Optional[str] = None
     # 审核通过后自动灌入本体（存入 field_mapping.__auto_apply_on_review__）
     auto_apply_on_review: bool = False
+    # 人工数据集发布通过契约校验的新版本后自动做本体全量对账。
+    auto_apply_on_version: bool = False
 
 
 class UpdateMappingRequest(BaseModel):
@@ -47,6 +49,7 @@ class UpdateMappingRequest(BaseModel):
     primary_key_column: Optional[str] = None
     target_object_type_id: Optional[str] = None
     auto_apply_on_review: Optional[bool] = None
+    auto_apply_on_version: Optional[bool] = None
 
 
 @router.post("/{ontology_id}/mappings/suggest")
@@ -263,6 +266,61 @@ def _require_draft_ontology(db: Session, ontology_id: str) -> None:
             "请先创建或切换到 draft 版本再维护映射")
 
 
+def _lock_ontology(db: Session, ontology_id: str):
+    """Lock an ontology without requiring draft status for runtime policy edits."""
+    from app.models.ontology import OntologyProject
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).with_for_update().first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    return project
+
+
+def _validate_version_automation_policy(db: Session, dataset_id: str) -> None:
+    from app.data_channel.datasets.version_events import (
+        manual_dataset_automation_eligibility,
+    )
+    from app.models.v2.dataset import Dataset, DatasetVersion
+
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset_id,
+    ).order_by(DatasetVersion.version_no.desc()).first()
+    if dataset is None:
+        raise HTTPException(404, "Mapping dataset not found")
+    eligible, reason = manual_dataset_automation_eligibility(dataset, version)
+    if not eligible:
+        raise HTTPException(409, detail={
+            "code": "manual_version_automation_not_eligible",
+            "message": (
+                "仅具备主键契约和可校验不可变版本的人工数据集可开启版本后自动灌入；"
+                f"当前不满足：{reason}"
+            ),
+        })
+
+
+def _validate_link_version_automation_policy(
+    db: Session, dataset_ids: set[str | None],
+) -> None:
+    """A link subscription may mix reviewed curated and governed manual inputs."""
+    from app.models.v2.dataset import Dataset
+
+    manual_ids: list[str] = []
+    for dataset_id in dataset_ids - {None}:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if dataset is None:
+            raise HTTPException(404, f"Link mapping dataset not found: {dataset_id}")
+        if dataset.kind != "curated":
+            manual_ids.append(dataset_id)
+    if not manual_ids:
+        raise HTTPException(409, detail={
+            "code": "manual_version_automation_not_applicable",
+            "message": "关系映射没有人工数据依赖；Curated 数据请使用审核通过触发链路。",
+        })
+    for dataset_id in manual_ids:
+        _validate_version_automation_policy(db, dataset_id)
+
+
 def _reject_reserved_mapping_keys(value: Optional[dict], field_name: str) -> None:
     """System lineage keys are write-only for the mapping runtime."""
     reserved = sorted(
@@ -387,11 +445,15 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
         field_mapping["__properties__"] = body.property_mappings
     if body.auto_apply_on_review:
         field_mapping["__auto_apply_on_review__"] = True
+    if body.auto_apply_on_version:
+        _validate_version_automation_policy(db, body.curated_dataset_id)
+        field_mapping["__auto_apply_on_version__"] = True
     client_definition = {
         "entity_class": body.entity_class,
         "field_mapping": dict(body.field_mapping or {}),
         "ignored_fields": sorted(set(body.ignored_fields)),
         "auto_apply_on_review": bool(body.auto_apply_on_review),
+        "auto_apply_on_version": bool(body.auto_apply_on_version),
         "target_object_type_id": body.target_object_type_id,
     }
     field_mapping["__client_definition__"] = client_definition
@@ -428,6 +490,8 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
             == sorted(field_mapping.get("__ignored_fields__") or [])
             and bool(existing_map.get("__auto_apply_on_review__"))
             == bool(field_mapping.get("__auto_apply_on_review__"))
+            and bool(existing_map.get("__auto_apply_on_version__"))
+            == bool(field_mapping.get("__auto_apply_on_version__"))
         )
         if same_definition:
             return {
@@ -454,8 +518,16 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
 @router.put("/{ontology_id}/mappings/{mapping_id}")
 def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest,
                    db: Session = Depends(get_db)):
-    """映射维护：改绑定 / 改字段映射 / 开关审核后自动灌入。"""
-    _require_draft_ontology(db, ontology_id)
+    """映射维护：结构只在 draft 修改；运行订阅可随时安全开关。"""
+    provided = body.model_fields_set
+    structural_fields = {
+        "entity_class", "field_mapping", "ignored_fields",
+        "primary_key_column", "target_object_type_id",
+    }
+    if provided & structural_fields:
+        _require_draft_ontology(db, ontology_id)
+    else:
+        _lock_ontology(db, ontology_id)
     from app.models.v2.mapping import OntologyMapping
     m = db.query(OntologyMapping).filter(
         OntologyMapping.id == mapping_id,
@@ -465,7 +537,6 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
     declared_pk = _canonical_primary_key(db, m.curated_dataset_id)
     _assert_client_primary_key_matches(
         body.primary_key_column, declared_pk, m.curated_dataset_id)
-    provided = body.model_fields_set
     candidate_target_type_id = (
         body.target_object_type_id
         if "target_object_type_id" in provided else m.target_object_type_id
@@ -508,9 +579,15 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
             fm["__auto_apply_on_review__"] = True
         else:
             fm.pop("__auto_apply_on_review__", None)
+    if body.auto_apply_on_version is not None:
+        if body.auto_apply_on_version:
+            _validate_version_automation_policy(db, m.curated_dataset_id)
+            fm["__auto_apply_on_version__"] = True
+        else:
+            fm.pop("__auto_apply_on_version__", None)
     if {
         "entity_class", "field_mapping", "ignored_fields",
-        "target_object_type_id", "auto_apply_on_review",
+        "target_object_type_id", "auto_apply_on_review", "auto_apply_on_version",
     } & provided:
         fm["__client_definition__"] = {
             "entity_class": m.entity_class,
@@ -520,6 +597,7 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
             },
             "ignored_fields": sorted(fm.get("__ignored_fields__") or []),
             "auto_apply_on_review": bool(fm.get("__auto_apply_on_review__")),
+            "auto_apply_on_version": bool(fm.get("__auto_apply_on_version__")),
             "target_object_type_id": m.target_object_type_id,
         }
     projection_changed = bool({
@@ -535,9 +613,13 @@ def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest
         m.status = "draft"
     m.field_mapping = fm
     db.commit(); db.refresh(m)
-    return {"mapping_id": m.id, "status": m.status,
-            "target_object_type_id": m.target_object_type_id,
-            "auto_apply_on_review": bool(fm.get("__auto_apply_on_review__"))}
+    return {
+        "mapping_id": m.id,
+        "status": m.status,
+        "target_object_type_id": m.target_object_type_id,
+        "auto_apply_on_review": bool(fm.get("__auto_apply_on_review__")),
+        "auto_apply_on_version": bool(fm.get("__auto_apply_on_version__")),
+    }
 
 
 @router.delete("/{ontology_id}/mappings/{mapping_id}", status_code=204)
@@ -582,11 +664,17 @@ def list_mappings(ontology_id: str, db: Session = Depends(get_db)):
     result = []
     for m in mappings:
         dataset_name = None
+        dataset_kind = None
+        dataset_source = None
         row_count = None
         if m.curated_dataset_id:
             ds = db.query(Dataset).filter(Dataset.id == m.curated_dataset_id).first()
             if ds:
                 dataset_name = ds.name
+                dataset_kind = ds.kind
+                schema = ds.schema_json if isinstance(ds.schema_json, dict) else {}
+                dataset_source = schema.get("origin") or (
+                    "sync" if ds.source_connection_id else "manual")
             else:
                 cd = db.query(CuratedDataset).filter(CuratedDataset.id == m.curated_dataset_id).first()
                 if cd:
@@ -625,6 +713,9 @@ def list_mappings(ontology_id: str, db: Session = Depends(get_db)):
                 "display_name": matched_ot.display_name,
             } if matched_ot else None),
             "auto_apply_on_review": bool((m.field_mapping or {}).get("__auto_apply_on_review__")),
+            "auto_apply_on_version": bool((m.field_mapping or {}).get("__auto_apply_on_version__")),
+            "dataset_kind": dataset_kind,
+            "dataset_source": dataset_source,
         })
     return result
 
@@ -714,6 +805,7 @@ class LinkMappingCreate(BaseModel):
     edge_dataset_id: str | None = None
     # field_mapping: {边属性名: 连接表列名}
     field_mapping: dict = {}
+    auto_apply_on_version: bool = False
 
 
 @router.post("/{ontology_id}/link-mappings")
@@ -724,6 +816,10 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
     from app.services.v2.dataset_service import DatasetService
     _require_draft_ontology(db, ontology_id)
     _reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
+    if body.auto_apply_on_version:
+        _validate_link_version_automation_policy(db, {
+            body.src_dataset_id, body.tgt_dataset_id, body.edge_dataset_id,
+        })
     link_type = None
 
     src_pk = split_pk(_canonical_primary_key(db, body.src_dataset_id))
@@ -815,14 +911,22 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
             and existing_link.relation_type == body.relation_type
             and existing_link.src_key == body.src_key
             and existing_link.tgt_key == body.tgt_key
-            and dict(existing_link.field_mapping or {}) == dict(body.field_mapping or {})
+            and {
+                key: value for key, value in dict(existing_link.field_mapping or {}).items()
+                if not str(key).startswith("__")
+            } == dict(body.field_mapping or {})
+            and bool((existing_link.field_mapping or {}).get("__auto_apply_on_version__"))
+            == bool(body.auto_apply_on_version)
         )
         if same_definition:
             return {
                 "link_mapping_id": existing_link.id,
                 "relation_type": existing_link.relation_type,
                 "edge_dataset_id": existing_link.edge_dataset_id,
-                "edge_properties": list((existing_link.field_mapping or {}).keys()),
+                "edge_properties": [
+                    key for key in (existing_link.field_mapping or {})
+                    if not str(key).startswith("__")
+                ],
                 "idempotent_replay": True,
             }
         raise HTTPException(409, detail={
@@ -888,7 +992,11 @@ def create_link_mapping(ontology_id: str, body: LinkMappingCreate, db: Session =
         tgt_key=body.tgt_key,
         link_type_id=body.link_type_id,
         edge_dataset_id=body.edge_dataset_id,
-        field_mapping=body.field_mapping or {},
+        field_mapping={
+            **(body.field_mapping or {}),
+            **({"__auto_apply_on_version__": True}
+               if body.auto_apply_on_version else {}),
+        },
         status="active",
     )
     db.add(lm)
@@ -910,9 +1018,50 @@ def list_link_mappings(ontology_id: str, db: Session = Depends(get_db)):
         "relation_type": l.relation_type, "src_key": l.src_key, "tgt_key": l.tgt_key,
         "status": l.status,
         "link_type_id": l.link_type_id, "edge_dataset_id": l.edge_dataset_id,
-        "field_mapping": l.field_mapping or {},
+        "field_mapping": {
+            key: value for key, value in (l.field_mapping or {}).items()
+            if not str(key).startswith("__")
+        },
+        "auto_apply_on_version": bool(
+            (l.field_mapping or {}).get("__auto_apply_on_version__")),
         "is_fat": bool(l.edge_dataset_id),
     } for l in links]
+
+
+class LinkMappingPolicyUpdate(BaseModel):
+    auto_apply_on_version: bool
+
+
+@router.put("/{ontology_id}/link-mappings/{link_mapping_id}/automation")
+def update_link_mapping_automation(
+    ontology_id: str, link_mapping_id: str, body: LinkMappingPolicyUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update only the operational subscription; safe for published ontologies."""
+    _lock_ontology(db, ontology_id)
+    from app.models.v2.mapping import OntologyLinkMapping
+    mapping = db.query(OntologyLinkMapping).filter(
+        OntologyLinkMapping.id == link_mapping_id,
+        OntologyLinkMapping.ontology_id == ontology_id,
+    ).first()
+    if mapping is None:
+        raise HTTPException(404, "Link mapping not found")
+    if body.auto_apply_on_version:
+        _validate_link_version_automation_policy(db, {
+            mapping.src_dataset_id, mapping.tgt_dataset_id,
+            mapping.edge_dataset_id,
+        })
+    field_mapping = dict(mapping.field_mapping or {})
+    if body.auto_apply_on_version:
+        field_mapping["__auto_apply_on_version__"] = True
+    else:
+        field_mapping.pop("__auto_apply_on_version__", None)
+    mapping.field_mapping = field_mapping
+    db.commit()
+    return {
+        "link_mapping_id": mapping.id,
+        "auto_apply_on_version": body.auto_apply_on_version,
+    }
 
 
 @router.delete("/{ontology_id}/link-mappings/{link_mapping_id}", status_code=204)

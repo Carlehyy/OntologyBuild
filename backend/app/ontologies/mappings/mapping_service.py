@@ -219,6 +219,11 @@ class MappingService:
 
         mapping.status = "applying"
         self._db.flush()
+        from app.ontologies.sentinels.cdc import (
+            CAPTURE_SUPPRESSED_KEY, SUPPRESS_KEY,
+        )
+        self._db.info[SUPPRESS_KEY] = True
+        self._db.info[CAPTURE_SUPPRESSED_KEY] = True
         try:
             if data:
                 self._normalize_mapping(mapping, data)
@@ -268,6 +273,8 @@ class MappingService:
         except Exception as e:
             logger.exception("apply_mapping 写入/正规本体投影失败")
             self._db.rollback()
+            from app.ontologies.sentinels.cdc import discard_captured_changes
+            discard_captured_changes(self._db)
             failed = self._db.query(OntologyMapping).filter(
                 OntologyMapping.id == mapping_id).first()
             if failed is not None:
@@ -285,6 +292,8 @@ class MappingService:
         neo4j_deleted = self._delete_neo4j_entities(
             mapping.ontology_id, stale_entity_ids)
         neo4j_count = self._write_neo4j(mapping.entity_class, entities)
+        from app.ontologies.sentinels.cdc import dispatch_captured_changes
+        sentinel_dispatch = dispatch_captured_changes(self._db)
 
         return {"mapping_id": mapping_id, "entity_class": mapping.entity_class,
                 "nodes_created": neo4j_count, "v1_entities_written": v1_count,
@@ -292,6 +301,7 @@ class MappingService:
                 "stale_entities_removed": len(stale_entity_ids),
                 "stale_neo4j_nodes_removed": neo4j_deleted,
                 "source_dataset_version_id": source_dataset_version_id,
+                "sentinel_dispatch": sentinel_dispatch,
                 "warnings": (["Neo4j 不可用或未写入节点，正规本体投影已完成"]
                              if entities and neo4j_count == 0 else []),
                 "errors": 0, "total_rows": len(data)}
@@ -321,6 +331,8 @@ class MappingService:
                 ontology_id, mappings, require_approved=require_approved)
         except Exception as exc:
             self._db.rollback()
+            from app.ontologies.sentinels.cdc import discard_captured_changes
+            discard_captured_changes(self._db)
             try:
                 if not mapping_ids:
                     mapping_ids = [item[0] for item in self._db.query(
@@ -348,6 +360,16 @@ class MappingService:
             require_approved: bool = False) -> dict:
         if not mappings:
             return {"error": "no mappings configured", "ontology_id": ontology_id}
+
+        # Formal Object/Link writes would otherwise trigger CDC immediately at
+        # the first commit while mappings are deliberately fenced as
+        # ``projecting``.  Capture the exact delta and release it only after all
+        # derived projections succeed and every mapping becomes ``applied``.
+        from app.ontologies.sentinels.cdc import (
+            CAPTURE_SUPPRESSED_KEY, SUPPRESS_KEY,
+        )
+        self._db.info[SUPPRESS_KEY] = True
+        self._db.info[CAPTURE_SUPPRESSED_KEY] = True
 
         from app.models.v2.dataset import Dataset
         from app.models.v2.curated import CuratedDataset
@@ -475,6 +497,8 @@ class MappingService:
             if applied is not None:
                 applied.status = "applied"
         self._db.commit()
+        from app.ontologies.sentinels.cdc import dispatch_captured_changes
+        sentinel_dispatch = dispatch_captured_changes(self._db)
         if neo4j_rebuilt:
             for result in entity_results:
                 result["nodes_created"] = result["v1_entities_written"]
@@ -489,6 +513,7 @@ class MappingService:
             "chroma_entities_written": chroma_count,
             "neo4j_projection_rebuilt": neo4j_rebuilt,
             "projection_warnings": projection_errors,
+            "sentinel_dispatch": sentinel_dispatch,
             "total_entities": sum(r.get("v1_entities_written", 0) for r in entity_results),
             "total_relations": sum(r.get("count", 0) for r in relation_results),
             "total_logic": logic_result.get("total_v2", 0),

@@ -369,6 +369,59 @@ def test_production_publish_requires_current_approved_applied_mapping(
     assert response.status_code == 201, response.text
 
 
+def test_production_publish_accepts_governed_manual_version_subscription(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    object_type = _object_type(oid, with_contract=True)
+    instance = ObjectInstance(
+        id="manual-prod-instance", ontology_id=oid,
+        object_type_id=object_type.id,
+        properties={"code": "M-1"}, computed={}, source="pipeline",
+        external_id="manual-row-M-1",
+    )
+    dataset = Dataset(
+        id="manual-prod-dataset", name="人工生产台账", kind="structured",
+        schema_json={
+            "origin": "manual", "primary_key": "code", "pk_source": "manual",
+            "columns": ["code"],
+            "columns_typed": [{
+                "name": "code", "type": "string", "nullable": False,
+            }],
+            "types_source": "declared",
+        },
+    )
+    version = DatasetVersion(
+        id="manual-prod-v1", dataset_id=dataset.id, version_no=1,
+        storage_uri="s3://manual/prod-v1.csv", checksum="a" * 64,
+    )
+    dataset.latest_version_id = version.id
+    mapping = OntologyMapping(
+        id="manual-prod-mapping", ontology_id=oid,
+        curated_dataset_id=dataset.id, entity_class="Order",
+        target_object_type_id=object_type.id, status="applied",
+        field_mapping={
+            "code": "code", "__primary_key__": "code",
+            "__pk_source__": "lake",
+            "__auto_apply_on_version__": True,
+            "__applied_dataset_version_id__": version.id,
+        },
+    )
+    db.add_all([object_type, instance, dataset, version, mapping])
+    db.commit()
+
+    monkeypatch.setattr(version_router.settings, "environment", "production")
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections",
+        lambda *_args, **_kwargs: {
+            "ready": True, "neo4j": "ok", "chroma": "ok",
+            "chroma_count": 1,
+        },
+    )
+
+    response = client.post(_versions(oid), headers=auth_headers, json={})
+    assert response.status_code == 201, response.text
+
+
 def test_production_publish_blocks_when_query_projection_rebuild_fails(
         client, auth_headers, ontology, db, monkeypatch):
     oid = ontology["id"]

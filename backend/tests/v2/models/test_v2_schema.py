@@ -2,7 +2,9 @@
 v2 모델 스키마 테스트 — 실제 DB 연결 없이 SQLAlchemy 모델 구조만 검증
 """
 from app.models.v2.connection import Connection, ConnectionKind
-from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+from app.models.v2.dataset import (
+    Dataset, DatasetVersion, DatasetVersionEvent, MediaItem,
+)
 from app.models.v2.pipeline import Pipeline, PipelineRun
 from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit
 from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
@@ -18,6 +20,10 @@ def test_dataset_model_tablename():
 
 def test_dataset_version_model_tablename():
     assert DatasetVersion.__tablename__ == "v2_dataset_versions"
+
+
+def test_dataset_version_event_model_tablename():
+    assert DatasetVersionEvent.__tablename__ == "v2_dataset_version_events"
 
 
 def test_media_item_model_tablename():
@@ -67,6 +73,7 @@ def test_all_v2_tables_registered():
         "v2_connections",
         "v2_datasets",
         "v2_dataset_versions",
+        "v2_dataset_version_events",
         "v2_dataset_write_locks",
         "v2_storage_deletion_outbox",
         "v2_media_items",

@@ -44,6 +44,9 @@ export interface ObjectMappingRecord {
   binding_mode: 'bound' | 'name_match' | 'auto_create'
   resolved_object_type: { id: string; name: string; display_name: string } | null
   auto_apply_on_review: boolean
+  auto_apply_on_version: boolean
+  dataset_kind: string | null
+  dataset_source: string | null
 }
 
 export interface LinkMappingRecord {

@@ -95,6 +95,46 @@ def test_create_table_basic(api, auth_headers):
         "编号": "string", "名称": "string", "数量": "integer"}
 
 
+def test_manual_version_subscription_can_be_toggled_after_publish(
+    api, auth_headers, ontology, db,
+):
+    dataset_id = _create_table(api, auth_headers).json()["data"]["id"]
+    ontology_id = ontology["id"]
+    response = api.post(
+        f"/api/v2/ontologies/{ontology_id}/mappings",
+        headers=auth_headers,
+        json={
+            "curated_dataset_id": dataset_id,
+            "entity_class": "Device",
+            "field_mapping": {"编号": "code", "名称": "name", "数量": "quantity"},
+            "auto_apply_on_version": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    mapping_id = response.json()["mapping_id"]
+
+    from app.models.ontology import OntologyProject
+    project = db.query(OntologyProject).filter_by(id=ontology_id).one()
+    project.status = "published"
+    db.commit()
+
+    response = api.put(
+        f"/api/v2/ontologies/{ontology_id}/mappings/{mapping_id}",
+        headers=auth_headers,
+        json={"auto_apply_on_version": False},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["auto_apply_on_version"] is False
+
+    # Structural edits remain frozen on the same published ontology.
+    response = api.put(
+        f"/api/v2/ontologies/{ontology_id}/mappings/{mapping_id}",
+        headers=auth_headers,
+        json={"entity_class": "ChangedDevice"},
+    )
+    assert response.status_code == 409
+
+
 def test_configured_upload_creates_first_version_with_field_contract(api, auth_headers):
     payload = {
         "name": "设备台账导入",

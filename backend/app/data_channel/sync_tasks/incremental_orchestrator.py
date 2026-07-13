@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging
 from datetime import datetime, timezone
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,99 @@ class IncrementalOrchestrator:
 
     def __init__(self, db: Session):
         self._db = db
+
+    def on_dataset_version_published(
+        self, dataset_id: str, dataset_version_id: str,
+    ) -> dict:
+        """Dispatch every downstream consumer of an immutable lake version.
+
+        Ontology projection is an explicit subscription because manual data
+        governance and transformation scheduling are independent concerns.
+        Pipeline scheduling retains its existing task/connection trigger path;
+        this event cannot accidentally enqueue the same PipelineRun twice after
+        an outbox retry.  Curated datasets continue to wait for version-bound
+        review approval.
+        """
+        from app.data_channel.datasets.version_events import (
+            manual_dataset_automation_eligibility,
+        )
+        from app.models.v2.dataset import Dataset, DatasetVersion
+        from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
+
+        dataset = self._db.query(Dataset).filter(
+            Dataset.id == dataset_id).first()
+        version = self._db.query(DatasetVersion).filter(
+            DatasetVersion.id == dataset_version_id,
+            DatasetVersion.dataset_id == dataset_id,
+        ).first()
+        if dataset is None or version is None:
+            return {"status": "skipped", "reason": "dataset_or_version_not_found"}
+
+        eligible, reason = manual_dataset_automation_eligibility(dataset, version)
+        if not eligible:
+            return {
+                "status": "completed",
+                "dataset_id": dataset_id,
+                "dataset_version_id": dataset_version_id,
+                "manual_mapping": {"status": "skipped", "reason": reason},
+            }
+
+        object_mappings = self._db.query(OntologyMapping).filter(
+            OntologyMapping.curated_dataset_id == dataset_id,
+            OntologyMapping.status != "disabled",
+        ).all()
+        ontology_ids = {
+            mapping.ontology_id for mapping in object_mappings
+            if bool((mapping.field_mapping or {}).get("__auto_apply_on_version__"))
+        }
+        link_mappings = self._db.query(OntologyLinkMapping).filter(
+            or_(
+                OntologyLinkMapping.src_dataset_id == dataset_id,
+                OntologyLinkMapping.tgt_dataset_id == dataset_id,
+                OntologyLinkMapping.edge_dataset_id == dataset_id,
+            ),
+            OntologyLinkMapping.status.in_(("active", "inferred")),
+        ).all()
+        ontology_ids.update(
+            mapping.ontology_id for mapping in link_mappings
+            if bool((mapping.field_mapping or {}).get("__auto_apply_on_version__"))
+        )
+
+        applied = []
+        from app.services.v2.mapping.mapping_service import MappingService
+        for ontology_id in sorted(ontology_ids):
+            projection = MappingService(self._db).build_all(
+                ontology_id, require_approved=True)
+            sentinel_dispatch = projection.get("sentinel_dispatch") or {}
+            # A replay after a process crash may find no relational delta even
+            # though the previous attempt died before sentinel evaluation.  In
+            # that case (or after an immediate dispatch exception), perform a
+            # full edge-state-safe evaluation before acknowledging the durable
+            # version event.  SentinelMatchState keeps notifications/actions
+            # idempotent when the affected CDC run already succeeded.
+            if sentinel_dispatch.get("errors") or not sentinel_dispatch.get("runs"):
+                from app.services.sentinel.engine import run_manual
+                sentinel_dispatch = run_manual(self._db, ontology_id)
+            if sentinel_dispatch.get("errors"):
+                raise RuntimeError(
+                    f"本体 {ontology_id} 哨兵评估存在 "
+                    f"{sentinel_dispatch['errors']} 个错误，拒绝确认数据版本事件")
+            applied.append({
+                "ontology_id": ontology_id,
+                "total_entities": projection.get("total_entities", 0),
+                "total_relations": projection.get("total_relations", 0),
+                "sentinel_dispatch": sentinel_dispatch,
+            })
+
+        return {
+            "status": "completed",
+            "dataset_id": dataset_id,
+            "dataset_version_id": dataset_version_id,
+            "manual_mapping": {
+                "status": "applied" if applied else "no_subscribers",
+                "ontologies": applied,
+            },
+        }
 
     # ── 触发点 1：Connection 同步完成 ────────────────────────────────
 

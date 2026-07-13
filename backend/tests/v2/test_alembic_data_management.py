@@ -36,6 +36,7 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         "v2_pipeline_runs",
         "v2_datasets",
         "v2_dataset_versions",
+        "v2_dataset_version_events",
         "v2_storage_deletion_outbox",
         "v2_curated_reviews",
         "v2_ontology_mappings",
@@ -50,6 +51,11 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         c["name"] for c in inspector.get_columns("v2_datasets")}
     assert {"id", "storage_uri", "attempts", "last_error", "created_at", "updated_at"} <= {
         c["name"] for c in inspector.get_columns("v2_storage_deletion_outbox")}
+    assert {
+        "dataset_id", "dataset_version_id", "status", "attempts",
+        "available_at", "claim_token", "result_json", "processed_at",
+    } <= {
+        c["name"] for c in inspector.get_columns("v2_dataset_version_events")}
     assert "token_encrypted" in {
         c["name"] for c in inspector.get_columns("v2_manual_dataset_shares")}
     assert {"ix_v2_storage_deletion_outbox_storage_uri",
@@ -76,6 +82,11 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
     assert (review_dataset_fk.get("options") or {}).get("ondelete", "").upper() == "RESTRICT"
     assert (review_version_fk.get("options") or {}).get("ondelete", "").upper() == "RESTRICT"
     assert foreign_key("v2_ontology_mappings", "curated_dataset_id")["referred_table"] == "v2_datasets"
+    assert foreign_key(
+        "v2_dataset_version_events", "dataset_id")["referred_table"] == "v2_datasets"
+    assert foreign_key(
+        "v2_dataset_version_events", "dataset_version_id",
+    )["referred_table"] == "v2_dataset_versions"
     producer_fk = foreign_key("v2_datasets", "producer_pipeline_id")
     assert producer_fk["referred_table"] == "v2_pipelines"
     assert (producer_fk.get("options") or {}).get("ondelete", "").upper() == "RESTRICT"

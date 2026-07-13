@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.v2.dataset import Dataset, DatasetVersion, StorageDeletionOutbox
+from app.models.v2.dataset import (
+    Dataset, DatasetVersion, DatasetVersionEvent, StorageDeletionOutbox,
+)
 from app.services.storage_service import StorageService, get_storage_service
 
 logger = logging.getLogger(__name__)
@@ -446,6 +448,13 @@ class DatasetService:
                 # 看到新 version，却仍按旧 PK/类型/producer 元数据解释它。
                 if schema_json is not None:
                     ds.schema_json = schema_json
+                # DatasetVersion 与发布事件同事务提交。后续自动化即使在服务重启、
+                # Celery/网络抖动或多实例竞争下失败，也能从 outbox 可靠重试。
+                self._db.add(DatasetVersionEvent(
+                    dataset_id=dataset_id,
+                    dataset_version_id=ver.id,
+                    event_type="version_published",
+                ))
                 self._db.commit()
                 break
             except IntegrityError:

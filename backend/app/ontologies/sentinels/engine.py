@@ -25,6 +25,7 @@ def _summary(firings) -> dict:
     return {
         "evaluated": len(firings),
         "fired": sum(1 for f in firings if f.status == "fired"),
+        "errors": sum(1 for f in firings if f.status == "error"),
         "no_change": sum(1 for f in firings if f.status == "no_change"),
         "no_match": sum(1 for f in firings if f.status == "no_match"),
         "firings": [{"sentinelId": f.sentinel_id, "sentinelName": f.sentinel_name,
