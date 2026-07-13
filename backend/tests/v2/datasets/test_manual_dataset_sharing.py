@@ -74,8 +74,21 @@ def test_view_link_is_anonymous_read_only_and_token_is_encrypted_for_reuse(api, 
 
     public = api.get(f"/api/public/manual-datasets/{created['token']}")
     assert public.status_code == 200
-    assert public.json()["dataset"]["name"] == "inventory"
-    assert public.json()["share"]["permission"] == "view"
+    payload = public.json()
+    assert payload["dataset"]["name"] == "inventory"
+    assert payload["share"]["permission"] == "view"
+    assert payload["changes"] == []
+    assert payload["dataset"]["column_meta"]["编号"] == {
+        "display_name": "编号",
+        "nullable": False,
+    }
+
+    second_page = api.get(
+        f"/api/public/manual-datasets/{created['token']}?limit=1&offset=1",
+    )
+    assert second_page.status_code == 200
+    assert second_page.json()["dataset"]["total_rows"] == 2
+    assert [row["编号"] for row in second_page.json()["dataset"]["rows"]] == ["A2"]
 
     denied = api.post(f"/api/public/manual-datasets/{created['token']}/changes", json={
         "base_version_no": 1,
