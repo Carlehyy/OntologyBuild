@@ -171,7 +171,7 @@ export default function PipelineListPage() {
 
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
-        <div className="relative w-full sm:w-64 xl:min-w-0 xl:flex-1">
+        <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             value={search}
