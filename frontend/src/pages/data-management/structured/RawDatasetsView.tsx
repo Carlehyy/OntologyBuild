@@ -3,7 +3,7 @@ import {
   Upload, RefreshCw, Trash2, Loader2,
   CheckCircle2, XCircle, X, GitBranch,
   Database, Pencil, KeyRound, Table2, Share2, ShieldCheck,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Search,
 } from 'lucide-react'
 import datasetsApi, { type DatasetOverviewItem, type DatasetConsumer, type CreateTableResult } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -42,6 +42,8 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
+  const [search, setSearch] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
 
   // 上传新版本
   const versionFileRef = useRef<HTMLInputElement>(null)
@@ -70,6 +72,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
     setLoadError('')
     datasetsApi.overview({
       source: 'manual',
+      search: searchQuery || undefined,
       sort_by: 'created_at',
       page,
       page_size: pageSize,
@@ -93,10 +96,17 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         )
       })
       .finally(() => setLoading(false))
-  }, [page, pageSize])
+  }, [page, pageSize, searchQuery])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => { void loadPendingApprovals() }, [])
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearchQuery(search.trim())
+      setPage(1)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
 
   const refreshFirstPage = () => {
     if (page === 1) load()
@@ -201,8 +211,24 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
 
       {/* 工具行 + 提示条：删除重复说明文字，首屏直接聚焦可执行操作。 */}
       <div className="shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 space-y-2">
-      <div className="flex items-center justify-end gap-3">
-        <div className="flex shrink-0 items-center gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative w-full sm:w-72">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="搜索数据集名称"
+            aria-label="按数据集名称搜索"
+            className="h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/15"
+          />
+          {search && (
+            <button type="button" onClick={() => setSearch('')} aria-label="清除数据集搜索"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-700">
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <button onClick={load} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
             <RefreshCw size={12} /> 刷新
           </button>
@@ -220,7 +246,11 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
             title="审批外部维护者提交的人工数据集修改；批准后才正式生效"
           >
             <ShieldCheck size={12} /> 审批任务
-            {pendingApprovals > 0 && <span className="ml-0.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] leading-none text-white">{pendingApprovals}</span>}
+            {pendingApprovals > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-4 text-white shadow-sm">
+                {pendingApprovals > 99 ? '99+' : pendingApprovals}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -260,16 +290,18 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       ) : items.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Database size={32} className="mx-auto opacity-30" />
-          <p className="text-sm font-medium">暂无人工数据集</p>
-          <p className="text-xs">在一个流程中上传 Excel/CSV 或定义空表，完成字段设置后即可在线维护</p>
-          <div className="flex justify-center pt-1">
-            <button
-              onClick={() => setCreateOpen(true)}
-              className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90"
-            >
-              在线新建表格
-            </button>
-          </div>
+          <p className="text-sm font-medium">{searchQuery ? '没有匹配的人工数据集' : '暂无人工数据集'}</p>
+          <p className="text-xs">{searchQuery ? '请尝试其他数据集名称' : '在一个流程中上传 Excel/CSV 或定义空表，完成字段设置后即可在线维护'}</p>
+          {!searchQuery && (
+            <div className="flex justify-center pt-1">
+              <button
+                onClick={() => setCreateOpen(true)}
+                className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90"
+              >
+                在线新建表格
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="border rounded-xl overflow-hidden bg-white">
