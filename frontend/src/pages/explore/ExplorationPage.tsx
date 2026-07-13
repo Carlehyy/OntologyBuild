@@ -8,7 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useQuery } from '@tanstack/react-query'
 import {
   Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, List,
-  Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, User, Wrench, X,
+  Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
   explorationApi, streamExplorationChat,
@@ -456,8 +456,7 @@ export default function ExplorationPage() {
             <div className="text-xs font-semibold text-[var(--color-text-secondary)]">会话记录</div>
             <button
               onClick={newSession}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-800 transition-colors hover:brightness-95 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-              style={{ backgroundColor: '#A1FEEF' }}
+              className="inline-flex items-center gap-1 rounded-md border-0 bg-transparent px-2 py-1 text-xs font-medium text-slate-800 transition-colors hover:bg-[var(--color-bg-hover)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
             >
               <Plus size={12} /> 新建会话
             </button>
@@ -473,7 +472,7 @@ export default function ExplorationPage() {
                 key={s.id}
                 onClick={() => void loadSession(s.id)}
                 className={`group px-2.5 py-2 rounded-md cursor-pointer transition-colors ${s.id === sid
-                  ? 'bg-teal-50' : 'hover:bg-[var(--color-bg-hover)]'}`}
+                  ? 'bg-[#3ce22a38]' : 'hover:bg-[var(--color-bg-hover)]'}`}
               >
                 <div className="flex items-center gap-1.5">
                   <Compass size={12} className={s.id === sid ? 'text-teal-600 shrink-0' : 'text-[var(--color-text-tertiary)] shrink-0'} />
@@ -554,15 +553,6 @@ export default function ExplorationPage() {
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
               >
                 <FileText size={15} />
-              </button>
-              <button
-                onClick={generateDocument}
-                disabled={!sid || genDocBusy || canvasCount === 0}
-                title={canvasCount === 0 ? '画布还是空的，先对话沉淀模型' : ''}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-600 hover:bg-teal-100 hover:text-teal-700 disabled:opacity-40"
-              >
-                {genDocBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                生成需求文档
               </button>
             </div>
           </div>
@@ -822,6 +812,9 @@ export default function ExplorationPage() {
           sessionId={sid}
           onClose={() => setDocsOpen(false)}
           onDraftCreated={draft => { setDocsOpen(false); setReviewDraft(draft) }}
+          onGenerate={generateDocument}
+          documentGenerating={genDocBusy}
+          canGenerateDocument={canvasCount > 0}
         />
       )}
       {workspaceOpen && sid && (
