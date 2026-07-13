@@ -8,6 +8,7 @@ export interface PublicManualDataset {
     total_rows: number
     columns: string[]
     column_types: Record<string, string>
+    column_meta: Record<string, { display_name: string; nullable: boolean }>
     primary_key: string
     rows: Record<string, unknown>[]
   }
