@@ -278,6 +278,8 @@ def public_dataset(token: str, limit: int = 50, offset: int = 0,
         first_row = svc.preview(dataset.id, latest_version.version_no, 1, 0) if latest_version else []
         columns = list(first_row[0].keys()) if first_row else []
     field_names = schema.get("field_names") if isinstance(schema.get("field_names"), dict) else {}
+    primary_key = str(schema.get("primary_key") or "")
+    pk_columns = {name.strip() for name in primary_key.split(",") if name.strip()}
     types = {
         str(item.get("name")): str(item.get("type") or "string")
         for item in typed_columns
@@ -289,7 +291,12 @@ def public_dataset(token: str, limit: int = 50, offset: int = 0,
                 or field_names.get(str(item.get("name")))
                 or item.get("name")
             ),
-            "nullable": bool(item.get("nullable", True)),
+            # A declared primary key is non-null by contract even when legacy
+            # columns_typed metadata still carries nullable=true.
+            "nullable": (
+                False if str(item.get("name")) in pk_columns
+                else bool(item.get("nullable", True))
+            ),
         }
         for item in typed_columns
     }
@@ -309,7 +316,7 @@ def public_dataset(token: str, limit: int = 50, offset: int = 0,
             "columns": columns,
             "column_types": types,
             "column_meta": column_meta,
-            "primary_key": str(schema.get("primary_key") or ""),
+            "primary_key": primary_key,
             "rows": rows,
         },
         "share": {
