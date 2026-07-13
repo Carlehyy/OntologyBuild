@@ -278,14 +278,9 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <div>
-          <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务画布</div>
-          <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
-            对话中确认的知识实时沉淀于此，转化为需求文档与本体的唯一来源
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+        <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务画布</div>
+        <div className="flex shrink-0 items-center gap-1.5">
           <button
             onClick={openDiagram}
             disabled={!sessionId || (counts.objects || 0) === 0}
