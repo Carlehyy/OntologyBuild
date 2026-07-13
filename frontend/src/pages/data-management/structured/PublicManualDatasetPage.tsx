@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Database,
 import { useParams } from 'react-router-dom'
 import { publicManualSharingApi, type PublicManualDataset } from '@/api/public-manual-sharing'
 
-const PAGE_SIZE = 50
+const PAGE_SIZES = [20, 50, 100, 200, 500] as const
 type CellMap = Record<string, string>
 type EditRow = { orig: CellMap; cur: CellMap; deleted: boolean }
 
@@ -26,6 +26,7 @@ export default function PublicManualDatasetPage() {
   const [rows, setRows] = useState<EditRow[]>([])
   const [inserts, setInserts] = useState<CellMap[]>([])
   const [offset, setOffset] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(50)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -33,9 +34,15 @@ export default function PublicManualDatasetPage() {
 
   const columns = data?.dataset.columns || []
   const pkCols = useMemo(() => (data?.dataset.primary_key || '').split(',').map(v => v.trim()).filter(Boolean), [data?.dataset.primary_key])
-  const pending = data?.changes.some(item => item.status === 'pending') || false
-  const editable = data?.share.permission === 'edit' && !pending
+  const canEdit = data?.share.permission === 'edit'
+  const pending = canEdit && (data?.changes.some(item => item.status === 'pending') || false)
+  const editable = canEdit && !pending
   const dirty = inserts.length > 0 || rows.some(row => row.deleted || columns.some(col => row.cur[col] !== row.orig[col]))
+  const columnLabel = (column: string) => {
+    const displayName = data?.dataset.column_meta?.[column]?.display_name?.trim()
+    return displayName && displayName !== column ? `${displayName}（${column}）` : column
+  }
+  const isNonNull = (column: string) => pkCols.includes(column) || data?.dataset.column_meta?.[column]?.nullable === false
 
   const hydrate = useCallback((result: PublicManualDataset, off: number) => {
     const cols = result.dataset.columns
@@ -48,10 +55,10 @@ export default function PublicManualDatasetPage() {
 
   const load = useCallback(async (off: number) => {
     setLoading(true); setError('')
-    try { hydrate(await publicManualSharingApi.get(token, off, PAGE_SIZE), off) }
+    try { hydrate(await publicManualSharingApi.get(token, off, pageSize), off) }
     catch (e) { setError(e instanceof Error ? e.message : '分享数据加载失败') }
     finally { setLoading(false) }
-  }, [hydrate, token])
+  }, [hydrate, pageSize, token])
   useEffect(() => { void Promise.resolve().then(() => load(0)) }, [load])
 
   const switchPage = (next: number) => {
@@ -62,9 +69,9 @@ export default function PublicManualDatasetPage() {
   const validate = (): string | null => {
     const activeRows = [...rows.filter(row => !row.deleted).map(row => row.cur), ...inserts]
     for (const row of activeRows) {
-      for (const pk of pkCols) if (!String(row[pk] || '').trim()) return `主键列「${pk}」不能为空`
       for (const col of columns) {
-        const issue = validateValue(col, data?.dataset.column_types[col] || 'string', row[col] || '')
+        if (isNonNull(col) && !String(row[col] || '').trim()) return `「${columnLabel(col)}」不能为空`
+        const issue = validateValue(columnLabel(col), data?.dataset.column_types[col] || 'string', row[col] || '')
         if (issue) return issue
       }
     }
@@ -104,22 +111,22 @@ export default function PublicManualDatasetPage() {
 
     <main className="mx-auto max-w-[1500px] space-y-4 p-5">
       {data.share.label && <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-800">分享说明：{data.share.label}</p>}
-      {pending && <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><Clock3 size={15} />本次修改正在审批中，审批完成前暂不可继续编辑。可在下方查看进度与意见。</div>}
+      {canEdit && pending && <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><Clock3 size={15} />本次修改正在审批中，审批完成前暂不可继续编辑。可在下方查看进度与意见。</div>}
       {error && <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"><AlertCircle size={15} /><span className="flex-1">{error}</span><button onClick={() => setError('')}><XCircle size={14} /></button></div>}
       {success && <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><CheckCircle2 size={15} />{success}</div>}
 
       <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
         <div className="flex items-center gap-3 border-b px-4 py-3"><div className="flex-1 text-xs text-slate-500">{pkCols.length ? <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700"><KeyRound size={10} />主键：{pkCols.join(' + ')}</span> : '未声明主键：仅支持新增行'}</div><button onClick={() => { if (!dirty || window.confirm('放弃当前未提交的修改并刷新？')) void load(offset) }} className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800"><RefreshCw size={12} />刷新</button></div>
         <div className="overflow-auto p-4">
-          <table className="w-full min-w-max border-separate border-spacing-0 text-xs"><thead className="sticky top-0"><tr><th className="border-b border-r bg-slate-50 px-2 py-2 font-normal text-slate-400">#</th>{columns.map(col => <th key={col} className="border-b bg-slate-50 px-3 py-2 text-left font-medium text-slate-600">{col}{pkCols.includes(col) && <KeyRound size={9} className="ml-1 inline text-amber-500" />}<small className="ml-1 font-normal text-slate-400">{data.dataset.column_types[col] && data.dataset.column_types[col] !== 'string' ? data.dataset.column_types[col] : ''}</small></th>)}<th className="border-b bg-slate-50" /></tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={index} className={row.deleted ? 'opacity-40' : ''}><td className="border-b border-r px-2 text-center text-slate-300">{offset + index + 1}</td>{columns.map(col => <td key={col} className="border-b p-0"><input value={row.cur[col]} disabled={!editable || row.deleted || (!pkCols.length && true)} onChange={e => setRows(list => list.map((item, i) => i === index ? { ...item, cur: { ...item.cur, [col]: e.target.value } } : item))} className={`min-w-[8rem] bg-transparent px-3 py-2 outline-none focus:bg-emerald-50 disabled:cursor-not-allowed ${row.cur[col] !== row.orig[col] ? 'bg-amber-50 text-amber-900' : ''}`} /></td>)}<td className="border-b px-2">{editable && pkCols.length > 0 && <button onClick={() => setRows(list => list.map((item, i) => i === index ? { ...item, deleted: !item.deleted } : item))} className="text-slate-300 hover:text-red-500">{row.deleted ? <Undo2 size={13} /> : <Trash2 size={13} />}</button>}</td></tr>)}
-              {inserts.map((row, index) => <tr key={`new-${index}`} className="bg-emerald-50/40"><td className="border-b border-r px-2 text-center text-emerald-500">新</td>{columns.map(col => <td key={col} className="border-b p-0"><input value={row[col]} placeholder={pkCols.includes(col) ? '主键，必填' : ''} onChange={e => setInserts(list => list.map((item, i) => i === index ? { ...item, [col]: e.target.value } : item))} className="min-w-[8rem] bg-transparent px-3 py-2 outline-none focus:bg-emerald-50" /></td>)}<td className="border-b px-2"><button onClick={() => setInserts(list => list.filter((_, i) => i !== index))} className="text-slate-300 hover:text-red-500"><Trash2 size={13} /></button></td></tr>)}</tbody>
+          <table className="w-full min-w-max border-separate border-spacing-0 text-xs"><thead className="sticky top-0"><tr><th className="border-b border-r bg-slate-50 px-2 py-2 text-center font-normal text-slate-400">#</th>{columns.map(col => <th key={col} className="border-b bg-slate-50 px-3 py-2 text-center font-medium text-slate-600"><div className="flex items-center justify-center gap-1.5 whitespace-nowrap"><span>{columnLabel(col)}</span>{pkCols.includes(col) && <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal text-amber-700"><KeyRound size={8} />主键</span>}{isNonNull(col) && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-normal text-rose-600">非空</span>}{data.dataset.column_types[col] && data.dataset.column_types[col] !== 'string' && <small className="font-normal text-slate-400">{data.dataset.column_types[col]}</small>}</div></th>)}{canEdit && <th className="border-b bg-slate-50" />}</tr></thead>
+            <tbody>{rows.map((row, index) => <tr key={index} className={row.deleted ? 'opacity-40' : ''}><td className="border-b border-r px-2 text-center text-slate-300">{offset + index + 1}</td>{columns.map(col => <td key={col} className="border-b p-0 text-center">{canEdit ? <input value={row.cur[col]} disabled={!editable || row.deleted || !pkCols.length} onChange={e => setRows(list => list.map((item, i) => i === index ? { ...item, cur: { ...item.cur, [col]: e.target.value } } : item))} className={`min-w-[8rem] bg-transparent px-3 py-2 text-center outline-none focus:bg-emerald-50 disabled:cursor-not-allowed ${row.cur[col] !== row.orig[col] ? 'bg-amber-50 text-amber-900' : ''}`} /> : <div className="min-w-[8rem] px-3 py-2 text-center">{row.cur[col] || '—'}</div>}</td>)}{canEdit && <td className="border-b px-2">{editable && pkCols.length > 0 && <button onClick={() => setRows(list => list.map((item, i) => i === index ? { ...item, deleted: !item.deleted } : item))} className="text-slate-300 hover:text-red-500">{row.deleted ? <Undo2 size={13} /> : <Trash2 size={13} />}</button>}</td>}</tr>)}
+              {canEdit && inserts.map((row, index) => <tr key={`new-${index}`} className="bg-emerald-50/40"><td className="border-b border-r px-2 text-center text-emerald-500">新</td>{columns.map(col => <td key={col} className="border-b p-0 text-center"><input value={row[col]} placeholder={isNonNull(col) ? '必填' : ''} onChange={e => setInserts(list => list.map((item, i) => i === index ? { ...item, [col]: e.target.value } : item))} className="min-w-[8rem] bg-transparent px-3 py-2 text-center outline-none focus:bg-emerald-50" /></td>)}<td className="border-b px-2"><button onClick={() => setInserts(list => list.filter((_, i) => i !== index))} className="text-slate-300 hover:text-red-500"><Trash2 size={13} /></button></td></tr>)}</tbody>
           </table>
         </div>
-        <div className="flex items-center gap-3 border-t bg-slate-50/70 px-4 py-3"><button onClick={() => setInserts(list => [...list, Object.fromEntries(columns.map(col => [col, '']))])} disabled={!editable} className="inline-flex items-center gap-1 rounded-lg border bg-white px-3 py-1.5 text-xs text-slate-600 disabled:opacity-40"><Plus size={12} />新增行</button><div className="flex items-center gap-1 text-xs text-slate-400"><button onClick={() => switchPage(offset - PAGE_SIZE)} disabled={offset === 0}><ChevronLeft size={14} /></button><span>{data.dataset.total_rows === 0 ? '0' : `${offset + 1}–${end}`} / {data.dataset.total_rows} 行</span><button onClick={() => switchPage(offset + PAGE_SIZE)} disabled={end >= data.dataset.total_rows}><ChevronRight size={14} /></button></div>{dirty && <span className="text-xs text-amber-600">有未提交修改</span>}<button onClick={save} disabled={!editable || !dirty || saving} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-40">{saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}保存并提交审批</button></div>
+        <div className="flex flex-wrap items-center gap-3 border-t bg-slate-50/70 px-4 py-3">{canEdit && <button onClick={() => setInserts(list => [...list, Object.fromEntries(columns.map(col => [col, '']))])} disabled={!editable} className="inline-flex items-center gap-1 rounded-lg border bg-white px-3 py-1.5 text-xs text-slate-600 disabled:opacity-40"><Plus size={12} />新增行</button>}<div className="flex items-center gap-1 text-xs text-slate-500"><button aria-label="上一页" onClick={() => switchPage(offset - pageSize)} disabled={offset === 0} className="rounded p-1 hover:bg-white disabled:opacity-30"><ChevronLeft size={14} /></button><span>{data.dataset.total_rows === 0 ? '0' : `${offset + 1}–${end}`} / {data.dataset.total_rows} 行</span><button aria-label="下一页" onClick={() => switchPage(offset + pageSize)} disabled={end >= data.dataset.total_rows} className="rounded p-1 hover:bg-white disabled:opacity-30"><ChevronRight size={14} /></button></div><label className="flex items-center gap-1.5 text-xs text-slate-500">每页<select value={pageSize} onChange={event => { const next = Number(event.target.value); if (dirty && !window.confirm('切换分页大小将放弃当前未提交的修改，是否继续？')) return; setPageSize(next) }} className="rounded-md border bg-white px-2 py-1 outline-none focus:border-emerald-500">{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select>行</label>{canEdit && dirty && <span className="text-xs text-amber-600">有未提交修改</span>}{canEdit && <button onClick={save} disabled={!editable || !dirty || saving} className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-40">{saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}保存并提交审批</button>}</div>
       </section>
 
-      <section className="rounded-2xl border bg-white p-4 shadow-sm"><h2 className="mb-3 text-sm font-semibold">审批进度</h2>{data.changes.length === 0 ? <p className="text-xs text-slate-400">尚未提交过修改</p> : <div className="space-y-2">{data.changes.map(change => <div key={change.id} className="flex items-start gap-3 rounded-xl border px-3 py-3"><span className={`grid h-8 w-8 place-items-center rounded-lg ${change.status === 'pending' ? 'bg-amber-50 text-amber-600' : change.status === 'approved' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>{change.status === 'pending' ? <Clock3 size={14} /> : change.status === 'approved' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}</span><div><p className="text-xs font-medium">{change.status === 'pending' ? '等待平台审批' : change.status === 'approved' ? `已批准${change.applied_version_no ? `，生效为 v${change.applied_version_no}` : ''}` : '已驳回'}</p><p className="mt-1 text-[11px] text-slate-400">{fmt(change.submitted_at)} · 修改 {change.summary.updated || 0} / 新增 {change.summary.inserted || 0} / 删除 {change.summary.deleted || 0}</p>{change.review_comment && <p className="mt-1.5 text-xs text-slate-600">审批意见：{change.review_comment}</p>}</div></div>)}</div>}</section>
+      {canEdit && <section className="rounded-2xl border bg-white p-4 shadow-sm"><h2 className="mb-3 text-sm font-semibold">审批进度</h2>{data.changes.length === 0 ? <p className="text-xs text-slate-400">尚未提交过修改</p> : <div className="space-y-2">{data.changes.map(change => <div key={change.id} className="flex items-start gap-3 rounded-xl border px-3 py-3"><span className={`grid h-8 w-8 place-items-center rounded-lg ${change.status === 'pending' ? 'bg-amber-50 text-amber-600' : change.status === 'approved' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>{change.status === 'pending' ? <Clock3 size={14} /> : change.status === 'approved' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}</span><div><p className="text-xs font-medium">{change.status === 'pending' ? '等待平台审批' : change.status === 'approved' ? `已批准${change.applied_version_no ? `，生效为 v${change.applied_version_no}` : ''}` : '已驳回'}</p><p className="mt-1 text-[11px] text-slate-400">{fmt(change.submitted_at)} · 修改 {change.summary.updated || 0} / 新增 {change.summary.inserted || 0} / 删除 {change.summary.deleted || 0}</p>{change.review_comment && <p className="mt-1.5 text-xs text-slate-600">审批意见：{change.review_comment}</p>}</div></div>)}</div>}</section>}
     </main>
   </div>
 }
