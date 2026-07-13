@@ -98,8 +98,8 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           <h2>把本体结构，接到真实数据上</h2>
           <p>查看映射覆盖、字段配置与数据采集结果；所有配置在独立工作台中集中维护。</p>
         </div>
-        <button className="dmo-primary-button" onClick={() => navigate(`/ontologies/${ontologyId}/mapping-config`)}>
-          <Settings2 size={15} />配置数据映射
+        <button className="dmo-primary-button" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>
+          <Settings2 size={15} />在草稿中配置映射
         </button>
       </header>
 
@@ -152,7 +152,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
             {!selected ? (
               <div className="dmo-canvas-empty"><Layers3 size={28} /><b>选择一个对象实体或实体关系</b><span>画布将展示当前已建立的数据映射关系</span></div>
             ) : selectedDatasets.length === 0 ? (
-              <div className="dmo-canvas-empty dmo-canvas-empty--warning"><AlertCircle size={28} /><b>尚未建立映射</b><span>前往配置工作台，将数据字段连接到本体属性</span><button onClick={() => navigate(`/ontologies/${ontologyId}/mapping-config`)}>立即配置</button></div>
+              <div className="dmo-canvas-empty dmo-canvas-empty--warning"><AlertCircle size={28} /><b>尚未建立映射</b><span>先创建草稿，再将数据字段连接到草稿本体属性</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>创建草稿</button></div>
             ) : (
               <div className="dmo-flow">
                 <div className="dmo-flow__sources">

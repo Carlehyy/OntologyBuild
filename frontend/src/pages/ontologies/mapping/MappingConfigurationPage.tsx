@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Background, Controls, Handle, MiniMap, Position, ReactFlow,
@@ -154,9 +154,11 @@ function nextLaneY(nodes: MappingNode[], lane: 'dataset' | 'target') {
 
 export default function MappingConfigurationPage() {
   const { id: ontologyId = '' } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
+  const versionId = searchParams.get('versionId')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const data = useMappingData(ontologyId)
+  const data = useMappingData(ontologyId, false, versionId)
   const [nodes, setNodes, onNodesChange] = useNodesState<MappingNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [leftSearch, setLeftSearch] = useState('')
@@ -395,6 +397,42 @@ export default function MappingConfigurationPage() {
 
     setSaving(true); setSaveIssues([]); setNotice(null)
     try {
+      if (versionId) {
+        const mappings = desiredObjectMappings.map(desired => {
+          const existing = data.mappings.find(item => item.curated_dataset_id === desired.datasetId && mappingTargetId(item) === desired.object.id)
+          return {
+            id: existing?.id || crypto.randomUUID(),
+            curatedDatasetId: desired.datasetId,
+            entityClass: desired.object.name,
+            targetObjectTypeId: desired.object.id,
+            fieldMapping: desired.fieldMapping,
+            status: 'draft', confidence: 1,
+          }
+        })
+        const linkMappings = desiredLinkMappings.desired.map(desired => {
+          const existing = linkMappingForType(desired.relation, data.linkMappings)
+          return {
+            id: existing?.id || crypto.randomUUID(),
+            srcDatasetId: desired.srcDatasetId, tgtDatasetId: desired.tgtDatasetId,
+            edgeDatasetId: desired.edgeDatasetId,
+            relationType: desired.relation.name, linkTypeId: desired.relation.id,
+            srcKey: desired.srcKey, tgtKey: desired.tgtKey,
+            fieldMapping: desired.fieldMapping, status: 'draft',
+          }
+        })
+        await apiClientV2.put(
+          `/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`,
+          { baseRevision: data.workspaceRevision, mappings, linkMappings },
+        )
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['mappings', ontologyId, versionId] }),
+          queryClient.invalidateQueries({ queryKey: ['link-mappings', ontologyId, versionId] }),
+          queryClient.invalidateQueries({ queryKey: ['mapping-workspace-meta', ontologyId, versionId] }),
+        ])
+        setDirty(false)
+        setNotice({ tone: 'good', text: `草稿映射已保存：${mappings.length} 个对象映射、${linkMappings.length} 个关系映射。` })
+        return
+      }
       const desiredLinksByType = new Map(desiredLinkMappings.desired.map(item => [item.relation.id, item]))
       for (const relation of data.linkTypes) {
         const existing = linkMappingForType(relation, data.linkMappings)
@@ -445,7 +483,9 @@ export default function MappingConfigurationPage() {
   const clearCanvas = () => { if (nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null) } }
   const leaveWorkspace = () => {
     if (dirty && !window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')) return
-    navigate(`/ontologies/${ontologyId}?tab=data-mapping`)
+    navigate(versionId
+      ? `/ontologies/${ontologyId}?tab=versions`
+      : `/ontologies/${ontologyId}?tab=data-mapping`)
   }
   const closeTutorial = () => { localStorage.setItem(`mapping-tutorial:${ontologyId}`, 'seen'); setTutorialStep(null) }
   const tutorial = [

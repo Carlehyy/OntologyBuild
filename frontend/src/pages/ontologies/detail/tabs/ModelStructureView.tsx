@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { apiClientV2 } from '@/api/client'
 import { Box, GitBranch, Bolt, FunctionSquare, ExternalLink, KeyRound, Cpu } from 'lucide-react'
 
-/* 模型结构（只读速览）：正规本体（图谱编辑器同一份数据）。
-   编辑请去图谱编辑器——这里回答"模型长什么样、每类有多少数据"。 */
+/* 模型结构（只读速览）：只展示当前发布投影。
+   修改必须先从版本树创建完整草稿，避免直接污染线上结构。 */
 
 interface OT { id: string; name: string; displayName: string; primaryKey?: string | null
   properties: { id: string; name: string; displayName?: string; type?: string; source?: string; functionId?: string }[] }
@@ -32,9 +32,9 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">正规本体的只读速览（与图谱编辑器同一份数据）。要修改请
-          <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
-            className="text-violet-600 hover:underline font-medium mx-1">打开图谱编辑器</button>。
+        <p className="text-sm text-gray-500">当前发布本体的只读速览。要修改请
+          <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+            className="text-violet-600 hover:underline font-medium mx-1">从版本树创建草稿</button>。
         </p>
       </div>
 
@@ -45,7 +45,7 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
           <p className="text-sm font-medium text-gray-700">对象实体（{ots.length}）</p>
         </div>
         {ots.length === 0 ? (
-          <p className="text-xs text-gray-400 py-3 text-center">还没有对象实体——去图谱编辑器创建，或在「数据映射」由数据生成。</p>
+          <p className="text-xs text-gray-400 py-3 text-center">还没有对象实体——请先从版本树创建草稿，再进入结构工作区建模。</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {ots.map(ot => {
@@ -141,9 +141,9 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
         </div>
       </div>
 
-      <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
+      <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
         className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-violet-300 text-violet-600 text-sm hover:bg-violet-50 transition-colors">
-        <ExternalLink size={14} /> 打开图谱编辑器修改模型
+        <ExternalLink size={14} /> 打开版本树并创建修改分支
       </button>
     </div>
   )

@@ -12,11 +12,9 @@ import {
   ExclamationTriangleIcon,
   ShieldCheckIcon,
   ArrowPathIcon,
-  TagIcon,
 } from '@heroicons/react/24/outline';
 import { useOntologyStore } from '../store/ontologyStore';
 import { lintOntology, lintSummary, type LintIssue } from '../utils/schemaLint';
-import { publishVersion } from '../api/formalApi';
 
 interface HeaderProps {
   onToggleActions?: () => void;
@@ -93,7 +91,6 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
 
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 text-sm text-surface-500 md:ml-0 md:justify-self-end">
           <LintBadge />
-          <PublishButton />
           {syncStatus === 'saved' && lastSentinelSummary && lastSentinelSummary.fired > 0 && (
             <span className="flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-500/40 bg-rose-900/25 text-xs text-rose-300"
               title={`本次保存评估了 ${lastSentinelSummary.evaluated} 个哨兵`}>
@@ -113,99 +110,6 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
         </div>
       </div>
     </header>
-  );
-}
-
-// 发布版本按钮：把已保存的模型固化为一个版本快照（fo_* 模式层 + 旧扁平模型）
-function PublishButton() {
-  const backendId = useOntologyStore((s) => s.backendId);
-  const isDirty = useOntologyStore((s) => s.isDirty);
-  const loadFromBackend = useOntologyStore((s) => s.loadFromBackend);
-  const [open, setOpen] = useState(false);
-  const [label, setLabel] = useState('');
-  const [desc, setDesc] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  if (!backendId) return null;
-
-  const handlePublish = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await publishVersion(backendId, { versionLabel: label, description: desc });
-      const f = r.change_summary?.formal?.total;
-      setDone(`${r.version_number} 已发布${f ? ` · 模型变更 +${f.added} ~${f.modified} -${f.deleted}` : ''}`);
-      // 服务端已推进项目 version，重新加载可同步 revision 与 dirty 基线。
-      await loadFromBackend(backendId);
-      setLabel('');
-      setDesc('');
-      setTimeout(() => { setDone(null); setOpen(false); }, 2200);
-    } catch (e: any) {
-      setError(typeof e?.detail === 'string' ? e.detail : (e?.message || '发布失败'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        disabled={isDirty}
-        title={isDirty ? '有未保存的改动，先保存再发布' : '把当前已保存的模型固化为一个版本'}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-surface-700 text-xs text-surface-300 hover:bg-surface-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-      >
-        <TagIcon className="w-4 h-4" />
-        发布版本
-      </button>
-
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-2 z-50 w-80 bg-surface-800 border border-surface-600 rounded-xl shadow-2xl p-4 animate-fade-in">
-            {done ? (
-              <p className="text-sm text-emerald-300 flex items-center gap-2">
-                <CheckCircleIcon className="w-5 h-5" /> {done}
-              </p>
-            ) : (
-              <>
-                <p className="text-xs text-surface-400 mb-3">
-                  把数据库中当前模型（对象/关系/动作/函数）固化为不可变快照，可在"版本"页查看与回滚。
-                </p>
-                <input
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  placeholder="版本标签（如：上线前基线）"
-                  className="input-field w-full text-sm mb-2"
-                />
-                <textarea
-                  value={desc}
-                  onChange={(e) => setDesc(e.target.value)}
-                  placeholder="说明（可选）"
-                  className="input-field w-full text-xs h-16 resize-none"
-                />
-                {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
-                <div className="flex justify-end gap-2 mt-3">
-                  <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-lg text-xs text-surface-300 hover:bg-surface-700">
-                    取消
-                  </button>
-                  <button
-                    onClick={() => void handlePublish()}
-                    disabled={busy}
-                    className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {busy && <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />}
-                    发布
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
-    </div>
   );
 }
 
@@ -383,7 +287,7 @@ function SaveButton({
 }
 
 function formatVersion(version?: string) {
-  if (!version) return 'v1.0.0';
+  if (!version) return 'v0';
   return version.trim().toLowerCase().startsWith('v') ? version : `v${version}`;
 }
 

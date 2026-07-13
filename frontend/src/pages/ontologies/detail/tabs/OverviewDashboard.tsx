@@ -101,7 +101,7 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
 
       {/* 四张核心指标卡：建模 → 数据 → 运行 → 事实 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
+        <button onClick={() => onGoGroup('design')}
           className="group text-left rounded-xl border bg-white p-4 hover:border-violet-300 hover:shadow-sm transition-all">
           <div className="flex items-center gap-2 text-gray-500 text-xs mb-2">
             <Boxes size={14} className="text-violet-500" /> 本体模型
@@ -256,10 +256,10 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
       {/* 底部快捷入口 */}
       <div className="flex items-center gap-2 text-xs text-gray-400 px-1">
         <GitBranch size={13} />
-        建模 / 哨兵 / 动作 / 审批的完整操作都在
-        <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
-          className="text-violet-600 hover:underline font-medium">图谱编辑器</button>
-        里；这里是给"治理与推演"看的驾驶舱。
+        结构与映射修改请先
+        <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+          className="text-violet-600 hover:underline font-medium">创建版本草稿</button>
+        并完成隔离试跑；这里始终展示当前发布投影。
       </div>
     </div>
   )

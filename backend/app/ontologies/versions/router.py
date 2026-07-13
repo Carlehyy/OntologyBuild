@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 import uuid
-from app.deps import get_db, require_admin
+from app.deps import get_db, get_current_user, require_admin
 from app.config import settings
-from app.models.ontology_version import OntologyVersion, OntologyChangeLog
+from app.models.ontology_version import (
+    OntologyVersion, OntologyChangeLog, OntologyTrialRun,
+    OntologyTrialObject, OntologyTrialLink,
+)
 from app.models.ontology import OntologyProject
 from app.models.entity import Entity
 from app.models.relation import Relation
@@ -29,8 +35,47 @@ from app.models.v2.curated import CuratedReview
 from app.ontologies.formal_modeling import schemas as FS
 from app.ontologies.formal_modeling.validation import validate_model
 from app.ontologies.access import ontology_access_guard
+from app.ontologies.versions.evolution_service import (
+    complete_snapshot, impact_report, materialize_trial, next_draft_number,
+    next_release_number, snapshot_hash, snapshot_models, validate_snapshot,
+    workspace_snapshot,
+)
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
+
+
+def _version_payload(version: OntologyVersion, latest_trial: OntologyTrialRun | None = None) -> dict:
+    return {
+        "id": version.id,
+        "version_number": version.version_number,
+        "version_label": version.version_label,
+        "description": version.description,
+        "parent_version_id": version.parent_version_id,
+        "base_release_id": version.base_release_id,
+        "promoted_from_id": version.promoted_from_id,
+        "node_kind": version.node_kind or "release",
+        "lifecycle_status": version.lifecycle_status or (
+            "released" if (version.node_kind or "release") == "release" else "editing"),
+        "revision": version.revision or 0,
+        "snapshot_hash": version.snapshot_hash,
+        "change_summary": version.change_summary or {},
+        "created_by": version.created_by,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+        "published_at": version.published_at.isoformat() if version.published_at else None,
+        "latest_trial": _trial_payload(latest_trial) if latest_trial else None,
+    }
+
+
+def _trial_payload(run: OntologyTrialRun) -> dict:
+    return {
+        "id": run.id, "version_id": run.version_id, "revision": run.revision,
+        "snapshot_hash": run.snapshot_hash, "status": run.status,
+        "dataset_versions": run.dataset_versions or [],
+        "result": run.result_json or {}, "impact_hash": run.impact_hash,
+        "created_by": run.created_by,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
 
 
 def _gate_error(code: str, kind: str, message: str, *, item_id: str = "",
@@ -673,24 +718,669 @@ def list_versions(ontology_id: str, limit: int = 20, offset: int = 0, db: Sessio
         OntologyProject.id == ontology_id).first()
     if not project:
         raise HTTPException(404, "Ontology not found")
+    current = _current_release(db, project)
     total = db.query(OntologyVersion).filter(
         OntologyVersion.ontology_id == ontology_id
     ).count()
     versions = db.query(OntologyVersion).filter(
         OntologyVersion.ontology_id == ontology_id
     ).order_by(desc(OntologyVersion.created_at)).offset(offset).limit(limit).all()
-    return {"data": [{
-        "id": v.id,
-        "version_number": v.version_number,
-        "version_label": v.version_label,
-        "description": v.description,
-        "change_summary": v.change_summary or {},
-        "created_by": v.created_by,
-        "created_at": v.created_at.isoformat() if v.created_at else None,
-    } for v in versions], "total": total, "limit": limit, "offset": offset}
+    trial_by_version: dict[str, OntologyTrialRun] = {}
+    if versions:
+        for run in db.query(OntologyTrialRun).filter(
+                OntologyTrialRun.version_id.in_([item.id for item in versions])
+        ).order_by(desc(OntologyTrialRun.created_at)).all():
+            trial_by_version.setdefault(run.version_id, run)
+    db.commit()
+    return {
+        "data": [_version_payload(v, trial_by_version.get(v.id)) for v in versions],
+        "total": total, "limit": limit, "offset": offset,
+        "current_release_id": current.id,
+        "current_release_version": current.version_number,
+    }
 
 
-@router.post("/{ontology_id}/versions", status_code=201)
+def _current_release(db: Session, project: OntologyProject) -> OntologyVersion:
+    current = None
+    if project.current_release_id:
+        current = db.query(OntologyVersion).filter(
+            OntologyVersion.id == project.current_release_id,
+            OntologyVersion.ontology_id == project.id,
+            OntologyVersion.node_kind == "release",
+        ).first()
+    if current is None:
+        current = db.query(OntologyVersion).filter(
+            OntologyVersion.ontology_id == project.id,
+            OntologyVersion.node_kind == "release",
+        ).order_by(desc(OntologyVersion.published_at),
+                   desc(OntologyVersion.created_at)).first()
+    if current is None:
+        # 存量安装首次访问时补齐完整基线；不猜增量历史，直接冻结当前定义。
+        snap = complete_snapshot(_snapshot_formal(db, project.id))
+        current = OntologyVersion(
+            id=str(uuid.uuid4()), ontology_id=project.id,
+            version_number="v0", version_label="迁移基线",
+            description="从升级前当前完整结构生成",
+            node_kind="release", lifecycle_status="released", revision=0,
+            snapshot_formal=snap, snapshot_hash=snapshot_hash(snap),
+            published_at=datetime.now(timezone.utc), created_by=project.created_by,
+        )
+        db.add(current)
+        db.flush()
+    elif current.snapshot_formal is None:
+        # 旧部署可能只有扁平版本元数据。当前运行结构仍可被可靠观察，首次
+        # 访问时将其冻结成完整迁移基线；历史非当前节点则不能这样猜测。
+        current.snapshot_formal = complete_snapshot(_snapshot_formal(db, project.id))
+        current.snapshot_hash = snapshot_hash(current.snapshot_formal)
+        current.published_at = current.published_at or current.created_at
+        db.flush()
+    elif not current.snapshot_hash:
+        current.snapshot_formal = complete_snapshot(current.snapshot_formal)
+        current.snapshot_hash = snapshot_hash(current.snapshot_formal)
+        current.published_at = current.published_at or current.created_at
+        db.flush()
+    if project.current_release_id != current.id:
+        project.current_release_id = current.id
+        if not str(project.version or "").startswith("v"):
+            project.version = current.version_number
+        db.flush()
+    return current
+
+
+@router.get("/{ontology_id}/version-tree")
+def get_version_tree(ontology_id: str, db: Session = Depends(get_db)):
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    current = _current_release(db, project)
+    versions = db.query(OntologyVersion).filter(
+        OntologyVersion.ontology_id == ontology_id,
+    ).order_by(OntologyVersion.created_at.asc()).all()
+    latest_trials: dict[str, OntologyTrialRun] = {}
+    for run in db.query(OntologyTrialRun).filter(
+            OntologyTrialRun.ontology_id == ontology_id,
+    ).order_by(desc(OntologyTrialRun.created_at)).all():
+        latest_trials.setdefault(run.version_id, run)
+    db.commit()
+    return {"data": {
+        "current_release_id": current.id,
+        "current_release_number": current.version_number,
+        "current_release_version": current.version_number,
+        "versions": [_version_payload(item, latest_trials.get(item.id))
+                     for item in versions],
+    }}
+
+
+@router.post("/{ontology_id}/versions/{source_version_id}/drafts", status_code=201)
+def create_draft_version(
+    ontology_id: str, source_version_id: str, body: dict,
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
+):
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).with_for_update().first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    current = _current_release(db, project)
+    source = db.query(OntologyVersion).filter(
+        OntologyVersion.id == source_version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if source is None:
+        raise HTTPException(404, "Source version not found")
+    if source.snapshot_formal is None:
+        raise HTTPException(409, detail={
+            "code": "legacy_snapshot_incomplete",
+            "message": "该历史版本缺少完整结构快照，不能安全创建分支",
+        })
+    siblings = [item.version_number for item in db.query(OntologyVersion).filter(
+        OntologyVersion.ontology_id == ontology_id,
+        OntologyVersion.parent_version_id == source.id,
+    ).all()]
+    number = next_draft_number(source.version_number, siblings)
+    snap = complete_snapshot(source.snapshot_formal)
+    base_release_id = source.id if source.node_kind == "release" else (
+        source.base_release_id or current.id)
+    draft = OntologyVersion(
+        id=str(uuid.uuid4()), ontology_id=ontology_id,
+        version_number=number,
+        version_label=str(body.get("version_label") or body.get("versionLabel") or ""),
+        description=str(body.get("description") or ""),
+        parent_version_id=source.id, base_release_id=base_release_id,
+        node_kind="draft", lifecycle_status="editing", revision=0,
+        snapshot_formal=snap, snapshot_hash=snapshot_hash(snap),
+        snapshot_entities=_json_safe(source.snapshot_entities or []),
+        snapshot_relations=_json_safe(source.snapshot_relations or []),
+        snapshot_logic=_json_safe(source.snapshot_logic or []),
+        snapshot_actions=_json_safe(source.snapshot_actions or []),
+        change_summary=_diff_formal(
+            current.snapshot_formal, snap), created_by=current_user.id,
+    )
+    db.add(draft)
+    db.commit()
+    return {"data": _version_payload(draft)}
+
+
+def _draft_or_404(db: Session, ontology_id: str, version_id: str) -> OntologyVersion:
+    draft = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if draft is None:
+        raise HTTPException(404, "Version not found")
+    if draft.node_kind != "draft":
+        raise HTTPException(409, detail={
+            "code": "immutable_release", "message": "发布版本不可修改，请先创建草稿分支",
+        })
+    return draft
+
+
+def _stale_previous_trials(db: Session, draft: OntologyVersion) -> None:
+    db.query(OntologyTrialRun).filter(
+        OntologyTrialRun.version_id == draft.id,
+        OntologyTrialRun.status == "passed",
+    ).update({OntologyTrialRun.status: "stale"}, synchronize_session=False)
+
+
+@router.get("/{ontology_id}/versions/{version_id}/workspace")
+def get_draft_workspace(
+    ontology_id: str, version_id: str, db: Session = Depends(get_db),
+):
+    draft = _draft_or_404(db, ontology_id, version_id)
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    snap = complete_snapshot(draft.snapshot_formal)
+    return {"data": {
+        "id": ontology_id, "name": project.name,
+        "description": project.description, "version": draft.version_number,
+        "revision": f"{draft.revision}:{draft.snapshot_hash}",
+        "objectTypes": snap["objectTypes"], "linkTypes": snap["linkTypes"],
+        "actions": snap["actions"], "functions": snap["functions"],
+        # 草稿只编辑结构；真实运行数据只存在于试跑空间，不能回写线上实例。
+        "instances": [], "linkInstances": [], "executionLogs": [],
+        "workspaceMode": "draft", "versionId": draft.id,
+    }}
+
+
+@router.put("/{ontology_id}/versions/{version_id}/workspace")
+def save_draft_workspace(
+    ontology_id: str, version_id: str, body: dict,
+    db: Session = Depends(get_db), _=Depends(get_current_user),
+):
+    draft = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).with_for_update().first()
+    if draft is None:
+        raise HTTPException(404, "Version not found")
+    if draft.node_kind != "draft":
+        raise HTTPException(409, detail={"code": "immutable_release", "message": "发布版本不可修改"})
+    expected = f"{draft.revision}:{draft.snapshot_hash}"
+    base_revision = body.get("baseRevision", body.get("base_revision"))
+    if base_revision is not None and str(base_revision) != expected:
+        raise HTTPException(409, detail={
+            "code": "conflict", "message": "该草稿已被其他会话修改，请重新加载",
+            "currentRevision": expected,
+        })
+    try:
+        candidate = workspace_snapshot(body, draft.snapshot_formal)
+    except Exception as exc:
+        raise HTTPException(422, detail={
+            "code": "invalid_workspace", "message": str(exc),
+        }) from exc
+    errors = validate_snapshot(candidate, require_object_type=False)
+    _raise_publish_errors(errors, "草稿结构校验未通过")
+    draft.snapshot_formal = candidate
+    draft.revision = (draft.revision or 0) + 1
+    draft.snapshot_hash = snapshot_hash(candidate)
+    draft.lifecycle_status = "editing"
+    _stale_previous_trials(db, draft)
+    db.commit()
+    return {"data": {
+        "revision": f"{draft.revision}:{draft.snapshot_hash}",
+        "snapshotHash": draft.snapshot_hash,
+    }}
+
+
+@router.get("/{ontology_id}/versions/{version_id}/workspace/mappings")
+def get_draft_mappings(
+    ontology_id: str, version_id: str, db: Session = Depends(get_db),
+):
+    draft = _draft_or_404(db, ontology_id, version_id)
+    snap = complete_snapshot(draft.snapshot_formal)
+    return {"data": {
+        "mappings": snap["mappings"], "linkMappings": snap["linkMappings"],
+        "sentinels": snap["sentinels"],
+        "revision": f"{draft.revision}:{draft.snapshot_hash}",
+    }}
+
+
+@router.put("/{ontology_id}/versions/{version_id}/workspace/mappings")
+def save_draft_mappings(
+    ontology_id: str, version_id: str, body: dict,
+    db: Session = Depends(get_db), _=Depends(get_current_user),
+):
+    draft = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).with_for_update().first()
+    if draft is None:
+        raise HTTPException(404, "Version not found")
+    if draft.node_kind != "draft":
+        raise HTTPException(409, detail={"code": "immutable_release", "message": "发布版本不可修改"})
+    expected = f"{draft.revision}:{draft.snapshot_hash}"
+    base_revision = body.get("baseRevision", body.get("base_revision"))
+    if base_revision is not None and str(base_revision) != expected:
+        raise HTTPException(409, detail={
+            "code": "conflict", "message": "该草稿映射已被修改，请重新加载",
+            "currentRevision": expected,
+        })
+    snap = complete_snapshot(draft.snapshot_formal)
+    for key in ("mappings", "linkMappings", "sentinels"):
+        if key in body:
+            if not isinstance(body[key], list):
+                raise HTTPException(422, f"{key} must be an array")
+            snap[key] = _json_safe(body[key])
+    draft.snapshot_formal = snap
+    draft.revision = (draft.revision or 0) + 1
+    draft.snapshot_hash = snapshot_hash(snap)
+    draft.lifecycle_status = "editing"
+    _stale_previous_trials(db, draft)
+    db.commit()
+    return {"data": {
+        "revision": f"{draft.revision}:{draft.snapshot_hash}",
+        "snapshotHash": draft.snapshot_hash,
+    }}
+
+
+@router.get("/{ontology_id}/versions/{version_id}/impact")
+def get_draft_impact(
+    ontology_id: str, version_id: str, db: Session = Depends(get_db),
+):
+    draft = _draft_or_404(db, ontology_id, version_id)
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    current = _current_release(db, project)
+    return {"data": {
+        **impact_report(current.snapshot_formal, draft.snapshot_formal),
+        "baseReleaseId": draft.base_release_id,
+        "currentReleaseId": current.id,
+        "baseOutdated": draft.base_release_id != current.id,
+    }}
+
+
+def _snapshot_sentinel_models(snapshot: dict) -> list[SimpleNamespace]:
+    result = []
+    for item in complete_snapshot(snapshot)["sentinels"]:
+        result.append(SimpleNamespace(
+            id=str(item.get("id") or ""),
+            name=str(item.get("name") or ""),
+            display_name=str(item.get("displayName") or item.get("name") or ""),
+            bindings=item.get("bindings") or [], links=item.get("links") or [],
+            condition=item.get("condition"),
+            primary_alias=item.get("primaryAlias"),
+            action_ids=item.get("actionIds") or [],
+            action_parameters=item.get("actionParameters") or {},
+        ))
+    return result
+
+
+@router.get("/{ontology_id}/versions/{version_id}/trial-runs")
+def list_trial_runs(
+    ontology_id: str, version_id: str, db: Session = Depends(get_db),
+):
+    version = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if version is None:
+        raise HTTPException(404, "Version not found")
+    runs = db.query(OntologyTrialRun).filter(
+        OntologyTrialRun.ontology_id == ontology_id,
+        OntologyTrialRun.version_id == version_id,
+    ).order_by(desc(OntologyTrialRun.created_at)).all()
+    return {"data": [_trial_payload(item) for item in runs]}
+
+
+@router.get("/{ontology_id}/versions/{version_id}/trial-runs/{run_id}")
+def get_trial_run(
+    ontology_id: str, version_id: str, run_id: str,
+    db: Session = Depends(get_db),
+):
+    run = db.query(OntologyTrialRun).filter(
+        OntologyTrialRun.id == run_id,
+        OntologyTrialRun.ontology_id == ontology_id,
+        OntologyTrialRun.version_id == version_id,
+    ).first()
+    if run is None:
+        raise HTTPException(404, "Trial run not found")
+    return {"data": _trial_payload(run)}
+
+
+@router.post("/{ontology_id}/versions/{version_id}/trial-runs", status_code=201)
+def create_trial_run(
+    ontology_id: str, version_id: str, body: dict,
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
+):
+    draft = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).with_for_update().first()
+    if draft is None:
+        raise HTTPException(404, "Version not found")
+    if draft.node_kind != "draft":
+        raise HTTPException(409, detail={
+            "code": "trial_requires_draft", "message": "只有草稿分支可以试跑",
+        })
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    current = _current_release(db, project)
+    if draft.base_release_id != current.id:
+        raise HTTPException(409, detail={
+            "code": "draft_base_outdated",
+            "message": "当前发布版已变化，请从最新发布版创建草稿并合并改动后再试跑",
+            "draftBaseReleaseId": draft.base_release_id,
+            "currentReleaseId": current.id,
+        })
+    snap = complete_snapshot(draft.snapshot_formal)
+    structural_errors = validate_snapshot(snap)
+    try:
+        models = snapshot_models(snap)
+        structural_errors.extend(_validate_sentinels(
+            _snapshot_sentinel_models(snap), models["objectTypes"],
+            models["linkTypes"], models["actions"],
+        ))
+    except Exception as exc:
+        structural_errors.append(_gate_error(
+            "sentinel_validation_failed", "sentinel", str(exc)))
+    _raise_publish_errors(structural_errors, "试跑前结构校验未通过")
+
+    report = impact_report(current.snapshot_formal, snap)
+    run = OntologyTrialRun(
+        id=str(uuid.uuid4()), ontology_id=ontology_id, version_id=draft.id,
+        revision=draft.revision or 0,
+        snapshot_hash=draft.snapshot_hash or snapshot_hash(snap),
+        status="running", dataset_versions=[], result_json={},
+        impact_hash=report["impactHash"], created_by=current_user.id,
+    )
+    db.add(run)
+    # running 记录先落盘；进程中断后不会伪装成“从未试跑”。
+    db.commit()
+    try:
+        materialize_trial(db, run, snap)
+        if run.status == "passed":
+            draft.lifecycle_status = "trial_ready"
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        run = db.query(OntologyTrialRun).filter(
+            OntologyTrialRun.id == run.id).with_for_update().one()
+        run.status = "failed"
+        run.completed_at = datetime.now(timezone.utc)
+        run.result_json = {
+            "counts": {"objects": 0, "links": 0, "facts": 0, "datasets": 0},
+            "errors": [_gate_error(
+                "trial_internal_error", "trialRun",
+                f"试跑事务已回滚: {exc}", item_id=run.id)],
+            "warnings": [], "samples": {"objects": [], "links": []},
+            "actionsExecuted": 0, "sideEffects": "blocked",
+        }
+        db.commit()
+    return {"data": _trial_payload(run)}
+
+
+def _verify_trial_dataset_pins(db: Session, run: OntologyTrialRun) -> list[dict]:
+    errors = []
+    for pin in run.dataset_versions or []:
+        dataset = db.query(Dataset).filter(
+            Dataset.id == pin.get("datasetId")).first()
+        version = db.query(DatasetVersion).filter(
+            DatasetVersion.id == pin.get("versionId"),
+            DatasetVersion.dataset_id == pin.get("datasetId"),
+        ).first()
+        if dataset is None or version is None:
+            errors.append(_gate_error(
+                "trial_dataset_version_missing", "dataset",
+                "试跑固定的数据版本已不存在",
+                item_id=str(pin.get("datasetId") or "")))
+            continue
+        if dataset.latest_version_id != version.id:
+            errors.append(_gate_error(
+                "trial_dataset_version_stale", "dataset",
+                f"数据集「{dataset.name}」在试跑后已产生新版本，请重新试跑",
+                item_id=dataset.id))
+        if version.checksum != pin.get("checksum"):
+            errors.append(_gate_error(
+                "trial_dataset_checksum_changed", "dataset",
+                f"数据集「{dataset.name}」固定版本校验和变化，拒绝发布",
+                item_id=dataset.id))
+    return errors
+
+
+@router.post("/{ontology_id}/versions/{version_id}/promote", status_code=201)
+def promote_draft(
+    ontology_id: str, version_id: str, body: dict,
+    db: Session = Depends(get_db), current_user=Depends(require_admin),
+):
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).with_for_update().first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    current = _current_release(db, project)
+    draft = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).with_for_update().first()
+    if draft is None:
+        raise HTTPException(404, "Version not found")
+    if draft.node_kind != "draft":
+        raise HTTPException(409, detail={
+            "code": "promotion_requires_draft", "message": "只能晋级草稿分支",
+        })
+    if draft.base_release_id != current.id:
+        raise HTTPException(409, detail={
+            "code": "draft_base_outdated",
+            "message": "草稿基线不是当前发布版，拒绝覆盖并发发布",
+            "draftBaseReleaseId": draft.base_release_id,
+            "currentReleaseId": current.id,
+        })
+    trial_run_id = body.get("trial_run_id", body.get("trialRunId"))
+    run = db.query(OntologyTrialRun).filter(
+        OntologyTrialRun.id == trial_run_id,
+        OntologyTrialRun.ontology_id == ontology_id,
+        OntologyTrialRun.version_id == draft.id,
+    ).first()
+    if run is None or run.status != "passed":
+        raise HTTPException(409, detail={
+            "code": "passed_trial_required", "message": "发布前必须选择一次通过的试跑",
+        })
+    snap = complete_snapshot(draft.snapshot_formal)
+    current_hash = snapshot_hash(snap)
+    if (run.revision != (draft.revision or 0)
+            or run.snapshot_hash != draft.snapshot_hash
+            or run.snapshot_hash != current_hash):
+        run.status = "stale"
+        db.commit()
+        raise HTTPException(409, detail={
+            "code": "trial_snapshot_stale", "message": "试跑后草稿已改变，请重新试跑",
+        })
+    report = impact_report(current.snapshot_formal, snap)
+    acknowledged = body.get("impact_hash", body.get("impactHash"))
+    if not acknowledged or acknowledged != report["impactHash"] or run.impact_hash != report["impactHash"]:
+        raise HTTPException(409, detail={
+            "code": "impact_review_required",
+            "message": "影响分析已变化或尚未确认，请重新审核",
+            "currentImpactHash": report["impactHash"],
+        })
+    _raise_publish_errors(_verify_trial_dataset_pins(db, run), "试跑数据版本已变化")
+
+    trial_objects = db.query(OntologyTrialObject).filter(
+        OntologyTrialObject.trial_run_id == run.id).all()
+    trial_links = db.query(OntologyTrialLink).filter(
+        OntologyTrialLink.trial_run_id == run.id).all()
+    expected = (run.result_json or {}).get("counts") or {}
+    if len(trial_objects) != int(expected.get("objects") or 0) or len(trial_links) != int(expected.get("links") or 0):
+        raise HTTPException(409, detail={
+            "code": "trial_materialization_incomplete",
+            "message": "试跑隔离投影不完整，拒绝发布并请重新试跑",
+        })
+
+    from app.ontologies.formal_modeling.facts import (
+        record_link_fact, record_object_tombstone, record_property_facts,
+    )
+    old_objects = db.query(FoObjectInstance).filter(
+        FoObjectInstance.ontology_id == ontology_id).all()
+    old_links = db.query(FoLinkInstance).filter(
+        FoLinkInstance.ontology_id == ontology_id).all()
+    old_object_by_id = {item.id: item for item in old_objects}
+    candidate_ids = {item.object_id for item in trial_objects}
+    candidate_link_ids = {item.link_id for item in trial_links}
+    release_id = str(uuid.uuid4())
+    release_number = next_release_number(current.version_number)
+    source = f"ontology-release://{release_id}"
+
+    try:
+        _restore_formal_snapshot(db, ontology_id, snap)
+        pinned = {str(item.get("datasetId")): item for item in (run.dataset_versions or [])}
+        for mapping in db.query(OntologyMapping).filter(
+                OntologyMapping.ontology_id == ontology_id).all():
+            mapping.status = "applied"
+            fields = dict(mapping.field_mapping or {})
+            pin = pinned.get(str(mapping.curated_dataset_id))
+            if pin:
+                fields["__applied_dataset_version_id__"] = pin.get("versionId")
+            mapping.field_mapping = fields
+        for mapping in db.query(OntologyLinkMapping).filter(
+                OntologyLinkMapping.ontology_id == ontology_id).all():
+            mapping.status = "active"
+            fields = dict(mapping.field_mapping or {})
+            for role, dataset_id in (
+                ("source", mapping.src_dataset_id),
+                ("target", mapping.tgt_dataset_id),
+                ("edge", mapping.edge_dataset_id),
+            ):
+                if dataset_id and str(dataset_id) in pinned:
+                    fields[f"__applied_{role}_version_id__"] = pinned[str(dataset_id)].get("versionId")
+            mapping.field_mapping = fields
+        for sentinel in db.query(Sentinel).filter(
+                Sentinel.ontology_id == ontology_id).all():
+            sentinel.status = "published"
+
+        for item in old_links:
+            if item.id not in candidate_link_ids:
+                record_link_fact(
+                    db, ontology_id=ontology_id, link_instance_id=item.id,
+                    link_type_id=item.link_type_id, exists=False,
+                    source=source, actor_id=current_user.id, caused_by=run.id)
+        for item in old_objects:
+            if item.id not in candidate_ids:
+                record_object_tombstone(
+                    db, ontology_id=ontology_id, instance_id=item.id,
+                    object_type_id=item.object_type_id, source=source,
+                    actor_id=current_user.id, caused_by=run.id)
+
+        db.query(FoLinkInstance).filter(
+            FoLinkInstance.ontology_id == ontology_id).delete(synchronize_session=False)
+        db.query(FoObjectInstance).filter(
+            FoObjectInstance.ontology_id == ontology_id).delete(synchronize_session=False)
+        # bulk delete 不会同步 Session identity map。后续用相同稳定 ID 写入
+        # 新投影前先移除旧 ORM 身份，避免 v1→v2 时出现对象冲突或脏缓存。
+        for old_item in [*old_links, *old_objects]:
+            db.expunge(old_item)
+        for item in trial_objects:
+            old = old_object_by_id.get(item.object_id)
+            old_props = dict(old.properties or {}) if old else None
+            new_props = dict(item.properties or {})
+            fact_props = dict(new_props)
+            if old_props is not None:
+                for removed in old_props.keys() - new_props.keys():
+                    fact_props[removed] = None
+            record_property_facts(
+                db, ontology_id=ontology_id, instance_id=item.object_id,
+                object_type_id=item.object_type_id, old_props=old_props,
+                new_props=fact_props, source=source, actor_id=current_user.id,
+                caused_by=run.id, confidence=1.0)
+            db.add(FoObjectInstance(
+                id=item.object_id, ontology_id=ontology_id,
+                object_type_id=item.object_type_id,
+                properties=dict(item.properties or {}), computed={},
+                source="pipeline", external_id=item.external_id,
+            ))
+        for item in trial_links:
+            db.add(FoLinkInstance(
+                id=item.link_id, ontology_id=ontology_id,
+                link_type_id=item.link_type_id,
+                source_object_id=item.source_object_id,
+                target_object_id=item.target_object_id,
+                properties=dict(item.properties or {}),
+            ))
+            record_link_fact(
+                db, ontology_id=ontology_id, link_instance_id=item.link_id,
+                link_type_id=item.link_type_id, exists=True,
+                source=source, actor_id=current_user.id, caused_by=run.id)
+        db.flush()
+        _raise_publish_errors(_release_errors(db, ontology_id))
+
+        release = OntologyVersion(
+            id=release_id, ontology_id=ontology_id,
+            version_number=release_number,
+            version_label=str(body.get("version_label") or body.get("versionLabel") or draft.version_label or ""),
+            description=str(body.get("description") or draft.description or ""),
+            parent_version_id=current.id, base_release_id=release_id,
+            promoted_from_id=draft.id, node_kind="release",
+            lifecycle_status="released", revision=0,
+            snapshot_formal=snap, snapshot_hash=current_hash,
+            published_at=datetime.now(timezone.utc),
+            change_summary={"formal": _diff_formal(current.snapshot_formal, snap),
+                            "impact": report},
+            created_by=current_user.id,
+        )
+        db.add(release)
+        project.current_release_id = release.id
+        project.version = release_number
+        project.status = "published"
+        draft.lifecycle_status = "superseded"
+        db.add(AuditLog(
+            id=str(uuid.uuid4()), ontology_id=ontology_id,
+            event_type="publish", event_subtype="draft_promoted",
+            user_id=current_user.id, user_name=current_user.username,
+            description=f"将 {draft.version_number} 晋级为 {release_number}",
+            object_type="ontology_version", object_id=release.id,
+            meta={"draft_version_id": draft.id, "trial_run_id": run.id,
+                  "impact_hash": report["impactHash"]},
+        ))
+        db.flush()
+        projection_check = None
+        if settings.environment == "production":
+            projection_check = _rebuild_required_query_projections(db, ontology_id)
+            if not projection_check["ready"]:
+                raise RuntimeError("Neo4j/Chroma candidate projection is not ready")
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        compensation = None
+        if settings.environment == "production":
+            try:
+                compensation = _rebuild_required_query_projections(db, ontology_id)
+            except Exception as compensation_exc:  # noqa: BLE001
+                compensation = {"ready": False, "error": str(compensation_exc)}
+        raise HTTPException(503, detail={
+            "code": "promotion_failed",
+            "message": f"发布事务已回滚，当前发布版保持 {current.version_number}: {exc}",
+            "compensation": compensation,
+        }) from exc
+
+    return {"data": {
+        **_version_payload(release),
+        "trial_run_id": run.id, "impact_hash": report["impactHash"],
+        "query_projection": projection_check,
+    }}
+
+
+@router.post("/{ontology_id}/versions", status_code=201, deprecated=True)
 def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
                    current_user=Depends(require_admin)):
     """创建新版本快照（通常在发布时调用）"""
@@ -718,22 +1408,19 @@ def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
                 "projection": projection_check,
             })
 
-    # 计算新版本号
-    latest = db.query(OntologyVersion).filter(
-        OntologyVersion.ontology_id == ontology_id
-    ).order_by(desc(OntologyVersion.created_at)).first()
-
-    if latest:
-        # 简单语义化：v{major}.{minor}.{patch}
-        parts = latest.version_number.replace("v", "").split(".")
-        try:
-            major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-            minor += 1
-            new_version = f"v{major}.{minor}.0"
-        except (ValueError, IndexError):
-            new_version = f"v1.0.0"
-    else:
-        new_version = "v1.0.0"
+    # 兼容旧客户端的一键发布仍然只生成发布主线 v1/v2；新 UI 走草稿→试跑→晋级。
+    latest = None
+    if project.current_release_id:
+        latest = db.query(OntologyVersion).filter(
+            OntologyVersion.id == project.current_release_id,
+            OntologyVersion.ontology_id == ontology_id,
+        ).first()
+    if latest is None:
+        latest = db.query(OntologyVersion).filter(
+            OntologyVersion.ontology_id == ontology_id,
+            OntologyVersion.node_kind == "release",
+        ).order_by(desc(OntologyVersion.created_at)).first()
+    new_version = next_release_number(latest.version_number if latest else None)
 
     # 快照当前数据
     entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
@@ -791,6 +1478,11 @@ def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
             "enabled": a.enabled, "status": a.status,
         } for a in actions],
         snapshot_formal=formal_snapshot,
+        parent_version_id=latest.id if latest else None,
+        base_release_id=latest.id if latest else None,
+        node_kind="release", lifecycle_status="released", revision=0,
+        snapshot_hash=snapshot_hash(formal_snapshot),
+        published_at=datetime.now(timezone.utc),
         change_summary={
             "added": added, "modified": modified, "deleted": deleted,
             "formal": formal_diff,
@@ -803,6 +1495,7 @@ def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
     project.version = new_version
     # 发布版本后，项目状态同步为"已发布"
     project.status = "published"
+    project.current_release_id = version.id
 
     # 记录审计
     audit = AuditLog(
@@ -838,11 +1531,7 @@ def get_version_detail(ontology_id: str, version_id: str, db: Session = Depends(
     if not v:
         raise HTTPException(404, "Version not found")
     return {"data": {
-        "id": v.id,
-        "version_number": v.version_number,
-        "version_label": v.version_label,
-        "description": v.description,
-        "change_summary": v.change_summary or {},
+        **_version_payload(v),
         "snapshot": {
             "entities": v.snapshot_entities or [],
             "relations": v.snapshot_relations or [],
@@ -854,7 +1543,7 @@ def get_version_detail(ontology_id: str, version_id: str, db: Session = Depends(
     }}
 
 
-@router.post("/{ontology_id}/unpublish")
+@router.post("/{ontology_id}/unpublish", deprecated=True)
 @router.post("/{ontology_id}/versions/unpublish", include_in_schema=False)
 def unpublish_ontology(ontology_id: str, db: Session = Depends(get_db),
                        current_user=Depends(require_admin)):
@@ -1010,6 +1699,11 @@ def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(ge
     ).first()
     if not v:
         raise HTTPException(404, "Version not found")
+    if v.node_kind == "draft":
+        raise HTTPException(409, detail={
+            "code": "draft_cannot_rollback",
+            "message": "草稿不能成为运行版本；请先完成试跑并晋级",
+        })
 
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).with_for_update().first()
@@ -1085,6 +1779,7 @@ def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(ge
 
         project.version = v.version_number
         project.status = "published"
+        project.current_release_id = v.id
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             ontology_id=ontology_id,

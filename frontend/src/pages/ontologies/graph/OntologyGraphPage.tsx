@@ -1,6 +1,6 @@
 import { useState, lazy, Suspense, useEffect } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import '../../../palantir-graph/palantir-graph.css';
 
@@ -40,6 +40,9 @@ function PanelLoader() {
 
 export default function OntologyGraphPage() {
   const { id: ontologyId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const versionId = searchParams.get('versionId');
 
   const [showHelp, setShowHelp] = useState(false);
   const [showGraphDB, setShowGraphDB] = useState(false);
@@ -82,7 +85,7 @@ export default function OntologyGraphPage() {
     let off: (() => void) | undefined;
     let cancelled = false;
 
-    void loadFromBackend(ontologyId).then(() => {
+    void loadFromBackend(ontologyId, versionId).then(() => {
       if (cancelled) return;
       off = attachAutoSave();
     });
@@ -91,7 +94,7 @@ export default function OntologyGraphPage() {
       cancelled = true;
       off?.();
     };
-  }, [ontologyId, loadFromBackend]);
+  }, [ontologyId, versionId, loadFromBackend]);
 
   // 撤销/重做历史记录（与后端加载无关，进入编辑器即绑定）
   useEffect(() => attachHistory(), []);
@@ -173,6 +176,18 @@ export default function OntologyGraphPage() {
   return (
     <ReactFlowProvider>
       <div className="fixed inset-0 z-[9999] h-screen w-screen overflow-hidden bg-surface-950">
+        {versionId && (
+          <div className="fixed left-1/2 top-[4.4rem] z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-950/90 px-3 py-1.5 text-xs text-amber-200 shadow-lg">
+            <span>草稿结构工作区 · 不加载线上实例、不执行真实动作</span>
+            <button className="font-medium underline" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>返回版本页试跑</button>
+          </div>
+        )}
+        {!versionId && (
+          <div className="fixed left-1/2 top-[4.4rem] z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-950/90 px-3 py-1.5 text-xs text-emerald-200 shadow-lg">
+            <span>当前发布运行视图 · 结构和映射变更请从完整草稿开始</span>
+            <button className="font-medium underline" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>打开版本树</button>
+          </div>
+        )}
         {/* 加载本体时的轻量提示（保存状态已整合到 Header 的保存按钮） */}
         {syncStatus === 'loading' && (
           <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50">
@@ -214,7 +229,7 @@ export default function OntologyGraphPage() {
           <DeleteSelectedDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} />
         )}
 
-        <FloatingMenu
+        {!versionId && <FloatingMenu
           onOpenHelp={() => setShowHelp(true)}
           onOpenFunctionTest={() => openFunctionTest()}
           onOpenActionRun={() => openActionRun()}
@@ -226,19 +241,19 @@ export default function OntologyGraphPage() {
           }}
           onOpenRunHistory={() => setShowRunHistory(true)}
           onOpenAutonomy={() => setShowAutonomy(true)}
-        />
+        />}
 
         <Suspense fallback={<PanelLoader />}>
           {showHelp && <HelpGuide isOpen={showHelp} onClose={() => setShowHelp(false)} />}
           {showGraphDB && <GraphDatabaseView isOpen={showGraphDB} onClose={() => setShowGraphDB(false)} />}
-          {showFunctionTester && (
+          {!versionId && showFunctionTester && (
             <FunctionTester
               isOpen={showFunctionTester}
               initialFunctionId={testFunctionId}
               onClose={() => setShowFunctionTester(false)}
             />
           )}
-          {showActionRunner && (
+          {!versionId && showActionRunner && (
             <ActionRunner
               isOpen={showActionRunner}
               initialActionId={runActionId}
@@ -246,7 +261,7 @@ export default function OntologyGraphPage() {
               onClose={() => setShowActionRunner(false)}
             />
           )}
-          {showInstanceBrowser && (
+          {!versionId && showInstanceBrowser && (
             <InstanceBrowser
               isOpen={showInstanceBrowser}
               initialObjectTypeId={instanceBrowserTypeId || undefined}
@@ -255,8 +270,8 @@ export default function OntologyGraphPage() {
             />
           )}
           {showApiDocs && <ApiDocs isOpen={showApiDocs} onClose={() => setShowApiDocs(false)} />}
-          {showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
-          {showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
+          {!versionId && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
+          {!versionId && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
         </Suspense>
       </div>
     </ReactFlowProvider>

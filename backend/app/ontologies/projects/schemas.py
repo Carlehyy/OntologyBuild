@@ -50,6 +50,8 @@ class OntologyOut(BaseModel):
     description: Optional[str]
     icon: Optional[str] = "network"
     version: str
+    current_release_id: Optional[str] = None
+    current_release_version: Optional[str] = None
     status: str
     build_mode: Optional[str] = "simple_llm"
     created_by: str
@@ -64,6 +66,8 @@ class OntologyListItem(BaseModel):
     description: Optional[str] = None
     icon: Optional[str] = "network"
     version: str
+    current_release_id: Optional[str] = None
+    current_release_version: Optional[str] = None
     status: str
     build_mode: Optional[str] = "simple_llm"
     entity_count: int = 0

@@ -54,6 +54,15 @@ export default function OntologyDetailPage() {
   const [exportError, setExportError] = useState<string | null>(null)
   const [showVersionModal, setShowVersionModal] = useState(false)
 
+  useEffect(() => {
+    if (requestedTab === 'versions') setShowVersionModal(true)
+  }, [requestedTab])
+
+  const closeVersionModal = () => {
+    setShowVersionModal(false)
+    if (requestedTab === 'versions') setSearchParams({}, { replace: true })
+  }
+
   const handleExport = async (format: string) => {
     setExportError(null)
     setExportingFormat(format)
@@ -227,7 +236,7 @@ export default function OntologyDetailPage() {
       )}
 
       {/* ═══ 历史版本弹窗 ═══ */}
-      <Modal open={showVersionModal} onClose={() => setShowVersionModal(false)} title="历史版本" size="3xl">
+      <Modal open={showVersionModal} onClose={closeVersionModal} title="本体版本演进" size="3xl">
         <VersionsTab ontologyId={id!} />
       </Modal>
     </div>

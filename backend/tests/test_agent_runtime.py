@@ -268,7 +268,7 @@ def test_direct_action_execution_uses_current_version_without_publish(
     assert response.status_code == 200, response.text
     result = response.json()["data"]
     assert result["status"] == "success"
-    assert result["ontologyVersion"] == "v0.1"
+    assert result["ontologyVersion"] == "v0"
 
     from app.models.ontology_formal import ObjectInstance
     instance = db.query(ObjectInstance).filter_by(id="inst-o1").one()

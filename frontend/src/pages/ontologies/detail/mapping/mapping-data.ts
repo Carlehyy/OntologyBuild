@@ -121,22 +121,40 @@ export function typesCompatible(source?: string, target?: string): boolean {
   return normalizeType(source) === normalizeType(target)
 }
 
-export function useMappingData(ontologyId: string, requireCollectionStatus = false) {
+export function useMappingData(
+  ontologyId: string,
+  requireCollectionStatus = false,
+  versionId: string | null = null,
+) {
   const objectTypesQuery = useQuery<MappingObjectType[]>({
-    queryKey: ['formal-object-types', ontologyId],
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/object-types`),
+    queryKey: ['formal-object-types', ontologyId, versionId],
+    queryFn: async () => versionId
+      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace`)).objectTypes || []
+      : apiClientV2.get(`/formal/ontologies/${ontologyId}/object-types`),
   })
   const linkTypesQuery = useQuery<MappingLinkType[]>({
-    queryKey: ['formal-link-types', ontologyId],
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/link-types`),
+    queryKey: ['formal-link-types', ontologyId, versionId],
+    queryFn: async () => versionId
+      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace`)).linkTypes || []
+      : apiClientV2.get(`/formal/ontologies/${ontologyId}/link-types`),
   })
   const mappingsQuery = useQuery<ObjectMappingRecord[]>({
-    queryKey: ['mappings', ontologyId],
-    queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/mappings`),
+    queryKey: ['mappings', ontologyId, versionId],
+    queryFn: async () => versionId
+      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`)).mappings || []
+      : apiClientV2.get(`/ontologies/${ontologyId}/mappings`),
   })
   const linkMappingsQuery = useQuery<LinkMappingRecord[]>({
-    queryKey: ['link-mappings', ontologyId],
-    queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/link-mappings`),
+    queryKey: ['link-mappings', ontologyId, versionId],
+    queryFn: async () => versionId
+      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`)).linkMappings || []
+      : apiClientV2.get(`/ontologies/${ontologyId}/link-mappings`),
+  })
+  const workspaceMetaQuery = useQuery<{ revision?: string }>({
+    queryKey: ['mapping-workspace-meta', ontologyId, versionId],
+    enabled: Boolean(versionId),
+    queryFn: () => apiClientV2.get(
+      `/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`),
   })
   const curatedQuery = useQuery<CuratedDataset[]>({
     queryKey: ['curated-all'],
@@ -148,10 +166,12 @@ export function useMappingData(ontologyId: string, requireCollectionStatus = fal
   })
   const instancesQuery = useQuery<ObjectInstanceSummary[]>({
     queryKey: ['mapping-object-instances', ontologyId],
+    enabled: !versionId,
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/instances`),
   })
   const linkInstancesQuery = useQuery<LinkInstanceSummary[]>({
     queryKey: ['mapping-link-instances', ontologyId],
+    enabled: !versionId,
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/link-instances`),
   })
 
@@ -219,6 +239,7 @@ export function useMappingData(ontologyId: string, requireCollectionStatus = fal
     objectInstances: instancesQuery.data || [],
     linkInstances: linkInstancesQuery.data || [],
     datasets,
+    workspaceRevision: workspaceMetaQuery.data?.revision || null,
     isLoading: requiredQueries.some(query => query.isLoading),
     isError: requiredQueries.some(query => query.isError),
     isLoadingSchemas: schemasQuery.isLoading,

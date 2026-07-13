@@ -195,7 +195,7 @@ export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
         <SectionHead icon={Rocket} iconCls="text-amber-500" title="自治等级"
           sub="影子 → 人审 → 自动：自治是按批准率挣来的" />
         {autonomy.length === 0 ? (
-          <p className="text-xs text-gray-400 py-3 text-center">还没有动作。在图谱编辑器创建动作并绑定哨兵后，这里管理每个动作的放权等级。</p>
+          <p className="text-xs text-gray-400 py-3 text-center">还没有动作。请在版本草稿中创建动作并绑定哨兵，发布后再在这里管理放权等级。</p>
         ) : (
           <div className="space-y-2">
             {autonomy.map(s => {
@@ -268,9 +268,9 @@ export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
       <div className="rounded-xl border bg-white p-4">
         <SectionHead icon={ShieldAlert} iconCls="text-rose-500" title="哨兵"
           sub="平台正在替你盯什么"
-          extra={<button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
+          extra={<button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
             className="text-xs text-rose-500 hover:underline inline-flex items-center gap-1">
-            去图谱编辑器管理 <ExternalLink size={11} /></button>} />
+            在版本草稿中修改 <ExternalLink size={11} /></button>} />
         {sentinels.length === 0 ? (
           <p className="text-xs text-gray-400 py-3 text-center">还没有哨兵。哨兵 = 常驻监听条件 + 命中执行动作，是治理与推演的发动机。</p>
         ) : (

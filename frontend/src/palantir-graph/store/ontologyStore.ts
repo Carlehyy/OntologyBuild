@@ -47,6 +47,8 @@ interface OntologyState {
   // ============ 后端同步状态 ============
   // 当前绑定的后端本体 id（来自路由 :id）。为 null 时退化为纯本地（localStorage）模式。
   backendId: string | null;
+  // 非空时编辑不可变发布版分出的完整草稿快照；运行数据与线上动作均不在此工作区。
+  workspaceVersionId: string | null;
   // 加载/保存状态。conflict = 保存被 409 拒绝（其他会话已修改）
   syncStatus: 'idle' | 'loading' | 'saving' | 'saved' | 'error' | 'conflict';
   syncError: string | null;
@@ -89,7 +91,7 @@ interface OntologyState {
   instanceBrowserObjectTypeId: string | null;
 
   // ============ 后端同步 actions ============
-  loadFromBackend: (id: string) => Promise<void>;
+  loadFromBackend: (id: string, versionId?: string | null) => Promise<void>;
   /** force=true 跳过冲突检测强制覆盖（用户在冲突对话框里明确选择后才用） */
   saveToBackend: (opts?: { force?: boolean }) => Promise<void>;
   /** 放弃本地未保存改动，从后端重新加载（冲突处理 / 后端模式下的"重置"） */
@@ -260,6 +262,7 @@ export const useOntologyStore = create<OntologyState>()(
     (set, get) => ({
       ontology: _migrateOntology(tradeErpOntology),
       backendId: null,
+      workspaceVersionId: null,
       syncStatus: 'idle',
       syncError: null,
       lastSavedAt: null,
@@ -288,11 +291,11 @@ export const useOntologyStore = create<OntologyState>()(
       pendingNodePosition: null,
 
       // ============ 后端同步 ============
-      loadFromBackend: async (id) => {
+      loadFromBackend: async (id, versionId = null) => {
         _histSuspended = true;
-        set({ backendId: id, syncStatus: 'loading', syncError: null });
+        set({ backendId: id, workspaceVersionId: versionId, syncStatus: 'loading', syncError: null });
         try {
-          const full = await loadFullOntology(id);
+          const full = await loadFullOntology(id, versionId);
           const objectTypes: ObjectType[] = full.objectTypes.map((o) => {
             const { positionX, positionY, ...rest } = o as ObjectType & { positionX?: number; positionY?: number };
             void positionX; void positionY;
@@ -375,7 +378,7 @@ export const useOntologyStore = create<OntologyState>()(
       },
 
       saveToBackend: async (opts) => {
-        const { backendId, ontology, nodes, revision } = get();
+        const { backendId, workspaceVersionId, ontology, nodes, revision } = get();
         if (!backendId || !ontology) return;
         // 取消上一次"已保存"复位任务，避免与本次保存状态产生竞态
         if (_savedResetTimer) { clearTimeout(_savedResetTimer); _savedResetTimer = null; }
@@ -394,7 +397,7 @@ export const useOntologyStore = create<OntologyState>()(
 
           // 增量保存：变更可追踪且非强制覆盖时只发 delta（负载 O(变更)）。
           // undo/redo/导入/首次进入等无法追踪的场景自动退回全量。
-          const useDelta = !opts?.force && !_delta.full && _deltaCount() > 0;
+          const useDelta = !workspaceVersionId && !opts?.force && !_delta.full && _deltaCount() > 0;
           if (useDelta) {
             const pick = <T extends { id: string }>(items: T[], kind: DeltaKind) =>
               items.filter((x) => _delta.upserts[kind].has(x.id));
@@ -429,7 +432,8 @@ export const useOntologyStore = create<OntologyState>()(
             savedSentinel = res.sentinelSummary ?? null;
             savedInstances = res.instances || [];
           } else {
-            const saved = await saveFullOntology(backendId, ontology, positions, base);
+            const saved = await saveFullOntology(
+              backendId, ontology, positions, base, workspaceVersionId);
             savedRevision = saved.revision ?? null;
             savedSentinel = saved.sentinelSummary ?? null;
             savedInstances = saved.instances || [];
@@ -496,9 +500,9 @@ export const useOntologyStore = create<OntologyState>()(
       },
 
       discardAndReload: async () => {
-        const { backendId, loadFromBackend } = get();
+        const { backendId, workspaceVersionId, loadFromBackend } = get();
         if (!backendId) return;
-        await loadFromBackend(backendId);
+        await loadFromBackend(backendId, workspaceVersionId);
       },
 
       createOntology: (name, description) => {

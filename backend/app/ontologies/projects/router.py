@@ -7,6 +7,8 @@ from app.models.ontology import OntologyProject
 from app.models.ontology_formal import ObjectType, LinkType, ActionType
 from app.models.user import User
 from app.models.domain import Domain
+from app.models.ontology_version import OntologyVersion
+from app.ontologies.versions.evolution_service import complete_snapshot, snapshot_hash
 from app.ontologies.access import require_ontology_access
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
 import uuid
@@ -30,6 +32,25 @@ def _validate_domain(db: Session, domain: str) -> None:
             "message": f"领域「{domain}」不存在，请先在系统设置中添加",
         })
 
+
+def _release_map(db: Session, projects: list[OntologyProject]) -> dict[str, OntologyVersion]:
+    ids = {item.current_release_id for item in projects if item.current_release_id}
+    if not ids:
+        return {}
+    return {item.id: item for item in db.query(OntologyVersion).filter(
+        OntologyVersion.id.in_(ids),
+    ).all()}
+
+
+def _project_payload(project: OntologyProject, schema, release: OntologyVersion | None = None) -> dict:
+    """对外版本始终来自发布指针，避免列表、详情和版本树显示不一致。"""
+    data = schema.model_validate(project).model_dump()
+    data["current_release_id"] = release.id if release else project.current_release_id
+    data["current_release_version"] = release.version_number if release else None
+    if release is not None:
+        data["version"] = release.version_number
+    return data
+
 @router.get("")
 def list_ontologies(
     name: Optional[str] = None,
@@ -44,9 +65,10 @@ def list_ontologies(
         q = q.filter(OntologyProject.domain == domain)
     total = q.count()
     items = q.order_by(OntologyProject.created_at.desc()).offset((page-1)*page_size).limit(page_size).all()
+    releases = _release_map(db, items)
     result = []
     for item in items:
-        d = OntologyListItem.model_validate(item).model_dump()
+        d = _project_payload(item, OntologyListItem, releases.get(item.current_release_id))
         d['entity_count'] = db.query(func.count(ObjectType.id)).filter(ObjectType.ontology_id == item.id).scalar() or 0
         d['relation_count'] = db.query(func.count(LinkType.id)).filter(LinkType.ontology_id == item.id).scalar() or 0
         d['action_count'] = db.query(func.count(ActionType.id)).filter(ActionType.ontology_id == item.id).scalar() or 0
@@ -65,17 +87,33 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
                                description=body.description, icon=body.icon,
                                # Internal compatibility value only; creation no
                                # longer branches into LLM/Pipeline workflows.
-                               build_mode=body.build_mode or "manual",
+                               build_mode=body.build_mode or "manual", version="v0",
                                created_by=current_user.id)
-    db.add(project); db.commit(); db.refresh(project)
-    return {"data": OntologyOut.model_validate(project).model_dump()}
+    db.add(project)
+    db.flush()
+    # v0 是不可变的完整空结构发布基线。project.status 暂时保留为 draft 仅兼容
+    # 旧编辑接口；新版本工作流只认 version.node_kind/current_release_id。
+    root_snapshot = complete_snapshot(None)
+    root = OntologyVersion(
+        id=str(uuid.uuid4()), ontology_id=project.id, version_number="v0",
+        version_label="初始基线", description="系统创建的完整空结构基线",
+        node_kind="release", lifecycle_status="released", revision=0,
+        snapshot_formal=root_snapshot, snapshot_hash=snapshot_hash(root_snapshot),
+        published_at=project.created_at, created_by=current_user.id,
+    )
+    db.add(root)
+    db.flush()
+    project.current_release_id = root.id
+    db.commit(); db.refresh(project)
+    return {"data": _project_payload(project, OntologyOut, root)}
 
 @router.get("/{ontology_id}")
 def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
-    return {"data": OntologyOut.model_validate(p).model_dump()}
+    release = _release_map(db, [p]).get(p.current_release_id)
+    return {"data": _project_payload(p, OntologyOut, release)}
 
 @router.put("/{ontology_id}")
 def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -97,7 +135,8 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
     for k, v in update.items():
         setattr(p, k, v)
     db.commit(); db.refresh(p)
-    return {"data": OntologyOut.model_validate(p).model_dump()}
+    release = _release_map(db, [p]).get(p.current_release_id)
+    return {"data": _project_payload(p, OntologyOut, release)}
 
 @router.delete("/{ontology_id}", status_code=204)
 def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):

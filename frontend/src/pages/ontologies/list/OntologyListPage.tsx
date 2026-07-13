@@ -324,7 +324,7 @@ function OntologyCard({
                 {item.domain || '未设置领域'}
               </span>
               <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
-                {item.version || 'v0.1'}
+                {item.current_release_version || item.version || 'v0'}
               </span>
             </div>
           </div>

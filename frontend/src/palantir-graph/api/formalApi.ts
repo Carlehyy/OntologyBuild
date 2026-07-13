@@ -88,8 +88,11 @@ function serializeFunction(fn: OntologyFunction): Record<string, unknown> {
 }
 
 /** GET /full — 加载整本体 */
-export async function loadFullOntology(id: string): Promise<FullOntologyDTO> {
-  const data = await apiClientV2.get<FullOntologyDTO>(`${base(id)}/full`);
+export async function loadFullOntology(id: string, versionId?: string | null): Promise<FullOntologyDTO> {
+  const path = versionId
+    ? `ontologies/${id}/versions/${versionId}/workspace`
+    : `${base(id)}/full`;
+  const data = await apiClientV2.get<FullOntologyDTO>(path);
   return {
     ...data,
     objectTypes: data.objectTypes || [],
@@ -123,6 +126,7 @@ export async function saveFullOntology(
   ontology: Ontology,
   positions: Record<string, { x: number; y: number }> = {},
   baseRevision: string | null = null,
+  versionId?: string | null,
 ): Promise<FullOntologyDTO> {
   const payload = {
     name: ontology.name,
@@ -140,7 +144,10 @@ export async function saveFullOntology(
     instances: ontology.instances.map(instanceToPayload),
     linkInstances: ontology.linkInstances,
   };
-  const data = await apiClientV2.put<FullOntologyDTO>(`${base(id)}/full`, payload);
+  const path = versionId
+    ? `ontologies/${id}/versions/${versionId}/workspace`
+    : `${base(id)}/full`;
+  const data = await apiClientV2.put<FullOntologyDTO>(path, payload);
   return {
     ...data,
     instances: (data.instances || []).map(normalizeInstance),
@@ -353,27 +360,6 @@ export async function setActionApproval(
   requiresApproval: boolean,
 ): Promise<void> {
   await apiClientV2.put(`${base(id)}/actions/${actionId}`, { requiresApproval });
-}
-
-// ============ 版本发布（v2 versions 路由） ============
-export interface PublishVersionResult {
-  id: string;
-  version_number: string;
-  change_summary: {
-    added: number; modified: number; deleted: number;
-    formal?: { total?: { added: number; modified: number; deleted: number } };
-  };
-}
-
-/** POST /api/v2/ontologies/:id/versions — 发布当前（已保存的）模型为一个版本快照 */
-export async function publishVersion(
-  id: string,
-  body: { versionLabel?: string; description?: string } = {},
-): Promise<PublishVersionResult> {
-  return apiClientV2.post<PublishVersionResult>(`ontologies/${id}/versions`, {
-    version_label: body.versionLabel || '',
-    description: body.description || '',
-  });
 }
 
 // ============ 数据采集器 (AI HOT) ============

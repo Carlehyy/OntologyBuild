@@ -7,6 +7,8 @@ export interface OntologyListItem {
   description?: string
   icon?: string
   version: string
+  current_release_id?: string | null
+  current_release_version?: string | null
   status: OntologyStatus
   build_mode?: string
   entity_count: number
