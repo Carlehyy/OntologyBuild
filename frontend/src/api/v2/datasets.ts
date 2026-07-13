@@ -109,6 +109,7 @@ const datasetsApi = {
   /** 资产湖原始数据集总览：版本/行数/来源/消费流水线 */
   overview: (params?: {
     source?: 'manual' | 'sync'
+    search?: string
     sort_by?: 'created_at' | 'updated_at'
     page?: number
     page_size?: number
