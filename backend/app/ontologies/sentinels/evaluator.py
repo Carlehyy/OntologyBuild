@@ -57,30 +57,49 @@ def _sentinel_execution_lock(db: Session, sentinel_id: str):
     """Serialize one sentinel across threads and, on PostgreSQL, processes.
 
     PostgreSQL session advisory locks survive the commits performed by the
-    action engine, unlike transaction locks.  The unique match-state claim is
-    still the final backstop for other database dialects.
+    action engine, unlike transaction locks.  They must therefore be owned by
+    a dedicated connection for the complete evaluator run.  Acquiring through
+    ``Session.execute`` is unsafe: an action may commit, return that physical
+    connection to the pool, and make the later unlock run on another pooled
+    connection.  The original connection would then retain the lock forever.
+
+    The unique match-state claim remains the final backstop for other database
+    dialects.
     """
     lock = _local_lock(sentinel_id)
     lock.acquire()
-    advisory = False
+    advisory_connection = None
+    advisory_acquired = False
     try:
         bind = db.get_bind()
         if bind is not None and bind.dialect.name == "postgresql":
-            db.execute(
+            # ``get_bind`` normally returns an Engine.  A Session explicitly
+            # bound to a Connection is also supported by opening a sibling
+            # connection from its Engine.  Never borrow the business Session's
+            # current connection for a session-scoped advisory lock.
+            engine = bind if hasattr(bind, "connect") else bind.engine
+            advisory_connection = engine.connect()
+            advisory_connection.execute(
                 text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"),
                 {"key": f"sentinel:{sentinel_id}"},
             )
-            advisory = True
+            advisory_acquired = True
         yield
     finally:
-        if advisory:
+        if advisory_acquired and advisory_connection is not None:
             try:
-                db.execute(
+                advisory_connection.execute(
                     text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"),
                     {"key": f"sentinel:{sentinel_id}"},
                 )
-            except Exception:  # connection close also releases session locks
+            except Exception:  # closing this connection also releases its locks
                 logger.warning("释放哨兵 advisory lock 失败: %s", sentinel_id, exc_info=True)
+        if advisory_connection is not None:
+            try:
+                advisory_connection.close()
+            except Exception:
+                logger.warning("关闭哨兵 advisory lock 连接失败: %s", sentinel_id,
+                               exc_info=True)
         lock.release()
 
 

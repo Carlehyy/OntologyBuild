@@ -16,6 +16,7 @@ from app.models.sentinel import Notification, Sentinel, SentinelMatchState
 from app.models.ontology import OntologyProject
 from app.models.v2.mapping import OntologyMapping
 from app.services.formal.action_engine import execute_action
+from app.ontologies.sentinels.evaluator import _sentinel_execution_lock
 from app.services.sentinel.evaluator import (
     evaluate_sentinel,
     reject_sentinel_match_claim,
@@ -24,6 +25,55 @@ from app.services.sentinel.evaluator import (
 from app.ontologies.formal_modeling.router import decide_pending_action
 from app.ontologies.formal_modeling.schemas import DecisionRequest
 from fastapi import HTTPException
+
+
+def test_postgres_sentinel_lock_uses_one_dedicated_connection_across_commits():
+    calls = []
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = False
+
+        def execute(self, statement, params):
+            calls.append((self, str(statement), params))
+
+        def close(self):
+            self.closed = True
+
+    connection = FakeConnection()
+
+    class FakeEngine:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def connect(self):
+            return connection
+
+    class FakeSession:
+        commits = 0
+
+        def get_bind(self):
+            return FakeEngine()
+
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("advisory lock must not use the business Session")
+
+        def commit(self):
+            self.commits += 1
+
+    session = FakeSession()
+    with _sentinel_execution_lock(session, "dedicated-lock"):
+        # This represents action-engine commits that can release/swap the
+        # business Session's pooled connection while evaluation is in flight.
+        session.commit()
+        session.commit()
+
+    assert session.commits == 2
+    assert len(calls) == 2
+    assert calls[0][0] is connection and calls[1][0] is connection
+    assert "pg_advisory_lock" in calls[0][1]
+    assert "pg_advisory_unlock" in calls[1][1]
+    assert calls[0][2] == calls[1][2] == {"key": "sentinel:dedicated-lock"}
+    assert connection.closed is True
 
 
 def _seed_object(db, ontology_id="runtime-hardening", *, suffix=""):
