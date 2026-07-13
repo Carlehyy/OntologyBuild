@@ -10,6 +10,7 @@ import type { OntologyListItem } from '@/types/ontology'
 import type { LucideIcon } from 'lucide-react'
 import {
   Boxes,
+  Building2,
   Cpu,
   Database,
   Factory,
@@ -63,6 +64,7 @@ const ICON_OPTIONS: IconOption[] = [
   { key: 'shield-check', label: '风控安全', icon: ShieldCheck, tone: 'bg-red-50 text-red-600' },
   { key: 'users', label: '组织客户', icon: Users, tone: 'bg-sky-50 text-sky-600' },
   { key: 'database', label: '数据资产', icon: Database, tone: 'bg-purple-50 text-purple-600' },
+  { key: 'building-2', label: '企业架构', icon: Building2, tone: 'bg-lime-50 text-lime-700' },
 ]
 
 const DEFAULT_ICON = ICON_OPTIONS[0]
@@ -194,6 +196,7 @@ function OntologyFormModal({
             value={name}
             onChange={event => setName(event.target.value)}
             placeholder="例如：供应链知识本体"
+            className="selection:bg-teal-200 selection:text-teal-950 focus:border-teal-500 focus:ring-teal-500/30"
           />
           <div>
             <label className="mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]">
@@ -203,7 +206,7 @@ function OntologyFormModal({
               <select
                 value={selectedDomain}
                 onChange={event => setDomain(event.target.value)}
-                className="h-9 w-full rounded-md border border-[var(--color-border)] bg-white px-3 text-sm text-[var(--color-text-primary)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+                className="h-9 w-full rounded-md border border-[var(--color-border)] bg-white px-3 text-sm text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
               >
                 {availableDomains.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
               </select>
@@ -227,7 +230,7 @@ function OntologyFormModal({
             maxLength={500}
             rows={3}
             placeholder="简要说明本体覆盖的业务范围和用途"
-            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] selection:bg-teal-200 selection:text-teal-950 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
           />
           <p className="mt-1 text-right text-[11px] text-[var(--color-text-tertiary)]">{description.length}/500</p>
         </div>
