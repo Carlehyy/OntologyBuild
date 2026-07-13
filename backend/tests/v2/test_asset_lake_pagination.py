@@ -81,6 +81,13 @@ def test_manual_dataset_page_orders_by_creation_and_excludes_sync(db):
     )
     assert [item["name"] for item in second["items"]] == ["最早创建人工数据集"]
 
+    filtered = datasets_overview(
+        db, source="manual", search="中间创建", sort_by="created_at",
+        page=1, page_size=10, paginated=True,
+    )
+    assert filtered["total"] == 1
+    assert [item["name"] for item in filtered["items"]] == ["中间创建人工数据集"]
+
     # 保留旧测试和内部调用的首个位置参数约定：datasets_overview(db)。
     legacy = datasets_overview(db)
     assert legacy["total"] == 4
