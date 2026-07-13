@@ -535,6 +535,7 @@ def edit_rows(dataset_id: str, body: RowEditsRequest, db: Session = Depends(get_
 def datasets_overview(
     db: Session = Depends(get_db),
     source: str = "",
+    search: str = "",
     sort_by: str = "updated_at",
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -556,6 +557,9 @@ def datasets_overview(
             Dataset.source_connection_id.is_not(None),
             Dataset.name.startswith("SYNC::"),
         ))
+    keyword = search.strip()
+    if keyword:
+        q = q.filter(Dataset.name.ilike(f"%{keyword}%"))
     total = q.count()
     order_column = Dataset.created_at if sort_by == "created_at" else Dataset.updated_at
     ordered = q.order_by(order_column.desc(), Dataset.id.desc())
