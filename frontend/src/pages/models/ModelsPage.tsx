@@ -405,7 +405,7 @@ export default function ModelsPage() {
             onClick={() => { setShowCreate(true); reset({ config_type: 'llm', provider: 'openai', ocr_enabled: 'false', ocr_lang: 'ch', ocr_device: 'cpu' }) }}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-white bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
           >
-            <Plus size={14} /> 添加提供商
+            <Plus size={14} /> 添加模型
           </button>
         </div>
       </div>
@@ -516,7 +516,7 @@ export default function ModelsPage() {
                         <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
                           <div className="text-[10px] text-slate-400 font-medium">平均延迟</div>
                           <div className="text-[16px] font-bold mt-0.5" style={{ color: latColor(summary.avgLatency) }}>
-                            {enabled && summary.avgLatency ? `${summary.avgLatency}ms` : '—'}
+                            {enabled && summary.avgLatency ? `${(summary.avgLatency / 1000).toFixed(1)}s` : '—'}
                           </div>
                         </div>
                       </div>
@@ -619,7 +619,7 @@ export default function ModelsPage() {
       {/* Create Modal */}
       {showCreate && (
         <ModelFormModal
-          title="添加提供商"
+          title="添加模型"
           onClose={() => setShowCreate(false)}
           onSubmit={handleCreate}
           register={register}
