@@ -90,17 +90,17 @@ function FlowNode({
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className={`group flex h-9 min-w-0 flex-1 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-semibold transition-colors ${
+      className={`group relative grid h-9 min-w-0 flex-1 place-items-center rounded-lg border px-8 text-[11px] font-semibold transition-colors ${
         active
           ? 'border-emerald-400 bg-emerald-50 text-emerald-800 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)]'
-          : 'border-slate-200 bg-white text-slate-700 hover:border-teal-300 hover:bg-teal-50/50 disabled:hover:border-slate-200 disabled:hover:bg-white'
+          : 'border-teal-300 bg-teal-50/50 text-teal-800 hover:border-teal-400 hover:bg-teal-100/70'
       }`}
     >
-      <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-md ${active ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 group-hover:bg-teal-100 group-hover:text-teal-700'}`}>
+      <span className={`absolute left-2 grid h-5 w-5 place-items-center rounded-md ${active ? 'bg-emerald-600 text-white' : 'bg-teal-100 text-teal-700'}`}>
         {icon}
       </span>
-      <span className="min-w-0 truncate whitespace-nowrap" title={label}>{label}</span>
-      {active && <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-medium text-white">当前</span>}
+      <span className="w-full truncate whitespace-nowrap text-center" title={label}>{label}</span>
+      {active && <span className="absolute right-2 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-medium text-white">当前</span>}
     </button>
   )
 }
@@ -139,16 +139,16 @@ function AssetInsightStrip() {
           : '—'
         setMetrics([
           { label: '数据集总数', value: String(curatedItems.length + rawItems.length), note: `成品 ${curatedItems.length} · 人工 ${manualItems.length}${legacySyncCount ? ` · 历史同步 ${legacySyncCount}` : ''}` },
-          { label: '待审核', value: String(curatedItems.filter(item => isPendingReview(item.status)).length), note: '需要人工确认的成品数据集' },
-          { label: '平均质量分', value: avgQuality, note: scored.length ? `基于 ${scored.length} 个已评分成品` : '暂无已评分成品' },
           { label: '人工数据集', value: String(manualItems.length), note: '文件上传或在线维护' },
           { label: '已声明主键', value: String(manualItems.filter(item => Boolean(item.primary_key)).length), note: '具备主键契约的人工数据集' },
+          { label: '平均质量分', value: avgQuality, note: scored.length ? `基于 ${scored.length} 个已评分成品` : '暂无已评分成品' },
+          { label: '待审核', value: String(curatedItems.filter(item => isPendingReview(item.status)).length), note: '需要人工确认的成品数据集' },
         ])
       })
       .catch(error => {
         if (!alive) return
         setMetrics(null)
-        setError(errorText(error, '洞察数据加载失败'))
+        setError(errorText(error, '总览数据加载失败'))
       })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
@@ -156,7 +156,7 @@ function AssetInsightStrip() {
 
   if (loading) {
     return (
-      <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5" aria-label="洞察加载中">
+      <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5" aria-label="总览加载中">
         {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-[74px] animate-pulse rounded-xl border border-slate-200 bg-slate-100/70" />)}
       </div>
     )
@@ -166,7 +166,7 @@ function AssetInsightStrip() {
     return (
       <div className="flex shrink-0 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
         <AlertTriangle size={15} className="shrink-0" />
-        <span className="flex-1">{error || '洞察数据不可用'}</span>
+        <span className="flex-1">{error || '总览数据不可用'}</span>
         <button
           type="button"
           onClick={() => { setLoading(true); setError(''); setRetryToken(token => token + 1) }}
@@ -214,15 +214,15 @@ export default function StructuredDataPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="flex w-full min-w-0 items-center">
-              <FlowNode label="n8n 流水线" icon={<Workflow size={14} />} onClick={() => navigate('/data/pipelines')} />
+              <FlowNode label="数据流水线" icon={<Workflow size={14} />} onClick={() => navigate('/data/pipelines')} />
               <FlowArrow />
               <FlowNode label="数据任务池" icon={<ListChecks size={14} />} onClick={() => navigate('/data/pipelines/sync-tasks')} />
               <FlowArrow />
               <FlowNode label="数据资产湖" icon={<Database size={14} />} active />
               <FlowArrow />
-              <FlowNode label="成品 / 人工数据集" icon={<Boxes size={14} />} />
+              <FlowNode label="本体数据映射" icon={<Boxes size={14} />} />
               <FlowArrow />
-              <FlowNode label="本体模型" icon={<Network size={14} />} onClick={() => navigate('/ontologies')} />
+              <FlowNode label="本体网络图谱" icon={<Network size={14} />} onClick={() => navigate('/ontologies')} />
             </div>
           </div>
 
@@ -255,9 +255,9 @@ export default function StructuredDataPage() {
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
               }`}
-              title={insightSelected ? '隐藏数据洞察' : '显示数据洞察'}
+              title={insightSelected ? '隐藏数据总览' : '显示数据总览'}
             >
-              <BarChart3 size={14} /> 洞察
+              <BarChart3 size={14} /> 总览
             </button>
           </div>
         </div>
@@ -684,32 +684,32 @@ function CuratedView() {
               ))}
             </tbody>
           </table>
-          <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
-            <label className="flex items-center gap-1.5 text-xs text-slate-500">
-              每页
-              <select
-                value={pageSize}
-                onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-                aria-label="成品数据集每页显示条数"
-              >
-                {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
-              </select>
-              条
-            </label>
-            <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
-                aria-label="成品数据集上一页"><ChevronLeft size={14} /></button>
-              <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
-                aria-label="成品数据集下一页"><ChevronRight size={14} /></button>
-            </div>
-          </div>
         </div>
       )}
       </div>
+
+      {!loading && !curatedLoadFailed && total > 0 && filtered.length > 0 && (
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            每页
+            <select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
+              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+              aria-label="成品数据集每页显示条数">
+              {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
+            条
+          </label>
+          <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label="成品数据集上一页"><ChevronLeft size={14} /></button>
+            <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label="成品数据集下一页"><ChevronRight size={14} /></button>
+          </div>
+        </div>
+      )}
 
       {/* 详情面板 */}
       {panelRow && (
