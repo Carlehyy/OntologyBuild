@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { X, FileText, Download, Loader2, ShieldAlert, Wand2 } from 'lucide-react'
+import { X, FileText, Download, Loader2, ShieldAlert, Sparkles, Wand2 } from 'lucide-react'
 import { explorationApi, type BxDocument, type BxDraft, type Readiness } from '@/api/exploration'
 import { ontologyApi } from '@/api/ontologies'
 import Md from './Md'
 
 /** 需求文档工作区：历史版本 + markdown 预览 + 生成本体模型。 */
-export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: {
+export default function DocumentsDrawer({
+  sessionId, onClose, onDraftCreated, onGenerate, documentGenerating, canGenerateDocument,
+}: {
   sessionId: string
   onClose: () => void
   onDraftCreated: (draft: BxDraft) => void
+  onGenerate: () => Promise<void>
+  documentGenerating: boolean
+  canGenerateDocument: boolean
 }) {
-  const { data: docs = [], isLoading } = useQuery({
+  const { data: docs = [], isLoading, refetch } = useQuery({
     queryKey: ['bx-documents', sessionId],
     queryFn: () => explorationApi.documents(sessionId),
   })
@@ -46,6 +51,12 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
+
+  const generateRequirements = async () => {
+    await onGenerate()
+    const result = await refetch()
+    if (result.data?.[0]) setActiveId(result.data[0].id)
+  }
 
   const download = () => {
     if (!doc) return
@@ -103,7 +114,7 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
             {isLoading && <div className="text-xs text-[var(--color-text-tertiary)] px-2 py-1">加载中…</div>}
             {!isLoading && docs.length === 0 && (
               <div className="text-xs text-[var(--color-text-tertiary)] px-2 py-1 leading-relaxed">
-                还没有需求文档。关闭弹窗后点击顶部「生成需求文档」。
+                还没有需求文档。点击右上角「生成需求文档」开始创建。
               </div>
             )}
             {docs.map(d => (
@@ -133,6 +144,15 @@ export default function DocumentsDrawer({ sessionId, onClose, onDraftCreated }: 
               {doc?.title || '选择一个版本预览'}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => void generateRequirements()}
+                disabled={!canGenerateDocument || documentGenerating}
+                title={canGenerateDocument ? '根据当前业务画布生成新的需求文档版本' : '画布还是空的，先对话沉淀模型'}
+                className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {documentGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                生成需求文档
+              </button>
               {doc && (
                 <button
                   onClick={download}
