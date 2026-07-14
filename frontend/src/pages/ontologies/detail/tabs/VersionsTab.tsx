@@ -2,8 +2,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Activity, AlertTriangle, CheckCircle2, Database, Eye,
-  GitBranch, GitCommitHorizontal, Plus, Rocket, ShieldCheck,
+  AlertTriangle, Database, Eye,
+  GitBranch, GitCommitHorizontal, MoreHorizontal, Plus, Rocket, ShieldCheck,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -196,69 +196,83 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const editing = stage === 'draft'
     const trial = stage === 'trial'
     const promotedFromVersion = node.promoted_from_id ? promotedFrom.get(node.promoted_from_id) : null
+    const menuItemClass = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500'
 
     return (
       <div key={node.id} role="treeitem" aria-level={depth + 1} aria-current={stage === 'current' ? 'true' : undefined}>
         <article
           data-testid={`version-node-${node.version_number}`}
-          className={`group relative rounded-xl border p-3 transition-all duration-200 ${meta.card}`}
+          className={`group relative rounded-xl border px-3.5 py-2.5 transition-all duration-200 ${meta.card}`}
         >
-          <span className={`absolute -left-[2.14rem] top-6 h-3 w-3 rounded-full ring-4 ${meta.dot}`} aria-hidden="true" />
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <span className={`absolute -left-[1.72rem] top-5 h-3 w-3 rounded-full ring-4 ${meta.dot}`} aria-hidden="true" />
+          <div className="flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={() => openVersion(node)}
               className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
               aria-label={`打开 ${node.version_number} ${meta.label}`}
             >
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2">
                 {node.node_kind === 'release'
-                  ? <GitCommitHorizontal size={16} className={stage === 'current' ? 'text-teal-700' : 'text-slate-500'} />
-                  : <GitBranch size={16} className={trial ? 'text-amber-600' : 'text-sky-600'} />}
-                <span className="font-mono text-base font-semibold tabular-nums text-slate-800">{node.version_number}</span>
-                <StageBadge stage={stage} />
-                {node.version_label && <span className="truncate text-xs font-medium text-slate-500">{node.version_label}</span>}
-              </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
-                {node.description && <span className="max-w-xl truncate">{node.description}</span>}
-                {promotedFromVersion && <span className="text-teal-600">由 {promotedFromVersion} 晋级</span>}
-                <span>{node.created_at ? new Date(node.created_at).toLocaleString('zh-CN') : ''}</span>
+                  ? <GitCommitHorizontal size={16} className={`shrink-0 ${stage === 'current' ? 'text-teal-700' : 'text-slate-500'}`} />
+                  : <GitBranch size={16} className={`shrink-0 ${trial ? 'text-amber-600' : 'text-sky-600'}`} />}
+                <span className="shrink-0 font-mono text-base font-semibold tabular-nums text-slate-800">{node.version_number}</span>
+                <span className="shrink-0"><StageBadge stage={stage} /></span>
+                {node.version_label && <span className="min-w-0 truncate text-xs font-medium text-slate-500">{node.version_label}</span>}
+                {promotedFromVersion && <span className="shrink-0 whitespace-nowrap text-[11px] text-teal-600">由 {promotedFromVersion} 晋级</span>}
               </div>
             </button>
 
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <Button variant="ghost" size="sm" onClick={() => openVersion(node)}>
-                <Eye size={13} /> {stage === 'current' ? '查看当前' : editing ? '编辑结构' : '查看快照'}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setSource(node)}>
-                <Plus size={13} /> 创建分支
-              </Button>
-              {editing && (
+            <div className="flex shrink-0 items-center gap-1.5">
+              {editing ? (
                 <>
-                  <Button variant="ghost" size="sm" onClick={() => openMapping(node)}>
-                    <Database size={13} /> 编辑映射
-                  </Button>
-                  <Button variant="ghost" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
-                    <Activity size={13} /> 进入试跑
+                  <Button size="sm" onClick={() => openVersion(node)}>编辑模型</Button>
+                  <Button variant="outline" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
+                    进入试跑
                   </Button>
                 </>
-              )}
-              {trial && (
+              ) : trial ? (
                 <>
-                  <Button variant="ghost" size="sm" onClick={() => setTrialDetail(node.latest_trial!)}>
-                    <CheckCircle2 size={13} /> 试跑结果
-                  </Button>
-                  <Button size="sm" onClick={() => inspectImpact.mutate(node)}>
-                    <Rocket size={13} /> 审核并发布
-                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setTrialDetail(node.latest_trial!)}>查看结果</Button>
+                  <Button size="sm" onClick={() => inspectImpact.mutate(node)}>审核发布</Button>
                 </>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => openVersion(node)}>
+                  {stage === 'current' ? '查看当前' : '查看快照'}
+                </Button>
               )}
+
+              <details className="group/menu relative">
+                <summary
+                  role="button"
+                  className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden"
+                  aria-label={`${node.version_number} 更多操作`}
+                  title="更多操作"
+                >
+                  <MoreHorizontal size={16} />
+                </summary>
+                <div className="absolute right-0 top-9 z-30 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg shadow-slate-200/70">
+                  {editing && (
+                    <button type="button" className={menuItemClass} onClick={() => openMapping(node)}>
+                      <Database size={13} /> 配置映射
+                    </button>
+                  )}
+                  {trial && (
+                    <button type="button" className={menuItemClass} onClick={() => openVersion(node)}>
+                      <Eye size={13} /> 查看快照
+                    </button>
+                  )}
+                  <button type="button" className={menuItemClass} onClick={() => setSource(node)}>
+                    <Plus size={13} /> 从此创建分支
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
         </article>
 
         {children.length > 0 && (
-          <div role="group" className="ml-5 space-y-3 border-l border-slate-200 pl-8 pt-3">
+          <div role="group" className="ml-3 space-y-2.5 border-l border-slate-200 pl-6 pt-2.5">
             {children.map(child => renderNode(child, depth + 1))}
           </div>
         )}
@@ -308,7 +322,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
           </span>
         </div>
         {roots.rootNodes.length > 0 ? (
-          <div role="tree" className="ml-4 space-y-3 border-l border-slate-200 pl-8" data-testid="version-tree">
+          <div role="tree" className="ml-2 space-y-2.5 border-l border-slate-200 pl-6" data-testid="version-tree">
             {roots.rootNodes.map(node => renderNode(node))}
           </div>
         ) : (
