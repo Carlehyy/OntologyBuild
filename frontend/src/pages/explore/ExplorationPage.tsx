@@ -1,13 +1,13 @@
 /**
  * 业务探索 — 对话式业务建模/需求建模工作台
  *
- * 三栏：会话列表 | 探索对话（SSE 流式 + 工具轨迹） | 业务画布（六类模型实时沉淀）
+ * 双区工作台：探索对话（SSE 流式 + 工具轨迹） | 业务画布（六类模型实时沉淀）
  * 顶部动作：生成需求文档 → 需求文档工作区里生成本体模型 → 人审后落地本体。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, List,
+  Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, History, List,
   Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -195,6 +195,7 @@ export default function ExplorationPage() {
   const [busy, setBusy] = useState(false)
   const [webSearch, setWebSearch] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
+  const [showSessionHistory, setShowSessionHistory] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [reviewDraft, setReviewDraft] = useState<BxDraft | null>(null)
@@ -268,6 +269,7 @@ export default function ExplorationPage() {
   const loadSession = useCallback(async (id: string) => {
     setSid(id)
     setShowMessageHistory(false)
+    setShowSessionHistory(false)
     setBanner('')
     setAttachError('')
     setAttachments([])
@@ -298,6 +300,7 @@ export default function ExplorationPage() {
     setUploads([])
     setAttachError('')
     setShowMessageHistory(false)
+    setShowSessionHistory(false)
     setSid(s.id)
     const detail = await explorationApi.session(s.id)
     setCanvas(detail.canvas)
@@ -450,50 +453,6 @@ export default function ExplorationPage() {
 
   return (
     <div className="flex h-full min-h-[560px] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] shadow-sm">
-      {/* 会话列表 */}
-      <aside className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] flex flex-col">
-          <div className="px-3 pt-4 pb-2 flex items-center justify-between">
-            <div className="text-xs font-semibold text-[var(--color-text-secondary)]">会话记录</div>
-            <button
-              onClick={newSession}
-              className="inline-flex items-center gap-1 rounded-md border-0 bg-transparent px-2 py-1 text-xs font-medium text-slate-800 transition-colors hover:bg-[var(--color-bg-hover)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-            >
-              <Plus size={12} /> 新建会话
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {sessions.length === 0 && (
-              <div className="px-2 py-1 text-xs text-[var(--color-text-tertiary)] leading-relaxed">
-                还没有会话。点击「新建会话」开始一次业务探索。
-              </div>
-            )}
-            {sessions.map(s => (
-              <div
-                key={s.id}
-                onClick={() => void loadSession(s.id)}
-                className={`group px-2.5 py-2 rounded-md cursor-pointer transition-colors ${s.id === sid
-                  ? 'bg-[#3ce22a38]' : 'hover:bg-[var(--color-bg-hover)]'}`}
-              >
-                <div className="flex items-center gap-1.5">
-                  <Compass size={12} className={s.id === sid ? 'text-teal-600 shrink-0' : 'text-[var(--color-text-tertiary)] shrink-0'} />
-                  <span className={`flex-1 truncate text-xs ${s.id === sid ? 'text-teal-800 font-medium' : 'text-[var(--color-text-secondary)]'}`}>
-                    {s.title}
-                  </span>
-                  <button
-                    onClick={e => { e.stopPropagation(); void removeSession(s.id) }}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </div>
-                <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-tertiary)]">
-                  {new Date(s.updatedAt).toLocaleString()}
-                </div>
-              </div>
-            ))}
-          </div>
-        </aside>
-
       {/* 对话区 */}
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4">
@@ -554,6 +513,84 @@ export default function ExplorationPage() {
               >
                 <FileText size={15} />
               </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowSessionHistory(value => !value)}
+                  title="查看会话记录"
+                  aria-label="查看会话记录"
+                  aria-expanded={showSessionHistory}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showSessionHistory
+                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                >
+                  <History size={15} />
+                </button>
+                {showSessionHistory && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setShowSessionHistory(false)} />
+                    <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-xl">
+                      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
+                        <div>
+                          <p className="text-xs font-semibold text-[var(--color-text-primary)]">会话记录</p>
+                          <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">共 {sessions.length} 个会话</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void newSession()}
+                          className="inline-flex items-center gap-1 rounded-md bg-teal-600 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                        >
+                          <Plus size={12} /> 新建会话
+                        </button>
+                      </div>
+                      <div className="scrollbar-thin max-h-80 overflow-y-auto p-2">
+                        {sessions.length === 0 ? (
+                          <div className="px-3 py-8 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
+                            还没有会话，点击右上角新建会话开始业务探索。
+                          </div>
+                        ) : sessions.map(session => (
+                          <div
+                            key={session.id}
+                            className={`mb-1 rounded-lg border px-3 py-2.5 last:mb-0 ${session.id === sid
+                              ? 'border-teal-200 bg-[#3ce22a38]'
+                              : 'border-transparent bg-[var(--color-bg-base)] hover:border-[var(--color-border)]'}`}
+                          >
+                            <div className="flex items-start gap-2">
+                              <Compass size={13} className={`mt-0.5 shrink-0 ${session.id === sid ? 'text-teal-600' : 'text-[var(--color-text-tertiary)]'}`} />
+                              <div className="min-w-0 flex-1">
+                                <p className={`truncate text-xs font-medium ${session.id === sid ? 'text-teal-800' : 'text-[var(--color-text-primary)]'}`} title={session.title}>
+                                  {session.title}
+                                </p>
+                                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">
+                                  {new Date(session.updatedAt).toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="mt-2 flex justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`确定删除会话「${session.title}」吗？`)) void removeSession(session.id)
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md border border-red-100 px-2 py-1 text-[10px] font-medium text-red-500 transition-colors hover:bg-red-50"
+                              >
+                                <Trash2 size={10} /> 删除
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void loadSession(session.id)}
+                                className="rounded-md bg-teal-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-teal-700"
+                              >
+                                查看
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </header>
