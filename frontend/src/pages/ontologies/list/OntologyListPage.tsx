@@ -17,7 +17,6 @@ import {
   GraduationCap,
   HeartPulse,
   Landmark,
-  Loader2,
   Network,
   Pencil,
   Plus,
@@ -26,7 +25,6 @@ import {
   ShieldCheck,
   ShoppingCart,
   Trash2,
-  Upload,
   Users,
   X,
   Zap,
@@ -279,22 +277,41 @@ function OntologyFormModal({
   )
 }
 
-function CreateOntologyCard({ onClick }: { onClick: () => void }) {
+function CreateOntologyCard({
+  onCreate,
+  onImport,
+  importing,
+}: {
+  onCreate: () => void
+  onImport: () => void
+  importing: boolean
+}) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-    >
+    <article className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg">
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
         <Plus size={25} />
       </div>
       <h3 className="text-base font-semibold text-slate-800">新建本体</h3>
       <p className="mt-2 max-w-[210px] text-xs leading-5 text-slate-500">快速创建本体模型</p>
-      <span className="mt-5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm">
-        立即创建
-      </span>
-    </button>
+      <div className="mt-5 flex items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={onCreate}
+          className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+        >
+          立即创建
+        </button>
+        <button
+          type="button"
+          disabled={importing}
+          onClick={onImport}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          aria-busy={importing}
+        >
+          {importing ? '正在导入' : '本地导入'}
+        </button>
+      </div>
+    </article>
   )
 }
 
@@ -553,37 +570,32 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         >
           <Plus size={15} /> 立即创建
         </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json,application/json"
-          className="sr-only"
-          aria-label="选择本体结构 JSON 文件"
-          onChange={event => void handleImportFile(event.target.files?.[0])}
-        />
-        <button
-          type="button"
-          disabled={importMutation.isPending}
-          onClick={() => {
+      </section>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="sr-only"
+        aria-label="选择本体结构 JSON 文件"
+        onChange={event => void handleImportFile(event.target.files?.[0])}
+      />
+      {importError && (
+        <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {importError}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <CreateOntologyCard
+          onCreate={openCreate}
+          onImport={() => {
             setImportError('')
             if (fileInputRef.current) fileInputRef.current.value = ''
             fileInputRef.current?.click()
           }}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-4 text-sm font-medium text-teal-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-300 hover:bg-teal-50 active:translate-y-0 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-          aria-busy={importMutation.isPending}
-        >
-          {importMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-          {importMutation.isPending ? '正在导入' : '本地导入'}
-        </button>
-        {importError && (
-          <div role="alert" className="basis-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {importError}
-          </div>
-        )}
-      </section>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <CreateOntologyCard onClick={openCreate} />
+          importing={importMutation.isPending}
+        />
 
         {isLoading ? (
           <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white sm:col-span-1 lg:col-span-2 xl:col-span-3">
