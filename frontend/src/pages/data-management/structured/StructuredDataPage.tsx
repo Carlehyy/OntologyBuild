@@ -70,9 +70,9 @@ function errorText(error: unknown, fallback: string): string {
 
 function FlowArrow() {
   return (
-    <div className="flex w-4 shrink-0 items-center" aria-hidden="true">
+    <div className="flex w-[clamp(0.625rem,1.1vw,1rem)] shrink-0 items-center" aria-hidden="true">
       <span className="h-px w-full border-t border-dashed border-slate-300" />
-      <ArrowRight size={14} className="-ml-1 shrink-0 text-slate-400" />
+      <ArrowRight className="-ml-1 h-[clamp(0.625rem,1vw,0.875rem)] w-[clamp(0.625rem,1vw,0.875rem)] shrink-0 text-slate-400" />
     </div>
   )
 }
@@ -90,17 +90,17 @@ function FlowNode({
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className={`group relative grid h-9 min-w-0 flex-1 place-items-center rounded-lg border px-8 text-[11px] font-semibold transition-colors ${
+      className={`group inline-flex h-[clamp(2rem,2.7vw,2.25rem)] flex-none items-center justify-center gap-[clamp(0.25rem,0.4vw,0.375rem)] rounded-lg border px-[clamp(0.375rem,0.65vw,0.625rem)] text-[clamp(10px,0.8vw,11px)] font-semibold transition-colors ${
         active
           ? 'border-emerald-400 bg-emerald-50 text-emerald-800 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)]'
           : 'border-teal-300 bg-teal-50/50 text-teal-800 hover:border-teal-400 hover:bg-teal-100/70'
       }`}
     >
-      <span className={`absolute left-2 grid h-5 w-5 place-items-center rounded-md ${active ? 'bg-emerald-600 text-white' : 'bg-teal-100 text-teal-700'}`}>
+      <span className={`grid h-[clamp(1.125rem,1.5vw,1.25rem)] w-[clamp(1.125rem,1.5vw,1.25rem)] shrink-0 place-items-center rounded-md [&_svg]:h-[clamp(0.6875rem,1vw,0.875rem)] [&_svg]:w-[clamp(0.6875rem,1vw,0.875rem)] ${active ? 'bg-emerald-600 text-white' : 'bg-teal-100 text-teal-700'}`}>
         {icon}
       </span>
-      <span className="w-full truncate whitespace-nowrap text-center" title={label}>{label}</span>
-      {active && <span className="absolute right-2 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-medium text-white">当前</span>}
+      <span className="whitespace-nowrap leading-none" title={label}>{label}</span>
+      {active && <span className="ml-0.5 shrink-0 rounded bg-emerald-600 px-[clamp(0.25rem,0.4vw,0.375rem)] py-0.5 text-[clamp(8px,0.65vw,9px)] font-medium leading-none text-white">当前</span>}
     </button>
   )
 }
@@ -211,9 +211,9 @@ export default function StructuredDataPage() {
     <div className="flex h-full flex-col gap-3">
       {/* 不重复页面标题，首屏直接呈现用户真正需要理解和操作的数据流。 */}
       <div className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <div className="flex w-full min-w-0 items-center">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="max-w-full flex-none overflow-x-auto">
+            <div className="flex w-max items-center">
               <FlowNode label="数据流水线" icon={<Workflow size={14} />} onClick={() => navigate('/data/pipelines')} />
               <FlowArrow />
               <FlowNode label="数据任务池" icon={<ListChecks size={14} />} onClick={() => navigate('/data/pipelines/sync-tasks')} />
@@ -226,7 +226,7 @@ export default function StructuredDataPage() {
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+          <div className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
             <div className="relative grid grid-cols-2 rounded-md">
               <span
                 aria-hidden="true"
@@ -493,7 +493,8 @@ function CuratedView() {
         <select
           value={publishedPipelines.some(pipeline => pipeline.id === normalizedPipelineFilter) ? normalizedPipelineFilter : ''}
           onChange={e => changePipelineFilter(e.target.value)}
-          className="px-3 py-1.5 border rounded-lg text-sm text-gray-600 bg-white"
+          className="w-48 max-w-full truncate rounded-lg border bg-white px-3 py-1.5 text-sm text-gray-600"
+          aria-label="筛选已发布流水线"
         >
           <option value="">全部已发布流水线</option>
           {publishedPipelines.map(pl => (
