@@ -6,10 +6,12 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import { useToast } from '@/components/ui/Toast'
 import type { OntologyListItem } from '@/types/ontology'
 import type { LucideIcon } from 'lucide-react'
 import {
   Boxes,
+  AlertCircle,
   Building2,
   Cpu,
   Database,
@@ -174,7 +176,12 @@ function OntologyFormModal({
       open={open}
       onClose={() => !saving && onClose()}
       title={title}
-      description="填写基本信息后即可使用，后续可在详情页维护结构与版本。"
+      description={initial
+        ? '更新本体的名称、领域与说明，不会影响已经维护的结构和版本。'
+        : '填写基本信息后即可使用，后续可在详情页维护结构与版本。'}
+      headerIcon={initial
+        ? <Pencil size={18} className="text-teal-600" />
+        : <Plus size={19} className="text-teal-600" />}
       size="lg"
       footer={(
         <>
@@ -268,8 +275,9 @@ function OntologyFormModal({
         </fieldset>
 
         {error && (
-          <div role="alert" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
-            {error}
+          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-100 bg-red-50/70 px-3.5 py-3 text-sm text-red-700">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span className="leading-5">{error}</span>
           </div>
         )}
       </div>
@@ -415,10 +423,10 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const [createOpen, setCreateOpen] = useState(defaultCreateOpen)
   const [editTarget, setEditTarget] = useState<OntologyListItem | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<OntologyListItem | null>(null)
-  const [importError, setImportError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const { toast } = useToast()
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['ontologies'],
@@ -461,6 +469,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
     onSuccess: () => {
       refresh()
       setCreateOpen(false)
+      toast({ tone: 'success', title: '本体已创建', description: '现在可以继续维护对象实体、实体关系与版本。' })
       if (defaultCreateOpen) navigate('/ontologies', { replace: true })
     },
   })
@@ -469,6 +478,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
     onSuccess: () => {
       refresh()
       setEditTarget(null)
+      toast({ tone: 'success', title: '本体信息已更新' })
     },
   })
   const deleteMutation = useMutation({
@@ -476,26 +486,29 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
     onSuccess: () => {
       refresh()
       setDeleteTarget(null)
+      toast({ tone: 'success', title: '本体已删除', description: '相关结构、映射与版本数据已一并移除。' })
+    },
+    onError: error => {
+      toast({ tone: 'error', title: '本体删除失败', description: errorMessage(error, '请稍后重试。') })
     },
   })
   const importMutation = useMutation({
     mutationFn: (body: unknown) => ontologyApi.importStructure(body),
     onSuccess: result => {
       refresh()
-      setImportError('')
+      toast({ tone: 'success', title: '本体导入完成', description: `已导入「${result.ontology.name}」，即将打开详情。` })
       navigate(`/ontologies/${result.ontology.id}`)
     },
   })
 
   const handleImportFile = async (file?: File) => {
     if (!file) return
-    setImportError('')
     if (!file.name.toLocaleLowerCase().endsWith('.json')) {
-      setImportError('请选择 JSON 格式的本体结构文件。')
+      toast({ tone: 'error', title: '无法导入本体', description: '请选择 JSON 格式的本体结构文件。' })
       return
     }
     if (file.size > 5 * 1024 * 1024) {
-      setImportError('导入文件不能超过 5 MB。')
+      toast({ tone: 'error', title: '文件超过大小限制', description: '本体结构文件不能超过 5 MB。' })
       return
     }
     try {
@@ -504,7 +517,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       try {
         body = JSON.parse(text)
       } catch {
-        setImportError('文件不是有效的 JSON，请重新选择本体结构导出文件。')
+        toast({ tone: 'error', title: '文件内容无法识别', description: '文件不是有效的 JSON，请重新选择本体结构导出文件。' })
         return
       }
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -512,7 +525,11 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       }
       await importMutation.mutateAsync(body)
     } catch (error: unknown) {
-      setImportError(errorMessage(error, '导入失败，请确认文件来自本体结构 JSON 导出。'))
+      toast({
+        tone: 'error',
+        title: '本体导入失败',
+        description: errorMessage(error, '请确认文件来自本体结构 JSON 导出。'),
+      })
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
@@ -582,17 +599,10 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         aria-label="选择本体结构 JSON 文件"
         onChange={event => void handleImportFile(event.target.files?.[0])}
       />
-      {importError && (
-        <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {importError}
-        </div>
-      )}
-
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <CreateOntologyCard
           onCreate={openCreate}
           onImport={() => {
-            setImportError('')
             if (fileInputRef.current) fileInputRef.current.value = ''
             fileInputRef.current?.click()
           }}
@@ -663,11 +673,11 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
 
       <ConfirmModal
         open={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
+        onClose={() => { if (!deleteMutation.isPending) setDeleteTarget(null) }}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
-        title="确认删除本体"
-        description={deleteTarget ? `确定要删除本体「${deleteTarget.name}」吗？本体结构、映射与版本数据将一并删除，此操作不可撤销。` : ''}
-        confirmText="确认删除"
+        title={deleteTarget ? `删除「${deleteTarget.name}」？` : '删除本体？'}
+        description="本体结构、数据映射与版本记录将被永久移除。此操作无法撤销，请确认你不再需要这些内容。"
+        confirmText="删除本体"
         variant="danger"
         loading={deleteMutation.isPending}
       />

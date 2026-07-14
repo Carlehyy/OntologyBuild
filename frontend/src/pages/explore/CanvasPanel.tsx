@@ -278,7 +278,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4">
         <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务画布</div>
         <div className="flex shrink-0 items-center gap-1.5">
           <button
@@ -295,7 +295,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-2">
+      <div className="flex-1 overflow-y-auto px-3 pb-3 pt-3 space-y-2">
         {/* 质量门：与草稿生成闸门同一口径 */}
         {readiness && total > 0 && <GatePanel readiness={readiness} />}
 

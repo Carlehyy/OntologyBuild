@@ -1263,7 +1263,7 @@ export default function AgentWorkbenchPage() {
             </div>
           </div>
 
-          <div className="scrollbar-thin flex-1 overflow-auto px-4 py-4">
+          <div className="scrollbar-thin flex-1 overflow-auto bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-4 py-4">
             {messages.length === 0 ? (
               <div className="flex min-h-full flex-col justify-center py-8 text-center anim-scale-in">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-600 text-white shadow-sm">

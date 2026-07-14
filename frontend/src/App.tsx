@@ -30,6 +30,7 @@ import ExplorationPage from '@/pages/explore/ExplorationPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
+import { ToastProvider } from '@/components/ui/Toast'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1 } }
@@ -48,8 +49,9 @@ function UnknownRouteRedirect() {
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
-      <HashRouter>
-        <Routes>
+      <ToastProvider>
+        <HashRouter>
+          <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/share/manual/:token" element={<PublicManualDatasetPage />} />
           <Route path="/" element={<Navigate to="/overview" replace />} />
@@ -96,8 +98,9 @@ export default function App() {
           <Route path="/settings/skills" element={<ProtectedRoute><SkillCenterPage /></ProtectedRoute>} />
           <Route path="/settings/:tab" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<UnknownRouteRedirect />} />
-        </Routes>
-      </HashRouter>
+          </Routes>
+        </HashRouter>
+      </ToastProvider>
     </QueryClientProvider>
   )
 }

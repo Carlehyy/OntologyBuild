@@ -13,10 +13,12 @@ import {
 import {
   explorationApi, streamExplorationChat,
   type BusinessCanvas, type BxAttachment, type BxDraft, type BxQuestion, type BxStep,
-  type Completeness, type Readiness,
+  type BxSession, type Completeness, type Readiness,
 } from '@/api/exploration'
 import { modelApi } from '@/api/ontologies'
 import MermaidBlock from '@/components/MermaidBlock'
+import { ConfirmModal } from '@/components/ui/Modal'
+import { useToast } from '@/components/ui/Toast'
 import Md from './Md'
 import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
@@ -48,6 +50,57 @@ const TEXTAREA_LINE_HEIGHT = 20
 const TEXTAREA_MAX_LINES = 10
 const TEXTAREA_MIN_HEIGHT = 28
 const TEXTAREA_MAX_HEIGHT = TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + 8
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
+function useExplorationLayout() {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [sizes, setSizes] = useState<[number, number]>([68, 32])
+
+  const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    const startX = event.clientX
+    const start = sizes
+    const min: [number, number] = [48, 24]
+    const pairTotal = start[0] + start[1]
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = ((moveEvent.clientX - startX) / rect.width) * 100
+      const left = clamp(start[0] + delta, min[0], pairTotal - min[1])
+      setSizes([left, pairTotal - left])
+    }
+    const onUp = () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [sizes])
+
+  return { containerRef, sizes, startResize }
+}
+
+function ExplorationSplitHandle({ onPointerDown }: { onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void }) {
+  return (
+    <div
+      role="separator"
+      aria-label="调整探索对话与业务画布宽度"
+      aria-orientation="vertical"
+      onPointerDown={onPointerDown}
+      className="group flex cursor-col-resize items-center justify-center"
+    >
+      <div className="h-16 w-1 rounded-full bg-[var(--color-border)] transition-all group-hover:h-24 group-hover:bg-teal-500/70" />
+    </div>
+  )
+}
 
 const formatSize = (n: number) =>
   n < 1024 ? `${n} B`
@@ -175,6 +228,8 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
 }
 
 export default function ExplorationPage() {
+  const { containerRef, sizes, startResize } = useExplorationLayout()
+  const { toast } = useToast()
   // -- 会话 --
   const { data: sessions = [], refetch: refetchSessions } = useQuery({
     queryKey: ['bx-sessions'], queryFn: () => explorationApi.sessions(),
@@ -196,6 +251,8 @@ export default function ExplorationPage() {
   const [webSearch, setWebSearch] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
   const [showSessionHistory, setShowSessionHistory] = useState(false)
+  const [deleteSessionTarget, setDeleteSessionTarget] = useState<BxSession | null>(null)
+  const [deletingSession, setDeletingSession] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [reviewDraft, setReviewDraft] = useState<BxDraft | null>(null)
@@ -309,18 +366,27 @@ export default function ExplorationPage() {
   }
 
   const removeSession = async (id: string) => {
-    await explorationApi.deleteSession(id)
-    if (id === sid) {
-      setSid('')
-      setMessages([])
-      setCanvas(null)
-      setCompleteness(null)
-      setReadiness(null)
-      setAttachments([])
-      setUploads([])
-      setShowMessageHistory(false)
+    setDeletingSession(true)
+    try {
+      await explorationApi.deleteSession(id)
+      if (id === sid) {
+        setSid('')
+        setMessages([])
+        setCanvas(null)
+        setCompleteness(null)
+        setReadiness(null)
+        setAttachments([])
+        setUploads([])
+        setShowMessageHistory(false)
+      }
+      setDeleteSessionTarget(null)
+      await refetchSessions()
+      toast({ tone: 'success', title: '会话已删除' })
+    } catch (error: unknown) {
+      toast({ tone: 'error', title: '会话删除失败', description: errorMessage(error, '请稍后重试。') })
+    } finally {
+      setDeletingSession(false)
     }
-    refetchSessions()
   }
 
   // 无会话时懒创建（首条消息 / 首个附件都可能触发）
@@ -441,6 +507,7 @@ export default function ExplorationPage() {
 
   const canvasCount = completeness
     ? Object.values(completeness.counts).reduce((a, b) => a + b, 0) : 0
+  const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm'
 
   // 开放堵门问题 → 输入框上方的快捷答复（最多展示 2 个，按登记顺序）
   const openBlocking = (canvas?.questions || [])
@@ -452,9 +519,14 @@ export default function ExplorationPage() {
   }
 
   return (
-    <div className="flex h-full min-h-[560px] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] shadow-sm">
+    <div className="relative flex h-full min-h-[560px] overflow-hidden bg-[var(--color-bg-base)]">
+      <div
+        ref={containerRef}
+        className="scrollbar-none grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-1"
+        style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(300px, ${sizes[1]}fr)` }}
+      >
       {/* 对话区 */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <section className={`${panelClass} flex flex-col`}>
         <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4">
           <div className="flex w-full min-w-0 items-center justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -529,63 +601,68 @@ export default function ExplorationPage() {
                 {showSessionHistory && (
                   <>
                     <div className="fixed inset-0 z-20" onClick={() => setShowSessionHistory(false)} />
-                    <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-xl">
-                      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
-                        <div>
-                          <p className="text-xs font-semibold text-[var(--color-text-primary)]">会话记录</p>
-                          <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">共 {sessions.length} 个会话</p>
-                        </div>
+                    <div className="absolute right-0 top-full z-30 mt-3 w-[380px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-white/95 shadow-[0_18px_52px_rgba(15,23,42,0.16)] backdrop-blur-xl animate-slide-up">
+                      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3">
+                        <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">历史会话</span>
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-teal-700">
+                          <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
+                          共 <span className="font-semibold tabular-nums">{sessions.length}</span> 个
+                        </span>
                         <button
                           type="button"
                           onClick={() => void newSession()}
-                          className="inline-flex items-center gap-1 rounded-md bg-teal-600 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                          className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
                         >
-                          <Plus size={12} /> 新建会话
+                          <Plus size={13} /> 新建
                         </button>
                       </div>
-                      <div className="scrollbar-thin max-h-80 overflow-y-auto p-2">
+                      <div className="scrollbar-thin max-h-[420px] overflow-y-auto overflow-x-hidden">
                         {sessions.length === 0 ? (
-                          <div className="px-3 py-8 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
-                            还没有会话，点击右上角新建会话开始业务探索。
+                          <div className="flex flex-col items-center px-6 py-14 text-center">
+                            <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--color-bg-base)] text-[var(--color-text-tertiary)]">
+                              <History size={21} />
+                            </span>
+                            <p className="text-sm font-medium text-[var(--color-text-secondary)]">还没有历史会话</p>
+                            <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">新建会话后，可随时回到之前的探索过程。</p>
                           </div>
-                        ) : sessions.map(session => (
+                        ) : <div className="divide-y divide-[var(--color-border)]">{sessions.map(session => (
                           <div
                             key={session.id}
-                            className={`mb-1 rounded-lg border px-3 py-2.5 last:mb-0 ${session.id === sid
-                              ? 'border-teal-200 bg-[#3ce22a38]'
-                              : 'border-transparent bg-[var(--color-bg-base)] hover:border-[var(--color-border)]'}`}
+                            className={`group flex items-center gap-3 px-4 py-3 transition-colors ${session.id === sid
+                              ? 'bg-teal-50/70'
+                              : 'hover:bg-[var(--color-bg-hover)]'}`}
                           >
-                            <div className="flex items-start gap-2">
-                              <Compass size={13} className={`mt-0.5 shrink-0 ${session.id === sid ? 'text-teal-600' : 'text-[var(--color-text-tertiary)]'}`} />
+                            <button
+                              type="button"
+                              onClick={() => void loadSession(session.id)}
+                              className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none"
+                            >
+                              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${session.id === sid
+                                ? 'bg-teal-100 text-teal-700'
+                                : 'bg-slate-100 text-slate-500'}`}>
+                                <Compass size={16} />
+                              </span>
                               <div className="min-w-0 flex-1">
-                                <p className={`truncate text-xs font-medium ${session.id === sid ? 'text-teal-800' : 'text-[var(--color-text-primary)]'}`} title={session.title}>
+                                <p className={`truncate text-sm font-medium ${session.id === sid ? 'text-teal-900' : 'text-[var(--color-text-primary)]'}`} title={session.title}>
                                   {session.title}
                                 </p>
-                                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">
-                                  {new Date(session.updatedAt).toLocaleString()}
+                                <p className="mt-1 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                                  {new Date(session.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                                 </p>
                               </div>
-                            </div>
-                            <div className="mt-2 flex justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (window.confirm(`确定删除会话「${session.title}」吗？`)) void removeSession(session.id)
-                                }}
-                                className="inline-flex items-center gap-1 rounded-md border border-red-100 px-2 py-1 text-[10px] font-medium text-red-500 transition-colors hover:bg-red-50"
-                              >
-                                <Trash2 size={10} /> 删除
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void loadSession(session.id)}
-                                className="rounded-md bg-teal-600 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-teal-700"
-                              >
-                                查看
-                              </button>
-                            </div>
+                              {session.id === sid && <span className="rounded-md bg-white/80 px-2 py-1 text-[10px] font-medium text-teal-700">当前</span>}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteSessionTarget(session)}
+                              title={`删除会话 ${session.title}`}
+                              aria-label={`删除会话 ${session.title}`}
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+                            >
+                              <Trash2 size={14} />
+                            </button>
                           </div>
-                        ))}
+                        ))}</div>}
                       </div>
                     </div>
                   </>
@@ -831,10 +908,12 @@ export default function ExplorationPage() {
             </div>
           </div>
         </div>
-      </div>
+      </section>
+
+      <ExplorationSplitHandle onPointerDown={startResize} />
 
       {/* 业务画布 */}
-      <aside className="w-[280px] lg:w-[320px] 2xl:w-[340px] shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+      <aside className={`${panelClass} flex flex-col`}>
         <CanvasPanel
           sessionId={sid || undefined}
           canvas={canvas}
@@ -843,6 +922,7 @@ export default function ExplorationPage() {
           onAsk={busy ? undefined : askInChat}
         />
       </aside>
+      </div>
 
       {docsOpen && sid && (
         <DocumentsDrawer
@@ -865,6 +945,16 @@ export default function ExplorationPage() {
       {reviewDraft && (
         <DraftReviewDrawer draft={reviewDraft} onClose={() => setReviewDraft(null)} />
       )}
+      <ConfirmModal
+        open={!!deleteSessionTarget}
+        onClose={() => { if (!deletingSession) setDeleteSessionTarget(null) }}
+        onConfirm={() => { if (deleteSessionTarget) void removeSession(deleteSessionTarget.id) }}
+        title={deleteSessionTarget ? `删除「${deleteSessionTarget.title}」？` : '删除会话？'}
+        description="该会话中的对话、附件与业务画布记录将被永久删除，此操作无法撤销。"
+        confirmText="删除会话"
+        variant="danger"
+        loading={deletingSession}
+      />
     </div>
   )
 }
