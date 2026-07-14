@@ -263,15 +263,12 @@ test("Audit Logs", t_audit_logs)
 
 # Test 13: Export
 def t_export_json():
-    r = client.get(f"/api/v1/ontologies/{oid}/export?format=json", headers=headers)
+    r = client.get(f"/api/v1/ontologies/{oid}/export", headers=headers)
     assert r.status_code == 200
-
-def t_export_ttl():
-    r = client.get(f"/api/v1/ontologies/{oid}/export?format=ttl", headers=headers)
-    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json()["format"] == "ontology-structure"
 
 test("Export JSON", t_export_json)
-test("Export TTL", t_export_ttl)
 
 # Summary
 print(f"\n{'='*50}")

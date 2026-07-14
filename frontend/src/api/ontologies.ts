@@ -1,6 +1,27 @@
 import { apiClient } from './client'
 import type { OntologyListItem, OntologyDetail, Entity, LogicRule, Action, UploadedFile, Prompt, ModelConfig } from '@/types/ontology'
 
+export interface OntologyImportResult {
+  ontology: OntologyDetail
+  version: {
+    id: string
+    version_number: 'v0'
+    version_label: string
+  }
+  counts: {
+    objectTypes: number
+    linkTypes: number
+    actions: number
+    functions: number
+  }
+}
+
+function safeDownloadName(value: string) {
+  const printable = [...value.trim()].filter(character => character.charCodeAt(0) >= 32).join('')
+  const cleaned = printable.replace(/[\\/:*?"<>|]/g, '_')
+  return cleaned || 'ontology'
+}
+
 export const ontologyApi = {
   list: (params?: { name?: string; domain?: string; page?: number; page_size?: number }) =>
     apiClient.get<{ items: OntologyListItem[]; total: number; page: number; page_size: number }>('/ontologies', { params }),
@@ -9,6 +30,7 @@ export const ontologyApi = {
   get: (id: string) => apiClient.get<OntologyDetail>(`/ontologies/${id}`),
   update: (id: string, body: Partial<OntologyDetail>) => apiClient.put<OntologyDetail>(`/ontologies/${id}`, body),
   delete: (id: string) => apiClient.delete(`/ontologies/${id}`),
+  importStructure: (body: unknown) => apiClient.post<OntologyImportResult>('/ontologies/import', body),
 
   // Files
   listFiles: (oid: string) => apiClient.get<UploadedFile[]>(`/ontologies/${oid}/files`),
@@ -46,21 +68,19 @@ export const ontologyApi = {
     apiClient.get(`/ontologies/${oid}/execute/status?task_id=${task_id}`),
 
   // Export (must use authenticated request — plain links omit Bearer token)
-  exportOntology: async (oid: string, format: string) => {
+  exportOntology: async (oid: string, name: string, version: string) => {
     const blob = (await apiClient.get(`/ontologies/${oid}/export`, {
-      params: { format },
       responseType: 'blob',
     })) as unknown as Blob
-    if (blob.type.includes('json')) {
-      const err = JSON.parse(await blob.text())
-      throw err
-    }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `ontology_${oid}.${format}`
+    a.download = `${safeDownloadName(name)}_${safeDownloadName(version || 'draft')}.json`
+    a.style.display = 'none'
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(url)
+    a.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
   },
 
   // Audit

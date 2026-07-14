@@ -1,485 +1,570 @@
-import csv
-import html
-import io
+"""Export and import the current formal ontology structure as portable JSON.
+
+Instances, execution history, mappings, and runtime state are intentionally not
+part of this contract.  Imported packages receive fresh database identifiers and
+become a sealed v0 baseline release.
+"""
+from __future__ import annotations
+
+import copy
 import json
-import re
-import yaml
-import zipfile
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
+from app.models.inference import AuditLog
 from app.models.ontology import OntologyProject
-from app.models.entity import Entity
-from app.models.logic import LogicRule
-from app.models.action import Action
-from app.models.relation import Relation
+from app.models.ontology_formal import (
+    ActionType,
+    LinkType,
+    ObjectType,
+    OntologyFunction,
+)
+from app.models.ontology_version import OntologyVersion
+from app.ontologies.export.schemas import (
+    OntologyStructurePackage,
+    PortableActionType,
+    PortableFunction,
+    PortableLinkType,
+    PortableObjectType,
+    PortableOntologyMetadata,
+    PortableOntologyStructure,
+)
+from app.ontologies.formal_modeling import schemas as formal_schemas
+from app.ontologies.formal_modeling.validation import validate_model
+from app.ontologies.versions.evolution_service import snapshot_hash
 
 
-def _collect_data(db: Session, ontology_id: str) -> dict:
-    project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
-    entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
-    logic_rules = db.query(LogicRule).filter(LogicRule.ontology_id == ontology_id).all()
-    actions = db.query(Action).filter(Action.ontology_id == ontology_id).all()
-    relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-    return {
-        "project": project,
-        "entities": entities,
-        "logic_rules": logic_rules,
-        "actions": actions,
-        "relations": relations,
+def _new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _without_external_lineage(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_external_lineage(child)
+            for key, child in value.items()
+            if key != "dataBinding"
+        }
+    if isinstance(value, list):
+        return [_without_external_lineage(child) for child in value]
+    return value
+
+
+def _portable_object_type(item: ObjectType) -> PortableObjectType:
+    data = _without_external_lineage(
+        formal_schemas.ObjectTypeOut.model_validate(item).model_dump())
+    return PortableObjectType.model_validate({
+        key: value for key, value in data.items()
+        if key not in {"created_at", "updated_at", "source"}
+    })
+
+
+def _portable_link_type(item: LinkType) -> PortableLinkType:
+    data = _without_external_lineage(
+        formal_schemas.LinkTypeOut.model_validate(item).model_dump())
+    return PortableLinkType.model_validate({
+        key: value for key, value in data.items()
+        if key not in {"created_at", "updated_at", "source"}
+    })
+
+
+def _portable_action(item: ActionType) -> PortableActionType:
+    data = _without_external_lineage(
+        formal_schemas.ActionTypeOut.model_validate(item).model_dump())
+    return PortableActionType.model_validate({
+        key: value for key, value in data.items()
+        if key not in {"created_at", "updated_at", "source"}
+    })
+
+
+def _portable_function(item: OntologyFunction) -> PortableFunction:
+    data = _without_external_lineage(
+        formal_schemas.FunctionOut.model_validate(item).model_dump())
+    return PortableFunction.model_validate({
+        key: value for key, value in data.items()
+        if key not in {"created_at", "updated_at", "source"}
+    })
+
+
+def build_export_package(db: Session, project: OntologyProject) -> OntologyStructurePackage:
+    """Build a stable structure-only package from the current formal model."""
+
+    def items(model):
+        return db.query(model).filter(model.ontology_id == project.id).all()
+
+    return OntologyStructurePackage(
+        exported_at=datetime.now(timezone.utc),
+        ontology=PortableOntologyMetadata(
+            id=project.id,
+            name=project.name,
+            domain=project.domain,
+            description=project.description,
+            icon=project.icon or "network",
+            source_version=project.version,
+            source_status=project.status,
+        ),
+        structure=PortableOntologyStructure(
+            object_types=[_portable_object_type(item) for item in items(ObjectType)],
+            link_types=[_portable_link_type(item) for item in items(LinkType)],
+            actions=[_portable_action(item) for item in items(ActionType)],
+            functions=[_portable_function(item) for item in items(OntologyFunction)],
+        ),
+    )
+
+
+def export_json(db: Session, project: OntologyProject) -> str:
+    package = build_export_package(db, project)
+    return json.dumps(package.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2)
+
+
+def _validate_unique_ids(kind: str, items: list[Any], errors: list[dict]) -> None:
+    seen: set[str] = set()
+    for item in items:
+        if item.id in seen:
+            errors.append({
+                "code": "duplicate_id",
+                "kind": kind,
+                "id": item.id,
+                "message": f"{kind} 中存在重复 ID: {item.id}",
+            })
+        seen.add(item.id)
+
+
+def _validate_reference(
+    value: Any,
+    valid_ids: set[str],
+    *,
+    kind: str,
+    item_id: str,
+    field: str,
+    errors: list[dict],
+) -> None:
+    if value in (None, ""):
+        return
+    if not isinstance(value, str) or value not in valid_ids:
+        errors.append({
+            "code": "dangling_reference",
+            "kind": kind,
+            "id": item_id,
+            "field": field,
+            "message": f"{kind} {item_id} 的 {field} 引用了不存在的结构 ID: {value}",
+        })
+
+
+def _validate_nested_references(
+    value: Any,
+    *,
+    kind: str,
+    item_id: str,
+    path: str,
+    object_ids: set[str],
+    link_ids: set[str],
+    action_ids: set[str],
+    function_ids: set[str],
+    errors: list[dict],
+) -> None:
+    reference_sets = {
+        "objectTypeId": object_ids,
+        "targetObjectTypeId": object_ids,
+        "sourceObjectTypeId": object_ids,
+        "linkTypeId": link_ids,
+        "actionId": action_ids,
+        "targetActionId": action_ids,
+        "functionId": function_ids,
+        "validationFunctionId": function_ids,
     }
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else key
+            if key in reference_sets:
+                _validate_reference(
+                    child,
+                    reference_sets[key],
+                    kind=kind,
+                    item_id=item_id,
+                    field=child_path,
+                    errors=errors,
+                )
+            elif key == "referenceType":
+                _validate_reference(
+                    child,
+                    object_ids,
+                    kind=kind,
+                    item_id=item_id,
+                    field=child_path,
+                    errors=errors,
+                )
+            _validate_nested_references(
+                child,
+                kind=kind,
+                item_id=item_id,
+                path=child_path,
+                object_ids=object_ids,
+                link_ids=link_ids,
+                action_ids=action_ids,
+                function_ids=function_ids,
+                errors=errors,
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _validate_nested_references(
+                child,
+                kind=kind,
+                item_id=item_id,
+                path=f"{path}[{index}]",
+                object_ids=object_ids,
+                link_ids=link_ids,
+                action_ids=action_ids,
+                function_ids=function_ids,
+                errors=errors,
+            )
 
 
-def _entity_map(entities: list) -> dict[str, Entity]:
-    return {e.id: e for e in entities}
+def _validate_import_package(package: OntologyStructurePackage) -> None:
+    structure = package.structure
+    errors = validate_model(
+        structure.object_types,
+        structure.link_types,
+        structure.actions,
+        structure.functions,
+        [],
+        [],
+    )
+    if not structure.object_types:
+        errors.append({
+            "code": "object_type_required",
+            "kind": "ontology",
+            "id": "",
+            "message": "导入并发布的本体至少需要一个对象类型",
+        })
+
+    _validate_unique_ids("objectType", structure.object_types, errors)
+    _validate_unique_ids("linkType", structure.link_types, errors)
+    _validate_unique_ids("action", structure.actions, errors)
+    _validate_unique_ids("function", structure.functions, errors)
+
+    object_ids = {item.id for item in structure.object_types}
+    link_ids = {item.id for item in structure.link_types}
+    action_ids = {item.id for item in structure.actions}
+    function_ids = {item.id for item in structure.functions}
+
+    for function in structure.functions:
+        if function.enabled and function.language.strip().lower() == "typescript":
+            errors.append({
+                "code": "enabled_typescript_function_forbidden",
+                "kind": "function",
+                "id": function.id,
+                "field": "language",
+                "message": f"启用的 TypeScript 函数「{function.display_name}」不能进入发布版本",
+            })
+
+    for kind, items in (
+        ("objectType", structure.object_types),
+        ("linkType", structure.link_types),
+        ("action", structure.actions),
+        ("function", structure.functions),
+    ):
+        for item in items:
+            _validate_nested_references(
+                item.model_dump(mode="json", by_alias=True),
+                kind=kind,
+                item_id=item.id,
+                path="",
+                object_ids=object_ids,
+                link_ids=link_ids,
+                action_ids=action_ids,
+                function_ids=function_ids,
+                errors=errors,
+            )
+
+    if errors:
+        raise HTTPException(status_code=422, detail={
+            "code": "ontology_import_validation_failed",
+            "message": f"导入文件中的本体结构未通过校验（{len(errors)} 个错误）",
+            "errors": errors,
+        })
 
 
-def _entity_label(e: Entity | None, lang: str = "cn") -> str:
-    if not e:
-        return ""
-    if lang == "en":
-        return e.name_en or e.name_cn or ""
-    return e.name_cn or e.name_en or ""
+def _unique_project_name(db: Session, requested: str) -> str:
+    base = requested.strip()
+    candidate = base
+    index = 0
+    while db.query(OntologyProject.id).filter(OntologyProject.name.ilike(candidate)).first():
+        index += 1
+        suffix = "（导入）" if index == 1 else f"（导入 {index}）"
+        candidate = f"{base[:max(1, 200 - len(suffix))]}{suffix}"
+    return candidate
 
 
-def _relation_row(rel: Relation, emap: dict[str, Entity]) -> dict:
-    src = emap.get(rel.source_entity)
-    tgt = emap.get(rel.target_entity)
-    return {
-        "id": rel.id,
-        "source_id": rel.source_entity,
-        "target_id": rel.target_entity,
-        "source_cn": _entity_label(src, "cn"),
-        "source_en": _entity_label(src, "en"),
-        "target_cn": _entity_label(tgt, "cn"),
-        "target_en": _entity_label(tgt, "en"),
-        "type": rel.type,
-        "confidence": rel.confidence,
-        "properties": rel.properties or {},
+def _remap_nested(
+    value: Any,
+    *,
+    object_ids: dict[str, str],
+    link_ids: dict[str, str],
+    action_ids: dict[str, str],
+    function_ids: dict[str, str],
+) -> Any:
+    mappings = {
+        "objectTypeId": object_ids,
+        "object_type_id": object_ids,
+        "targetObjectTypeId": object_ids,
+        "target_object_type_id": object_ids,
+        "sourceObjectTypeId": object_ids,
+        "source_object_type_id": object_ids,
+        "linkTypeId": link_ids,
+        "link_type_id": link_ids,
+        "actionId": action_ids,
+        "action_id": action_ids,
+        "targetActionId": action_ids,
+        "target_action_id": action_ids,
+        "functionId": function_ids,
+        "function_id": function_ids,
+        "validationFunctionId": function_ids,
+        "validation_function_id": function_ids,
     }
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            mapping = mappings.get(key)
+            if mapping and isinstance(child, str) and child:
+                result[key] = mapping[child]
+            elif key in {"referenceType", "reference_type"} and isinstance(child, str) and child in object_ids:
+                result[key] = object_ids[child]
+            elif key == "dataBinding":
+                # Dataset/mapping lineage belongs to the source environment and
+                # is intentionally outside the structure-only package.
+                continue
+            else:
+                result[key] = _remap_nested(
+                    child,
+                    object_ids=object_ids,
+                    link_ids=link_ids,
+                    action_ids=action_ids,
+                    function_ids=function_ids,
+                )
+        return result
+    if isinstance(value, list):
+        return [
+            _remap_nested(
+                child,
+                object_ids=object_ids,
+                link_ids=link_ids,
+                action_ids=action_ids,
+                function_ids=function_ids,
+            )
+            for child in value
+        ]
+    return value
 
 
-def _h(text: str | None) -> str:
-    return html.escape(text or "", quote=True)
+def _snapshot_formal(db: Session, ontology_id: str) -> dict:
+    def items(model):
+        return db.query(model).filter(model.ontology_id == ontology_id).all()
 
-
-def _safe_uri_token(value: str) -> str:
-    return re.sub(r"[^\w]", "_", value or "unknown")
-
-
-def _ontology_payload(data: dict) -> dict:
-    p = data["project"]
-    emap = _entity_map(data["entities"])
     return {
-        "ontology": {"id": p.id, "name": p.name, "domain": p.domain, "version": p.version},
-        "entities": [
-            {
-                "id": e.id,
-                "name_cn": e.name_cn,
-                "name_abbr": e.name_abbr,
-                "name_en": e.name_en,
-                "type": e.type,
-                "description": e.description,
-                "confidence": e.confidence,
-            }
-            for e in data["entities"]
+        "objectTypes": [
+            formal_schemas.ObjectTypeOut.model_validate(item).model_dump(mode="json", by_alias=True)
+            for item in items(ObjectType)
         ],
-        "relations": [_relation_row(r, emap) for r in data["relations"]],
-        "logic_rules": [
-            {
-                "id": r.id,
-                "name_cn": r.name_cn,
-                "formula": r.formula,
-                "confidence": r.confidence,
-            }
-            for r in data["logic_rules"]
+        "linkTypes": [
+            formal_schemas.LinkTypeOut.model_validate(item).model_dump(mode="json", by_alias=True)
+            for item in items(LinkType)
         ],
         "actions": [
-            {"id": a.id, "name_cn": a.name_cn, "execution_rule": a.execution_rule}
-            for a in data["actions"]
+            formal_schemas.ActionTypeOut.model_validate(item).model_dump(mode="json", by_alias=True)
+            for item in items(ActionType)
         ],
+        "functions": [
+            formal_schemas.FunctionOut.model_validate(item).model_dump(mode="json", by_alias=True)
+            for item in items(OntologyFunction)
+        ],
+        "sentinels": [],
+        "mappings": [],
+        "linkMappings": [],
     }
 
 
-def export_json(db: Session, ontology_id: str) -> str:
-    data = _collect_data(db, ontology_id)
-    return json.dumps(_ontology_payload(data), ensure_ascii=False, indent=2)
+def import_structure_package(
+    db: Session,
+    package: OntologyStructurePackage,
+    *,
+    current_user: Any,
+) -> dict:
+    """Import a validated package and atomically create its published v0 baseline."""
 
+    _validate_import_package(package)
+    structure = package.structure
+    ontology_id = _new_id()
+    project_name = _unique_project_name(db, package.ontology.name)
+    lineage = {
+        "kind": "local_import",
+        "sourceOntologyId": package.ontology.id,
+        "sourceVersion": package.ontology.source_version,
+        "exportedAt": package.exported_at.isoformat(),
+    }
 
-def export_yaml(db: Session, ontology_id: str) -> str:
-    data = json.loads(export_json(db, ontology_id))
-    return yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    object_ids = {item.id: _new_id() for item in structure.object_types}
+    link_ids = {item.id: _new_id() for item in structure.link_types}
+    action_ids = {item.id: _new_id() for item in structure.actions}
+    function_ids = {item.id: _new_id() for item in structure.functions}
 
+    def remapped_data(item: Any) -> dict:
+        raw = item.model_dump(exclude={"id"}, exclude_none=False)
+        return _remap_nested(
+            copy.deepcopy(raw),
+            object_ids=object_ids,
+            link_ids=link_ids,
+            action_ids=action_ids,
+            function_ids=function_ids,
+        )
 
-def export_csv(db: Session, ontology_id: str) -> str:
-    data = _collect_data(db, ontology_id)
-    emap = _entity_map(data["entities"])
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow([
-        "record_type",
-        "id",
-        "name_cn",
-        "name_en",
-        "description",
-        "confidence",
-        "source_cn",
-        "target_cn",
-        "relation_type",
-    ])
-    for e in data["entities"]:
-        w.writerow(["entity", e.id, e.name_cn, e.name_en or "", e.description or "", e.confidence, "", "", ""])
-    for rel in data["relations"]:
-        row = _relation_row(rel, emap)
-        w.writerow([
-            "relation",
-            row["id"],
-            "",
-            "",
-            f"{row['source_cn']} -> {row['target_cn']}",
-            row["confidence"],
-            row["source_cn"],
-            row["target_cn"],
-            row["type"],
-        ])
-    for r in data["logic_rules"]:
-        w.writerow(["logic_rule", r.id, r.name_cn, r.name_en or "", r.description or "", r.confidence, "", "", ""])
-    for a in data["actions"]:
-        w.writerow(["action", a.id, a.name_cn, a.name_en or "", a.description or "", a.confidence, "", "", ""])
-    return out.getvalue()
+    try:
+        project = OntologyProject(
+            id=ontology_id,
+            name=project_name,
+            domain=package.ontology.domain,
+            description=package.ontology.description,
+            icon=package.ontology.icon or "network",
+            version="v0",
+            status="published",
+            build_mode="manual",
+            created_by=current_user.id,
+        )
+        db.add(project)
+        db.flush()
 
+        for item in structure.object_types:
+            db.add(ObjectType(
+                id=object_ids[item.id],
+                ontology_id=ontology_id,
+                source=lineage,
+                **remapped_data(item),
+            ))
+        for item in structure.functions:
+            db.add(OntologyFunction(
+                id=function_ids[item.id],
+                ontology_id=ontology_id,
+                source=lineage,
+                **remapped_data(item),
+            ))
+        for item in structure.actions:
+            db.add(ActionType(
+                id=action_ids[item.id],
+                ontology_id=ontology_id,
+                source=lineage,
+                **remapped_data(item),
+            ))
+        for item in structure.link_types:
+            db.add(LinkType(
+                id=link_ids[item.id],
+                ontology_id=ontology_id,
+                source=lineage,
+                **remapped_data(item),
+            ))
+        db.flush()
 
-def export_ttl(db: Session, ontology_id: str) -> str:
-    from rdflib import Graph, Literal, Namespace, RDF, OWL, RDFS
-
-    data = _collect_data(db, ontology_id)
-    p = data["project"]
-    emap = _entity_map(data["entities"])
-    g = Graph()
-    NS = Namespace(f"http://ontoprompt.local/ontologies/{ontology_id}#")
-    g.bind("onto", NS)
-    g.bind("owl", OWL)
-
-    g.add((NS[_safe_uri_token(p.name)], RDF.type, OWL.Ontology))
-
-    entity_uris: dict[str, object] = {}
-    for e in data["entities"]:
-        uri = NS[f"entity_{_safe_uri_token(e.id)}"]
-        entity_uris[e.id] = uri
-        g.add((uri, RDF.type, OWL.Class))
-        g.add((uri, RDFS.label, Literal(e.name_cn, lang="zh")))
-        if e.name_en:
-            g.add((uri, RDFS.label, Literal(e.name_en, lang="en")))
-        if e.description:
-            g.add((uri, RDFS.comment, Literal(e.description)))
-
-    prop_uris: dict[str, object] = {}
-    for rel in data["relations"]:
-        prop_key = _safe_uri_token(rel.type)
-        if prop_key not in prop_uris:
-            prop_uri = NS[f"rel_{prop_key}"]
-            prop_uris[prop_key] = prop_uri
-            g.add((prop_uri, RDF.type, OWL.ObjectProperty))
-            g.add((prop_uri, RDFS.label, Literal(rel.type)))
-        src_uri = entity_uris.get(rel.source_entity)
-        tgt_uri = entity_uris.get(rel.target_entity)
-        if src_uri and tgt_uri:
-            g.add((src_uri, prop_uris[prop_key], tgt_uri))
-
-    return g.serialize(format="turtle")
-
-
-def export_neo4j_cypher(db: Session, ontology_id: str) -> str:
-    data = _collect_data(db, ontology_id)
-    p = data["project"]
-    lines: list[str] = []
-
-    lines.append(f"// Neo4j Cypher — {p.name} (domain: {p.domain}, version: {p.version})")
-    lines.append("// Generated by nano-ontoprompt")
-    lines.append("")
-
-    lines.append("// ── Nodes ──────────────────────────────────────────────────────────────")
-    for e in data["entities"]:
-        label = re.sub(r"[^\w]", "_", e.type or "Entity")
-        props: dict = {
-            "id": e.id,
-            "name_cn": e.name_cn or "",
-            "name_en": e.name_en or "",
-            "confidence": e.confidence,
+        formal_snapshot = _snapshot_formal(db, ontology_id)
+        counts = {
+            "objectTypes": len(structure.object_types),
+            "linkTypes": len(structure.link_types),
+            "actions": len(structure.actions),
+            "functions": len(structure.functions),
         }
-        if e.name_abbr:
-            props["name_abbr"] = e.name_abbr
-        if e.description:
-            props["description"] = e.description
-        if e.properties:
-            props.update(e.properties)
-        props_str = _cypher_props(props)
-        lines.append(f"MERGE (n:{label} {{id: {_cypher_val(e.id)}}})")
-        lines.append(f"  SET n += {props_str};")
-
-    lines.append("")
-    lines.append("// ── Relationships ───────────────────────────────────────────────────────")
-    for rel in data["relations"]:
-        rel_type = re.sub(r"[^\w]", "_", rel.type or "RELATED_TO").upper()
-        props: dict = {"confidence": rel.confidence}
-        if rel.properties:
-            props.update(rel.properties)
-        props_str = _cypher_props(props)
-        lines.append(f"MATCH (a {{id: {_cypher_val(rel.source_entity)}}}), (b {{id: {_cypher_val(rel.target_entity)}}})")
-        lines.append(f"MERGE (a)-[r:{rel_type}]->(b)")
-        lines.append(f"  SET r += {props_str};")
-
-    return "\n".join(lines) + "\n"
-
-
-def _cypher_str(s: str) -> str:
-    escaped = (
-        s.replace("\\", "\\\\")
-         .replace("'", "\\'")
-         .replace("\n", "\\n")
-         .replace("\r", "\\r")
-         .replace("\t", "\\t")
-    )
-    return f"'{escaped}'"
-
-
-def _cypher_val(v) -> str:
-    if isinstance(v, str):
-        return _cypher_str(v)
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return str(v)
-    if v is None:
-        return "null"
-    if isinstance(v, list):
-        return "[" + ", ".join(_cypher_val(item) for item in v) + "]"
-    if isinstance(v, dict):
-        return _cypher_props(v)
-    # fallback: stringify and escape as a string
-    return _cypher_str(str(v))
-
-
-_CYPHER_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _cypher_key(k: str) -> str:
-    """Backtick-quote property keys that are not plain ASCII identifiers."""
-    if _CYPHER_IDENT_RE.match(k):
-        return k
-    return "`" + k.replace("`", "``") + "`"
-
-
-def _cypher_props(props: dict) -> str:
-    pairs = ", ".join(f"{_cypher_key(k)}: {_cypher_val(v)}" for k, v in props.items())
-    return "{" + pairs + "}"
-
-
-# ── TuGraph bulk-import ───────────────────────────────────────────────────────
-# Output: ZIP containing import.json + one CSV per vertex label + one CSV per
-# edge type.  Load with: lgraph_import -c import.json --dir /path/to/db
-
-_TG_VERTEX_COLS = ["id", "name_cn", "name_en", "name_abbr", "description", "confidence"]
-_TG_EDGE_COLS   = ["SRC_ID", "DST_ID", "confidence"]
-
-_TG_PROP_DEFS = [
-    {"name": "id",          "type": "STRING"},
-    {"name": "name_cn",     "type": "STRING"},
-    {"name": "name_en",     "type": "STRING"},
-    {"name": "name_abbr",   "type": "STRING"},
-    {"name": "description", "type": "STRING"},
-    {"name": "confidence",  "type": "DOUBLE"},
-]
-_TG_EDGE_PROP_DEFS = [{"name": "confidence", "type": "DOUBLE"}]
-
-
-def export_tugraph_zip(db: Session, ontology_id: str) -> bytes:
-    data = _collect_data(db, ontology_id)
-    emap = _entity_map(data["entities"])
-
-    # Group entities by label (entity.type, normalised)
-    by_label: dict[str, list[Entity]] = {}
-    for e in data["entities"]:
-        label = re.sub(r"[^\w]", "_", e.type or "Entity")
-        by_label.setdefault(label, []).append(e)
-
-    # Group relations by type (normalised to upper)
-    by_rel: dict[str, list] = {}
-    for rel in data["relations"]:
-        rtype = re.sub(r"[^\w]", "_", rel.type or "RELATED_TO").upper()
-        by_rel.setdefault(rtype, []).append(rel)
-
-    schema_vertices = [
-        {
-            "label": label,
-            "type": "VERTEX",
-            "primary": "id",
-            "properties": _TG_PROP_DEFS,
+        total = sum(counts.values())
+        formal_diff = {
+            key: {"added": value, "modified": 0, "deleted": 0}
+            for key, value in counts.items()
         }
-        for label in sorted(by_label)
-    ]
-
-    schema_edges = [
-        {
-            "label": rtype,
-            "type": "EDGE",
-            "properties": _TG_EDGE_PROP_DEFS,
-        }
-        for rtype in sorted(by_rel)
-    ]
-
-    file_entries = []
-
-    # Vertex file entries
-    for label in sorted(by_label):
-        file_entries.append({
-            "path": f"vertex_{label}.csv",
-            "format": "CSV",
-            "label": label,
-            "header": 1,
-            "columns": _TG_VERTEX_COLS,
+        formal_diff.update({
+            "sentinels": {"added": 0, "modified": 0, "deleted": 0},
+            "mappings": {"added": 0, "modified": 0, "deleted": 0},
+            "linkMappings": {"added": 0, "modified": 0, "deleted": 0},
+            "total": {"added": total, "modified": 0, "deleted": 0},
         })
 
-    # Edge file entries — TuGraph needs SRC_ID/DST_ID to know which vertex
-    # label each endpoint belongs to.  Since we may have edges between
-    # different vertex labels, use a catch-all approach: declare the first
-    # observed (src_label, dst_label) pair per edge type.
-    edge_label_pairs: dict[str, tuple[str, str]] = {}
-    for rtype in sorted(by_rel):
-        for rel in by_rel[rtype]:
-            src = emap.get(rel.source_entity)
-            tgt = emap.get(rel.target_entity)
-            if src and tgt:
-                src_label = re.sub(r"[^\w]", "_", src.type or "Entity")
-                tgt_label = re.sub(r"[^\w]", "_", tgt.type or "Entity")
-                edge_label_pairs[rtype] = (src_label, tgt_label)
-                break
+        version_id = _new_id()
+        published_at = datetime.now(timezone.utc)
+        version = OntologyVersion(
+            id=version_id,
+            ontology_id=ontology_id,
+            version_number="v0",
+            version_label="本地导入基线",
+            description=(
+                f"从本地 JSON 导入"
+                f"（源版本 {package.ontology.source_version or '未知'}）"
+            ),
+            base_release_id=version_id,
+            node_kind="release",
+            lifecycle_status="released",
+            revision=0,
+            snapshot_entities=[],
+            snapshot_relations=[],
+            snapshot_logic=[],
+            snapshot_actions=[],
+            snapshot_formal=formal_snapshot,
+            snapshot_hash=snapshot_hash(formal_snapshot),
+            published_at=published_at,
+            change_summary={
+                "added": 0,
+                "modified": 0,
+                "deleted": 0,
+                "formal": formal_diff,
+            },
+            created_by=current_user.id,
+        )
+        db.add(version)
+        db.flush()
+        project.current_release_id = version.id
+        db.add(AuditLog(
+            id=_new_id(),
+            ontology_id=ontology_id,
+            event_type="import",
+            event_subtype="local_json_v0",
+            user_id=current_user.id,
+            user_name=getattr(current_user, "username", None),
+            description=f"从本地 JSON 导入本体并创建发布版本 v0",
+            object_type="ontology_version",
+            object_id=version.id,
+            meta={
+                "version_number": "v0",
+                "source_ontology_id": package.ontology.id,
+                "source_version": package.ontology.source_version,
+                "counts": counts,
+            },
+        ))
+        db.commit()
+        db.refresh(project)
+    except Exception:
+        db.rollback()
+        raise
 
-    for rtype in sorted(by_rel):
-        src_label, tgt_label = edge_label_pairs.get(rtype, ("Entity", "Entity"))
-        file_entries.append({
-            "path": f"edge_{rtype}.csv",
-            "format": "CSV",
-            "label": rtype,
-            "SRC_ID": src_label,
-            "DST_ID": tgt_label,
-            "header": 1,
-            "columns": _TG_EDGE_COLS,
-        })
-
-    import_json = json.dumps(
-        {"schema": schema_vertices + schema_edges, "files": file_entries},
-        ensure_ascii=False,
-        indent=2,
-    )
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("import.json", import_json)
-
-        for label, entities in sorted(by_label.items()):
-            csv_buf = io.StringIO()
-            w = csv.writer(csv_buf)
-            w.writerow(_TG_VERTEX_COLS)
-            for e in entities:
-                w.writerow([
-                    e.id,
-                    e.name_cn or "",
-                    e.name_en or "",
-                    e.name_abbr or "",
-                    e.description or "",
-                    e.confidence,
-                ])
-            zf.writestr(f"vertex_{label}.csv", csv_buf.getvalue())
-
-        for rtype, rels in sorted(by_rel.items()):
-            csv_buf = io.StringIO()
-            w = csv.writer(csv_buf)
-            w.writerow(_TG_EDGE_COLS)
-            for rel in rels:
-                w.writerow([rel.source_entity, rel.target_entity, rel.confidence])
-            zf.writestr(f"edge_{rtype}.csv", csv_buf.getvalue())
-
-    return buf.getvalue()
-
-
-def export_html(db: Session, ontology_id: str) -> str:
-    data = _collect_data(db, ontology_id)
-    p = data["project"]
-    emap = _entity_map(data["entities"])
-
-    entity_rows = "".join(
-        f"<tr><td>{_h(_entity_label(e, 'cn'))}</td>"
-        f"<td>{_h(_entity_label(e, 'en'))}</td>"
-        f"<td>{_h(e.type)}</td><td>{e.confidence}</td></tr>"
-        for e in data["entities"]
-    )
-
-    relation_rows = "".join(
-        f"<tr><td>{_h(row['source_cn'])}</td>"
-        f"<td>{_h(row['target_cn'])}</td>"
-        f"<td>{_h(row['type'])}</td><td>{row['confidence']}</td></tr>"
-        for row in (_relation_row(r, emap) for r in data["relations"])
-    )
-
-    logic_rows = "".join(
-        f"<tr><td>{_h(r.name_cn)}</td><td>{_h(r.name_en)}</td>"
-        f"<td>{_h(r.formula)}</td><td>{r.confidence}</td></tr>"
-        for r in data["logic_rules"]
-    )
-
-    action_rows = "".join(
-        f"<tr><td>{_h(a.name_cn)}</td><td>{_h(a.name_en)}</td>"
-        f"<td>{_h(a.execution_rule)}</td><td>{a.confidence}</td></tr>"
-        for a in data["actions"]
-    )
-
-    n_ent = len(data["entities"])
-    n_rel = len(data["relations"])
-
-    sections = f"""
-<h2>实体 <span class="count">({n_ent})</span></h2>
-<table>
-<thead><tr><th>中文名</th><th>英文名</th><th>类型</th><th>置信度</th></tr></thead>
-<tbody>{entity_rows or '<tr><td colspan="4">无</td></tr>'}</tbody>
-</table>
-
-<h2>关系 <span class="count">({n_rel})</span></h2>
-<table>
-<thead><tr><th>源实体</th><th>目标实体</th><th>关系类型</th><th>置信度</th></tr></thead>
-<tbody>{relation_rows or '<tr><td colspan="4">无</td></tr>'}</tbody>
-</table>
-"""
-
-    if data["logic_rules"]:
-        sections += f"""
-<h2>逻辑规则 <span class="count">({len(data['logic_rules'])})</span></h2>
-<table>
-<thead><tr><th>中文名</th><th>英文名</th><th>公式</th><th>置信度</th></tr></thead>
-<tbody>{logic_rows}</tbody>
-</table>
-"""
-
-    if data["actions"]:
-        sections += f"""
-<h2>动作 <span class="count">({len(data['actions'])})</span></h2>
-<table>
-<thead><tr><th>中文名</th><th>英文名</th><th>执行规则</th><th>置信度</th></tr></thead>
-<tbody>{action_rows}</tbody>
-</table>
-"""
-
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{_h(p.name)}</title>
-<style>
-body{{font-family:sans-serif;padding:2rem;max-width:1200px;margin:0 auto}}
-h1{{margin-bottom:.25rem}} .meta{{color:#666;margin-bottom:2rem}}
-h2{{margin-top:2rem;border-bottom:1px solid #eee;padding-bottom:.5rem}}
-.count{{font-size:.85rem;color:#888;font-weight:normal}}
-table{{border-collapse:collapse;width:100%;margin-bottom:1rem}}
-th,td{{border:1px solid #ddd;padding:8px;text-align:left}}
-th{{background:#f5f5f5}}
-</style></head>
-<body>
-<h1>{_h(p.name)}</h1>
-<p class="meta">Domain: {_h(p.domain)} | Version: {_h(p.version)} | Entities: {n_ent} | Relations: {n_rel}</p>
-{sections}
-</body></html>"""
+    return {
+        "ontology": {
+            "id": project.id,
+            "name": project.name,
+            "domain": project.domain,
+            "description": project.description,
+            "icon": project.icon,
+            "version": project.version,
+            "current_release_id": project.current_release_id,
+            "current_release_version": version.version_number,
+            "status": project.status,
+            "created_by": project.created_by,
+            "created_at": project.created_at.isoformat(),
+            "updated_at": project.updated_at.isoformat(),
+        },
+        "version": {
+            "id": version.id,
+            "version_number": version.version_number,
+            "version_label": version.version_label,
+            "node_kind": version.node_kind,
+            "lifecycle_status": version.lifecycle_status,
+            "snapshot_hash": version.snapshot_hash,
+            "published_at": version.published_at.isoformat(),
+        },
+        "counts": counts,
+    }

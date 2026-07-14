@@ -14,7 +14,7 @@ import VersionsTab from './tabs/VersionsTab'
 import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
 import {
-  History, Download, Loader2, X,
+  History, Download, Loader2,
 } from 'lucide-react'
 
 /* ═════════════════════════════════════════════════════════════
@@ -49,9 +49,8 @@ export default function OntologyDetailPage() {
   const activeGroup = GROUPS.some(group => group.key === requestedTab) ? requestedTab! : 'overview'
   const groupTabsRef = useRef<HTMLDivElement>(null)
   const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
-  const [exportOpen, setExportOpen] = useState(false)
-  const [exportingFormat, setExportingFormat] = useState<string | null>(null)
-  const [exportError, setExportError] = useState<string | null>(null)
+  const [isExporting, setIsExporting] = useState(false)
+  const [exportFeedback, setExportFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [showVersionModal, setShowVersionModal] = useState(false)
 
   useEffect(() => {
@@ -62,30 +61,41 @@ export default function OntologyDetailPage() {
     setShowVersionModal(false)
     if (requestedTab === 'versions') setSearchParams({}, { replace: true })
   }
-
-  const handleExport = async (format: string) => {
-    setExportError(null)
-    setExportingFormat(format)
-    try {
-      await ontologyApi.exportOntology(id!, format)
-    } catch (error: unknown) {
-      const candidate = typeof error === 'object' && error !== null
-        ? error as { detail?: unknown; message?: unknown }
-        : null
-      setExportError(
-        typeof candidate?.detail === 'string' ? candidate.detail
-          : typeof candidate?.message === 'string' ? candidate.message : '导出失败',
-      )
-    } finally {
-      setExportingFormat(null)
-    }
-  }
-
   const { data: ontology, isLoading } = useQuery<OntologyDetail>({
     queryKey: ['ontology', id],
     queryFn: () => ontologyApi.get(id!),
     enabled: !!id,
   })
+
+  const handleExport = async () => {
+    if (!id || !ontology || isExporting) return
+    setExportFeedback(null)
+    setIsExporting(true)
+    try {
+      await ontologyApi.exportOntology(id, ontology.name, ontology.version)
+      setExportFeedback({ tone: 'success', message: '本体结构 JSON 已下载' })
+    } catch (error: unknown) {
+      const candidate = typeof error === 'object' && error !== null
+        ? error as { detail?: unknown; message?: unknown }
+        : null
+      const detail = candidate?.detail
+      setExportFeedback({
+        tone: 'error',
+        message: typeof detail === 'string' ? detail
+          : detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+            ? detail.message
+            : typeof candidate?.message === 'string' ? candidate.message : '导出失败，请稍后重试',
+      })
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  useEffect(() => {
+    if (exportFeedback?.tone !== 'success') return
+    const timer = window.setTimeout(() => setExportFeedback(null), 3000)
+    return () => window.clearTimeout(timer)
+  }, [exportFeedback])
 
   useEffect(() => {
     const container = groupTabsRef.current
@@ -151,15 +161,31 @@ export default function OntologyDetailPage() {
           </button>
           <button
             type="button"
-            onClick={() => setExportOpen(true)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-            title="导出本体结构"
-            aria-label="导出本体结构"
+            onClick={() => void handleExport()}
+            disabled={isExporting}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-wait disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+            title={isExporting ? '正在导出 JSON' : '导出本体结构 JSON'}
+            aria-label={isExporting ? '正在导出本体结构 JSON' : '导出本体结构 JSON'}
+            aria-busy={isExporting}
           >
-            <Download size={18} />
+            {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
           </button>
         </div>
       </div>
+
+      {exportFeedback && (
+        <div
+          role={exportFeedback.tone === 'error' ? 'alert' : 'status'}
+          aria-live="polite"
+          className={`rounded-xl border px-4 py-2.5 text-sm ${
+            exportFeedback.tone === 'error'
+              ? 'border-red-200 bg-red-50 text-red-700'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          }`}
+        >
+          {exportFeedback.message}
+        </div>
+      )}
 
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (
@@ -181,57 +207,6 @@ export default function OntologyDetailPage() {
       ) : (
         <div className="onto-glass-card onto-glass-in p-4">
           <GovernanceTab ontologyId={id!} />
-        </div>
-      )}
-
-      {/* ═══ 导出本体结构弹窗 ═══ */}
-      {exportOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-[var(--color-bg-overlay)]" onClick={() => { setExportOpen(false); setExportError(null) }} />
-          <div className="onto-glass-card relative w-full max-w-lg mx-4 p-6 z-10">
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <h3 className="text-base font-semibold" style={{ color: 'var(--color-text-primary)' }}>导出本体结构</h3>
-                <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>选择格式下载 {ontology.name} 的结构数据</p>
-              </div>
-              <button
-                onClick={() => { setExportOpen(false); setExportError(null) }}
-                className="onto-glass-btn p-1.5"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            {exportError && (
-              <p className="text-sm text-red-500 mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200">{exportError}</p>
-            )}
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              {[
-                { fmt: 'json', label: 'JSON', desc: '结构化数据交换' },
-                { fmt: 'yaml', label: 'YAML', desc: '可读配置文件' },
-                { fmt: 'csv', label: 'CSV', desc: '表格数据导入' },
-                { fmt: 'ttl', label: 'TTL', desc: 'RDF 语义网' },
-                { fmt: 'html', label: 'HTML', desc: '网页可视化' },
-                { fmt: 'cypher', label: 'CYPHER', desc: 'Neo4j 图查询' },
-                { fmt: 'tugraph', label: 'TUGRAPH', desc: 'TuGraph 图数据库' },
-              ].map(({ fmt, label, desc }) => (
-                <button
-                  key={fmt}
-                  disabled={exportingFormat !== null}
-                  onClick={() => handleExport(fmt)}
-                  className="flex flex-col items-center gap-1.5 px-3 py-3 rounded-xl border border-[var(--color-border)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-light)] transition-all duration-200 disabled:opacity-50"
-                >
-                  {exportingFormat === fmt ? (
-                    <Loader2 size={18} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
-                  ) : (
-                    <span className="text-xs font-mono font-semibold" style={{ color: 'var(--color-primary)' }}>{label}</span>
-                  )}
-                  <span className="text-[10px] leading-tight text-center" style={{ color: 'var(--color-text-tertiary)' }}>{desc}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       )}
 

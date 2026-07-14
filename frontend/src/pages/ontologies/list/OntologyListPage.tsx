@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { domainApi, ontologyApi } from '@/api/ontologies'
@@ -17,6 +17,7 @@ import {
   GraduationCap,
   HeartPulse,
   Landmark,
+  Loader2,
   Network,
   Pencil,
   Plus,
@@ -25,6 +26,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Trash2,
+  Upload,
   Users,
   X,
   Zap,
@@ -77,6 +79,10 @@ function errorMessage(error: unknown, fallback: string) {
   if (!error || typeof error !== 'object') return fallback
   const candidate = error as { detail?: unknown; message?: unknown }
   if (typeof candidate.detail === 'string') return candidate.detail
+  if (Array.isArray(candidate.detail)) {
+    const first = candidate.detail[0] as { msg?: unknown } | undefined
+    if (typeof first?.msg === 'string') return `导入文件格式不正确：${first.msg}`
+  }
   if (candidate.detail && typeof candidate.detail === 'object') {
     const detail = candidate.detail as { message?: unknown }
     if (typeof detail.message === 'string') return detail.message
@@ -390,6 +396,8 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const [createOpen, setCreateOpen] = useState(defaultCreateOpen)
   const [editTarget, setEditTarget] = useState<OntologyListItem | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<OntologyListItem | null>(null)
+  const [importError, setImportError] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
@@ -451,6 +459,45 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       setDeleteTarget(null)
     },
   })
+  const importMutation = useMutation({
+    mutationFn: (body: unknown) => ontologyApi.importStructure(body),
+    onSuccess: result => {
+      refresh()
+      setImportError('')
+      navigate(`/ontologies/${result.ontology.id}`)
+    },
+  })
+
+  const handleImportFile = async (file?: File) => {
+    if (!file) return
+    setImportError('')
+    if (!file.name.toLocaleLowerCase().endsWith('.json')) {
+      setImportError('请选择 JSON 格式的本体结构文件。')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setImportError('导入文件不能超过 5 MB。')
+      return
+    }
+    try {
+      const text = await file.text()
+      let body: unknown
+      try {
+        body = JSON.parse(text)
+      } catch {
+        setImportError('文件不是有效的 JSON，请重新选择本体结构导出文件。')
+        return
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new Error('文件根节点必须是 JSON 对象')
+      }
+      await importMutation.mutateAsync(body)
+    } catch (error: unknown) {
+      setImportError(errorMessage(error, '导入失败，请确认文件来自本体结构 JSON 导出。'))
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
 
   const openCreate = () => setCreateOpen(true)
   const closeCreate = () => {
@@ -502,10 +549,37 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         <button
           type="button"
           onClick={openCreate}
-          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-opacity hover:opacity-90"
+          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
         >
-          <Plus size={15} /> 新建本体
+          <Plus size={15} /> 立即创建
         </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="sr-only"
+          aria-label="选择本体结构 JSON 文件"
+          onChange={event => void handleImportFile(event.target.files?.[0])}
+        />
+        <button
+          type="button"
+          disabled={importMutation.isPending}
+          onClick={() => {
+            setImportError('')
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            fileInputRef.current?.click()
+          }}
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-4 text-sm font-medium text-teal-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-300 hover:bg-teal-50 active:translate-y-0 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          aria-busy={importMutation.isPending}
+        >
+          {importMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+          {importMutation.isPending ? '正在导入' : '本地导入'}
+        </button>
+        {importError && (
+          <div role="alert" className="basis-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {importError}
+          </div>
+        )}
       </section>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

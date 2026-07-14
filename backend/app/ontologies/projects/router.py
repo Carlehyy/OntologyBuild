@@ -10,6 +10,8 @@ from app.models.domain import Domain
 from app.models.ontology_version import OntologyVersion
 from app.ontologies.versions.evolution_service import complete_snapshot, snapshot_hash
 from app.ontologies.access import require_ontology_access
+from app.ontologies.export.schemas import OntologyStructurePackage
+from app.ontologies.export.service import import_structure_package
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
 import uuid
 
@@ -106,6 +108,19 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
     project.current_release_id = root.id
     db.commit(); db.refresh(project)
     return {"data": _project_payload(project, OntologyOut, root)}
+
+
+@router.post("/import", status_code=201)
+def import_ontology_structure(
+    body: OntologyStructurePackage,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a published v0 ontology from a local structure JSON package."""
+    if getattr(current_user, "role", "") not in ("admin", "editor"):
+        raise HTTPException(403, "Viewer role is read-only")
+    _validate_domain(db, body.ontology.domain)
+    return {"data": import_structure_package(db, body, current_user=current_user)}
 
 @router.get("/{ontology_id}")
 def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
