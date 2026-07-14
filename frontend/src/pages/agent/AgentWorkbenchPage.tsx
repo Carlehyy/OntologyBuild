@@ -1170,6 +1170,8 @@ export default function AgentWorkbenchPage() {
                     setRefreshMsg('本体数据已刷新')
                     setTimeout(() => setRefreshMsg(''), 2000)
                   }}
+                  title="查询最新本体结构"
+                  aria-label="查询最新本体结构"
                   className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
                 >
                   <RefreshCw size={14} className={graphLoading ? 'animate-spin' : ''} />
