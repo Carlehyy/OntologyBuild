@@ -321,6 +321,7 @@ def test_normalize_definitions_backfills_source_key_and_maps_legacy_types():
     assert [d["source_key"] for d in defs] == ["order_id", "created", "ok"]
     assert [d["field_type"] for d in defs] == ["integer", "timestamp", "boolean"]
     assert defs[0]["field_name"] == "order_id"  # 缺省显示名回退列名
+    assert defs[0]["nullable"] is False  # 主键列即使传入/缺省允许空也必须强制非空
     assert defs[2]["nullable"] is False
 
 

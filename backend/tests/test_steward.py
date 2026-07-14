@@ -1008,11 +1008,16 @@ def test_shadow_pipeline_guards(pipelines_client, client, auth_headers, db, fake
     pid = draft_record.pipeline_id
     assert _publish(client, auth_headers, pid).status_code == 200
 
-    # 发布后身份与契约全部封版，不再回同步管家记录。
-    r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"name": "改名"})
-    assert r.status_code == 409
+    # 发布后名称/描述仍可维护，并同步回数据管家治理记录。
+    r = client.put(
+        f"/api/v2/pipelines/{pid}",
+        headers=auth_headers,
+        json={"name": "改名", "description": "更新后的说明"},
+    )
+    assert r.status_code == 200
     db.refresh(draft_record)
-    assert draft_record.name == "订单同步流水线"
+    assert draft_record.name == "改名"
+    assert draft_record.description == "更新后的说明"
     # 编排字段仍归数据管家托管
     r = client.put(f"/api/v2/pipelines/{pid}", headers=auth_headers, json={"definition": {"nodes": []}})
     assert r.status_code == 400

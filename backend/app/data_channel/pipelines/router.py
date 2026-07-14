@@ -379,14 +379,22 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
             if definitions_changed:
                 steward_service.invalidate_validation_attestation(rec)
 
-    # ── 已发布封版：所有内容字段均不可修改 ──
-    # 发布是单向版本边界，不允许通过改名/描述等看似无害的入口改变审计身份。
+    # ── 已发布封版：编排与字段契约不可修改；基础展示信息随时可维护 ──
+    # name/description 不参与执行快照，发布版本仍由 PipelineVersion 中的
+    # definition/column_definitions 保持不可变。
     if (pl.status or "") == "published" and update_data:
-        raise HTTPException(
-            409,
-            "流水线已发布并永久封版，名称、描述、字段契约与编排均不可修改。"
-            "如需调整，请新建流水线；旧版本可停用或归档。",
-        )
+        blocked = sorted(set(update_data) - {"name", "description"})
+        if blocked:
+            raise HTTPException(
+                409,
+                "流水线已发布，名称与描述仍可修改，但编排、字段契约及数据源配置已封版。"
+                f"不可修改字段：{', '.join(blocked)}。",
+            )
+
+    if "column_definitions" in update_data:
+        from app.data_channel.datasets.lake_gate import normalize_definitions
+        update_data["column_definitions"] = normalize_definitions(
+            update_data.get("column_definitions"))
 
     # ── 改名重名校验（与创建同一口径）──
     if "name" in update_data:
@@ -1317,7 +1325,10 @@ def dry_run_pipeline(
                 # 未发布的 workflow 未激活、生产 webhook 未注册——走数据管家的
                 # 试跑通道（临时激活→触发→恢复），否则向导第 2 步必失败，
                 # 未发布 n8n 永远设不了字段契约（先设契约、后发布的流程死锁）
-                rows, engine_meta = collect_test_rows(db, rec)
+                # 预览与发布凭证解耦：远端 n8n 版本若不返回 activeVersionId，
+                # 已成功产生的输出仍应展示；缺失的发布证据只在第 3 步校验时阻断发布。
+                rows, engine_meta = collect_test_rows(
+                    db, rec, require_publish_evidence=False)
                 if engine_meta.get("error"):
                     raise RuntimeError(f"n8n 执行失败：{engine_meta['error']}")
                 persist_test_result(db, rec, rows, engine_meta)
@@ -1360,6 +1371,14 @@ def dry_run_pipeline(
                          "warnings": g["warnings"], "drift": g["drift"]}
         except LakeGateError as e:
             gate_error = str(e)
+        publish_evidence_error = str(
+            engine_meta.get("publish_evidence_error") or "").strip()
+        if publish_evidence_error and not preview:
+            gate_info["warnings"] = [
+                *gate_info["warnings"],
+                "执行预览已成功，但当前 n8n 版本未能形成发布凭证："
+                f"{publish_evidence_error}",
+            ]
         if contract_defs is None and (pl.column_definitions or []):
             gate_info["warnings"] = [*gate_info["warnings"],
                                      "多产物流水线暂不应用流水线级字段契约（契约粒度=单产物）"]

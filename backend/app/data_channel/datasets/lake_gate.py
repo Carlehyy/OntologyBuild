@@ -80,13 +80,15 @@ def normalize_definitions(defs: list | None) -> list[dict]:
         source_key = str(d.get("source_key") or "").strip() or field_key
         if not source_key:
             continue
+        is_primary_key = bool(d.get("is_primary_key"))
         out.append({
             "source_key": source_key,
             "field_key": field_key or source_key,
             "field_name": str(d.get("field_name") or "").strip() or (field_key or source_key),
             "field_type": normalize_field_type(d.get("field_type")),
-            "is_primary_key": bool(d.get("is_primary_key")),
-            "nullable": bool(d.get("nullable", True)),
+            "is_primary_key": is_primary_key,
+            # 主键组中的每一列都是身份组成部分，必须全量非空。
+            "nullable": False if is_primary_key else bool(d.get("nullable", True)),
         })
     return out
 

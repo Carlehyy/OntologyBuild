@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, Sparkles, ExternalLink,
-  Eye,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
@@ -371,9 +370,9 @@ export default function PipelineListPage() {
                         <button
                           onClick={() => setEditTarget(pl)}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                          title={normStatus(pl.status) === 'published' ? '查看已发布版本' : '配置流水线：信息 / 执行预览 / 主键组 / 发布'}
+                          title={normStatus(pl.status) === 'published' ? '查看发布契约 / 编辑名称与描述' : '配置流水线：信息 / 执行预览 / 主键组 / 发布'}
                         >
-                          {normStatus(pl.status) === 'published' ? <Eye size={14} /> : <Pencil size={14} />}
+                          <Pencil size={14} />
                         </button>
                         <button
                           onClick={() => setPreviewTarget(pl)}
@@ -595,7 +594,7 @@ function PipelineCreateModal({
         <div className="flex items-center justify-between mt-4">
           <p className="text-xs text-gray-400 max-w-[60%] leading-relaxed">
             {isEdit
-              ? '草稿可修改名称和描述，发布后所有信息永久封版。'
+              ? '名称和描述始终可修改；发布后仅编排与字段契约封版。'
               : '推荐使用 n8n 流水线。系统流水线为旧版能力，仅保留兼容入口。'}
           </p>
           <div className="flex gap-3 shrink-0">

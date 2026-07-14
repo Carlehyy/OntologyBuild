@@ -382,9 +382,17 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
                 "n8n 工作流在执行预览期间发生编排变化，无法确认本次输出对应同一编排。"
                 "请确认无人同时编辑后重新执行预览。")
         workflow_evidence = None
-        if require_publish_evidence:
+        try:
+            # 即使调用方只要求查看预览，也尽可能生成后续发布所需的证据，
+            # 让标准 n8n 环境保持原有“一次预览即可继续发布”的流程。
             workflow_evidence = service.workflow_validation_evidence(
                 final_workflow, context="执行预览后")
+        except StewardError as exc:
+            if require_publish_evidence:
+                raise
+            # 某些 n8n 公共 API 版本不返回 activeVersionId。数据已经成功执行
+            # 时仍返回预览，但明确标记发布凭证不可用，由字段校验步骤继续阻断发布。
+            exec_meta["publish_evidence_error"] = str(exc)
     rec.workflow_snapshot = final_snapshot
     exec_meta["workflow_snapshot_hash"] = final_snapshot_hash
     if workflow_evidence is not None:
