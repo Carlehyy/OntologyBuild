@@ -58,7 +58,7 @@ const selectArrow = "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http:/
 
 function useAssistantLayout() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [sizes, setSizes] = useState<[number, number]>([60, 40])
+  const [sizes, setSizes] = useState<[number, number]>([40, 60])
 
   const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -67,7 +67,7 @@ function useAssistantLayout() {
 
     const startX = event.clientX
     const start = sizes
-    const min: [number, number] = [42, 28]
+    const min: [number, number] = [28, 42]
     const pairTotal = start[0] + start[1]
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
@@ -1132,7 +1132,7 @@ export default function AgentWorkbenchPage() {
       <div
         ref={containerRef}
         className="scrollbar-none grid flex-1 min-h-0 overflow-x-auto overflow-y-hidden p-1"
-        style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(420px, ${sizes[1]}fr)` }}
+        style={{ gridTemplateColumns: `minmax(420px, ${sizes[0]}fr) 4px minmax(560px, ${sizes[1]}fr)` }}
       >
         {/* 2. 本体拓扑图 */}
         <section className={`${panelClass} col-start-3 row-start-1 flex flex-col bg-white`}>
