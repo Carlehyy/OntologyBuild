@@ -616,7 +616,7 @@ def test_published_release_cannot_be_unpublished_or_reopened(
     pl = db.query(Pipeline).filter(Pipeline.id == pid).first()
     assert pl.status == "published" and pl.enabled is True
 
-    # 任何编排与内容字段修改都继续被封版保护。
+    # 编排继续受封版保护；名称与描述属于展示信息，发布后仍可维护。
     runner = ToolRunner(db, None, None)
     out = runner.run("update_workflow", {
         "record_id": draft_record.id,
@@ -630,10 +630,16 @@ def test_published_release_cannot_be_unpublished_or_reopened(
     assert "error" in out and "新建" in out["error"]
     update = client.put(
         f"/api/v2/pipelines/{pid}", headers=auth_headers,
-        json={"name": "不应成功的改名", "description": "不可改"},
+        json={"name": "发布后新名称", "description": "发布后更新的说明"},
     )
-    assert update.status_code == 409
-    assert "永久封版" in update.json()["detail"]
+    assert update.status_code == 200
+    assert update.json()["name"] == "发布后新名称"
+    assert update.json()["description"] == "发布后更新的说明"
+    db.refresh(draft_record)
+    assert draft_record.name == "发布后新名称"
+    assert draft_record.description == "发布后更新的说明"
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
+    assert len(fake_n8n.workflows[draft_record.n8n_workflow_id]["nodes"]) == 2
 
 
 def test_publish_requires_trigger(pipelines_client, client, auth_headers, db, fake_n8n):

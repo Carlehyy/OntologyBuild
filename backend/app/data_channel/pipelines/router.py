@@ -989,10 +989,18 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
         if not attestation or any(
             not attestation.get(field) for field in required_attestation_fields
         ):
+            evidence_error = str(
+                (rec.last_test_result or {}).get("publish_evidence_error") or ""
+            ).strip()
+            evidence_detail = (
+                f"最近一次执行预览未能形成发布凭证：{evidence_error}"
+                if evidence_error
+                else "当前没有可用的发布凭证"
+            )
             raise HTTPException(
                 400,
                 "n8n 流水线发布前必须先执行预览，并用该次完整输出成功校验字段定义。"
-                "当前没有可用的发布凭证，请回到向导第 2、3 步重新完成。",
+                f"{evidence_detail}，请回到向导第 2、3 步重新完成。",
             )
         if attestation["column_definitions_hash"] != _column_definitions_hash(
                 pl.column_definitions):

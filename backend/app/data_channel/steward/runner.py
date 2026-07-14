@@ -418,6 +418,9 @@ def persist_test_result(db: Session, rec: N8nPipeline, rows: list[dict], exec_me
         "sample": rows[:5],
         "output_checksum": service.canonical_json_hash(rows),
         "workflow_evidence": exec_meta.get("workflow_evidence"),
+        # 预览成功但 n8n 公共 API 缺少版本字段时保留具体原因；发布端据此
+        # 返回可操作的错误，而不是退化成笼统的“没有发布凭证”。
+        "publish_evidence_error": exec_meta.get("publish_evidence_error"),
         "at": datetime.now(timezone.utc).isoformat(),
     }
     db.commit()
