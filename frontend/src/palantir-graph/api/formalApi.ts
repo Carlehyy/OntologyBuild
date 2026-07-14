@@ -34,6 +34,12 @@ export interface FullOntologyDTO {
   revision?: string;
   /** 保存后哨兵评估摘要（仅 PUT /full 响应携带） */
   sentinelSummary?: { evaluated: number; fired: number };
+  /** runtime=当前正式投影；draft=可编辑分支；其余模式均为冻结只读快照 */
+  workspaceMode?: 'runtime' | 'draft' | 'trial' | 'release' | 'archived';
+  editable?: boolean;
+  versionId?: string | null;
+  nodeKind?: 'release' | 'draft';
+  lifecycleStatus?: 'editing' | 'trial_ready' | 'released' | 'superseded';
   objectTypes: BackendObjectType[];
   linkTypes: LinkType[];
   actions: Action[];

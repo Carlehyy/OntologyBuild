@@ -17,6 +17,8 @@ import { useOntologyStore } from '../store/ontologyStore';
 import { lintOntology, lintSummary, type LintIssue } from '../utils/schemaLint';
 
 interface HeaderProps {
+  readOnly?: boolean;
+  stageLabel?: string;
   onToggleActions?: () => void;
   onToggleFunctions?: () => void;
   showActions?: boolean;
@@ -27,7 +29,7 @@ interface HeaderProps {
   showObjects?: boolean;
 }
 
-export default function Header({ onToggleActions, onToggleFunctions, showActions, showFunctions, onToggleLinks, showLinks, onToggleObjects, showObjects }: HeaderProps) {
+export default function Header({ readOnly = false, stageLabel, onToggleActions, onToggleFunctions, showActions, showFunctions, onToggleLinks, showLinks, onToggleObjects, showObjects }: HeaderProps) {
   const { ontology, syncStatus, isDirty, syncError, saveToBackend, discardAndReload, lastSentinelSummary } = useOntologyStore();
 
   if (!ontology) return null;
@@ -57,10 +59,10 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
         </div>
 
         <div className="order-3 flex w-full items-center justify-center gap-2 overflow-x-auto pb-1 md:order-none md:w-auto md:flex-none md:overflow-visible md:pb-0 md:justify-self-center">
-          <button onClick={onToggleObjects} className="flex">
+          <button onClick={onToggleObjects} disabled={readOnly} className="flex disabled:cursor-default">
             <StatBadge icon={CubeIcon} label="对象实体" value={stats.objects} color="indigo" active={showObjects} />
           </button>
-          <button onClick={onToggleLinks} className="flex">
+          <button onClick={onToggleLinks} disabled={readOnly} className="flex disabled:cursor-default">
             <StatBadge
               icon={LinkIcon}
               label="实体关系"
@@ -69,7 +71,7 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
               active={showLinks}
             />
           </button>
-          <button onClick={onToggleActions} className="flex">
+          <button onClick={onToggleActions} disabled={readOnly} className="flex disabled:cursor-default">
             <StatBadge
               icon={BoltIcon}
               label="执行动作"
@@ -78,7 +80,7 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
               active={showActions}
             />
           </button>
-          <button onClick={onToggleFunctions} className="flex">
+          <button onClick={onToggleFunctions} disabled={readOnly} className="flex disabled:cursor-default">
             <StatBadge
               icon={CodeBracketIcon}
               label="激活函数"
@@ -90,21 +92,26 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
         </div>
 
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 text-sm text-surface-500 md:ml-0 md:justify-self-end">
-          <LintBadge />
+          {readOnly && (
+            <span className="rounded-lg border border-surface-700 bg-surface-800/70 px-2.5 py-1.5 text-xs font-medium text-surface-300">
+              {stageLabel || '只读快照'}
+            </span>
+          )}
+          <LintBadge readOnly={readOnly} />
           {syncStatus === 'saved' && lastSentinelSummary && lastSentinelSummary.fired > 0 && (
             <span className="flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-500/40 bg-rose-900/25 text-xs text-rose-300"
               title={`本次保存评估了 ${lastSentinelSummary.evaluated} 个哨兵`}>
               ⚡ 触发 {lastSentinelSummary.fired} 个哨兵
             </span>
           )}
-          <SaveButton
+          {!readOnly && <SaveButton
             syncStatus={syncStatus}
             isDirty={isDirty}
             syncError={syncError}
             onSave={() => void saveToBackend()}
             onForceSave={() => void saveToBackend({ force: true })}
             onReload={() => void discardAndReload()}
-          />
+          />}
           <ClockIcon className="hidden w-4 h-4 xl:block" />
           <span className="hidden xl:inline">更新于 {formatTime(ontology.updatedAt)}</span>
         </div>
@@ -114,7 +121,7 @@ export default function Header({ onToggleActions, onToggleFunctions, showActions
 }
 
 // Schema Lint 徽标：实时校验建模问题，点击展开问题列表，点条目跳转到对应元素
-function LintBadge() {
+function LintBadge({ readOnly = false }: { readOnly?: boolean }) {
   const ontology = useOntologyStore((s) => s.ontology);
   const { setSelectedNode, setSelectedEdge, setSelectedAction, setSelectedFunction, openPanel } = useOntologyStore();
   const [open, setOpen] = useState(false);
@@ -153,6 +160,20 @@ function LintBadge() {
   };
 
   const hasError = errors > 0;
+  if (readOnly) {
+    return (
+      <span
+        className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs ${hasError
+          ? 'border-red-500/40 bg-red-900/20 text-red-300'
+          : 'border-amber-500/40 bg-amber-900/20 text-amber-300'}`}
+        title={`模型校验：${errors} 个错误，${warnings} 个警告`}
+      >
+        <ExclamationTriangleIcon className="h-4 w-4" />
+        {errors > 0 && <span>{errors} 错误</span>}
+        {warnings > 0 && <span>{warnings} 警告</span>}
+      </span>
+    );
+  }
   return (
     <div className="relative">
       <button

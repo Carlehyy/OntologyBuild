@@ -319,11 +319,13 @@ function OntologyCard({
   item,
   onEdit,
   onDetail,
+  onView,
   onDelete,
 }: {
   item: OntologyListItem
   onEdit: () => void
   onDetail: () => void
+  onView: () => void
   onDelete: () => void
 }) {
   return (
@@ -385,10 +387,10 @@ function OntologyCard({
         </button>
         <button
           type="button"
-          onClick={onDetail}
+          onClick={onView}
           className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
         >
-          <Search size={12} /> 详情
+          <Search size={12} /> 查看
         </button>
         <span className="ml-auto whitespace-nowrap text-[10px] tabular-nums text-slate-400" title={`最近更改：${new Date(item.updated_at).toLocaleString('zh-CN')}`}>
           {formatChangedAt(item.updated_at)}
@@ -618,6 +620,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
               item={item}
               onEdit={() => setEditTarget(item)}
               onDetail={() => navigate(`/ontologies/${item.id}`)}
+              onView={() => navigate(`/ontologies/${item.id}?tab=design`)}
               onDelete={() => setDeleteTarget(item)}
             />
           ))

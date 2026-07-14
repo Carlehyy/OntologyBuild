@@ -174,6 +174,22 @@ def test_version_tree_uses_complete_snapshots_and_dependency_numbering(
     assert nested["version_number"] == "v0.1.1"
     assert sibling["version_number"] == "v0.2"
 
+    release_workspace = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{root['id']}/workspace",
+        headers=auth_headers,
+    )
+    assert release_workspace.status_code == 200, release_workspace.text
+    assert release_workspace.json()["data"]["workspaceMode"] == "release"
+    assert release_workspace.json()["data"]["editable"] is False
+
+    draft_workspace = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{nested['id']}/workspace",
+        headers=auth_headers,
+    )
+    assert draft_workspace.status_code == 200, draft_workspace.text
+    assert draft_workspace.json()["data"]["workspaceMode"] == "draft"
+    assert draft_workspace.json()["data"]["editable"] is True
+
     detail = client.get(
         f"/api/v2/ontologies/{oid}/versions/{nested['id']}",
         headers=auth_headers).json()["data"]
@@ -299,7 +315,7 @@ def test_trial_keeps_same_dataset_mappings_separate_by_endpoint_type(
     assert db.query(OntologyTrialLink).filter_by(trial_run_id=run["id"]).count() == 2
 
 
-def test_edit_after_trial_marks_run_stale_and_blocks_promotion(
+def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
         client, auth_headers, ontology, db, monkeypatch):
     oid = ontology["id"]
     _dataset(db, monkeypatch)
@@ -310,28 +326,41 @@ def test_edit_after_trial_marks_run_stale_and_blocks_promotion(
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
         headers=auth_headers, json={}).json()["data"]
-    impact = client.get(
-        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
-        headers=auth_headers).json()["data"]
-
     workspace = client.get(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
         headers=auth_headers).json()["data"]
+    assert workspace["workspaceMode"] == "trial"
+    assert workspace["editable"] is False
     workspace["baseRevision"] = workspace["revision"]
     workspace["objectTypes"][0]["displayName"] = "订单（已修改）"
-    assert client.put(
+    frozen = client.put(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
-        headers=auth_headers, json=workspace).status_code == 200
+        headers=auth_headers, json=workspace)
+    assert frozen.status_code == 409, frozen.text
+    assert frozen.json()["detail"]["code"] == "trial_snapshot_frozen"
+
+    frozen_mapping = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace/mappings",
+        headers=auth_headers, json={"baseRevision": workspace["revision"], "mappings": []})
+    assert frozen_mapping.status_code == 409, frozen_mapping.text
+    assert frozen_mapping.json()["detail"]["code"] == "trial_snapshot_frozen"
+
+    rerun = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={})
+    assert rerun.status_code == 409, rerun.text
+    assert rerun.json()["detail"]["code"] == "trial_snapshot_frozen"
 
     db.expire_all()
-    assert db.query(OntologyTrialRun).filter_by(id=run["id"]).one().status == "stale"
-    promoted = client.post(
-        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
-        headers=auth_headers,
-        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
-    )
-    assert promoted.status_code == 409
-    assert promoted.json()["detail"]["code"] == "passed_trial_required"
+    assert db.query(OntologyTrialRun).filter_by(id=run["id"]).one().status == "passed"
+
+    next_draft = _draft(client, auth_headers, oid, draft["id"])
+    assert next_draft["version_number"] == "v0.1.1"
+    next_workspace = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{next_draft['id']}/workspace",
+        headers=auth_headers).json()["data"]
+    assert next_workspace["workspaceMode"] == "draft"
+    assert next_workspace["editable"] is True
 
 
 def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(

@@ -4,7 +4,7 @@ import { apiClientV2 } from '@/api/client'
 import { Box, GitBranch, Bolt, FunctionSquare, ExternalLink, KeyRound, Cpu } from 'lucide-react'
 
 /* 模型结构（只读速览）：只展示当前发布投影。
-   修改必须先从版本树创建完整草稿，避免直接污染线上结构。 */
+   图谱编辑器默认打开当前发布版，并在用户开始修改时自动创建完整草稿。 */
 
 interface OT { id: string; name: string; displayName: string; primaryKey?: string | null
   properties: { id: string; name: string; displayName?: string; type?: string; source?: string; functionId?: string }[] }
@@ -32,10 +32,7 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">当前发布本体的只读速览。要修改请
-          <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-            className="text-violet-600 hover:underline font-medium mx-1">从版本树创建草稿</button>。
-        </p>
+        <p className="text-sm text-gray-500">这里始终展示当前最新发布版。进入图谱编辑器后，可查看正式运行结构，或基于它开始新的修改。</p>
       </div>
 
       {/* 对象实体 */}
@@ -45,7 +42,7 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
           <p className="text-sm font-medium text-gray-700">对象实体（{ots.length}）</p>
         </div>
         {ots.length === 0 ? (
-          <p className="text-xs text-gray-400 py-3 text-center">还没有对象实体——请先从版本树创建草稿，再进入结构工作区建模。</p>
+          <p className="text-xs text-gray-400 py-3 text-center">当前发布版还没有对象实体，可进入图谱编辑器开始建模。</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {ots.map(ot => {
@@ -141,9 +138,9 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
         </div>
       </div>
 
-      <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-violet-300 text-violet-600 text-sm hover:bg-violet-50 transition-colors">
-        <ExternalLink size={14} /> 打开版本树并创建修改分支
+      <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
+        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-teal-300 text-teal-700 text-sm font-medium hover:bg-teal-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2">
+        <ExternalLink size={14} /> 打开图谱编辑器修改模型
       </button>
     </div>
   )

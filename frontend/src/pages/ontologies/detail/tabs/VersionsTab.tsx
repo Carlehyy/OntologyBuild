@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Activity, AlertTriangle, CheckCircle2, ChevronRight, Database,
-  FileEdit, GitBranch, GitCommitHorizontal, Plus, Rocket, ShieldCheck,
+  Activity, AlertTriangle, CheckCircle2, Database, Eye,
+  GitBranch, GitCommitHorizontal, Plus, Rocket, ShieldCheck,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -17,6 +17,8 @@ import {
   type OntologyVersionNode as VersionNode,
 } from '@/api/v2/ontology-versions'
 
+type VersionStage = 'current' | 'release' | 'draft' | 'trial' | 'archived'
+
 function errorText(error: any) {
   const detail = error?.response?.data?.detail ?? error?.detail
   if (typeof detail === 'string') return detail
@@ -25,17 +27,43 @@ function errorText(error: any) {
   return error?.message || '操作失败'
 }
 
-function statusBadge(node: VersionNode, current: boolean) {
-  if (current) return <Badge variant="success">当前发布</Badge>
-  if (node.node_kind === 'release') return <Badge>历史发布</Badge>
-  if (node.lifecycle_status === 'superseded') return <Badge>已晋级</Badge>
-  if (node.latest_trial?.status === 'passed') return <Badge variant="success">试跑通过</Badge>
-  if (node.latest_trial?.status === 'failed') return <Badge variant="danger">试跑失败</Badge>
-  if (node.latest_trial?.status === 'stale') return <Badge variant="warning">试跑已失效</Badge>
-  return <Badge variant="warning">草稿</Badge>
+function stageOf(node: VersionNode, currentReleaseId?: string): VersionStage {
+  if (node.id === currentReleaseId) return 'current'
+  if (node.node_kind === 'release') return 'release'
+  if (node.lifecycle_status === 'superseded') return 'archived'
+  if (node.lifecycle_status === 'trial_ready' && node.latest_trial?.status === 'passed') return 'trial'
+  return 'draft'
 }
 
-export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
+const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warning' | 'danger' | 'default'; dot: string; card: string }> = {
+  current: {
+    label: '当前发布', badge: 'success', dot: 'bg-teal-500 ring-teal-100',
+    card: 'border-teal-200 bg-teal-50/55 hover:border-teal-300',
+  },
+  release: {
+    label: '历史发布', badge: 'default', dot: 'bg-slate-400 ring-slate-100',
+    card: 'border-slate-200 bg-white hover:border-slate-300',
+  },
+  draft: {
+    label: '草稿态', badge: 'warning', dot: 'bg-sky-500 ring-sky-100',
+    card: 'border-sky-200 bg-sky-50/45 hover:border-sky-300',
+  },
+  trial: {
+    label: '试跑态', badge: 'warning', dot: 'bg-amber-500 ring-amber-100',
+    card: 'border-amber-200 bg-amber-50/45 hover:border-amber-300',
+  },
+  archived: {
+    label: '已晋级', badge: 'default', dot: 'bg-violet-400 ring-violet-100',
+    card: 'border-violet-100 bg-violet-50/30 hover:border-violet-200',
+  },
+}
+
+function StageBadge({ stage }: { stage: VersionStage }) {
+  const meta = STAGE_META[stage]
+  return <Badge variant={meta.badge}>{meta.label}</Badge>
+}
+
+export default function VersionsTab({ ontologyId, onClose }: { ontologyId: string; onClose?: () => void }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [source, setSource] = useState<VersionNode | null>(null)
@@ -50,32 +78,33 @@ export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
     queryFn: () => ontologyVersionApi.tree(ontologyId),
   })
 
-  const nodes = (treeQuery.data?.versions || []) as VersionNode[]
-  const currentReleaseId = treeQuery.data?.current_release_id as string | undefined
-  const ordered = useMemo(() => {
-    const children = new Map<string | null, VersionNode[]>()
+  const nodes = treeQuery.data?.versions || []
+  const currentReleaseId = treeQuery.data?.current_release_id
+  const promotedFrom = useMemo(() => new Map(nodes.map(node => [node.id, node.version_number])), [nodes])
+  const roots = useMemo(() => {
+    const known = new Set(nodes.map(node => node.id))
+    const children = new Map<string, VersionNode[]>()
+    const rootNodes: VersionNode[] = []
     for (const node of nodes) {
-      const parent = node.parent_version_id || null
-      children.set(parent, [...(children.get(parent) || []), node])
-    }
-    const output: Array<{ node: VersionNode; depth: number }> = []
-    const visit = (parent: string | null, depth: number) => {
-      for (const node of children.get(parent) || []) {
-        output.push({ node, depth })
-        visit(node.id, depth + 1)
+      if (!node.parent_version_id || !known.has(node.parent_version_id)) {
+        rootNodes.push(node)
+        continue
       }
+      children.set(node.parent_version_id, [...(children.get(node.parent_version_id) || []), node])
     }
-    visit(null, 0)
-    // 历史迁移数据可能没有 parent；确保仍可见。
-    for (const node of nodes) if (!output.some(item => item.node.id === node.id)) output.push({ node, depth: 0 })
-    return output
+    // 发布节点优先，视觉上形成连续主干；草稿、试跑和归档节点作为侧枝展开。
+    const sort = (items: VersionNode[]) => [...items].sort((a, b) => {
+      if (a.node_kind !== b.node_kind) return a.node_kind === 'release' ? -1 : 1
+      return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+    })
+    for (const [parent, items] of children) children.set(parent, sort(items))
+    return { rootNodes: sort(rootNodes), children }
   }, [nodes])
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['version-tree', ontologyId] })
   const refreshReleasedProjection = async () => {
     const keys = [
-      ['ontologies'],
-      ['ontology', ontologyId],
+      ['ontologies'], ['ontology', ontologyId],
       ['formal-overview', ontologyId], ['recent-facts', ontologyId],
       ['ms-ot', ontologyId], ['ms-lt', ontologyId], ['ms-act', ontologyId],
       ['ms-fn', ontologyId], ['ms-inst', ontologyId],
@@ -83,26 +112,42 @@ export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
       ['formal-object-types', ontologyId], ['formal-link-types', ontologyId],
       ['mappings', ontologyId], ['link-mappings', ontologyId],
       ['mapping-object-instances', ontologyId], ['mapping-link-instances', ontologyId],
-      ['gov-sentinels', ontologyId], ['gov-autonomy', ontologyId],
-      ['gov-facts', ontologyId],
+      ['gov-sentinels', ontologyId], ['gov-autonomy', ontologyId], ['gov-facts', ontologyId],
     ]
     await Promise.all(keys.map(queryKey => qc.invalidateQueries({ queryKey })))
   }
+
+  const openVersion = (node: VersionNode) => {
+    onClose?.()
+    navigate(node.id === currentReleaseId
+      ? `/ontologies/${ontologyId}/graph`
+      : `/ontologies/${ontologyId}/graph?versionId=${node.id}`)
+  }
+
+  const openMapping = (node: VersionNode) => {
+    onClose?.()
+    navigate(`/ontologies/${ontologyId}/mapping-config?versionId=${node.id}`)
+  }
+
   const createDraft = useMutation({
     mutationFn: () => ontologyVersionApi.createDraft(
       ontologyId, source!.id, { versionLabel: label, description }),
     onSuccess: async node => {
-      await refresh(); setSource(null); setLabel(''); setDescription('')
-      setNotice({ tone: 'good', text: `${node.version_number} 已从完整快照创建。` })
+      await refresh()
+      setSource(null)
+      setLabel('')
+      setDescription('')
+      setNotice({ tone: 'good', text: `${node.version_number} 已从完整快照创建，可直接点击节点进入编辑。` })
     },
   })
 
   const runTrial = useMutation({
     mutationFn: (node: VersionNode) => ontologyVersionApi.runTrial(ontologyId, node.id),
     onSuccess: async run => {
-      await refresh(); setTrialDetail(run)
+      await refresh()
+      setTrialDetail(run)
       setNotice(run.status === 'passed'
-        ? { tone: 'good', text: '试跑通过：真实数据已在隔离空间完成验证，未执行任何外部动作。' }
+        ? { tone: 'good', text: '草稿已进入试跑态：快照冻结，真实数据仅写入隔离空间。' }
         : { tone: 'bad', text: '试跑未通过，请根据错误修正结构或映射。' })
     },
     onError: error => setNotice({ tone: 'bad', text: errorText(error) }),
@@ -119,14 +164,17 @@ export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
 
   const promote = useMutation({
     mutationFn: () => ontologyVersionApi.promote(
-      ontologyId, promotion!.node.id,
+      ontologyId,
+      promotion!.node.id,
       {
         trialRunId: promotion!.node.latest_trial!.id,
         impactHash: promotion!.impact.impactHash,
         versionLabel: promotion!.node.version_label || '',
-      }),
+      },
+    ),
     onSuccess: async release => {
-      setPromotion(null); await refresh()
+      setPromotion(null)
+      await refresh()
       await refreshReleasedProjection()
       setNotice({ tone: 'good', text: `${release.version_number} 已发布并成为唯一运行版本。` })
     },
@@ -141,86 +189,132 @@ export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
     </Card>
   )
 
+  const renderNode = (node: VersionNode, depth = 0): ReactNode => {
+    const stage = stageOf(node, currentReleaseId)
+    const meta = STAGE_META[stage]
+    const children = roots.children.get(node.id) || []
+    const editing = stage === 'draft'
+    const trial = stage === 'trial'
+    const promotedFromVersion = node.promoted_from_id ? promotedFrom.get(node.promoted_from_id) : null
+
+    return (
+      <div key={node.id} role="treeitem" aria-level={depth + 1} aria-current={stage === 'current' ? 'true' : undefined}>
+        <article
+          data-testid={`version-node-${node.version_number}`}
+          className={`group relative rounded-xl border p-3 transition-all duration-200 ${meta.card}`}
+        >
+          <span className={`absolute -left-[2.14rem] top-6 h-3 w-3 rounded-full ring-4 ${meta.dot}`} aria-hidden="true" />
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <button
+              type="button"
+              onClick={() => openVersion(node)}
+              className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+              aria-label={`打开 ${node.version_number} ${meta.label}`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {node.node_kind === 'release'
+                  ? <GitCommitHorizontal size={16} className={stage === 'current' ? 'text-teal-700' : 'text-slate-500'} />
+                  : <GitBranch size={16} className={trial ? 'text-amber-600' : 'text-sky-600'} />}
+                <span className="font-mono text-base font-semibold tabular-nums text-slate-800">{node.version_number}</span>
+                <StageBadge stage={stage} />
+                {node.version_label && <span className="truncate text-xs font-medium text-slate-500">{node.version_label}</span>}
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                {node.description && <span className="max-w-xl truncate">{node.description}</span>}
+                {promotedFromVersion && <span className="text-teal-600">由 {promotedFromVersion} 晋级</span>}
+                <span>{node.created_at ? new Date(node.created_at).toLocaleString('zh-CN') : ''}</span>
+              </div>
+            </button>
+
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <Button variant="ghost" size="sm" onClick={() => openVersion(node)}>
+                <Eye size={13} /> {stage === 'current' ? '查看当前' : editing ? '编辑结构' : '查看快照'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setSource(node)}>
+                <Plus size={13} /> 创建分支
+              </Button>
+              {editing && (
+                <>
+                  <Button variant="ghost" size="sm" onClick={() => openMapping(node)}>
+                    <Database size={13} /> 编辑映射
+                  </Button>
+                  <Button variant="ghost" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
+                    <Activity size={13} /> 进入试跑
+                  </Button>
+                </>
+              )}
+              {trial && (
+                <>
+                  <Button variant="ghost" size="sm" onClick={() => setTrialDetail(node.latest_trial!)}>
+                    <CheckCircle2 size={13} /> 试跑结果
+                  </Button>
+                  <Button size="sm" onClick={() => inspectImpact.mutate(node)}>
+                    <Rocket size={13} /> 审核并发布
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </article>
+
+        {children.length > 0 && (
+          <div role="group" className="ml-5 space-y-3 border-l border-slate-200 pl-8 pt-3">
+            {children.map(child => renderNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
-    <div className="space-y-4 pb-6">
+    <div className="space-y-4 pb-2">
       <Card className="p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
               <GitCommitHorizontal size={17} /> 在秩序中演化
             </h3>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              每个节点都是完整结构。草稿只有通过真实数据隔离试跑并确认影响后，才能晋级为新的发布版。
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
+              主干是发布版本，侧枝是从任意完整快照创建的工作分支。点击任意节点即可按其阶段边界打开。
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <ShieldCheck size={15} className="text-emerald-600" /> 线上结构始终指向一个发布版本
+            <ShieldCheck size={15} className="text-teal-600" /> 当前运行始终只指向一个发布版本
           </div>
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-3" aria-label="版本阶段边界">
+          <div className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800"><b>草稿态</b><span className="ml-2 text-sky-600">可编辑；不产生 Fact；不执行</span></div>
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800"><b>试跑态</b><span className="ml-2 text-amber-600">快照冻结；真实数据隔离执行</span></div>
+          <div className="rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800"><b>发布态</b><span className="ml-2 text-teal-600">结构不可修改；承载正式运行</span></div>
         </div>
       </Card>
 
       {notice && (
-        <div className={`rounded-lg border px-3 py-2 text-sm ${notice.tone === 'good'
+        <div role="status" className={`rounded-lg border px-3 py-2 text-sm ${notice.tone === 'good'
           ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
           : 'border-red-200 bg-red-50 text-red-800'}`}>
           {notice.text}
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] bg-white">
-        <div className="grid min-w-[820px] grid-cols-[minmax(220px,1fr)_130px_150px_minmax(280px,auto)] gap-3 border-b bg-gray-50 px-4 py-2 text-xs font-medium text-gray-500">
-          <span>版本树</span><span>状态</span><span>最近试跑</span><span className="text-right">操作</span>
+      <section className="max-h-[52vh] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-slate-700">版本演化树</p>
+            <p className="mt-0.5 text-xs text-slate-400">{nodes.length} 个完整快照节点</p>
+          </div>
+          <span className="rounded-md bg-teal-50 px-2.5 py-1 font-mono text-xs font-semibold text-teal-700">
+            当前 {treeQuery.data?.current_release_version}
+          </span>
         </div>
-        {ordered.map(({ node, depth }) => {
-          const current = node.id === currentReleaseId
-          const editable = node.node_kind === 'draft' && node.lifecycle_status !== 'superseded'
-          const passed = editable && node.latest_trial?.status === 'passed'
-          return (
-            <div key={node.id} data-testid={`version-row-${node.version_number}`}
-              className="grid min-w-[820px] grid-cols-[minmax(220px,1fr)_130px_150px_minmax(280px,auto)] items-center gap-3 border-b px-4 py-3 last:border-b-0">
-              <div className="min-w-0" style={{ paddingLeft: depth * 24 }}>
-                <div className="flex items-center gap-2">
-                  {depth > 0 && <ChevronRight size={13} className="text-gray-300" />}
-                  {node.node_kind === 'release'
-                    ? <GitCommitHorizontal size={15} className="text-emerald-600" />
-                    : <GitBranch size={15} className="text-amber-600" />}
-                  <span className="font-mono font-semibold">{node.version_number}</span>
-                  {node.version_label && <span className="truncate text-xs text-gray-500">{node.version_label}</span>}
-                </div>
-                {node.description && <p className="mt-1 truncate text-xs text-gray-400">{node.description}</p>}
-              </div>
-              <div>{statusBadge(node, current)}</div>
-              <div className="text-xs text-gray-500">
-                {node.latest_trial ? (
-                  <button className="inline-flex items-center gap-1 hover:text-gray-900" onClick={() => setTrialDetail(node.latest_trial!)}>
-                    {node.latest_trial.status === 'passed' ? <CheckCircle2 size={13} className="text-emerald-600" /> : <Activity size={13} />}
-                    {node.latest_trial.result?.counts?.objects ?? 0} 对象
-                  </button>
-                ) : '—'}
-              </div>
-              <div className="flex flex-wrap justify-end gap-1.5">
-                <Button variant="ghost" size="sm" onClick={() => setSource(node)}>
-                  <Plus size={13} /> 创建分支
-                </Button>
-                {editable && <>
-                  <Button variant="ghost" size="sm" onClick={() => navigate(`/ontologies/${ontologyId}/graph?versionId=${node.id}`)}>
-                    <FileEdit size={13} /> 结构
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => navigate(`/ontologies/${ontologyId}/mapping-config?versionId=${node.id}`)}>
-                    <Database size={13} /> 映射
-                  </Button>
-                  <Button variant="ghost" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
-                    <Activity size={13} /> 试跑
-                  </Button>
-                  {passed && <Button size="sm" onClick={() => inspectImpact.mutate(node)}>
-                    <Rocket size={13} /> 发布
-                  </Button>}
-                </>}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+        {roots.rootNodes.length > 0 ? (
+          <div role="tree" className="ml-4 space-y-3 border-l border-slate-200 pl-8" data-testid="version-tree">
+            {roots.rootNodes.map(node => renderNode(node))}
+          </div>
+        ) : (
+          <p className="rounded-lg bg-white px-4 py-8 text-center text-sm text-slate-400">暂无版本节点</p>
+        )}
+      </section>
 
       {source && (
         <Modal open onClose={() => setSource(null)} title={`从 ${source.version_number} 创建完整分支`} size="sm"
@@ -241,7 +335,7 @@ export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
         <Modal open onClose={() => setTrialDetail(null)} title="隔离试跑结果" size="lg"
           footer={<Button onClick={() => setTrialDetail(null)}>关闭</Button>}>
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {Object.entries(trialDetail.result?.counts || {}).map(([key, value]) => (
                 <div key={key} className="rounded-lg border bg-gray-50 p-3"><b className="block text-lg">{String(value)}</b><span className="text-xs text-gray-500">{key}</span></div>
               ))}
@@ -274,7 +368,7 @@ export default function VersionsTab({ ontologyId }: { ontologyId: string }) {
               <h4 className="mb-2 font-medium">破坏性影响（{promotion.impact.breakingCount}）</h4>
               {promotion.impact.breakingCount === 0
                 ? <p className="rounded-lg bg-emerald-50 p-3 text-emerald-800">未发现结构性破坏。</p>
-                : <div className="max-h-56 space-y-2 overflow-auto">{promotion.impact.breaking.map((item: any, index: number) => (
+                : <div className="max-h-56 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
                   <div key={index} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">{item.message}</div>
                 ))}</div>}
             </div>

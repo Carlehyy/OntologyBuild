@@ -19,11 +19,14 @@ export interface OntologyVersionNode {
   version_label?: string
   description?: string
   parent_version_id?: string | null
+  base_release_id?: string | null
+  promoted_from_id?: string | null
   node_kind: 'release' | 'draft'
   lifecycle_status: 'editing' | 'trial_ready' | 'released' | 'superseded'
   revision: number
   latest_trial?: OntologyTrialRun | null
   created_at?: string
+  published_at?: string
 }
 
 export interface OntologyVersionTree {

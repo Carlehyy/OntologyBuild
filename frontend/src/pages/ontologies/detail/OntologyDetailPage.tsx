@@ -150,6 +150,13 @@ export default function OntologyDetailPage() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <span
+            className="inline-flex h-9 items-center rounded-lg border border-teal-100 bg-teal-50 px-3 font-mono text-sm font-semibold tabular-nums text-teal-700"
+            title="当前最新发布版本"
+            data-testid="current-release-version"
+          >
+            {ontology.current_release_version || ontology.version || 'v0'}
+          </span>
           <button
             type="button"
             onClick={() => setShowVersionModal(true)}
@@ -212,7 +219,7 @@ export default function OntologyDetailPage() {
 
       {/* ═══ 历史版本弹窗 ═══ */}
       <Modal open={showVersionModal} onClose={closeVersionModal} title="本体版本演进" size="3xl">
-        <VersionsTab ontologyId={id!} />
+        <VersionsTab ontologyId={id!} onClose={closeVersionModal} />
       </Modal>
     </div>
   )

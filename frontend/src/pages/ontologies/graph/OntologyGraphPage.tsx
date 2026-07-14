@@ -1,6 +1,7 @@
 import { useState, lazy, Suspense, useEffect } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ontologyVersionApi } from '@/api/v2/ontology-versions';
 
 import '../../../palantir-graph/palantir-graph.css';
 
@@ -67,17 +68,22 @@ export default function OntologyGraphPage() {
   const loadFromBackend = useOntologyStore((s) => s.loadFromBackend);
   const syncStatus = useOntologyStore((s) => s.syncStatus);
   const isDirty = useOntologyStore((s) => s.isDirty);
+  const workspaceMode = useOntologyStore((s) => s.workspaceMode);
+  const ontology = useOntologyStore((s) => s.ontology);
+  const readOnly = workspaceMode !== 'draft';
+  const [creatingDraft, setCreatingDraft] = useState(false);
+  const [draftError, setDraftError] = useState('');
 
   // 有未保存改动时，拦截关闭/刷新页面（浏览器原生确认框）
   useEffect(() => {
-    if (!isDirty) return;
+    if (readOnly || !isDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [isDirty]);
+  }, [isDirty, readOnly]);
 
   // 加载后端本体后再绑定脏标记监听，避免把后端加载结果误判为用户编辑
   useEffect(() => {
@@ -87,7 +93,9 @@ export default function OntologyGraphPage() {
 
     void loadFromBackend(ontologyId, versionId).then(() => {
       if (cancelled) return;
-      off = attachAutoSave();
+      if (useOntologyStore.getState().workspaceMode === 'draft') {
+        off = attachAutoSave();
+      }
     });
 
     return () => {
@@ -114,24 +122,24 @@ export default function OntologyGraphPage() {
         setShowSearch((v) => !v);
         return;
       }
-      if (mod && e.key.toLowerCase() === 's') {
+      if (mod && e.key.toLowerCase() === 's' && !readOnly) {
         e.preventDefault();
         void useOntologyStore.getState().saveToBackend();
         return;
       }
       if (inEditable) return;
 
-      if (mod && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      if (!readOnly && mod && !e.shiftKey && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         useOntologyStore.getState().undo();
         return;
       }
-      if ((mod && e.shiftKey && e.key.toLowerCase() === 'z') || (mod && e.key.toLowerCase() === 'y')) {
+      if (!readOnly && ((mod && e.shiftKey && e.key.toLowerCase() === 'z') || (mod && e.key.toLowerCase() === 'y'))) {
         e.preventDefault();
         useOntologyStore.getState().redo();
         return;
       }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!readOnly && (e.key === 'Delete' || e.key === 'Backspace')) {
         const s = useOntologyStore.getState();
         if (s.selectedNodeId) {
           e.preventDefault();
@@ -149,7 +157,7 @@ export default function OntologyGraphPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [readOnly]);
 
   // 为 body 添加作用域类，确保 Palantir 样式只在本页面生效
   useEffect(() => {
@@ -173,19 +181,66 @@ export default function OntologyGraphPage() {
     setShowActionRunner(true);
   };
 
+  const beginCurrentReleaseEdit = async () => {
+    if (!ontologyId || creatingDraft) return;
+    setDraftError('');
+    setCreatingDraft(true);
+    try {
+      const tree = await ontologyVersionApi.tree(ontologyId);
+      const draft = await ontologyVersionApi.createDraft(
+        ontologyId,
+        tree.current_release_id,
+        {
+          versionLabel: '模型修改',
+          description: `基于当前发布版 ${tree.current_release_version} 创建`,
+        },
+      );
+      navigate(`/ontologies/${ontologyId}/graph?versionId=${draft.id}`);
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail ?? error?.detail;
+      setDraftError(typeof detail === 'string' ? detail : detail?.message || error?.message || '创建修改分支失败');
+    } finally {
+      setCreatingDraft(false);
+    }
+  };
+
+  const stage = workspaceMode === 'draft'
+    ? { tone: 'sky', text: `草稿 ${ontology?.version || ''} · 可编辑结构与映射，不产生 Fact、不执行本体网络` }
+    : workspaceMode === 'trial'
+      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 当前快照已冻结，真实数据仅写入隔离空间` }
+      : workspaceMode === 'release'
+        ? { tone: 'slate', text: `历史发布 ${ontology?.version || ''} · 只读结构快照，不承载当前运行数据` }
+        : workspaceMode === 'archived'
+          ? { tone: 'slate', text: `已归档分支 ${ontology?.version || ''} · 只读快照` }
+          : { tone: 'emerald', text: `当前发布 ${ontology?.version || ''} · 结构不可修改，正式数据与本体网络持续运行` };
+
+  const stageClass = {
+    sky: 'border-sky-500/40 bg-sky-950/90 text-sky-200',
+    amber: 'border-amber-500/40 bg-amber-950/90 text-amber-200',
+    slate: 'border-slate-500/40 bg-slate-950/90 text-slate-200',
+    emerald: 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200',
+  }[stage.tone];
+
   return (
     <ReactFlowProvider>
       <div className="fixed inset-0 z-[9999] h-screen w-screen overflow-hidden bg-surface-950">
-        {versionId && (
-          <div className="fixed left-1/2 top-[4.4rem] z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-950/90 px-3 py-1.5 text-xs text-amber-200 shadow-lg">
-            <span>草稿结构工作区 · 不加载线上实例、不执行真实动作</span>
-            <button className="font-medium underline" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>返回版本页试跑</button>
-          </div>
-        )}
-        {!versionId && (
-          <div className="fixed left-1/2 top-[4.4rem] z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-950/90 px-3 py-1.5 text-xs text-emerald-200 shadow-lg">
-            <span>当前发布运行视图 · 结构和映射变更请从完整草稿开始</span>
-            <button className="font-medium underline" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>打开版本树</button>
+        <div className={`fixed left-1/2 top-[4.4rem] z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs shadow-lg ${stageClass}`}>
+          <span className="truncate">{stage.text}</span>
+          {workspaceMode === 'runtime' ? (
+            <button
+              className="shrink-0 font-medium underline disabled:cursor-wait disabled:opacity-60"
+              disabled={creatingDraft}
+              onClick={() => void beginCurrentReleaseEdit()}
+            >
+              {creatingDraft ? '正在创建草稿' : '基于此版本开始修改'}
+            </button>
+          ) : (
+            <button className="shrink-0 font-medium underline" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>返回版本演进</button>
+          )}
+        </div>
+        {draftError && (
+          <div role="alert" className="fixed left-1/2 top-[6.8rem] z-50 -translate-x-1/2 rounded-lg border border-red-500/40 bg-red-950/95 px-3 py-2 text-xs text-red-200 shadow-lg">
+            {draftError}
           </div>
         )}
         {/* 加载本体时的轻量提示（保存状态已整合到 Header 的保存按钮） */}
@@ -199,6 +254,8 @@ export default function OntologyGraphPage() {
         )}
 
         <Header
+          readOnly={readOnly}
+          stageLabel={workspaceMode === 'runtime' ? '当前发布' : workspaceMode === 'draft' ? '草稿编辑' : workspaceMode === 'trial' ? '试跑快照' : '历史快照'}
           onToggleActions={() => setShowActionPanel(v => !v)}
           onToggleFunctions={() => setShowFunctionPanel(v => !v)}
           showActions={showActionPanel}
@@ -210,26 +267,27 @@ export default function OntologyGraphPage() {
         />
         <main className="h-full pt-16">
           <Canvas
+            readOnly={readOnly}
             onBrowseInstances={(objectTypeId) => {
               setInstanceBrowserTypeId(objectTypeId);
               setShowInstanceBrowser(true);
             }}
           />
         </main>
-        <Toolbar />
-        <Panel />
-        <ActionList onRunAction={openActionRun} isOpen={showActionPanel} onClose={() => setShowActionPanel(false)} />
-        <FunctionList onTestFunction={openFunctionTest} isOpen={showFunctionPanel} onClose={() => setShowFunctionPanel(false)} />
-        <LinkList isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
-        <ObjectList isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />
-        <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />
+        {!readOnly && <Toolbar />}
+        {!readOnly && <Panel />}
+        {!readOnly && <ActionList onRunAction={openActionRun} isOpen={showActionPanel} onClose={() => setShowActionPanel(false)} />}
+        {!readOnly && <FunctionList onTestFunction={openFunctionTest} isOpen={showFunctionPanel} onClose={() => setShowFunctionPanel(false)} />}
+        {!readOnly && <LinkList isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />}
+        {!readOnly && <ObjectList isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />}
+        {!readOnly && <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />}
 
-        {showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
-        {deleteTarget && (
+        {!readOnly && showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
+        {!readOnly && deleteTarget && (
           <DeleteSelectedDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} />
         )}
 
-        {!versionId && <FloatingMenu
+        {workspaceMode === 'runtime' && <FloatingMenu
           onOpenHelp={() => setShowHelp(true)}
           onOpenFunctionTest={() => openFunctionTest()}
           onOpenActionRun={() => openActionRun()}
@@ -246,14 +304,14 @@ export default function OntologyGraphPage() {
         <Suspense fallback={<PanelLoader />}>
           {showHelp && <HelpGuide isOpen={showHelp} onClose={() => setShowHelp(false)} />}
           {showGraphDB && <GraphDatabaseView isOpen={showGraphDB} onClose={() => setShowGraphDB(false)} />}
-          {!versionId && showFunctionTester && (
+          {workspaceMode === 'runtime' && showFunctionTester && (
             <FunctionTester
               isOpen={showFunctionTester}
               initialFunctionId={testFunctionId}
               onClose={() => setShowFunctionTester(false)}
             />
           )}
-          {!versionId && showActionRunner && (
+          {workspaceMode === 'runtime' && showActionRunner && (
             <ActionRunner
               isOpen={showActionRunner}
               initialActionId={runActionId}
@@ -261,7 +319,7 @@ export default function OntologyGraphPage() {
               onClose={() => setShowActionRunner(false)}
             />
           )}
-          {!versionId && showInstanceBrowser && (
+          {workspaceMode === 'runtime' && showInstanceBrowser && (
             <InstanceBrowser
               isOpen={showInstanceBrowser}
               initialObjectTypeId={instanceBrowserTypeId || undefined}
@@ -270,8 +328,8 @@ export default function OntologyGraphPage() {
             />
           )}
           {showApiDocs && <ApiDocs isOpen={showApiDocs} onClose={() => setShowApiDocs(false)} />}
-          {!versionId && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
-          {!versionId && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
+          {workspaceMode === 'runtime' && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
+          {workspaceMode === 'runtime' && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
         </Suspense>
       </div>
     </ReactFlowProvider>

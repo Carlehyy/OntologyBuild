@@ -875,6 +875,20 @@ def _draft_or_404(db: Session, ontology_id: str, version_id: str) -> OntologyVer
     return draft
 
 
+def _ensure_editable_draft(draft: OntologyVersion) -> None:
+    """Enforce the lifecycle boundary: a successful trial is an immutable snapshot."""
+    if draft.lifecycle_status == "trial_ready":
+        raise HTTPException(409, detail={
+            "code": "trial_snapshot_frozen",
+            "message": "试跑态快照已冻结；如需继续修改，请从该版本创建新的草稿分支",
+        })
+    if draft.lifecycle_status != "editing":
+        raise HTTPException(409, detail={
+            "code": "archived_version_immutable",
+            "message": "该版本已归档且不可修改；如需继续演化，请从当前发布版创建新的草稿分支",
+        })
+
+
 def _stale_previous_trials(db: Session, draft: OntologyVersion) -> None:
     db.query(OntologyTrialRun).filter(
         OntologyTrialRun.version_id == draft.id,
@@ -883,22 +897,39 @@ def _stale_previous_trials(db: Session, draft: OntologyVersion) -> None:
 
 
 @router.get("/{ontology_id}/versions/{version_id}/workspace")
-def get_draft_workspace(
+def get_version_workspace(
     ontology_id: str, version_id: str, db: Session = Depends(get_db),
 ):
-    draft = _draft_or_404(db, ontology_id, version_id)
+    version = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if version is None:
+        raise HTTPException(404, "Version not found")
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).first()
-    snap = complete_snapshot(draft.snapshot_formal)
+    snap = complete_snapshot(version.snapshot_formal)
+    if version.node_kind == "release":
+        workspace_mode = "release"
+    elif version.lifecycle_status == "trial_ready":
+        workspace_mode = "trial"
+    elif version.lifecycle_status == "superseded":
+        workspace_mode = "archived"
+    else:
+        workspace_mode = "draft"
     return {"data": {
         "id": ontology_id, "name": project.name,
-        "description": project.description, "version": draft.version_number,
-        "revision": f"{draft.revision}:{draft.snapshot_hash}",
+        "description": project.description, "version": version.version_number,
+        "revision": f"{version.revision}:{version.snapshot_hash}",
         "objectTypes": snap["objectTypes"], "linkTypes": snap["linkTypes"],
         "actions": snap["actions"], "functions": snap["functions"],
-        # 草稿只编辑结构；真实运行数据只存在于试跑空间，不能回写线上实例。
+        # 版本节点只展示冻结结构；真实运行数据只属于当前发布投影。
         "instances": [], "linkInstances": [], "executionLogs": [],
-        "workspaceMode": "draft", "versionId": draft.id,
+        "workspaceMode": workspace_mode,
+        "editable": workspace_mode == "draft",
+        "versionId": version.id,
+        "nodeKind": version.node_kind,
+        "lifecycleStatus": version.lifecycle_status,
     }}
 
 
@@ -915,6 +946,7 @@ def save_draft_workspace(
         raise HTTPException(404, "Version not found")
     if draft.node_kind != "draft":
         raise HTTPException(409, detail={"code": "immutable_release", "message": "发布版本不可修改"})
+    _ensure_editable_draft(draft)
     expected = f"{draft.revision}:{draft.snapshot_hash}"
     base_revision = body.get("baseRevision", body.get("base_revision"))
     if base_revision is not None and str(base_revision) != expected:
@@ -968,6 +1000,7 @@ def save_draft_mappings(
         raise HTTPException(404, "Version not found")
     if draft.node_kind != "draft":
         raise HTTPException(409, detail={"code": "immutable_release", "message": "发布版本不可修改"})
+    _ensure_editable_draft(draft)
     expected = f"{draft.revision}:{draft.snapshot_hash}"
     base_revision = body.get("baseRevision", body.get("base_revision"))
     if base_revision is not None and str(base_revision) != expected:
@@ -1072,6 +1105,7 @@ def create_trial_run(
         raise HTTPException(409, detail={
             "code": "trial_requires_draft", "message": "只有草稿分支可以试跑",
         })
+    _ensure_editable_draft(draft)
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).first()
     current = _current_release(db, project)
@@ -1147,7 +1181,7 @@ def _verify_trial_dataset_pins(db: Session, run: OntologyTrialRun) -> list[dict]
         if dataset.latest_version_id != version.id:
             errors.append(_gate_error(
                 "trial_dataset_version_stale", "dataset",
-                f"数据集「{dataset.name}」在试跑后已产生新版本，请重新试跑",
+                f"数据集「{dataset.name}」在试跑后已产生新版本，请从该试跑版本创建新草稿后重新试跑",
                 item_id=dataset.id))
         if version.checksum != pin.get("checksum"):
             errors.append(_gate_error(
@@ -1202,7 +1236,8 @@ def promote_draft(
         run.status = "stale"
         db.commit()
         raise HTTPException(409, detail={
-            "code": "trial_snapshot_stale", "message": "试跑后草稿已改变，请重新试跑",
+            "code": "trial_snapshot_stale",
+            "message": "试跑快照与当前结构不一致，请从该版本创建新草稿后重新试跑",
         })
     report = impact_report(current.snapshot_formal, snap)
     acknowledged = body.get("impact_hash", body.get("impactHash"))
@@ -1222,7 +1257,7 @@ def promote_draft(
     if len(trial_objects) != int(expected.get("objects") or 0) or len(trial_links) != int(expected.get("links") or 0):
         raise HTTPException(409, detail={
             "code": "trial_materialization_incomplete",
-            "message": "试跑隔离投影不完整，拒绝发布并请重新试跑",
+            "message": "试跑隔离投影不完整；请从该版本创建新草稿后重新试跑",
         })
 
     from app.ontologies.formal_modeling.facts import (

@@ -256,10 +256,12 @@ export default function OverviewDashboard({ ontologyId, onGoGroup }: {
       {/* 底部快捷入口 */}
       <div className="flex items-center gap-2 text-xs text-gray-400 px-1">
         <GitBranch size={13} />
-        结构与映射修改请先
+        这里始终展示当前发布投影。
+        <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
+          className="font-medium text-teal-700 hover:underline">查看当前发布图谱</button>
+        <span className="text-gray-300">·</span>
         <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-          className="text-violet-600 hover:underline font-medium">创建版本草稿</button>
-        并完成隔离试跑；这里始终展示当前发布投影。
+          className="font-medium text-violet-600 hover:underline">查看版本演进</button>
       </div>
     </div>
   )

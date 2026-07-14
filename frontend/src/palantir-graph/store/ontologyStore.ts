@@ -49,6 +49,8 @@ interface OntologyState {
   backendId: string | null;
   // 非空时编辑不可变发布版分出的完整草稿快照；运行数据与线上动作均不在此工作区。
   workspaceVersionId: string | null;
+  // runtime 仅承载当前正式投影；只有 draft 工作区允许修改模式结构。
+  workspaceMode: 'runtime' | 'draft' | 'trial' | 'release' | 'archived';
   // 加载/保存状态。conflict = 保存被 409 拒绝（其他会话已修改）
   syncStatus: 'idle' | 'loading' | 'saving' | 'saved' | 'error' | 'conflict';
   syncError: string | null;
@@ -263,6 +265,7 @@ export const useOntologyStore = create<OntologyState>()(
       ontology: _migrateOntology(tradeErpOntology),
       backendId: null,
       workspaceVersionId: null,
+      workspaceMode: 'runtime',
       syncStatus: 'idle',
       syncError: null,
       lastSavedAt: null,
@@ -293,7 +296,13 @@ export const useOntologyStore = create<OntologyState>()(
       // ============ 后端同步 ============
       loadFromBackend: async (id, versionId = null) => {
         _histSuspended = true;
-        set({ backendId: id, workspaceVersionId: versionId, syncStatus: 'loading', syncError: null });
+        set({
+          backendId: id,
+          workspaceVersionId: versionId,
+          workspaceMode: versionId ? 'archived' : 'runtime',
+          syncStatus: 'loading',
+          syncError: null,
+        });
         try {
           const full = await loadFullOntology(id, versionId);
           const objectTypes: ObjectType[] = full.objectTypes.map((o) => {
@@ -347,6 +356,7 @@ export const useOntologyStore = create<OntologyState>()(
 
           set({
             ontology, nodes, edges,
+            workspaceMode: full.workspaceMode || (versionId ? 'archived' : 'runtime'),
             syncStatus: 'idle', syncError: null, isDirty: false,
             lastSavedAt: now(),
             revision: full.revision ?? null,
@@ -365,6 +375,7 @@ export const useOntologyStore = create<OntologyState>()(
             edges: [],
             selectedNodeId: null, selectedEdgeId: null,
             selectedActionId: null, selectedFunctionId: null, selectedInstanceId: null,
+            workspaceMode: versionId ? 'archived' : 'runtime',
             syncStatus: 'error', syncError: e?.detail || e?.message || '加载失败',
           });
           _resetDelta(true);
