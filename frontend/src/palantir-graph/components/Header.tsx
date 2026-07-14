@@ -59,10 +59,10 @@ export default function Header({ readOnly = false, stageLabel, onToggleActions, 
         </div>
 
         <div className="order-3 flex w-full items-center justify-center gap-2 overflow-x-auto pb-1 md:order-none md:w-auto md:flex-none md:overflow-visible md:pb-0 md:justify-self-center">
-          <button onClick={onToggleObjects} disabled={readOnly} className="flex disabled:cursor-default">
+          <button onClick={onToggleObjects} className="flex" aria-label={`查看对象实体，共 ${stats.objects} 个`}>
             <StatBadge icon={CubeIcon} label="对象实体" value={stats.objects} color="indigo" active={showObjects} />
           </button>
-          <button onClick={onToggleLinks} disabled={readOnly} className="flex disabled:cursor-default">
+          <button onClick={onToggleLinks} className="flex" aria-label={`查看实体关系，共 ${stats.links} 个`}>
             <StatBadge
               icon={LinkIcon}
               label="实体关系"
@@ -71,7 +71,7 @@ export default function Header({ readOnly = false, stageLabel, onToggleActions, 
               active={showLinks}
             />
           </button>
-          <button onClick={onToggleActions} disabled={readOnly} className="flex disabled:cursor-default">
+          <button onClick={onToggleActions} className="flex" aria-label={`查看执行动作，共 ${stats.actions} 个`}>
             <StatBadge
               icon={BoltIcon}
               label="执行动作"
@@ -80,7 +80,7 @@ export default function Header({ readOnly = false, stageLabel, onToggleActions, 
               active={showActions}
             />
           </button>
-          <button onClick={onToggleFunctions} disabled={readOnly} className="flex disabled:cursor-default">
+          <button onClick={onToggleFunctions} className="flex" aria-label={`查看激活函数，共 ${stats.functions} 个`}>
             <StatBadge
               icon={CodeBracketIcon}
               label="激活函数"

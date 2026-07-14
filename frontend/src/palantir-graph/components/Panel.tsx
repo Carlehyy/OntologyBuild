@@ -7,6 +7,7 @@ import RuleEditor from './editors/RuleEditor';
 import FunctionParameterEditor from './editors/FunctionParameterEditor';
 import type { Property, ActionParameter, ActionRule, FunctionParameter, FunctionType, FunctionLanguage, CacheStrategy as FunctionCacheStrategy, PropertyType } from '../types/ontology';
 import { sanitizeIdentifier } from '../utils/identifier';
+import ReadonlyDefinitionPanel from './ReadonlyDefinitionPanel';
 
 // Color options for objects
 const colorOptions = [
@@ -23,7 +24,7 @@ const colorOptions = [
 // Icon options
 const iconOptions = ['📦', '👤', '🏢', '📄', '💰', '🚀', '⚙️', '📊', '🔗', '📱', '🖥️', '🎯'];
 
-export default function Panel() {
+export default function Panel({ readOnly = false }: { readOnly?: boolean }) {
   const {
     isPanelOpen,
     panelMode,
@@ -36,6 +37,23 @@ export default function Panel() {
   } = useOntologyStore();
 
   if (!isPanelOpen || !panelType) return null;
+
+  if (readOnly && panelType !== 'instance') {
+    const selectedId = panelType === 'objectType'
+      ? selectedNodeId
+      : panelType === 'linkType'
+        ? selectedEdgeId
+        : panelType === 'action'
+          ? selectedActionId
+          : selectedFunctionId;
+    return (
+      <div className="fixed right-0 top-0 bottom-0 w-[420px] z-[80] panel-enter">
+        <div className="h-full glass border-l border-surface-700 flex flex-col">
+          <ReadonlyDefinitionPanel type={panelType} selectedId={selectedId} onClose={closePanel} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed right-0 top-0 bottom-0 w-[420px] z-50 panel-enter">

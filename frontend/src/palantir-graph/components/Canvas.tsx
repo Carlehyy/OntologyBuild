@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -47,8 +47,10 @@ const defaultEdgeOptions = {
 interface CanvasProps {
   /** 右键菜单"浏览实例"入口（由页面渲染 InstanceBrowser） */
   onBrowseInstances?: (objectTypeId: string) => void;
-  /** 嵌入智能助手等场景时只展示结构，不允许创建、连线、拖拽或删除 */
+  /** 只读版本禁止结构写入，但仍允许查看、选择、移动节点与缩放画布 */
   readOnly?: boolean;
+  /** 切换版本时重置只读画布的临时布局，避免不同快照之间串位 */
+  layoutScope?: string;
 }
 
 /** 相邻平行边顶点之间的间距(px) */
@@ -88,7 +90,7 @@ function offsetParallelEdges(edges: Edge[]): Edge[] {
   return out;
 }
 
-export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasProps = {}) {
+export default function Canvas({ onBrowseInstances, readOnly = false, layoutScope = 'default' }: CanvasProps = {}) {
   const {
     ontology,
     nodes: storeNodes,
@@ -149,10 +151,21 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
   );
   const renderEdges = readOnly ? selectedStoreEdges : edges;
 
-  // Sync with store when store changes
+  const previousLayoutScope = useRef(layoutScope);
+
+  // 草稿直接跟随可保存结构；只读状态保留本次查看期间的临时位置，不写回版本快照。
   useEffect(() => {
-    setNodes(selectedStoreNodes);
-  }, [selectedStoreNodes, setNodes]);
+    const scopeChanged = previousLayoutScope.current !== layoutScope;
+    previousLayoutScope.current = layoutScope;
+    if (!readOnly || scopeChanged) {
+      setNodes(selectedStoreNodes);
+      return;
+    }
+    setNodes((currentNodes) => selectedStoreNodes.map((storeNode) => {
+      const localNode = currentNodes.find((candidate) => candidate.id === storeNode.id);
+      return localNode ? { ...storeNode, position: localNode.position } : storeNode;
+    }));
+  }, [layoutScope, readOnly, selectedStoreNodes, setNodes]);
 
   useEffect(() => {
     setEdges(selectedStoreEdges);
@@ -189,6 +202,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
 
   const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
+      // 发布/试跑/历史版本仅调整本地视图，不改快照、不产生脏数据。
       if (readOnly) return;
       updateNodePosition(node.id, node.position);
     },
@@ -212,7 +226,6 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
   const onEdgeDoubleClick = useCallback(
     (_: React.MouseEvent, edge: Edge) => {
       setSelectedEdge(edge.id);
-      if (readOnly) return;
       openPanel('edit', 'linkType');
     },
     [setSelectedEdge, openPanel, readOnly]
@@ -245,7 +258,9 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
   }, [readOnly]);
 
   const handleNodesChange = useCallback((changes: NodeChange<Node>[]) => {
-    onNodesChange(readOnly ? changes.filter((change) => change.type === 'select') : changes);
+    onNodesChange(readOnly
+      ? changes.filter((change) => change.type === 'select' || change.type === 'position' || change.type === 'dimensions')
+      : changes);
   }, [onNodesChange, readOnly]);
 
   const handleEdgesChange = useCallback((changes: EdgeChange<Edge>[]) => {
@@ -324,7 +339,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
         edgeTypes={edgeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         connectionMode={ConnectionMode.Loose}
-        nodesDraggable={!readOnly}
+        nodesDraggable
         nodesConnectable={!readOnly}
         deleteKeyCode={null}
         fitView
@@ -341,16 +356,14 @@ export default function Canvas({ onBrowseInstances, readOnly = false }: CanvasPr
           size={1}
           color="rgba(99, 102, 241, 0.15)"
         />
-        {!readOnly && (
-          <MiniMap
-            className="!bottom-6 !right-6"
-            nodeColor={(node) => {
-              if (node.type === 'objectType') return '#6366f1';
-              return '#64748b';
-            }}
-            maskColor="rgba(10, 14, 23, 0.8)"
-          />
-        )}
+        <MiniMap
+          className="!bottom-6 !right-6"
+          nodeColor={(node) => {
+            if (node.type === 'objectType') return '#6366f1';
+            return '#64748b';
+          }}
+          maskColor="rgba(10, 14, 23, 0.8)"
+        />
       </ReactFlow>
 
       {/* 空态引导：还没有任何对象类型时给出下一步指引 */}

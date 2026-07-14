@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   CubeIcon,
+  EyeIcon,
   PencilIcon,
   TrashIcon,
   XMarkIcon,
@@ -10,9 +11,10 @@ import { useOntologyStore } from '../../store/ontologyStore';
 interface ObjectListProps {
   isOpen?: boolean;
   onClose?: () => void;
+  readOnly?: boolean;
 }
 
-export default function ObjectList({ isOpen, onClose }: ObjectListProps) {
+export default function ObjectList({ isOpen, onClose, readOnly = false }: ObjectListProps) {
   const { ontology, deleteObjectType, setSelectedNode, openPanel } = useOntologyStore();
   const [internalOpen, setInternalOpen] = useState(false);
 
@@ -22,7 +24,7 @@ export default function ObjectList({ isOpen, onClose }: ObjectListProps) {
     onClose?.();
   };
 
-  const handleEdit = (id: string) => {
+  const handleOpen = (id: string) => {
     setSelectedNode(id);
     openPanel('edit', 'objectType');
     closePanel();
@@ -59,6 +61,7 @@ export default function ObjectList({ isOpen, onClose }: ObjectListProps) {
                 </div>
               </div>
               <button
+                aria-label="关闭对象实体列表"
                 onClick={closePanel}
                 className="p-2 text-surface-400 hover:text-surface-200 hover:bg-surface-700 rounded-lg transition-colors"
               >
@@ -72,7 +75,7 @@ export default function ObjectList({ isOpen, onClose }: ObjectListProps) {
                 <div className="text-center py-12">
                   <CubeIcon className="w-12 h-12 text-surface-600 mx-auto mb-3" />
                   <p className="text-surface-400">暂无对象实体</p>
-                  <p className="text-sm text-surface-500 mt-1">点击左侧工具栏的"对象"按钮创建</p>
+                  <p className="text-sm text-surface-500 mt-1">{readOnly ? '该版本没有对象实体定义' : '点击左侧工具栏的"对象"按钮创建'}</p>
                 </div>
               ) : (
                 objectTypes.map((obj) => (
@@ -98,19 +101,21 @@ export default function ObjectList({ isOpen, onClose }: ObjectListProps) {
                         </div>
                       </div>
                       <button
-                        onClick={() => handleEdit(obj.id)}
+                        onClick={() => handleOpen(obj.id)}
                         className="p-1.5 text-surface-500 hover:text-onto-400 hover:bg-onto-500/10 rounded transition-colors shrink-0"
-                        title="编辑对象"
+                        title={readOnly ? '查看对象详情' : '编辑对象'}
                       >
-                        <PencilIcon className="w-4 h-4" />
+                        {readOnly ? <EyeIcon className="w-4 h-4" /> : <PencilIcon className="w-4 h-4" />}
                       </button>
-                      <button
-                        onClick={() => handleDelete(obj.id, obj.displayName)}
-                        className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors shrink-0"
-                        title="删除对象"
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
+                      {!readOnly && (
+                        <button
+                          onClick={() => handleDelete(obj.id, obj.displayName)}
+                          className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors shrink-0"
+                          title="删除对象"
+                        >
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
 
                     {obj.description && (

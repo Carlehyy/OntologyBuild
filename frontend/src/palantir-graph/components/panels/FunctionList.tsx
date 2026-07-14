@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   CodeBracketIcon,
+  EyeIcon,
   PencilIcon,
   TrashIcon,
   XMarkIcon,
@@ -22,9 +23,10 @@ interface FunctionListProps {
   onTestFunction?: (fnId?: string) => void;
   isOpen?: boolean;
   onClose?: () => void;
+  readOnly?: boolean;
 }
 
-export default function FunctionList({ onTestFunction, isOpen, onClose }: FunctionListProps) {
+export default function FunctionList({ onTestFunction, isOpen, onClose, readOnly = false }: FunctionListProps) {
   const [internalOpen, setInternalOpen] = useState(false);
 
   const panelOpen = isOpen !== undefined ? isOpen : internalOpen;
@@ -56,7 +58,7 @@ export default function FunctionList({ onTestFunction, isOpen, onClose }: Functi
     return '全局';
   };
 
-  const handleEdit = (id: string) => {
+  const handleOpen = (id: string) => {
     closePanel();
     setSelectedFunction(id);
     openPanel('edit', 'function');
@@ -93,6 +95,7 @@ export default function FunctionList({ onTestFunction, isOpen, onClose }: Functi
                 </div>
               </div>
               <button
+                aria-label="关闭函数列表"
                 onClick={closePanel}
                 className="p-2 text-surface-400 hover:text-surface-200 hover:bg-surface-700 rounded-lg transition-colors"
               >
@@ -105,7 +108,7 @@ export default function FunctionList({ onTestFunction, isOpen, onClose }: Functi
                 <div className="text-center py-12">
                   <CodeBracketIcon className="w-12 h-12 text-surface-600 mx-auto mb-3" />
                   <p className="text-surface-400">暂无函数</p>
-                  <p className="text-sm text-surface-500 mt-1">点击左侧工具栏的「函数」按钮创建</p>
+                  <p className="text-sm text-surface-500 mt-1">{readOnly ? '该版本没有激活函数定义' : '点击左侧工具栏的「函数」按钮创建'}</p>
                 </div>
               ) : (
                 functions.map((fn) => {
@@ -136,19 +139,21 @@ export default function FunctionList({ onTestFunction, isOpen, onClose }: Functi
                             <PlayIcon className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => handleEdit(fn.id)}
+                            onClick={() => handleOpen(fn.id)}
                             className="p-1.5 text-surface-500 hover:text-cyan-400 hover:bg-cyan-500/10 rounded transition-colors"
-                            title="编辑"
+                            title={readOnly ? '查看函数详情' : '编辑函数'}
                           >
-                            <PencilIcon className="w-4 h-4" />
+                            {readOnly ? <EyeIcon className="w-4 h-4" /> : <PencilIcon className="w-4 h-4" />}
                           </button>
-                          <button
-                            onClick={() => handleDelete(fn.id)}
-                            className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                            title="删除"
-                          >
-                            <TrashIcon className="w-4 h-4" />
-                          </button>
+                          {!readOnly && (
+                            <button
+                              onClick={() => handleDelete(fn.id)}
+                              className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                              title="删除函数"
+                            >
+                              <TrashIcon className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
 

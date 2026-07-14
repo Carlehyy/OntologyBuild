@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   LinkIcon,
+  EyeIcon,
   PencilIcon,
   TrashIcon,
   XMarkIcon,
@@ -10,9 +11,10 @@ import { useOntologyStore } from '../../store/ontologyStore';
 interface LinkListProps {
   isOpen?: boolean;
   onClose?: () => void;
+  readOnly?: boolean;
 }
 
-export default function LinkList({ isOpen, onClose }: LinkListProps) {
+export default function LinkList({ isOpen, onClose, readOnly = false }: LinkListProps) {
   const { ontology, deleteLinkType, setSelectedEdge, openPanel } = useOntologyStore();
   const [internalOpen, setInternalOpen] = useState(false);
 
@@ -22,7 +24,7 @@ export default function LinkList({ isOpen, onClose }: LinkListProps) {
     onClose?.();
   };
 
-  const handleEdit = (id: string) => {
+  const handleOpen = (id: string) => {
     setSelectedEdge(id);
     openPanel('edit', 'linkType');
     closePanel();
@@ -74,6 +76,7 @@ export default function LinkList({ isOpen, onClose }: LinkListProps) {
                 </div>
               </div>
               <button
+                aria-label="关闭实体关系列表"
                 onClick={closePanel}
                 className="p-2 text-surface-400 hover:text-surface-200 hover:bg-surface-700 rounded-lg transition-colors"
               >
@@ -87,7 +90,7 @@ export default function LinkList({ isOpen, onClose }: LinkListProps) {
                 <div className="text-center py-12">
                   <LinkIcon className="w-12 h-12 text-surface-600 mx-auto mb-3" />
                   <p className="text-surface-400">暂无实体关系</p>
-                  <p className="text-sm text-surface-500 mt-1">点击左侧工具栏的"关系"按钮创建</p>
+                  <p className="text-sm text-surface-500 mt-1">{readOnly ? '该版本没有实体关系定义' : '点击左侧工具栏的"关系"按钮创建'}</p>
                 </div>
               ) : (
                 linkTypes.map((link) => (
@@ -105,19 +108,21 @@ export default function LinkList({ isOpen, onClose }: LinkListProps) {
                         </p>
                       </div>
                       <button
-                        onClick={() => handleEdit(link.id)}
+                        onClick={() => handleOpen(link.id)}
                         className="p-1.5 text-surface-500 hover:text-onto-400 hover:bg-onto-500/10 rounded transition-colors"
-                        title="编辑关系"
+                        title={readOnly ? '查看关系详情' : '编辑关系'}
                       >
-                        <PencilIcon className="w-4 h-4" />
+                        {readOnly ? <EyeIcon className="w-4 h-4" /> : <PencilIcon className="w-4 h-4" />}
                       </button>
-                      <button
-                        onClick={() => handleDelete(link.id, link.displayName)}
-                        className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                        title="删除关系"
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
+                      {!readOnly && (
+                        <button
+                          onClick={() => handleDelete(link.id, link.displayName)}
+                          className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                          title="删除关系"
+                        >
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
 
                     {link.description && (

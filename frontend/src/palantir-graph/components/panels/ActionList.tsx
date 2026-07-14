@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { 
   BoltIcon,
+  EyeIcon,
   PencilIcon,
   TrashIcon,
   XMarkIcon,
@@ -12,9 +13,10 @@ interface ActionListProps {
   onRunAction?: (actionId: string, instanceId?: string) => void;
   isOpen?: boolean;
   onClose?: () => void;
+  readOnly?: boolean;
 }
 
-export default function ActionList({ onRunAction, isOpen, onClose }: ActionListProps) {
+export default function ActionList({ onRunAction, isOpen, onClose, readOnly = false }: ActionListProps) {
   const { ontology, deleteAction, setSelectedAction, openPanel } = useOntologyStore();
   const [internalOpen, setInternalOpen] = useState(false);
 
@@ -24,7 +26,7 @@ export default function ActionList({ onRunAction, isOpen, onClose }: ActionListP
     onClose?.();
   };
 
-  const handleEdit = (id: string) => {
+  const handleOpen = (id: string) => {
     setSelectedAction(id);
     openPanel('edit', 'action');
     closePanel();
@@ -66,6 +68,7 @@ export default function ActionList({ onRunAction, isOpen, onClose }: ActionListP
                 </div>
               </div>
               <button
+                aria-label="关闭动作列表"
                 onClick={closePanel}
                 className="p-2 text-surface-400 hover:text-surface-200 hover:bg-surface-700 rounded-lg transition-colors"
               >
@@ -79,7 +82,7 @@ export default function ActionList({ onRunAction, isOpen, onClose }: ActionListP
                 <div className="text-center py-12">
                   <BoltIcon className="w-12 h-12 text-surface-600 mx-auto mb-3" />
                   <p className="text-surface-400">暂无动作</p>
-                  <p className="text-sm text-surface-500 mt-1">点击左侧工具栏的"动作"按钮创建</p>
+                  <p className="text-sm text-surface-500 mt-1">{readOnly ? '该版本没有执行动作定义' : '点击左侧工具栏的"动作"按钮创建'}</p>
                 </div>
               ) : (
                 actions.map((action) => (
@@ -97,11 +100,11 @@ export default function ActionList({ onRunAction, isOpen, onClose }: ActionListP
                         </p>
                       </div>
                       <button
-                        onClick={() => handleEdit(action.id)}
+                        onClick={() => handleOpen(action.id)}
                         className="p-1.5 text-surface-500 hover:text-onto-400 hover:bg-onto-500/10 rounded transition-colors"
-                        title="编辑动作"
+                        title={readOnly ? '查看动作详情' : '编辑动作'}
                       >
-                        <PencilIcon className="w-4 h-4" />
+                        {readOnly ? <EyeIcon className="w-4 h-4" /> : <PencilIcon className="w-4 h-4" />}
                       </button>
                       {onRunAction && (
                         <button
@@ -112,13 +115,15 @@ export default function ActionList({ onRunAction, isOpen, onClose }: ActionListP
                           <PlayIcon className="w-4 h-4" />
                         </button>
                       )}
-                      <button
-                        onClick={() => handleDelete(action.id)}
-                        className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                        title="删除动作"
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
+                      {!readOnly && (
+                        <button
+                          onClick={() => handleDelete(action.id)}
+                          className="p-1.5 text-surface-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                          title="删除动作"
+                        >
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                     
                     {action.description && (

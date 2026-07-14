@@ -20,7 +20,6 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
 
   const handleDoubleClick = () => {
     setSelectedNode(data.id);
-    if (readOnly) return;
     openPanel('edit', 'objectType');
   };
 
@@ -31,6 +30,7 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
   return (
     <div
       onDoubleClick={handleDoubleClick}
+      title={readOnly ? '双击查看对象定义；拖动可调整当前视图' : '双击编辑对象定义'}
       className={`
         min-w-[240px] max-w-[320px] rounded-xl overflow-hidden
         bg-gradient-to-b from-surface-800 to-surface-900

@@ -205,14 +205,14 @@ export default function OntologyGraphPage() {
   };
 
   const stage = workspaceMode === 'draft'
-    ? { tone: 'sky', text: `草稿 ${ontology?.version || ''} · 可编辑结构与映射，不产生 Fact、不执行本体网络` }
+    ? { tone: 'sky', text: `草稿 ${ontology?.version || ''} · 可编辑并查看全部模型定义，不产生 Fact、不执行本体网络` }
     : workspaceMode === 'trial'
-      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 当前快照已冻结，真实数据仅写入隔离空间` }
+      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 可查看定义和调整画布视图，真实数据仅写入隔离空间` }
       : workspaceMode === 'release'
-        ? { tone: 'slate', text: `历史发布 ${ontology?.version || ''} · 只读结构快照，不承载当前运行数据` }
+        ? { tone: 'slate', text: `历史发布 ${ontology?.version || ''} · 可查看定义和调整画布视图，不承载当前运行数据` }
         : workspaceMode === 'archived'
-          ? { tone: 'slate', text: `已归档分支 ${ontology?.version || ''} · 只读快照` }
-          : { tone: 'emerald', text: `当前发布 ${ontology?.version || ''} · 结构不可修改，正式数据与本体网络持续运行` };
+          ? { tone: 'slate', text: `已归档分支 ${ontology?.version || ''} · 可查看定义和调整画布视图` }
+          : { tone: 'emerald', text: `当前发布 ${ontology?.version || ''} · 可查看定义和调整画布视图，正式数据与本体网络持续运行` };
 
   const stageClass = {
     sky: 'border-sky-500/40 bg-sky-950/90 text-sky-200',
@@ -268,6 +268,7 @@ export default function OntologyGraphPage() {
         <main className="h-full pt-16">
           <Canvas
             readOnly={readOnly}
+            layoutScope={`${ontologyId || 'ontology'}:${versionId || 'runtime'}`}
             onBrowseInstances={(objectTypeId) => {
               setInstanceBrowserTypeId(objectTypeId);
               setShowInstanceBrowser(true);
@@ -275,11 +276,21 @@ export default function OntologyGraphPage() {
           />
         </main>
         {!readOnly && <Toolbar />}
-        {!readOnly && <Panel />}
-        {!readOnly && <ActionList onRunAction={openActionRun} isOpen={showActionPanel} onClose={() => setShowActionPanel(false)} />}
-        {!readOnly && <FunctionList onTestFunction={openFunctionTest} isOpen={showFunctionPanel} onClose={() => setShowFunctionPanel(false)} />}
-        {!readOnly && <LinkList isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />}
-        {!readOnly && <ObjectList isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />}
+        <Panel readOnly={readOnly} />
+        <ActionList
+          readOnly={readOnly}
+          onRunAction={workspaceMode === 'runtime' ? openActionRun : undefined}
+          isOpen={showActionPanel}
+          onClose={() => setShowActionPanel(false)}
+        />
+        <FunctionList
+          readOnly={readOnly}
+          onTestFunction={workspaceMode === 'runtime' ? openFunctionTest : undefined}
+          isOpen={showFunctionPanel}
+          onClose={() => setShowFunctionPanel(false)}
+        />
+        <LinkList readOnly={readOnly} isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
+        <ObjectList readOnly={readOnly} isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />
         {!readOnly && <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />}
 
         {!readOnly && showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
