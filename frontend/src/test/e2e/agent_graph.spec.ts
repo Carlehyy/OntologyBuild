@@ -155,7 +155,12 @@ test('assistant data graph supports progressive depth, paths, impact preview and
     expect(detail.properties.status).toBe('running')
 
     if (process.env.PLAYWRIGHT_EXPECT_LLM === '1') {
-      await page.getByLabel('选择对话模型').selectOption({ label: 'DeepSeek V4 Flash' })
+      const modelSelect = page.getByLabel('选择对话模型')
+      const flashModelValue = await modelSelect.locator('option').evaluateAll(options =>
+        options.find(option => option.textContent?.toLowerCase().includes('flash'))?.getAttribute('value'),
+      )
+      expect(flashModelValue, 'an enabled Flash model must be available').toBeTruthy()
+      await modelSelect.selectOption(flashModelValue!)
       await page.getByRole('button', { name: '让助手分析影响与建议' }).click()
       await expect(page.getByText('关联影响预演', { exact: true }).last()).toBeVisible({ timeout: 90_000 })
       await expect(page.getByText(/关系可达|关联范围|直接关联/).last()).toBeVisible({ timeout: 90_000 })
