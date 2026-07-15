@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
-  CircleCheck, CircleHelp, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2,
+  CircleCheck, CircleHelp, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2, FileText,
 } from 'lucide-react'
 import {
   explorationApi, type BusinessCanvas, type BxQuestion, type CanvasElement,
@@ -71,22 +71,41 @@ function elementBadges(key: CanvasKey, el: CanvasElement): string[] {
 
 /** 质量门清单：与后端草稿闸门同一口径，未过门项即 agent 的追问方向 */
 function GatePanel({ readiness }: { readiness: Readiness }) {
+  const [expanded, setExpanded] = useState(false)
   const [open, setOpen] = useState<Record<string, boolean>>({})
   return (
-    <div className={`rounded-lg border px-3 py-2.5 ${readiness.ready
-      ? 'border-teal-200 bg-teal-50/50' : 'border-amber-200 bg-amber-50/60'}`}>
-      <div className={`flex items-center gap-1.5 text-xs font-medium mb-1 ${readiness.ready
-        ? 'text-teal-700' : 'text-amber-700'}`}>
-        {readiness.ready ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
-        质量门 {readiness.gatesPassed}/{readiness.gatesTotal}
-        <span className="font-normal">
-          {readiness.ready ? '· 可生成本体模型' : `· ${readiness.blockingCount} 项待定量`}
+    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
+      <button
+        type="button"
+        onClick={() => setExpanded(value => !value)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-bg-hover)]"
+      >
+        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${readiness.ready
+          ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
+          {readiness.ready ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
         </span>
-      </div>
-      <div className={`text-[11px] mb-1.5 ${readiness.ready ? 'text-teal-800/80' : 'text-amber-800/90'}`}>
-        {readiness.stage}
-      </div>
-      <ul className="space-y-0.5">
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-primary)]">
+            质量门
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${readiness.ready
+              ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
+              {readiness.gatesPassed}/{readiness.gatesTotal}
+            </span>
+          </span>
+          <span className="mt-0.5 block truncate text-[11px] text-[var(--color-text-tertiary)]">
+            {readiness.ready ? '全部通过 · 可生成本体模型' : `${readiness.blockingCount} 项待定量 · 点击查看详情`}
+          </span>
+        </span>
+        {expanded
+          ? <ChevronDown size={13} className="shrink-0 text-[var(--color-text-tertiary)]" />
+          : <ChevronRight size={13} className="shrink-0 text-[var(--color-text-tertiary)]" />}
+      </button>
+      {expanded && <div className="border-t border-[var(--color-border)] px-3 pb-3 pt-2.5">
+        <div className={`mb-2 text-[11px] ${readiness.ready ? 'text-teal-700' : 'text-amber-800'}`}>
+          当前阶段：{readiness.stage}
+        </div>
+        <ul className="space-y-1">
         {readiness.gates.map(g => {
           const expandable = g.blockingItems.length + g.advisoryItems.length > 0
           const expanded = open[g.id]
@@ -128,7 +147,8 @@ function GatePanel({ readiness }: { readiness: Readiness }) {
             </li>
           )
         })}
-      </ul>
+        </ul>
+      </div>}
     </div>
   )
 }
@@ -211,12 +231,13 @@ function LedgerPanel({ questions, onAsk }: {
 }
 
 /** 业务画布面板：六类模型分组卡片 + 澄清账本 + 质量门，随 SSE canvas 事件实时刷新 */
-export default function CanvasPanel({ sessionId, canvas, completeness, readiness, onAsk }: {
+export default function CanvasPanel({ sessionId, canvas, completeness, readiness, onAsk, onOpenDocuments }: {
   sessionId?: string
   canvas: BusinessCanvas | null
   completeness: Completeness | null
   readiness?: Readiness | null
   onAsk?: (text: string) => void
+  onOpenDocuments?: () => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [detail, setDetail] = useState<{ section: typeof SECTIONS[number]; el: CanvasElement } | null>(null)
@@ -277,9 +298,9 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
     : targetSpec === 'object' ? objectNames : []
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4">
-        <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务画布</div>
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-white px-4">
+        <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务场景</div>
         <div className="flex shrink-0 items-center gap-1.5">
           <button
             onClick={openDiagram}
@@ -289,13 +310,20 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
           >
             <Share2 size={11} /> 图表
           </button>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--color-bg-base)] border border-[var(--color-border)] text-[var(--color-text-secondary)]">
-            {total} 元素
-          </span>
+          <button
+            type="button"
+            onClick={onOpenDocuments}
+            disabled={!sessionId}
+            title="查看需求文档"
+            aria-label="查看需求文档"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40"
+          >
+            <FileText size={13} />
+          </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 pb-3 pt-3 space-y-2">
+      <div className="flex-1 space-y-2 overflow-y-auto bg-[#f8fbff] px-3 pb-3 pt-3">
         {/* 质量门：与草稿生成闸门同一口径 */}
         {readiness && total > 0 && <GatePanel readiness={readiness} />}
 
