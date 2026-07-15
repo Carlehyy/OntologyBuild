@@ -1,7 +1,7 @@
 /**
  * 业务探索 — 对话式业务建模/需求建模工作台
  *
- * 双区工作台：探索对话（SSE 流式 + 工具轨迹） | 业务画布（六类模型实时沉淀）
+ * 双区工作台：探索对话（SSE 流式 + 工具轨迹） | 业务场景（六类模型实时沉淀）
  * 顶部动作：生成需求文档 → 需求文档工作区里生成本体模型 → 人审后落地本体。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -92,7 +92,7 @@ function ExplorationSplitHandle({ onPointerDown }: { onPointerDown: (event: Reac
   return (
     <div
       role="separator"
-      aria-label="调整探索对话与业务画布宽度"
+      aria-label="调整探索对话与业务场景宽度"
       aria-orientation="vertical"
       onPointerDown={onPointerDown}
       className="group flex cursor-col-resize items-center justify-center"
@@ -526,8 +526,8 @@ export default function ExplorationPage() {
         style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(300px, ${sizes[1]}fr)` }}
       >
       {/* 对话区 */}
-      <section className={`${panelClass} flex flex-col`}>
-        <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4">
+      <section className={`${panelClass} flex flex-col bg-white`}>
+        <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
           <div className="flex w-full min-w-0 items-center justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <div className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-teal-50 text-teal-600">
@@ -576,15 +576,6 @@ export default function ExplorationPage() {
                   </span>
                 )}
               </button>
-              <button
-                onClick={() => setDocsOpen(true)}
-                disabled={!sid}
-                title="查看需求文档"
-                aria-label="查看需求文档"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-              >
-                <FileText size={15} />
-              </button>
               <div className="relative">
                 <button
                   type="button"
@@ -601,8 +592,8 @@ export default function ExplorationPage() {
                 {showSessionHistory && (
                   <>
                     <div className="fixed inset-0 z-20" onClick={() => setShowSessionHistory(false)} />
-                    <div className="absolute right-0 top-full z-30 mt-3 w-[380px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-white/95 shadow-[0_18px_52px_rgba(15,23,42,0.16)] backdrop-blur-xl animate-slide-up">
-                      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3">
+                    <div className="absolute right-0 top-full z-30 mt-[14px] w-[380px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up">
+                      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
                         <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">历史会话</span>
                         <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-teal-700">
                           <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
@@ -628,7 +619,7 @@ export default function ExplorationPage() {
                         ) : <div className="divide-y divide-[var(--color-border)]">{sessions.map(session => (
                           <div
                             key={session.id}
-                            className={`group flex items-center gap-3 px-4 py-3 transition-colors ${session.id === sid
+                            className={`group flex items-center gap-2.5 px-4 py-2 transition-colors ${session.id === sid
                               ? 'bg-teal-50/70'
                               : 'hover:bg-[var(--color-bg-hover)]'}`}
                           >
@@ -637,7 +628,7 @@ export default function ExplorationPage() {
                               onClick={() => void loadSession(session.id)}
                               className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none"
                             >
-                              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${session.id === sid
+                              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${session.id === sid
                                 ? 'bg-teal-100 text-teal-700'
                                 : 'bg-slate-100 text-slate-500'}`}>
                                 <Compass size={16} />
@@ -646,7 +637,7 @@ export default function ExplorationPage() {
                                 <p className={`truncate text-sm font-medium ${session.id === sid ? 'text-teal-900' : 'text-[var(--color-text-primary)]'}`} title={session.title}>
                                   {session.title}
                                 </p>
-                                <p className="mt-1 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                                <p className="mt-0.5 text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
                                   {new Date(session.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                                 </p>
                               </div>
@@ -678,7 +669,7 @@ export default function ExplorationPage() {
           </div>
         )}
 
-        <div ref={chatScrollRef} onScroll={updateScrollStickiness} className="flex-1 overflow-y-auto px-4 py-4">
+        <div ref={chatScrollRef} onScroll={updateScrollStickiness} className="flex-1 overflow-y-auto bg-[#f8fbff] bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.08),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.08),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] px-4 py-4">
           {timeline.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center gap-4">
               <div className="w-12 h-12 rounded-2xl bg-teal-50 flex items-center justify-center">
@@ -912,14 +903,15 @@ export default function ExplorationPage() {
 
       <ExplorationSplitHandle onPointerDown={startResize} />
 
-      {/* 业务画布 */}
-      <aside className={`${panelClass} flex flex-col`}>
+      {/* 业务场景 */}
+      <aside className={`${panelClass} flex flex-col bg-white`}>
         <CanvasPanel
           sessionId={sid || undefined}
           canvas={canvas}
           completeness={completeness}
           readiness={readiness}
           onAsk={busy ? undefined : askInChat}
+          onOpenDocuments={() => setDocsOpen(true)}
         />
       </aside>
       </div>
