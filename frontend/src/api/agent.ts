@@ -255,6 +255,69 @@ export interface AgentGraphImpactResult {
   visualizationCounts?: AgentGraphVisualizationCounts
 }
 
+export type ReportVisualization = 'auto' | 'kpi' | 'bar' | 'line' | 'pie' | 'table' | 'none'
+
+export interface ReportQuery {
+  tool: 'aggregate_objects' | 'search_objects'
+  arguments: Record<string, unknown>
+}
+
+export interface ReportSection {
+  id: string
+  title: string
+  goal: string
+  visualization: ReportVisualization
+  queryPlan: ReportQuery[]
+}
+
+export interface AnalysisReportTemplate {
+  id: string
+  ontologyId: string
+  createdBy: string
+  name: string
+  description: string
+  sourcePrompt: string
+  generationMode: 'ai' | 'fallback' | 'manual'
+  status: 'draft' | 'published'
+  revision: number
+  sections: ReportSection[]
+  style: Record<string, unknown>
+  defaultModelId: string | null
+  lastPreviewRunId: string | null
+  lastPreviewRevision: number | null
+  publishedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReportQuality {
+  passed: boolean
+  score: number
+  threshold: number
+  summary: string
+  blockers: string[]
+  warnings: string[]
+  checks: { key: string; label: string; passed: boolean; detail: string }[]
+  templateRevision: number
+}
+
+export interface AnalysisReportRun {
+  id: string
+  templateId: string
+  ontologyId: string
+  createdBy: string
+  triggerType: 'preview' | 'manual' | 'scheduled'
+  status: 'running' | 'succeeded' | 'failed'
+  templateRevision: number
+  templateSnapshot: Record<string, unknown>
+  sectionResults: Record<string, unknown>[]
+  qualityReport: ReportQuality
+  htmlContent: string
+  errorMessage: string | null
+  startedAt: string
+  completedAt: string | null
+}
+
 // ---------- REST ----------
 
 const base = (oid: string) => `/formal/ontologies/${oid}/agent`
@@ -302,6 +365,32 @@ export const agentApi = {
     apiClientV2.delete(`${base(oid)}/conversations/${cid}`),
   executeProposal: (oid: string, body: { actionId: string; parameters: Record<string, unknown>; targetInstanceId?: string | null }) =>
     apiClientV2.post<ExecuteProposalResult>(`${base(oid)}/execute-proposal`, body),
+  reportTemplates: (oid: string) =>
+    apiClientV2.get<AnalysisReportTemplate[]>(`${base(oid)}/report-templates`),
+  createReportTemplate: (oid: string, body: { brief: string; modelId?: string | null; conversationId?: string | null }) =>
+    apiClientV2.post<AnalysisReportTemplate>(`${base(oid)}/report-templates/ai-draft`, body),
+  reportTemplate: (oid: string, templateId: string) =>
+    apiClientV2.get<AnalysisReportTemplate>(`${base(oid)}/report-templates/${templateId}`),
+  updateReportTemplate: (oid: string, templateId: string, body: {
+    expectedRevision: number; name: string; description: string; sections: ReportSection[];
+    style: Record<string, unknown>; defaultModelId?: string | null
+  }) => apiClientV2.put<AnalysisReportTemplate>(`${base(oid)}/report-templates/${templateId}`, body),
+  deleteReportTemplate: (oid: string, templateId: string) =>
+    apiClientV2.delete(`${base(oid)}/report-templates/${templateId}`),
+  previewReportTemplate: (oid: string, templateId: string, modelId?: string | null) =>
+    apiClientV2.post<AnalysisReportRun>(`${base(oid)}/report-templates/${templateId}/preview`, { modelId }),
+  publishReportTemplate: (oid: string, templateId: string) =>
+    apiClientV2.post<AnalysisReportTemplate>(`${base(oid)}/report-templates/${templateId}/publish`, {}),
+  runReportTemplate: (oid: string, templateId: string, modelId?: string | null) =>
+    apiClientV2.post<AnalysisReportRun>(`${base(oid)}/report-templates/${templateId}/runs`, { modelId }),
+  reportRuns: (oid: string, templateId: string) =>
+    apiClientV2.get<AnalysisReportRun[]>(`${base(oid)}/report-templates/${templateId}/runs`),
+  reportRun: (oid: string, runId: string) =>
+    apiClientV2.get<AnalysisReportRun>(`${base(oid)}/report-runs/${runId}`),
+}
+
+export function reportHtmlUrl(oid: string, runId: string): string {
+  return `${apiRoot()}${base(oid)}/report-runs/${runId}/html`
 }
 
 // ---------- SSE 流式 chat ----------

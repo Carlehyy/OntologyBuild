@@ -980,6 +980,7 @@ function OntologyNetworkView({
 
 export default function AgentWorkbenchPage() {
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const navigate = useNavigate()
   const { containerRef, sizes, startResize } = useAssistantLayout()
 
   // -- 本体 / 模型选择 --
@@ -1277,6 +1278,16 @@ export default function AgentWorkbenchPage() {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => navigate(oid
+                    ? `/agent/reports/new?ontologyId=${encodeURIComponent(oid)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}`
+                    : '/agent/reports')}
+                  className="mr-1 inline-flex h-8 items-center rounded-full bg-slate-900 px-3.5 text-[11px] font-semibold text-white shadow-[0_8px_20px_rgba(15,23,42,0.16)] transition-[transform,background] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 hover:bg-teal-800 active:translate-y-0"
+                  title={oid ? '基于当前本体和会话生成可编辑分析报告模板' : '打开分析报告工作台'}
+                >
+                  {oid ? '生成分析报告' : '分析报告'}
+                </button>
                 <select
                   value={modelId}
                   onChange={e => setModelId(e.target.value)}

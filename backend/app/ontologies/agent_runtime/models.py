@@ -5,10 +5,12 @@
 不自由扫描 schema，只能在 AgentProfile 声明的授权边界内，通过本体暴露的
 对象 / 链接 / 事实 / 动作完成业务交互。
 
-三张表：
+五张表：
   - AgentProfile       每个本体一份的授权边界配置（能看什么、能提什么动作、配额）
   - AgentConversation  对话（按本体 × 用户组织）
   - AgentMessage       消息（含工具调用轨迹 / 引用 / 动作提案，全程可审计）
+  - AnalysisReportTemplate  AI 辅助生成、人工编辑、试运行后发布的报告模板
+  - AnalysisReportRun       模板在真实数据上的预览/正式运行快照与 HTML 产物
 """
 import uuid
 from datetime import datetime, timezone
@@ -88,3 +90,63 @@ class AgentMessage(Base):
     token_usage: Mapped[dict] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class AnalysisReportTemplate(Base):
+    """分析报告模板。
+
+    ``revision`` 是发布质量门的并发令牌：模板任何可见内容被修改都会递增，
+    已完成的真实数据试运行只对当时 revision 有效。发布后的模板不可原地修改，
+    避免自动运行悄悄漂移。
+    """
+    __tablename__ = "fo_analysis_report_templates"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ontology_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_by: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    source_prompt: Mapped[str] = mapped_column(Text, default="")
+    generation_mode: Mapped[str] = mapped_column(String(20), default="ai")  # ai | fallback | manual
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | published
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+    # [{id,title,goal,visualization,queryPlan:[{tool,arguments}]}]
+    sections: Mapped[list] = mapped_column(JSON, default=list)
+    style: Mapped[dict] = mapped_column(JSON, default=dict)
+    default_model_id: Mapped[str] = mapped_column(String, nullable=True)
+
+    # 最近一次真实数据试运行；仅当 revision 相等且质量门通过时允许发布。
+    last_preview_run_id: Mapped[str] = mapped_column(String, nullable=True)
+    last_preview_revision: Mapped[int] = mapped_column(Integer, nullable=True)
+    published_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class AnalysisReportRun(Base):
+    """一次分析报告运行。
+
+    保存模板快照、查询结果、质量报告与完整 HTML，使输出可复核、可下载，
+    也让后续 n8n 自动触发复用同一套确定性查询计划。
+    """
+    __tablename__ = "fo_analysis_report_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    template_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    ontology_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_by: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    trigger_type: Mapped[str] = mapped_column(String(20), default="preview")  # preview | manual | scheduled
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running | succeeded | failed
+    template_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    template_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    section_results: Mapped[list] = mapped_column(JSON, default=list)
+    quality_report: Mapped[dict] = mapped_column(JSON, default=dict)
+    html_content: Mapped[str] = mapped_column(Text, default="")
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)

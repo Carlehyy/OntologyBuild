@@ -541,6 +541,239 @@ def test_disabled_agent(client, auth_headers, modeled_ontology):
     assert "停用" in (r.json()["data"]["error"] or "")
 
 
+# ---------------------------------------------------------------- 分析报告能力
+
+
+def test_analysis_report_template_preview_publish_and_run(
+        client, auth_headers, modeled_ontology, db, admin_user, editor_user, monkeypatch):
+    """AI 草稿可编辑；真实数据试运行绑定 revision；质量门通过后才能发布并复跑。"""
+    oid = modeled_ontology["id"]
+    from app.models.model_config import ModelConfig
+    model = ModelConfig(id=str(uuid.uuid4()), name="report-fake", provider="openai",
+                        config_type="llm", models=["report-fake-model"],
+                        created_by=admin_user.id)
+    db.add(model)
+    db.commit()
+
+    def fake_chat(call_kwargs, messages, tools):
+        prompt = messages[-1]["content"]
+        if "生成一份可编辑" in prompt:
+            return {"content": """{
+              "name": "订单经营分析报告",
+              "description": "用于管理层核对订单规模与状态结构。",
+              "sections": [
+                {"id":"order-scale","title":"订单规模","goal":"统计订单总量并解释当前业务规模。","visualization":"kpi","queryPlan":[{"tool":"aggregate_objects","arguments":{"object_type":"Order","metric":"count"}},{"tool":"aggregate_objects","arguments":{"object_type":"Order","metric":"sum","metric_property":"amount"}}]},
+                {"id":"order-status","title":"订单状态结构","goal":"按状态分析订单分布与集中情况。","visualization":"bar","queryPlan":[{"tool":"aggregate_objects","arguments":{"object_type":"Order","metric":"count","group_by":"status"}}]}
+              ]
+            }""", "tool_calls": [], "usage": None}
+        assert "为每个报告章节" in prompt
+        return {"content": """{
+          "order-scale":"当前共有2笔订单。该指标给出了本次真实数据范围内的业务规模基线，可作为后续状态结构分析的分母。",
+          "order-status":"待支付与已支付订单各1笔，当前状态分布均衡。样本量仍较小，汇报时应避免将这一结构外推为长期趋势。"
+        }""", "tool_calls": [], "usage": None}
+
+    from app.ontologies.agent_runtime import llm_bridge
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+
+    base = f"{_fo(oid)}/agent/report-templates"
+    created = client.post(
+        f"{base}/ai-draft", headers=auth_headers,
+        json={"brief": "生成订单规模和状态结构的管理层汇报", "modelId": model.id},
+    )
+    assert created.status_code == 201, created.text
+    template = created.json()["data"]
+    assert template["status"] == "draft" and template["generationMode"] == "ai"
+    assert len(template["sections"]) == 2
+
+    blocked = client.post(f"{base}/{template['id']}/publish", headers=auth_headers)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "report_preview_required"
+
+    preview = client.post(
+        f"{base}/{template['id']}/preview", headers=auth_headers,
+        json={"modelId": model.id},
+    )
+    assert preview.status_code == 200, preview.text
+    run = preview.json()["data"]
+    assert run["status"] == "succeeded"
+    assert run["qualityReport"]["passed"] is True
+    assert run["qualityReport"]["score"] >= 80
+    assert "订单经营分析报告" in run["htmlContent"]
+    assert "订单状态结构" in run["htmlContent"]
+    assert "核心指标数据" in run["htmlContent"] and ">350<" in run["htmlContent"]
+    assert "<script" not in run["htmlContent"].lower()
+
+    # 试运行后修改模板：旧预览立即失效，发布必须再取一次真实数据。
+    template["description"] = "更新后的汇报说明"
+    updated = client.put(
+        f"{base}/{template['id']}", headers=auth_headers,
+        json={
+            "expectedRevision": template["revision"],
+            "name": template["name"], "description": template["description"],
+            "sections": template["sections"], "style": template["style"],
+            "defaultModelId": model.id,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["revision"] == template["revision"] + 1
+    assert updated.json()["data"]["lastPreviewRunId"] is None
+    stale = client.put(
+        f"{base}/{template['id']}", headers=auth_headers,
+        json={
+            "expectedRevision": template["revision"],
+            "name": template["name"], "description": "过期页面的覆盖尝试",
+            "sections": template["sections"], "style": template["style"],
+            "defaultModelId": model.id,
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "report_revision_conflict"
+    assert client.post(f"{base}/{template['id']}/publish", headers=auth_headers).status_code == 409
+
+    preview2 = client.post(
+        f"{base}/{template['id']}/preview", headers=auth_headers,
+        json={"modelId": model.id},
+    )
+    assert preview2.status_code == 200 and preview2.json()["data"]["qualityReport"]["passed"]
+    published = client.post(f"{base}/{template['id']}/publish", headers=auth_headers)
+    assert published.status_code == 200, published.text
+    assert published.json()["data"]["status"] == "published"
+
+    formal_run = client.post(
+        f"{base}/{template['id']}/runs", headers=auth_headers,
+        json={"modelId": model.id},
+    )
+    assert formal_run.status_code == 200, formal_run.text
+    assert formal_run.json()["data"]["triggerType"] == "manual"
+    assert formal_run.json()["data"]["status"] == "succeeded"
+    run_id = formal_run.json()["data"]["id"]
+    history = client.get(f"{base}/{template['id']}/runs", headers=auth_headers)
+    assert history.status_code == 200
+    assert history.json()["data"][0]["htmlContent"] == ""
+    html_response = client.get(f"{_fo(oid)}/agent/report-runs/{run_id}/html", headers=auth_headers)
+    assert html_response.status_code == 200
+    assert "default-src 'none'" in html_response.headers["content-security-policy"]
+
+    # 正式模板可复用，但运行历史按发起者隔离，列表与详情权限一致。
+    editor_login = client.post(
+        "/api/v1/auth/login", json={"username": "editor", "password": "editor123"})
+    editor_headers = {
+        "Authorization": f"Bearer {editor_login.json()['data']['access_token']}"}
+    editor_history = client.get(
+        f"{base}/{template['id']}/runs", headers=editor_headers)
+    assert editor_history.status_code == 200
+    assert editor_history.json()["data"] == []
+    assert client.get(
+        f"{_fo(oid)}/agent/report-runs/{run_id}", headers=editor_headers).status_code == 403
+
+    editor_run = client.post(
+        f"{base}/{template['id']}/runs", headers=editor_headers,
+        json={"modelId": model.id},
+    )
+    assert editor_run.status_code == 200, editor_run.text
+    own_editor_history = client.get(
+        f"{base}/{template['id']}/runs", headers=editor_headers).json()["data"]
+    assert [item["id"] for item in own_editor_history] == [editor_run.json()["data"]["id"]]
+
+
+def test_analysis_report_quality_gate_and_readonly_query_guard(
+        client, auth_headers, modeled_ontology, db, admin_user, monkeypatch):
+    """单章节低质量模板不能发布；报告查询计划不能混入写动作。"""
+    oid = modeled_ontology["id"]
+    from app.models.model_config import ModelConfig
+    model = ModelConfig(id=str(uuid.uuid4()), name="quality-fake", provider="openai",
+                        config_type="llm", models=["quality-fake-model"],
+                        created_by=admin_user.id)
+    db.add(model)
+    db.commit()
+
+    def fake_chat(call_kwargs, messages, tools):
+        prompt = messages[-1]["content"]
+        if "生成一份可编辑" in prompt:
+            return {"content": """{
+              "name":"订单快照","description":"单指标草稿",
+              "sections":[{"id":"only","title":"订单总量","goal":"统计订单总量。","visualization":"kpi","queryPlan":[{"tool":"aggregate_objects","arguments":{"object_type":"Order","metric":"count"}}]}]
+            }""", "tool_calls": [], "usage": None}
+        return {"content": "{\"only\":\"当前共有2笔订单，本节只提供单一规模指标，尚不足以支撑完整的管理层汇报。\"}",
+                "tool_calls": [], "usage": None}
+
+    from app.ontologies.agent_runtime import llm_bridge
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+    base = f"{_fo(oid)}/agent/report-templates"
+    created = client.post(
+        f"{base}/ai-draft", headers=auth_headers,
+        json={"brief": "只生成订单总量快照用于验证质量门", "modelId": model.id},
+    ).json()["data"]
+    preview = client.post(
+        f"{base}/{created['id']}/preview", headers=auth_headers,
+        json={"modelId": model.id},
+    ).json()["data"]
+    assert preview["qualityReport"]["passed"] is False
+    assert any("至少需要两个" in item for item in preview["qualityReport"]["blockers"])
+    publish = client.post(f"{base}/{created['id']}/publish", headers=auth_headers)
+    assert publish.status_code == 422
+    assert publish.json()["detail"]["code"] == "report_quality_gate_blocked"
+
+    invalid_sections = [{
+        "id": "unsafe", "title": "危险章节", "goal": "不应执行写动作。", "visualization": "none",
+        "queryPlan": [{"tool": "propose_action", "arguments": {"action": "mark_paid"}}],
+    }]
+    invalid = client.put(
+        f"{base}/{created['id']}", headers=auth_headers,
+        json={"expectedRevision": created["revision"], "name": "危险模板", "description": "", "sections": invalid_sections, "style": {}},
+    )
+    assert invalid.status_code == 422
+    assert "只允许" in invalid.text
+
+    wrong_contract = [{
+        "id": "wrong-contract", "title": "错误聚合参数", "goal": "验证 AI 参数结构会被提前拦截。",
+        "visualization": "bar",
+        "queryPlan": [{"tool": "aggregate_objects", "arguments": {
+            "object": "Order", "aggregations": [{"field": "amount", "function": "sum"}],
+        }}],
+    }]
+    rejected = client.put(
+        f"{base}/{created['id']}", headers=auth_headers,
+        json={"expectedRevision": created["revision"], "name": "错误参数模板",
+              "description": "", "sections": wrong_contract, "style": {}},
+    )
+    assert rejected.status_code == 422
+    assert "未知参数" in rejected.text
+
+
+def test_analysis_report_quality_gate_rejects_empty_real_data():
+    """查询本身成功但没有任何可分析数据时，不能以“技术成功”冒充汇报质量。"""
+    from app.ontologies.agent_runtime.reporting import evaluate_quality
+
+    sections = [{
+        "id": f"empty-{index}", "title": f"空数据章节{index}", "goal": "核对真实数据是否存在。",
+        "visualization": "table", "narrative": "当前数据不足，无法形成可靠的管理层分析结论。",
+        "queries": [{"tool": "search_objects", "arguments": {}, "result": {"items": [], "total": 0}}],
+        "chart": None,
+    } for index in range(2)]
+
+    quality = evaluate_quality({"revision": 1}, sections)
+    assert quality["passed"] is False
+    assert quality["score"] == 50
+    assert any("没有取得可用于分析" in item for item in quality["blockers"])
+    substance = next(item for item in quality["checks"] if item["key"] == "substance")
+    assert substance["passed"] is False
+
+
+def test_analysis_report_style_tokens_are_strictly_normalized():
+    """渲染样式不接受字符串伪装的布尔值，也不持久化未知外观令牌。"""
+    from app.ontologies.agent_runtime.reporting import normalize_style
+
+    style = normalize_style({
+        "theme": "untrusted-theme", "accent": "scripted",
+        "density": "compressed", "showSources": "false",
+    })
+    assert style == {
+        "theme": "editorial-light", "accent": "teal",
+        "density": "comfortable", "showSources": True,
+    }
+
+
 # ---------------------------------------------------------------- 多跳遍历 & 护栏
 
 

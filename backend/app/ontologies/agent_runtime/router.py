@@ -12,16 +12,21 @@
 """
 import json
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, get_current_user, require_admin
 from app.models.ontology import OntologyProject
 from app.ontologies.agent_runtime import schemas as S
 from app.ontologies.agent_runtime.boundary import ToolError, build_scope, get_or_create_profile
-from app.ontologies.agent_runtime.models import AgentConversation, AgentMessage, AgentProfile
+from app.ontologies.agent_runtime.models import (
+    AgentConversation, AgentMessage, AgentProfile,
+    AnalysisReportRun, AnalysisReportTemplate,
+)
 from app.ontologies.agent_runtime.orchestrator import run_agent_turn
 from app.ontologies.agent_runtime.graph_service import (
     analyze_change_impact,
@@ -29,6 +34,7 @@ from app.ontologies.agent_runtime.graph_service import (
     find_paths,
     get_instance_detail,
 )
+from app.ontologies.agent_runtime import reporting
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -176,6 +182,261 @@ def query_agent_graph_impact(
         raise HTTPException(422, str(exc)) from exc
 
 
+# ---------------------------------------------------------------- 分析报告模板
+
+
+def _template_out(row: AnalysisReportTemplate) -> dict:
+    return S.ReportTemplateOut.model_validate(row).model_dump(by_alias=True)
+
+
+def _run_out(row: AnalysisReportRun, *, include_html: bool = True) -> dict:
+    data = S.ReportRunOut.model_validate(row).model_dump(by_alias=True)
+    if not include_html:
+        data["htmlContent"] = ""
+        data["sectionResults"] = []
+    return data
+
+
+def _require_report_template(db: Session, ontology_id: str, template_id: str,
+                             current_user) -> AnalysisReportTemplate:
+    row = db.query(AnalysisReportTemplate).filter(
+        AnalysisReportTemplate.id == template_id,
+        AnalysisReportTemplate.ontology_id == ontology_id,
+    ).first()
+    if not row:
+        raise HTTPException(404, "分析报告模板不存在")
+    if row.status != "published" and row.created_by != getattr(current_user, "id", None) \
+            and getattr(current_user, "role", "") != "admin":
+        raise HTTPException(403, "无权访问该分析报告模板")
+    return row
+
+
+def _require_report_run(db: Session, ontology_id: str, run_id: str,
+                        current_user) -> AnalysisReportRun:
+    row = db.query(AnalysisReportRun).filter(
+        AnalysisReportRun.id == run_id,
+        AnalysisReportRun.ontology_id == ontology_id,
+    ).first()
+    if not row:
+        raise HTTPException(404, "分析报告运行记录不存在")
+    if row.created_by != getattr(current_user, "id", None) \
+            and getattr(current_user, "role", "") != "admin":
+        raise HTTPException(403, "无权访问该分析报告运行记录")
+    return row
+
+
+@router.get("/{ontology_id}/agent/report-templates")
+def list_report_templates(ontology_id: str, db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    _require_ontology(db, ontology_id)
+    query = db.query(AnalysisReportTemplate).filter(
+        AnalysisReportTemplate.ontology_id == ontology_id)
+    if getattr(current_user, "role", "") != "admin":
+        query = query.filter(or_(
+            AnalysisReportTemplate.created_by == getattr(current_user, "id", None),
+            AnalysisReportTemplate.status == "published",
+        ))
+    rows = query.order_by(AnalysisReportTemplate.updated_at.desc()).limit(100).all()
+    return _ok([_template_out(row) for row in rows])
+
+
+@router.post("/{ontology_id}/agent/report-templates/ai-draft", status_code=201)
+def create_ai_report_template(ontology_id: str, body: S.ReportTemplateAIDraftRequest,
+                              db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    _require_ontology(db, ontology_id)
+    brief = (body.brief or "").strip()
+    if len(brief) < 8:
+        raise HTTPException(422, "请用至少 8 个字说明报告面向谁、要回答什么问题")
+
+    context = ""
+    if body.conversation_id:
+        conversation = _require_conversation(db, ontology_id, body.conversation_id, current_user)
+        messages = (db.query(AgentMessage)
+                    .filter(AgentMessage.conversation_id == conversation.id)
+                    .order_by(AgentMessage.created_at.asc()).limit(30).all())
+        context = "\n".join(
+            f"{'用户' if item.role == 'user' else '助手'}：{(item.content or '')[:500]}"
+            for item in messages if (item.content or "").strip())
+
+    try:
+        spec = reporting.generate_template_spec(
+            db, ontology_id, brief, model_id=body.model_id,
+            conversation_context=context)
+        sections = reporting.normalize_sections(spec["sections"])
+    except (ToolError, ValueError) as exc:
+        raise HTTPException(422, str(exc))
+
+    row = AnalysisReportTemplate(
+        ontology_id=ontology_id,
+        created_by=getattr(current_user, "id", None),
+        name=spec["name"],
+        description=spec.get("description") or "",
+        source_prompt=brief,
+        generation_mode=spec.get("generationMode") or "ai",
+        sections=sections,
+        style=reporting.normalize_style(spec.get("style")),
+        default_model_id=body.model_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _ok(_template_out(row))
+
+
+@router.get("/{ontology_id}/agent/report-templates/{template_id}")
+def get_report_template(ontology_id: str, template_id: str,
+                        db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    return _ok(_template_out(
+        _require_report_template(db, ontology_id, template_id, current_user)))
+
+
+@router.put("/{ontology_id}/agent/report-templates/{template_id}")
+def update_report_template(ontology_id: str, template_id: str,
+                           body: S.ReportTemplateUpdate,
+                           db: Session = Depends(get_db),
+                           current_user=Depends(get_current_user)):
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    if row.status == "published":
+        raise HTTPException(409, "已发布模板不可原地修改；请基于它创建新草稿版本")
+    if body.expected_revision != row.revision:
+        raise HTTPException(409, detail={
+            "code": "report_revision_conflict",
+            "message": "模板已在其他页面更新，请刷新后再编辑，避免覆盖较新的修改",
+            "currentRevision": row.revision,
+        })
+    try:
+        sections = reporting.normalize_sections(body.sections)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    name = (body.name or "").strip()[:240]
+    if not name:
+        raise HTTPException(422, "报告名称不能为空")
+    next_state = {
+        "name": name,
+        "description": (body.description or "").strip()[:5000],
+        "sections": sections,
+        "style": reporting.normalize_style(body.style),
+        "default_model_id": body.default_model_id,
+    }
+    current_state = {key: getattr(row, key) for key in next_state}
+    if current_state != next_state:
+        for key, value in next_state.items():
+            setattr(row, key, value)
+        row.revision = (row.revision or 0) + 1
+        row.last_preview_run_id = None
+        row.last_preview_revision = None
+        db.commit()
+        db.refresh(row)
+    return _ok(_template_out(row))
+
+
+@router.delete("/{ontology_id}/agent/report-templates/{template_id}", status_code=204)
+def delete_report_template(ontology_id: str, template_id: str,
+                           db: Session = Depends(get_db),
+                           current_user=Depends(get_current_user)):
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    if row.status == "published":
+        raise HTTPException(409, "已发布模板不可删除，请保留运行审计记录")
+    db.query(AnalysisReportRun).filter(AnalysisReportRun.template_id == row.id).delete()
+    db.delete(row)
+    db.commit()
+
+
+@router.post("/{ontology_id}/agent/report-templates/{template_id}/preview")
+def preview_report_template(ontology_id: str, template_id: str,
+                            body: S.ReportRunRequest,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    if row.status == "published":
+        raise HTTPException(409, "已发布模板请使用正式运行入口")
+    run = reporting.execute_report(db, row, current_user, "preview", body.model_id)
+    return _ok(_run_out(run))
+
+
+@router.post("/{ontology_id}/agent/report-templates/{template_id}/publish")
+def publish_report_template(ontology_id: str, template_id: str,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    if row.status == "published":
+        return _ok(_template_out(row))
+    if not row.last_preview_run_id or row.last_preview_revision != row.revision:
+        raise HTTPException(409, detail={
+            "code": "report_preview_required",
+            "message": "模板已变化或尚未试运行，请重新查询真实数据并确认结果后再发布",
+        })
+    run = db.query(AnalysisReportRun).filter(
+        AnalysisReportRun.id == row.last_preview_run_id,
+        AnalysisReportRun.template_id == row.id,
+    ).first()
+    if not run or run.status != "succeeded":
+        raise HTTPException(409, "最近一次真实数据试运行未成功")
+    quality = run.quality_report or {}
+    if not quality.get("passed"):
+        raise HTTPException(422, detail={
+            "code": "report_quality_gate_blocked",
+            "message": quality.get("summary") or "报告未达到汇报级发布标准",
+            "quality": quality,
+        })
+    row.status = "published"
+    row.published_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return _ok(_template_out(row))
+
+
+@router.post("/{ontology_id}/agent/report-templates/{template_id}/runs")
+def run_published_report(ontology_id: str, template_id: str,
+                         body: S.ReportRunRequest,
+                         db: Session = Depends(get_db),
+                         current_user=Depends(get_current_user)):
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    if row.status != "published":
+        raise HTTPException(409, "模板尚未发布，只能先执行真实数据试运行")
+    run = reporting.execute_report(db, row, current_user, "manual", body.model_id)
+    return _ok(_run_out(run))
+
+
+@router.get("/{ontology_id}/agent/report-templates/{template_id}/runs")
+def list_report_runs(ontology_id: str, template_id: str,
+                     db: Session = Depends(get_db),
+                     current_user=Depends(get_current_user)):
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    query = db.query(AnalysisReportRun).filter(AnalysisReportRun.template_id == row.id)
+    # 已发布模板可被本体用户复用，但每次运行仍属于发起者自己的审计记录。
+    # 列表与详情使用同一权限边界，避免列表展示一条随后无法打开的他人运行。
+    if getattr(current_user, "role", "") != "admin":
+        query = query.filter(
+            AnalysisReportRun.created_by == getattr(current_user, "id", None))
+    runs = query.order_by(AnalysisReportRun.started_at.desc()).limit(50).all()
+    return _ok([_run_out(run, include_html=False) for run in runs])
+
+
+@router.get("/{ontology_id}/agent/report-runs/{run_id}")
+def get_report_run(ontology_id: str, run_id: str,
+                   db: Session = Depends(get_db),
+                   current_user=Depends(get_current_user)):
+    return _ok(_run_out(_require_report_run(db, ontology_id, run_id, current_user)))
+
+
+@router.get("/{ontology_id}/agent/report-runs/{run_id}/html", response_class=HTMLResponse)
+def get_report_html(ontology_id: str, run_id: str,
+                    db: Session = Depends(get_db),
+                    current_user=Depends(get_current_user)):
+    run = _require_report_run(db, ontology_id, run_id, current_user)
+    if run.status != "succeeded" or not run.html_content:
+        raise HTTPException(409, "该运行尚无可用 HTML 报告")
+    return HTMLResponse(
+        content=run.html_content,
+        headers={
+            "Content-Disposition": f'inline; filename="analysis-report-{run.id[:8]}.html"',
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 @router.post("/{ontology_id}/agent/chat")
 def chat(ontology_id: str, body: S.ChatRequest,
          db: Session = Depends(get_db), current_user=Depends(get_current_user)):

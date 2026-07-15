@@ -85,3 +85,59 @@ class MessageOut(CamelModel):
     model: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     created_at: datetime
+
+
+class ReportTemplateAIDraftRequest(CamelModel):
+    brief: str
+    model_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class ReportTemplateUpdate(CamelModel):
+    expected_revision: int
+    name: str
+    description: str = ""
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+    default_model_id: Optional[str] = None
+
+
+class ReportRunRequest(CamelModel):
+    model_id: Optional[str] = None
+
+
+class ReportTemplateOut(CamelModel):
+    id: str
+    ontology_id: str
+    created_by: str
+    name: str
+    description: str = ""
+    source_prompt: str = ""
+    generation_mode: str
+    status: str
+    revision: int
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+    default_model_id: Optional[str] = None
+    last_preview_run_id: Optional[str] = None
+    last_preview_revision: Optional[int] = None
+    published_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportRunOut(CamelModel):
+    id: str
+    template_id: str
+    ontology_id: str
+    created_by: str
+    trigger_type: str
+    status: str
+    template_revision: int
+    template_snapshot: dict[str, Any] = Field(default_factory=dict)
+    section_results: list[dict[str, Any]] = Field(default_factory=list)
+    quality_report: dict[str, Any] = Field(default_factory=dict)
+    html_content: str = ""
+    error_message: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None

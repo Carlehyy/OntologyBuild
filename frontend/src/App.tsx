@@ -25,6 +25,7 @@ import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 import SyncTasksTab from '@/pages/pipelines/sync-tasks/SyncTasksTab'
 import StructuredDataPage from '@/pages/data-management/structured/StructuredDataPage'
 import AgentWorkbenchPage from '@/pages/agent/AgentWorkbenchPage'
+import ReportStudioPage from '@/pages/agent/ReportStudioPage'
 import EventRegistryPage from '@/pages/events/EventRegistryPage'
 import ExplorationPage from '@/pages/explore/ExplorationPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
@@ -90,6 +91,8 @@ export default function App() {
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
           <Route path="/api-hub" element={<Navigate to="/api-hub/interfaces" replace />} />
           <Route path="/api-hub/:tab" element={<ProtectedRoute><ApiHubPage /></ProtectedRoute>} />
+          <Route path="/agent/reports" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
+          <Route path="/agent/reports/:templateId" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent" element={<ProtectedRoute><AgentWorkbenchPage /></ProtectedRoute>} />
           <Route path="/events" element={<ProtectedRoute><EventRegistryPage /></ProtectedRoute>} />
           <Route path="/rag" element={<Navigate to="/agent" replace />} />
