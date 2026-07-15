@@ -925,7 +925,7 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
         )}
 
         {selectedNode && (
-          <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[min(310px,42%)] min-w-[260px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white/96 shadow-lg backdrop-blur" data-testid="graph-inspector">
+          <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[min(310px,42%)] min-w-[260px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg" data-testid="graph-inspector">
             <div className="flex items-start gap-2 border-b border-slate-200 px-3 py-3">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-700">
                 {selectedNode.kind === 'object_type' ? <Layers3 size={15} /> : selectedNode.kind === 'property' ? <GitBranch size={15} /> : <CircleDotDashed size={15} />}
