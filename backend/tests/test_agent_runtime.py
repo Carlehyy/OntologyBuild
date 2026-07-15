@@ -6,9 +6,68 @@
      requires_approval 的动作进 HITL pending 队列
   4. 回合编排：假 LLM 驱动 orchestrator 走「查询→回答」全链路，轨迹/引用被持久化
 """
+import json
 import uuid
 
 import pytest
+
+
+def test_large_visual_tool_result_keeps_structured_graph():
+    from app.ontologies.agent_runtime.orchestrator import _display_result
+
+    nodes = [{
+        "id": f"instance:i-{index}",
+        "entityId": f"i-{index}",
+        "kind": "instance",
+        "label": f"设备-{index}",
+        "objectTypeId": "device",
+        "objectTypeLabel": "设备",
+        "preview": [{"name": "blob", "label": "大字段", "value": "x" * 300}],
+    } for index in range(120)]
+    result = {
+        "kind": "impact",
+        "mode": "association_only",
+        "change": {"instanceId": "i-0", "property": "status"},
+        "summary": {"related": 119, "direct": 10, "indirect": 109},
+        "nodes": nodes,
+        "edges": [{
+            "id": f"link:l-{index}", "entityId": f"l-{index}", "kind": "relation",
+            "source": f"instance:i-{index}", "target": f"instance:i-{index + 1}",
+            "label": "关联", "properties": {"blob": "y" * 300},
+        } for index in range(119)],
+        "impacts": [{
+            "instanceId": f"i-{index}", "label": f"设备-{index}", "objectType": "设备",
+            "depth": 1 if index < 10 else 2,
+            "classification": "direct" if index < 10 else "indirect",
+            "certainty": "related",
+            "path": {"nodeIds": ["i-0", f"i-{index}"], "edgeIds": [f"l-{index}"],
+                     "steps": [{"blob": "z" * 300}], "hops": 1},
+        } for index in range(1, 120)],
+        "disclaimer": "只读关联范围",
+    }
+
+    displayed = _display_result(result)
+    assert displayed["kind"] == "impact"
+    assert isinstance(displayed["nodes"], list)
+    assert isinstance(displayed["edges"], list)
+    assert displayed["visualizationTruncated"] is True
+    assert "preview" not in displayed["nodes"][0]
+    assert "properties" not in displayed["edges"][0]
+    assert "steps" not in displayed["impacts"][0]["path"]
+    assert len(json.dumps(displayed, ensure_ascii=False)) <= 18000
+
+
+def test_agent_stream_can_close_without_yielding_after_generator_exit(monkeypatch):
+    from app.ontologies.agent_runtime import orchestrator
+
+    def fake_run(*_args, **_kwargs):
+        yield {"type": "answer", "content": "ok"}
+        yield {"type": "answer", "content": "unused"}
+
+    monkeypatch.setattr(orchestrator, "_run", fake_run)
+    stream = orchestrator.run_agent_turn(None, "ontology", None, "question")
+    assert next(stream)["content"] == "ok"
+    stream.close()  # 回归：关闭中的生成器不得再 yield done 或抛 RuntimeError
 
 
 def _fo(ontology_id: str) -> str:
@@ -168,6 +227,140 @@ def test_aggregate_and_history_and_traverse(client, auth_headers, modeled_ontolo
 
     hist = runner.run("get_object_history", {"instance_id": "inst-o1"})
     assert any(f["property"] == "status" for f in hist["facts"])   # 保存时追加过事实
+
+
+def test_progressive_graph_path_and_impact_preview(
+        client, auth_headers, modeled_ontology, db):
+    """数据图谱只读、受边界约束，并能返回可直接高亮的路径/影响结构。"""
+    oid = modeled_ontology["id"]
+    from app.models.ontology_formal import ObjectType, LinkType, ObjectInstance, LinkInstance
+
+    risk_type = ObjectType(
+        id="ot-risk", ontology_id=oid, name="Risk", display_name="风险",
+        primary_key="risk_no",
+        properties=[
+            {"id": "rp1", "name": "risk_no", "displayName": "风险号",
+             "type": "string", "required": True},
+            {"id": "rp2", "name": "level", "displayName": "等级",
+             "type": "string", "required": False},
+        ],
+    )
+    risk_link_type = LinkType(
+        id="lt-risk", ontology_id=oid, name="supplier_risk", display_name="供应风险",
+        source_object_type_id="ot-supplier", target_object_type_id="ot-risk",
+        cardinality="one-to-many", properties=[],
+    )
+    risk = ObjectInstance(
+        id="inst-r1", ontology_id=oid, object_type_id="ot-risk",
+        properties={"risk_no": "R-001", "level": "high"}, computed={}, source="manual",
+    )
+    risk_link = LinkInstance(
+        id="li-risk", ontology_id=oid, link_type_id="lt-risk",
+        source_object_id="inst-s1", target_object_id="inst-r1", properties={},
+    )
+    db.add_all([risk_type, risk_link_type, risk, risk_link])
+    db.commit()
+
+    level1 = client.get(
+        f"{_fo(oid)}/agent/graph?depth=1", headers=auth_headers)
+    assert level1.status_code == 200, level1.text
+    graph1 = level1.json()["data"]
+    assert {node["kind"] for node in graph1["nodes"]} == {"object_type"}
+    assert graph1["meta"]["matchedInstances"] == 4
+
+    level2 = client.get(
+        f"{_fo(oid)}/agent/graph?depth=2&query=SO-001&limit_per_type=5",
+        headers=auth_headers,
+    )
+    assert level2.status_code == 200, level2.text
+    graph2 = level2.json()["data"]
+    instance_nodes = [node for node in graph2["nodes"] if node["kind"] == "instance"]
+    assert [node["entityId"] for node in instance_nodes] == ["inst-o1"]
+    assert graph2["meta"]["matchedInstances"] == 1
+
+    level3 = client.get(
+        f"{_fo(oid)}/agent/graph?depth=3&focus_instance_id=inst-o1",
+        headers=auth_headers,
+    )
+    assert level3.status_code == 200, level3.text
+    graph3 = level3.json()["data"]
+    assert any(node["kind"] == "property" and node["propertyName"] == "status"
+               for node in graph3["nodes"])
+
+    detail = client.get(
+        f"{_fo(oid)}/agent/graph/instances/inst-o1", headers=auth_headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["properties"]["status"] == "pending"
+
+    paths = client.post(
+        f"{_fo(oid)}/agent/graph/paths", headers=auth_headers,
+        json={"sourceInstanceId": "inst-o1", "targetInstanceId": "inst-r1",
+              "direction": "both", "maxDepth": 4, "maxPaths": 3},
+    )
+    assert paths.status_code == 200, paths.text
+    path_data = paths.json()["data"]
+    assert path_data["found"] is True
+    assert path_data["paths"][0]["nodeIds"] == ["inst-o1", "inst-s1", "inst-r1"]
+    assert path_data["paths"][0]["hops"] == 2
+
+    impact = client.post(
+        f"{_fo(oid)}/agent/graph/impact", headers=auth_headers,
+        json={"instanceId": "inst-o1", "property": "status",
+              "proposedValue": "cancelled", "direction": "both", "maxDepth": 3},
+    )
+    assert impact.status_code == 200, impact.text
+    impact_data = impact.json()["data"]
+    assert impact_data["mode"] == "association_only"
+    assert impact_data["summary"] == {"related": 2, "direct": 1, "indirect": 1}
+    assert {item["classification"] for item in impact_data["impacts"]} == {"direct", "indirect"}
+    db.refresh(db.query(ObjectInstance).filter(ObjectInstance.id == "inst-o1").one())
+    unchanged = db.query(ObjectInstance).filter(ObjectInstance.id == "inst-o1").one()
+    assert unchanged.properties["status"] == "pending"  # 预演绝不落真实变更
+
+
+def test_graph_tools_respect_agent_scope(client, auth_headers, modeled_ontology, db):
+    oid = modeled_ontology["id"]
+    from app.models.ontology_formal import LinkInstance, ObjectInstance, ObjectType
+
+    # 防御历史脏数据：允许的链接类型也可能被旧数据错误地指向隐藏类型，路径层不得泄露。
+    db.add(ObjectType(
+        id="ot-hidden", ontology_id=oid, name="HiddenRisk", display_name="隐藏风险",
+        properties=[{"name": "name", "displayName": "名称", "type": "string"}],
+    ))
+    db.add(ObjectInstance(
+        id="inst-hidden", ontology_id=oid, object_type_id="ot-hidden",
+        properties={"name": "不可见"}, computed={},
+    ))
+    db.add(LinkInstance(
+        id="li-corrupt", ontology_id=oid, link_type_id="lt-1",
+        source_object_id="inst-o2", target_object_id="inst-hidden", properties={},
+    ))
+    db.commit()
+    client.put(f"{_fo(oid)}/agent/profile", headers=auth_headers,
+               json={"allowedObjectTypeIds": ["ot-order", "ot-supplier"]})
+    dirty_impact = client.post(
+        f"{_fo(oid)}/agent/graph/impact", headers=auth_headers,
+        json={"instanceId": "inst-o2", "property": "status", "proposedValue": "review"},
+    )
+    assert dirty_impact.status_code == 200
+    dirty_data = dirty_impact.json()["data"]
+    assert dirty_data["summary"]["related"] == 0
+    assert "inst-hidden" not in json.dumps(dirty_data)
+
+    client.put(f"{_fo(oid)}/agent/profile", headers=auth_headers,
+               json={"allowedObjectTypeIds": ["ot-order"]})
+
+    graph = client.get(f"{_fo(oid)}/agent/graph?depth=2", headers=auth_headers)
+    assert graph.status_code == 200
+    nodes = graph.json()["data"]["nodes"]
+    assert all(node.get("objectTypeId") == "ot-order" for node in nodes)
+
+    path = client.post(
+        f"{_fo(oid)}/agent/graph/paths", headers=auth_headers,
+        json={"sourceInstanceId": "inst-o1", "targetInstanceId": "inst-s1"},
+    )
+    assert path.status_code == 422
+    assert "不在授权范围" in path.text
 
 
 # ---------------------------------------------------------------- 动作治理

@@ -52,6 +52,22 @@ class ExecuteProposalRequest(CamelModel):
     target_instance_id: Optional[str] = None
 
 
+class GraphPathRequest(CamelModel):
+    source_instance_id: str
+    target_instance_id: str
+    direction: str = "both"
+    max_depth: int = Field(default=5, ge=1, le=6)
+    max_paths: int = Field(default=3, ge=1, le=5)
+
+
+class GraphImpactRequest(CamelModel):
+    instance_id: str
+    property: str
+    proposed_value: Any = None
+    direction: str = "both"
+    max_depth: int = Field(default=3, ge=1, le=4)
+
+
 class ConversationOut(CamelModel):
     id: str
     title: str

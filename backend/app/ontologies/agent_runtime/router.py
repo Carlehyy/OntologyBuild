@@ -13,7 +13,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,12 @@ from app.ontologies.agent_runtime import schemas as S
 from app.ontologies.agent_runtime.boundary import ToolError, build_scope, get_or_create_profile
 from app.ontologies.agent_runtime.models import AgentConversation, AgentMessage, AgentProfile
 from app.ontologies.agent_runtime.orchestrator import run_agent_turn
+from app.ontologies.agent_runtime.graph_service import (
+    analyze_change_impact,
+    build_workspace_graph,
+    find_paths,
+    get_instance_detail,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -82,6 +88,92 @@ def get_capabilities(ontology_id: str, db: Session = Depends(get_db),
     except ToolError as e:
         raise HTTPException(404, str(e))
     return _ok({**scope.summary(), "skillCard": scope.skill_card()})
+
+
+@router.get("/{ontology_id}/agent/graph")
+def get_agent_graph(
+    ontology_id: str,
+    depth: int = Query(default=2, ge=1, le=3),
+    query: str | None = Query(default=None, max_length=200),
+    object_type: str | None = Query(default=None, max_length=200),
+    focus_instance_id: str | None = Query(default=None, max_length=200),
+    limit_per_type: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """授权范围内的渐进式数据图谱：L1 类型、L2 实例、L3 聚焦属性。"""
+    _require_ontology(db, ontology_id)
+    try:
+        _, _, scope = build_scope(db, ontology_id)
+        return _ok(build_workspace_graph(
+            scope,
+            depth=depth,
+            query=query,
+            object_type_ref=object_type,
+            focus_instance_id=focus_instance_id,
+            limit_per_type=limit_per_type,
+        ))
+    except ToolError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/{ontology_id}/agent/graph/instances/{instance_id}")
+def get_agent_graph_instance(
+    ontology_id: str,
+    instance_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    _require_ontology(db, ontology_id)
+    try:
+        _, _, scope = build_scope(db, ontology_id)
+        return _ok(get_instance_detail(scope, instance_id))
+    except ToolError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/{ontology_id}/agent/graph/paths")
+def query_agent_graph_paths(
+    ontology_id: str,
+    body: S.GraphPathRequest,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    _require_ontology(db, ontology_id)
+    try:
+        _, _, scope = build_scope(db, ontology_id)
+        return _ok(find_paths(
+            scope,
+            body.source_instance_id,
+            body.target_instance_id,
+            direction=body.direction,
+            max_depth=body.max_depth,
+            max_paths=body.max_paths,
+        ))
+    except ToolError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/{ontology_id}/agent/graph/impact")
+def query_agent_graph_impact(
+    ontology_id: str,
+    body: S.GraphImpactRequest,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    _require_ontology(db, ontology_id)
+    try:
+        _, _, scope = build_scope(db, ontology_id)
+        return _ok(analyze_change_impact(
+            scope,
+            body.instance_id,
+            body.property,
+            body.proposed_value,
+            direction=body.direction,
+            max_depth=body.max_depth,
+        ))
+    except ToolError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/{ontology_id}/agent/chat")

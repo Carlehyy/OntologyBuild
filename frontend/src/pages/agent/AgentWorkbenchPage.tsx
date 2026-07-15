@@ -6,7 +6,7 @@
  *   - 每一步工具调用实时展示（可审计的推理轨迹）
  *   - 回答带对象引用；改数据只出「提案卡」，用户确认 + HITL 审批才真执行
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
@@ -16,8 +16,8 @@ import {
   Send, Bot, User, Sparkles, Boxes, Link2, Zap, Shield, History, Search, Eye,
   GitBranch, Sigma, ScrollText, ListChecks, FlaskConical, Plus, Loader2,
   AlertTriangle, BadgeCheck, FileSearch, PenLine, Trash2, Network,
-  RefreshCw, FunctionSquare, Minus, Maximize2, KeyRound, X, Download, ExternalLink,
-  ChevronRight, Copy, Check, List,
+  FunctionSquare, Minus, Maximize2, KeyRound, X, Download, ExternalLink,
+  ChevronRight, Copy, Check, List, ArrowLeftRight,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Modal } from '@/components/ui/Modal'
@@ -30,6 +30,7 @@ import {
 import { ProposalCard } from './ProposalCard'
 import { BoundaryDrawer } from './BoundaryDrawer'
 import { ChartBlock, AgentChart, type ChartSpec } from './AgentChart'
+import type { GraphAssistantSignal } from './InstanceKnowledgeGraph'
 import { useOntologyStore } from '../../palantir-graph/store/ontologyStore'
 import type {
   Action,
@@ -37,6 +38,8 @@ import type {
   ObjectType,
   OntologyFunction,
 } from '../../palantir-graph/types/ontology'
+
+const InstanceKnowledgeGraph = lazy(() => import('./InstanceKnowledgeGraph'))
 
 interface ChatMsg {
   id: string
@@ -149,6 +152,8 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   get_object: { label: '查看详情', icon: Eye },
   traverse_links: { label: '遍历关系', icon: GitBranch },
   traverse_path: { label: '多跳遍历', icon: Network },
+  find_paths: { label: '查找路径', icon: Network },
+  analyze_change_impact: { label: '关联影响预演', icon: FlaskConical },
   aggregate_objects: { label: '聚合统计', icon: Sigma },
   get_object_history: { label: '事实溯源', icon: ScrollText },
   list_actions: { label: '查看动作', icon: ListChecks },
@@ -983,6 +988,7 @@ export default function AgentWorkbenchPage() {
   })
   const ontologyList = (ontologies as any)?.items || ontologies || []
   const [oid, setOid] = useState('')
+  const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data'>('ontology')
 
   useEffect(() => {
     if (ontologyList.length === 0) {
@@ -1037,7 +1043,7 @@ export default function AgentWorkbenchPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showJump, setShowJump] = useState(false)
-  const [refreshMsg, setRefreshMsg] = useState('')
+  const [graphSignal, setGraphSignal] = useState<GraphAssistantSignal | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -1061,16 +1067,27 @@ export default function AgentWorkbenchPage() {
     setMessages([])
     setShowHistory(false)
     setShowJump(false)
+    setGraphSignal(null)
   }, [])
   useEffect(() => { resetChat() }, [oid, resetChat])
 
   const loadConversation = async (cid: string) => {
     const conv = await agentApi.conversation(oid, cid)
-    setConversationId(cid)
-    setMessages((conv.messages || []).map(m => ({
+    const restoredMessages = (conv.messages || []).map(m => ({
       id: m.id, role: m.role, content: m.content,
       steps: m.steps || [], citations: m.citations || [], proposals: m.proposals || [],
-    })))
+    }))
+    setConversationId(cid)
+    setMessages(restoredMessages)
+    const lastVisual = [...restoredMessages].reverse().find(message =>
+      message.role === 'assistant' && (message.citations.length > 0 || message.steps.some(step => {
+        const kind = (step.result as any)?.kind
+        return kind === 'path' || kind === 'impact'
+      })))
+    if (lastVisual) {
+      setWorkspaceView('data')
+      setGraphSignal({ sequence: Date.now(), steps: lastVisual.steps, citations: lastVisual.citations })
+    }
     setShowHistory(false)
   }
 
@@ -1097,14 +1114,25 @@ export default function AgentWorkbenchPage() {
       setMessages(prev => prev.map(m =>
         m.id === aid ? { ...m, ...(typeof p === 'function' ? p(m) : p) } : m))
 
+    const turnSteps: AgentStep[] = []
     try {
       await streamAgentChat(oid, { message: question, conversationId, modelId }, ev => {
         if (ev.type === 'meta') setConversationId(ev.conversationId)
         else if (ev.type === 'step') {
           const { type: _t, ...step } = ev
-          patch(m => ({ steps: [...m.steps, step as AgentStep] }))
+          const typedStep = step as AgentStep
+          turnSteps.push(typedStep)
+          patch(m => ({ steps: [...m.steps, typedStep] }))
+          const kind = (typedStep.result as any)?.kind
+          if (kind === 'path' || kind === 'impact') {
+            setWorkspaceView('data')
+            setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: [] })
+          }
         } else if (ev.type === 'answer') {
           patch({ content: ev.content, citations: ev.citations || [], proposals: ev.proposals || [], loading: false })
+          if ((ev.citations || []).length > 0 || turnSteps.some(step => ['path', 'impact'].includes((step.result as any)?.kind))) {
+            setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: ev.citations || [] })
+          }
         } else if (ev.type === 'error') {
           patch({ error: ev.message, loading: false })
         }
@@ -1117,15 +1145,22 @@ export default function AgentWorkbenchPage() {
     }
   }, [busy, conversationId, input, modelId, oid, refetchConversations])
 
-  const suggested = useMemo<string[]>(() => [], [caps])
+  const suggested = useMemo<string[]>(() => {
+    const first = caps?.objectTypes?.[0]?.displayName
+    return first ? [
+      '“' + first + '”有哪些实例？',
+      '帮我寻找两个具体实例之间的关系路径',
+      '分析一个字段拟议变化的直接和间接关联范围',
+    ] : []
+  }, [caps])
 
   const selectedOntology = ontologyList.find((o: any) => o.id === oid)
 
   if (ontologiesLoading) return <LoadingState message="加载配置..." />
 
   const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm'
-  const graphLoading = !!oid && backendId === oid && syncStatus === 'loading'
-  const graphError = !!oid && backendId === oid && syncStatus === 'error' && !graphOntology
+  const graphLoading = workspaceView === 'ontology' && !!oid && backendId === oid && syncStatus === 'loading'
+  const graphError = workspaceView === 'ontology' && !!oid && backendId === oid && syncStatus === 'error' && !graphOntology
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-bg-base)]">
@@ -1134,7 +1169,7 @@ export default function AgentWorkbenchPage() {
         className="scrollbar-none grid flex-1 min-h-0 overflow-x-auto overflow-y-hidden p-1"
         style={{ gridTemplateColumns: `minmax(420px, ${sizes[0]}fr) 4px minmax(560px, ${sizes[1]}fr)` }}
       >
-        {/* 2. 本体拓扑图 */}
+        {/* 2. 本体结构 / 数据推演图谱 */}
         <section className={`${panelClass} col-start-3 row-start-1 flex flex-col bg-white`}>
           <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
@@ -1143,11 +1178,15 @@ export default function AgentWorkbenchPage() {
                   <Network size={16} />
                 </div>
                 <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">本体拓扑图</h3>
+                  <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+                    {workspaceView === 'ontology' ? '本体拓扑图' : '数据推演图谱'}
+                  </h3>
                   <p className={`truncate text-[11px] ${syncStatus === 'error' ? 'text-red-500' : 'text-[var(--color-text-tertiary)]'}`}>
-                    {syncStatus === 'error'
+                    {workspaceView === 'ontology' && syncStatus === 'error'
                       ? (syncError || '网络图加载失败。')
-                      : `${selectedOntology?.name || '未选择本体'} · 只读展示对象实体与实体关系`}
+                      : workspaceView === 'ontology'
+                        ? `${selectedOntology?.name || '未选择本体'} · 只读展示对象类型与关系`
+                        : `${selectedOntology?.name || '未选择本体'} · 实例、路径与拟议变更联动`}
                   </p>
                 </div>
               </div>
@@ -1155,6 +1194,7 @@ export default function AgentWorkbenchPage() {
                 <select
                   value={oid}
                   onChange={e => setOid(e.target.value)}
+                  aria-label="选择本体"
                   className="h-8 min-w-[180px] cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-3 pr-8 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 10px center' }}
                 >
@@ -1164,29 +1204,33 @@ export default function AgentWorkbenchPage() {
                 </select>
                 <button
                   type="button"
-                  onClick={async () => {
-                    if (!oid) return
-                    await loadFromBackend(oid)
-                    setRefreshMsg('本体数据已刷新')
-                    setTimeout(() => setRefreshMsg(''), 2000)
-                  }}
-                  title="查询最新本体结构"
-                  aria-label="查询最新本体结构"
-                  className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                  onClick={() => setWorkspaceView(view => view === 'ontology' ? 'data' : 'ontology')}
+                  disabled={!oid}
+                  title={workspaceView === 'ontology' ? '切换到数据推演图谱' : '切换到本体拓扑图'}
+                  aria-label={workspaceView === 'ontology' ? '切换到数据推演图谱' : '切换到本体拓扑图'}
+                  data-testid="workspace-view-toggle"
+                  className="flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <RefreshCw size={14} className={graphLoading ? 'animate-spin' : ''} />
+                  <ArrowLeftRight size={14} />
                 </button>
               </div>
             </div>
           </div>
 
           <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
-            {refreshMsg && (
-              <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 animate-fade-in rounded-md bg-emerald-50 px-3 py-1.5 text-center text-xs text-emerald-700 shadow-sm">
-                {refreshMsg}
-              </div>
-            )}
-            {graphLoading ? (
+            {workspaceView === 'data' ? (
+              <Suspense fallback={(
+                <div className="flex h-full items-center justify-center gap-2 bg-slate-50 text-xs text-slate-500">
+                  <Loader2 size={14} className="animate-spin text-teal-600" />正在加载数据图谱工作台…
+                </div>
+              )}>
+                <InstanceKnowledgeGraph
+                  oid={oid}
+                  assistantSignal={graphSignal}
+                  onAskAssistant={question => void send(question)}
+                />
+              </Suspense>
+            ) : graphLoading ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 bg-slate-50 text-slate-500">
                 <Loader2 size={22} className="animate-spin text-sky-500" />
                 <span className="text-xs">正在加载本体网络…</span>
@@ -1236,6 +1280,7 @@ export default function AgentWorkbenchPage() {
                 <select
                   value={modelId}
                   onChange={e => setModelId(e.target.value)}
+                  aria-label="选择对话模型"
                   disabled={!oid}
                   className="h-8 w-44 cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-2 pr-7 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100 disabled:opacity-30 disabled:cursor-not-allowed"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 6px center', backgroundSize: '10px' }}
@@ -1336,14 +1381,19 @@ export default function AgentWorkbenchPage() {
                         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                           <span className="text-[10px] text-[var(--color-text-tertiary)]">引用</span>
                           {msg.citations.map(c => (
-                            <span key={c.instanceId}
+                            <button key={c.instanceId}
+                              type="button"
+                              onClick={() => {
+                                setWorkspaceView('data')
+                                setGraphSignal({ sequence: Date.now(), steps: msg.steps, citations: [c] })
+                              }}
                               title={c.snippet
                                 ? `${c.sourceLabel || `${c.objectType} · ${c.label}`} — ${c.snippet}`
                                 : (c.sourceLabel || c.instanceId)}
-                              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]">
+                              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:border-cyan-300 hover:bg-cyan-50">
                               <span className="text-[var(--color-text-tertiary)]">{c.objectType}</span>
                               <span className="font-medium text-[var(--color-text-primary)]">{c.label}</span>
-                            </span>
+                            </button>
                           ))}
                         </div>
                       )}

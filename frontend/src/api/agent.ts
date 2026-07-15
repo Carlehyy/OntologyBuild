@@ -115,6 +115,146 @@ export interface ExecuteProposalResult {
   id?: string
 }
 
+export type AgentGraphNodeKind = 'object_type' | 'instance' | 'property'
+export type AgentGraphEdgeKind = 'schema_relation' | 'contains' | 'relation' | 'attribute'
+
+export interface AgentGraphNode {
+  id: string
+  entityId: string
+  kind: AgentGraphNodeKind
+  label: string
+  secondaryLabel?: string | null
+  technicalName?: string
+  objectTypeId?: string
+  objectTypeLabel?: string
+  count?: number
+  color?: string | null
+  description?: string | null
+  propertiesCount?: number
+  source?: string | null
+  externalId?: string | null
+  preview?: { name: string; label: string; value: string }[]
+  updatedAt?: string | null
+  instanceId?: string
+  propertyName?: string
+  propertyType?: string
+  value?: unknown
+  isNull?: boolean
+}
+
+export interface AgentGraphEdge {
+  id: string
+  entityId?: string
+  kind: AgentGraphEdgeKind
+  source: string
+  target: string
+  label: string
+  linkTypeId?: string
+  linkTypeName?: string
+  cardinality?: string
+  properties?: Record<string, unknown>
+}
+
+export interface AgentGraphData {
+  ontologyId: string
+  ontologyName: string
+  depth: 1 | 2 | 3
+  nodes: AgentGraphNode[]
+  edges: AgentGraphEdge[]
+  meta: {
+    query?: string | null
+    objectTypeId?: string | null
+    focusInstanceId?: string | null
+    instanceCounts: Record<string, number>
+    loadedInstances: number
+    matchedInstances: number
+    limitPerType: number
+    truncated: boolean
+    propertyTruncated: boolean
+    nodeBudget: number
+    edgeBudget: number
+  }
+}
+
+export interface AgentInstanceDetail {
+  id: string
+  label: string
+  objectType: {
+    id: string
+    name: string
+    displayName: string
+    primaryKey?: string | null
+    properties: { id?: string; name: string; displayName?: string; display_name?: string; type?: string }[]
+  }
+  properties: Record<string, unknown>
+  computed: Record<string, unknown>
+  source?: string | null
+  externalId?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface AgentGraphPath {
+  nodeIds: string[]
+  edgeIds: string[]
+  steps: { linkInstanceId: string; linkTypeId: string; direction: 'out' | 'in' }[]
+  hops: number
+}
+
+export interface AgentGraphPathResult {
+  kind: 'path'
+  sourceInstanceId: string
+  targetInstanceId: string
+  sourceLabel: string
+  targetLabel: string
+  direction: 'both' | 'outgoing' | 'incoming'
+  maxDepth: number
+  paths: AgentGraphPath[]
+  nodes: AgentGraphNode[]
+  edges: AgentGraphEdge[]
+  found: boolean
+  truncated: boolean
+  visualizationTruncated?: boolean
+  visualizationCounts?: AgentGraphVisualizationCounts
+}
+
+export interface AgentGraphVisualizationCounts {
+  available: { nodes: number; edges: number; impacts: number }
+  displayed: { nodes: number; edges: number; impacts: number }
+}
+
+export interface AgentGraphImpactResult {
+  kind: 'impact'
+  mode: 'association_only'
+  change: {
+    instanceId: string
+    instanceLabel: string
+    objectType: string
+    property: string
+    propertyLabel: string
+    currentValue: unknown
+    proposedValue: unknown
+  }
+  direction: 'both' | 'outgoing' | 'incoming'
+  maxDepth: number
+  summary: { related: number; direct: number; indirect: number }
+  impacts: {
+    instanceId: string
+    label: string
+    objectType: string
+    depth: number
+    classification: 'direct' | 'indirect'
+    certainty: 'related'
+    path: AgentGraphPath
+  }[]
+  nodes: AgentGraphNode[]
+  edges: AgentGraphEdge[]
+  truncated: boolean
+  disclaimer: string
+  visualizationTruncated?: boolean
+  visualizationCounts?: AgentGraphVisualizationCounts
+}
+
 // ---------- REST ----------
 
 const base = (oid: string) => `/formal/ontologies/${oid}/agent`
@@ -124,6 +264,37 @@ export const agentApi = {
   updateProfile: (oid: string, body: AgentProfileUpdate) =>
     apiClientV2.put<AgentProfile>(`${base(oid)}/profile`, body),
   capabilities: (oid: string) => apiClientV2.get<AgentCapabilities>(`${base(oid)}/capabilities`),
+  graph: (oid: string, params: {
+    depth?: 1 | 2 | 3
+    query?: string
+    objectType?: string
+    focusInstanceId?: string
+    limitPerType?: number
+  }) => apiClientV2.get<AgentGraphData>(`${base(oid)}/graph`, {
+    params: {
+      depth: params.depth,
+      query: params.query,
+      object_type: params.objectType,
+      focus_instance_id: params.focusInstanceId,
+      limit_per_type: params.limitPerType,
+    },
+  }),
+  graphInstance: (oid: string, instanceId: string) =>
+    apiClientV2.get<AgentInstanceDetail>(`${base(oid)}/graph/instances/${encodeURIComponent(instanceId)}`),
+  findPaths: (oid: string, body: {
+    sourceInstanceId: string
+    targetInstanceId: string
+    direction?: 'both' | 'outgoing' | 'incoming'
+    maxDepth?: number
+    maxPaths?: number
+  }) => apiClientV2.post<AgentGraphPathResult>(`${base(oid)}/graph/paths`, body),
+  analyzeImpact: (oid: string, body: {
+    instanceId: string
+    property: string
+    proposedValue: unknown
+    direction?: 'both' | 'outgoing' | 'incoming'
+    maxDepth?: number
+  }) => apiClientV2.post<AgentGraphImpactResult>(`${base(oid)}/graph/impact`, body),
   conversations: (oid: string) => apiClientV2.get<AgentConversationDTO[]>(`${base(oid)}/conversations`),
   conversation: (oid: string, cid: string) =>
     apiClientV2.get<AgentConversationDTO>(`${base(oid)}/conversations/${cid}`),

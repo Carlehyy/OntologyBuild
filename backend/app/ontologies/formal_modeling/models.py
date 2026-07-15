@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     String, DateTime, Float, ForeignKey, Text, JSON, Boolean, Integer,
-    UniqueConstraint,
+    Index, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
@@ -161,6 +161,9 @@ class OntologyFunction(Base):
 class ObjectInstance(Base):
     """对象实例 — 运行时数据（数据采集的落地点）"""
     __tablename__ = "fo_object_instances"
+    __table_args__ = (
+        Index("ix_fo_object_instances_graph_page", "ontology_id", "object_type_id", "updated_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -182,6 +185,10 @@ class ObjectInstance(Base):
 class LinkInstance(Base):
     """链接实例 — 运行时关系"""
     __tablename__ = "fo_link_instances"
+    __table_args__ = (
+        Index("ix_fo_link_instances_graph_source", "ontology_id", "link_type_id", "source_object_id"),
+        Index("ix_fo_link_instances_graph_target", "ontology_id", "link_type_id", "target_object_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)

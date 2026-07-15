@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _TOOL_RESULT_CAP = 8000     # 回填给 LLM 的单个工具结果长度上限
 _RESULT_DISPLAY_CAP = 6000  # 推送/持久化给前端展示的工具结果长度上限
+_GRAPH_DISPLAY_CAP = 18000  # 图谱步骤需保留结构供前端联动，仍限制单步持久化体积
 _HISTORY_LIMIT = 10         # 逐字带入的最近消息条数
 _HISTORY_DIGEST_SCAN = 40   # 为「对话回顾」额外回溯的条数（滑出窗口的更早提问压成摘要）
 
@@ -76,10 +77,11 @@ def _system_prompt(scope) -> str:
 # 行为准则
 1. 先查证后回答：任何涉及数据的结论都必须来自工具返回结果，禁止编造，也不要用本体之外的常识或训练记忆去补充业务事实。工具结果不足以回答时，明确说明还缺什么、需要用户补充或授权什么，而不是猜。多个结果相互矛盾时，指出差异并优先采信更具体、更有出处的来源。工具返回 partial=true 时，说明这是基于部分数据的估计。
 2. 用中文回答，简洁、结构化；提到具体对象时带上它的标签（如订单号、名称），便于用户核对。
-3. 统计类问题（总共/平均/最多/分布）优先用 aggregate_objects，不要拉列表自己数；跨多层关系的问题（X 经由 A 再到 B）用 traverse_path 多跳遍历，别让我自己反复单跳。
+3. 统计类问题（总共/平均/最多/分布）优先用 aggregate_objects，不要拉列表自己数；已知关系序列的多跳问题用 traverse_path；明确询问两个具体实例之间有哪些路径时，用 find_paths，必要时先 search_objects 确认两端 id。
 4. 用户问「为什么是这个值 / 谁改的 / 什么时候变的」，用 get_object_history 给出带出处的回答。
 5. 需要修改数据时：只能用 propose_action 做预演并生成提案，真实执行由用户在界面上确认。绝不能声称你已经完成了修改。
 6. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
+7. 用户询问某字段拟议变化会波及哪些对象时，先用 analyze_change_impact 展示直接/间接关系可达范围。它是只读模拟，不代表确定业务因果；除非工具返回了受治理的因果规则，否则必须称为“关联范围”，不得声称这些对象一定会改变。
 
 {_CHARTS_GUIDE}
 {extra_block}"""
@@ -97,6 +99,11 @@ def _summarize(name: str, result: dict) -> str:
         return f"{result.get('from', '')} —{result.get('linkType', '')}→ {result.get('returned', 0)} 个对象"
     if name == "traverse_path":
         return f"{result.get('from', '')} 经 {len(result.get('path') or [])} 跳 → {result.get('returned', 0)} 个终点对象"
+    if name == "find_paths":
+        return f"{result.get('sourceLabel', '')} → {result.get('targetLabel', '')}，找到 {len(result.get('paths') or [])} 条路径"
+    if name == "analyze_change_impact":
+        summary = result.get("summary") or {}
+        return f"关联影响预演：直接 {summary.get('direct', 0)}，间接 {summary.get('indirect', 0)}"
     if name == "aggregate_objects":
         if "groups" in result:
             return f"{result.get('objectType', '')} 按 {result.get('groupBy')} 分 {len(result['groups'])} 组"
@@ -112,6 +119,88 @@ def _summarize(name: str, result: dict) -> str:
     return "完成"
 
 
+def _compact_graph_node(node: dict) -> dict:
+    """移除仅用于详情面板的重字段，保留图谱渲染和节点定位所需字段。"""
+    keys = (
+        "id", "entityId", "kind", "label", "secondaryLabel", "objectTypeId",
+        "objectTypeLabel", "instanceId", "propertyName", "propertyType", "value",
+    )
+    return {key: node[key] for key in keys if key in node}
+
+
+def _compact_graph_edge(edge: dict) -> dict:
+    keys = ("id", "entityId", "kind", "source", "target", "label", "linkTypeId")
+    return {key: edge[key] for key in keys if key in edge}
+
+
+def _compact_path(path: dict) -> dict:
+    keys = ("nodeIds", "edgeIds", "hops")
+    return {key: path[key] for key in keys if key in path}
+
+
+def _graph_display_result(result: dict) -> dict:
+    """为助手联动保留可解析图结构，同时按相关性限制消息与数据库体积。"""
+    node_limit, edge_limit, impact_limit = 80, 120, 60
+    compact = {key: value for key, value in result.items()
+               if key not in {"nodes", "edges", "paths", "impacts"}}
+    compact["nodes"] = [_compact_graph_node(node)
+                        for node in (result.get("nodes") or [])[:node_limit]]
+    compact["edges"] = [_compact_graph_edge(edge)
+                        for edge in (result.get("edges") or [])[:edge_limit]]
+    if "paths" in result:
+        compact["paths"] = [_compact_path(path) for path in (result.get("paths") or [])[:5]]
+    if "impacts" in result:
+        impacts = []
+        for item in (result.get("impacts") or [])[:impact_limit]:
+            retained = {key: item[key] for key in (
+                "instanceId", "label", "objectType", "depth", "classification", "certainty",
+            ) if key in item}
+            retained["path"] = _compact_path(item.get("path") or {})
+            impacts.append(retained)
+        compact["impacts"] = impacts
+
+    original_counts = {
+        "nodes": len(result.get("nodes") or []),
+        "edges": len(result.get("edges") or []),
+        "impacts": len(result.get("impacts") or []),
+    }
+    displayed_counts = {
+        "nodes": len(compact["nodes"]),
+        "edges": len(compact["edges"]),
+        "impacts": len(compact.get("impacts") or []),
+    }
+    compact["visualizationTruncated"] = original_counts != displayed_counts
+    compact["visualizationCounts"] = {
+        "available": original_counts,
+        "displayed": displayed_counts,
+    }
+
+    # 极密图谱继续按层级收紧，但始终保留合法、可直接渲染的 JSON，而不是字符串预览。
+    payload = json.dumps(compact, ensure_ascii=False, default=str)
+    if len(payload) > _GRAPH_DISPLAY_CAP:
+        compact["nodes"] = compact["nodes"][:40]
+        compact["edges"] = compact["edges"][:60]
+        if "impacts" in compact:
+            compact["impacts"] = compact["impacts"][:30]
+        compact["visualizationTruncated"] = True
+        compact["visualizationCounts"]["displayed"] = {
+            "nodes": len(compact["nodes"]),
+            "edges": len(compact["edges"]),
+            "impacts": len(compact.get("impacts") or []),
+        }
+    if len(json.dumps(compact, ensure_ascii=False, default=str)) > _GRAPH_DISPLAY_CAP:
+        compact["nodes"] = compact["nodes"][:32]
+        compact["edges"] = compact["edges"][:48]
+        if "impacts" in compact:
+            compact["impacts"] = compact["impacts"][:24]
+        compact["visualizationCounts"]["displayed"] = {
+            "nodes": len(compact["nodes"]),
+            "edges": len(compact["edges"]),
+            "impacts": len(compact.get("impacts") or []),
+        }
+    return compact
+
+
 def _display_result(result: dict):
     """给前端「查看工具输出」用的结果；过大则截断，避免消息体与 DB 膨胀。"""
     try:
@@ -120,6 +209,8 @@ def _display_result(result: dict):
         return {"_note": "结果无法序列化展示"}
     if len(payload) <= _RESULT_DISPLAY_CAP:
         return result
+    if result.get("kind") in {"path", "impact"}:
+        return _graph_display_result(result)
     return {
         "_truncated": True,
         "_note": f"结果较大（约 {len(payload)} 字符），此处仅展示前 {_RESULT_DISPLAY_CAP} 字符预览。",
@@ -144,11 +235,14 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
     """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。"""
     try:
         yield from _run(db, ontology_id, user, question, conversation_id, model_id)
+    except GeneratorExit:
+        # 浏览器刷新/离开会主动关闭 SSE。生成器关闭后不能在 finally 中继续 yield，
+        # 否则 Python 会抛出 ``generator ignored GeneratorExit`` 并污染服务日志。
+        return
     except Exception as e:  # noqa: BLE001
         logger.exception("agent 回合失败")
         yield {"type": "error", "message": f"智能体执行失败: {e}"}
-    finally:
-        yield {"type": "done"}
+    yield {"type": "done"}
 
 
 def _run(db: Session, ontology_id: str, user, question: str,

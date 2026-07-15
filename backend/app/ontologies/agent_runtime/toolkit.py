@@ -10,6 +10,8 @@
   search_objects     按类型 + 属性过滤 + 关键词检索实例
   get_object         单实例详情（含各链接类型的邻居概览）
   traverse_links     沿链接类型遍历邻居
+  find_paths         两个具体实例之间的最短关系路径
+  analyze_change_impact 字段拟议变更的关系可达范围（只读预演）
   aggregate_objects  分组计数 / 求和 / 均值 / 最值
   get_object_history 实例的事实流（谁、何时、为何改的 — 溯源问答）
   list_actions       授权范围内的动作及参数说明
@@ -118,6 +120,36 @@ TOOL_DEFS: list[dict] = [
                 "limit": {"type": "integer", "description": "返回终点对象的条数上限（受授权配额约束）"},
             },
             "required": ["instance_id", "path"],
+        },
+    },
+    {
+        "name": "find_paths",
+        "description": "查找两个具体对象实例之间的最短关系路径，并返回可供图谱高亮的节点与边。用户明确问‘A 到 B 有哪些路径/如何关联’时使用；如果只有名称，先用 search_objects 找到两端 instance_id。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source_instance_id": {"type": "string", "description": "起点实例 id"},
+                "target_instance_id": {"type": "string", "description": "终点实例 id"},
+                "direction": {"type": "string", "enum": ["both", "outgoing", "incoming"], "description": "both=忽略遍历方向寻找连接，outgoing=只沿关系正向，incoming=只沿关系反向"},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 6},
+                "max_paths": {"type": "integer", "minimum": 1, "maximum": 5},
+            },
+            "required": ["source_instance_id", "target_instance_id"],
+        },
+    },
+    {
+        "name": "analyze_change_impact",
+        "description": "只读预演某实例字段的拟议变化，沿真实关系计算直接/间接可达范围，并返回可供图谱分层标亮的节点与边。它不修改数据；结果只代表关联范围而非确定因果，回答时必须保留该边界。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {"type": "string", "description": "拟议变更的实例 id"},
+                "property": {"type": "string", "description": "拟议变更的属性 name 或显示名"},
+                "proposed_value": {"description": "拟议的新值，可为字符串、数字、布尔或空值"},
+                "direction": {"type": "string", "enum": ["both", "outgoing", "incoming"]},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 4},
+            },
+            "required": ["instance_id", "property", "proposed_value"],
         },
     },
     {
@@ -554,6 +586,42 @@ class ToolRunner:
             "frontierCapped": frontier_capped,
             "items": items,
         }
+
+    def _tool_find_paths(self, args: dict) -> dict:
+        from app.ontologies.agent_runtime.graph_service import find_paths
+
+        result = find_paths(
+            self.scope,
+            args.get("source_instance_id", ""),
+            args.get("target_instance_id", ""),
+            direction=args.get("direction") or "both",
+            max_depth=args.get("max_depth") or 5,
+            max_paths=args.get("max_paths") or 3,
+        )
+        for node in result.get("nodes") or []:
+            instance = self.db.query(ObjectInstance).filter(
+                ObjectInstance.id == node.get("entityId")).first()
+            if instance:
+                self._cite(instance)
+        return result
+
+    def _tool_analyze_change_impact(self, args: dict) -> dict:
+        from app.ontologies.agent_runtime.graph_service import analyze_change_impact
+
+        result = analyze_change_impact(
+            self.scope,
+            args.get("instance_id", ""),
+            args.get("property", ""),
+            args.get("proposed_value"),
+            direction=args.get("direction") or "both",
+            max_depth=args.get("max_depth") or 3,
+        )
+        for node in result.get("nodes") or []:
+            instance = self.db.query(ObjectInstance).filter(
+                ObjectInstance.id == node.get("entityId")).first()
+            if instance:
+                self._cite(instance)
+        return result
 
     def _tool_aggregate_objects(self, args: dict) -> dict:
         ot = self.scope.require_object_type(args.get("object_type", ""))
