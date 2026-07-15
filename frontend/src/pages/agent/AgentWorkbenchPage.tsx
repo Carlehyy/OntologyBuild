@@ -17,7 +17,7 @@ import {
   GitBranch, Sigma, ScrollText, ListChecks, FlaskConical, Plus, Loader2,
   AlertTriangle, BadgeCheck, FileSearch, PenLine, Trash2, Network,
   FunctionSquare, Minus, Maximize2, KeyRound, X, Download, ExternalLink,
-  ChevronRight, Copy, Check, List, ArrowLeftRight,
+  ChevronRight, Copy, Check, List, ArrowLeftRight, FileText, Workflow,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Modal } from '@/components/ui/Modal'
@@ -302,6 +302,118 @@ function ProvenanceBar({ steps, cited }: { steps: AgentStep[]; cited: number }) 
     <div className="mt-2 flex items-center gap-1.5 text-[10.5px] text-[var(--color-text-tertiary)]">
       <FileSearch size={11} className="shrink-0 opacity-70" />
       <span>{bits.join(' · ')}</span>
+    </div>
+  )
+}
+
+function AgentCallChainView({ messages, conversationId, ontologyName, running }: {
+  messages: ChatMsg[]
+  conversationId: string | null
+  ontologyName: string
+  running: boolean
+}) {
+  const turns = useMemo(() => {
+    let question = ''
+    let turn = 0
+    return messages.reduce<Array<{ turn: number; question: string; message: ChatMsg }>>((result, message) => {
+      if (message.role === 'user') {
+        question = message.content
+        return result
+      }
+      turn += 1
+      if (message.steps.length > 0 || message.content || message.loading || message.error) {
+        result.push({ turn, question, message })
+      }
+      return result
+    }, [])
+  }, [messages])
+  const allSteps = turns.flatMap(item => item.message.steps)
+  const totalDuration = allSteps.reduce((sum, step) => sum + (step.durationMs || 0), 0)
+
+  if (turns.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center bg-[#f8fbff] p-8 text-center">
+        <div className="max-w-sm">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-600 shadow-sm">
+            <Workflow size={21} />
+          </div>
+          <h3 className="mt-4 text-sm font-semibold text-slate-800">当前会话还没有调用记录</h3>
+          <p className="mt-1 text-xs leading-5 text-slate-500">发起一次业务查询后，这里会按执行顺序记录工具、输入、输出、结果与耗时。</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="scrollbar-thin h-full overflow-y-auto bg-[#f8fbff] px-4 py-4" data-testid="agent-call-chain-view">
+      <div className="mx-auto max-w-4xl">
+        <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+          {[
+            ['执行轮次', `${turns.length}`],
+            ['工具调用', `${allSteps.length}`],
+            ['累计耗时', totalDuration > 0 ? `${totalDuration.toLocaleString('zh-CN')} ms` : '—'],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg bg-slate-50 px-3 py-2">
+              <p className="text-[10px] text-slate-400">{label}</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold text-slate-700">{value}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex items-center justify-between px-1 text-[10px] text-slate-400">
+          <span>{ontologyName} · 当前会话完整执行记录</span>
+          <span className="font-mono">{conversationId ? `会话 ${conversationId.slice(0, 8)}` : '会话建立中'}</span>
+        </div>
+
+        <div className="relative mt-4 space-y-3 before:absolute before:bottom-4 before:left-[18px] before:top-4 before:w-px before:bg-slate-200">
+          {turns.map(({ turn, question, message }, index) => {
+            const duration = message.steps.reduce((sum, step) => sum + (step.durationMs || 0), 0)
+            return (
+              <details key={message.id} open={index === turns.length - 1} className="group relative rounded-xl border border-slate-200 bg-white shadow-sm">
+                <summary className="flex cursor-pointer list-none items-start gap-3 px-3 py-3 marker:content-none">
+                  <span className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg font-mono text-[11px] font-semibold ${message.error
+                    ? 'bg-red-50 text-red-600' : 'bg-teal-50 text-teal-700'}`}>
+                    {String(turn).padStart(2, '0')}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-semibold text-slate-800">{question || '系统续执行'}</span>
+                    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                      <span>{message.steps.length} 次工具调用</span>
+                      <span>{duration > 0 ? `${duration.toLocaleString('zh-CN')} ms` : '等待耗时数据'}</span>
+                      {message.loading && <span className="inline-flex items-center gap-1 text-sky-600"><Loader2 size={10} className="animate-spin" />执行中</span>}
+                      {message.error && <span className="text-red-600">执行异常</span>}
+                    </span>
+                  </span>
+                  <ChevronRight size={14} className="mt-1 shrink-0 text-slate-400 transition-transform group-open:rotate-90" />
+                </summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3">
+                  {message.steps.length > 0 ? (
+                    <div className="space-y-3">
+                      {message.steps.map((step, stepIndex) => (
+                        <div key={stepIndex} className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+                          <StepRow step={step} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-xs text-slate-400">
+                      {message.loading ? '正在规划并等待第一次工具调用…' : '本轮未调用工具，直接生成答复。'}
+                    </div>
+                  )}
+                  {(message.content || message.error) && (
+                    <div className={`mt-3 rounded-lg border px-3 py-2.5 ${message.error ? 'border-red-100 bg-red-50' : 'border-teal-100 bg-teal-50/50'}`}>
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">本轮执行结果</p>
+                      {message.error
+                        ? <p className="text-xs text-red-600">{message.error}</p>
+                        : <div className="max-h-72 overflow-y-auto text-slate-700"><Md text={message.content} /></div>}
+                    </div>
+                  )}
+                </div>
+              </details>
+            )
+          })}
+          {running && <div className="relative z-10 ml-1 flex items-center gap-2 text-[11px] text-sky-600"><Loader2 size={12} className="animate-spin" />执行链持续写入中</div>}
+        </div>
+      </div>
     </div>
   )
 }
@@ -989,7 +1101,7 @@ export default function AgentWorkbenchPage() {
   })
   const ontologyList = (ontologies as any)?.items || ontologies || []
   const [oid, setOid] = useState('')
-  const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data'>('ontology')
+  const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data' | 'trace'>('ontology')
 
   useEffect(() => {
     if (ontologyList.length === 0) {
@@ -1176,18 +1288,20 @@ export default function AgentWorkbenchPage() {
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sky-50 text-sky-600">
-                  <Network size={16} />
+                  {workspaceView === 'trace' ? <Workflow size={16} /> : <Network size={16} />}
                 </div>
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                    {workspaceView === 'ontology' ? '本体拓扑图' : '数据推演图谱'}
+                    {workspaceView === 'ontology' ? '本体拓扑图' : workspaceView === 'data' ? '数据推演图谱' : 'Agent调用链'}
                   </h3>
-                  <p className={`truncate text-[11px] ${syncStatus === 'error' ? 'text-red-500' : 'text-[var(--color-text-tertiary)]'}`}>
+                  <p className={`truncate text-[11px] ${workspaceView === 'ontology' && syncStatus === 'error' ? 'text-red-500' : 'text-[var(--color-text-tertiary)]'}`}>
                     {workspaceView === 'ontology' && syncStatus === 'error'
                       ? (syncError || '网络图加载失败。')
                       : workspaceView === 'ontology'
                         ? `${selectedOntology?.name || '未选择本体'} · 只读展示对象类型与关系`
-                        : `${selectedOntology?.name || '未选择本体'} · 实例、路径与拟议变更联动`}
+                        : workspaceView === 'data'
+                          ? `${selectedOntology?.name || '未选择本体'} · 实例、路径与拟议变更联动`
+                          : `${selectedOntology?.name || '未选择本体'} · 当前会话工具调用可审计、可复盘`}
                   </p>
                 </div>
               </div>
@@ -1203,23 +1317,41 @@ export default function AgentWorkbenchPage() {
                   {ontologyList.length > 0 && <option value="">请选择本体</option>}
                   {ontologyList.map((o: any) => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
-                <button
-                  type="button"
-                  onClick={() => setWorkspaceView(view => view === 'ontology' ? 'data' : 'ontology')}
-                  disabled={!oid}
-                  title={workspaceView === 'ontology' ? '切换到数据推演图谱' : '切换到本体拓扑图'}
-                  aria-label={workspaceView === 'ontology' ? '切换到数据推演图谱' : '切换到本体拓扑图'}
-                  data-testid="workspace-view-toggle"
-                  className="flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <ArrowLeftRight size={14} />
-                </button>
+                <div className="flex items-center rounded-md border border-slate-200 bg-slate-50 p-0.5" aria-label="切换工作台视图">
+                  {([
+                    { id: 'ontology', label: '本体拓扑图', icon: Network },
+                    { id: 'data', label: '数据推演图谱', icon: ArrowLeftRight },
+                    { id: 'trace', label: 'Agent调用链', icon: Workflow },
+                  ] as const).map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setWorkspaceView(item.id)}
+                      disabled={!oid}
+                      title={item.label}
+                      aria-label={`切换到${item.label}`}
+                      aria-pressed={workspaceView === item.id}
+                      data-testid={item.id === 'data' ? 'workspace-view-toggle' : `workspace-view-${item.id}`}
+                      className={`flex h-7 w-8 items-center justify-center rounded transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${workspaceView === item.id
+                        ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-400 hover:bg-white/70 hover:text-slate-700'}`}
+                    >
+                      <item.icon size={13} />
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
 
           <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
-            {workspaceView === 'data' ? (
+            {workspaceView === 'trace' ? (
+              <AgentCallChainView
+                messages={messages}
+                conversationId={conversationId}
+                ontologyName={selectedOntology?.name || '当前本体'}
+                running={busy}
+              />
+            ) : workspaceView === 'data' ? (
               <Suspense fallback={(
                 <div className="flex h-full items-center justify-center gap-2 bg-slate-50 text-xs text-slate-500">
                   <Loader2 size={14} className="animate-spin text-teal-600" />正在加载数据图谱工作台…
@@ -1278,16 +1410,6 @@ export default function AgentWorkbenchPage() {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => navigate(oid
-                    ? `/agent/reports/new?ontologyId=${encodeURIComponent(oid)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}`
-                    : '/agent/reports')}
-                  className="mr-1 inline-flex h-8 items-center rounded-full bg-slate-900 px-3.5 text-[11px] font-semibold text-white shadow-[0_8px_20px_rgba(15,23,42,0.16)] transition-[transform,background] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] hover:-translate-y-0.5 hover:bg-teal-800 active:translate-y-0"
-                  title={oid ? '基于当前本体和会话生成可编辑分析报告模板' : '打开分析报告工作台'}
-                >
-                  {oid ? '生成分析报告' : '分析报告'}
-                </button>
                 <select
                   value={modelId}
                   onChange={e => setModelId(e.target.value)}
@@ -1305,6 +1427,19 @@ export default function AgentWorkbenchPage() {
                     <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">授权边界配置</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => navigate(oid
+                    ? `/agent/reports/new?ontologyId=${encodeURIComponent(oid)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}`
+                    : '/agent/reports')}
+                  disabled={!oid}
+                  aria-label={oid ? '生成分析报告' : '分析报告'}
+                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-600 transition-colors hover:border-sky-300 hover:bg-sky-100 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-30"
+                  title={oid ? '基于当前本体和会话生成可编辑分析报告模板' : '打开分析报告工作台'}
+                >
+                  <FileText size={14} />
+                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">{oid ? '生成分析报告' : '分析报告'}</span>
+                </button>
                 <button onClick={resetChat} disabled={!oid}
                   className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-500 transition-colors hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-700 disabled:opacity-30 disabled:cursor-not-allowed">
                   <Plus size={14} />
@@ -1319,7 +1454,7 @@ export default function AgentWorkbenchPage() {
             </div>
           </div>
 
-          <div className="scrollbar-thin flex-1 overflow-auto bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-4 py-4">
+          <div className="scrollbar-thin flex-1 overflow-auto bg-[#f8fbff] bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.10),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.10),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] px-4 py-4">
             {messages.length === 0 ? (
               <div className="flex min-h-full flex-col justify-center py-8 text-center anim-scale-in">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-600 text-white shadow-sm">
