@@ -22,8 +22,13 @@ type VersionStage = 'current' | 'release' | 'draft' | 'trial' | 'archived'
 function errorText(error: any) {
   const detail = error?.response?.data?.detail ?? error?.detail
   if (typeof detail === 'string') return detail
+  if (Array.isArray(detail?.errors) && detail.errors.length > 0) {
+    const issues = detail.errors.map((item: any) => item.message).filter(Boolean).join('；')
+    return detail?.message && issues
+      ? `${detail.message}：${issues}`
+      : issues || detail?.message || '发布校验未通过'
+  }
   if (detail?.message) return detail.message
-  if (Array.isArray(detail?.errors)) return detail.errors.map((item: any) => item.message).join('；')
   return error?.message || '操作失败'
 }
 

@@ -10,6 +10,9 @@ from app.models.ontology_formal import ObjectInstance, PropertyFact
 from app.models.ontology_version import (
     OntologyTrialLink, OntologyTrialObject, OntologyTrialRun, OntologyVersion,
 )
+from app.ontologies.versions.evolution_service import (
+    impact_report, validate_release_mapping_contract,
+)
 
 
 class MemoryStorage:
@@ -159,6 +162,106 @@ def _paired_dataset(db, monkeypatch) -> None:
               {"left_id": "PAIR-2", "right_id": "PAIR-2"}]),
         rowcount=2,
     )
+
+
+def test_release_mapping_contract_requires_complete_object_and_link_coverage():
+    snapshot = {
+        "objectTypes": [
+            {
+                "id": "ot-order", "name": "Order", "displayName": "订单",
+                "primaryKey": "order-id", "properties": [
+                    {"id": "order-id", "name": "id", "required": True},
+                    {"id": "order-name", "name": "name", "required": True},
+                ],
+            },
+            {
+                "id": "ot-customer", "name": "Customer", "displayName": "客户",
+                "primaryKey": "customer-id", "properties": [
+                    {"id": "customer-id", "name": "id", "required": True},
+                ],
+            },
+        ],
+        "linkTypes": [{
+            "id": "lt-owner", "name": "owned_by", "displayName": "所属客户",
+            "sourceObjectTypeId": "ot-order", "targetObjectTypeId": "ot-customer",
+            "cardinality": "many-to-one", "properties": [],
+        }],
+        "actions": [], "functions": [], "sentinels": [],
+        "mappings": [{
+            "id": "map-order", "curatedDatasetId": "orders",
+            "entityClass": "Order", "targetObjectTypeId": "ot-order",
+            "fieldMapping": {"id": "id"}, "status": "draft",
+        }],
+        "linkMappings": [],
+    }
+
+    codes = {item["code"] for item in validate_release_mapping_contract(snapshot)}
+    assert "mapping_required_property_missing" in codes
+    assert "object_type_mapping_required" in codes
+    assert "link_type_mapping_required" in codes
+
+    snapshot["mappings"][0]["fieldMapping"]["name"] = "name"
+    snapshot["mappings"].append({
+        "id": "map-customer", "curatedDatasetId": "customers",
+        "entityClass": "Customer", "targetObjectTypeId": "ot-customer",
+        "fieldMapping": {"id": "id"}, "status": "draft",
+    })
+    snapshot["linkMappings"].append({
+        "id": "link-owner", "linkTypeId": "lt-owner", "relationType": "owned_by",
+        "srcDatasetId": "orders", "tgtDatasetId": "customers",
+        "srcKey": "customer_id", "tgtKey": "id", "fieldMapping": {},
+        "status": "draft",
+    })
+    assert validate_release_mapping_contract(snapshot) == []
+
+
+def test_trial_and_promotion_reject_incomplete_mapping_contract(
+        client, auth_headers, ontology, db):
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+    draft = _draft(client, auth_headers, oid, root["id"])
+    saved = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers, json=_workspace(draft),
+    )
+    assert saved.status_code == 200, saved.text
+
+    trial = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert trial.status_code == 422, trial.text
+    trial_errors = trial.json()["detail"]["errors"]
+    assert {item["code"] for item in trial_errors} >= {"object_type_mapping_required"}
+    assert db.query(OntologyTrialRun).filter_by(version_id=draft["id"]).count() == 0
+
+    # Defense in depth: a passed run created by an older deployment must not
+    # bypass the same mapping contract at promotion time.
+    draft_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
+    root_row = db.query(OntologyVersion).filter_by(id=root["id"]).one()
+    impact = impact_report(root_row.snapshot_formal, draft_row.snapshot_formal)
+    run = OntologyTrialRun(
+        id="legacy-passed-incomplete-run", ontology_id=oid,
+        version_id=draft_row.id, revision=draft_row.revision,
+        snapshot_hash=draft_row.snapshot_hash, status="passed",
+        dataset_versions=[], result_json={
+            "counts": {"objects": 0, "links": 0, "facts": 0, "datasets": 0},
+        },
+        impact_hash=impact["impactHash"], created_by=draft_row.created_by,
+    )
+    db.add(run)
+    db.commit()
+
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run.id, "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 422, promoted.text
+    promotion_errors = promoted.json()["detail"]["errors"]
+    assert {item["code"] for item in promotion_errors} >= {"object_type_mapping_required"}
+    db.expire_all()
+    assert db.query(OntologyProject).filter_by(id=oid).one().current_release_id == root["id"]
 
 
 def test_version_tree_uses_complete_snapshots_and_dependency_numbering(

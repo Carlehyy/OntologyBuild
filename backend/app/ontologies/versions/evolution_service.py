@@ -271,6 +271,207 @@ def _object_type_for_mapping(mapping: dict, object_types: dict[str, dict]) -> di
                  or item.get("displayName") == entity_class), None)
 
 
+def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
+    """Require every publishable type to have a complete materialization contract.
+
+    Drafts may be incomplete, but a trial is a release rehearsal.  This gate is
+    intentionally snapshot-only so both trial entry and promotion can enforce the
+    exact same definition boundary.  Dataset approval, checksums and row-level
+    correctness are validated while materializing the trial and again at promotion.
+    """
+    snap = complete_snapshot(snapshot)
+    errors: list[dict] = []
+    object_types = {
+        str(item.get("id") or ""): item
+        for item in snap["objectTypes"]
+        if item.get("id")
+    }
+    mappings_by_type: dict[str, list[dict]] = {}
+
+    def label(item: dict) -> str:
+        return str(item.get("displayName") or item.get("name") or item.get("id") or "")
+
+    def stored_required_properties(item: dict) -> list[dict]:
+        return [
+            prop for prop in (item.get("properties") or [])
+            if isinstance(prop, dict)
+            and prop.get("name")
+            and prop.get("required")
+            and prop.get("source") != "computed"
+            and not prop.get("computed")
+        ]
+
+    for mapping in snap["mappings"]:
+        mapping_id = str(mapping.get("id") or "")
+        mapping_name = str(mapping.get("entityClass") or mapping_id)
+        target = _object_type_for_mapping(mapping, object_types)
+        if target is None:
+            errors.append({
+                "code": "mapping_object_type_not_found", "kind": "mapping",
+                "id": mapping_id, "name": mapping_name,
+                "message": f"Mapping「{mapping_name}」未绑定有效的 ObjectType",
+                "field": "targetObjectTypeId",
+            })
+            continue
+
+        target_id = str(target.get("id") or "")
+        mappings_by_type.setdefault(target_id, []).append(mapping)
+        if not mapping.get("curatedDatasetId"):
+            errors.append({
+                "code": "mapping_dataset_missing", "kind": "mapping",
+                "id": mapping_id, "name": mapping_name,
+                "message": f"Mapping「{mapping_name}」未绑定数据集",
+                "field": "curatedDatasetId",
+            })
+
+        field_mapping = mapping.get("fieldMapping")
+        if not isinstance(field_mapping, dict):
+            errors.append({
+                "code": "mapping_field_mapping_invalid", "kind": "mapping",
+                "id": mapping_id, "name": mapping_name,
+                "message": f"Mapping「{mapping_name}」的字段映射必须是对象",
+                "field": "fieldMapping",
+            })
+            field_mapping = {}
+        mapped_properties = {
+            str(target_name)
+            for source_name, target_name in field_mapping.items()
+            if not str(source_name).startswith("__")
+            and isinstance(target_name, str) and target_name
+        }
+        required = {str(prop["name"]) for prop in stored_required_properties(target)}
+        primary_key = target.get("primaryKey")
+        primary_property = next((
+            prop for prop in (target.get("properties") or [])
+            if isinstance(prop, dict)
+            and primary_key
+            and (prop.get("id") == primary_key or prop.get("name") == primary_key)
+        ), None)
+        if primary_property and primary_property.get("name"):
+            required.add(str(primary_property["name"]))
+        for property_name in sorted(required - mapped_properties):
+            errors.append({
+                "code": "mapping_required_property_missing", "kind": "mapping",
+                "id": mapping_id, "name": mapping_name,
+                "message": (
+                    f"Mapping「{mapping_name}」未覆盖 ObjectType「{label(target)}」"
+                    f"的必需属性「{property_name}」"
+                ),
+                "field": property_name,
+            })
+
+    for object_type_id, object_type in object_types.items():
+        if not object_type.get("primaryKey"):
+            errors.append({
+                "code": "object_type_primary_key_required", "kind": "objectType",
+                "id": object_type_id, "name": label(object_type),
+                "message": f"ObjectType「{label(object_type)}」未设置主键，不能进入试跑态",
+                "field": "primaryKey",
+            })
+        if not mappings_by_type.get(object_type_id):
+            errors.append({
+                "code": "object_type_mapping_required", "kind": "objectType",
+                "id": object_type_id, "name": label(object_type),
+                "message": f"ObjectType「{label(object_type)}」没有数据映射，不能进入试跑态",
+                "field": "mappings",
+            })
+
+    link_types = {
+        str(item.get("id") or ""): item
+        for item in snap["linkTypes"]
+        if item.get("id")
+    }
+    link_mappings_by_type: dict[str, list[dict]] = {}
+    for mapping in snap["linkMappings"]:
+        mapping_id = str(mapping.get("id") or "")
+        mapping_name = str(mapping.get("relationType") or mapping_id)
+        link_type_id = str(mapping.get("linkTypeId") or "")
+        link_type = link_types.get(link_type_id)
+        if link_type is None:
+            errors.append({
+                "code": "link_mapping_type_not_found", "kind": "linkMapping",
+                "id": mapping_id, "name": mapping_name,
+                "message": f"LinkMapping「{mapping_name}」未绑定有效的 LinkType",
+                "field": "linkTypeId",
+            })
+            continue
+        link_mappings_by_type.setdefault(link_type_id, []).append(mapping)
+
+        for field, text in (("srcDatasetId", "源端"), ("tgtDatasetId", "目标端"),
+                            ("srcKey", "源端外键"), ("tgtKey", "目标端外键")):
+            if not mapping.get(field):
+                errors.append({
+                    "code": "link_mapping_endpoint_missing", "kind": "linkMapping",
+                    "id": mapping_id, "name": mapping_name,
+                    "message": f"LinkMapping「{mapping_name}」缺少{text}配置",
+                    "field": field,
+                })
+
+        source_type_id = str(link_type.get("sourceObjectTypeId") or "")
+        target_type_id = str(link_type.get("targetObjectTypeId") or "")
+        source_dataset_id = str(mapping.get("srcDatasetId") or "")
+        target_dataset_id = str(mapping.get("tgtDatasetId") or "")
+        if source_dataset_id and not any(
+            str(item.get("curatedDatasetId") or "") == source_dataset_id
+            for item in mappings_by_type.get(source_type_id, [])
+        ):
+            errors.append({
+                "code": "link_mapping_source_object_mapping_missing",
+                "kind": "linkMapping", "id": mapping_id, "name": mapping_name,
+                "message": f"LinkMapping「{mapping_name}」的源端数据集没有对应的对象映射",
+                "field": "srcDatasetId",
+            })
+        if target_dataset_id and not any(
+            str(item.get("curatedDatasetId") or "") == target_dataset_id
+            for item in mappings_by_type.get(target_type_id, [])
+        ):
+            errors.append({
+                "code": "link_mapping_target_object_mapping_missing",
+                "kind": "linkMapping", "id": mapping_id, "name": mapping_name,
+                "message": f"LinkMapping「{mapping_name}」的目标端数据集没有对应的对象映射",
+                "field": "tgtDatasetId",
+            })
+
+        field_mapping = mapping.get("fieldMapping")
+        if not isinstance(field_mapping, dict):
+            errors.append({
+                "code": "link_mapping_field_mapping_invalid", "kind": "linkMapping",
+                "id": mapping_id, "name": mapping_name,
+                "message": f"LinkMapping「{mapping_name}」的字段映射必须是对象",
+                "field": "fieldMapping",
+            })
+            field_mapping = {}
+        mapped_properties = {
+            str(property_name)
+            for property_name, source_name in field_mapping.items()
+            if not str(property_name).startswith("__")
+            and isinstance(source_name, str) and source_name
+        }
+        required = {
+            str(prop["name"]) for prop in stored_required_properties(link_type)
+        }
+        for property_name in sorted(required - mapped_properties):
+            errors.append({
+                "code": "link_mapping_required_property_missing",
+                "kind": "linkMapping", "id": mapping_id, "name": mapping_name,
+                "message": (
+                    f"LinkMapping「{mapping_name}」未覆盖 LinkType「{label(link_type)}」"
+                    f"的必需属性「{property_name}」"
+                ),
+                "field": property_name,
+            })
+
+    for link_type_id, link_type in link_types.items():
+        if not link_mappings_by_type.get(link_type_id):
+            errors.append({
+                "code": "link_type_mapping_required", "kind": "linkType",
+                "id": link_type_id, "name": label(link_type),
+                "message": f"LinkType「{label(link_type)}」没有关系映射，不能进入试跑态",
+                "field": "linkMappings",
+            })
+    return errors
+
+
 def _simulate_sentinels(snapshot: dict, objects: list[dict], links: list[dict]) -> list[dict]:
     by_type: dict[str, list[dict]] = {}
     for item in objects:

@@ -38,7 +38,7 @@ from app.ontologies.access import ontology_access_guard
 from app.ontologies.versions.evolution_service import (
     complete_snapshot, impact_report, materialize_trial, next_draft_number,
     next_release_number, snapshot_hash, snapshot_models, validate_snapshot,
-    workspace_snapshot,
+    validate_release_mapping_contract, workspace_snapshot,
 )
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
@@ -1118,6 +1118,7 @@ def create_trial_run(
         })
     snap = complete_snapshot(draft.snapshot_formal)
     structural_errors = validate_snapshot(snap)
+    structural_errors.extend(validate_release_mapping_contract(snap))
     try:
         models = snapshot_models(snap)
         structural_errors.extend(_validate_sentinels(
@@ -1127,7 +1128,7 @@ def create_trial_run(
     except Exception as exc:
         structural_errors.append(_gate_error(
             "sentinel_validation_failed", "sentinel", str(exc)))
-    _raise_publish_errors(structural_errors, "试跑前结构校验未通过")
+    _raise_publish_errors(structural_errors, "试跑前发布就绪校验未通过")
 
     report = impact_report(current.snapshot_formal, snap)
     run = OntologyTrialRun(
@@ -1239,6 +1240,10 @@ def promote_draft(
             "code": "trial_snapshot_stale",
             "message": "试跑快照与当前结构不一致，请从该版本创建新草稿后重新试跑",
         })
+    _raise_publish_errors(
+        validate_release_mapping_contract(snap),
+        "发布前数据映射完整性校验未通过",
+    )
     report = impact_report(current.snapshot_formal, snap)
     acknowledged = body.get("impact_hash", body.get("impactHash"))
     if not acknowledged or acknowledged != report["impactHash"] or run.impact_hash != report["impactHash"]:
