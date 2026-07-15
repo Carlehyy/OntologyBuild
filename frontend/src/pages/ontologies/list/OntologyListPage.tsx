@@ -371,13 +371,14 @@ function OntologyCard({
           {item.description || '暂无描述'}
         </p>
 
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-3 grid grid-cols-4 gap-1.5">
           {[
             { label: '对象实体', value: item.entity_count ?? 0 },
             { label: '实体关系', value: item.relation_count ?? 0 },
             { label: '执行动作', value: item.action_count ?? 0 },
+            { label: '哨兵引擎', value: item.sentinel_count ?? 0 },
           ].map(metric => (
-            <div key={metric.label} className="rounded-xl bg-slate-50 px-3 py-2.5">
+            <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2.5 text-center">
               <p className="whitespace-nowrap text-[10px] font-medium text-slate-400">{metric.label}</p>
               <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-800">{metric.value}</p>
             </div>
@@ -385,28 +386,28 @@ function OntologyCard({
         </div>
       </div>
 
-      <footer className="mt-auto flex min-h-11 items-center gap-1 border-t border-slate-100 px-4 py-1.5">
+      <footer className="mt-auto flex min-h-11 items-center gap-0.5 border-t border-slate-100 px-4 py-1.5">
         <button
           type="button"
           onClick={onEdit}
-          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+          className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
         >
           <Pencil size={12} /> 编辑
         </button>
         <button
           type="button"
           onClick={onView}
-          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+          className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
         >
           <Search size={12} /> 查看
         </button>
-        <span className="ml-auto whitespace-nowrap text-[10px] tabular-nums text-slate-400" title={`最近更改：${new Date(item.updated_at).toLocaleString('zh-CN')}`}>
-          {formatChangedAt(item.updated_at)}
+        <span className="ml-auto shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400" title={`创建时间：${new Date(item.created_at).toLocaleString('zh-CN')}`}>
+          {formatChangedAt(item.created_at)}
         </span>
         <button
           type="button"
           onClick={onDelete}
-          className="ml-1 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+          className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
           title="删除本体"
           aria-label={`删除本体 ${item.name}`}
         >

@@ -1,10 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from typing import Optional
 from app.deps import get_db, get_current_user
 from app.models.ontology import OntologyProject
-from app.models.ontology_formal import ObjectType, LinkType, ActionType
 from app.models.user import User
 from app.models.domain import Domain
 from app.models.ontology_version import OntologyVersion
@@ -53,6 +51,17 @@ def _project_payload(project: OntologyProject, schema, release: OntologyVersion 
         data["version"] = release.version_number
     return data
 
+
+def _release_structure_counts(release: OntologyVersion | None) -> dict[str, int]:
+    """Return card metrics from the immutable current release snapshot."""
+    snapshot = complete_snapshot(release.snapshot_formal if release else None)
+    return {
+        "entity_count": len(snapshot["objectTypes"]),
+        "relation_count": len(snapshot["linkTypes"]),
+        "action_count": len(snapshot["actions"]),
+        "sentinel_count": len(snapshot["sentinels"]),
+    }
+
 @router.get("")
 def list_ontologies(
     name: Optional[str] = None,
@@ -70,10 +79,9 @@ def list_ontologies(
     releases = _release_map(db, items)
     result = []
     for item in items:
-        d = _project_payload(item, OntologyListItem, releases.get(item.current_release_id))
-        d['entity_count'] = db.query(func.count(ObjectType.id)).filter(ObjectType.ontology_id == item.id).scalar() or 0
-        d['relation_count'] = db.query(func.count(LinkType.id)).filter(LinkType.ontology_id == item.id).scalar() or 0
-        d['action_count'] = db.query(func.count(ActionType.id)).filter(ActionType.ontology_id == item.id).scalar() or 0
+        release = releases.get(item.current_release_id)
+        d = _project_payload(item, OntologyListItem, release)
+        d.update(_release_structure_counts(release))
         result.append(d)
     return {"data": {"items": result, "total": total, "page": page, "page_size": page_size}}
 

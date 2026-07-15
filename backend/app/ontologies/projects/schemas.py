@@ -73,6 +73,7 @@ class OntologyListItem(BaseModel):
     entity_count: int = 0
     relation_count: int = 0
     action_count: int = 0
+    sentinel_count: int = 0
     created_by: str
     created_at: datetime
     updated_at: datetime

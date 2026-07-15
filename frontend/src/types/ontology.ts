@@ -14,6 +14,7 @@ export interface OntologyListItem {
   entity_count: number
   relation_count: number
   action_count: number
+  sentinel_count: number
   created_by: string
   created_at: string
   updated_at: string
