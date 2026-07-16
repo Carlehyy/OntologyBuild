@@ -242,57 +242,51 @@ export default function RunHistory() {
       </section>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm/50">
-        <header className="shrink-0 border-b border-slate-100 px-5 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="flex items-baseline gap-2">
-                <h2 className="text-sm font-semibold text-slate-900">调用明细</h2>
-                <span className="text-[11px] tabular-nums text-slate-400">共 {total} 条</span>
-              </div>
-              <p className="mt-0.5 text-[11px] text-slate-400">点击任意记录查看脱敏后的请求快照、响应头和响应体</p>
-            </div>
-            <ResultTabs
-              value={filters.result}
-              slowThreshold={slowThreshold}
-              onChange={setResultFilter}
-            />
-          </div>
-
+        <header className="shrink-0 border-b border-slate-100 px-5">
           <form
-            className="mt-3 flex flex-wrap items-center gap-2 pb-3"
+            className="flex flex-wrap items-center gap-2 py-3"
             onSubmit={event => {
               event.preventDefault()
               applyFilters()
             }}
           >
-            <label className="flex h-9 min-w-[240px] flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100 lg:max-w-sm">
-              <Search size={14} className="shrink-0 text-slate-400" />
-              <input
-                value={draftKeyword}
-                onChange={event => setDraftKeyword(event.target.value)}
-                className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 outline-none placeholder:text-slate-400"
-                placeholder="搜索接口名称"
-                aria-label="搜索接口名称"
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <label className="flex h-9 min-w-[240px] flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100 lg:max-w-sm">
+                <Search size={14} className="shrink-0 text-slate-400" />
+                <input
+                  value={draftKeyword}
+                  onChange={event => setDraftKeyword(event.target.value)}
+                  className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 outline-none placeholder:text-slate-400"
+                  placeholder="搜索接口名称"
+                  aria-label="搜索接口名称"
+                />
+              </label>
+              <DateField label="开始日期" value={draftStart} onChange={setDraftStart} />
+              <span className="px-0.5 text-xs text-slate-300">—</span>
+              <DateField label="结束日期" value={draftEnd} onChange={setDraftEnd} />
+              <Button type="submit" size="sm" variant="success" className="h-9 rounded-lg px-4">
+                <Search size={13} />
+                查询
+              </Button>
+              {hasFilters && (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                >
+                  <RotateCcw size={12} />
+                  清除
+                </button>
+              )}
+            </div>
+            <div className="ml-auto shrink-0">
+              <ResultTabs
+                value={filters.result}
+                slowThreshold={slowThreshold}
+                onChange={setResultFilter}
               />
-            </label>
-            <DateField label="开始日期" value={draftStart} onChange={setDraftStart} />
-            <span className="px-0.5 text-xs text-slate-300">—</span>
-            <DateField label="结束日期" value={draftEnd} onChange={setDraftEnd} />
-            <Button type="submit" size="sm" className="h-9 rounded-lg px-4">
-              <Search size={13} />
-              查询
-            </Button>
-            {hasFilters && (
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-              >
-                <RotateCcw size={12} />
-                清除
-              </button>
-            )}
-            {formError && <span className="w-full text-[11px] text-red-600">{formError}</span>}
+            </div>
+            {formError && <span className="basis-full text-[11px] text-red-600">{formError}</span>}
           </form>
         </header>
 
@@ -305,16 +299,18 @@ export default function RunHistory() {
         )}
 
         <div className="min-h-0 flex-1 overflow-auto">
-          <table className="w-full min-w-[980px] border-collapse text-left text-xs">
+          <table className="w-full min-w-[1280px] border-collapse text-center text-xs">
             <thead className="sticky top-0 z-10 bg-slate-50/95 text-slate-500 backdrop-blur">
               <tr>
-                <th className="w-32 border-b border-slate-200 px-5 py-3 font-medium">结果</th>
-                <th className="border-b border-slate-200 px-4 py-3 font-medium">接口、来源与诊断</th>
-                <th className="w-28 border-b border-slate-200 px-4 py-3 font-medium">请求</th>
-                <th className="w-44 border-b border-slate-200 px-4 py-3 font-medium">调用时间</th>
-                <th className="w-44 border-b border-slate-200 px-4 py-3 font-medium">耗时</th>
-                <th className="w-32 border-b border-slate-200 px-4 py-3 font-medium">认证恢复</th>
-                <th className="w-20 border-b border-slate-200 px-4 py-3 text-right font-medium">详情</th>
+                <th className="w-32 border-b border-slate-200 px-5 py-3 text-center font-medium">结果</th>
+                <th className="min-w-52 border-b border-slate-200 px-4 py-3 text-center font-medium">接口</th>
+                <th className="w-36 border-b border-slate-200 px-4 py-3 text-center font-medium">来源</th>
+                <th className="min-w-56 border-b border-slate-200 px-4 py-3 text-center font-medium">诊断</th>
+                <th className="w-28 border-b border-slate-200 px-4 py-3 text-center font-medium">请求</th>
+                <th className="w-40 border-b border-slate-200 px-4 py-3 text-center font-medium">调用时间</th>
+                <th className="w-44 border-b border-slate-200 px-4 py-3 text-center font-medium">耗时</th>
+                <th className="w-32 border-b border-slate-200 px-4 py-3 text-center font-medium">认证恢复</th>
+                <th className="w-20 border-b border-slate-200 px-4 py-3 text-center font-medium">详情</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -668,8 +664,8 @@ function HistoryRow({
         active ? 'bg-teal-50/70' : 'hover:bg-slate-50/80'
       }`}
     >
-      <td className="px-5 py-2.5">
-        <div className={`inline-flex items-center gap-2 font-medium ${ok ? 'text-emerald-700' : 'text-red-700'}`}>
+      <td className="px-5 py-2.5 text-center">
+        <div className={`inline-flex items-center justify-center gap-2 font-medium ${ok ? 'text-emerald-700' : 'text-red-700'}`}>
           <span className={`h-2 w-2 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
           <span>{ok ? '成功' : '失败'}</span>
           <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${ok ? 'bg-emerald-50' : 'bg-red-50'}`}>
@@ -677,31 +673,35 @@ function HistoryRow({
           </span>
         </div>
       </td>
-      <td className="max-w-0 px-4 py-2.5">
+      <td className="max-w-52 px-4 py-2.5 text-center">
         <p className="truncate font-medium text-slate-800" title={item.name}>{item.name}</p>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5">
+      </td>
+      <td className="px-4 py-2.5 text-center">
+        <div className="flex min-w-0 flex-col items-center justify-center gap-1">
           <SourceBadge source={item.source} />
           {item.proxy_key_name && (
-            <span className="truncate text-[10px] text-slate-500" title={item.proxy_key_name}>
+            <span className="max-w-28 truncate text-[10px] text-slate-500" title={item.proxy_key_name}>
               {item.proxy_key_name}
             </span>
           )}
         </div>
-        <p className={`mt-1 truncate text-[10px] ${item.error ? 'text-red-600' : 'font-mono text-slate-400'}`} title={item.error || undefined}>
+      </td>
+      <td className="max-w-56 px-4 py-2.5 text-center">
+        <p className={`mx-auto truncate text-[10px] ${item.error ? 'text-red-600' : 'font-mono text-slate-400'}`} title={item.error || undefined}>
           {item.error || `RUN-${String(item.id).padStart(6, '0')}`}
         </p>
       </td>
-      <td className="px-4 py-2.5">
+      <td className="px-4 py-2.5 text-center">
         <span className="inline-flex rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[10px] font-semibold text-slate-600">
           {item.method}
         </span>
       </td>
-      <td className="px-4 py-2.5 tabular-nums">
+      <td className="px-4 py-2.5 text-center tabular-nums">
         <p className="text-slate-600">{time.date}</p>
         <p className="mt-0.5 text-[10px] text-slate-400">{time.time}</p>
       </td>
-      <td className="px-4 py-2.5">
-        <div className="flex items-center gap-2">
+      <td className="px-4 py-2.5 text-center">
+        <div className="flex items-center justify-center gap-2">
           <span className={`w-14 tabular-nums ${slow ? 'font-medium text-amber-700' : 'text-slate-600'}`}>
             {formatElapsed(item.elapsed_ms)}
           </span>
@@ -715,16 +715,16 @@ function HistoryRow({
           )}
         </div>
       </td>
-      <td className="px-4 py-2.5">
+      <td className="px-4 py-2.5 text-center">
         {item.relogin ? (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-700">
+          <span className="inline-flex items-center justify-center gap-1.5 text-[11px] font-medium text-amber-700">
             <ShieldCheck size={13} />
             自动重登
           </span>
         ) : <span className="text-[11px] text-slate-400">未触发</span>}
       </td>
-      <td className="px-4 py-2.5 text-right">
-        <span className={`ml-auto inline-flex items-center justify-end gap-1 text-[11px] font-medium transition group-hover:translate-x-0.5 group-hover:text-teal-700 ${
+      <td className="px-4 py-2.5 text-center">
+        <span className={`inline-flex items-center justify-center gap-1 text-[11px] font-medium transition group-hover:translate-x-0.5 group-hover:text-teal-700 ${
           active ? 'text-teal-700' : 'text-slate-400'
         }`}>
           查看
@@ -750,13 +750,15 @@ function SourceBadge({ source }: { source: string }) {
 function HistorySkeleton() {
   return (
     <tr className="animate-pulse">
-      <td className="px-5 py-4"><div className="h-5 w-20 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-3 w-40 rounded bg-slate-100" /><div className="mt-2 h-2.5 w-24 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-5 w-12 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-3 w-24 rounded bg-slate-100" /><div className="mt-2 h-2.5 w-16 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-3 w-24 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-3 w-16 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-4 w-4 rounded bg-slate-100" /></td>
+      <td className="px-5 py-4"><div className="mx-auto h-5 w-20 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-3 w-40 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-5 w-14 rounded bg-slate-100" /><div className="mx-auto mt-2 h-2.5 w-20 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-3 w-32 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-5 w-12 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-3 w-24 rounded bg-slate-100" /><div className="mx-auto mt-2 h-2.5 w-16 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-3 w-24 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-3 w-16 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-4 w-10 rounded bg-slate-100" /></td>
     </tr>
   )
 }
