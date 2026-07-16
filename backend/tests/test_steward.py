@@ -373,7 +373,7 @@ def test_column_definition_change_invalidates_n8n_publish_attestation(
         json={"enable": False},
     )
     assert published.status_code == 400
-    assert "发布凭证" in published.json()["detail"]
+    assert "一致性确认" in published.json()["detail"]
 
 
 @pytest.mark.parametrize("drift_kind", ["revision", "snapshot"])
@@ -1239,9 +1239,9 @@ def test_execute_pipeline_does_not_require_draft_publish_revision_metadata(
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
 
 
-def test_wizard_preview_still_requires_complete_publish_revision_metadata(
+def test_wizard_preview_builds_internal_evidence_without_active_version_id(
         db, fake_n8n, draft_record, monkeypatch):
-    """只有编辑向导的发布前预览继续 fail closed，避免降低发布安全门。"""
+    """inactive 草稿缺 activeVersionId 时由平台自动用 revision + snapshot 完成校验。"""
     from app.data_channel.steward.runner import collect_test_rows
 
     original_activate = fake_n8n.activate_workflow
@@ -1252,9 +1252,38 @@ def test_wizard_preview_still_requires_complete_publish_revision_metadata(
 
     monkeypatch.setattr(fake_n8n, "activate_workflow", activate_without_version)
 
-    with pytest.raises(service.StewardError, match="activeVersionId"):
-        collect_test_rows(db, draft_record)
+    rows, exec_meta = collect_test_rows(db, draft_record)
 
+    assert rows and exec_meta["workflow_evidence"]["snapshot_hash"]
+    revision = exec_meta["workflow_evidence"]["revision"]
+    assert revision["versionId"] and revision["updatedAt"]
+    assert revision["activeVersionId"] is None
+    assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+
+
+def test_wizard_validates_and_publishes_when_active_version_id_is_absent(
+        pipelines_client, client, auth_headers, db, fake_n8n, draft_record,
+        monkeypatch):
+    """n8n API 不暴露 activeVersionId 时，完整向导仍由平台自动完成并安全发布。"""
+    original_activate = fake_n8n.activate_workflow
+
+    def activate_without_version(workflow_id: str):
+        original_activate(workflow_id)
+        fake_n8n.workflows[str(workflow_id)]["activeVersionId"] = None
+
+    monkeypatch.setattr(fake_n8n, "activate_workflow", activate_without_version)
+
+    response = _publish(
+        client, auth_headers, draft_record.pipeline_id, enable=False)
+
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    pipeline = db.query(Pipeline).filter(
+        Pipeline.id == draft_record.pipeline_id).one()
+    assert pipeline.status == "published"
+    revision = pipeline.definition["n8n"]["revision"]
+    assert revision["versionId"] and revision["updatedAt"]
+    assert revision["activeVersionId"] is None
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
 
 
