@@ -371,7 +371,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <div className="profile-heading">
             <div className="profile-mark"><NetworkMark /></div>
             <div>
-              <h1>{ontology.name}</h1>
+              <h1 title={ontology.name}>{ontology.name}</h1>
               <span className="profile-domain">{ontology.domain || '未分类'}</span>
             </div>
           </div>

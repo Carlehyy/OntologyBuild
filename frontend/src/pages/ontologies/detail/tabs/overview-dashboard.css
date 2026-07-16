@@ -75,34 +75,32 @@
   grid-template-columns: minmax(420px, var(--ov-side-width)) minmax(0, 1fr);
   grid-template-rows: auto auto;
   gap: 14px;
+  align-items: stretch;
 }
 
 .ontology-profile {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
+  display: flex;
+  grid-column: 1;
+  grid-row: 1 / span 2;
   min-height: 0;
-  column-gap: 18px;
+  flex-direction: column;
   padding: 18px 22px 16px;
 }
 
-.ontology-profile > .overview-panel-title { grid-column: 1 / -1; }
 .profile-heading {
   display: flex;
-  grid-column: 1;
-  grid-row: 2 / span 2;
+  width: 100%;
+  min-width: 0;
   align-items: center;
-  align-self: start;
-  flex-direction: column;
-  gap: 22px;
-  margin-top: 12px;
+  gap: 18px;
+  margin-top: 26px;
 }
 
 .profile-mark {
   display: grid;
-  width: 64px;
-  height: 64px;
-  flex: 0 0 64px;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
   place-items: center;
   border: 1px solid #cdebe5;
   border-radius: 50%;
@@ -110,18 +108,40 @@
   color: var(--ov-teal);
 }
 
-.overview-network-mark { width: 47px; height: 47px; }
-.profile-heading > div:last-child { min-width: 0; text-align: center; }
-.profile-heading h1 { margin: 0 0 7px; overflow: hidden; color: #172033; font-size: 19px; font-weight: 750; letter-spacing: .01em; text-overflow: ellipsis; white-space: nowrap; }
+.overview-network-mark { width: 52px; height: 52px; }
+.profile-heading > div:last-child { width: 100%; min-width: 0; overflow: hidden; text-align: left; }
+.profile-heading h1 {
+  display: -webkit-box;
+  max-width: 100%;
+  margin: 0 0 9px;
+  overflow: hidden;
+  color: #172033;
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.35;
+  letter-spacing: .01em;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .profile-domain { display: inline-flex; min-height: 25px; align-items: center; padding: 0 8px; border: 1px solid #bde5dc; border-radius: 7px; background: #effaf7; color: #158b7a; font-size: 12px; font-weight: 600; }
-.profile-description { grid-column: 2; grid-row: 2; min-height: 0; margin: 12px 0 8px; color: #59667a; font-size: 13px; line-height: 1.62; }
-.profile-meta { display: grid; grid-column: 2; grid-row: 3; gap: 6px; margin: 0; padding: 9px 0 0; border-top: 1px solid #edf1f5; }
+.profile-description {
+  min-height: 0;
+  margin: 30px 0 18px;
+  color: #59667a;
+  font-size: 13px;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+}
+.profile-meta { display: grid; gap: 9px; margin: auto 0 0; padding: 18px 0 0; border-top: 1px solid #edf1f5; }
 .profile-meta div { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; }
 .profile-meta dt { color: #8a96a8; font-size: 11px; }
 .profile-meta dd { overflow: hidden; margin: 0; color: #40506a; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 
 .kpi-rail {
   display: grid;
+  grid-column: 2;
+  grid-row: 1;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   overflow: hidden;
 }
@@ -151,11 +171,11 @@
 .kpi-status.is-neutral { color: #607086; font-weight: 500; }
 .kpi-status.is-purple { color: #755bd3; }
 
-.approval-pipeline { position: relative; grid-column: 1 / -1; overflow: hidden; padding: 21px 25px 22px; }
+.approval-pipeline { position: relative; grid-column: 2; grid-row: 2; overflow: hidden; padding: 21px 25px 22px; }
 .approval-summary { position: absolute; top: 56px; left: 26px; display: flex; align-items: baseline; gap: 7px; color: #768399; font-size: 12px; }
 .approval-count { color: #8d99aa; font-size: 30px; font-weight: 730; line-height: 1; }
 .approval-count.is-active { color: #e58a19; }
-.approval-workbench { display: grid; grid-template-columns: minmax(400px, 1.46fr) 78px minmax(285px, .92fr) 160px; min-height: 250px; align-items: center; gap: 0; margin-top: 18px; padding-top: 12px; }
+.approval-workbench { display: grid; grid-template-columns: minmax(300px, 1.4fr) 72px minmax(235px, .92fr) minmax(110px, .48fr); min-height: 250px; align-items: center; gap: 0; margin-top: 18px; padding-top: 12px; }
 .approval-belt { position: relative; height: 176px; align-self: end; overflow: hidden; padding: 0 26px; }
 .belt-rail { position: absolute; right: 0; left: 0; height: 14px; border: 1px solid #8392a5; background: #47566b; }
 .belt-rail-top { bottom: 46px; border-radius: 5px 5px 0 0; box-shadow: inset 0 2px rgba(255, 255, 255, .12); }
@@ -326,28 +346,24 @@
   .overview-hero-grid, .overview-row-model { grid-template-columns: minmax(380px, var(--ov-side-width)) minmax(0, 1fr); }
   .ontology-profile { padding-right: 22px; padding-left: 22px; }
   .kpi-cell { padding-right: 19px; padding-left: 19px; }
-  .approval-workbench { grid-template-columns: minmax(340px, 1.35fr) 68px minmax(255px, .95fr) 120px; }
-  .approval-routes { margin-left: 4px; }
+  .approval-workbench { grid-template-columns: minmax(280px, 1.35fr) 68px minmax(225px, .95fr); }
+  .approval-routes { display: none; }
   .model-composition-body { grid-template-columns: 190px minmax(0,1fr); }
   .mapping-body { grid-template-columns: 190px minmax(0,1fr); }
   .recent-row { grid-template-columns: 14px 42px minmax(80px,.7fr) minmax(70px,1fr) 9px minmax(80px,1.2fr) 62px 92px; gap: 5px; }
 }
 
 @media (max-width: 1450px) {
-  .approval-workbench { grid-template-columns: minmax(320px, 1.25fr) 62px minmax(245px, .9fr); }
-  .approval-routes { display: none; }
+  .approval-workbench { grid-template-columns: minmax(250px, 1.25fr) 62px minmax(210px, .9fr); }
 }
 
 @media (max-width: 1250px) {
   .overview-hero-grid { grid-template-columns: 1fr; grid-template-rows: auto; }
-  .ontology-profile { display: grid; grid-template-columns: minmax(280px,.8fr) minmax(0,1.2fr); min-height: 0; column-gap: 30px; }
-  .ontology-profile > .overview-panel-title { grid-column: 1 / -1; }
-  .profile-heading { grid-column: 1; grid-row: 2 / span 2; flex-direction: row; }
-  .profile-heading > div:last-child { text-align: left; }
-  .profile-description { align-self: center; margin: 10px 0; }
-  .profile-description { grid-column: 2; grid-row: 2; }
-  .profile-meta { grid-column: 2; grid-row: 3; }
-  .profile-meta { padding: 13px 0; }
+  .ontology-profile, .kpi-rail, .approval-pipeline { grid-column: 1; grid-row: auto; }
+  .ontology-profile { min-height: 0; }
+  .profile-heading { margin-top: 18px; }
+  .profile-description { margin: 18px 0; }
+  .profile-meta { margin-top: 0; padding: 13px 0 0; }
   .approval-pipeline { min-height: 330px; }
   .overview-row-model, .overview-row-data, .overview-row-facts { grid-template-columns: 1fr; }
 }
