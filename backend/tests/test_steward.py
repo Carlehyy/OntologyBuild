@@ -1274,8 +1274,12 @@ def test_execute_pipeline_does_not_require_draft_publish_revision_metadata(
     assert out["rows"] == 2 and out["execution"]["execution_status"] == "success"
     assert out["preview"]["rows"][0] == {"currency": "USD", "rate": 1.0}
     assert "workflow_snapshot_hash" in out["execution"]
-    assert "workflow_evidence" not in out["execution"]
+    evidence = out["execution"]["workflow_evidence"]
+    assert evidence["revision"]["activeVersionId"] is None
+    assert evidence["snapshot_hash"] == out["execution"]["workflow_snapshot_hash"]
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
+    db.refresh(draft_record)
+    assert not draft_record.last_test_result
 
 
 def test_wizard_preview_builds_internal_evidence_without_active_version_id(
