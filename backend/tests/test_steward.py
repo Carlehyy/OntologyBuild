@@ -861,7 +861,9 @@ def test_publish_requires_complete_remote_revision_and_compensates(
     response = _publish(client, auth_headers, draft_record.pipeline_id)
 
     assert response.status_code == 400
-    assert "updatedAt" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "一致性确认" in detail
+    assert "updatedAt" not in detail  # 底层 revision 字段不暴露给业务用户
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
     db.expire_all()
     assert db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first().status == "draft"
