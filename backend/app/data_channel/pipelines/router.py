@@ -749,7 +749,7 @@ def validate_column_definitions(
     stored_dry_run_id = payload.get("dry_run_id")
     if (stored_dry_run_id not in (None, dry_run_id)
             or (_is_n8n_pipeline(pl) and stored_dry_run_id != dry_run_id)):
-        raise HTTPException(400, "试运行凭证 id 与暂存内容不匹配，请重新执行预览")
+        raise HTTPException(400, "试运行结果 id 与暂存内容不匹配，平台已拒绝使用该结果")
 
     outputs = payload.get("outputs") or []
     from app.data_channel.steward import service as steward_service
@@ -787,7 +787,7 @@ def validate_column_definitions(
         })
     if payload.get("truncated"):
         errors.append({"field_key": "", "severity": "error",
-                       "message": f"试运行输出超过暂存上限，本次仅有 {len(rows):,} 行，无法形成全量发布凭证"})
+                       "message": f"试运行输出超过暂存上限，本次仅有 {len(rows):,} 行，无法完成全量发布校验"})
 
     for message in validate_contract_structure(body.column_definitions):
         errors.append({"field_key": "", "severity": "error", "message": message})
@@ -878,7 +878,7 @@ def validate_column_definitions(
             errors.append({
                 "field_key": "",
                 "severity": "error",
-                "message": "缺少数据管家治理记录，无法形成 n8n 发布凭证",
+                "message": "平台内部治理记录不完整，无法安全发布",
             })
         else:
             engine_meta = payload.get("engine_meta") or {}
@@ -911,7 +911,7 @@ def validate_column_definitions(
                 errors.append({
                     "field_key": "",
                     "severity": "error",
-                    "message": f"无法读取当前 n8n workflow，不能形成发布凭证：{exc}",
+                    "message": f"无法读取当前 n8n workflow，平台内部一致性检查失败：{exc}",
                 })
 
     has_blocking = any(e["severity"] == "error" for e in errors)
