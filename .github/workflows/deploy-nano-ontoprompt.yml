@@ -9,7 +9,9 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 首次安装 Python/Node 依赖 + 800+ 后端用例 + 迁移检查 + 前端生产构建
+    # 在冷缓存 runner 上可能超过 25 分钟；保留明确上限，避免误取消正常验证。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
