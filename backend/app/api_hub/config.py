@@ -39,6 +39,20 @@ MAX_RUNS_PER_INTERFACE = int(
     _env("API_HUB_MAX_RUNS_PER_INTERFACE", _env("MAX_RUNS_PER_INTERFACE", "20"))
 )
 
+# Public HTTP proxy publishing. Management APIs stay under the platform JWT
+# boundary; only /proxy/<slug> is public and every call requires a proxy key.
+PROXY_PATH = _env("API_HUB_PROXY_PATH", "/proxy") or "/proxy"
+if not PROXY_PATH.startswith("/"):
+    PROXY_PATH = "/" + PROXY_PATH
+PROXY_PATH = PROXY_PATH.rstrip("/") or "/proxy"
+PROXY_KEY_HEADER = (
+    _env("API_HUB_PROXY_KEY_HEADER", "X-API-Hub-Key") or "X-API-Hub-Key"
+)
+PROXY_MAX_REQUEST_BYTES = max(
+    1,
+    int(_env("API_HUB_PROXY_MAX_REQUEST_BYTES", str(10 * 1024 * 1024))),
+)
+
 MCP_TOKEN = _env("API_HUB_MCP_TOKEN", _env("MCP_TOKEN"))
 SYSTEM_MCP_TOKEN = _env("API_HUB_SYSTEM_MCP_TOKEN", _env("SYSTEM_MCP_TOKEN"))
 MCP_PATH = "/api-hub/mcp"

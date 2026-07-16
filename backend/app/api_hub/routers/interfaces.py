@@ -1,17 +1,31 @@
 import json
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import db, executor
+from .. import config, db, executor
 
 router = APIRouter(prefix="/interfaces", tags=["api-hub-interfaces"])
 
 _RESERVED_GROUP = "默认分组"
 _SLOW_RUN_MS = 500
+_PROXY_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_PROXY_RESERVED_HEADERS = {
+    "host",
+    "content-length",
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "upgrade",
+}
 
 
 def _check_group_name(name: str):
@@ -38,6 +52,67 @@ class InterfaceIn(BaseModel):
     use_w3: bool = True
     mcp_enabled: bool = False
     open_enabled: bool = False
+    http_enabled: bool = False
+    proxy_slug: str = ""
+    proxy_query_keys: List[str] = Field(default_factory=list)
+    proxy_header_keys: List[str] = Field(default_factory=list)
+    proxy_body_enabled: bool = False
+
+
+def _load_json_list(value) -> list:
+    try:
+        data = json.loads(value) if value else []
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _normalize_publish_keys(items: List[str], *, lower: bool = False) -> list[str]:
+    out = []
+    seen = set()
+    for item in items:
+        key = (item or "").strip()
+        marker = key.lower() if lower else key
+        if not key or marker in seen:
+            continue
+        seen.add(marker)
+        out.append(key)
+    return out
+
+
+def _validate_proxy_publish(
+    conn, body: InterfaceIn, iid: int | None = None
+) -> tuple[str, list[str], list[str]]:
+    slug = (body.proxy_slug or "").strip().lower()
+    query_keys = _normalize_publish_keys(body.proxy_query_keys)
+    header_keys = _normalize_publish_keys(body.proxy_header_keys, lower=True)
+
+    if slug and not _PROXY_SLUG_RE.fullmatch(slug):
+        raise HTTPException(
+            status_code=400,
+            detail="HTTP 公开路径只能包含小写字母、数字、短横线和下划线，长度 1-64 位",
+        )
+    if body.http_enabled:
+        if not slug:
+            raise HTTPException(status_code=400, detail="发布 HTTP 接口前必须填写公开路径")
+        if not (body.url or "").strip():
+            raise HTTPException(status_code=400, detail="发布 HTTP 接口前必须填写真实 URL")
+        sql = "SELECT id FROM interfaces WHERE proxy_slug = ? AND http_enabled = 1"
+        params: list = [slug]
+        if iid is not None:
+            sql += " AND id <> ?"
+            params.append(iid)
+        if conn.execute(sql, params).fetchone():
+            raise HTTPException(status_code=409, detail=f"HTTP 公开路径「{slug}」已被其它接口使用")
+
+    reserved = _PROXY_RESERVED_HEADERS | {config.PROXY_KEY_HEADER.lower()}
+    blocked = [key for key in header_keys if key.lower() in reserved]
+    if blocked:
+        raise HTTPException(
+            status_code=400,
+            detail="以下 Header 由平台代理层管理，不能配置为透传项：" + ", ".join(blocked),
+        )
+    return slug, query_keys, header_keys
 
 
 def _row_to_dict(row) -> dict:
@@ -48,13 +123,18 @@ def _row_to_dict(row) -> dict:
         "group_name": row["group_name"],
         "method": row["method"],
         "url": row["url"],
-        "query_params": json.loads(row["query_params"]),
-        "headers": json.loads(row["headers"]),
+        "query_params": _load_json_list(row["query_params"]),
+        "headers": _load_json_list(row["headers"]),
         "body_type": row["body_type"],
         "body_content": row["body_content"],
         "use_w3": bool(row["use_w3"]),
         "mcp_enabled": bool(row["mcp_enabled"]),
         "open_enabled": bool(row["open_enabled"]),
+        "http_enabled": bool(row["http_enabled"]),
+        "proxy_slug": row["proxy_slug"],
+        "proxy_query_keys": _load_json_list(row["proxy_query_keys"]),
+        "proxy_header_keys": _load_json_list(row["proxy_header_keys"]),
+        "proxy_body_enabled": bool(row["proxy_body_enabled"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -85,16 +165,21 @@ def create_interface(body: InterfaceIn):
     _check_group_name(body.group_name)
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
+        slug, query_keys, header_keys = _validate_proxy_publish(conn, body)
         cur = conn.execute(
             "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-            "body_type, body_content, use_w3, mcp_enabled, open_enabled, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "body_type, body_content, use_w3, mcp_enabled, open_enabled, http_enabled, proxy_slug, "
+            "proxy_query_keys, proxy_header_keys, proxy_body_enabled, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 body.name, body.description, body.group_name, body.method.upper(), body.url,
                 _dump_kv(body.query_params), _dump_kv(body.headers),
                 body.body_type, body.body_content,
                 1 if body.use_w3 else 0, 1 if body.mcp_enabled else 0,
-                1 if body.open_enabled else 0, now, now,
+                1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
+                json.dumps(query_keys, ensure_ascii=False),
+                json.dumps(header_keys, ensure_ascii=False),
+                1 if body.proxy_body_enabled else 0, now, now,
             ),
         )
         row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -114,15 +199,21 @@ def update_interface(iid: int, body: InterfaceIn):
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
         _get_or_404(conn, iid)
+        slug, query_keys, header_keys = _validate_proxy_publish(conn, body, iid)
         conn.execute(
             "UPDATE interfaces SET name=?, description=?, group_name=?, method=?, url=?, query_params=?, "
-            "headers=?, body_type=?, body_content=?, use_w3=?, mcp_enabled=?, open_enabled=?, updated_at=? WHERE id=?",
+            "headers=?, body_type=?, body_content=?, use_w3=?, mcp_enabled=?, open_enabled=?, "
+            "http_enabled=?, proxy_slug=?, proxy_query_keys=?, proxy_header_keys=?, "
+            "proxy_body_enabled=?, updated_at=? WHERE id=?",
             (
                 body.name, body.description, body.group_name, body.method.upper(), body.url,
                 _dump_kv(body.query_params), _dump_kv(body.headers),
                 body.body_type, body.body_content,
                 1 if body.use_w3 else 0, 1 if body.mcp_enabled else 0,
-                1 if body.open_enabled else 0, now, iid,
+                1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
+                json.dumps(query_keys, ensure_ascii=False),
+                json.dumps(header_keys, ensure_ascii=False),
+                1 if body.proxy_body_enabled else 0, now, iid,
             ),
         )
         row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
@@ -142,6 +233,14 @@ def delete_interface(iid: int):
 
 class OpenBody(BaseModel):
     open: bool
+
+
+class HttpPublishIn(BaseModel):
+    enabled: bool = False
+    slug: str = ""
+    query_keys: List[str] = Field(default_factory=list)
+    header_keys: List[str] = Field(default_factory=list)
+    body_enabled: bool = False
 
 
 class MoveBody(BaseModel):
@@ -208,6 +307,40 @@ def set_open(iid: int, body: OpenBody):
         conn.execute(
             "UPDATE interfaces SET open_enabled = ?, updated_at = ? WHERE id = ?",
             (1 if body.open else 0, now, iid),
+        )
+        row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
+    return _row_to_dict(row)
+
+
+@router.put("/{iid}/http-publication")
+def set_http_publication(iid: int, body: HttpPublishIn):
+    """独立更新普通 HTTP 发布配置，不覆盖编辑器里其它接口字段。"""
+    now = datetime.now(timezone.utc).isoformat()
+    with db.get_conn() as conn:
+        row = _get_or_404(conn, iid)
+        draft = InterfaceIn(
+            **{
+                **_row_to_dict(row),
+                "http_enabled": body.enabled,
+                "proxy_slug": body.slug,
+                "proxy_query_keys": body.query_keys,
+                "proxy_header_keys": body.header_keys,
+                "proxy_body_enabled": body.body_enabled,
+            }
+        )
+        slug, query_keys, header_keys = _validate_proxy_publish(conn, draft, iid)
+        conn.execute(
+            "UPDATE interfaces SET http_enabled=?, proxy_slug=?, proxy_query_keys=?, "
+            "proxy_header_keys=?, proxy_body_enabled=?, updated_at=? WHERE id=?",
+            (
+                1 if body.enabled else 0,
+                slug,
+                json.dumps(query_keys, ensure_ascii=False),
+                json.dumps(header_keys, ensure_ascii=False),
+                1 if body.body_enabled else 0,
+                now,
+                iid,
+            ),
         )
         row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
     return _row_to_dict(row)
@@ -379,7 +512,8 @@ def list_all_runs(
         ).fetchone()[0]
         rows = conn.execute(
             "SELECT r.id, r.interface_id, i.name, i.method, r.ok, r.status_code, "
-            "r.elapsed_ms, r.error, r.relogin, r.created_at "
+            "r.elapsed_ms, r.error, r.relogin, r.source, r.proxy_key_name, "
+            "r.source_ip, r.created_at "
             + base_from + where_sql +
             " ORDER BY r.id DESC LIMIT ? OFFSET ?",
             params + [size, (page - 1) * size],

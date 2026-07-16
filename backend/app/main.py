@@ -507,6 +507,7 @@ from app.api_hub.routers import credential as api_hub_credential
 from app.api_hub.routers import interfaces as api_hub_interfaces
 from app.api_hub.routers import mcp as api_hub_mcp_router
 from app.api_hub.routers import proxy as api_hub_proxy
+from app.api_hub.routers import http_proxy as api_hub_http_proxy
 from app.deps import get_current_user
 api_hub_auth = [Depends(get_current_user)]
 app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_auth)
@@ -514,9 +515,16 @@ app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencie
 app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_auth)
 app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_auth)
 app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_auth)
+app.include_router(
+    api_hub_http_proxy.admin_router,
+    prefix="/api/api-hub",
+    dependencies=api_hub_auth,
+)
 # n8n service-to-service calls use API_HUB_SYSTEM_MCP_TOKEN and only reach
 # interfaces explicitly added to the open list.
 app.include_router(api_hub_proxy.router)
+# Ordinary HTTP consumers use per-caller proxy keys and stable /proxy/<slug> URLs.
+app.include_router(api_hub_http_proxy.public_router)
 asset_lake_guard = [Depends(asset_lake_access_guard)]
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"], dependencies=asset_lake_guard)
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"], dependencies=asset_lake_guard)

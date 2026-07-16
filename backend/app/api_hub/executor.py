@@ -1,80 +1,282 @@
-"""
-执行器 —— 把一条保存的接口真正发出去。
+"""统一接口执行器。
 
-关键能力（把复杂留给系统）：启用 W3 的接口，先用现有 Cookie 直接发；如果响应
-401/403 或被重定向回 login.huawei.com（说明会话过期），就静默重新登录一次、用新
-Cookie 重发该请求，再把结果交还给前端。整个过程用户无感。
+网页调试、MCP、n8n 内部代理与普通 HTTP 发布都走这里，确保 W3 登录态注入、
+透明重登、动态参数合并和调用审计的行为一致。
 """
+from __future__ import annotations
+
 import json
+import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from http.cookies import SimpleCookie
+from typing import Any
+from urllib.parse import parse_qsl
 
 import requests
 
 from . import config, credential, db
 
 _LOGIN_HOST = "login.huawei.com"
-_MAX_BODY_CHARS = 1_000_000  # 响应体最多展示 ~1MB，超出截断
+_MAX_BODY_CHARS = 1_000_000
+_MAX_SNAPSHOT_BODY_CHARS = 100_000
+_UNSET = object()
+_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+}
+_SENSITIVE_NAME_RE = re.compile(
+    r"(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class RequestOverrides:
+    """一次调用允许覆盖的请求值和审计上下文。"""
+
+    query_params: list[tuple[str, str]] | None = None
+    headers: list[tuple[str, str]] | None = None
+    body: Any = _UNSET
+    content_type: str | None = None
+    source: str = "ui"
+    proxy_key_id: int | None = None
+    proxy_key_name: str | None = None
+    source_ip: str | None = None
 
 
 def _looks_expired(resp: requests.Response) -> bool:
     if resp.status_code in (401, 403):
         return True
-    # 被重定向到了 SSO 登录页（最终 URL 落在登录域）
     final = resp.url or ""
     if _LOGIN_HOST in final:
         return True
-    # 兜底：有些后端不重定向、也不返回 401/403，而是直接回 200 + 一段 SSO 登录页 HTML。
-    # 仅在响应像 HTML 且明显是登录页时才判定过期，避免误伤正常的业务响应。
-    ctype = (resp.headers.get("Content-Type") or "").lower()
-    if "html" in ctype:
+    content_type = (resp.headers.get("Content-Type") or "").lower()
+    if "html" in content_type:
         try:
             head = resp.text[:4000].lower()
         except Exception:  # noqa: BLE001
             head = ""
-        if _LOGIN_HOST in head and ("loginaccount" in head or "login1" in head or "hwidcenter" in head):
+        if _LOGIN_HOST in head and (
+            "loginaccount" in head or "login1" in head or "hwidcenter" in head
+        ):
             return True
     return False
 
 
-def _parse_form(text: str) -> dict:
-    out = {}
+def _parse_form(text: str) -> list[tuple[str, str]]:
+    out = []
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
+        if not line or line.startswith("#") or "=" not in line:
             continue
-        if "=" in line:
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.strip()
+        key, value = line.split("=", 1)
+        out.append((key.strip(), value.strip()))
     return out
 
 
-def _build_kwargs(iface: dict, query_override: dict | None = None,
-                  body_override: str | None = None) -> dict:
-    params = {p["key"]: p["value"] for p in iface.get("query_params", []) if p.get("key")}
-    if query_override:
-        params.update({str(k): str(v) for k, v in query_override.items() if v is not None})
-    headers = {h["key"]: h["value"] for h in iface.get("headers", []) if h.get("key")}
+def _kv_pairs(items) -> list[tuple[str, str]]:
+    out = []
+    for item in items or []:
+        if isinstance(item, dict):
+            key, value = item.get("key"), item.get("value", "")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            key, value = item[0], item[1]
+        else:
+            continue
+        key = str(key or "").strip()
+        if key:
+            out.append((key, str(value if value is not None else "")))
+    return out
 
-    kwargs = {
-        "params": params or None,
+
+def _merge_query(defaults, overrides) -> list[tuple[str, str]]:
+    base = _kv_pairs(defaults)
+    if overrides is None:
+        return base
+    incoming = _kv_pairs(overrides)
+    replaced = {key for key, _ in incoming}
+    return [(key, value) for key, value in base if key not in replaced] + incoming
+
+
+def _merge_headers(defaults, overrides) -> dict[str, str]:
+    merged: dict[str, tuple[str, str]] = {}
+    for key, value in _kv_pairs(defaults):
+        merged[key.lower()] = (key, value)
+    if overrides is not None:
+        for key, value in _kv_pairs(overrides):
+            merged[key.lower()] = (key, value)
+    headers = {original: value for original, value in merged.values()}
+    reserved = _HOP_BY_HOP_HEADERS | {config.PROXY_KEY_HEADER.lower()}
+    for key in list(headers):
+        if key.lower() in reserved:
+            headers.pop(key, None)
+    return headers
+
+
+def _pop_header(headers: dict[str, str], name: str) -> str | None:
+    target = name.lower()
+    for key in list(headers):
+        if key.lower() == target:
+            return headers.pop(key)
+    return None
+
+
+def _set_header(headers: dict[str, str], name: str, value: str) -> None:
+    _pop_header(headers, name)
+    headers[name] = value
+
+
+def _caller_cookies(cookie_header: str) -> dict[str, str]:
+    parsed = SimpleCookie()
+    try:
+        parsed.load(cookie_header)
+    except Exception:  # noqa: BLE001
+        return {}
+    return {key: morsel.value for key, morsel in parsed.items()}
+
+
+def _redact_value(name: str, value: Any) -> Any:
+    return "***" if _SENSITIVE_NAME_RE.search(name or "") else value
+
+
+def _redact_mapping(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _redact_value(str(key), _redact_mapping(item))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_mapping(item) for item in value]
+    return value
+
+
+def _redact_body(value: Any, content_type: str | None) -> Any:
+    if value is _UNSET:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    elif isinstance(value, str):
+        text = value
+    else:
+        return _redact_mapping(value)
+
+    if len(text) > _MAX_SNAPSHOT_BODY_CHARS:
+        text = text[:_MAX_SNAPSHOT_BODY_CHARS] + "\n…（请求体快照已截断）"
+    lowered = (content_type or "").lower()
+    if "json" in lowered or text.lstrip().startswith(("{", "[")):
+        try:
+            return json.dumps(
+                _redact_mapping(json.loads(text)), ensure_ascii=False
+            )
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if "x-www-form-urlencoded" in lowered:
+        return "&".join(
+            f"{key}={_redact_value(key, item)}"
+            for key, item in parse_qsl(text, keep_blank_values=True)
+        )
+    return text
+
+
+def _redact_headers(headers: dict[str, str]) -> list[dict[str, str]]:
+    return [
+        {"key": key, "value": str(_redact_value(key, value))}
+        for key, value in headers.items()
+    ]
+
+
+def _redact_response_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {
+        key: str(_redact_value(key, value))
+        for key, value in (headers or {}).items()
+    }
+
+
+def _build_kwargs(
+    iface: dict,
+    overrides: RequestOverrides,
+    *,
+    use_w3: bool,
+    session: requests.Session,
+) -> tuple[dict, dict]:
+    query = _merge_query(iface.get("query_params", []), overrides.query_params)
+    headers = _merge_headers(iface.get("headers", []), overrides.headers)
+    kwargs: dict[str, Any] = {
+        "params": query or None,
         "timeout": config.HTTP_TIMEOUT,
         "allow_redirects": True,
     }
 
-    body_type = iface.get("body_type", "none")
-    body = body_override if body_override is not None else (iface.get("body_content", "") or "")
+    body_for_snapshot: Any = _UNSET
+    body_content_type = overrides.content_type
+    if overrides.body is not _UNSET:
+        kwargs["data"] = overrides.body
+        body_for_snapshot = overrides.body
+        if overrides.content_type:
+            _set_header(headers, "Content-Type", overrides.content_type)
+    else:
+        body_type = iface.get("body_type", "none")
+        body = iface.get("body_content", "") or ""
+        if body_type == "json" and body.strip():
+            kwargs["data"] = body.encode("utf-8")
+            body_for_snapshot = body
+            body_content_type = "application/json"
+            if not any(key.lower() == "content-type" for key in headers):
+                headers["Content-Type"] = "application/json; charset=utf-8"
+        elif body_type == "form" and body.strip():
+            form = _parse_form(body)
+            kwargs["data"] = form
+            body_for_snapshot = body
+            body_content_type = "application/x-www-form-urlencoded"
+        elif body_type == "raw" and body:
+            kwargs["data"] = body.encode("utf-8")
+            body_for_snapshot = body
 
-    if body_type == "json" and body.strip():
-        kwargs["data"] = body.encode("utf-8")
-        headers.setdefault("Content-Type", "application/json; charset=utf-8")
-    elif body_type == "form" and body.strip():
-        kwargs["data"] = _parse_form(body)
-    elif body_type == "raw" and body:
-        kwargs["data"] = body.encode("utf-8")
+    # W3 模式下可透传其它业务 Cookie，但同名登录 Cookie 永远以平台会话为准。
+    cookie_header = None
+    for key, value in list(headers.items()):
+        if key.lower() == "cookie":
+            cookie_header = value
+            if use_w3:
+                headers.pop(key)
+            break
+    if use_w3 and cookie_header:
+        platform_cookie_names = set(session.cookies.get_dict())
+        extra_cookies = {
+            key: value
+            for key, value in _caller_cookies(cookie_header).items()
+            if key not in platform_cookie_names
+        }
+        if extra_cookies:
+            kwargs["cookies"] = extra_cookies
 
     kwargs["headers"] = headers or None
-    return kwargs
+    snapshot = {
+        "method": iface.get("method"),
+        "url": iface.get("url"),
+        "query_params": [
+            {"key": key, "value": str(_redact_value(key, value))}
+            for key, value in query
+        ],
+        "headers": _redact_headers(headers),
+        "body_type": iface.get("body_type"),
+        "body_content": _redact_body(body_for_snapshot, body_content_type),
+        "use_w3": iface.get("use_w3"),
+        "source": overrides.source,
+        "proxy_key_name": overrides.proxy_key_name,
+        "source_ip": overrides.source_ip,
+    }
+    return kwargs, snapshot
 
 
 def _safe_text(resp: requests.Response) -> str:
@@ -94,122 +296,194 @@ def _blank_result() -> dict:
         "elapsed_ms": None,
         "response_headers": {},
         "response_body": "",
+        "response_content": None,
         "content_type": "",
         "error": None,
+        "error_type": None,
         "relogin": False,
     }
 
 
-def run_interface(iface: dict, *, query_override: dict | None = None,
-                  body_override: str | None = None) -> dict:
+def _session_for_request(use_w3: bool, result: dict) -> requests.Session | None:
+    if not use_w3:
+        session = requests.Session()
+        # Preserve the existing API-Hub behavior for internal/self-signed services.
+        session.verify = False
+        return session
+
+    session = credential.build_session_from_saved()
+    if session is None or credential.saved_is_expired():
+        had_session = session is not None
+        status = credential.refresh()
+        if status.get("last_result") != "success":
+            result["error"] = (
+                "该接口需要 W3 登录态，自动登录失败："
+                f"{status.get('message') or '未知原因'}"
+            )
+            result["error_type"] = "w3_login"
+            return None
+        session = credential.build_session_from_saved()
+        if session is None:
+            result["error"] = "该接口需要 W3 登录态，但刷新后仍未能建立会话"
+            result["error_type"] = "w3_login"
+            return None
+        if had_session:
+            result["relogin"] = True
+    return session
+
+
+def run_interface(
+    iface: dict,
+    overrides: RequestOverrides | None = None,
+    *,
+    include_response_content: bool = False,
+    query_override: dict | None = None,
+    body_override: str | None = None,
+) -> dict:
+    """执行接口；旧的 query_override/body_override 参数继续兼容 n8n 调用。"""
     method = (iface.get("method") or "GET").upper()
     url = (iface.get("url") or "").strip()
     use_w3 = bool(iface.get("use_w3", 1))
+    if overrides is None:
+        overrides = RequestOverrides(
+            query_params=list((query_override or {}).items()) if query_override else None,
+            body=body_override if body_override is not None else _UNSET,
+            source="n8n_proxy" if query_override is not None or body_override is not None else "ui",
+        )
     result = _blank_result()
 
     if not url:
         result["error"] = "URL 不能为空"
-        _save_run(iface, result)
+        result["error_type"] = "configuration"
+        _save_run(iface, result, overrides, None)
         return result
 
-    kwargs = _build_kwargs(iface, query_override=query_override, body_override=body_override)
+    session = _session_for_request(use_w3, result)
+    if session is None:
+        _save_run(iface, result, overrides, None)
+        return result
 
-    # 选择会话
-    if use_w3:
-        # 主动式：发请求前先确保有一份「尽量有效」的登录态。
-        #   - 没有会话，或本地可判定已过期/即将过期 → 先刷新登录，再带新会话发，
-        #     避免「明知会过期还硬发一次、失败了才补登」。
-        session = credential.build_session_from_saved()
-        if session is None or credential.saved_is_expired():
-            had_session = session is not None
-            st = credential.refresh()   # 走 refresh：带锁、并把最新登录态同步给界面
-            if st.get("last_result") != "success":
-                result["error"] = f"该接口需要 W3 登录态，自动登录失败：{st.get('message') or '未知原因'}"
-                _save_run(iface, result)
-                return result
-            session = credential.build_session_from_saved()
-            if session is None:
-                result["error"] = "该接口需要 W3 登录态，但刷新后仍未能建立会话"
-                _save_run(iface, result)
-                return result
-            if had_session:
-                result["relogin"] = True   # 之前有会话、这次因过期而重登
-    else:
-        session = requests.Session()
-        session.verify = False
-
+    kwargs, snapshot = _build_kwargs(iface, overrides, use_w3=use_w3, session=session)
     start = time.perf_counter()
     try:
         resp = session.request(method, url, **kwargs)
-
-        # 反应式兜底：本地判断不了过期（如纯会话 cookie），但服务端把我们当未登录时，
-        # 重新登录并重发一次，尽量让本次调用成功。
         if use_w3 and _looks_expired(resp):
-            st = credential.refresh()
-            if st.get("last_result") == "success":
+            status = credential.refresh()
+            if status.get("last_result") == "success":
                 session2 = credential.build_session_from_saved()
                 if session2 is not None:
+                    kwargs, snapshot = _build_kwargs(
+                        iface, overrides, use_w3=use_w3, session=session2
+                    )
                     resp = session2.request(method, url, **kwargs)
                     result["relogin"] = True
                 else:
                     result["error"] = "登录态疑似过期，自动重登后仍未能建立会话"
+                    result["error_type"] = "w3_login"
             else:
-                result["error"] = f"登录态疑似过期，自动重登失败：{st.get('message') or '未知原因'}"
+                result["error"] = (
+                    "登录态疑似过期，自动重登失败："
+                    f"{status.get('message') or '未知原因'}"
+                )
+                result["error_type"] = "w3_login"
 
         result["status_code"] = resp.status_code
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
         result["response_headers"] = dict(resp.headers)
         result["content_type"] = resp.headers.get("Content-Type", "")
         result["response_body"] = _safe_text(resp)
+        if include_response_content:
+            result["response_content"] = resp.content
         if not 200 <= resp.status_code < 300:
             result["error"] = result["error"] or f"上游返回 HTTP {resp.status_code}"
+            result["error_type"] = result["error_type"] or "upstream_http"
         result["ok"] = result["error"] is None
-    except requests.RequestException as e:
+    except requests.Timeout as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"请求失败：{e}"
+        result["error"] = f"请求超时：{exc}"
+        result["error_type"] = "timeout"
+    except requests.RequestException as exc:
+        result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = f"请求失败：{exc}"
+        result["error_type"] = "network"
 
-    _save_run(iface, result)
+    _save_run(iface, result, overrides, snapshot)
     return result
 
 
-def _save_run(iface: dict, result: dict) -> None:
-    iid = iface.get("id")
-    if not iid:
+def _save_run(
+    iface: dict,
+    result: dict,
+    overrides: RequestOverrides,
+    snapshot: dict | None,
+) -> None:
+    interface_id = iface.get("id")
+    if not interface_id:
         return
-    snapshot = {
-        "method": iface.get("method"),
-        "url": iface.get("url"),
-        "query_params": iface.get("query_params"),
-        "headers": iface.get("headers"),
-        "body_type": iface.get("body_type"),
-        "body_content": iface.get("body_content"),
-        "use_w3": iface.get("use_w3"),
-    }
+    if snapshot is None:
+        snapshot = {
+            "method": iface.get("method"),
+            "url": iface.get("url"),
+            "query_params": [
+                {
+                    "key": item.get("key", ""),
+                    "value": str(_redact_value(item.get("key", ""), item.get("value", ""))),
+                }
+                for item in iface.get("query_params", [])
+            ],
+            "headers": _redact_headers(
+                {
+                    item.get("key", ""): item.get("value", "")
+                    for item in iface.get("headers", [])
+                    if item.get("key")
+                }
+            ),
+            "body_type": iface.get("body_type"),
+            "body_content": _redact_body(
+                iface.get("body_content", ""),
+                "application/json" if iface.get("body_type") == "json" else None,
+            ),
+            "use_w3": iface.get("use_w3"),
+            "source": overrides.source,
+            "proxy_key_name": overrides.proxy_key_name,
+            "source_ip": overrides.source_ip,
+        }
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO runs(interface_id, ok, status_code, elapsed_ms, request_snapshot, "
-            "response_headers, response_body, error, relogin, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "response_headers, response_body, error, relogin, source, proxy_key_id, "
+            "proxy_key_name, source_ip, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                iid,
+                interface_id,
                 1 if result["ok"] else 0,
                 result["status_code"],
                 result["elapsed_ms"],
                 json.dumps(snapshot, ensure_ascii=False),
-                json.dumps(result["response_headers"], ensure_ascii=False),
+                json.dumps(
+                    _redact_response_headers(result["response_headers"]),
+                    ensure_ascii=False,
+                ),
                 result["response_body"],
                 result["error"],
                 1 if result["relogin"] else 0,
+                overrides.source,
+                overrides.proxy_key_id,
+                overrides.proxy_key_name,
+                overrides.source_ip,
                 now,
             ),
         )
         result["run_id"] = cur.lastrowid
-        # 只保留最近 N 条
+        if overrides.proxy_key_id:
+            conn.execute(
+                "UPDATE proxy_keys SET last_used_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, overrides.proxy_key_id),
+            )
         conn.execute(
             "DELETE FROM runs WHERE interface_id = ? AND id NOT IN "
             "(SELECT id FROM runs WHERE interface_id = ? ORDER BY id DESC LIMIT ?)",
-            (iid, iid, config.MAX_RUNS_PER_INTERFACE),
+            (interface_id, interface_id, config.MAX_RUNS_PER_INTERFACE),
         )
     if iface.get("use_w3"):
         db.record_credential_usage(iface, result, now)

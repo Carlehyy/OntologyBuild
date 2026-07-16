@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api_hub import config, credential as credential_service, db
-from app.api_hub.routers import backup, credential, interfaces, mcp, proxy
+from app.api_hub.routers import backup, credential, http_proxy, interfaces, mcp, proxy
 
 
 @pytest.fixture
@@ -22,6 +22,8 @@ def hub_client(tmp_path, monkeypatch):
     app.include_router(backup.router)
     app.include_router(mcp.router)
     app.include_router(proxy.router)
+    app.include_router(http_proxy.admin_router)
+    app.include_router(http_proxy.public_router)
     return TestClient(app)
 
 
@@ -71,6 +73,7 @@ def test_interface_crud_group_and_auth_boundary(hub_client):
 
     response = TestClient(platform_app).get("/api/api-hub/interfaces")
     assert response.status_code == 403
+    assert TestClient(platform_app).get("/api/api-hub/proxy/info").status_code == 403
 
 
 def test_run_history_and_response_capture(hub_client, monkeypatch):
@@ -216,9 +219,12 @@ def test_n8n_proxy_is_fail_closed_and_forwards_dynamic_pagination(
     monkeypatch.setattr(config, "SYSTEM_MCP_TOKEN", "proxy-token")
     observed = {}
 
-    def fake_run(iface, *, query_override=None, body_override=None):
+    def fake_run(iface, overrides=None, **_kwargs):
         observed.update({
-            "id": iface["id"], "query": query_override, "body": body_override,
+            "id": iface["id"],
+            "query": dict(overrides.query_params or []),
+            "body": overrides.body,
+            "source": overrides.source,
         })
         return {
             "ok": True, "status_code": 200, "response_body": '{"rows":[1]}',
@@ -241,8 +247,9 @@ def test_n8n_proxy_is_fail_closed_and_forwards_dynamic_pagination(
     assert response.headers["x-api-hub-run-id"] == "42"
     assert observed == {
         "id": item["id"],
-        "query": {"tenant": "cn", "page": 3, "pageSize": 100},
+        "query": {"tenant": "cn", "page": "3", "pageSize": "100"},
         "body": '{"active": true}',
+        "source": "n8n_proxy",
     }
 
 

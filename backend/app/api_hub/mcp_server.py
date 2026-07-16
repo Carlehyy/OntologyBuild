@@ -205,7 +205,11 @@ async def _handle_call(args: dict) -> list[types.TextContent]:
     iface = _apply_overrides(_row_to_iface(dict(row)), args)
 
     # executor 是同步阻塞的，放到线程里跑，避免卡住事件循环
-    result = await anyio.to_thread.run_sync(executor.run_interface, iface)
+    result = await anyio.to_thread.run_sync(
+        lambda: executor.run_interface(
+            iface, executor.RequestOverrides(source="mcp_open")
+        )
+    )
 
     if result.get("status_code") is None and result.get("error"):
         text = f"请求失败：{result['error']}"
@@ -517,7 +521,11 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
         if not row:
             return [types.TextContent(type="text", text=json.dumps({"error": f"接口 {iid} 不存在"}, ensure_ascii=False))]
         iface = _apply_overrides(_row_to_iface(dict(row)), args)
-        result = await anyio.to_thread.run_sync(executor.run_interface, iface)
+        result = await anyio.to_thread.run_sync(
+            lambda: executor.run_interface(
+                iface, executor.RequestOverrides(source="mcp_system")
+            )
+        )
         if result.get("status_code") is None and result.get("error"):
             text = f"请求失败：{result['error']}"
         else:

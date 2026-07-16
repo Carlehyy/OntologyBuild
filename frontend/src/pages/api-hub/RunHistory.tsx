@@ -9,8 +9,11 @@ import {
   Clock3,
   Copy,
   Gauge,
+  Globe2,
+  KeyRound,
   RefreshCw,
   RotateCcw,
+  Route,
   Search,
   ShieldCheck,
   TimerReset,
@@ -301,7 +304,7 @@ export default function RunHistory() {
             <thead className="sticky top-0 z-10 bg-slate-50/95 text-slate-500 backdrop-blur">
               <tr>
                 <th className="w-32 border-b border-slate-200 px-5 py-3 font-medium">结果</th>
-                <th className="border-b border-slate-200 px-4 py-3 font-medium">接口与诊断</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-medium">接口、来源与诊断</th>
                 <th className="w-28 border-b border-slate-200 px-4 py-3 font-medium">请求</th>
                 <th className="w-44 border-b border-slate-200 px-4 py-3 font-medium">调用时间</th>
                 <th className="w-44 border-b border-slate-200 px-4 py-3 font-medium">耗时</th>
@@ -671,6 +674,14 @@ function HistoryRow({
       </td>
       <td className="max-w-0 px-4 py-2.5">
         <p className="truncate font-medium text-slate-800" title={item.name}>{item.name}</p>
+        <div className="mt-1 flex min-w-0 items-center gap-1.5">
+          <SourceBadge source={item.source} />
+          {item.proxy_key_name && (
+            <span className="truncate text-[10px] text-slate-500" title={item.proxy_key_name}>
+              {item.proxy_key_name}
+            </span>
+          )}
+        </div>
         <p className={`mt-1 truncate text-[10px] ${item.error ? 'text-red-600' : 'font-mono text-slate-400'}`} title={item.error || undefined}>
           {item.error || `RUN-${String(item.id).padStart(6, '0')}`}
         </p>
@@ -717,6 +728,18 @@ function HistoryRow({
       </td>
     </tr>
   )
+}
+
+function SourceBadge({ source }: { source: string }) {
+  const label = sourceLabel(source)
+  const tone = source === 'http_proxy'
+    ? 'bg-violet-50 text-violet-700'
+    : source === 'n8n_proxy'
+      ? 'bg-blue-50 text-blue-700'
+      : source.startsWith('mcp_')
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-slate-100 text-slate-600'
+  return <span className={`shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[9px] font-semibold ${tone}`}>{label}</span>
 }
 
 function HistorySkeleton() {
@@ -789,9 +812,9 @@ function RunDetailDrawer({
     ? detail.request_snapshot.url
     : ''
   const tabs: Array<{ key: DetailTab; label: string }> = [
-    { key: 'request', label: '请求快照' },
+    { key: 'request', label: '请求快照（已脱敏）' },
     { key: 'response', label: '响应体' },
-    { key: 'headers', label: '响应头' },
+    { key: 'headers', label: '响应头（已脱敏）' },
   ]
 
   return (
@@ -845,6 +868,9 @@ function RunDetailDrawer({
           <DetailMetric icon={Gauge} label="响应耗时" value={formatElapsed(current.elapsed_ms)} />
           <DetailMetric icon={TimerReset} label="请求方法" value={current.method} mono />
           <DetailMetric icon={ShieldCheck} label="认证恢复" value={current.relogin ? '自动重登' : '未触发'} />
+          <DetailMetric icon={Route} label="调用来源" value={sourceLabel(current.source)} />
+          <DetailMetric icon={KeyRound} label="调用方" value={current.proxy_key_name || '—'} />
+          <DetailMetric icon={Globe2} label="来源 IP" value={current.source_ip || '—'} mono />
         </div>
 
         {current.error && (
@@ -938,6 +964,18 @@ function metricTone(tone: 'default' | 'success' | 'warning' | 'danger') {
   if (tone === 'warning') return 'text-amber-700'
   if (tone === 'danger') return 'text-red-700'
   return 'text-slate-950'
+}
+
+function sourceLabel(source?: string | null) {
+  const labels: Record<string, string> = {
+    ui: '平台界面',
+    http_proxy: 'HTTP 代理',
+    n8n_proxy: 'n8n',
+    mcp_individual: '独立 MCP',
+    mcp_open: '统一 MCP',
+    mcp_system: '系统 MCP',
+  }
+  return labels[source || ''] || source || '平台界面'
 }
 
 function stringifyValue(value: unknown, fallback: string) {

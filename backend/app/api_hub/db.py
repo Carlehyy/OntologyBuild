@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS interfaces (
     use_w3        INTEGER NOT NULL DEFAULT 1,
     mcp_enabled   INTEGER NOT NULL DEFAULT 0,
     open_enabled  INTEGER NOT NULL DEFAULT 0,
+    http_enabled  INTEGER NOT NULL DEFAULT 0,
+    proxy_slug    TEXT    NOT NULL DEFAULT '',
+    proxy_query_keys  TEXT NOT NULL DEFAULT '[]',
+    proxy_header_keys TEXT NOT NULL DEFAULT '[]',
+    proxy_body_enabled INTEGER NOT NULL DEFAULT 0,
     sort_order    INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL,
     updated_at    TEXT    NOT NULL
@@ -34,7 +39,33 @@ CREATE TABLE IF NOT EXISTS runs (
     response_body    TEXT,
     error            TEXT,
     relogin          INTEGER NOT NULL DEFAULT 0,
+    source            TEXT    NOT NULL DEFAULT 'ui',
+    proxy_key_id      INTEGER,
+    proxy_key_name    TEXT,
+    source_ip         TEXT,
     created_at       TEXT    NOT NULL,
+    FOREIGN KEY (interface_id) REFERENCES interfaces(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS proxy_keys (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL,
+    key_prefix    TEXT    NOT NULL,
+    key_hash      TEXT    NOT NULL UNIQUE,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    valid_from    TEXT,
+    expires_at    TEXT,
+    scope_all     INTEGER NOT NULL DEFAULT 0,
+    last_used_at  TEXT,
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS proxy_key_interfaces (
+    key_id        INTEGER NOT NULL,
+    interface_id  INTEGER NOT NULL,
+    PRIMARY KEY (key_id, interface_id),
+    FOREIGN KEY (key_id) REFERENCES proxy_keys(id) ON DELETE CASCADE,
     FOREIGN KEY (interface_id) REFERENCES interfaces(id) ON DELETE CASCADE
 );
 
@@ -83,6 +114,58 @@ def _migrate(conn) -> None:
         conn.execute("ALTER TABLE interfaces ADD COLUMN open_enabled INTEGER NOT NULL DEFAULT 0")
         # 老数据兼容：已有 mcp_enabled=1 的接口，自动设为 open_enabled=1
         conn.execute("UPDATE interfaces SET open_enabled = 1 WHERE mcp_enabled = 1")
+    if "http_enabled" not in cols:
+        conn.execute("ALTER TABLE interfaces ADD COLUMN http_enabled INTEGER NOT NULL DEFAULT 0")
+    if "proxy_slug" not in cols:
+        conn.execute("ALTER TABLE interfaces ADD COLUMN proxy_slug TEXT NOT NULL DEFAULT ''")
+    if "proxy_query_keys" not in cols:
+        conn.execute("ALTER TABLE interfaces ADD COLUMN proxy_query_keys TEXT NOT NULL DEFAULT '[]'")
+    if "proxy_header_keys" not in cols:
+        conn.execute("ALTER TABLE interfaces ADD COLUMN proxy_header_keys TEXT NOT NULL DEFAULT '[]'")
+    if "proxy_body_enabled" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN proxy_body_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+
+    run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    if "source" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'ui'")
+    if "proxy_key_id" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN proxy_key_id INTEGER")
+    if "proxy_key_name" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN proxy_key_name TEXT")
+    if "source_ip" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN source_ip TEXT")
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS proxy_keys (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    NOT NULL,
+            key_prefix    TEXT    NOT NULL,
+            key_hash      TEXT    NOT NULL UNIQUE,
+            enabled       INTEGER NOT NULL DEFAULT 1,
+            valid_from    TEXT,
+            expires_at    TEXT,
+            scope_all     INTEGER NOT NULL DEFAULT 0,
+            last_used_at  TEXT,
+            created_at    TEXT    NOT NULL,
+            updated_at    TEXT    NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS proxy_key_interfaces (
+            key_id        INTEGER NOT NULL,
+            interface_id  INTEGER NOT NULL,
+            PRIMARY KEY (key_id, interface_id),
+            FOREIGN KEY (key_id) REFERENCES proxy_keys(id) ON DELETE CASCADE,
+            FOREIGN KEY (interface_id) REFERENCES interfaces(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_interfaces_active_proxy_slug
+        ON interfaces(proxy_slug)
+        WHERE http_enabled = 1 AND proxy_slug <> '';
+        CREATE INDEX IF NOT EXISTS idx_proxy_keys_hash ON proxy_keys(key_hash);
+        CREATE INDEX IF NOT EXISTS idx_runs_proxy_key_id ON runs(proxy_key_id);
+        """
+    )
 
 
 def get_setting(key: str, default=None):

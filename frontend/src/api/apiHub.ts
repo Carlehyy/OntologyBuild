@@ -30,6 +30,11 @@ export interface HubInterface {
   use_w3: boolean
   mcp_enabled: boolean
   open_enabled: boolean
+  http_enabled: boolean
+  proxy_slug: string
+  proxy_query_keys: string[]
+  proxy_header_keys: string[]
+  proxy_body_enabled: boolean
   created_at?: string
   updated_at?: string
 }
@@ -56,6 +61,9 @@ export interface RunSummary {
   elapsed_ms: number | null
   error: string | null
   relogin: number | boolean
+  source: string
+  proxy_key_name: string | null
+  source_ip: string | null
   created_at: string
 }
 
@@ -135,6 +143,42 @@ export interface McpInfo {
   tools?: { name: string; desc: string }[]
 }
 
+export interface ProxyInfo {
+  path: string
+  key_header: string
+  port: number
+  key_count: number
+  published: { id: number; name: string; method: string; proxy_slug: string }[]
+}
+
+export type ProxyKeyStatus = 'active' | 'disabled' | 'scheduled' | 'expired'
+
+export interface ProxyKey {
+  id: number
+  name: string
+  key_prefix: string
+  masked_key: string
+  enabled: boolean
+  valid_from: string | null
+  expires_at: string | null
+  scope_all: boolean
+  interface_ids: number[]
+  status: ProxyKeyStatus
+  last_used_at: string | null
+  created_at: string
+  updated_at: string
+  secret?: string
+}
+
+export interface ProxyKeyPayload {
+  name: string
+  enabled: boolean
+  valid_from: string | null
+  expires_at: string | null
+  scope_all: boolean
+  interface_ids: number[]
+}
+
 const data = <T>(promise: Promise<{ data: T }>) => promise.then(response => response.data)
 
 export const apiHub = {
@@ -145,6 +189,10 @@ export const apiHub = {
   deleteInterface: (id: number) => data<{ ok: boolean }>(http.delete(`/interfaces/${id}`)),
   deleteGroup: (group_name: string) => data<{ ok: boolean; count: number }>(http.post('/interfaces/groups/delete', { group_name })),
   setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
+  setHttpPublication: (
+    id: number,
+    body: { enabled: boolean; slug: string; query_keys: string[]; header_keys: string[]; body_enabled: boolean },
+  ) => data<HubInterface>(http.put(`/interfaces/${id}/http-publication`, body)),
   run: (id: number) => data<RunResult>(http.post(`/interfaces/${id}/run`)),
   listRuns: (params: Record<string, string | number>) => data<{ items: RunSummary[]; total: number; page: number; size: number }>(http.get('/runs', { params })),
   runOverview: () => data<RunOverview>(http.get('/runs/overview')),
@@ -158,6 +206,11 @@ export const apiHub = {
   cookieHeader: () => data<{ cookie: string; count: number }>(http.get('/credential/cookie-header')),
   mcpInfo: () => data<McpInfo>(http.get('/mcp/info')),
   systemMcpInfo: () => data<McpInfo>(http.get('/mcp/system/info')),
+  proxyInfo: () => data<ProxyInfo>(http.get('/proxy/info')),
+  listProxyKeys: () => data<ProxyKey[]>(http.get('/proxy/keys')),
+  createProxyKey: (body: ProxyKeyPayload) => data<ProxyKey>(http.post('/proxy/keys', body)),
+  updateProxyKey: (id: number, body: ProxyKeyPayload) => data<ProxyKey>(http.put(`/proxy/keys/${id}`, body)),
+  deleteProxyKey: (id: number) => data<{ ok: boolean }>(http.delete(`/proxy/keys/${id}`)),
   importBackup: (payload: unknown) => data<{ imported: number; skipped: number; total: number; name: string }>(http.post('/backup/import', payload)),
   exportBackup: (payload: { name: string; mode: 'full' | 'partial'; ids: number[] }) =>
     http.post('/backup/export', payload, { responseType: 'blob' }),
@@ -178,6 +231,11 @@ export function emptyHubInterface(): HubInterface {
     use_w3: true,
     mcp_enabled: false,
     open_enabled: false,
+    http_enabled: false,
+    proxy_slug: '',
+    proxy_query_keys: [],
+    proxy_header_keys: [],
+    proxy_body_enabled: false,
   }
 }
 

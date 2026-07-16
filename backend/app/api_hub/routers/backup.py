@@ -21,12 +21,14 @@ router = APIRouter(prefix="/backup", tags=["api-hub-backup"])
 
 # 备份文件的标识，还原时用于校验来源
 BACKUP_APP = "API-Hub"
-BACKUP_VERSION = 1
+BACKUP_VERSION = 2
 
 # 可移植的接口字段（不含 id、created_at、updated_at、sort_order 等本地/派生字段）
 _IFACE_FIELDS = (
-    "name", "group_name", "method", "url", "query_params", "headers",
+    "name", "description", "group_name", "method", "url", "query_params", "headers",
     "body_type", "body_content", "use_w3", "mcp_enabled", "open_enabled",
+    "http_enabled", "proxy_slug", "proxy_query_keys", "proxy_header_keys",
+    "proxy_body_enabled",
 )
 
 
@@ -53,12 +55,15 @@ def _row_to_portable(row) -> dict:
     out = {}
     for f in _IFACE_FIELDS:
         v = row[f]
-        if f in ("query_params", "headers"):
+        if f in ("query_params", "headers", "proxy_query_keys", "proxy_header_keys"):
             try:
                 v = json.loads(v) if v else []
             except (json.JSONDecodeError, TypeError):
                 v = []
-        elif f in ("use_w3", "mcp_enabled", "open_enabled"):
+        elif f in (
+            "use_w3", "mcp_enabled", "open_enabled", "http_enabled",
+            "proxy_body_enabled",
+        ):
             v = bool(v)
         out[f] = v
     return out
@@ -173,13 +178,39 @@ def import_backup(body: ImportIn):
                     status_code=400,
                     detail=f"接口「{name}」的 body_type 无效（{body_type}），允许的值：{', '.join(sorted(_ALLOWED_BODY_TYPES))}",
                 )
+            proxy_query_keys = it.get("proxy_query_keys") or []
+            proxy_header_keys = it.get("proxy_header_keys") or []
+            if not isinstance(proxy_query_keys, list) or not isinstance(proxy_header_keys, list):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"接口「{name}」的 HTTP 发布参数配置必须为数组",
+                )
+            http_enabled = bool(it.get("http_enabled", False))
+            proxy_slug = (it.get("proxy_slug") or "").strip().lower()
+            if http_enabled:
+                if not proxy_slug:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"接口「{name}」已标记 HTTP 发布，但公开路径为空",
+                    )
+                occupied = conn.execute(
+                    "SELECT id FROM interfaces WHERE proxy_slug = ? AND http_enabled = 1",
+                    (proxy_slug,),
+                ).fetchone()
+                if occupied:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"HTTP 公开路径「{proxy_slug}」已存在，无法导入接口「{name}」",
+                    )
 
             conn.execute(
-                "INSERT INTO interfaces(name, group_name, method, url, query_params, headers, "
-                "body_type, body_content, use_w3, mcp_enabled, open_enabled, created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
+                "body_type, body_content, use_w3, mcp_enabled, open_enabled, http_enabled, "
+                "proxy_slug, proxy_query_keys, proxy_header_keys, proxy_body_enabled, "
+                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name,
+                    it.get("description") or "",
                     it.get("group_name") or "",
                     method,
                     url,
@@ -190,6 +221,11 @@ def import_backup(body: ImportIn):
                     1 if it.get("use_w3", True) else 0,
                     1 if it.get("mcp_enabled", False) else 0,
                     1 if it.get("open_enabled", False) else 0,
+                    1 if http_enabled else 0,
+                    proxy_slug,
+                    json.dumps(proxy_query_keys, ensure_ascii=False),
+                    json.dumps(proxy_header_keys, ensure_ascii=False),
+                    1 if it.get("proxy_body_enabled", False) else 0,
                     now, now,
                 ),
             )
