@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  CheckCircle2, ChevronRight, CircleAlert, Clock3,
-  Database, FileCheck2, FileX2, GitBranch, Loader2, PackageCheck, ShieldCheck,
-  Sparkles, XCircle,
+  ArrowRight, Check, CheckCircle2, ChevronRight, CircleAlert, Clock3,
+  Database, GitBranch, Loader2, PackageCheck, ShieldCheck,
+  Sparkles, X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
@@ -80,22 +80,6 @@ const formatDateTime = (iso?: string | null, compact = false) => {
     : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
-const formatRelativeTime = (iso?: string | null) => {
-  if (!iso) return '时间未记录'
-  // SQLite 会丢失 timezone 后缀，但后端时间统一按 UTC 写入；补回 Z，避免东八区显示成 8 小时前。
-  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(iso) ? iso : `${iso}Z`
-  const timestamp = new Date(normalized).getTime()
-  if (Number.isNaN(timestamp)) return '时间未记录'
-  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000))
-  if (seconds < 60) return '刚刚'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}分钟前`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}小时前`
-  const days = Math.floor(hours / 24)
-  return days < 30 ? `${days}天前` : formatDateTime(iso, true)
-}
-
 const formatValue = (value: unknown, max = 30) => {
   if (value === null || value === undefined) return '∅'
   const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
@@ -132,48 +116,33 @@ function PanelTitle({ title, sub, action }: { title: string; sub?: string; actio
 }
 
 function ApprovalPipeline({
-  pending, selected, busy, message, loading, failed, onSelect, onDecide, onRetry, onViewAll,
+  pending, selected, busy, message, onSelect, onDecide, onViewAll,
 }: {
   pending: PendingLog[]
   selected: PendingLog | null
   busy: string | null
   message: { ok: boolean; text: string } | null
-  loading: boolean
-  failed: boolean
   onSelect: (item: PendingLog) => void
   onDecide: (item: PendingLog, decision: 'approved' | 'rejected') => void
-  onRetry: () => void
   onViewAll: () => void
 }) {
-  const targetLabel = selected?.objectInstanceLabel || selected?.objectTypeName || '未绑定业务对象'
   return (
     <section className="overview-panel approval-pipeline" aria-labelledby="approval-title">
-      <header className="approval-header">
-        <div className="approval-title-copy">
-          <h2 id="approval-title">待审批流水线</h2>
-          <span>动作在人工闸口暂停，批准或拒绝都会写入决策事实</span>
-        </div>
-        <div className="approval-header-actions">
-          <div className="approval-summary" aria-live="polite">
-            <span className={pending.length ? 'approval-count is-active' : 'approval-count'}>{loading ? '—' : pending.length}</span>
-            <span>件待处理</span>
-          </div>
-          <button className="overview-link-button approval-view-all" onClick={onViewAll}>
-            查看全部审批 <ChevronRight aria-hidden="true" />
-          </button>
-        </div>
-      </header>
+      <PanelTitle
+        title="待审批流水线"
+        sub="动作包裹到达人工闸口，批准或拒绝都会写入事实流"
+        action={<button className="overview-link-button" onClick={onViewAll}>查看全部审批 <ChevronRight size={15} /></button>}
+      />
+      <div className="approval-summary" aria-live="polite">
+        <span className={pending.length ? 'approval-count is-active' : 'approval-count'}>{pending.length}</span>
+        <span>{pending.length ? '件待处理' : '当前没有待审批动作'}</span>
+      </div>
 
-      <div
-        className={`approval-workbench ${pending.length === 0 ? 'is-empty' : ''}`}
-        data-testid="approval-pipeline"
-        data-pending-count={pending.length}
-      >
+      <div className={`approval-workbench ${pending.length === 0 ? 'is-empty' : ''}`}>
         <div className="approval-belt" aria-label="待审批动作包裹">
-          <span className="belt-entry-label">动作进入</span>
-          <span className="belt-entry-chute" aria-hidden="true" />
+          <div className="belt-rail belt-rail-top" />
           <div className="belt-items">
-            {pending.slice(0, 2).map((item) => (
+            {pending.slice(0, 3).map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -185,54 +154,52 @@ function ApprovalPipeline({
                 <span className="package-name">{item.actionName || '未命名动作'}</span>
                 <span className="package-target">{item.objectInstanceLabel || item.objectTypeName || '未绑定业务对象'}</span>
                 <span className="package-parameter">{firstParameter(item.parameters)}</span>
-                <span className="package-source">{TRIGGER_LABEL[item.triggerSource || 'system']} · {formatRelativeTime(item.executedAt)}</span>
+                <span className="package-source">{TRIGGER_LABEL[item.triggerSource || 'system']} · {formatDateTime(item.executedAt, true)}</span>
                 <span className="package-version">{item.ontologyVersion || '版本未记录'}</span>
               </button>
             ))}
-            {!loading && !failed && pending.length === 0 && (
+            {pending.length === 0 && (
               <div className="approval-empty-package">
                 <PackageCheck size={28} />
                 <span>流水线已清空</span>
                 <small>新的审批请求会自动送达这里</small>
               </div>
             )}
-            {loading && (
-              <div className="approval-empty-package"><Loader2 className="spin" size={26} /><span>正在读取审批流水线</span></div>
-            )}
-            {failed && (
-              <button type="button" className="approval-empty-package approval-load-error" onClick={onRetry}>
-                <CircleAlert size={26} /><span>审批队列加载失败</span><small>点击重试</small>
-              </button>
-            )}
           </div>
-          <div className="belt-rail belt-rail-top" />
           <div className="belt-rollers" aria-hidden="true">
-            {Array.from({ length: 6 }, (_, index) => <span key={index} />)}
+            {Array.from({ length: 13 }, (_, index) => <span key={index} />)}
           </div>
           <div className="belt-direction" aria-hidden="true">
-            <span>›››</span><span>›››</span>
+            <ArrowRight size={15} /><ArrowRight size={15} /><ArrowRight size={15} />
           </div>
         </div>
 
-        <div className="approval-gate">
+        <div className="approval-gate" aria-hidden="true">
+          <div className="gate-beacon" />
+          <div className="gate-frame"><span /></div>
           <strong>人工审批闸口</strong>
-          <div className="gate-beacon" aria-hidden="true" />
-          <div className="gate-frame" aria-hidden="true">
-            {selected && <span className="gate-package"><i /></span>}
-          </div>
         </div>
 
-        <div className="approval-inspector" data-testid="approval-inspector">
+        <div className="approval-inspector">
+          <div className="inspector-heading">
+            <span><ShieldCheck size={17} /> 当前包裹</span>
+            {selected && <span className="inspector-sequence">#{selected.id.slice(0, 6).toUpperCase()}</span>}
+          </div>
           {selected ? (
             <>
               <h3>{selected.actionName || '未命名动作'}</h3>
-              <p>{targetLabel}</p>
+              <dl>
+                <div><dt>业务对象</dt><dd>{selected.objectInstanceLabel || selected.objectTypeName || '未绑定'}</dd></div>
+                <div><dt>动作参数</dt><dd>{firstParameter(selected.parameters)}</dd></div>
+                <div><dt>触发方式</dt><dd>{TRIGGER_LABEL[selected.triggerSource || 'system']}</dd></div>
+                <div><dt>本体版本</dt><dd>{selected.ontologyVersion || '未记录'}</dd></div>
+              </dl>
               <div className="inspector-actions">
                 <button className="approve-button" disabled={busy === selected.id} onClick={() => onDecide(selected, 'approved')}>
-                  {busy === selected.id ? <Loader2 className="spin" /> : <CheckCircle2 />} 批准并执行
+                  {busy === selected.id ? <Loader2 size={16} className="spin" /> : <Check size={16} />} 批准并执行
                 </button>
                 <button className="reject-button" disabled={busy === selected.id} onClick={() => onDecide(selected, 'rejected')}>
-                  <XCircle /> 拒绝
+                  <X size={16} /> 拒绝
                 </button>
               </div>
             </>
@@ -243,9 +210,10 @@ function ApprovalPipeline({
         </div>
 
         <div className="approval-routes" aria-hidden="true">
-          <span className="route-brace" />
-          <div className="route-outcome route-approved"><FileCheck2 /><strong>执行并留痕</strong></div>
-          <div className="route-outcome route-rejected"><FileX2 /><strong>拒绝并留痕</strong></div>
+          <span className="route-line route-approved" />
+          <div><Check size={14} /> 执行并留痕</div>
+          <span className="route-line route-rejected" />
+          <div><X size={14} /> 拒绝并留痕</div>
         </div>
       </div>
     </section>
@@ -412,11 +380,8 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           selected={selected}
           busy={busy}
           message={message}
-          loading={pendingQuery.isLoading}
-          failed={pendingQuery.isError}
           onSelect={item => { setSelectedId(item.id); setMessage(null) }}
           onDecide={decide}
-          onRetry={() => pendingQuery.refetch()}
           onViewAll={() => onGoGroup('governance')}
         />
       </div>
