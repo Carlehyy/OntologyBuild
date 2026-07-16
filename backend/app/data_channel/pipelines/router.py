@@ -1003,9 +1003,9 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
                 (rec.last_test_result or {}).get("publish_evidence_error") or ""
             ).strip()
             evidence_detail = (
-                f"最近一次执行预览未能形成发布凭证：{evidence_error}"
+                f"内部一致性检查详情：{evidence_error}"
                 if evidence_error
-                else "当前没有可用的发布凭证"
+                else "内部一致性检查尚未完成"
             )
             raise HTTPException(
                 400,
