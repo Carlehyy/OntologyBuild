@@ -22,16 +22,6 @@ def refresh():
     return st
 
 
-@router.get("/cookie-header")
-def cookie_header():
-    """返回当前登录态拼成的 Cookie 头，供 cURL 导出复用（仅本机可访问）。"""
-    saved = credential.load_saved()
-    if not saved or not saved.get("cookies"):
-        return {"cookie": "", "count": 0}
-    parts = [f'{c["name"]}={c["value"]}' for c in saved["cookies"]]
-    return {"cookie": "; ".join(parts), "count": len(parts)}
-
-
 class CronBody(BaseModel):
     cron: str
 
@@ -52,12 +42,15 @@ def get_config():
 def put_config(body: CredentialConfigBody):
     if not body.username.strip():
         raise HTTPException(status_code=400, detail="W3 账号不能为空")
-    return credential.update_configuration(
-        username=body.username,
-        password=body.password,
-        login_url=body.login_url,
-        clear_password=body.clear_password,
-    )
+    try:
+        return credential.update_configuration(
+            username=body.username,
+            password=body.password,
+            login_url=body.login_url,
+            clear_password=body.clear_password,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/usage")

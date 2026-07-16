@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -7,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api_hub import config, credential as credential_service, db
+from app.api_hub.outbound_security import OutboundTargetError, validate_outbound_url
 from app.api_hub.routers import backup, credential, http_proxy, interfaces, mcp, proxy
 
 
@@ -14,6 +16,13 @@ from app.api_hub.routers import backup, credential, http_proxy, interfaces, mcp,
 def hub_client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
     monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
+    monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
+    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ("service.example",))
+    monkeypatch.setattr(
+        config,
+        "W3_LOGIN_ALLOWED_HOSTS",
+        ("login.huawei.com", "login.example"),
+    )
     db.init_db()
     app = FastAPI()
     app.include_router(credential.router)
@@ -68,12 +77,26 @@ def test_interface_crud_group_and_auth_boundary(hub_client):
     assert moved.json() == {"ok": True, "count": 1}
     assert hub_client.get(f"/interfaces/{item['id']}").json()["group_name"] == ""
 
-    # The host application adds JWT protection to every management route.
+    # The host application restricts every management route to administrators.
     from app.main import app as platform_app
+    from app.deps import get_current_user
 
     response = TestClient(platform_app).get("/api/api-hub/interfaces")
     assert response.status_code == 403
     assert TestClient(platform_app).get("/api/api-hub/proxy/info").status_code == 403
+    try:
+        platform_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+            role="viewer", is_active=True
+        )
+        assert TestClient(platform_app).get("/api/api-hub/interfaces").status_code == 403
+        assert TestClient(platform_app).post("/api/api-hub/proxy/keys", json={}).status_code == 403
+
+        platform_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+            role="admin", is_active=True
+        )
+        assert TestClient(platform_app).get("/api/api-hub/interfaces").status_code == 200
+    finally:
+        platform_app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_run_history_and_response_capture(hub_client, monkeypatch):
@@ -254,7 +277,19 @@ def test_n8n_proxy_is_fail_closed_and_forwards_dynamic_pagination(
 
 
 def test_backup_round_trip_skips_duplicates(hub_client):
-    item = hub_client.post("/interfaces", json=_interface()).json()
+    item = hub_client.post(
+        "/interfaces",
+        json=_interface(
+            url="https://service.example/health?token=url-secret",
+            query_params=[
+                {"key": "verbose", "value": "1"},
+                {"key": "api_key", "value": "query-secret"},
+            ],
+            headers=[{"key": "Authorization", "value": "Bearer header-secret"}],
+            body_type="json",
+            body_content='{"password":"body-secret"}',
+        ),
+    ).json()
     exported = hub_client.post(
         "/backup/export",
         json={"name": "review-copy", "mode": "full", "ids": []},
@@ -263,6 +298,27 @@ def test_backup_round_trip_skips_duplicates(hub_client):
     payload = exported.json()
     assert payload["app"] == "API-Hub"
     assert payload["interface_count"] == 1
+    assert payload["includes_sensitive_values"] is False
+    portable = payload["interfaces"][0]
+    assert "url-secret" not in portable["url"]
+    assert portable["query_params"][1]["value"] == ""
+    assert portable["headers"] == []
+    assert portable["body_content"] == ""
+    assert portable["sensitive_values_omitted"] is True
+
+    sensitive_export = hub_client.post(
+        "/backup/export",
+        json={
+            "name": "review-copy-sensitive",
+            "mode": "full",
+            "ids": [],
+            "include_sensitive": True,
+        },
+    ).json()
+    assert sensitive_export["includes_sensitive_values"] is True
+    sensitive_portable = sensitive_export["interfaces"][0]
+    assert sensitive_portable["headers"][0]["value"] == "Bearer header-secret"
+    assert "body-secret" in sensitive_portable["body_content"]
 
     duplicate = hub_client.post("/backup/import", json=payload).json()
     assert duplicate["imported"] == 0
@@ -271,7 +327,11 @@ def test_backup_round_trip_skips_duplicates(hub_client):
     assert hub_client.delete(f"/interfaces/{item['id']}").status_code == 200
     restored = hub_client.post("/backup/import", json=payload).json()
     assert restored["imported"] == 1
-    assert hub_client.get("/interfaces").json()[0]["name"] == "健康检查"
+    restored_item = hub_client.get("/interfaces").json()[0]
+    assert restored_item["name"] == "健康检查"
+    assert restored_item["mcp_enabled"] is False
+    assert restored_item["open_enabled"] is False
+    assert restored_item["http_enabled"] is False
 
 
 def test_online_credential_config_is_encrypted_and_password_is_never_returned(hub_client):
@@ -301,3 +361,100 @@ def test_online_credential_config_is_encrypted_and_password_is_never_returned(hu
 
     fetched = hub_client.get("/credential/config").json()
     assert fetched == public
+
+    retained_password_attack = hub_client.put(
+        "/credential/config",
+        json={
+            "username": "another-user",
+            "login_url": "https://login.example/other",
+        },
+    )
+    assert retained_password_attack.status_code == 400
+    assert "必须重新输入密码" in retained_password_attack.json()["detail"]
+
+    malicious_login_url = hub_client.put(
+        "/credential/config",
+        json={
+            "username": "w3-user",
+            "password": "new-password",
+            "login_url": "https://attacker.example/collect",
+        },
+    )
+    assert malicious_login_url.status_code == 400
+    assert "允许清单" in malicious_login_url.json()["detail"]
+
+
+def test_preview_run_uses_draft_without_saving_and_redacts_history(
+    hub_client, monkeypatch
+):
+    item = hub_client.post("/interfaces", json=_interface(name="已保存名称")).json()
+    observed = {}
+
+    def fake_request(session, method, url, **kwargs):
+        observed["verify"] = session.verify
+        observed["method"] = method
+        observed["url"] = url
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps(
+            {
+                "ok": True,
+                "nested": '{"password":"upstream-secret"}',
+            }
+        ).encode()
+        response.encoding = "utf-8"
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    response = hub_client.post(
+        "/interfaces/preview-run",
+        json={
+            **_interface(name="未保存草稿", method="OPTIONS"),
+            "id": item["id"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert observed == {
+        "verify": True,
+        "method": "OPTIONS",
+        "url": "https://service.example/health",
+    }
+    assert hub_client.get(f"/interfaces/{item['id']}").json()["name"] == "已保存名称"
+
+    history = hub_client.get(f"/interfaces/{item['id']}/runs").json()
+    detail = hub_client.get(
+        f"/interfaces/{item['id']}/runs/{history[0]['id']}"
+    ).json()
+    assert "upstream-secret" not in detail["response_body"]
+    assert "***" in detail["response_body"]
+
+
+def test_ssrf_guard_and_mcp_tokens_fail_closed(hub_client, monkeypatch):
+    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ())
+    with pytest.raises(OutboundTargetError):
+        validate_outbound_url("http://127.0.0.1:8000/private")
+    with pytest.raises(OutboundTargetError):
+        validate_outbound_url("https://public.example/data")
+    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ("public.example",))
+    assert validate_outbound_url("https://public.example/data").startswith("https://")
+
+    from app.main import app as platform_app
+
+    monkeypatch.setattr(config, "MCP_TOKEN", "")
+    monkeypatch.setattr(config, "SYSTEM_MCP_TOKEN", "")
+    client = TestClient(platform_app)
+    assert client.post(
+        config.MCP_PATH, headers={"Content-Type": "application/json"}, json={}
+    ).status_code == 503
+    assert client.post(
+        config.SYSTEM_MCP_PATH,
+        headers={"Content-Type": "application/json"},
+        json={},
+    ).status_code == 503
+
+    assert "token" not in hub_client.get("/mcp/info").json()
+    assert "token" not in hub_client.get("/mcp/system/info").json()
+    assert hub_client.get("/credential/cookie-header").status_code == 404

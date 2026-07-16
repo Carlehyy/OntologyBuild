@@ -18,6 +18,7 @@ Agent 看到的工具数量都不变：
 """
 import json
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 import anyio
 import mcp.types as types
@@ -73,13 +74,23 @@ def _row_to_iface(row: dict) -> dict:
 def _catalog_entry(row: dict) -> dict:
     """单个已开放接口在「清单」里对 Agent 暴露的视图。"""
     qp = json.loads(row["query_params"])
+    parsed_url = urlsplit(row["url"])
     return {
         "id": row["id"],
         "name": row["name"],
         "description": (row.get("description") or "").strip(),
         "group": row["group_name"],
         "method": row["method"],
-        "url": row["url"],
+        # 清单只用于发现，不披露 URL 查询值（其中可能包含访问令牌）。
+        "url": urlunsplit(
+            (
+                parsed_url.scheme,
+                parsed_url.netloc,
+                parsed_url.path,
+                "",
+                "",
+            )
+        ),
         # 只暴露“接口当前已配置了哪些 query 键”，作为可覆盖参数的提示
         "query_params": [p["key"] for p in qp if p.get("key")],
         "body_type": row["body_type"],
@@ -235,13 +246,17 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
 
 
 # Streamable HTTP 传输。无状态 + JSON 响应，便于跨机访问与排查。
-# 关闭 DNS 重绑定保护，否则用局域网 IP 的 Host 头会被拦（本工具面向可信内网）。
+# Host / Origin 必须显式进入允许清单，避免浏览器侧 DNS rebinding。
 def _build_session_manager(app):
     return StreamableHTTPSessionManager(
         app=app,
         json_response=True,
         stateless=True,
-        security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(config.MCP_ALLOWED_HOSTS),
+            allowed_origins=list(config.MCP_ALLOWED_ORIGINS),
+        ),
     )
 
 
@@ -257,7 +272,14 @@ async def handle_mcp(scope, receive, send):
 #  独立端点 /mcp/system，独立令牌 SYSTEM_MCP_TOKEN。
 # ═══════════════════════════════════════════════════════════
 
-from .routers.interfaces import InterfaceIn, _row_to_dict as _iface_row_to_dict, _dump_kv
+from .routers.interfaces import (
+    InterfaceIn,
+    create_interface as _create_interface,
+    delete_group as _delete_group,
+    delete_interface as _delete_interface,
+    update_interface as _update_interface,
+    _row_to_dict as _iface_row_to_dict,
+)
 
 sys_server = Server(config.MCP_SERVER_NAME + "-system")
 
@@ -318,7 +340,7 @@ async def sys_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="create_interface",
-            description="新建接口。name 和 url 必填，其余可选（method 默认 GET，use_w3 默认 true）。",
+            description="新建接口。name 和 url 必填，其余可选（method 默认 GET，use_w3 默认 false）。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -331,7 +353,7 @@ async def sys_list_tools() -> list[types.Tool]:
                     "headers": {"type": "object", "description": "自定义请求头，键值对如 {\"X-Token\":\"abc\"}。", "additionalProperties": {"type": "string"}},
                     "body_type": {"type": "string", "description": "Body 类型：none/json/form/raw，默认 none。"},
                     "body_content": {"type": "string", "description": "Body 内容。"},
-                    "use_w3": {"type": "boolean", "description": "是否启用 W3 登录，默认 true。"},
+                    "use_w3": {"type": "boolean", "description": "是否启用 W3 登录，默认 false。"},
                 },
                 "required": ["name", "url"],
             },
@@ -404,7 +426,6 @@ async def sys_list_tools() -> list[types.Tool]:
 
 @sys_server.call_tool()
 async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
-    from datetime import datetime, timezone
     args = arguments or {}
 
     if name == "list_groups":
@@ -442,63 +463,48 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
             description=args.get("description", ""),
             body_type=args.get("body_type", "none"),
             body_content=args.get("body_content", ""),
-            use_w3=args.get("use_w3", True),
+            use_w3=args.get("use_w3", False),
+            query_params=[KV(key=str(k), value=str(v)) for k, v in qp.items()],
+            headers=[KV(key=str(k), value=str(v)) for k, v in hd.items()],
         )
-        now = datetime.now(timezone.utc).isoformat()
-        with db.get_conn() as conn:
-            cur = conn.execute(
-                "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-                "body_type, body_content, use_w3, mcp_enabled, open_enabled, created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (body.name, body.description, body.group_name, body.method, body.url,
-                 json.dumps([{"key": k, "value": v} for k, v in qp.items()], ensure_ascii=False),
-                 json.dumps([{"key": k, "value": v} for k, v in hd.items()], ensure_ascii=False),
-                 body.body_type, body.body_content,
-                 1 if body.use_w3 else 0, 0, 0, now, now),
-            )
-            row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (cur.lastrowid,)).fetchone()
-        text = json.dumps(_iface_row_to_dict(row), ensure_ascii=False, indent=2)
+        text = json.dumps(_create_interface(body), ensure_ascii=False, indent=2)
         return [types.TextContent(type="text", text=text)]
 
     if name == "update_interface":
         iid = int(args.get("id", 0))
-        now = datetime.now(timezone.utc).isoformat()
         with db.get_conn() as conn:
             row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
             if not row:
                 return [types.TextContent(type="text", text=json.dumps({"error": "接口不存在"}, ensure_ascii=False))]
-            updates = {}
-            for f in ("name", "url", "method", "description", "body_type", "body_content"):
-                if f in args:
-                    updates[f] = args[f]
-            if "group" in args:
-                updates["group_name"] = args["group"]
-            if "use_w3" in args:
-                updates["use_w3"] = 1 if args["use_w3"] else 0
-            if "query_params" in args:
-                qp = args["query_params"] or {}
-                updates["query_params"] = json.dumps([{"key": k, "value": v} for k, v in qp.items()], ensure_ascii=False)
-            if "headers" in args:
-                hd = args["headers"] or {}
-                updates["headers"] = json.dumps([{"key": k, "value": v} for k, v in hd.items()], ensure_ascii=False)
-            if updates:
-                sets = ", ".join(f"{k} = ?" for k in updates)
-                vals = list(updates.values())
-                conn.execute(
-                    f"UPDATE interfaces SET {sets}, updated_at = ? WHERE id = ?",
-                    (*vals, now, iid),
-                )
-            row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
-        text = json.dumps(_iface_row_to_dict(row), ensure_ascii=False, indent=2)
+            merged = _iface_row_to_dict(row)
+        for field in ("name", "url", "method", "description", "body_type", "body_content"):
+            if field in args:
+                merged[field] = args[field]
+        if "group" in args:
+            merged["group_name"] = args["group"]
+        if "use_w3" in args:
+            merged["use_w3"] = bool(args["use_w3"])
+        if "query_params" in args:
+            merged["query_params"] = [
+                {"key": str(key), "value": str(value)}
+                for key, value in (args["query_params"] or {}).items()
+            ]
+        if "headers" in args:
+            merged["headers"] = [
+                {"key": str(key), "value": str(value)}
+                for key, value in (args["headers"] or {}).items()
+            ]
+        updated = _update_interface(iid, InterfaceIn(**merged))
+        text = json.dumps(updated, ensure_ascii=False, indent=2)
         return [types.TextContent(type="text", text=text)]
 
     if name == "delete_interface":
         iid = int(args.get("id", 0))
         with db.get_conn() as conn:
-            row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
-            if not row:
-                return [types.TextContent(type="text", text=json.dumps({"error": "接口不存在"}, ensure_ascii=False))]
-            conn.execute("DELETE FROM interfaces WHERE id = ?", (iid,))
+            row = conn.execute("SELECT id FROM interfaces WHERE id = ?", (iid,)).fetchone()
+        if not row:
+            return [types.TextContent(type="text", text=json.dumps({"error": "接口不存在"}, ensure_ascii=False))]
+        _delete_interface(iid)
         return [types.TextContent(type="text", text=json.dumps({"ok": True, "deleted_id": iid}, ensure_ascii=False))]
 
     if name == "delete_group":
@@ -507,11 +513,9 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
             return [types.TextContent(type="text", text=json.dumps({"error": "分组名不能为空"}, ensure_ascii=False))]
         if gname == "默认分组":
             return [types.TextContent(type="text", text=json.dumps({"error": "默认分组不可删除"}, ensure_ascii=False))]
-        with db.get_conn() as conn:
-            cur = conn.execute(
-                "UPDATE interfaces SET group_name = '' WHERE group_name = ?", (gname,)
-            )
-            count = cur.rowcount
+        from .routers.interfaces import DeleteGroupBody
+        result = _delete_group(DeleteGroupBody(group_name=gname))
+        count = result["count"]
         return [types.TextContent(type="text", text=json.dumps({"ok": True, "deleted_group": gname, "moved_count": count}, ensure_ascii=False))]
 
     if name == "call_interface":

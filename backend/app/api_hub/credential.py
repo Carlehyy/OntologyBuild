@@ -9,22 +9,25 @@ statusCode==0 成功判断），只是从那个耦合了 Obsidian 输出/bs4 的
 data/w3_session.json，发请求时再重建出来注入。
 """
 import json
+import os
+import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 import requests
-import urllib3
 
 from . import config
 from . import db
 from app.shared.encryption import decrypt, encrypt
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from .outbound_security import request_with_safe_redirects
 
 _LOCK = threading.Lock()
+_STATUS_KEY = "w3_refresh_status"
 
-# 最近一次刷新（登录）尝试的结果，仅存于内存
+# 最近一次刷新（登录）尝试的结果；同时持久化到 SQLite 供多 worker 展示。
 _last = {
     "result": None,      # "success" | "failed" | None
     "message": "",
@@ -43,18 +46,35 @@ _DEFAULT_HEADERS = {
 
 def _new_session() -> requests.Session:
     s = requests.Session()
-    s.verify = False  # 与同事代码一致：内网常见自签证书
+    s.verify = config.TLS_CA_BUNDLE or True
     s.headers.update(_DEFAULT_HEADERS)
     return s
 
 
-def w3_login() -> requests.Session:
-    """执行一次华为 W3 SSO 登录。成功返回带登录 Cookie 的 Session，失败抛 RuntimeError。"""
-    username, password, login_url = runtime_credentials()
+def validate_login_url(login_url: str) -> str:
+    value = (login_url or "").strip()
+    parsed = urlsplit(value)
+    hostname = (parsed.hostname or "").lower()
+    allowed = {item.lower() for item in config.W3_LOGIN_ALLOWED_HOSTS}
+    if parsed.scheme.lower() != "https" or not hostname or parsed.username or parsed.password:
+        raise ValueError("W3 登录地址必须是无内嵌账号信息的 HTTPS 绝对地址")
+    if hostname not in allowed:
+        raise ValueError(
+            "W3 登录地址域名不在允许清单中；请通过 "
+            "API_HUB_W3_LOGIN_ALLOWED_HOSTS 由管理员配置"
+        )
+    return value
+
+
+def _login_with(username: str, password: str, login_url: str) -> requests.Session:
     if not username:
         raise RuntimeError("未配置 W3_USERNAME（请在 .env 填写工号）")
     if not password:
         raise RuntimeError("未配置 W3_PASSWORD（请在 .env 填写密码）")
+    try:
+        login_url = validate_login_url(login_url)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     s = _new_session()
     payload = {
@@ -64,11 +84,13 @@ def w3_login() -> requests.Session:
         "encryptedPasswordSwitch": "off",
     }
     try:
-        resp = s.post(
+        resp = request_with_safe_redirects(
+            s,
+            "POST",
             login_url,
+            validator=validate_login_url,
             json=payload,
             headers={"Content-Type": "application/json; charset=UTF-8"},
-            allow_redirects=True,
             timeout=config.HTTP_TIMEOUT,
         )
         resp.raise_for_status()
@@ -84,6 +106,11 @@ def w3_login() -> requests.Session:
         raise RuntimeError(f"登录被拒绝：{result.get('statusText', '未知原因')}")
 
     return s
+
+
+def w3_login() -> requests.Session:
+    """执行一次 W3 SSO 登录。成功返回带登录 Cookie 的 Session，失败抛 RuntimeError。"""
+    return _login_with(*runtime_credentials())
 
 
 # ── Cookie 持久化 ──────────────────────────────────────────
@@ -106,9 +133,26 @@ def save_session(session: requests.Session) -> None:
         "acquired_at": datetime.now(timezone.utc).isoformat(),
         "cookies": _serialize(session.cookies),
     }
-    config.SESSION_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    config.SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=config.SESSION_PATH.parent,
+            prefix=config.SESSION_PATH.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_name = handle.name
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_name, 0o600)
+        os.replace(temp_name, config.SESSION_PATH)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
 
 
 def load_saved() -> Optional[dict]:
@@ -186,27 +230,83 @@ def update_configuration(
     login_url: str,
     clear_password: bool = False,
 ) -> dict:
-    current_user, current_password, _ = runtime_credentials()
-    username = username.strip()
-    login_url = login_url.strip() or config.W3_LOGIN_URL
-    if clear_password:
-        next_password = ""
-    elif password is None or password == "":
-        next_password = current_password
-    else:
-        next_password = password
-    db.set_setting(_MODE_KEY, "online")
-    db.set_setting(_USER_KEY, username or current_user)
-    db.set_setting(_PASSWORD_KEY, encrypt(next_password) if next_password else "")
-    db.set_setting(_LOGIN_URL_KEY, login_url)
-    clear_saved()  # a changed account must not reuse the previous cookie jar
-    return public_configuration()
+    with _LOCK, _process_refresh_lock():
+        current_user, current_password, current_login_url = runtime_credentials()
+        username = username.strip()
+        login_url = validate_login_url(login_url.strip() or config.W3_LOGIN_URL)
+        identity_changed = username != current_user or login_url != current_login_url
+        if clear_password:
+            next_password = ""
+        elif password is None or password == "":
+            if identity_changed and current_password:
+                raise ValueError("修改 W3 账号或登录地址时必须重新输入密码")
+            next_password = current_password
+        else:
+            next_password = password
+        db.set_setting(_MODE_KEY, "online")
+        db.set_setting(_USER_KEY, username)
+        db.set_setting(_PASSWORD_KEY, encrypt(next_password) if next_password else "")
+        db.set_setting(_LOGIN_URL_KEY, login_url)
+        clear_saved()  # a changed account must not reuse the previous cookie jar
+        return public_configuration()
 
 
 # ── 对外动作 ───────────────────────────────────────────────
-def refresh() -> dict:
-    """登录并持久化 Cookie。线程安全。返回最新状态。"""
-    with _LOCK:
+@contextmanager
+def _process_refresh_lock():
+    config.SESSION_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with config.SESSION_LOCK_PATH.open("a+", encoding="utf-8") as handle:
+        try:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            fcntl = None
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
+
+def _persist_last() -> None:
+    db.set_setting(_STATUS_KEY, json.dumps(_last, ensure_ascii=False))
+
+
+def _load_last() -> dict:
+    raw = db.get_setting(_STATUS_KEY, "")
+    if raw:
+        try:
+            value = json.loads(raw)
+            if isinstance(value, dict):
+                return {**_last, **value}
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return dict(_last)
+
+
+def _recent_session(max_age_seconds: int = 60) -> bool:
+    saved = load_saved()
+    if not saved or not saved.get("acquired_at"):
+        return False
+    try:
+        acquired = datetime.fromisoformat(
+            str(saved["acquired_at"]).replace("Z", "+00:00")
+        )
+        return (
+            datetime.now(timezone.utc) - acquired.astimezone(timezone.utc)
+        ).total_seconds() < max_age_seconds
+    except (TypeError, ValueError):
+        return False
+
+
+def refresh(*, force: bool = True) -> dict:
+    """登录并持久化 Cookie；线程和多进程之间都串行化。"""
+    with _LOCK, _process_refresh_lock():
+        if not force and _recent_session():
+            return status()
         now = datetime.now(timezone.utc).isoformat()
         try:
             s = w3_login()
@@ -214,6 +314,7 @@ def refresh() -> dict:
             _last.update({"result": "success", "message": "登录成功", "refreshed_at": now})
         except Exception as e:  # noqa: BLE001 —— 任何失败都要回报给前端，不能崩
             _last.update({"result": "failed", "message": str(e), "refreshed_at": now})
+        _persist_last()
         return status()
 
 
@@ -275,6 +376,7 @@ def status() -> dict:
             expires_at = datetime.fromtimestamp(earliest, tz=timezone.utc).isoformat()
             expired = earliest <= datetime.now(timezone.utc).timestamp()
     public = public_configuration()
+    last = _load_last()
     return {
         "configured": bool(public["username"] and public["password_configured"]),
         "username": public["username"],
@@ -283,7 +385,7 @@ def status() -> dict:
         "expired": expired,            # True = 本地可判定已过期，建议重新登录
         "expires_at": expires_at,      # 已知的最早过期时间（无则为 None）
         "acquired_at": saved.get("acquired_at") if saved else None,
-        "last_result": _last["result"],
-        "message": _last["message"],
-        "refreshed_at": _last["refreshed_at"],
+        "last_result": last["result"],
+        "message": last["message"],
+        "refreshed_at": last["refreshed_at"],
     }

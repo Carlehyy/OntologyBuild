@@ -10,18 +10,28 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import List
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import db
+from .interfaces import (
+    InterfaceIn,
+    _check_group_name,
+    _dump_kv,
+    _validate_proxy_publish,
+)
 
 router = APIRouter(prefix="/backup", tags=["api-hub-backup"])
 
 # 备份文件的标识，还原时用于校验来源
 BACKUP_APP = "API-Hub"
-BACKUP_VERSION = 2
+BACKUP_VERSION = 3
+_SENSITIVE_NAME_RE = re.compile(
+    r"(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)",
+    re.IGNORECASE,
+)
 
 # 可移植的接口字段（不含 id、created_at、updated_at、sort_order 等本地/派生字段）
 _IFACE_FIELDS = (
@@ -36,6 +46,7 @@ class ExportIn(BaseModel):
     name: str = ""
     mode: str = "full"            # full | partial
     ids: List[int] = Field(default_factory=list)
+    include_sensitive: bool = False
 
 
 class ImportIn(BaseModel):
@@ -46,11 +57,23 @@ class ImportIn(BaseModel):
     mode: str = ""
     interfaces: List[dict] = Field(default_factory=list)
 
-# 合法的 body_type 取值
-_ALLOWED_BODY_TYPES = {"none", "json", "form", "raw"}
+def _safe_url(url: str) -> str:
+    parsed = urlsplit(url or "")
+    query = [
+        (key, "" if _SENSITIVE_NAME_RE.search(key) else value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    ]
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query, doseq=True), parsed.fragment)
+    )
 
 
-def _row_to_portable(row) -> dict:
+def _natural_key(name: str, method: str, url: str) -> tuple[str, str, str]:
+    """用脱敏后的 URL 比较，避免安全备份因清空令牌值而重复导入。"""
+    return ((name or "").strip(), (method or "").upper(), _safe_url(url or ""))
+
+
+def _row_to_portable(row, *, include_sensitive: bool) -> dict:
     """把一行接口记录转为可移植的纯数据。"""
     out = {}
     for f in _IFACE_FIELDS:
@@ -66,6 +89,21 @@ def _row_to_portable(row) -> dict:
         ):
             v = bool(v)
         out[f] = v
+    if not include_sensitive:
+        query_params = out.get("query_params") or []
+        out["query_params"] = [
+            {
+                "key": item.get("key", ""),
+                "value": "" if _SENSITIVE_NAME_RE.search(item.get("key", "")) else item.get("value", ""),
+            }
+            for item in query_params
+            if isinstance(item, dict)
+        ]
+        out["url"] = _safe_url(out.get("url") or "")
+        omitted = bool(out.get("headers") or out.get("body_content"))
+        out["headers"] = []
+        out["body_content"] = ""
+        out["sensitive_values_omitted"] = omitted
     return out
 
 
@@ -105,8 +143,12 @@ def export_backup(body: ExportIn):
         "name": body.name.strip() or "Backup",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
+        "includes_sensitive_values": body.include_sensitive,
         "interface_count": len(rows),
-        "interfaces": [_row_to_portable(r) for r in rows],
+        "interfaces": [
+            _row_to_portable(r, include_sensitive=body.include_sensitive)
+            for r in rows
+        ],
     }
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     # RFC 5987：filename 给旧浏览器兜底（ASCII），filename* 给现代浏览器用原名（UTF-8）
@@ -148,60 +190,35 @@ def import_backup(body: ImportIn):
         # 预加载已有接口的自然键，做内存去重（接口数通常很少，无需复杂查询）
         existing = set()
         for r in conn.execute("SELECT name, method, url FROM interfaces").fetchall():
-            existing.add(((r["name"] or "").strip(), (r["method"] or ""), (r["url"] or "")))
+            existing.add(_natural_key(r["name"], r["method"], r["url"]))
 
         for it in items:
-            name = (it.get("name") or "").strip() or "未命名接口"
-            method = (it.get("method") or "GET").upper()
-            url = it.get("url") or ""
-            key = (name, method, url)
+            try:
+                candidate = InterfaceIn(
+                    **{
+                        **it,
+                        "mcp_enabled": False,
+                        "open_enabled": False,
+                        "http_enabled": False,
+                    }
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"备份中的接口配置无效：{exc.errors()[0]['msg']}",
+                ) from exc
+            name = candidate.name
+            method = candidate.method
+            url = candidate.url
+            key = _natural_key(name, method, url)
             if key in existing:
                 skipped += 1
                 continue
 
-            # ── 字段校验 ──
-            query_params = it.get("query_params")
-            if query_params is not None and not isinstance(query_params, list):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"接口「{name}」的 query_params 必须为数组",
-                )
-            headers = it.get("headers")
-            if headers is not None and not isinstance(headers, list):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"接口「{name}」的 headers 必须为数组",
-                )
-            body_type = it.get("body_type") or "none"
-            if body_type not in _ALLOWED_BODY_TYPES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"接口「{name}」的 body_type 无效（{body_type}），允许的值：{', '.join(sorted(_ALLOWED_BODY_TYPES))}",
-                )
-            proxy_query_keys = it.get("proxy_query_keys") or []
-            proxy_header_keys = it.get("proxy_header_keys") or []
-            if not isinstance(proxy_query_keys, list) or not isinstance(proxy_header_keys, list):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"接口「{name}」的 HTTP 发布参数配置必须为数组",
-                )
-            http_enabled = bool(it.get("http_enabled", False))
-            proxy_slug = (it.get("proxy_slug") or "").strip().lower()
-            if http_enabled:
-                if not proxy_slug:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"接口「{name}」已标记 HTTP 发布，但公开路径为空",
-                    )
-                occupied = conn.execute(
-                    "SELECT id FROM interfaces WHERE proxy_slug = ? AND http_enabled = 1",
-                    (proxy_slug,),
-                ).fetchone()
-                if occupied:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"HTTP 公开路径「{proxy_slug}」已存在，无法导入接口「{name}」",
-                    )
+            _check_group_name(candidate.group_name)
+            proxy_slug, proxy_query_keys, proxy_header_keys = _validate_proxy_publish(
+                conn, candidate
+            )
 
             conn.execute(
                 "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
@@ -210,22 +227,22 @@ def import_backup(body: ImportIn):
                 "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name,
-                    it.get("description") or "",
-                    it.get("group_name") or "",
+                    candidate.description,
+                    candidate.group_name,
                     method,
                     url,
-                    json.dumps(query_params or [], ensure_ascii=False),
-                    json.dumps(headers or [], ensure_ascii=False),
-                    body_type,
-                    it.get("body_content") or "",
-                    1 if it.get("use_w3", True) else 0,
-                    1 if it.get("mcp_enabled", False) else 0,
-                    1 if it.get("open_enabled", False) else 0,
-                    1 if http_enabled else 0,
+                    _dump_kv(candidate.query_params),
+                    _dump_kv(candidate.headers),
+                    candidate.body_type,
+                    candidate.body_content,
+                    1 if candidate.use_w3 else 0,
+                    0,
+                    0,
+                    0,
                     proxy_slug,
                     json.dumps(proxy_query_keys, ensure_ascii=False),
                     json.dumps(proxy_header_keys, ensure_ascii=False),
-                    1 if it.get("proxy_body_enabled", False) else 0,
+                    1 if candidate.proxy_body_enabled else 0,
                     now, now,
                 ),
             )

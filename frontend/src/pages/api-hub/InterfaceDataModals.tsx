@@ -36,7 +36,7 @@ export function OpenInterfacesModal({ open, onClose, interfaces, reload, onError
       [info.server_name]: {
         type: 'streamable-http',
         url: endpoint,
-        ...(info.token_required ? { headers: { Authorization: `Bearer ${info.token}` } } : {}),
+        headers: { Authorization: 'Bearer <API_HUB_MCP_TOKEN>' },
       },
     },
   }, null, 2) : ''
@@ -74,7 +74,7 @@ export function OpenInterfacesModal({ open, onClose, interfaces, reload, onError
           <div className="flex items-start gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-nav-light)] text-[var(--color-nav-bg)]"><Network size={17} /></div><div><h4 className="text-sm font-semibold">统一调用 MCP</h4><p className="mt-0.5 text-[11px] leading-5 text-[var(--color-text-tertiary)]">工具面固定为 list_open_interfaces 与 call_open_interface，接口增减即时生效。</p></div></div>
           <div><label className="mb-1.5 block text-[11px] text-[var(--color-text-tertiary)]">Streamable HTTP 地址</label><div className="flex gap-2"><input readOnly value={endpoint} className="h-9 min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-white px-3 font-mono text-[11px]" /><Button variant="outline" size="icon" onClick={() => navigator.clipboard.writeText(endpoint)}><Copy size={14} /></Button></div></div>
           <div><div className="mb-1.5 flex items-center justify-between"><label className="text-[11px] text-[var(--color-text-tertiary)]">Agent 配置 JSON</label><button onClick={() => navigator.clipboard.writeText(mcpConfig)} className="text-[11px] text-[var(--color-nav-bg)]">复制配置</button></div><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-3 font-mono text-[10px] leading-5 text-slate-100">{mcpConfig || '正在读取配置…'}</pre></div>
-          {info && <div className={`rounded-md px-3 py-2 text-[11px] ${info.token_required ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{info.token_required ? '访问 Token 已启用' : '当前未设置 API_HUB_MCP_TOKEN，生产环境建议启用。'}</div>}
+          {info && <div className={`rounded-md px-3 py-2 text-[11px] ${info.token_required ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{info.token_required ? '访问 Token 已启用；原值仅保存在服务端。' : '未设置 API_HUB_MCP_TOKEN，MCP 端点当前已禁用。'}</div>}
         </section>
       </div>
     </Modal>
@@ -230,13 +230,14 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
   const [name, setName] = useState(defaultBackupName)
   const [mode, setMode] = useState<'full' | 'partial'>('full')
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [includeSensitive, setIncludeSensitive] = useState(false)
   const [message, setMessage] = useState('')
 
   const exportData = async () => {
     const ids = mode === 'partial' ? [...selected] : []
     if (mode === 'partial' && !ids.length) { onError('请至少选择一个接口'); return }
     try {
-      const response = await apiHub.exportBackup({ name, mode, ids })
+      const response = await apiHub.exportBackup({ name, mode, ids, include_sensitive: includeSensitive })
       const url = URL.createObjectURL(response.data)
       const link = document.createElement('a')
       link.href = url; link.download = `${name || 'Backup'}.json`; link.click()
@@ -254,7 +255,7 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="系统数据" description="备份或还原接口清单；调用历史与授权凭据不会写入备份。" size="3xl" footer={<Button variant="outline" onClick={onClose}>关闭</Button>}>
+    <Modal open={open} onClose={onClose} title="系统数据" description="备份或还原接口清单；调用历史、W3 凭据和代理密钥不会写入备份。" size="3xl" footer={<Button variant="outline" onClick={onClose}>关闭</Button>}>
       {message && <div className="mb-4 rounded-md bg-[var(--color-success-bg)] px-3 py-2 text-xs text-[var(--color-success)]">{message}</div>}
       <div className="grid min-h-[430px] grid-cols-2 gap-6">
         <section className="space-y-4 rounded-lg border border-[var(--color-border)] p-4">
@@ -262,10 +263,11 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
           <input value={name} onChange={event => setName(event.target.value)} className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-xs outline-none" />
           <div className="grid grid-cols-2 gap-2"><ModeButton active={mode === 'full'} onClick={() => setMode('full')} title="完整备份" subtitle={`${interfaces.length} 个接口`} /><ModeButton active={mode === 'partial'} onClick={() => setMode('partial')} title="部分备份" subtitle={`${selected.size} 个已选`} /></div>
           {mode === 'partial' && <div className="max-h-52 overflow-y-auto rounded-md border border-[var(--color-border)] p-2">{interfaces.map(item => <label key={item.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]"><input type="checkbox" checked={selected.has(item.id!)} onChange={() => setSelected(current => { const next = new Set(current); if (next.has(item.id!)) next.delete(item.id!); else next.add(item.id!); return next })} /><span className="w-10 font-mono text-[10px]">{item.method}</span><span className="truncate">{item.name}</span></label>)}</div>}
+          <label className={`flex items-start gap-2 rounded-md border px-3 py-2 text-[11px] ${includeSensitive ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-[var(--color-border)] text-[var(--color-text-secondary)]'}`}><input type="checkbox" checked={includeSensitive} onChange={event => setIncludeSensitive(event.target.checked)} className="mt-0.5" /><span><strong>包含请求 Header 和 Body 原值</strong><br />默认关闭。开启后备份可能含 API Key、Cookie 或业务敏感数据，请只存放在受控位置。</span></label>
           <Button onClick={exportData}><Download size={14} />导出备份</Button>
         </section>
         <section className="space-y-4 rounded-lg border border-[var(--color-border)] p-4">
-          <div><h4 className="text-sm font-semibold">数据还原</h4><p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">以名称、方法和 URL 去重，已有接口不会被覆盖。</p></div>
+          <div><h4 className="text-sm font-semibold">数据还原</h4><p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">以名称、方法和 URL 去重；导入后的 MCP、开放清单和 HTTP 发布状态统一保持关闭，需管理员重新确认。</p></div>
           <label className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border-hover)] bg-[var(--color-bg-base)] text-center hover:border-[var(--color-nav-bg)]"><Upload size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><span className="text-xs font-medium">选择 API-Hub 备份文件</span><span className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">支持 .json</span><input type="file" accept=".json,application/json" className="hidden" onChange={event => { void importData(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
         </section>
       </div>

@@ -138,8 +138,10 @@ def test_http_proxy_migrates_existing_api_hub_database(tmp_path, monkeypatch):
 def proxy_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
     monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
+    monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
     monkeypatch.setattr(config, "HTTP_TIMEOUT", 5)
     monkeypatch.setattr(config, "PROXY_MAX_REQUEST_BYTES", 1024 * 1024)
+    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ("127.0.0.1",))
     db.init_db()
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), EchoHandler)
@@ -375,14 +377,18 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
     assert binary.headers["content-type"] == "application/octet-stream"
 
     with db.get_conn() as conn:
-        snapshot_text = conn.execute(
-            "SELECT request_snapshot FROM runs r JOIN interfaces i ON i.id=r.interface_id "
+        persisted_run = conn.execute(
+            "SELECT request_snapshot, response_body FROM runs r "
+            "JOIN interfaces i ON i.id=r.interface_id "
             "WHERE i.proxy_slug='post-echo' ORDER BY r.id DESC"
-        ).fetchone()["request_snapshot"]
+        ).fetchone()
+    snapshot_text = persisted_run["request_snapshot"]
     snapshot = json.loads(snapshot_text)
     assert "private" not in snapshot_text
     assert json.loads(snapshot["body_content"])["password"] == "***"
     assert "platform-cookie" not in snapshot_text
+    assert "private" not in persisted_run["response_body"]
+    assert "***" in persisted_run["response_body"]
 
 
 def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
@@ -441,7 +447,7 @@ def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
     )
     assert backup_response.status_code == 200
     payload = backup_response.json()
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert "proxy_keys" not in payload
     assert key["secret"] not in backup_response.text
     exported = next(item for item in payload["interfaces"] if item["name"] == "Echo")

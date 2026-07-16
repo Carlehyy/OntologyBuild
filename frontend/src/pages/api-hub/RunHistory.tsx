@@ -66,6 +66,7 @@ export default function RunHistory() {
   const [refreshMode, setRefreshMode] = useState<RefreshMode>('manual')
   const [refreshing, setRefreshing] = useState(false)
   const detailRequestRef = useRef<number | null>(null)
+  const detailTriggerRef = useRef<HTMLElement | null>(null)
   const refreshRequestRef = useRef(false)
 
   const loadHistory = useCallback(async (silent = false) => {
@@ -165,6 +166,9 @@ export default function RunHistory() {
   }
 
   const openDetail = async (item: RunSummary) => {
+    detailTriggerRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
     setSelected(item)
     setDetail(null)
     setDetailError('')
@@ -188,6 +192,7 @@ export default function RunHistory() {
     setDetail(null)
     setDetailError('')
     setCopied('')
+    window.setTimeout(() => detailTriggerRef.current?.focus(), 0)
   }
 
   const copyText = async (key: string, value: string) => {
@@ -216,7 +221,7 @@ export default function RunHistory() {
               接口代理 · 可观测性
             </div>
             <h1 className="text-lg font-semibold tracking-[-0.02em] text-slate-950">调用历史</h1>
-            <p className="mt-1 text-xs leading-5 text-slate-500">定位失败与慢调用，查看每次请求的完整证据。</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">短期调试记录，不作为合规审计；每接口最多保留 {overview?.retention_limit_per_interface ?? 20} 条。</p>
           </div>
           <RefreshSelector
             value={refreshMode}
@@ -244,7 +249,7 @@ export default function RunHistory() {
                 <h2 className="text-sm font-semibold text-slate-900">调用明细</h2>
                 <span className="text-[11px] tabular-nums text-slate-400">共 {total} 条</span>
               </div>
-              <p className="mt-0.5 text-[11px] text-slate-400">点击任意记录查看请求快照、响应头和响应体</p>
+              <p className="mt-0.5 text-[11px] text-slate-400">点击任意记录查看脱敏后的请求快照、响应头和响应体</p>
             </div>
             <ResultTabs
               value={filters.result}
@@ -794,11 +799,29 @@ function RunDetailDrawer({
   onCopy: (key: string, value: string) => void
   onClose: () => void
 }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
+      if (event.key !== 'Tab' || !dialogRef.current) return
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )]
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', close)
+    closeButtonRef.current?.focus()
     return () => window.removeEventListener('keydown', close)
   }, [onClose])
 
@@ -821,6 +844,7 @@ function RunDetailDrawer({
     <div className="fixed inset-0 z-[var(--z-modal)]">
       <button type="button" className="absolute inset-0 bg-slate-950/25 backdrop-blur-[1px]" onClick={onClose} aria-label="关闭调用详情" />
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="run-detail-title"
@@ -853,6 +877,7 @@ function RunDetailDrawer({
               {requestUrl && <p className="mt-2 truncate font-mono text-[10px] text-slate-500" title={requestUrl}>{requestUrl}</p>}
             </div>
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={onClose}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"

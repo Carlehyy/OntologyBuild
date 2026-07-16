@@ -132,6 +132,11 @@ Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 S
 手动启动时如需数据管家的实时浏览器，还要准备一个开放 CDP 的 Chromium，并设置
 `STEWARD_BROWSER_CDP_URL`（默认 `http://localhost:9222`）。生产环境应同时配置
 `API_HUB_SYSTEM_MCP_TOKEN`，在 n8n 中以 Header Auth 凭据保存该令牌；不要把令牌直接写入工作流 JSON。
+接口代理的每个目标域名或网段还必须显式写入 `API_HUB_OUTBOUND_ALLOWED_HOSTS`
+（支持精确域名、`*.example.com` 和 CIDR）；留空会拒绝全部出站调用。内网自签 CA 应通过
+`API_HUB_TLS_CA_BUNDLE` 指定信任链，平台不会关闭 TLS 证书校验。MCP 令牌留空时对应入口保持禁用；
+从外部生产域名访问 MCP 时，还需同步配置 `API_HUB_MCP_ALLOWED_HOSTS` 和
+`API_HUB_MCP_ALLOWED_ORIGINS`。
 
 会话浏览器默认最多同时保留 8 个 BrowserContext、每个用户最多 3 个，空闲 15 分钟后自动保存
 登录态并回收；再次访问该会话时会从会话隔离目录恢复登录态并重新分配 Context。可通过

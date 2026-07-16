@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Braces, Check, ChevronRight, CirclePlus, Copy, FileCode2, Folder, Play,
   Plus, Search, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2,
@@ -16,21 +16,29 @@ interface Props {
   onError: (message: string) => void
 }
 
-const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']
+const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 const methodTone: Record<string, string> = {
   GET: 'text-blue-600 bg-blue-50', POST: 'text-emerald-700 bg-emerald-50',
   PUT: 'text-amber-700 bg-amber-50', PATCH: 'text-violet-700 bg-violet-50',
   DELETE: 'text-red-600 bg-red-50', HEAD: 'text-slate-600 bg-slate-100',
+  OPTIONS: 'text-cyan-700 bg-cyan-50',
 }
+
+type PendingNavigation =
+  | { type: 'select'; item: HubInterface }
+  | { type: 'create' }
 
 export default function InterfaceManager({ interfaces, reload, onError }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(interfaces[0]?.id ?? null)
   const [draft, setDraft] = useState<HubInterface>(() => interfaces[0] ? structuredClone(interfaces[0]) : emptyHubInterface())
+  const [baseline, setBaseline] = useState<HubInterface>(() => interfaces[0] ? structuredClone(interfaces[0]) : emptyHubInterface())
   const [search, setSearch] = useState('')
   const [editorTab, setEditorTab] = useState<'params' | 'headers' | 'body' | 'description'>('params')
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<RunResult | null>(null)
+  const [resultFingerprint, setResultFingerprint] = useState('')
+  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [curl, setCurl] = useState('')
   const [openInterfaces, setOpenInterfaces] = useState(false)
@@ -78,18 +86,51 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     return [...groups.entries()].sort(([a], [b]) => a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'zh-CN'))
   }, [filtered])
   const groupNames = [...new Set(interfaces.map(item => item.group_name).filter(Boolean))].sort()
+  const isDirty = draftFingerprint(draft) !== draftFingerprint(baseline)
+  const resultStale = Boolean(
+    result && resultFingerprint !== requestFingerprint(draft)
+  )
 
-  const select = (item: HubInterface) => {
+  const selectNow = (item: HubInterface) => {
     setSelectedId(item.id)
     setDraft(structuredClone(item))
+    setBaseline(structuredClone(item))
     setResult(null)
+    setResultFingerprint('')
   }
-  const create = () => {
+  const createNow = () => {
     setSelectedId(null)
     setDraft(emptyHubInterface())
+    setBaseline(emptyHubInterface())
     setResult(null)
+    setResultFingerprint('')
+  }
+  const select = (item: HubInterface) => {
+    if (item.id === selectedId) return
+    if (isDirty) { setPendingNavigation({ type: 'select', item }); return }
+    selectNow(item)
+  }
+  const create = () => {
+    if (isDirty) { setPendingNavigation({ type: 'create' }); return }
+    createNow()
+  }
+  const discardAndNavigate = () => {
+    if (!pendingNavigation) return
+    if (pendingNavigation.type === 'select') selectNow(pendingNavigation.item)
+    else createNow()
+    setPendingNavigation(null)
   }
   const patchDraft = <K extends keyof HubInterface>(key: K, value: HubInterface[K]) => setDraft(current => ({ ...current, [key]: value }))
+
+  useEffect(() => {
+    if (!isDirty) return undefined
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [isDirty])
 
   const save = async (): Promise<HubInterface | null> => {
     if (!draft.name.trim()) { onError('请填写接口名称'); return null }
@@ -102,6 +143,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         : await apiHub.createInterface(payload)
       setSelectedId(saved.id)
       setDraft(structuredClone(saved))
+      setBaseline(structuredClone(saved))
       await reload()
       return saved
     } catch (error) {
@@ -109,19 +151,42 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     } finally { setSaving(false) }
   }
 
-  const reloadSelected = async () => {
+  const reloadOpenState = async () => {
     const items = await reload()
-    const refreshed = items.find(item => item.id === draft.id)
-    if (refreshed) setDraft(structuredClone(refreshed))
+    const refreshed = items.find(item => item.id === selectedId)
+    if (refreshed) {
+      setDraft(current => ({ ...current, open_enabled: refreshed.open_enabled }))
+      setBaseline(current => ({ ...current, open_enabled: refreshed.open_enabled }))
+    }
+    return items
+  }
+
+  const reloadPublication = async () => {
+    const items = await reload()
+    const refreshed = items.find(item => item.id === selectedId)
+    if (refreshed) {
+      const publication = {
+        http_enabled: refreshed.http_enabled,
+        proxy_slug: refreshed.proxy_slug,
+        proxy_query_keys: refreshed.proxy_query_keys,
+        proxy_header_keys: refreshed.proxy_header_keys,
+        proxy_body_enabled: refreshed.proxy_body_enabled,
+      }
+      setDraft(current => ({ ...current, ...publication }))
+      setBaseline(current => ({ ...current, ...publication }))
+    }
     return items
   }
 
   const run = async () => {
+    if (!draft.name.trim()) { onError('请填写接口名称'); return }
+    if (!draft.url.trim()) { onError('请填写请求 URL'); return }
     setRunning(true)
     try {
-      const saved = await save()
-      if (!saved?.id) return
-      setResult(await apiHub.run(saved.id))
+      const payload = { ...draft, method: draft.method.toUpperCase() }
+      const fingerprint = requestFingerprint(payload)
+      setResult(await apiHub.runDraft(payload))
+      setResultFingerprint(fingerprint)
     } catch (error) { onError(apiError(error)) }
     finally { setRunning(false) }
   }
@@ -135,23 +200,24 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       const next = items[0]
       setSelectedId(next?.id ?? null)
       setDraft(next ? structuredClone(next) : emptyHubInterface())
+      setBaseline(next ? structuredClone(next) : emptyHubInterface())
       setResult(null)
       setDeleteOpen(false)
     } catch (error) { onError(apiError(error)) }
     finally { setSaving(false) }
   }
 
-  const showCurl = async () => {
+  const showCurl = () => {
     try {
       const url = new URL(draft.url || 'http://example.com')
-      draft.query_params.filter(item => item.key).forEach(item => url.searchParams.set(item.key, item.value))
-      const pieces = [`curl -X ${draft.method}`, `'${url.toString()}'`]
-      draft.headers.filter(item => item.key).forEach(item => pieces.push(`-H '${item.key}: ${item.value.replaceAll("'", "'\\''")}'`))
-      if (draft.use_w3) {
-        const cookie = await apiHub.cookieHeader().catch(() => ({ cookie: '', count: 0 }))
-        if (cookie.cookie) pieces.push(`-H 'Cookie: ${cookie.cookie.replaceAll("'", "'\\''")}'`)
-      }
-      if (draft.body_type !== 'none' && draft.body_content) pieces.push(`--data-raw '${draft.body_content.replaceAll("'", "'\\''")}'`)
+      draft.query_params.filter(item => item.key).forEach(item => url.searchParams.append(item.key, item.value))
+      const pieces = [`curl -X ${methods.includes(draft.method) ? draft.method : 'GET'}`, shellQuote(url.toString())]
+      const headers = draft.headers.filter(item => item.key)
+      headers.forEach(item => pieces.push(`-H ${shellQuote(`${item.key}: ${item.value}`)}`))
+      const hasContentType = headers.some(item => item.key.toLowerCase() === 'content-type')
+      if (!hasContentType && draft.body_type === 'json' && draft.body_content) pieces.push("-H 'Content-Type: application/json; charset=utf-8'")
+      if (!hasContentType && draft.body_type === 'form' && draft.body_content) pieces.push("-H 'Content-Type: application/x-www-form-urlencoded'")
+      if (draft.body_type !== 'none' && draft.body_content) pieces.push(`--data-raw ${shellQuote(draft.body_content)}`)
       setCurl(pieces.join(' \\\n  '))
     } catch {
       onError('请先填写有效的绝对 URL，再导出 cURL')
@@ -202,12 +268,12 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-[var(--color-text-tertiary)]" placeholder="接口名称" />
           <input list="api-hub-groups" value={draft.group_name} onChange={event => patchDraft('group_name', event.target.value)} className="h-8 w-36 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 text-xs outline-none" placeholder="默认分组" />
           <datalist id="api-hub-groups">{groupNames.map(group => <option key={group} value={group} />)}</datalist>
-          {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, http_enabled: false, proxy_slug: '' }) }}><Copy size={14} /></Button>}
+          {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, http_enabled: false, proxy_slug: '' }); setResult(null); setResultFingerprint('') }}><Copy size={14} /></Button>}
           {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
           {draft.id && <Button variant="outline" size="sm" onClick={() => setHttpPublication(true)}><Share2 size={14} />HTTP发布</Button>}
           <Button variant="outline" size="sm" onClick={showCurl}><FileCode2 size={14} />cURL</Button>
           <Button variant="outline" size="sm" loading={saving} onClick={save}><Check size={14} />保存</Button>
-          <Button size="sm" loading={running} onClick={run}><Send size={14} />发送</Button>
+          {isDirty && <span className="rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
         </div>
 
         <div className="shrink-0 p-4 pb-3">
@@ -243,15 +309,16 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="描述接口用途、参数要求与返回结果，供 Agent 渐进式发现时理解此接口。" />}
         </div>
 
-        <ResponsePanel result={result} />
+        <ResponsePanel result={result} stale={resultStale} />
       </section>
 
       <ConfirmModal open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={remove} loading={saving} variant="danger" title={`删除“${draft.name}”？`} description="接口配置及其全部调用历史都会被删除，此操作不可撤销。" confirmText="删除接口" />
-      <Modal open={Boolean(curl)} onClose={() => setCurl('')} title="导出 cURL" description={draft.use_w3 ? '已尽力附带当前 W3 Cookie，请勿将命令分享给无关人员。' : '命令已根据当前编辑器内容生成。'} size="2xl" footer={<Button onClick={() => navigator.clipboard.writeText(curl)}><Copy size={14} />复制命令</Button>}>
+      <ConfirmModal open={Boolean(pendingNavigation)} onClose={() => setPendingNavigation(null)} onConfirm={discardAndNavigate} variant="danger" title="放弃未保存修改？" description="当前接口的未保存修改将丢失，且无法恢复。" confirmText="放弃并继续" />
+      <Modal open={Boolean(curl)} onClose={() => setCurl('')} title="导出 cURL" description={draft.use_w3 ? 'W3 Cookie 由平台在服务端注入，不会导出到浏览器或 cURL。' : '命令已根据当前编辑器草稿生成。'} size="2xl" footer={<Button onClick={() => navigator.clipboard.writeText(curl)}><Copy size={14} />复制命令</Button>}>
         <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-4 text-xs leading-6 text-slate-100">{curl}</pre>
       </Modal>
-      <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reload} onError={onError} />
-      <HttpPublicationModal open={httpPublication} onClose={() => setHttpPublication(false)} item={draft.id ? draft : null} reload={reloadSelected} onError={onError} onManageKeys={() => { setHttpPublication(false); setProxyKeys(true) }} />
+      <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reloadOpenState} onError={onError} />
+      <HttpPublicationModal open={httpPublication} onClose={() => setHttpPublication(false)} item={draft.id ? draft : null} reload={reloadPublication} onError={onError} onManageKeys={() => { setHttpPublication(false); setProxyKeys(true) }} />
       <ProxyKeysModal open={proxyKeys} onClose={() => setProxyKeys(false)} interfaces={interfaces} onError={onError} />
       <SystemDataModal open={systemData} onClose={() => setSystemData(false)} interfaces={interfaces} reload={reload} onError={onError} />
     </div>
@@ -276,10 +343,42 @@ function BodyEditor({ draft, patchDraft }: { draft: HubInterface; patchDraft: <K
   return <div><div className="mb-2 flex gap-1">{(['none', 'json', 'form', 'raw'] as const).map(type => <button key={type} onClick={() => patchDraft('body_type', type)} className={`rounded px-2.5 py-1 text-[11px] ${draft.body_type === type ? 'bg-[var(--color-nav-light)] font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}>{type.toUpperCase()}</button>)}</div>{draft.body_type === 'none' ? <div className="rounded-md border border-dashed border-[var(--color-border)] py-9 text-center text-xs text-[var(--color-text-tertiary)]">当前请求不发送 Body</div> : <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder={draft.body_type === 'json' ? '{\n  "key": "value"\n}' : draft.body_type === 'form' ? 'key=value\nother=value' : '原始请求内容'} />}</div>
 }
 
-function ResponsePanel({ result }: { result: RunResult | null }) {
+function ResponsePanel({ result, stale }: { result: RunResult | null; stale: boolean }) {
   const pretty = useMemo(() => {
     if (!result?.response_body) return ''
     try { return JSON.stringify(JSON.parse(result.response_body), null, 2) } catch { return result.response_body }
   }, [result])
-  return <div className="flex min-h-0 flex-1 flex-col"><div className="flex h-10 shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4"><span className="text-xs font-semibold text-[var(--color-text-primary)]">响应</span>{result && <><span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${result.status_code && result.status_code < 400 ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>{result.status_code ?? 'ERR'}</span><span className="text-[11px] text-[var(--color-text-tertiary)]">{result.elapsed_ms ?? '—'} ms</span>{result.relogin && <span className="text-[11px] text-[var(--color-warning)]">已自动重登</span>}</>}</div>{!result ? <div className="flex flex-1 items-center justify-center text-xs text-[var(--color-text-tertiary)]"><Send size={18} className="mr-2 opacity-50" />点击“发送”查看响应</div> : <div className="min-h-0 flex-1 overflow-auto p-4">{result.error && <div className="mb-3 rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{result.error}</div>}<pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[var(--color-text-primary)]">{pretty || '(空响应体)'}</pre></div>}</div>
+  return <div className="flex min-h-0 flex-1 flex-col"><div className="flex h-10 shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4"><span className="text-xs font-semibold text-[var(--color-text-primary)]">响应</span>{result && <><span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${stale ? 'bg-slate-100 text-slate-500' : result.status_code && result.status_code < 400 ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>{result.status_code ?? 'ERR'}</span><span className="text-[11px] text-[var(--color-text-tertiary)]">{result.elapsed_ms ?? '—'} ms</span>{stale && <span className="text-[11px] font-medium text-amber-700">请求已修改，此结果已过期</span>}{result.relogin && <span className="text-[11px] text-[var(--color-warning)]">已自动重登</span>}</>}</div>{!result ? <div className="flex flex-1 items-center justify-center text-xs text-[var(--color-text-tertiary)]"><Send size={18} className="mr-2 opacity-50" />点击“调用”查看响应</div> : <div className={`min-h-0 flex-1 overflow-auto p-4 ${stale ? 'opacity-60' : ''}`}>{result.error && <div className="mb-3 rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{result.error}</div>}<pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[var(--color-text-primary)]">{pretty || '(空响应体)'}</pre></div>}</div>
+}
+
+function requestFingerprint(item: HubInterface) {
+  return JSON.stringify({
+    method: item.method,
+    url: item.url,
+    query_params: item.query_params,
+    headers: item.headers,
+    body_type: item.body_type,
+    body_content: item.body_content,
+    use_w3: item.use_w3,
+  })
+}
+
+function draftFingerprint(item: HubInterface) {
+  return JSON.stringify({
+    name: item.name,
+    description: item.description,
+    group_name: item.group_name,
+    ...JSON.parse(requestFingerprint(item)),
+    mcp_enabled: item.mcp_enabled,
+    open_enabled: item.open_enabled,
+    http_enabled: item.http_enabled,
+    proxy_slug: item.proxy_slug,
+    proxy_query_keys: item.proxy_query_keys,
+    proxy_header_keys: item.proxy_header_keys,
+    proxy_body_enabled: item.proxy_body_enabled,
+  })
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`
 }

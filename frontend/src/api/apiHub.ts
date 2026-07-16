@@ -126,6 +126,7 @@ export interface RunOverview {
   success_rate: number
   p95_elapsed_ms: number | null
   slow_threshold_ms: number
+  retention_limit_per_interface: number
   daily: { date: string; count: number; failed: number }[]
 }
 
@@ -138,7 +139,6 @@ export interface McpInfo {
   transport: string
   lan_exposed: boolean
   token_required: boolean
-  token: string
   published?: { id: number; name: string; tool_name: string }[]
   tools?: { name: string; desc: string }[]
 }
@@ -194,8 +194,10 @@ export const apiHub = {
     body: { enabled: boolean; slug: string; query_keys: string[]; header_keys: string[]; body_enabled: boolean },
   ) => data<HubInterface>(http.put(`/interfaces/${id}/http-publication`, body)),
   run: (id: number) => data<RunResult>(http.post(`/interfaces/${id}/run`)),
+  runDraft: (body: HubInterface) => data<RunResult>(http.post('/interfaces/preview-run', body)),
   listRuns: (params: Record<string, string | number>) => data<{ items: RunSummary[]; total: number; page: number; size: number }>(http.get('/runs', { params })),
-  runOverview: () => data<RunOverview>(http.get('/runs/overview')),
+  runOverview: (timezoneOffsetMinutes = new Date().getTimezoneOffset()) =>
+    data<RunOverview>(http.get('/runs/overview', { params: { timezone_offset_minutes: timezoneOffsetMinutes } })),
   getRun: (interfaceId: number, runId: number) => data<RunDetail>(http.get(`/interfaces/${interfaceId}/runs/${runId}`)),
   credentialStatus: () => data<CredentialStatus>(http.get('/credential/status')),
   credentialConfig: () => data<CredentialConfig>(http.get('/credential/config')),
@@ -203,7 +205,6 @@ export const apiHub = {
   credentialUsage: (limit = 60) => data<CredentialUsage>(http.get('/credential/usage', { params: { limit } })),
   refreshCredential: () => data<CredentialStatus>(http.post('/credential/refresh')),
   setSchedule: (cron: string) => data<{ cron: string; next_run: string | null }>(http.put('/credential/schedule', { cron })),
-  cookieHeader: () => data<{ cookie: string; count: number }>(http.get('/credential/cookie-header')),
   mcpInfo: () => data<McpInfo>(http.get('/mcp/info')),
   systemMcpInfo: () => data<McpInfo>(http.get('/mcp/system/info')),
   proxyInfo: () => data<ProxyInfo>(http.get('/proxy/info')),
@@ -212,7 +213,7 @@ export const apiHub = {
   updateProxyKey: (id: number, body: ProxyKeyPayload) => data<ProxyKey>(http.put(`/proxy/keys/${id}`, body)),
   deleteProxyKey: (id: number) => data<{ ok: boolean }>(http.delete(`/proxy/keys/${id}`)),
   importBackup: (payload: unknown) => data<{ imported: number; skipped: number; total: number; name: string }>(http.post('/backup/import', payload)),
-  exportBackup: (payload: { name: string; mode: 'full' | 'partial'; ids: number[] }) =>
+  exportBackup: (payload: { name: string; mode: 'full' | 'partial'; ids: number[]; include_sensitive: boolean }) =>
     http.post('/backup/export', payload, { responseType: 'blob' }),
 }
 
@@ -228,7 +229,7 @@ export function emptyHubInterface(): HubInterface {
     headers: [{ key: '', value: '' }],
     body_type: 'none',
     body_content: '',
-    use_w3: true,
+    use_w3: false,
     mcp_enabled: false,
     open_enabled: false,
     http_enabled: false,

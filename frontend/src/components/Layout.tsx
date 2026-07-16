@@ -18,6 +18,7 @@ interface NavItem {
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const logout = useAuthStore(s => s.logout)
+  const user = useAuthStore(s => s.user)
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
@@ -121,7 +122,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       { to: '/settings/domains', icon: Globe, label: '领域设置' },
       { to: '/settings/open-interfaces', icon: PlugZap, label: '开放接口' },
     ]},
-  ]
+  ].filter(item => item.to !== '/api-hub' || user?.role === 'admin')
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
   const isGroupActive = (item: NavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)

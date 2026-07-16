@@ -13,7 +13,7 @@ _SETTING_KEY = "refresh_cron"
 
 
 def _job():
-    credential.refresh()
+    credential.refresh(force=False)
 
 
 def get_cron() -> str:

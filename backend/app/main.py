@@ -7,6 +7,7 @@ v1 兼容：/api/v1/* 路由全部保留
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
+import hmac
 import json
 import urllib.request
 
@@ -436,24 +437,30 @@ class McpMiddleware:
         from app.api_hub import config as api_hub_config
         from app.api_hub import mcp_server as api_hub_mcp
         if path == api_hub_config.SYSTEM_MCP_PATH or path.startswith(api_hub_config.SYSTEM_MCP_PATH + "/"):
-            if api_hub_config.SYSTEM_MCP_TOKEN:
-                headers = dict(scope.get("headers") or [])
-                auth = headers.get(b"authorization", b"").decode("latin-1")
-                if auth != f"Bearer {api_hub_config.SYSTEM_MCP_TOKEN}":
-                    await _send_json(send, 401, {"error": "unauthorized"})
-                    return
+            if not api_hub_config.SYSTEM_MCP_TOKEN:
+                await _send_json(send, 503, {"error": "system MCP is disabled"})
+                return
+            headers = dict(scope.get("headers") or [])
+            auth = headers.get(b"authorization", b"").decode("latin-1")
+            if not hmac.compare_digest(
+                auth, f"Bearer {api_hub_config.SYSTEM_MCP_TOKEN}"
+            ):
+                await _send_json(send, 401, {"error": "unauthorized"})
+                return
             hub_scope = dict(scope)
             hub_scope["path"] = "/"
             hub_scope["raw_path"] = b"/"
             await api_hub_mcp.handle_mcp_system(hub_scope, receive, send)
             return
         if path == api_hub_config.MCP_PATH or path.startswith(api_hub_config.MCP_PATH + "/"):
-            if api_hub_config.MCP_TOKEN:
-                headers = dict(scope.get("headers") or [])
-                auth = headers.get(b"authorization", b"").decode("latin-1")
-                if auth != f"Bearer {api_hub_config.MCP_TOKEN}":
-                    await _send_json(send, 401, {"error": "unauthorized"})
-                    return
+            if not api_hub_config.MCP_TOKEN:
+                await _send_json(send, 503, {"error": "API-Hub MCP is disabled"})
+                return
+            headers = dict(scope.get("headers") or [])
+            auth = headers.get(b"authorization", b"").decode("latin-1")
+            if not hmac.compare_digest(auth, f"Bearer {api_hub_config.MCP_TOKEN}"):
+                await _send_json(send, 401, {"error": "unauthorized"})
+                return
             hub_scope = dict(scope)
             hub_scope["path"] = "/"
             hub_scope["raw_path"] = b"/"
@@ -508,8 +515,8 @@ from app.api_hub.routers import interfaces as api_hub_interfaces
 from app.api_hub.routers import mcp as api_hub_mcp_router
 from app.api_hub.routers import proxy as api_hub_proxy
 from app.api_hub.routers import http_proxy as api_hub_http_proxy
-from app.deps import get_current_user
-api_hub_auth = [Depends(get_current_user)]
+from app.deps import require_admin
+api_hub_auth = [Depends(require_admin)]
 app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_auth)
 app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencies=api_hub_auth)
 app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_auth)

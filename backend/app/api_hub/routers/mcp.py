@@ -40,7 +40,6 @@ def info():
         "transport": "streamable-http",
         "lan_exposed": config.is_lan_exposed(),
         "token_required": bool(config.MCP_TOKEN),
-        "token": config.MCP_TOKEN,
         "published": mcp_server.published_tools(),
     }
 
@@ -57,7 +56,6 @@ def system_info():
         "transport": "streamable-http",
         "lan_exposed": config.is_lan_exposed(),
         "token_required": bool(config.SYSTEM_MCP_TOKEN),
-        "token": config.SYSTEM_MCP_TOKEN,
         "tools": [
             {"name": "list_groups", "desc": "列出所有分组及接口数量"},
             {"name": "list_interfaces", "desc": "列出接口（可按分组筛选）"},

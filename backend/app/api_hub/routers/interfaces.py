@@ -3,9 +3,10 @@ import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import config, db, executor
 
@@ -13,6 +14,9 @@ router = APIRouter(prefix="/interfaces", tags=["api-hub-interfaces"])
 
 _RESERVED_GROUP = "默认分组"
 _SLOW_RUN_MS = 500
+_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+_ALLOWED_BODY_TYPES = {"none", "json", "form", "raw"}
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PROXY_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _PROXY_RESERVED_HEADERS = {
     "host",
@@ -49,7 +53,7 @@ class InterfaceIn(BaseModel):
     headers: List[KV] = Field(default_factory=list)
     body_type: str = "none"   # none | json | form | raw
     body_content: str = ""
-    use_w3: bool = True
+    use_w3: bool = False
     mcp_enabled: bool = False
     open_enabled: bool = False
     http_enabled: bool = False
@@ -57,6 +61,90 @@ class InterfaceIn(BaseModel):
     proxy_query_keys: List[str] = Field(default_factory=list)
     proxy_header_keys: List[str] = Field(default_factory=list)
     proxy_body_enabled: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("接口名称不能为空")
+        if len(value) > 200:
+            raise ValueError("接口名称不能超过 200 个字符")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        if len(value) > 20_000:
+            raise ValueError("用途说明不能超过 20000 个字符")
+        return value
+
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, value: str) -> str:
+        value = value.upper().strip()
+        if value not in _ALLOWED_METHODS:
+            raise ValueError("不支持的 HTTP 方法")
+        return value
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        value = value.strip()
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("请求 URL 必须是无内嵌账号信息的 HTTP/HTTPS 绝对地址")
+        if len(value) > 4096:
+            raise ValueError("请求 URL 不能超过 4096 个字符")
+        return value
+
+    @field_validator("body_type")
+    @classmethod
+    def validate_body_type(cls, value: str) -> str:
+        value = value.lower().strip()
+        if value not in _ALLOWED_BODY_TYPES:
+            raise ValueError("不支持的请求 Body 类型")
+        return value
+
+    @field_validator("body_content")
+    @classmethod
+    def validate_body_size(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > config.PROXY_MAX_REQUEST_BYTES:
+            raise ValueError("请求 Body 超过平台允许的最大长度")
+        return value
+
+    @field_validator("query_params")
+    @classmethod
+    def validate_query_params(cls, value: List[KV]) -> List[KV]:
+        for item in value:
+            if "\r" in item.key or "\n" in item.key:
+                raise ValueError("查询参数名不能包含换行符")
+            if len(item.key) > 500 or len(item.value) > 100_000:
+                raise ValueError("查询参数过长")
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def validate_headers(cls, value: List[KV]) -> List[KV]:
+        for item in value:
+            key = item.key.strip()
+            if key and not _HEADER_NAME_RE.fullmatch(key):
+                raise ValueError(f"Header 名称无效：{key}")
+            if "\r" in item.value or "\n" in item.value:
+                raise ValueError(f"Header 值不能包含换行符：{key}")
+            if len(item.value) > 100_000:
+                raise ValueError(f"Header 值过长：{key}")
+            item.key = key
+        return value
+
+
+class PreviewInterfaceIn(InterfaceIn):
+    id: int | None = Field(default=None, gt=0)
 
 
 def _load_json_list(value) -> list:
@@ -184,6 +272,16 @@ def create_interface(body: InterfaceIn):
         )
         row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (cur.lastrowid,)).fetchone()
     return _row_to_dict(row)
+
+
+@router.post("/preview-run")
+def preview_run(body: PreviewInterfaceIn):
+    """执行当前编辑器草稿，不隐式保存接口配置。"""
+    if body.id is not None:
+        with db.get_conn() as conn:
+            _get_or_404(conn, body.id)
+    iface = body.model_dump(mode="json")
+    return executor.run_interface(iface)
 
 
 @router.get("/{iid}")
@@ -393,30 +491,44 @@ runs_router = APIRouter(prefix="/runs", tags=["api-hub-runs"])
 
 
 @runs_router.get("/overview")
-def run_overview():
-    today = datetime.now(timezone.utc).date()
+def run_overview(timezone_offset_minutes: int = 0):
+    timezone_offset_minutes = max(-840, min(840, timezone_offset_minutes))
+    local_now = datetime.now(timezone.utc) - timedelta(
+        minutes=timezone_offset_minutes
+    )
+    today = local_now.date()
     start = today - timedelta(days=6)
     days = [(start + timedelta(days=i)).isoformat() for i in range(7)]
+    sqlite_modifier = f"{-timezone_offset_minutes:+d} minutes"
     with db.get_conn() as conn:
         total_interfaces = conn.execute("SELECT COUNT(*) FROM interfaces").fetchone()[0]
         executed = conn.execute("SELECT COUNT(DISTINCT interface_id) FROM runs").fetchone()[0]
         today_traffic = conn.execute(
-            "SELECT COUNT(*) FROM runs WHERE substr(created_at, 1, 10) = ?",
-            (today.isoformat(),),
+            "SELECT COUNT(*) FROM runs "
+            "WHERE date(datetime(created_at), ?) = ?",
+            (sqlite_modifier, today.isoformat()),
         ).fetchone()[0]
         rows = conn.execute(
-            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count, "
+            "SELECT date(datetime(created_at), ?) AS day, COUNT(*) AS count, "
             "SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed "
-            "FROM runs WHERE substr(created_at, 1, 10) >= ? "
-            "AND substr(created_at, 1, 10) <= ? "
-            "GROUP BY substr(created_at, 1, 10)",
-            (start.isoformat(), today.isoformat()),
+            "FROM runs WHERE date(datetime(created_at), ?) >= ? "
+            "AND date(datetime(created_at), ?) <= ? "
+            "GROUP BY date(datetime(created_at), ?)",
+            (
+                sqlite_modifier,
+                sqlite_modifier, start.isoformat(),
+                sqlite_modifier, today.isoformat(),
+                sqlite_modifier,
+            ),
         ).fetchall()
         recent_rows = conn.execute(
             "SELECT ok, elapsed_ms FROM runs "
-            "WHERE substr(created_at, 1, 10) >= ? "
-            "AND substr(created_at, 1, 10) <= ?",
-            (start.isoformat(), today.isoformat()),
+            "WHERE date(datetime(created_at), ?) >= ? "
+            "AND date(datetime(created_at), ?) <= ?",
+            (
+                sqlite_modifier, start.isoformat(),
+                sqlite_modifier, today.isoformat(),
+            ),
         ).fetchall()
     by_day = {
         row["day"]: {"count": int(row["count"]), "failed": int(row["failed"] or 0)}
@@ -455,6 +567,7 @@ def run_overview():
         ) if seven_day_traffic else 0,
         "p95_elapsed_ms": p95_elapsed_ms,
         "slow_threshold_ms": _SLOW_RUN_MS,
+        "retention_limit_per_interface": config.MAX_RUNS_PER_INTERFACE,
         "daily": daily,
     }
 

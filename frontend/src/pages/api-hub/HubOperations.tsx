@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, UserRoundCheck } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, UserRoundCheck } from 'lucide-react'
 import {
   apiError, apiHub, type CredentialConfig, type CredentialStatus,
   type CredentialUsage, type McpInfo,
@@ -21,9 +21,10 @@ export default function HubOperations({ credential, reloadCredential, onError }:
   const [password, setPassword] = useState('')
   const [loginUrl, setLoginUrl] = useState('')
   const [cron, setCron] = useState(credential?.cron || '0 */2 * * *')
-  const [saving, setSaving] = useState(false)
+  const [savingConfig, setSavingConfig] = useState(false)
+  const [savingCron, setSavingCron] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<{ text: string; kind: 'success' | 'error' } | null>(null)
 
   useEffect(() => {
     Promise.all([apiHub.credentialConfig(), apiHub.credentialUsage(60), apiHub.systemMcpInfo()])
@@ -37,39 +38,49 @@ export default function HubOperations({ credential, reloadCredential, onError }:
       .catch(error => onError(apiError(error)))
   }, [onError])
 
-  const saveConfig = async () => {
+  const persistConfig = async () => {
     if (!username.trim()) { onError('请输入 W3 账号'); return }
-    setSaving(true)
+    const updated = await apiHub.updateCredentialConfig({
+      username: username.trim(),
+      ...(password ? { password } : {}),
+      login_url: loginUrl.trim(),
+    })
+    setConfig(updated)
+    setPassword('')
+    await reloadCredential()
+    return updated
+  }
+
+  const saveConfig = async () => {
+    setSavingConfig(true)
     try {
-      const updated = await apiHub.updateCredentialConfig({
-        username: username.trim(),
-        ...(password ? { password } : {}),
-        login_url: loginUrl.trim(),
-      })
-      setConfig(updated)
-      setPassword('')
-      await reloadCredential()
-      setMessage('W3 授权配置已加密保存；原登录态已清理，请执行一次登录验证。')
+      const updated = await persistConfig()
+      if (updated) setMessage({ text: 'W3 授权配置已加密保存；原登录态已清理，请执行一次登录验证。', kind: 'success' })
     } catch (error) { onError(apiError(error)) }
-    finally { setSaving(false) }
+    finally { setSavingConfig(false) }
   }
 
   const refreshLogin = async () => {
     setRefreshing(true)
     try {
+      const updated = await persistConfig()
+      if (!updated) return
       const status = await apiHub.refreshCredential()
       await reloadCredential()
       setUsage(await apiHub.credentialUsage(60))
-      setMessage(status.last_result === 'success' ? 'W3 登录验证成功' : status.message || 'W3 登录验证失败')
+      setMessage({
+        text: status.last_result === 'success' ? 'W3 登录验证成功' : status.message || 'W3 登录验证失败',
+        kind: status.last_result === 'success' ? 'success' : 'error',
+      })
     } catch (error) { onError(apiError(error)) }
     finally { setRefreshing(false) }
   }
 
   const saveCron = async () => {
-    setSaving(true)
-    try { await apiHub.setSchedule(cron); await reloadCredential(); setMessage('授权刷新计划已保存') }
+    setSavingCron(true)
+    try { await apiHub.setSchedule(cron); await reloadCredential(); setMessage({ text: '授权刷新计划已保存', kind: 'success' }) }
     catch (error) { onError(apiError(error)) }
-    finally { setSaving(false) }
+    finally { setSavingCron(false) }
   }
 
   const ready = Boolean(credential?.configured && credential.has_session && !credential.expired)
@@ -80,7 +91,7 @@ export default function HubOperations({ credential, reloadCredential, onError }:
         <div><h1 className="text-lg font-semibold">授权配置</h1><p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">在线维护 W3 授权、观察稳定性并配置系统管理 MCP。</p></div>
         <span className={`rounded-full px-3 py-1.5 text-xs font-medium ${ready ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{ready ? '授权已就绪' : credential?.configured ? '已配置，待验证' : '尚未配置'}</span>
       </div>
-      {message && <div className="mb-4 flex items-center justify-between rounded-md bg-[var(--color-success-bg)] px-4 py-2.5 text-xs text-[var(--color-success)]"><span className="flex items-center gap-2"><CheckCircle2 size={14} />{message}</span><button onClick={() => setMessage('')}>关闭</button></div>}
+      {message && <div className={`mb-4 flex items-center justify-between rounded-md px-4 py-2.5 text-xs ${message.kind === 'success' ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}><span className="flex items-center gap-2">{message.kind === 'success' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}{message.text}</span><button onClick={() => setMessage(null)}>关闭</button></div>}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
@@ -92,7 +103,7 @@ export default function HubOperations({ credential, reloadCredential, onError }:
             </div>
             <Field label="登录地址"><input value={loginUrl} onChange={event => setLoginUrl(event.target.value)} className={`${inputClass} font-mono`} placeholder="https://login.huawei.com/..." /></Field>
             <div className="flex items-center justify-between rounded-md bg-[var(--color-bg-base)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]"><span>密码状态：{config?.password_configured ? '已配置' : '未配置'}</span><span>保存后会清理旧 Cookie，防止账号串用</span></div>
-            <div className="flex gap-2"><Button loading={saving} onClick={saveConfig}><Save size={14} />保存授权</Button><Button variant="outline" loading={refreshing} onClick={refreshLogin}><UserRoundCheck size={14} />验证登录</Button></div>
+            <div className="flex gap-2"><Button loading={savingConfig} onClick={saveConfig}><Save size={14} />保存授权</Button><Button variant="outline" loading={refreshing} onClick={refreshLogin}><UserRoundCheck size={14} />保存并验证</Button></div>
           </CardContent>
         </Card>
 
@@ -109,7 +120,7 @@ export default function HubOperations({ credential, reloadCredential, onError }:
 
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><RefreshCw size={16} />刷新设置</CardTitle><CardDescription>按 Cron 周期主动更新授权，接口执行时仍保留失效重登兜底。</CardDescription></CardHeader>
-          <CardContent className="space-y-4"><Field label="刷新 Cron（5 段）"><div className="flex gap-2"><input value={cron} onChange={event => setCron(event.target.value)} className={`${inputClass} font-mono`} /><Button variant="outline" loading={saving} onClick={saveCron}>保存计划</Button></div></Field><div className="grid grid-cols-2 gap-3"><SmallInfo label="最近获取" value={formatTime(credential?.acquired_at)} /><SmallInfo label="下次刷新" value={formatTime(credential?.next_run)} /></div>{credential?.message && credential.last_result === 'failed' && <div className="rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{credential.message}</div>}</CardContent>
+          <CardContent className="space-y-4"><Field label="刷新 Cron（5 段）"><div className="flex gap-2"><input value={cron} onChange={event => setCron(event.target.value)} className={`${inputClass} font-mono`} /><Button variant="outline" loading={savingCron} onClick={saveCron}>保存计划</Button></div></Field><div className="grid grid-cols-2 gap-3"><SmallInfo label="最近获取" value={formatTime(credential?.acquired_at)} /><SmallInfo label="下次刷新" value={formatTime(credential?.next_run)} /></div>{credential?.message && credential.last_result === 'failed' && <div className="rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{credential.message}</div>}</CardContent>
         </Card>
 
         <SystemMcpCard info={systemMcp} />
@@ -124,13 +135,13 @@ function CredentialHeatStrip({ usage }: { usage: CredentialUsage | null }) {
     const padding = Array.from({ length: Math.max(0, 60 - recent.length) }, () => null)
     return [...padding, ...recent]
   }, [usage])
-  return <div className="flex gap-px">{cells.map((record, index) => <span key={record?.id ?? `empty-${index}`} title={record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'} className="h-5 min-w-0 flex-1 rounded-[2px]" style={{ background: !record ? '#e5e7eb' : record.relogin ? '#f59e0b' : record.ok ? '#22c55e' : '#ef4444' }} />)}</div>
+  return <div className="flex gap-px">{cells.map((record, index) => { const label = record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'; return <span key={record?.id ?? `empty-${index}`} role="img" tabIndex={0} aria-label={label} title={label} className="h-5 min-w-0 flex-1 rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500" style={{ background: !record ? '#e5e7eb' : record.relogin ? '#f59e0b' : record.ok ? '#22c55e' : '#ef4444' }} /> })}</div>
 }
 
 function SystemMcpCard({ info }: { info: McpInfo | null }) {
   const endpoint = info ? `${window.location.origin}${info.endpoint}` : ''
-  const config = info ? JSON.stringify({ mcpServers: { [info.server_name]: { type: 'streamable-http', url: endpoint, ...(info.token_required ? { headers: { Authorization: `Bearer ${info.token}` } } : {}) } } }, null, 2) : ''
-  return <Card><CardHeader className="flex-row items-start justify-between"><div><CardTitle className="flex items-center gap-2"><ShieldCheck size={16} />系统管理 MCP</CardTitle><CardDescription>向受信任的 Agent 开放接口与分组管理能力。</CardDescription></div>{info && <span className={`rounded-full px-2.5 py-1 text-[10px] ${info.token_required ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{info.token_required ? 'Token 已启用' : '未设置 Token'}</span>}</CardHeader><CardContent className="space-y-3"><div className="flex gap-2"><input readOnly value={endpoint} className={`${inputClass} font-mono text-[11px]`} /><Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(endpoint)}><Copy size={14} /></Button></div><div className="flex items-center justify-between text-[11px]"><span className="text-[var(--color-text-tertiary)]">Agent 配置 JSON</span><button onClick={() => navigator.clipboard.writeText(config)} className="text-[var(--color-nav-bg)]">复制配置</button></div><pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-3 font-mono text-[10px] leading-5 text-slate-100">{config || '正在读取配置…'}</pre></CardContent></Card>
+  const config = info ? JSON.stringify({ mcpServers: { [info.server_name]: { type: 'streamable-http', url: endpoint, headers: { Authorization: 'Bearer <API_HUB_SYSTEM_MCP_TOKEN>' } } } }, null, 2) : ''
+  return <Card><CardHeader className="flex-row items-start justify-between"><div><CardTitle className="flex items-center gap-2"><ShieldCheck size={16} />系统管理 MCP</CardTitle><CardDescription>向受信任的 Agent 开放接口与分组管理能力；Token 只在服务端配置，不会回传浏览器。</CardDescription></div>{info && <span className={`rounded-full px-2.5 py-1 text-[10px] ${info.token_required ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{info.token_required ? 'Token 已启用' : '未配置，端点已禁用'}</span>}</CardHeader><CardContent className="space-y-3"><div className="flex gap-2"><input readOnly value={endpoint} className={`${inputClass} font-mono text-[11px]`} /><Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(endpoint)}><Copy size={14} /></Button></div><div className="flex items-center justify-between text-[11px]"><span className="text-[var(--color-text-tertiary)]">Agent 配置 JSON（请替换占位符）</span><button onClick={() => navigator.clipboard.writeText(config)} className="text-[var(--color-nav-bg)]">复制配置</button></div><pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-3 font-mono text-[10px] leading-5 text-slate-100">{config || '正在读取配置…'}</pre></CardContent></Card>
 }
 
 const inputClass = 'h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-xs outline-none focus:border-[var(--color-nav-bg)]'

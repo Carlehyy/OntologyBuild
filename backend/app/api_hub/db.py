@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS interfaces (
     headers       TEXT    NOT NULL DEFAULT '[]',   -- JSON: [{key,value}]
     body_type     TEXT    NOT NULL DEFAULT 'none', -- none|json|form|raw
     body_content  TEXT    NOT NULL DEFAULT '',
-    use_w3        INTEGER NOT NULL DEFAULT 1,
+    use_w3        INTEGER NOT NULL DEFAULT 0,
     mcp_enabled   INTEGER NOT NULL DEFAULT 0,
     open_enabled  INTEGER NOT NULL DEFAULT 0,
     http_enabled  INTEGER NOT NULL DEFAULT 0,
@@ -166,6 +166,28 @@ def _migrate(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_runs_proxy_key_id ON runs(proxy_key_id);
         """
     )
+    redaction_migration = conn.execute(
+        "SELECT value FROM settings WHERE key = 'run_payload_redaction_v2'"
+    ).fetchone()
+    if not redaction_migration:
+        # Historical snapshots predate the redaction boundary and may contain
+        # credentials. They are short-lived diagnostics, so remove their payload
+        # rather than continuing to expose unknown legacy secrets.
+        conn.execute(
+            "UPDATE runs SET request_snapshot = NULL, response_headers = NULL, "
+            "response_body = CASE WHEN response_body IS NULL OR response_body = '' "
+            "THEN response_body ELSE '（旧调用响应体已因安全升级清除）' END, "
+            "error = CASE WHEN error IS NULL OR error = '' THEN error "
+            "ELSE '（旧调用错误信息已因安全升级清除）' END"
+        )
+        conn.execute(
+            "UPDATE credential_usage SET error = CASE "
+            "WHEN error IS NULL OR error = '' THEN error "
+            "ELSE '（旧授权调用错误信息已因安全升级清除）' END"
+        )
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('run_payload_redaction_v2', 'done')"
+        )
 
 
 def get_setting(key: str, default=None):

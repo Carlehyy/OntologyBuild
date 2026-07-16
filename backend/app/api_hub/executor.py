@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from typing import Any
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
 from . import config, credential, db
+from .outbound_security import OutboundTargetError, request_with_safe_redirects
 
 _LOGIN_HOST = "login.huawei.com"
 _MAX_BODY_CHARS = 1_000_000
@@ -38,6 +39,11 @@ _SENSITIVE_NAME_RE = re.compile(
     r"(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)",
     re.IGNORECASE,
 )
+_SENSITIVE_TEXT_RE = re.compile(
+    r"(?i)\b(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)"
+    r"\b(\s*[:=]\s*)([^\s,;&]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 
 
 @dataclass
@@ -157,7 +163,45 @@ def _redact_mapping(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_mapping(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                return json.dumps(
+                    _redact_mapping(json.loads(stripped)), ensure_ascii=False
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return _redact_text(value)
     return value
+
+
+def _redact_text(text: str) -> str:
+    text = _BEARER_RE.sub("Bearer ***", text)
+    return _SENSITIVE_TEXT_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}***",
+        text,
+    )
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parsed = urlsplit(url or "")
+        query = [
+            (key, str(_redact_value(key, value)))
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        ]
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode(query, doseq=True),
+                "",
+            )
+        )
+    except ValueError:
+        return _redact_text(url or "")
 
 
 def _redact_body(value: Any, content_type: str | None) -> Any:
@@ -185,7 +229,14 @@ def _redact_body(value: Any, content_type: str | None) -> Any:
             f"{key}={_redact_value(key, item)}"
             for key, item in parse_qsl(text, keep_blank_values=True)
         )
-    return text
+    return _redact_text(text)
+
+
+def _redact_response_body(value: str, content_type: str | None) -> str:
+    redacted = _redact_body(value or "", content_type)
+    return redacted if isinstance(redacted, str) else json.dumps(
+        redacted, ensure_ascii=False
+    )
 
 
 def _redact_headers(headers: dict[str, str]) -> list[dict[str, str]]:
@@ -214,7 +265,6 @@ def _build_kwargs(
     kwargs: dict[str, Any] = {
         "params": query or None,
         "timeout": config.HTTP_TIMEOUT,
-        "allow_redirects": True,
     }
 
     body_for_snapshot: Any = _UNSET
@@ -263,7 +313,7 @@ def _build_kwargs(
     kwargs["headers"] = headers or None
     snapshot = {
         "method": iface.get("method"),
-        "url": iface.get("url"),
+        "url": _redact_url(iface.get("url") or ""),
         "query_params": [
             {"key": key, "value": str(_redact_value(key, value))}
             for key, value in query
@@ -307,14 +357,13 @@ def _blank_result() -> dict:
 def _session_for_request(use_w3: bool, result: dict) -> requests.Session | None:
     if not use_w3:
         session = requests.Session()
-        # Preserve the existing API-Hub behavior for internal/self-signed services.
-        session.verify = False
+        session.verify = config.TLS_CA_BUNDLE or True
         return session
 
     session = credential.build_session_from_saved()
     if session is None or credential.saved_is_expired():
         had_session = session is not None
-        status = credential.refresh()
+        status = credential.refresh(force=False)
         if status.get("last_result") != "success":
             result["error"] = (
                 "该接口需要 W3 登录态，自动登录失败："
@@ -366,7 +415,7 @@ def run_interface(
     kwargs, snapshot = _build_kwargs(iface, overrides, use_w3=use_w3, session=session)
     start = time.perf_counter()
     try:
-        resp = session.request(method, url, **kwargs)
+        resp = request_with_safe_redirects(session, method, url, **kwargs)
         if use_w3 and _looks_expired(resp):
             status = credential.refresh()
             if status.get("last_result") == "success":
@@ -375,7 +424,9 @@ def run_interface(
                     kwargs, snapshot = _build_kwargs(
                         iface, overrides, use_w3=use_w3, session=session2
                     )
-                    resp = session2.request(method, url, **kwargs)
+                    resp = request_with_safe_redirects(
+                        session2, method, url, **kwargs
+                    )
                     result["relogin"] = True
                 else:
                     result["error"] = "登录态疑似过期，自动重登后仍未能建立会话"
@@ -400,11 +451,15 @@ def run_interface(
         result["ok"] = result["error"] is None
     except requests.Timeout as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"请求超时：{exc}"
+        result["error"] = _redact_text(f"请求超时：{exc}")
         result["error_type"] = "timeout"
+    except OutboundTargetError as exc:
+        result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+        result["error"] = f"目标地址被安全策略拒绝：{exc}"
+        result["error_type"] = "ssrf_blocked"
     except requests.RequestException as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"请求失败：{exc}"
+        result["error"] = _redact_text(f"请求失败：{exc}")
         result["error_type"] = "network"
 
     _save_run(iface, result, overrides, snapshot)
@@ -423,7 +478,7 @@ def _save_run(
     if snapshot is None:
         snapshot = {
             "method": iface.get("method"),
-            "url": iface.get("url"),
+            "url": _redact_url(iface.get("url") or ""),
             "query_params": [
                 {
                     "key": item.get("key", ""),
@@ -464,8 +519,10 @@ def _save_run(
                     _redact_response_headers(result["response_headers"]),
                     ensure_ascii=False,
                 ),
-                result["response_body"],
-                result["error"],
+                _redact_response_body(
+                    result["response_body"], result.get("content_type")
+                ),
+                _redact_text(result["error"]) if result["error"] else None,
                 1 if result["relogin"] else 0,
                 overrides.source,
                 overrides.proxy_key_id,
@@ -486,4 +543,11 @@ def _save_run(
             (interface_id, interface_id, config.MAX_RUNS_PER_INTERFACE),
         )
     if iface.get("use_w3"):
-        db.record_credential_usage(iface, result, now)
+        db.record_credential_usage(
+            iface,
+            {
+                **result,
+                "error": _redact_text(result["error"]) if result["error"] else None,
+            },
+            now,
+        )
