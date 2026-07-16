@@ -351,6 +351,45 @@ def test_validate_definitions_persists_complete_n8n_publish_attestation(
     assert version.definition["n8n"]["validation_attestation"] == attestation
 
 
+def test_validate_definitions_recovers_internal_evidence_from_snapshot_hash(
+        pipelines_client, client, auth_headers, db, draft_record):
+    """旧预览缺 workflow_evidence 时，平台用已核对的 snapshot hash 自动恢复。"""
+    preview = client.post(
+        f"/api/v2/pipelines/{draft_record.pipeline_id}/dry-run",
+        headers=auth_headers,
+    )
+    assert preview.status_code == 200, preview.text
+    dry_run_id = preview.json()["dry_run_id"]
+
+    from app.data_channel.pipelines.router import _DRY_RUN_BUCKET, _dry_run_uri
+    from app.services.storage_service import get_storage_service
+
+    storage = get_storage_service()
+    payload = json.loads(storage.get_object(
+        _dry_run_uri(draft_record.pipeline_id, dry_run_id)).decode("utf-8"))
+    engine_meta = payload["engine_meta"]
+    assert engine_meta.get("workflow_snapshot_hash")
+    engine_meta.pop("workflow_evidence", None)
+    storage.put_bytes(
+        _DRY_RUN_BUCKET,
+        f"dry-runs/{draft_record.pipeline_id}/{dry_run_id}.json",
+        json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        content_type="application/json",
+    )
+
+    validation = client.post(
+        f"/api/v2/pipelines/{draft_record.pipeline_id}/validate-definitions",
+        params={"dry_run_id": dry_run_id},
+        headers=auth_headers,
+        json={"column_definitions": VALIDATED_COLUMNS},
+    )
+
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["valid"] is True
+    db.refresh(draft_record)
+    assert service.validation_attestation(draft_record) is not None
+
+
 def test_column_definition_change_invalidates_n8n_publish_attestation(
         pipelines_client, client, auth_headers, db, draft_record):
     assert _validate_for_publish(
