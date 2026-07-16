@@ -198,12 +198,36 @@ def _summarize(name: str, result: dict) -> str:
     return "完成"
 
 
+def resolve_selected_target(db: Session, target_record_id: str | None) -> N8nPipeline | None:
+    """Resolve and validate the explicit pipeline chosen in the chat composer."""
+    if not target_record_id:
+        return None
+    rec = service.require_record(db, target_record_id)
+    service.require_orchestrable(db, rec, service.get_n8n_client(db))
+    return rec
+
+
+def selected_target_instruction(rec: N8nPipeline) -> str:
+    """Stable LLM context: pin existing-pipeline operations to the selected record id."""
+    pipeline_id = rec.pipeline_id or "未生成"
+    return (
+        "用户已在界面明确选择本轮操作目标："
+        f"「{rec.name}」（数据管家 record_id={rec.id}，平台 pipeline_id={pipeline_id}）。"
+        "凡本轮涉及查看、编排、体检、执行或诊断现有流水线，必须直接使用这个 record_id，"
+        "不要按名称猜测、不要改选其他流水线，也无需先调用 list_pipelines。"
+        "修改前仍须按规则先调用 get_workflow。"
+        "如果用户明确要求新建一条独立流水线，则不要修改该目标，只把它视为参考上下文。"
+    )
+
+
 def run_steward_turn(db: Session, user, question: str,
                      conversation_id: Optional[str] = None,
-                     model_id: Optional[str] = None) -> Iterator[dict]:
+                     model_id: Optional[str] = None,
+                     target_record_id: Optional[str] = None) -> Iterator[dict]:
     """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。"""
     try:
-        yield from _run(db, user, question, conversation_id, model_id)
+        yield from _run(
+            db, user, question, conversation_id, model_id, target_record_id)
     except Exception as e:  # noqa: BLE001
         logger.exception("数据管家回合失败")
         yield {"type": "error", "message": f"数据管家执行失败: {e}"}
@@ -212,7 +236,8 @@ def run_steward_turn(db: Session, user, question: str,
 
 
 def _run(db: Session, user, question: str,
-         conversation_id: Optional[str], model_id: Optional[str]) -> Iterator[dict]:
+         conversation_id: Optional[str], model_id: Optional[str],
+         target_record_id: Optional[str]) -> Iterator[dict]:
     cfg = select_llm_model_config(db, model_id=model_id)
     call_kwargs = llm_call_kwargs(cfg)
     if not call_kwargs:
@@ -236,6 +261,8 @@ def _run(db: Session, user, question: str,
                .order_by(StewardMessage.created_at.desc())
                .limit(_HISTORY_LIMIT).all())[::-1]
 
+    selected_target = resolve_selected_target(db, target_record_id)
+
     db.add(StewardMessage(conversation_id=conv.id, role="user", content=question))
     db.commit()
 
@@ -254,6 +281,11 @@ def _run(db: Session, user, question: str,
             "这是工具路由提示，不是最终结论；若用户表达与初判冲突，以用户原话为准。"
         ),
     })
+    if selected_target is not None:
+        messages.append({
+            "role": "system",
+            "content": selected_target_instruction(selected_target),
+        })
     messages.append({"role": "user", "content": question})
 
     runner = ToolRunner(db, user_id, conv.id)

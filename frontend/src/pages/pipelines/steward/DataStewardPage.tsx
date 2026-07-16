@@ -80,6 +80,7 @@ interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
   steps: StewardStep[]
+  targetName?: string
   loading?: boolean
   error?: string
 }
@@ -240,10 +241,15 @@ export default function DataStewardPage() {
   const [busy, setBusy] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const messageInputRef = useRef<HTMLInputElement>(null)
 
   const [records, setRecords] = useState<StewardPipeline[]>([])
   const [recordsLoading, setRecordsLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(searchParams.get('record'))
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(searchParams.get('record'))
+  const [targetMenuOpen, setTargetMenuOpen] = useState(false)
+  const [targetSearch, setTargetSearch] = useState('')
+  const targetPickerRef = useRef<HTMLDivElement>(null)
   const [editTarget, setEditTarget] = useState<Pipeline | null>(null)
   const n8nApiUrl = status?.n8n?.api_url ?? ''
   // 拖拽调整对话区/审批面板宽度（仅宽屏有效）
@@ -300,6 +306,28 @@ export default function DataStewardPage() {
   }, [loadStatus, loadRecords, loadConversations])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
   useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!targetPickerRef.current?.contains(event.target as globalThis.Node)) setTargetMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [])
+
+  const selectedRecord = records.find(record => record.id === selectedRecordId) || null
+  const filteredTargetRecords = records.filter(record => {
+    const keyword = targetSearch.trim().toLowerCase()
+    if (!keyword) return true
+    return record.name.toLowerCase().includes(keyword)
+      || record.description.toLowerCase().includes(keyword)
+      || record.id.toLowerCase().includes(keyword)
+  })
+
+  useEffect(() => {
+    if (selectedRecordId && !recordsLoading && !records.some(record => record.id === selectedRecordId)) {
+      setSelectedRecordId(null)
+    }
+  }, [records, recordsLoading, selectedRecordId])
 
   // 受管流水线面板尽量实时：HTTP 轮询（非 WebSocket）——数据管家或流水线列表新建/
   // 改动流水线后，无需手动刷新即可反映可编排的那批。仅在标签页可见时轮询，切回时立即刷新一次。
@@ -376,7 +404,14 @@ export default function DataStewardPage() {
     setInput('')
     setBusy(true)
 
-    const userMsg: ChatMsg = { id: nextId(), role: 'user', content: text, steps: [] }
+    const target = selectedRecord
+    const userMsg: ChatMsg = {
+      id: nextId(),
+      role: 'user',
+      content: text,
+      steps: [],
+      targetName: target?.name,
+    }
     const botMsg: ChatMsg = { id: nextId(), role: 'assistant', content: '', steps: [], loading: true }
     setMessages(prev => [...prev, userMsg, botMsg])
 
@@ -389,7 +424,7 @@ export default function DataStewardPage() {
     let touched: string[] = []
     try {
       await streamStewardChat(
-        { message: text, conversationId },
+        { message: text, conversationId, targetRecordId: target?.id },
         e => {
           if (e.type === 'meta') setConversationId(e.conversationId)
           else if (e.type === 'step') {
@@ -506,6 +541,11 @@ export default function DataStewardPage() {
                 {messages.map(msg => msg.role === 'user' ? (
                   <div key={msg.id} className="flex justify-end gap-3">
                     <div className="max-w-[82%] rounded-2xl rounded-br-md bg-teal-700 px-4 py-3 text-white shadow-sm">
+                      {msg.targetName && (
+                        <p className="mb-1.5 flex items-center justify-end gap-1 text-[10px] font-medium text-teal-100">
+                          <Workflow size={10} /> 操作目标 · {msg.targetName}
+                        </p>
+                      )}
                       <p className="whitespace-pre-line text-sm leading-relaxed">{msg.content}</p>
                     </div>
                     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700">
@@ -537,20 +577,146 @@ export default function DataStewardPage() {
           </div>
 
           <div className="bg-white px-4 py-3.5">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white py-2 pl-3.5 pr-2 shadow-sm transition focus-within:border-teal-500 focus-within:ring-4 focus-within:ring-teal-500/10">
-              <input
-                placeholder={n8nReady ? '描述你要的数据流水线，或让管家检查/修改现有流水线…' : '请先完成 n8n 配置'}
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && send()}
-                disabled={busy}
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400 disabled:opacity-50"
-              />
-              <button onClick={() => send()} disabled={!input.trim() || busy}
-                aria-label="发送消息"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition hover:bg-teal-800 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-25">
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              </button>
+            <div
+              ref={targetPickerRef}
+              className="relative rounded-2xl border border-slate-200 bg-white shadow-sm transition focus-within:border-teal-500 focus-within:ring-4 focus-within:ring-teal-500/10"
+            >
+              <div className="flex min-h-10 items-center gap-2 border-b border-slate-100 px-3.5 py-2">
+                <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                  <Workflow size={12} className="text-teal-700" /> 操作目标
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-haspopup="listbox"
+                  aria-expanded={targetMenuOpen}
+                  onClick={() => {
+                    setTargetMenuOpen(open => !open)
+                    setTargetSearch('')
+                  }}
+                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1 text-left text-xs transition ${
+                    selectedRecord
+                      ? 'bg-teal-50 text-teal-800 hover:bg-teal-100'
+                      : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {selectedRecord ? selectedRecord.name : recordsLoading ? '正在加载可编排流水线…' : '选择一条可编排流水线（可选）'}
+                  </span>
+                  {!recordsLoading && (
+                    <span className="shrink-0 text-[10px] text-slate-400">
+                      {selectedRecord ? `${selectedRecord.summary.node_count} 个节点` : `${records.length} 条`}
+                    </span>
+                  )}
+                  <ChevronDown size={12} className={`shrink-0 transition-transform ${targetMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {selectedRecord && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setSelectedRecordId(null)
+                      setTargetMenuOpen(false)
+                      messageInputRef.current?.focus()
+                    }}
+                    aria-label="清除目标流水线"
+                    title="清除目标流水线"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {targetMenuOpen && !busy && (
+                <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_52px_rgba(15,23,42,0.16)]">
+                  <div className="border-b border-slate-100 p-2.5">
+                    <div className="relative">
+                      <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        autoFocus
+                        value={targetSearch}
+                        onChange={event => setTargetSearch(event.target.value)}
+                        onKeyDown={event => {
+                          if (event.key === 'Escape') setTargetMenuOpen(false)
+                          event.stopPropagation()
+                        }}
+                        placeholder="搜索流水线名称或描述"
+                        className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs outline-none transition focus:border-teal-400 focus:bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div role="listbox" aria-label="可编排流水线" className="max-h-64 overflow-y-auto p-1.5">
+                    {recordsLoading ? (
+                      <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400">
+                        <Loader2 size={13} className="animate-spin" /> 正在加载
+                      </div>
+                    ) : filteredTargetRecords.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-xs leading-5 text-slate-400">
+                        {records.length === 0 ? '当前没有可编排流水线，可先让数据管家新建一条。' : '没有匹配的可编排流水线。'}
+                      </div>
+                    ) : filteredTargetRecords.map(record => (
+                      <button
+                        key={record.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selectedRecordId === record.id}
+                        onClick={() => {
+                          setSelectedRecordId(record.id)
+                          setExpandedId(record.id)
+                          setTargetMenuOpen(false)
+                          setTargetSearch('')
+                          messageInputRef.current?.focus()
+                        }}
+                        className={`flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${
+                          selectedRecordId === record.id
+                            ? 'bg-teal-50 text-teal-900'
+                            : 'text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                          selectedRecordId === record.id ? 'bg-white text-teal-700' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          <Workflow size={13} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className="truncate text-xs font-semibold">{record.name}</span>
+                            <span className="shrink-0 text-[10px] text-slate-400">{record.summary.node_count} 个节点</span>
+                          </span>
+                          <span className="mt-0.5 block truncate text-[10px] text-slate-400">
+                            {record.description || '暂未设置描述'}
+                          </span>
+                        </span>
+                        {selectedRecordId === record.id && <CheckCircle2 size={14} className="mt-1 shrink-0 text-teal-600" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 px-2 py-2 pl-3.5">
+                <input
+                  ref={messageInputRef}
+                  placeholder={n8nReady
+                    ? selectedRecord
+                      ? `告诉数据管家要如何操作「${selectedRecord.name}」…`
+                      : '描述你要新建的流水线，或先选择一条现有流水线…'
+                    : '请先完成 n8n 配置'}
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) void send()
+                  }}
+                  disabled={busy}
+                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400 disabled:opacity-50"
+                />
+                <button onClick={() => void send()} disabled={!input.trim() || busy}
+                  aria-label="发送消息"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition hover:bg-teal-800 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-25">
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                </button>
+              </div>
             </div>
           </div>
         </section>

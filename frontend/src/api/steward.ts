@@ -254,7 +254,12 @@ function apiRoot(): string {
 }
 
 export async function streamStewardChat(
-  body: { message: string; conversationId?: string | null; modelId?: string | null },
+  body: {
+    message: string
+    conversationId?: string | null
+    modelId?: string | null
+    targetRecordId?: string | null
+  },
   onEvent: (e: StewardEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -266,6 +271,7 @@ export async function streamStewardChat(
       message: body.message,
       conversationId: body.conversationId || undefined,
       modelId: body.modelId || undefined,
+      targetRecordId: body.targetRecordId || undefined,
       stream: true,
     }),
     signal,

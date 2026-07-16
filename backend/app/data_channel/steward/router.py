@@ -92,6 +92,7 @@ class ChatBody(BaseModel):
     message: str
     conversationId: Optional[str] = None
     modelId: Optional[str] = None
+    targetRecordId: Optional[str] = None
     stream: bool = True
 
 
@@ -108,7 +109,8 @@ def chat(body: ChatBody, db: Session = Depends(get_db),
     if not body.stream:
         events = list(run_steward_turn(db, current_user, body.message,
                                        conversation_id=body.conversationId,
-                                       model_id=body.modelId))
+                                       model_id=body.modelId,
+                                       target_record_id=body.targetRecordId))
         answer = next((e for e in events if e["type"] == "answer"), None)
         error = next((e for e in events if e["type"] == "error"), None)
         meta = next((e for e in events if e["type"] == "meta"), {})
@@ -132,7 +134,8 @@ def chat(body: ChatBody, db: Session = Depends(get_db),
         try:
             for event in run_steward_turn(session, user, body.message,
                                           conversation_id=body.conversationId,
-                                          model_id=body.modelId):
+                                          model_id=body.modelId,
+                                          target_record_id=body.targetRecordId):
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         finally:
             session.close()

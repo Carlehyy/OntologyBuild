@@ -248,7 +248,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <div className="text-sm text-slate-500 p-5 bg-slate-50 rounded-xl text-center space-y-2">
                   <Database size={22} className="mx-auto text-slate-300" />
                   <p>还没有「已发布且已启用」的流水线。</p>
-                  <p className="text-xs text-slate-400">请先在流水线编辑向导中完成发布并启用（设置主键组后发布即可挂接任务）。</p>
+                  <p className="text-xs text-slate-400">请先在编辑向导中发布流水线，再回到流水线列表打开启用开关。</p>
                   <button onClick={() => navigate('/data/pipelines')}
                     className="mt-1 inline-flex items-center gap-1 text-xs px-3 py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50 text-blue-600">
                     去流水线 <ArrowRight size={11} />

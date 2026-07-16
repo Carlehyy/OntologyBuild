@@ -214,7 +214,7 @@ export default function PipelineBuilderPage() {
     return (
       <div className="flex flex-col items-center justify-center gap-3 p-16 text-center">
         <p className="text-sm font-medium text-gray-700">「{pipeline.name}」是数据管家托管的 n8n 流水线</p>
-        <p className="text-xs text-gray-400">它没有画布节点，创建与编排在数据管家中通过对话完成；发布与启用在流水线列表的编辑向导</p>
+        <p className="text-xs text-gray-400">它没有画布节点，创建与编排在数据管家中通过对话完成；发布在编辑向导完成，启用由流水线列表开关控制</p>
         <button
           onClick={() => navigate(rid ? `/data/pipelines/steward?record=${encodeURIComponent(rid)}` : '/data/pipelines/steward')}
           className="mt-1 px-4 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700"

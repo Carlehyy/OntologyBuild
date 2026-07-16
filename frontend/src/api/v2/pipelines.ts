@@ -63,13 +63,6 @@ export interface DryRunResult {
   rows_in: number
   rows_out: number
   outputs: DryRunOutput[]
-  can_save: boolean
-}
-
-export interface CommitResult {
-  run_id: string
-  curated_dataset_ids: string[]
-  lake_rows: number
 }
 
 /** 试运行暂存数据的分页读取结果 */
@@ -167,15 +160,12 @@ const pipelinesApi = {
   setEnabled: (id: string, enabled: boolean) =>
     apiClientV2.patch<Pipeline>(`/pipelines/${id}/enabled`, { enabled }).then(r => r),
 
-  /** 试运行：真实执行但不写资产湖，返回产物预览 + 入湖闸门预检 */
+  /** 试运行：真实执行但不写资产湖，返回产物预览与契约诊断 */
   dryRun: (id: string, maxRows?: number) =>
     apiClientV2.post<DryRunResult>(`/pipelines/${id}/dry-run`, null, { params: { max_rows: maxRows ?? 100 } }).then(r => r),
   /** 分页读取试运行暂存的完整输出（「展开查看全部数据」） */
   dryRunRows: (id: string, dryRunId: string, params?: { output_index?: number; page?: number; page_size?: number }) =>
     apiClientV2.get<DryRunRowsPage>(`/pipelines/${id}/dry-run/${dryRunId}/rows`, { params }).then(r => r),
-  /** 把试运行输出按原样写入资产湖（不重新执行） */
-  commitDryRun: (id: string, dryRunId: string) =>
-    apiClientV2.post<CommitResult>(`/pipelines/${id}/dry-run/${dryRunId}/commit`).then(r => r),
 
   /** Runs */
   run: (id: string) =>

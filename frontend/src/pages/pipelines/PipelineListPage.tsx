@@ -8,6 +8,7 @@ import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { useToast } from '@/components/ui/Toast'
 import RunPreviewModal from './RunPreviewModal'
 import PipelineEditWizard from './PipelineEditWizard'
 
@@ -33,6 +34,27 @@ const RUN_STATUS_META: Record<string, { icon: React.ReactNode; label: string; co
 
 function isN8nPipeline(pl: Pipeline): boolean {
   return (pl.definition as { engine?: string } | null)?.engine === 'n8n'
+}
+
+function mergePipeline(current: Pipeline, updated: Pipeline): Pipeline {
+  const currentDefinition = current.definition as Record<string, unknown> | null
+  const updatedDefinition = updated.definition as Record<string, unknown> | null
+  const currentN8n = currentDefinition?.n8n as Record<string, unknown> | undefined
+  const updatedN8n = updatedDefinition?.n8n as Record<string, unknown> | undefined
+
+  return {
+    ...current,
+    ...updated,
+    definition: updatedDefinition
+      ? {
+          ...currentDefinition,
+          ...updatedDefinition,
+          ...(currentN8n || updatedN8n
+            ? { n8n: { ...currentN8n, ...updatedN8n } }
+            : {}),
+        } as Pipeline['definition']
+      : current.definition,
+  }
 }
 
 function formatTime(iso?: string | null): string {
@@ -71,6 +93,7 @@ function EnabledSwitch({ on, busy, lockReason, onToggle, onLocked }: {
 
 export default function PipelineListPage() {
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [searchParams] = useSearchParams()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [loading, setLoading] = useState(true)
@@ -81,7 +104,6 @@ export default function PipelineListPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
-  const [pageError, setPageError] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
@@ -93,7 +115,6 @@ export default function PipelineListPage() {
 
   const load = useCallback(() => {
     setLoading(true)
-    setPageError('')
     pipelinesApi.listPage({
       search: search || undefined,
       engine: filterSource || undefined,
@@ -110,10 +131,14 @@ export default function PipelineListPage() {
       .catch(() => {
         setPipelines([])
         setTotal(0)
-        setPageError('流水线列表加载失败，请检查服务连接后重试。')
+        toast({
+          tone: 'error',
+          title: '流水线列表加载失败',
+          description: '请检查服务连接后重试。',
+        })
       })
       .finally(() => setLoading(false))
-  }, [filterEnabled, filterSource, filterStatus, page, pageSize, search])
+  }, [filterEnabled, filterSource, filterStatus, page, pageSize, search, toast])
 
   useEffect(() => { load() }, [load])
 
@@ -121,16 +146,78 @@ export default function PipelineListPage() {
     stewardApi.status().then(s => setN8nApiUrl(s.n8n.api_url)).catch(() => {})
   }, [])
 
+  const matchesActiveFilters = useCallback((pl: Pipeline) => {
+    const keyword = search.trim().toLowerCase()
+    if (keyword && !pl.name.toLowerCase().includes(keyword) && !pl.id.toLowerCase().includes(keyword)) {
+      return false
+    }
+    if (filterSource && (filterSource === 'n8n') !== isN8nPipeline(pl)) return false
+    if (filterStatus && normStatus(pl.status) !== filterStatus) return false
+    if (filterEnabled) {
+      const enabled = pl.enabled ?? true
+      if ((filterEnabled === 'enabled') !== enabled) return false
+    }
+    return true
+  }, [filterEnabled, filterSource, filterStatus, search])
+
+  const insertPipelineLocally = (pl: Pipeline) => {
+    if (matchesActiveFilters(pl)) {
+      setTotal(current => current + 1)
+      if (page === 1) {
+        setPipelines(current => [pl, ...current.filter(item => item.id !== pl.id)].slice(0, pageSize))
+      }
+    }
+    toast({
+      tone: 'success',
+      title: '流水线已创建',
+      description: page === 1 && matchesActiveFilters(pl)
+        ? `「${pl.name}」已加入当前列表。`
+        : `「${pl.name}」已创建，可调整筛选或返回第一页查看。`,
+    })
+  }
+
+  const updatePipelineLocally = (updated: Pipeline) => {
+    const current = pipelines.find(item => item.id === updated.id)
+    if (!current) return
+    const merged = mergePipeline(current, updated)
+    const remainsVisible = matchesActiveFilters(merged)
+    setPipelines(items => remainsVisible
+      ? items.map(item => item.id === merged.id ? merged : item)
+      : items.filter(item => item.id !== merged.id))
+    if (!remainsVisible) setTotal(value => Math.max(0, value - 1))
+    toast({
+      tone: 'success',
+      title: '流水线已更新',
+      description: remainsVisible
+        ? `「${merged.name}」的信息已局部更新。`
+        : `「${merged.name}」已更新，并因当前筛选条件从列表中移除。`,
+    })
+  }
+
   const handleToggleEnabled = async (pl: Pipeline) => {
     const next = !(pl.enabled ?? true)
     setTogglingId(pl.id)
     setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: next } : p))
     try {
       await pipelinesApi.setEnabled(pl.id, next)
+      const updated = { ...pl, enabled: next }
+      if (!matchesActiveFilters(updated)) {
+        setPipelines(items => items.filter(item => item.id !== pl.id))
+        setTotal(value => Math.max(0, value - 1))
+      }
+      toast({
+        tone: 'success',
+        title: next ? '流水线已启用' : '流水线已停用',
+        description: `「${pl.name}」的启用状态已更新。`,
+      })
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: !next } : p))
-      setPageError(err?.detail || err?.message || '切换启用状态失败')
+      toast({
+        tone: 'error',
+        title: '启用状态更新失败',
+        description: err?.detail || err?.message || '请稍后重试。',
+      })
     } finally {
       setTogglingId(null)
     }
@@ -138,16 +225,27 @@ export default function PipelineListPage() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return
+    const target = deleteTarget
     setDeleting(true)
     try {
-      await pipelinesApi.delete(deleteTarget.id)
+      await pipelinesApi.delete(target.id)
       setDeleteTarget(null)
-      load()
+      setPipelines(items => items.filter(item => item.id !== target.id))
+      setTotal(value => Math.max(0, value - 1))
+      toast({
+        tone: 'success',
+        title: isN8nPipeline(target) ? '流水线已归档' : '流水线已删除',
+        description: `「${target.name}」已从当前列表移除。`,
+      })
     } catch (e: unknown) {
       // 典型场景：被调度任务引用（后端引用保护 400）
       const err = e as { detail?: string; message?: string }
       setDeleteTarget(null)
-      setPageError(err?.detail || err?.message || '归档失败')
+      toast({
+        tone: 'error',
+        title: isN8nPipeline(target) ? '流水线归档失败' : '流水线删除失败',
+        description: err?.detail || err?.message || '请稍后重试。',
+      })
     } finally {
       setDeleting(false)
     }
@@ -161,21 +259,8 @@ export default function PipelineListPage() {
     setFilterEnabled('')
     setPage(1)
   }
-  const refreshFirstPage = () => {
-    if (page === 1) load()
-    else setPage(1)
-  }
-
   return (
     <div className="space-y-4 pb-4">
-      {pageError && (
-        <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <XCircle size={15} className="mt-0.5 shrink-0" />
-          <span className="flex-1">{pageError}</span>
-          <button onClick={() => setPageError('')} aria-label="关闭错误提示" className="text-red-400 hover:text-red-700"><X size={14} /></button>
-        </div>
-      )}
-
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
         <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
@@ -297,7 +382,7 @@ export default function PipelineListPage() {
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
                         <span className="inline-flex whitespace-nowrap items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700"
-                          title="由数据管家托管的 n8n 流水线：编排在数据管家，发布与启用在本列表的编辑向导">
+                          title="由数据管家托管的 n8n 流水线：编排在数据管家，发布在编辑向导，启用由本列表开关控制">
                           <Sparkles size={10} /> n8n 流水线
                         </span>
                       ) : (
@@ -324,7 +409,11 @@ export default function PipelineListPage() {
                           busy={togglingId === pl.id}
                           lockReason={enableLockReason}
                           onToggle={() => handleToggleEnabled(pl)}
-                          onLocked={() => enableLockReason && setPageError(enableLockReason)}
+                          onLocked={() => enableLockReason && toast({
+                            tone: 'warning',
+                            title: '当前无法切换启用状态',
+                            description: enableLockReason,
+                          })}
                         />
                         <span className={`text-xs whitespace-nowrap ${enabled ? 'text-teal-700' : 'text-slate-400'}`}>
                           {enabled ? '已启用' : '未启用'}
@@ -406,7 +495,7 @@ export default function PipelineListPage() {
                         <button
                           onClick={() => setPreviewTarget(pl)}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                          title="执行：先试运行看输出，确认后再保存入资产湖"
+                          title="试执行流水线并查看输出"
                         >
                           <Play size={14} />
                         </button>
@@ -462,12 +551,11 @@ export default function PipelineListPage() {
         </div>
       )}
 
-      {/* 执行：试运行预览 → 确认入湖 */}
+      {/* 试执行：仅运行并查看输出，入湖统一由数据任务池负责 */}
       {previewTarget && (
         <RunPreviewModal
           pipeline={previewTarget}
           onClose={() => setPreviewTarget(null)}
-          onSaved={load}
         />
       )}
 
@@ -476,7 +564,10 @@ export default function PipelineListPage() {
         <PipelineEditWizard
           pipeline={editTarget}
           onClose={() => setEditTarget(null)}
-          onSaved={() => { setEditTarget(null); load() }}
+          onSaved={(updated) => {
+            setEditTarget(null)
+            updatePipelineLocally(updated)
+          }}
         />
       )}
 
@@ -484,15 +575,9 @@ export default function PipelineListPage() {
       {showCreate && (
         <PipelineCreateModal
           onClose={() => setShowCreate(false)}
-          onCreated={(_pl) => {
+          onCreated={(pl) => {
             setShowCreate(false)
-            refreshFirstPage()
-          }}
-          onN8nCreated={() => {
-            // 创建即在列表登记为未发布——留在列表让用户看到新行；
-            // 编排完善随时进数据管家，发布在本列表的编辑向导
-            setShowCreate(false)
-            refreshFirstPage()
+            insertPipelineLocally(pl)
           }}
         />
       )}
@@ -513,14 +598,14 @@ export default function PipelineListPage() {
 }
 
 function PipelineCreateModal({
-  pipeline, onClose, onCreated, onN8nCreated, onSaved,
+  pipeline, onClose, onCreated, onSaved,
 }: {
   pipeline?: Pipeline
   onClose: () => void
   onCreated?: (pl: Pipeline) => void
-  onN8nCreated?: (recordId: string) => void
   onSaved?: () => void
 }) {
+  const { toast } = useToast()
   const isEdit = !!pipeline
   const defaultMode = isEdit
     ? (isN8nPipeline(pipeline) ? 'n8n' : 'canvas')
@@ -530,19 +615,33 @@ function PipelineCreateModal({
   const [description, setDescription] = useState(pipeline?.description || '')
   const [mode, setMode] = useState<'canvas' | 'n8n'>(defaultMode)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
 
   const handleSubmit = async () => {
-    if (!name.trim()) { setError('请填写流水线名称'); return }
+    if (!name.trim()) {
+      toast({ tone: 'warning', title: '请填写流水线名称' })
+      return
+    }
     setSaving(true)
-    setError('')
     try {
       if (isEdit) {
         await pipelinesApi.update(pipeline.id, { name: name.trim(), description })
         onSaved?.()
       } else if (mode === 'n8n') {
         const res = await stewardApi.bootstrap(name.trim(), description)
-        onN8nCreated?.(res.record.id)
+        if (!res.record.pipelineId) throw new Error('n8n 流水线已创建，但未生成平台流水线记录。')
+        const pl = await pipelinesApi.get(res.record.pipelineId)
+        const definition = pl.definition as Record<string, unknown> | null
+        const n8n = definition?.n8n as Record<string, unknown> | undefined
+        onCreated?.({
+          ...pl,
+          definition: {
+            ...definition,
+            n8n: {
+              ...n8n,
+              n8n_workflow_id: res.record.n8nWorkflowId,
+            },
+          } as unknown as Pipeline['definition'],
+        })
       } else {
         const pl = await pipelinesApi.create({
           name: name.trim(),
@@ -553,7 +652,11 @@ function PipelineCreateModal({
       }
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      setError(err?.detail || err?.message || (isEdit ? '保存失败' : '创建失败'))
+      toast({
+        tone: 'error',
+        title: isEdit ? '流水线保存失败' : '流水线创建失败',
+        description: err?.detail || err?.message || '请稍后重试。',
+      })
     } finally {
       setSaving(false)
     }
@@ -618,7 +721,6 @@ function PipelineCreateModal({
               placeholder="流水线用途说明"
             />
           </div>
-          {error && <p className="text-red-500 text-xs">{error}</p>}
         </div>
         <div className="flex items-center justify-between mt-4">
           <p className="text-xs text-gray-400 max-w-[60%] leading-relaxed">

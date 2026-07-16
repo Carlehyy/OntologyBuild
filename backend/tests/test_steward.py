@@ -40,6 +40,37 @@ def test_steward_intent_router_does_not_default_every_turn_to_overview():
     assert classify_steward_intent("你好，先聊聊需求")["code"] == "consult"
 
 
+def test_chat_request_forwards_explicit_target(
+        client, auth_headers, monkeypatch):
+    captured = {}
+
+    def fake_turn(_db, _user, _question, conversation_id=None, model_id=None,
+                  target_record_id=None):
+        captured["conversation_id"] = conversation_id
+        captured["model_id"] = model_id
+        captured["target_record_id"] = target_record_id
+        yield {"type": "meta", "conversationId": "conv-1", "model": "test-model"}
+        yield {"type": "answer", "content": "收到", "touchedPipelineIds": [], "usage": {}}
+        yield {"type": "done"}
+
+    monkeypatch.setattr(
+        "app.data_channel.steward.router.run_steward_turn", fake_turn)
+    response = client.post(
+        "/api/v2/steward/chat",
+        headers=auth_headers,
+        json={
+            "message": "完善取数节点",
+            "conversationId": "conv-existing",
+            "targetRecordId": "record-selected",
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["conversation_id"] == "conv-existing"
+    assert captured["target_record_id"] == "record-selected"
+
+
 # ── 假 n8n 客户端 ──────────────────────────────────────────────────
 
 class FakeN8nClient:
@@ -198,6 +229,32 @@ def draft_record(db, fake_n8n):
     })
     assert "error" not in updated, updated
     return db.query(N8nPipeline).filter(N8nPipeline.id == rid).first()
+
+
+def test_selected_target_context_pins_stable_record_id(
+        db, fake_n8n, draft_record):
+    from app.data_channel.steward.orchestrator import (
+        resolve_selected_target, selected_target_instruction)
+
+    selected = resolve_selected_target(db, draft_record.id)
+    instruction = selected_target_instruction(selected)
+
+    assert selected.id == draft_record.id
+    assert f"record_id={draft_record.id}" in instruction
+    assert f"pipeline_id={draft_record.pipeline_id}" in instruction
+    assert "不要按名称猜测" in instruction
+
+
+def test_selected_target_rejects_pipeline_that_is_no_longer_orchestrable(
+        db, fake_n8n, draft_record):
+    from app.data_channel.steward.orchestrator import resolve_selected_target
+
+    shadow = db.query(Pipeline).filter(Pipeline.id == draft_record.pipeline_id).first()
+    shadow.status = "published"
+    db.commit()
+
+    with pytest.raises(StewardError, match="已发布"):
+        resolve_selected_target(db, draft_record.id)
 
 
 VALIDATED_COLUMNS = [
