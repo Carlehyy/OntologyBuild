@@ -240,7 +240,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   onOpenDocuments?: () => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [detail, setDetail] = useState<{ section: typeof SECTIONS[number]; el: CanvasElement } | null>(null)
+  const [detailStack, setDetailStack] = useState<{ section: typeof SECTIONS[number]; el: CanvasElement }[]>([])
   const [dgOpen, setDgOpen] = useState(false)
   const [dgKind, setDgKind] = useState<DiagramKind>('er')
   const [dgTarget, setDgTarget] = useState('')
@@ -296,6 +296,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   const targetSpec = DIAGRAM_TABS.find(t => t.kind === dgKind)?.needsTarget
   const targetOptions = targetSpec === 'scenario' ? scenarioNames
     : targetSpec === 'object' ? objectNames : []
+  const detail = detailStack[detailStack.length - 1] || null
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -354,7 +355,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                   {items.map(el => (
                     <button
                       key={el.id}
-                      onClick={() => setDetail({ section, el })}
+                      onClick={() => setDetailStack([{ section, el }])}
                       title="查看详情"
                       className="group block w-full text-left rounded-md bg-[var(--color-bg-base)] px-2.5 py-1.5 transition-colors hover:bg-[var(--color-bg-hover)] hover:ring-1 hover:ring-teal-200"
                     >
@@ -392,10 +393,19 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
           sectionKey={detail.section.key}
           el={detail.el}
           canvas={canvas}
-          onClose={() => setDetail(null)}
+          onClose={() => setDetailStack([])}
+          onBack={detailStack.length > 1
+            ? () => setDetailStack(stack => stack.slice(0, -1))
+            : undefined}
           onNavigate={(key, el) => {
             const sec = SECTIONS.find(s => s.key === key)
-            if (sec) setDetail({ section: sec, el })
+            if (sec) {
+              setDetailStack(stack => {
+                const current = stack[stack.length - 1]
+                if (current?.section.key === key && current.el.id === el.id) return stack
+                return [...stack, { section: sec, el }]
+              })
+            }
           }}
         />
       )}
