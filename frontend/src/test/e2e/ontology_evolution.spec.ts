@@ -146,16 +146,31 @@ test('complete branch → real-data trial → reviewed release works in the brow
       fieldMapping: { id: 'id', name: 'name', __primary_key__: 'id' },
       status: 'draft', confidence: 1,
     }],
-    linkMappings: [], sentinels: [],
+    linkMappings: [{
+      id: `link-map-browser-order-${suffix}`,
+      linkTypeId: `lt-browser-order-${suffix}`,
+      relationType: 'order_lineage',
+      srcDatasetId: dataset.id,
+      tgtDatasetId: dataset.id,
+      edgeDatasetId: null,
+      srcKey: 'id',
+      tgtKey: 'id',
+      fieldMapping: {},
+      status: 'draft',
+    }],
+    sentinels: [],
   })
 
-  // 日常入口不再要求用户选择版本：列表“查看”直接落到当前发布结构。
+  // 日常入口不再要求用户选择版本：列表“查看”先进入本体总览。
   await page.goto('/#/ontologies')
   const ontologyCard = page.locator('article').filter({ hasText: ontology.name })
   await ontologyCard.getByRole('button', { name: '查看', exact: true }).click()
-  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}\\?tab=design$`))
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}$`))
   await expect(page.getByTestId('current-release-version')).toHaveText('v0')
-  await expect(page.getByRole('button', { name: '打开图谱编辑器修改模型' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '本体总览' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('这里始终展示当前发布投影。')).toHaveCount(0)
+  await page.getByRole('button', { name: '查看当前发布图谱' }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph$`))
 
   await page.goto(`/#/ontologies/${ontology.id}`)
   await expect(page.getByTestId('current-release-version')).toHaveText('v0')
@@ -170,9 +185,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(draftRow.getByRole('button', { name: 'v0.1 更多操作' })).toBeVisible()
 
   await draftRow.getByRole('button', { name: '进入试跑' }).click()
-  await expect(page.getByText('隔离试跑结果')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByText('外部动作执行数：0')).toBeVisible()
-  await page.getByRole('button', { name: '关闭' }).click()
+  const trialDialog = page.getByRole('dialog', { name: '隔离试跑结果' })
+  await expect(trialDialog).toBeVisible({ timeout: 20_000 })
+  await expect(trialDialog.getByText('外部动作执行数：0')).toBeVisible()
+  await trialDialog.getByRole('button', { name: '关闭', exact: true }).click()
   await expect(draftRow).toContainText('试跑态')
   await expect(draftRow.getByRole('button', { name: '编辑模型' })).toHaveCount(0)
 
@@ -221,6 +237,32 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect(releasedOntology.current_release_id).toBe(finalTree.current_release_id)
   const instances = await api<any[]>(request, token, 'get', `/api/v2/formal/ontologies/${ontology.id}/instances`)
   expect(instances).toHaveLength(2)
+
+  // 总览使用当前发布投影与真实 HITL 待办：包裹可选择、可直接决策，结果进入事实流。
+  const pendingAction = await api<any>(request, token, 'post', `/api/v2/formal/ontologies/${ontology.id}/run-action`, {
+    actionId: `act-browser-order-${suffix}`,
+    targetInstanceId: instances[0].id,
+    parameters: { note: 'overview-e2e' },
+    dryRun: false,
+  })
+  expect(pendingAction.status).toBe('pending')
+  await page.goto(`/#/ontologies/${ontology.id}`)
+  await expect(page.getByRole('heading', { name: '本体概况' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '模型资产构成' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '近 7 日运行汇总' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '实例分布与来源' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '映射状态' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '事实类型构成' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '健康检查' })).toHaveCount(0)
+  const approvalPipeline = page.locator('.approval-pipeline')
+  await expect(approvalPipeline).toContainText('审核订单')
+  await expect(approvalPipeline).toContainText(`真机订单 · ${instances[0].properties.id}`)
+  await approvalPipeline.getByRole('button', { name: '拒绝', exact: true }).click()
+  await expect(approvalPipeline).toContainText('当前没有待审批动作')
+  await expect(approvalPipeline).toContainText('已拒绝，决策已进入事实流。')
+  const decisionFacts = await api<any[]>(request, token, 'get',
+    `/api/v2/formal/ontologies/${ontology.id}/facts/recent?limit=10&kind=decision`)
+  expect(decisionFacts.some((fact: any) => fact.value === 'REJECTED')).toBeTruthy()
 
   await request.delete(`${API}/api/v1/ontologies/${ontology.id}`, {
     headers: { Authorization: `Bearer ${token}` },

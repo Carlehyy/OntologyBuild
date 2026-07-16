@@ -54,6 +54,40 @@ def _ok(data):
     return {"data": data}
 
 
+def _approval_instance_label(instance: ObjectInstance, object_type: Optional[ObjectType]) -> str:
+    """为审批待办选择稳定、可读的业务标签，不把整份 properties 暴露给界面。"""
+    properties = instance.properties if isinstance(instance.properties, dict) else {}
+    candidates: list[str] = []
+    primary_key = getattr(object_type, "primary_key", None)
+    if primary_key:
+        candidates.append(primary_key)
+        for prop in (getattr(object_type, "properties", None) or []):
+            if not isinstance(prop, dict):
+                continue
+            prop_id, prop_name = prop.get("id"), prop.get("name")
+            if prop_id == primary_key and prop_name:
+                candidates.append(prop_name)
+            elif prop_name == primary_key and prop_id:
+                candidates.append(prop_id)
+    candidates.extend(("name", "title", "label", "code", "month", "report_month"))
+
+    value = None
+    for key in dict.fromkeys(candidates):
+        candidate = properties.get(key)
+        if candidate is not None and not isinstance(candidate, (dict, list)) and str(candidate).strip():
+            value = str(candidate).strip()
+            break
+    if value is None and instance.external_id:
+        value = str(instance.external_id)
+    if value is None:
+        value = instance.id[:10]
+
+    type_name = None
+    if object_type is not None:
+        type_name = object_type.display_name or object_type.name
+    return f"{type_name} · {value}" if type_name else value
+
+
 def _raise_validation_failed(errors: list[dict], message: str = "运行契约校验未通过") -> None:
     if errors:
         raise HTTPException(422, detail={
@@ -992,7 +1026,34 @@ def list_pending_actions(ontology_id: str,
                      ActionExecutionLog.status == "pending",
                      ActionExecutionLog.dry_run == False)  # noqa: E712
              .order_by(ActionExecutionLog.executed_at.desc()).limit(100).all())
-    return _ok([S.ActionLogOut.model_validate(x).model_dump(by_alias=True) for x in items])
+    instance_ids = {item.object_instance_id for item in items if item.object_instance_id}
+    instances = (db.query(ObjectInstance)
+                 .filter(ObjectInstance.ontology_id == ontology_id,
+                         ObjectInstance.id.in_(instance_ids)).all()) if instance_ids else []
+    instances_by_id = {item.id: item for item in instances}
+    object_type_ids = {item.object_type_id for item in items if item.object_type_id}
+    object_type_ids.update(item.object_type_id for item in instances if item.object_type_id)
+    object_types = (db.query(ObjectType)
+                    .filter(ObjectType.ontology_id == ontology_id,
+                            ObjectType.id.in_(object_type_ids)).all()) if object_type_ids else []
+    object_types_by_id = {item.id: item for item in object_types}
+
+    result = []
+    for item in items:
+        instance = instances_by_id.get(item.object_instance_id)
+        object_type = object_types_by_id.get(
+            instance.object_type_id if instance is not None else item.object_type_id)
+        payload = S.ActionLogOut.model_validate(item).model_dump(by_alias=True)
+        payload.update({
+            "objectTypeName": ((object_type.display_name or object_type.name)
+                               if object_type is not None else None),
+            "objectInstanceLabel": (_approval_instance_label(instance, object_type)
+                                    if instance is not None else None),
+            "triggerSource": ("sentinel" if item.sentinel_match_state_id
+                              else "manual" if item.actor_id else "system"),
+        })
+        result.append(payload)
+    return _ok(result)
 
 
 @router.post("/{ontology_id}/action-logs/{log_id}/decide")

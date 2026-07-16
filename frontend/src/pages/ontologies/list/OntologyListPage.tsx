@@ -631,7 +631,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
               item={item}
               onEdit={() => setEditTarget(item)}
               onDetail={() => navigate(`/ontologies/${item.id}`)}
-              onView={() => navigate(`/ontologies/${item.id}?tab=design`)}
+              onView={() => navigate(`/ontologies/${item.id}`)}
               onDelete={() => setDeleteTarget(item)}
             />
           ))

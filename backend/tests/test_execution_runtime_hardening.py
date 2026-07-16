@@ -22,7 +22,7 @@ from app.services.sentinel.evaluator import (
     reject_sentinel_match_claim,
     resume_sentinel_match_claim,
 )
-from app.ontologies.formal_modeling.router import decide_pending_action
+from app.ontologies.formal_modeling.router import decide_pending_action, list_pending_actions
 from app.ontologies.formal_modeling.schemas import DecisionRequest
 from fastapi import HTTPException
 
@@ -115,6 +115,38 @@ def _update_rule(property_name: str, *, source="constant", value="\"done\""):
             "value": value,
         },
     }
+
+
+def test_pending_actions_include_real_business_context(db):
+    ontology_id = "approval-dashboard-context"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.display_name = "月度运营报告"
+    object_type.primary_key = "report-code"
+    object_type.properties = [{"id": "report-code", "name": "report_code"}]
+    instance.properties = {"report_code": "2026-07"}
+    instance.external_id = "report-fallback"
+    log = ActionExecutionLog(
+        id="approval-dashboard-log",
+        ontology_id=ontology_id,
+        action_id="refresh-indicators",
+        action_name="刷新治理指标",
+        object_type_id=object_type.id,
+        object_instance_id=instance.id,
+        parameters={"scope": "all"},
+        status="pending",
+        dry_run=False,
+        actor_id="runtime-tests",
+        ontology_version="v1.0.0",
+    )
+    db.add(log)
+    db.commit()
+
+    response = list_pending_actions(ontology_id, db=db, _=None)
+
+    assert len(response["data"]) == 1
+    assert response["data"][0]["objectTypeName"] == "月度运营报告"
+    assert response["data"][0]["objectInstanceLabel"] == "月度运营报告 · 2026-07"
+    assert response["data"][0]["triggerSource"] == "manual"
 
 
 def test_action_parameter_contract_applies_defaults_and_rejects_bad_input(db):

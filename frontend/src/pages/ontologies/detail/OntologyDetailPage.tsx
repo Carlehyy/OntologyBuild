@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
@@ -14,7 +14,7 @@ import VersionsTab from './tabs/VersionsTab'
 import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
 import {
-  History, Download, Loader2,
+  History, Download, Loader2, Network,
 } from 'lucide-react'
 
 /* ═════════════════════════════════════════════════════════════
@@ -42,6 +42,7 @@ const GROUPS: GroupDef[] = [
 
 export default function OntologyDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { t } = useTranslation()
 
@@ -159,6 +160,15 @@ export default function OntologyDetailPage() {
           </span>
           <button
             type="button"
+            onClick={() => navigate(`/ontologies/${id}/graph`)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+            title="查看当前发布图谱"
+            aria-label="查看当前发布图谱"
+          >
+            <Network size={18} />
+          </button>
+          <button
+            type="button"
             onClick={() => setShowVersionModal(true)}
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
             title="历史版本"
@@ -197,7 +207,7 @@ export default function OntologyDetailPage() {
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (
         <div className="onto-glass-in">
-          <OverviewDashboard ontologyId={id!} onGoGroup={selectGroup} />
+          <OverviewDashboard ontologyId={id!} ontology={ontology} onGoGroup={selectGroup} />
         </div>
       ) : activeGroup === 'design' ? (
         <div className="onto-glass-card onto-glass-in p-4">
