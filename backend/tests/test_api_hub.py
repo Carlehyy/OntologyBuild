@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 import requests
@@ -114,6 +115,47 @@ def test_run_history_and_response_capture(hub_client, monkeypatch):
     assert overview["unexecuted_interfaces"] == 0
     assert overview["today_traffic"] == 1
     assert overview["seven_day_traffic"] == 1
+    assert overview["seven_day_success"] == 1
+    assert overview["seven_day_failed"] == 0
+    assert overview["success_rate"] == 100
+    assert overview["p95_elapsed_ms"] is not None
+    assert overview["slow_threshold_ms"] == 500
+    assert sum(item["failed"] for item in overview["daily"]) == 0
+
+
+def test_run_history_filters_failures_and_slow_calls(hub_client):
+    item = hub_client.post("/interfaces", json=_interface()).json()
+    created_at = datetime.now(timezone.utc).isoformat()
+    with db.get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO runs(interface_id, ok, status_code, elapsed_ms, "
+            "request_snapshot, response_headers, response_body, error, relogin, "
+            "created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            [
+                (item["id"], 1, 200, 120, "{}", "{}", "{}", None, 0, created_at),
+                (item["id"], 0, 503, 680, "{}", "{}", "{}", "上游不可用", 0, created_at),
+                (item["id"], 1, 200, 900, "{}", "{}", "{}", None, 0, created_at),
+            ],
+        )
+
+    failed = hub_client.get("/runs", params={"result": "failed"}).json()
+    assert failed["total"] == 1
+    assert failed["items"][0]["status_code"] == 503
+
+    slow = hub_client.get("/runs", params={"result": "slow"}).json()
+    assert slow["total"] == 2
+    assert {row["elapsed_ms"] for row in slow["items"]} == {680, 900}
+
+    success = hub_client.get("/runs", params={"result": "success"}).json()
+    assert success["total"] == 2
+
+    overview = hub_client.get("/runs/overview").json()
+    assert overview["seven_day_traffic"] == 3
+    assert overview["seven_day_success"] == 2
+    assert overview["seven_day_failed"] == 1
+    assert overview["success_rate"] == 66.7
+    assert overview["p95_elapsed_ms"] == 900
+    assert sum(item["failed"] for item in overview["daily"]) == 1
 
 
 def test_non_2xx_response_is_failure_in_history_and_credential_usage(

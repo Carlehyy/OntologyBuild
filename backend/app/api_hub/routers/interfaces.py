@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import List
 
@@ -10,6 +11,7 @@ from .. import db, executor
 router = APIRouter(prefix="/interfaces", tags=["api-hub-interfaces"])
 
 _RESERVED_GROUP = "默认分组"
+_SLOW_RUN_MS = 500
 
 
 def _check_group_name(name: str):
@@ -270,19 +272,56 @@ def run_overview():
             (today.isoformat(),),
         ).fetchone()[0]
         rows = conn.execute(
-            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count "
+            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count, "
+            "SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed "
             "FROM runs WHERE substr(created_at, 1, 10) >= ? "
+            "AND substr(created_at, 1, 10) <= ? "
             "GROUP BY substr(created_at, 1, 10)",
-            (start.isoformat(),),
+            (start.isoformat(), today.isoformat()),
         ).fetchall()
-    by_day = {row["day"]: row["count"] for row in rows}
-    daily = [{"date": day, "count": int(by_day.get(day, 0))} for day in days]
+        recent_rows = conn.execute(
+            "SELECT ok, elapsed_ms FROM runs "
+            "WHERE substr(created_at, 1, 10) >= ? "
+            "AND substr(created_at, 1, 10) <= ?",
+            (start.isoformat(), today.isoformat()),
+        ).fetchall()
+    by_day = {
+        row["day"]: {"count": int(row["count"]), "failed": int(row["failed"] or 0)}
+        for row in rows
+    }
+    daily = [
+        {
+            "date": day,
+            "count": by_day.get(day, {}).get("count", 0),
+            "failed": by_day.get(day, {}).get("failed", 0),
+        }
+        for day in days
+    ]
+    seven_day_traffic = len(recent_rows)
+    seven_day_success = sum(1 for row in recent_rows if bool(row["ok"]))
+    seven_day_failed = seven_day_traffic - seven_day_success
+    latencies = sorted(
+        int(row["elapsed_ms"])
+        for row in recent_rows
+        if row["elapsed_ms"] is not None
+    )
+    p95_elapsed_ms = (
+        latencies[max(0, math.ceil(len(latencies) * 0.95) - 1)]
+        if latencies else None
+    )
     return {
         "total_interfaces": int(total_interfaces),
         "executed_interfaces": int(executed),
         "unexecuted_interfaces": max(0, int(total_interfaces) - int(executed)),
         "today_traffic": int(today_traffic),
-        "seven_day_traffic": sum(item["count"] for item in daily),
+        "seven_day_traffic": seven_day_traffic,
+        "seven_day_success": seven_day_success,
+        "seven_day_failed": seven_day_failed,
+        "success_rate": round(
+            seven_day_success * 100 / seven_day_traffic, 1
+        ) if seven_day_traffic else 0,
+        "p95_elapsed_ms": p95_elapsed_ms,
+        "slow_threshold_ms": _SLOW_RUN_MS,
         "daily": daily,
     }
 
@@ -292,6 +331,7 @@ def list_all_runs(
     keyword: str = "",
     start: str = "",
     end: str = "",
+    result: str = "",
     page: int = 1,
     size: int = 20,
 ):
@@ -300,6 +340,7 @@ def list_all_runs(
     - keyword：按接口名称模糊匹配（LIKE %keyword%）
     - start / end：时间范围，前端传入的完整 ISO 时间戳（已按用户本地
       时区换算为 UTC 边界）。用 SQLite datetime() 比较，兼容 Z / +00:00。
+    - result：success / failed / slow，slow 表示耗时不低于 500ms。
     - page / size：分页，size 上限 100
     """
     page = max(page, 1)
@@ -319,6 +360,16 @@ def list_all_runs(
     if e:
         where.append("datetime(r.created_at) <= datetime(?)")
         params.append(e)
+    result_mode = result.strip().lower()
+    if result_mode not in {"", "all", "success", "failed", "slow"}:
+        raise HTTPException(status_code=400, detail="不支持的调用结果筛选")
+    if result_mode == "success":
+        where.append("r.ok = 1")
+    elif result_mode == "failed":
+        where.append("r.ok = 0")
+    elif result_mode == "slow":
+        where.append("r.elapsed_ms >= ?")
+        params.append(_SLOW_RUN_MS)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     base_from = "FROM runs r JOIN interfaces i ON i.id = r.interface_id"

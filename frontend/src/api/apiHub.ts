@@ -113,7 +113,12 @@ export interface RunOverview {
   unexecuted_interfaces: number
   today_traffic: number
   seven_day_traffic: number
-  daily: { date: string; count: number }[]
+  seven_day_success: number
+  seven_day_failed: number
+  success_rate: number
+  p95_elapsed_ms: number | null
+  slow_threshold_ms: number
+  daily: { date: string; count: number; failed: number }[]
 }
 
 export interface McpInfo {
