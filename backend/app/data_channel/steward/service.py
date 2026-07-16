@@ -419,16 +419,19 @@ def require_orchestrable(db: Session, rec: N8nPipeline, client: N8nClient) -> No
 # ── 发布与启停的 n8n 侧动作 ────────────────────────────────────
 
 _REVISION_FIELDS = ("versionId", "activeVersionId", "updatedAt")
+# inactive 草稿在部分 n8n 公共 API 版本中不会返回 activeVersionId。草稿一致性
+# 由当前编辑版本 + 更新时间 + canonical workflow snapshot 共同证明；activeVersionId
+# 只在远端确实返回时作为额外校验项，不能成为用户配置字段契约的前置条件。
+_REQUIRED_REVISION_FIELDS = ("versionId", "updatedAt")
 
 
 def _require_complete_revision(workflow: dict, *, context: str) -> dict:
     revision = N8nClient.workflow_revision(workflow)
-    missing = [field for field in _REVISION_FIELDS if not revision.get(field)]
+    missing = [field for field in _REQUIRED_REVISION_FIELDS if not revision.get(field)]
     if missing:
         raise StewardError(
-            f"{context}无法取得 n8n 不可变版本信息（缺少 {', '.join(missing)}），"
-            "为避免发布内容与实际执行内容不一致，操作已中止。请确认 n8n 公共 API "
-            "会返回 versionId、activeVersionId、updatedAt。")
+            f"{context}无法确认当前 n8n 工作流版本，平台已安全中止操作。"
+            "请稍后重试；若持续失败，请由管理员检查 n8n 公共 API 兼容性。")
     return revision
 
 
@@ -454,13 +457,20 @@ def require_workflow_validation_evidence(
     )
     if not expected_revision or not expected_snapshot_hash:
         raise ValidationAttestationError(
-            f"{context}缺少 n8n workflow revision/snapshot 凭证，请重新执行预览并校验字段定义。"
+            f"{context}平台内部一致性检查尚未完成，操作已安全中止。"
         )
     current = workflow_validation_evidence(workflow, context=context)
     drift = [
-        field for field in _REVISION_FIELDS
+        field for field in _REQUIRED_REVISION_FIELDS
         if current["revision"].get(field) != expected_revision.get(field)
     ]
+    # activeVersionId 对 inactive 草稿不是稳定公共字段；只有预览时和当前读取
+    # 都返回它时才作为附加漂移证据。
+    if (expected_revision.get("activeVersionId")
+            and current["revision"].get("activeVersionId")
+            and current["revision"]["activeVersionId"]
+            != expected_revision["activeVersionId"]):
+        drift.append("activeVersionId")
     if current["snapshot_hash"] != expected_snapshot_hash:
         drift.append("workflowSnapshot")
     if drift:
@@ -587,7 +597,8 @@ def activate_for_publish(
         require_workflow_validation_evidence(
             validation_attestation, published_workflow, context="发布激活后")
         revision = _require_complete_revision(published_workflow, context="发布后")
-        if revision["versionId"] != revision["activeVersionId"]:
+        if (revision.get("activeVersionId")
+                and revision["versionId"] != revision["activeVersionId"]):
             raise StewardError(
                 "n8n 当前编辑版本与实际激活版本不一致"
                 f"（versionId={revision['versionId']}，"
@@ -599,8 +610,13 @@ def activate_for_publish(
             _was_active, final_workflow = _set_remote_active(
                 rec, client, enabled=False, context="发布但不启用")
             final_revision = _require_complete_revision(final_workflow, context="发布停用后")
-            drift = [field for field in _REVISION_FIELDS
+            drift = [field for field in _REQUIRED_REVISION_FIELDS
                      if final_revision.get(field) != revision.get(field)]
+            if (revision.get("activeVersionId")
+                    and final_revision.get("activeVersionId")
+                    and final_revision["activeVersionId"]
+                    != revision["activeVersionId"]):
+                drift.append("activeVersionId")
             if drift:
                 raise StewardError(
                     "n8n 工作流在发布后停用期间发生版本变化"
@@ -638,13 +654,21 @@ def require_published_revision(
 ) -> dict:
     """运行前确认远端仍是发布时审核过的同一 revision。"""
     published = (((pl.definition or {}).get("n8n") or {}).get("revision") or {})
-    missing_published = [field for field in _REVISION_FIELDS if not published.get(field)]
+    missing_published = [
+        field for field in _REQUIRED_REVISION_FIELDS if not published.get(field)
+    ]
     if missing_published:
         raise StewardError(
             "该流水线的发布快照缺少 n8n revision 信息，不能安全运行。"
             "请停用并归档该历史版本，然后新建流水线替代。")
     current = _require_complete_revision(remote_workflow, context="运行前")
-    drift = [field for field in _REVISION_FIELDS if current.get(field) != published.get(field)]
+    drift = [
+        field for field in _REQUIRED_REVISION_FIELDS
+        if current.get(field) != published.get(field)
+    ]
+    if (published.get("activeVersionId") and current.get("activeVersionId")
+            and current["activeVersionId"] != published["activeVersionId"]):
+        drift.append("activeVersionId")
     if drift:
         details = "，".join(
             f"{field}: 发布={published.get(field)} / 当前={current.get(field)}"
@@ -683,7 +707,9 @@ def resolve_published_runtime_release(pl, rec: N8nPipeline,
         and managed_contract.get("output_node_name")
         and managed_contract.get("output_node_id")
     )
-    complete_revision = all(published_revision.get(field) for field in _REVISION_FIELDS)
+    complete_revision = all(
+        published_revision.get(field) for field in _REQUIRED_REVISION_FIELDS
+    )
     if complete_contract and complete_revision:
         require_published_revision(pl, remote_workflow, require_active=require_active)
         return {
@@ -706,7 +732,8 @@ def resolve_published_runtime_release(pl, rec: N8nPipeline,
     contract = validate_managed_workflow_contract(
         published_snapshot, allow_legacy_webhook_path=True)
     revision = _require_complete_revision(remote_workflow, context="历史发布版本兼容校验时")
-    if revision["versionId"] != revision["activeVersionId"]:
+    if (revision.get("activeVersionId")
+            and revision["versionId"] != revision["activeVersionId"]):
         raise StewardError(
             "该历史发布版本的 n8n 当前编辑版本与激活版本不一致，不能安全执行。"
             "请先停用旧版本并新建流水线替代。")
