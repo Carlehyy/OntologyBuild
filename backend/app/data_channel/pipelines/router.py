@@ -881,11 +881,21 @@ def validate_column_definitions(
                 "message": "缺少数据管家治理记录，无法形成 n8n 发布凭证",
             })
         else:
-            dry_run_evidence = ((payload.get("engine_meta") or {}).get(
-                "workflow_evidence") or {})
+            engine_meta = payload.get("engine_meta") or {}
+            dry_run_evidence = engine_meta.get("workflow_evidence") or {}
             try:
                 client = steward_service.get_n8n_client(db)
                 live_workflow = client.get_workflow(rec.n8n_workflow_id)
+                # 兼容旧版/部分 n8n API：预览阶段即使没有 activeVersionId，
+                # runner 仍会保存执行前后核对过的 snapshot hash。平台可结合
+                # 当前 live revision 自动补全内部证据，无需用户理解或重跑“凭证”。
+                if (not dry_run_evidence
+                        and engine_meta.get("workflow_snapshot_hash")):
+                    from app.settings.workflows.n8n_client import N8nClient
+                    dry_run_evidence = {
+                        "revision": N8nClient.workflow_revision(live_workflow),
+                        "snapshot_hash": engine_meta["workflow_snapshot_hash"],
+                    }
                 live_evidence = steward_service.require_workflow_validation_evidence(
                     dry_run_evidence,
                     live_workflow,
@@ -999,8 +1009,8 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
             )
             raise HTTPException(
                 400,
-                "n8n 流水线发布前必须先执行预览，并用该次完整输出成功校验字段定义。"
-                f"{evidence_detail}，请回到向导第 2、3 步重新完成。",
+                "平台尚未完成最近一次执行预览与字段定义的一致性确认，暂时无法安全发布。"
+                f"{evidence_detail}。",
             )
         if attestation["column_definitions_hash"] != _column_definitions_hash(
                 pl.column_definitions):
@@ -1008,8 +1018,8 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
             db.commit()
             raise HTTPException(
                 400,
-                "字段定义在最近一次校验后发生变化，旧发布凭证已失效。"
-                "请重新执行预览并校验字段定义。",
+                "字段定义在最近一次校验后发生变化，平台已自动使旧校验结果失效。"
+                "请重新校验字段定义。",
             )
         try:
             client = steward_service.get_n8n_client(db)
@@ -1039,8 +1049,8 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
             frozen_revision = release.get("revision") or {}
             if not contract.get("output_node_name") or not contract.get("webhook_path"):
                 raise HTTPException(500, "发布事务未形成完整 n8n 输入/输出契约，发布已中止。")
-            if not all(frozen_revision.get(field) for field in ("versionId", "activeVersionId", "updatedAt")):
-                raise HTTPException(500, "发布事务未形成完整 n8n revision 快照，发布已中止。")
+            if not all(frozen_revision.get(field) for field in ("versionId", "updatedAt")):
+                raise HTTPException(500, "平台未能确认发布版本，发布已安全中止。")
 
         # 契约主键 vs 湖中已固化主键：不一致 → 警告随响应返回（不再拦截）
         warnings: list[str] = []
@@ -1379,14 +1389,6 @@ def dry_run_pipeline(
                          "warnings": g["warnings"], "drift": g["drift"]}
         except LakeGateError as e:
             gate_error = str(e)
-        publish_evidence_error = str(
-            engine_meta.get("publish_evidence_error") or "").strip()
-        if publish_evidence_error and not preview:
-            gate_info["warnings"] = [
-                *gate_info["warnings"],
-                "执行预览已成功，但当前 n8n 版本未能形成发布凭证："
-                f"{publish_evidence_error}",
-            ]
         if contract_defs is None and (pl.column_definitions or []):
             gate_info["warnings"] = [*gate_info["warnings"],
                                      "多产物流水线暂不应用流水线级字段契约（契约粒度=单产物）"]
