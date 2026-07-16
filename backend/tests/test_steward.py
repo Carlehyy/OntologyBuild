@@ -45,10 +45,11 @@ def test_chat_request_forwards_explicit_target(
     captured = {}
 
     def fake_turn(_db, _user, _question, conversation_id=None, model_id=None,
-                  target_record_id=None):
+                  target_record_id=None, web_search=False):
         captured["conversation_id"] = conversation_id
         captured["model_id"] = model_id
         captured["target_record_id"] = target_record_id
+        captured["web_search"] = web_search
         yield {"type": "meta", "conversationId": "conv-1", "model": "test-model"}
         yield {"type": "answer", "content": "收到", "touchedPipelineIds": [], "usage": {}}
         yield {"type": "done"}
@@ -69,6 +70,7 @@ def test_chat_request_forwards_explicit_target(
     assert response.status_code == 200
     assert captured["conversation_id"] == "conv-existing"
     assert captured["target_record_id"] == "record-selected"
+    assert captured["web_search"] is False
 
 
 # ── 假 n8n 客户端 ──────────────────────────────────────────────────

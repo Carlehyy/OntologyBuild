@@ -53,6 +53,7 @@ export interface StewardStep {
   durationMs: number
   error?: string
   preview?: StewardTablePreview
+  searchResults?: { title: string; url: string; snippet: string }[]
 }
 
 export interface StewardTablePreview {
@@ -259,6 +260,7 @@ export async function streamStewardChat(
     conversationId?: string | null
     modelId?: string | null
     targetRecordId?: string | null
+    webSearch?: boolean
   },
   onEvent: (e: StewardEvent) => void,
   signal?: AbortSignal,
@@ -272,6 +274,7 @@ export async function streamStewardChat(
       conversationId: body.conversationId || undefined,
       modelId: body.modelId || undefined,
       targetRecordId: body.targetRecordId || undefined,
+      webSearch: body.webSearch || undefined,
       stream: true,
     }),
     signal,

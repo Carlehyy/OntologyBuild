@@ -93,6 +93,7 @@ class ChatBody(BaseModel):
     conversationId: Optional[str] = None
     modelId: Optional[str] = None
     targetRecordId: Optional[str] = None
+    webSearch: bool = False
     stream: bool = True
 
 
@@ -110,7 +111,8 @@ def chat(body: ChatBody, db: Session = Depends(get_db),
         events = list(run_steward_turn(db, current_user, body.message,
                                        conversation_id=body.conversationId,
                                        model_id=body.modelId,
-                                       target_record_id=body.targetRecordId))
+                                       target_record_id=body.targetRecordId,
+                                       web_search=body.webSearch))
         answer = next((e for e in events if e["type"] == "answer"), None)
         error = next((e for e in events if e["type"] == "error"), None)
         meta = next((e for e in events if e["type"] == "meta"), {})
@@ -135,7 +137,8 @@ def chat(body: ChatBody, db: Session = Depends(get_db),
             for event in run_steward_turn(session, user, body.message,
                                           conversation_id=body.conversationId,
                                           model_id=body.modelId,
-                                          target_record_id=body.targetRecordId):
+                                          target_record_id=body.targetRecordId,
+                                          web_search=body.webSearch):
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         finally:
             session.close()

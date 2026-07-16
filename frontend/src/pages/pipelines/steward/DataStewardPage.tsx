@@ -7,15 +7,15 @@
  * 左侧：与数据管家对话（create_pipeline 新建骨架、update_workflow 补全编排）
  * 右侧：可编排流水线看板（只展示未发布、未启用的 n8n 流水线）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
   CheckCircle2, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
-  GitBranch, Globe, History, KeyRound, Library, Loader2, Monitor, MousePointer2,
-  Pencil, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Table2, Trash2, Upload,
+  GitBranch, Globe, Globe2, History, KeyRound, Library, List, Loader2, Monitor, MousePointer2,
+  Paperclip, Pencil, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Table2, Trash2, Upload,
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
@@ -52,6 +52,7 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   list_node_types:     { label: '查节点目录', icon: Zap },
   describe_node:       { label: '查节点详情', icon: BookOpen },
   n8n_reference:       { label: '查编排参考', icon: Library },
+  web_search:          { label: '联网检索', icon: Globe2 },
   probe_url:           { label: '探测数据源', icon: Globe },
   list_session_files:  { label: '查看会话文件', icon: FolderOpen },
   read_session_file:   { label: '读取文件', icon: FileText },
@@ -84,10 +85,17 @@ interface ChatMsg {
   targetName?: string
   loading?: boolean
   error?: string
+  createdAt?: string
 }
 
 let msgSeq = 0
 const nextId = () => `m${Date.now()}_${msgSeq++}`
+
+const ATTACH_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt'
+const TEXTAREA_LINE_HEIGHT = 20
+const TEXTAREA_MAX_LINES = 10
+const TEXTAREA_MIN_HEIGHT = 28
+const TEXTAREA_MAX_HEIGHT = TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + 8
 
 function Md({ text }: { text: string }) {
   return (
@@ -200,13 +208,31 @@ function StepTrace({ steps, running }: { steps: StewardStep[]; running?: boolean
             <div className="flex items-start gap-2.5">
               <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
                 s.error ? 'bg-red-50 text-red-500' : 'bg-teal-100 text-teal-700'}`}>
-                <Icon size={11} />
+                {s.tool === 'web_search' ? <Globe2 size={11} /> : <Icon size={11} />}
               </div>
               <div className="min-w-0 text-xs leading-5">
                 <span className={`font-medium ${s.error ? 'text-red-600' : 'text-gray-800'}`}>{meta.label}</span>
                 <span className="text-slate-400"> · {s.summary}</span>
               </div>
             </div>
+            {s.searchResults && s.searchResults.length > 0 && (
+              <div className="ml-7 space-y-1">
+                {s.searchResults.map((result, index) => (
+                  <a
+                    key={`${result.url}-${index}`}
+                    href={result.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={result.snippet || result.title}
+                    className="group/source flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-600 transition-colors hover:bg-teal-50 hover:text-teal-700"
+                  >
+                    <span className="shrink-0 font-mono text-[10px] text-slate-400">[{index + 1}]</span>
+                    <span className="min-w-0 flex-1 truncate">{result.title}</span>
+                    <ExternalLink size={10} className="shrink-0 opacity-0 transition-opacity group-hover/source:opacity-100" />
+                  </a>
+                ))}
+              </div>
+            )}
             {s.preview && <OutputPreviewTable preview={s.preview} />}
           </div>
         )
@@ -240,9 +266,15 @@ export default function DataStewardPage() {
   const [showBrowser, setShowBrowser] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [webSearch, setWebSearch] = useState(false)
+  const [showMessageHistory, setShowMessageHistory] = useState(false)
+  const [files, setFiles] = useState<StewardArtifact[]>([])
+  const [uploads, setUploads] = useState<{ uid: string; name: string; ts: number }[]>([])
+  const [fileError, setFileError] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const messageInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const [records, setRecords] = useState<StewardPipeline[]>([])
   const [recordsLoading, setRecordsLoading] = useState(true)
@@ -257,6 +289,46 @@ export default function DataStewardPage() {
   const [chatWidthPct, setChatWidthPct] = useState(58)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const [isWide, setIsWide] = useState(typeof window !== 'undefined' && window.innerWidth >= 1280)
+
+  const myMessages = useMemo(() => messages.filter(message => message.role === 'user'), [messages])
+  const timeline = useMemo(() => {
+    const items: (
+      | { key: string; ts: number; kind: 'message'; message: ChatMsg }
+      | { key: string; ts: number; kind: 'file'; file: StewardArtifact }
+      | { key: string; ts: number; kind: 'upload'; upload: { uid: string; name: string; ts: number } }
+    )[] = []
+    let lastTimestamp = 0
+    messages.forEach(message => {
+      let timestamp = message.createdAt ? Date.parse(message.createdAt) : NaN
+      if (Number.isNaN(timestamp)) timestamp = lastTimestamp + 1
+      lastTimestamp = timestamp
+      items.push({ key: message.id, ts: timestamp, kind: 'message', message })
+    })
+    files
+      .filter(file => file.source === 'upload')
+      .forEach(file => items.push({
+        key: `file-${file.id}`,
+        ts: Date.parse(file.createdAt) || 0,
+        kind: 'file',
+        file,
+      }))
+    uploads.forEach(upload => items.push({
+      key: upload.uid,
+      ts: upload.ts,
+      kind: 'upload',
+      upload,
+    }))
+    return items.sort((left, right) => left.ts - right.ts)
+  }, [files, messages, uploads])
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = `${TEXTAREA_MIN_HEIGHT}px`
+    const contentHeight = input ? textarea.scrollHeight : TEXTAREA_MIN_HEIGHT
+    textarea.style.height = `${Math.max(TEXTAREA_MIN_HEIGHT, Math.min(contentHeight, TEXTAREA_MAX_HEIGHT))}px`
+    textarea.style.overflowY = contentHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden'
+  }, [input])
   useEffect(() => {
     const onResize = () => setIsWide(window.innerWidth >= 1280)
     window.addEventListener('resize', onResize)
@@ -301,11 +373,17 @@ export default function DataStewardPage() {
     stewardApi.conversations().then(res => setConversations(Array.isArray(res) ? res : [])).catch(() => {})
   }, [])
 
+  const loadSessionFiles = useCallback((cid: string) => {
+    return stewardApi.files(cid)
+      .then(res => setFiles(Array.isArray(res) ? res : []))
+      .catch(() => setFiles([]))
+  }, [])
+
   useEffect(() => {
     const timer = window.setTimeout(() => { loadStatus(); void loadRecords(); loadConversations() }, 0)
     return () => window.clearTimeout(timer)
   }, [loadStatus, loadRecords, loadConversations])
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [timeline])
   useEffect(() => () => abortRef.current?.abort(), [])
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -355,7 +433,11 @@ export default function DataStewardPage() {
     abortRef.current?.abort()
     setConversationId(null)
     setMessages([])
+    setFiles([])
+    setUploads([])
+    setFileError('')
     setShowHistory(false)
+    setShowMessageHistory(false)
   }
 
   const ensureConversation = useCallback(async (): Promise<string> => {
@@ -385,9 +467,13 @@ export default function DataStewardPage() {
       const conv = await stewardApi.conversation(cid)
       setConversationId(cid)
       setMessages((conv.messages || []).map(m => ({
-        id: m.id, role: m.role, content: m.content, steps: m.steps || [],
+        id: m.id, role: m.role, content: m.content, steps: m.steps || [], createdAt: m.createdAt,
       })))
+      setUploads([])
+      setFileError('')
+      await loadSessionFiles(cid)
       setShowHistory(false)
+      setShowMessageHistory(false)
     } catch { /* 忽略 */ }
   }
 
@@ -399,6 +485,64 @@ export default function DataStewardPage() {
     } catch { /* 忽略 */ }
   }
 
+  const pickFiles = () => fileInputRef.current?.click()
+
+  const uploadFiles = async (selected: FileList | null) => {
+    if (!selected || selected.length === 0) return
+    setFileError('')
+    let cid: string
+    try {
+      cid = await ensureConversation()
+    } catch (error: unknown) {
+      setFileError(errorText(error, '无法创建会话，附件未上传'))
+      return
+    }
+    for (const file of Array.from(selected)) {
+      const uid = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      setUploads(previous => [...previous, { uid, name: file.name, ts: Date.now() }])
+      try {
+        const artifact = await stewardApi.uploadFile(cid, file)
+        setFiles(previous => [...previous, artifact])
+      } catch (error: unknown) {
+        setFileError(`「${file.name}」上传失败：${errorText(error, '无法读取文件内容')}`)
+      } finally {
+        setUploads(previous => previous.filter(upload => upload.uid !== uid))
+      }
+    }
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    loadConversations()
+  }
+
+  const removeUploadedFile = async (artifactId: string) => {
+    if (!conversationId) return
+    setFiles(previous => previous.filter(file => file.id !== artifactId))
+    try {
+      await stewardApi.deleteFile(conversationId, artifactId)
+    } catch (error: unknown) {
+      setFileError(errorText(error, '文件移除失败，请刷新后重试'))
+      void loadSessionFiles(conversationId)
+    }
+  }
+
+  const downloadUploadedFile = async (file: StewardArtifact) => {
+    if (!conversationId) return
+    try {
+      await downloadStewardFile(conversationId, file.id, file.filename)
+    } catch (error: unknown) {
+      setFileError(`「${file.filename}」下载失败：${errorText(error, '文件不可用')}`)
+    }
+  }
+
+  const jumpToMessage = (messageId: string) => {
+    setShowMessageHistory(false)
+    requestAnimationFrame(() => {
+      document.getElementById(`steward-msg-${messageId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+    })
+  }
+
   const send = async (preset?: string) => {
     const text = (preset ?? input).trim()
     if (!text || busy) return
@@ -406,14 +550,23 @@ export default function DataStewardPage() {
     setBusy(true)
 
     const target = selectedRecord
+    const createdAt = new Date().toISOString()
     const userMsg: ChatMsg = {
       id: nextId(),
       role: 'user',
       content: text,
       steps: [],
       targetName: target?.name,
+      createdAt,
     }
-    const botMsg: ChatMsg = { id: nextId(), role: 'assistant', content: '', steps: [], loading: true }
+    const botMsg: ChatMsg = {
+      id: nextId(),
+      role: 'assistant',
+      content: '',
+      steps: [],
+      loading: true,
+      createdAt,
+    }
     setMessages(prev => [...prev, userMsg, botMsg])
 
     const patchBot = (patch: Partial<ChatMsg> | ((m: ChatMsg) => Partial<ChatMsg>)) =>
@@ -423,16 +576,26 @@ export default function DataStewardPage() {
     const ctrl = new AbortController()
     abortRef.current = ctrl
     let touched: string[] = []
+    let activeConversationId = conversationId
     try {
       await streamStewardChat(
-        { message: text, conversationId, targetRecordId: target?.id },
+        {
+          message: text,
+          conversationId,
+          targetRecordId: target?.id,
+          webSearch,
+        },
         e => {
-          if (e.type === 'meta') setConversationId(e.conversationId)
+          if (e.type === 'meta') {
+            activeConversationId = e.conversationId
+            setConversationId(e.conversationId)
+          }
           else if (e.type === 'step') {
             const step: StewardStep = {
               tool: e.tool, arguments: e.arguments, summary: e.summary,
               durationMs: e.durationMs, ...(e.error ? { error: e.error } : {}),
               ...(e.preview ? { preview: e.preview } : {}),
+              ...(e.searchResults ? { searchResults: e.searchResults } : {}),
             }
             patchBot(m => ({ steps: [...m.steps, step] }))
           } else if (e.type === 'answer') {
@@ -452,6 +615,7 @@ export default function DataStewardPage() {
       patchBot({ loading: false })
       setBusy(false)
       loadConversations()
+      if (activeConversationId) void loadSessionFiles(activeConversationId)
       // 本回合动过流水线 → 刷新受管流水线面板并展开最近触达的一条
       if (touched.length > 0) {
         loadRecords()
@@ -504,13 +668,26 @@ export default function DataStewardPage() {
               </h2>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button onClick={openFiles}
-                className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700 transition hover:bg-amber-100">
-                <FolderOpen size={13} /> 会话文件
+              <button
+                onClick={openFiles}
+                title="查看会话文件"
+                aria-label="查看会话文件"
+                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              >
+                <FolderOpen size={15} />
+                {files.length > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[9px] font-semibold leading-4 text-white">
+                    {files.length > 99 ? '99+' : files.length}
+                  </span>
+                )}
               </button>
-              <button onClick={openBrowser}
-                className="flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-700 transition hover:bg-sky-100">
-                <Monitor size={13} /> 实时浏览器
+              <button
+                onClick={openBrowser}
+                title="打开实时浏览器"
+                aria-label="打开实时浏览器"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+              >
+                <Monitor size={15} />
               </button>
               <div className="relative">
                 <button
@@ -519,13 +696,14 @@ export default function DataStewardPage() {
                     if (!showHistory) loadConversations()
                     setShowHistory(value => !value)
                   }}
-                  aria-label="查看历史会话"
+                  title="查看会话记录"
+                  aria-label="查看会话记录"
                   aria-expanded={showHistory}
-                  className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
                     ? 'border-teal-300 bg-teal-50 text-teal-700'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                    : 'border-slate-200 text-slate-500 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
                 >
-                  <History size={13} /> 历史会话
+                  <History size={15} />
                 </button>
                 <SessionHistoryPopover
                   open={showHistory}
@@ -542,7 +720,7 @@ export default function DataStewardPage() {
             </div>
           </div>
           <div className="scrollbar-none flex-1 overflow-y-auto px-5 py-5">
-            {messages.length === 0 ? (
+            {timeline.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center px-6">
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-teal-200 bg-teal-50 text-teal-700 shadow-sm">
                   <Bot size={26} />
@@ -562,48 +740,110 @@ export default function DataStewardPage() {
               </div>
             ) : (
               <div className="space-y-5">
-                {messages.map(msg => msg.role === 'user' ? (
-                  <div key={msg.id} className="flex justify-end gap-3">
-                    <div className="max-w-[82%] rounded-2xl rounded-br-md bg-teal-700 px-4 py-3 text-white shadow-sm">
-                      {msg.targetName && (
-                        <p className="mb-1.5 flex items-center justify-end gap-1 text-[10px] font-medium text-teal-100">
-                          <Workflow size={10} /> 操作目标 · {msg.targetName}
-                        </p>
-                      )}
-                      <p className="whitespace-pre-line text-sm leading-relaxed">{msg.content}</p>
-                    </div>
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700">
-                      <User size={14} />
-                    </div>
-                  </div>
-                ) : (
-                  <div key={msg.id} className="flex gap-3">
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
-                      <Bot size={14} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <StepTrace steps={msg.steps} running={msg.loading} />
-                      {msg.error ? (
-                        <div className="rounded-lg border border-red-200 bg-red-50/70 px-4 py-3">
-                          <p className="flex items-start gap-2 text-sm text-red-600">
-                            <AlertTriangle size={14} className="mt-0.5 shrink-0" />{msg.error}
-                          </p>
+                {timeline.map(item => {
+                  if (item.kind === 'file' || item.kind === 'upload') {
+                    const uploading = item.kind === 'upload'
+                    const name = uploading ? item.upload.name : item.file.filename
+                    return (
+                      <div key={item.key} className="flex flex-row-reverse gap-3">
+                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700">
+                          <Paperclip size={14} />
                         </div>
-                      ) : msg.content ? (
-                        <div className="text-gray-800"><Md text={msg.content} /></div>
-                      ) : null}
+                        <div className={`group flex max-w-[82%] items-center gap-2.5 rounded-xl border bg-white px-3 py-2 ${uploading
+                          ? 'border-dashed border-slate-300'
+                          : 'border-slate-200'}`}
+                        >
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
+                            {uploading ? <Loader2 size={15} className="animate-spin" /> : <FileText size={16} />}
+                          </span>
+                          <div className="min-w-0 text-left">
+                            <div className="truncate text-sm font-medium text-slate-800" title={name}>{name}</div>
+                            <div className="mt-0.5 text-[11px] text-slate-400">
+                              {uploading ? '上传中…' : `会话附件 · ${formatBytes(item.file.size)} · 仅本会话可见`}
+                            </div>
+                          </div>
+                          {!uploading && (
+                            <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                              <button
+                                type="button"
+                                onClick={() => void downloadUploadedFile(item.file)}
+                                title="下载文件"
+                                className="rounded p-1 text-slate-400 hover:bg-slate-50 hover:text-teal-600"
+                              >
+                                <Download size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeUploadedFile(item.file.id)}
+                                title="移除附件"
+                                className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                              >
+                                <X size={13} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }
+                  const msg = item.message
+                  return msg.role === 'user' ? (
+                    <div key={msg.id} id={`steward-msg-${msg.id}`} className="flex scroll-mt-4 justify-end gap-3">
+                      <div className="max-w-[82%] rounded-2xl rounded-br-md bg-teal-700 px-4 py-3 text-white shadow-sm">
+                        {msg.targetName && (
+                          <p className="mb-1.5 flex items-center justify-end gap-1 text-[10px] font-medium text-teal-100">
+                            <Workflow size={10} /> 操作目标 · {msg.targetName}
+                          </p>
+                        )}
+                        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.content}</p>
+                      </div>
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700">
+                        <User size={14} />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ) : (
+                    <div key={msg.id} className="flex gap-3">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
+                        <Bot size={14} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <StepTrace steps={msg.steps} running={msg.loading} />
+                        {msg.error ? (
+                          <div className="rounded-lg border border-red-200 bg-red-50/70 px-4 py-3">
+                            <p className="flex items-start gap-2 text-sm text-red-600">
+                              <AlertTriangle size={14} className="mt-0.5 shrink-0" />{msg.error}
+                            </p>
+                          </div>
+                        ) : msg.content ? (
+                          <div className="text-gray-800"><Md text={msg.content} /></div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })}
                 <div ref={bottomRef} />
               </div>
             )}
           </div>
 
-          <div className="bg-white px-4 py-3.5">
+          <div className="relative bg-white px-4 pb-4 pt-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ATTACH_ACCEPT}
+              className="hidden"
+              onChange={event => void uploadFiles(event.target.files)}
+            />
+            {fileError && (
+              <div className="mb-1.5 truncate text-[11px] text-red-600" title={fileError}>
+                {fileError}
+              </div>
+            )}
             <div
               ref={targetPickerRef}
-              className="relative rounded-2xl border border-slate-200 bg-white shadow-sm transition focus-within:border-teal-500 focus-within:ring-4 focus-within:ring-teal-500/10"
+              data-testid="steward-composer-shell"
+              className="relative overflow-visible rounded-xl border border-slate-200 bg-white transition-colors focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500/10"
             >
               <div className="flex min-h-10 items-center gap-2 border-b border-slate-100 px-3.5 py-2">
                 <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-500">
@@ -641,7 +881,7 @@ export default function DataStewardPage() {
                     onClick={() => {
                       setSelectedRecordId(null)
                       setTargetMenuOpen(false)
-                      messageInputRef.current?.focus()
+                      textareaRef.current?.focus()
                     }}
                     aria-label="清除目标流水线"
                     title="清除目标流水线"
@@ -690,7 +930,7 @@ export default function DataStewardPage() {
                           setExpandedId(record.id)
                           setTargetMenuOpen(false)
                           setTargetSearch('')
-                          messageInputRef.current?.focus()
+                          textareaRef.current?.focus()
                         }}
                         className={`flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${
                           selectedRecordId === record.id
@@ -719,28 +959,110 @@ export default function DataStewardPage() {
                 </div>
               )}
 
-              <div className="flex items-center gap-2 px-2 py-2 pl-3.5">
-                <input
-                  ref={messageInputRef}
+              <div data-testid="steward-composer-input" className="px-3 pb-2 pt-2.5">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={event => setInput(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault()
+                      void send()
+                    }
+                  }}
+                  rows={1}
                   placeholder={n8nReady
                     ? selectedRecord
-                      ? `告诉数据管家要如何操作「${selectedRecord.name}」…`
-                      : '描述你要新建的流水线，或先选择一条现有流水线…'
+                      ? `告诉数据管家要如何操作「${selectedRecord.name}」…（Enter 发送，Shift+Enter 换行）`
+                      : '描述数据源或流水线需求…（Enter 发送，Shift+Enter 换行）'
                     : '请先完成 n8n 配置'}
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) void send()
-                  }}
                   disabled={busy}
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400 disabled:opacity-50"
+                  aria-label="数据管家消息"
+                  data-testid="steward-composer"
+                  className="scrollbar-thin block min-h-7 w-full resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-slate-400 disabled:opacity-50"
                 />
-                <button onClick={() => void send()} disabled={!input.trim() || busy}
-                  aria-label="发送消息"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition hover:bg-teal-800 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-25">
-                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                </button>
               </div>
+              <div
+                data-testid="steward-composer-toolbar"
+                className="flex min-h-12 items-center justify-between gap-3 px-2.5 py-2"
+              >
+                <div className="flex min-w-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={pickFiles}
+                    title="上传会话附件（仅本会话可见）"
+                    aria-label="上传会话附件"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-teal-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  >
+                    <Paperclip size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWebSearch(value => !value)}
+                    aria-pressed={webSearch}
+                    data-testid="steward-web-search-toggle"
+                    title={webSearch ? '联网搜索已开启，点击关闭' : '联网搜索已关闭，点击开启'}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${webSearch
+                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                      : 'border-transparent text-slate-400 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-600'}`}
+                  >
+                    <Globe2 size={15} />
+                    <span>联网</span>
+                    <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-teal-500' : 'bg-slate-200'}`} />
+                  </button>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void send()}
+                    disabled={busy || !input.trim()}
+                    title="发送消息"
+                    aria-label="发送消息"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
+                  >
+                    {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowMessageHistory(value => !value)}
+                    disabled={myMessages.length === 0}
+                    title="我发送的消息 · 快速跳转"
+                    aria-label="查看我发送的消息"
+                    aria-expanded={showMessageHistory}
+                    data-testid="steward-message-history-button"
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
+                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                      : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+                  >
+                    <List size={15} />
+                  </button>
+                </div>
+              </div>
+              {showMessageHistory && (
+                <>
+                  <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
+                  <div className="absolute bottom-full right-0 z-30 mb-2 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                      <span className="text-[11px] font-medium text-slate-600">我发送的消息</span>
+                      <span className="text-[10px] text-slate-400">点击跳转 · 共 {myMessages.length} 条</span>
+                    </div>
+                    <div className="scrollbar-thin max-h-64 overflow-auto py-1">
+                      {[...myMessages].reverse().map((message, index) => (
+                        <button
+                          type="button"
+                          key={message.id}
+                          onClick={() => jumpToMessage(message.id)}
+                          title={message.content}
+                          className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+                        >
+                          <span className="mt-0.5 shrink-0 font-mono text-[10px] text-slate-400">#{myMessages.length - index}</span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{message.content}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </section>
@@ -778,12 +1100,17 @@ export default function DataStewardPage() {
       )}
 
       {showFiles && conversationId && (
-        <WorkspaceModal conversationId={conversationId} onClose={() => setShowFiles(false)} />
+        <WorkspaceModal
+          conversationId={conversationId}
+          onClose={() => {
+            setShowFiles(false)
+            void loadSessionFiles(conversationId)
+          }}
+        />
       )}
       {showBrowser && conversationId && (
         <BrowserModal conversationId={conversationId} onClose={() => setShowBrowser(false)} />
       )}
-
     </div>
   )
 }
