@@ -86,9 +86,9 @@ export default function HubOperations({ credential, reloadCredential, onError }:
   const ready = Boolean(credential?.configured && credential.has_session && !credential.expired)
 
   return (
-    <div className="relative min-h-full bg-[#eef1f5] p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
+    <div className="relative min-h-full bg-[var(--color-bg-base)] p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
       {message && (
-        <div className={`absolute left-1/2 top-3 z-20 flex w-[min(680px,calc(100%-32px))] -translate-x-1/2 items-center justify-between rounded-xl border px-4 py-2.5 text-xs shadow-lg ${message.kind === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-emerald-900/5' : 'border-red-200 bg-red-50 text-red-600 shadow-red-900/5'}`}>
+        <div className={`absolute left-1/2 top-3 z-20 flex w-[min(680px,calc(100%-32px))] -translate-x-1/2 items-center justify-between rounded-xl border px-4 py-2.5 text-xs shadow-lg ${message.kind === 'success' ? 'border-[#cde8d5] bg-[#e8f5e9] text-[#2d8a4e]' : 'border-[#f2caca] bg-[#fde8e8] text-[#c23b3b]'}`}>
           <span className="flex min-w-0 items-center gap-2">
             {message.kind === 'success' ? <CheckCircle2 size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
             <span className="truncate">{message.text}</span>
@@ -98,10 +98,10 @@ export default function HubOperations({ credential, reloadCredential, onError }:
       )}
 
       <div className="grid min-h-full grid-cols-1 gap-4 xl:h-full xl:min-h-0 xl:grid-cols-12 xl:grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)]">
-        <Card className={`${cardClass} xl:col-span-7`}>
+        <Card className={`${cardClass} xl:col-span-7 ${ready ? 'border-teal-600 ring-1 ring-teal-100' : ''}`}>
           <CardHeader className="flex-row items-start justify-between gap-4 p-4 pb-3">
             <CardHeading icon={<KeyRound size={17} />} title="W3 账号授权" description="凭据由平台密钥加密保存，密码不会通过接口回传。" />
-            {config && <StatusBadge tone="neutral">{config.source === 'online' ? '在线配置' : '环境变量'}</StatusBadge>}
+            {config && <StatusBadge tone={config.source === 'online' ? 'accent' : 'neutral'}>{config.source === 'online' ? '在线配置' : '环境变量'}</StatusBadge>}
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4 pt-0">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -110,7 +110,7 @@ export default function HubOperations({ credential, reloadCredential, onError }:
             </div>
             <Field label="登录地址"><input value={loginUrl} onChange={event => setLoginUrl(event.target.value)} className={`${inputClass} font-mono`} placeholder="https://login.huawei.com/..." /></Field>
             <div className="grid grid-cols-1 gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] text-slate-500 sm:grid-cols-2">
-              <span>密码状态：<b className={config?.password_configured ? 'font-semibold text-emerald-700' : 'font-semibold text-slate-500'}>{config?.password_configured ? '已配置' : '未配置'}</b></span>
+              <span>密码状态：<b className={config?.password_configured ? 'font-semibold text-[#2d8a4e]' : 'font-semibold text-slate-500'}>{config?.password_configured ? '已配置' : '未配置'}</b></span>
               <span className="sm:text-right">保存后清理旧 Cookie，避免账号串用</span>
             </div>
             <div className="mt-auto flex flex-wrap gap-2">
@@ -144,8 +144,8 @@ export default function HubOperations({ credential, reloadCredential, onError }:
               ) : (
                 <div className="grid h-full min-h-0 grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200">
                   {usage.recent.slice(0, 8).map(record => (
-                    <div key={record.id} title={`${record.interface_name} · ${formatTime(record.created_at)}`} className="flex min-w-0 items-center gap-2 bg-slate-50 px-2.5 py-1.5 text-[10px]">
-                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: record.relogin ? '#f0a020' : record.ok ? '#40c463' : '#e5484d' }} />
+                    <div key={record.id} title={`${record.interface_name} · ${formatTime(record.created_at)}`} className="flex min-w-0 items-center gap-2 bg-white px-2.5 py-1.5 text-[10px]">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: credentialHeatColor(record) }} />
                       <span className="min-w-0 flex-1 truncate font-medium text-slate-600">{record.interface_name}</span>
                       <span className="shrink-0 tabular-nums text-slate-400">{formatCompactTime(record.created_at)}</span>
                     </div>
@@ -171,11 +171,11 @@ export default function HubOperations({ credential, reloadCredential, onError }:
               <SmallInfo label="最近获取" value={formatTime(credential?.acquired_at)} />
               <SmallInfo label="下次刷新" value={formatTime(credential?.next_run)} />
             </div>
-            <div className="mt-auto flex items-center justify-between rounded-xl bg-teal-50 px-3 py-2.5 text-[11px] text-teal-800">
+            <div className="mt-auto flex items-center justify-between rounded-xl bg-[#e8f5e9] px-3 py-2.5 text-[11px] text-[#2d8a4e]">
               <span className="flex items-center gap-2"><RefreshCw size={13} />失效时自动重新登录</span>
               <StatusBadge tone={ready ? 'success' : 'neutral'}>{ready ? '当前可用' : '等待授权'}</StatusBadge>
             </div>
-            {credential?.message && credential.last_result === 'failed' && <div className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{credential.message}</div>}
+            {credential?.message && credential.last_result === 'failed' && <div className="rounded-xl bg-[#fde8e8] px-3 py-2 text-xs text-[#c23b3b]">{credential.message}</div>}
           </CardContent>
         </Card>
 
@@ -191,7 +191,7 @@ function CredentialHeatStrip({ usage }: { usage: CredentialUsage | null }) {
     const padding = Array.from({ length: Math.max(0, 60 - recent.length) }, () => null)
     return [...padding, ...recent]
   }, [usage])
-  return <div className="flex gap-px">{cells.map((record, index) => { const label = record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'; return <span key={record?.id ?? `empty-${index}`} role="img" tabIndex={0} aria-label={label} title={label} className="h-4 min-w-0 flex-1 rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500" style={{ background: !record ? '#eceef1' : record.relogin ? '#f0a020' : record.ok ? '#40c463' : '#e5484d' }} /> })}</div>
+  return <div className="flex gap-px">{cells.map((record, index) => { const label = record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'; return <span key={record?.id ?? `empty-${index}`} role="img" tabIndex={0} aria-label={label} title={label} className="h-4 min-w-0 flex-1 rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500" style={{ background: record ? credentialHeatColor(record) : '#eceef1' }} /> })}</div>
 }
 
 function SystemMcpCard({ info }: { info: McpInfo | null }) {
@@ -220,15 +220,15 @@ function SystemMcpCard({ info }: { info: McpInfo | null }) {
   )
 }
 
-const cardClass = 'flex min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm transition-shadow duration-200 hover:shadow-md'
+const cardClass = 'flex min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm transition-all duration-200 hover:shadow-lg'
 const inputClass = 'h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-teal-400 focus:ring-2 focus:ring-teal-500/15'
-const primaryButtonClass = 'rounded-lg bg-teal-600 text-white shadow-sm hover:bg-teal-700 active:bg-teal-800'
+const primaryButtonClass = 'rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm hover:bg-teal-700 active:bg-teal-800'
 const outlineButtonClass = 'rounded-lg border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-800'
 
 function CardHeading({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
   return (
     <div className="flex min-w-0 items-start gap-3">
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">{icon}</span>
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-teal-100 bg-teal-50 text-teal-600">{icon}</span>
       <div className="min-w-0">
         <CardTitle className="text-[14px] text-slate-800">{title}</CardTitle>
         <CardDescription className="mt-1 text-[11px] leading-4 text-slate-400">{description}</CardDescription>
@@ -237,13 +237,20 @@ function CardHeading({ icon, title, description }: { icon: React.ReactNode; titl
   )
 }
 
-function StatusBadge({ tone, children }: { tone: 'success' | 'warning' | 'neutral'; children: React.ReactNode }) {
-  const style = tone === 'success' ? 'bg-emerald-50 text-emerald-700' : tone === 'warning' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'
+function StatusBadge({ tone, children }: { tone: 'success' | 'warning' | 'neutral' | 'accent'; children: React.ReactNode }) {
+  const style = tone === 'success'
+    ? 'bg-[#e8f5e9] text-[#2d8a4e]'
+    : tone === 'warning'
+      ? 'bg-[#fff8e1] text-[#c9861a]'
+      : tone === 'accent'
+        ? 'border border-teal-200 bg-teal-50 text-teal-700'
+        : 'bg-slate-100 text-slate-500'
   return <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[10px] font-semibold ${style}`}>{children}</span>
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-[11px] font-semibold text-slate-600">{label}</span>{children}</label> }
-function Metric({ label, value, tone }: { label: string; value: string | number; tone?: 'success' | 'danger' }) { return <div className="rounded-xl bg-slate-50 px-2.5 py-2"><div className="text-[10px] font-medium text-slate-400">{label}</div><div className={`mt-0.5 text-[17px] font-bold tabular-nums ${tone === 'success' ? 'text-emerald-600' : tone === 'danger' ? 'text-red-500' : 'text-slate-800'}`}>{value}</div></div> }
+function Metric({ label, value, tone }: { label: string; value: string | number; tone?: 'success' | 'danger' }) { return <div className="rounded-lg bg-slate-50 px-2.5 py-2"><div className="text-[10px] font-medium text-slate-400">{label}</div><div className={`mt-0.5 text-[17px] font-bold tabular-nums ${tone === 'success' ? 'text-[#2d8a4e]' : tone === 'danger' ? 'text-[#c23b3b]' : 'text-slate-800'}`}>{value}</div></div> }
 function SmallInfo({ label, value }: { label: string; value: string }) { return <div className="rounded-xl bg-slate-50 px-3 py-2.5"><div className="text-[10px] font-medium text-slate-400">{label}</div><div className="mt-1 truncate text-xs font-semibold tabular-nums text-slate-700" title={value}>{value}</div></div> }
+function credentialHeatColor(record: CredentialUsage['recent'][number]) { return record.relogin ? '#f0a020' : record.ok ? '#40c463' : '#e5484d' }
 function formatTime(value?: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function formatCompactTime(value?: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—' }
