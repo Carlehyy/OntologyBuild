@@ -86,41 +86,97 @@ export default function HubOperations({ credential, reloadCredential, onError }:
   const ready = Boolean(credential?.configured && credential.has_session && !credential.expired)
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <div><h1 className="text-lg font-semibold">授权配置</h1><p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">在线维护 W3 授权、观察稳定性并配置系统管理 MCP。</p></div>
-        <span className={`rounded-full px-3 py-1.5 text-xs font-medium ${ready ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{ready ? '授权已就绪' : credential?.configured ? '已配置，待验证' : '尚未配置'}</span>
-      </div>
-      {message && <div className={`mb-4 flex items-center justify-between rounded-md px-4 py-2.5 text-xs ${message.kind === 'success' ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}><span className="flex items-center gap-2">{message.kind === 'success' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}{message.text}</span><button onClick={() => setMessage(null)}>关闭</button></div>}
+    <div className="relative min-h-full bg-[#eef1f5] p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
+      {message && (
+        <div className={`absolute left-1/2 top-3 z-20 flex w-[min(680px,calc(100%-32px))] -translate-x-1/2 items-center justify-between rounded-xl border px-4 py-2.5 text-xs shadow-lg ${message.kind === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-emerald-900/5' : 'border-red-200 bg-red-50 text-red-600 shadow-red-900/5'}`}>
+          <span className="flex min-w-0 items-center gap-2">
+            {message.kind === 'success' ? <CheckCircle2 size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
+            <span className="truncate">{message.text}</span>
+          </span>
+          <button onClick={() => setMessage(null)} className="ml-4 shrink-0 font-medium transition-opacity hover:opacity-70">关闭</button>
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader className="flex-row items-start justify-between"><div><CardTitle className="flex items-center gap-2"><KeyRound size={16} />W3 账号授权</CardTitle><CardDescription>凭据使用平台密钥加密保存，密码不会通过接口回传。</CardDescription></div>{config && <span className="rounded-full bg-[var(--color-bg-base)] px-2.5 py-1 text-[10px] text-[var(--color-text-secondary)]">{config.source === 'online' ? '在线配置' : '环境变量'}</span>}</CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+      <div className="grid min-h-full grid-cols-1 gap-4 xl:h-full xl:min-h-0 xl:grid-cols-12 xl:grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)]">
+        <Card className={`${cardClass} xl:col-span-7`}>
+          <CardHeader className="flex-row items-start justify-between gap-4 p-4 pb-3">
+            <CardHeading icon={<KeyRound size={17} />} title="W3 账号授权" description="凭据由平台密钥加密保存，密码不会通过接口回传。" />
+            {config && <StatusBadge tone="neutral">{config.source === 'online' ? '在线配置' : '环境变量'}</StatusBadge>}
+          </CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4 pt-0">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="W3 账号"><input value={username} onChange={event => setUsername(event.target.value)} className={inputClass} placeholder="工号 / 登录账号" /></Field>
               <Field label="W3 密码"><input type="password" value={password} onChange={event => setPassword(event.target.value)} className={inputClass} placeholder={config?.password_configured ? '留空则保持现有密码' : '请输入密码'} /></Field>
             </div>
             <Field label="登录地址"><input value={loginUrl} onChange={event => setLoginUrl(event.target.value)} className={`${inputClass} font-mono`} placeholder="https://login.huawei.com/..." /></Field>
-            <div className="flex items-center justify-between rounded-md bg-[var(--color-bg-base)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]"><span>密码状态：{config?.password_configured ? '已配置' : '未配置'}</span><span>保存后会清理旧 Cookie，防止账号串用</span></div>
-            <div className="flex gap-2"><Button loading={savingConfig} onClick={saveConfig}><Save size={14} />保存授权</Button><Button variant="outline" loading={refreshing} onClick={refreshLogin}><UserRoundCheck size={14} />保存并验证</Button></div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader><CardTitle>授权稳定性</CardTitle><CardDescription>统计启用 W3 的接口调用结果；最近 60 次采用模型配置相同的热力条表达。</CardDescription></CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-4 gap-2"><Metric label="总使用" value={usage?.total ?? 0} /><Metric label="成功" value={usage?.success ?? 0} tone="success" /><Metric label="失败" value={usage?.failed ?? 0} tone="danger" /><Metric label="成功率" value={`${usage?.success_rate ?? 0}%`} /></div>
-            <div><div className="mb-2 flex items-center justify-between text-[11px]"><span className="font-medium text-[var(--color-text-secondary)]">最近 60 次授权使用</span><span className="text-[var(--color-text-tertiary)]">绿色成功 · 红色失败 · 琥珀自动重登</span></div><CredentialHeatStrip usage={usage} /></div>
-            <div className="max-h-44 overflow-y-auto rounded-md border border-[var(--color-border)]">
-              {!usage?.recent.length ? <div className="py-12 text-center text-xs text-[var(--color-text-tertiary)]">暂无 W3 使用记录</div> : usage.recent.slice(0, 8).map(record => <div key={record.id} className="flex items-center gap-3 border-b border-[var(--color-border)] px-3 py-2 text-[11px] last:border-0"><span className={`h-2 w-2 rounded-full ${record.ok ? 'bg-emerald-500' : 'bg-red-500'}`} /><span className="min-w-0 flex-1 truncate font-medium">{record.interface_name}</span><span className="text-[var(--color-text-tertiary)]">{record.relogin ? '自动重登 · ' : ''}{formatTime(record.created_at)}</span></div>)}
+            <div className="grid grid-cols-1 gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] text-slate-500 sm:grid-cols-2">
+              <span>密码状态：<b className={config?.password_configured ? 'font-semibold text-emerald-700' : 'font-semibold text-slate-500'}>{config?.password_configured ? '已配置' : '未配置'}</b></span>
+              <span className="sm:text-right">保存后清理旧 Cookie，避免账号串用</span>
+            </div>
+            <div className="mt-auto flex flex-wrap gap-2">
+              <Button loading={savingConfig} onClick={saveConfig} className={primaryButtonClass}><Save size={14} />保存授权</Button>
+              <Button variant="outline" loading={refreshing} onClick={refreshLogin} className={outlineButtonClass}><UserRoundCheck size={14} />保存并验证</Button>
             </div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader><CardTitle className="flex items-center gap-2"><RefreshCw size={16} />刷新设置</CardTitle><CardDescription>按 Cron 周期主动更新授权，接口执行时仍保留失效重登兜底。</CardDescription></CardHeader>
-          <CardContent className="space-y-4"><Field label="刷新 Cron（5 段）"><div className="flex gap-2"><input value={cron} onChange={event => setCron(event.target.value)} className={`${inputClass} font-mono`} /><Button variant="outline" loading={savingCron} onClick={saveCron}>保存计划</Button></div></Field><div className="grid grid-cols-2 gap-3"><SmallInfo label="最近获取" value={formatTime(credential?.acquired_at)} /><SmallInfo label="下次刷新" value={formatTime(credential?.next_run)} /></div>{credential?.message && credential.last_result === 'failed' && <div className="rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{credential.message}</div>}</CardContent>
+        <Card className={`${cardClass} xl:col-span-5`}>
+          <CardHeader className="p-4 pb-3">
+            <CardHeading icon={<CheckCircle2 size={17} />} title="授权稳定性" description="最近 60 次 W3 调用表现，与模型配置页采用相同状态配色。" />
+          </CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4 pt-0">
+            <div className="grid grid-cols-4 gap-2">
+              <Metric label="总使用" value={usage?.total ?? 0} />
+              <Metric label="成功" value={usage?.success ?? 0} tone="success" />
+              <Metric label="失败" value={usage?.failed ?? 0} tone="danger" />
+              <Metric label="成功率" value={`${usage?.success_rate ?? 0}%`} />
+            </div>
+            <div>
+              <div className="mb-1.5 flex items-center justify-between gap-3 text-[10px]">
+                <span className="font-semibold text-slate-500">最近 60 次授权使用</span>
+                <span className="text-right text-slate-400">成功 · 失败 · 自动重登</span>
+              </div>
+              <CredentialHeatStrip usage={usage} />
+            </div>
+            <div className="min-h-0 flex-1">
+              {!usage?.recent.length ? (
+                <div className="grid h-full min-h-24 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 text-xs text-slate-400">暂无 W3 使用记录</div>
+              ) : (
+                <div className="grid h-full min-h-0 grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200">
+                  {usage.recent.slice(0, 8).map(record => (
+                    <div key={record.id} title={`${record.interface_name} · ${formatTime(record.created_at)}`} className="flex min-w-0 items-center gap-2 bg-slate-50 px-2.5 py-1.5 text-[10px]">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: record.relogin ? '#f0a020' : record.ok ? '#40c463' : '#e5484d' }} />
+                      <span className="min-w-0 flex-1 truncate font-medium text-slate-600">{record.interface_name}</span>
+                      <span className="shrink-0 tabular-nums text-slate-400">{formatCompactTime(record.created_at)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className={`${cardClass} xl:col-span-5`}>
+          <CardHeader className="p-4 pb-3">
+            <CardHeading icon={<RefreshCw size={17} />} title="刷新设置" description="按 Cron 主动更新授权，并保留调用时失效重登兜底。" />
+          </CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4 pt-0">
+            <Field label="刷新 Cron（5 段）">
+              <div className="flex gap-2">
+                <input value={cron} onChange={event => setCron(event.target.value)} className={`${inputClass} font-mono`} />
+                <Button variant="outline" loading={savingCron} onClick={saveCron} className={`${outlineButtonClass} shrink-0`}>保存计划</Button>
+              </div>
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <SmallInfo label="最近获取" value={formatTime(credential?.acquired_at)} />
+              <SmallInfo label="下次刷新" value={formatTime(credential?.next_run)} />
+            </div>
+            <div className="mt-auto flex items-center justify-between rounded-xl bg-teal-50 px-3 py-2.5 text-[11px] text-teal-800">
+              <span className="flex items-center gap-2"><RefreshCw size={13} />失效时自动重新登录</span>
+              <StatusBadge tone={ready ? 'success' : 'neutral'}>{ready ? '当前可用' : '等待授权'}</StatusBadge>
+            </div>
+            {credential?.message && credential.last_result === 'failed' && <div className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{credential.message}</div>}
+          </CardContent>
         </Card>
 
         <SystemMcpCard info={systemMcp} />
@@ -135,17 +191,59 @@ function CredentialHeatStrip({ usage }: { usage: CredentialUsage | null }) {
     const padding = Array.from({ length: Math.max(0, 60 - recent.length) }, () => null)
     return [...padding, ...recent]
   }, [usage])
-  return <div className="flex gap-px">{cells.map((record, index) => { const label = record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'; return <span key={record?.id ?? `empty-${index}`} role="img" tabIndex={0} aria-label={label} title={label} className="h-5 min-w-0 flex-1 rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500" style={{ background: !record ? '#e5e7eb' : record.relogin ? '#f59e0b' : record.ok ? '#22c55e' : '#ef4444' }} /> })}</div>
+  return <div className="flex gap-px">{cells.map((record, index) => { const label = record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'; return <span key={record?.id ?? `empty-${index}`} role="img" tabIndex={0} aria-label={label} title={label} className="h-4 min-w-0 flex-1 rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500" style={{ background: !record ? '#eceef1' : record.relogin ? '#f0a020' : record.ok ? '#40c463' : '#e5484d' }} /> })}</div>
 }
 
 function SystemMcpCard({ info }: { info: McpInfo | null }) {
   const endpoint = info ? `${window.location.origin}${info.endpoint}` : ''
-  const config = info ? JSON.stringify({ mcpServers: { [info.server_name]: { type: 'streamable-http', url: endpoint, headers: { Authorization: 'Bearer <API_HUB_SYSTEM_MCP_TOKEN>' } } } }, null, 2) : ''
-  return <Card><CardHeader className="flex-row items-start justify-between"><div><CardTitle className="flex items-center gap-2"><ShieldCheck size={16} />系统管理 MCP</CardTitle><CardDescription>向受信任的 Agent 开放接口与分组管理能力；Token 只在服务端配置，不会回传浏览器。</CardDescription></div>{info && <span className={`rounded-full px-2.5 py-1 text-[10px] ${info.token_required ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{info.token_required ? 'Token 已启用' : '未配置，端点已禁用'}</span>}</CardHeader><CardContent className="space-y-3"><div className="flex gap-2"><input readOnly value={endpoint} className={`${inputClass} font-mono text-[11px]`} /><Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(endpoint)}><Copy size={14} /></Button></div><div className="flex items-center justify-between text-[11px]"><span className="text-[var(--color-text-tertiary)]">Agent 配置 JSON（请替换占位符）</span><button onClick={() => navigator.clipboard.writeText(config)} className="text-[var(--color-nav-bg)]">复制配置</button></div><pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-3 font-mono text-[10px] leading-5 text-slate-100">{config || '正在读取配置…'}</pre></CardContent></Card>
+  const config = info ? JSON.stringify({ mcpServers: { [info.server_name]: { type: 'streamable-http', url: endpoint, headers: { Authorization: 'Bearer <API_HUB_SYSTEM_MCP_TOKEN>' } } } }) : ''
+  return (
+    <Card className={`${cardClass} xl:col-span-7`}>
+      <CardHeader className="flex-row items-start justify-between gap-4 p-4 pb-3">
+        <CardHeading icon={<ShieldCheck size={17} />} title="系统管理 MCP" description="向受信任的 Agent 开放管理能力；Token 只在服务端配置。" />
+        {info && <StatusBadge tone={info.token_required ? 'success' : 'warning'}>{info.token_required ? 'Token 已启用' : '未配置，端点已禁用'}</StatusBadge>}
+      </CardHeader>
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4 pt-0">
+        <Field label="服务地址">
+          <div className="flex gap-2">
+            <input readOnly value={endpoint} className={`${inputClass} font-mono text-[11px]`} />
+            <Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(endpoint)} className={`${outlineButtonClass} shrink-0`} aria-label="复制服务地址"><Copy size={14} /></Button>
+          </div>
+        </Field>
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="font-medium text-slate-500">Agent 配置 JSON（请替换占位符）</span>
+          <button onClick={() => navigator.clipboard.writeText(config)} className="font-medium text-teal-700 transition-colors hover:text-teal-900">复制配置</button>
+        </div>
+        <pre className="min-h-24 flex-1 whitespace-pre-wrap break-all rounded-xl bg-slate-900 p-3 font-mono text-[10px] leading-4 text-slate-100 shadow-inner">{config || '正在读取配置…'}</pre>
+      </CardContent>
+    </Card>
+  )
 }
 
-const inputClass = 'h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-xs outline-none focus:border-[var(--color-nav-bg)]'
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-xs font-medium">{label}</span>{children}</label> }
-function Metric({ label, value, tone }: { label: string; value: string | number; tone?: 'success' | 'danger' }) { return <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3"><div className="text-[10px] text-[var(--color-text-tertiary)]">{label}</div><div className={`mt-1 text-lg font-semibold ${tone === 'success' ? 'text-[var(--color-success)]' : tone === 'danger' ? 'text-[var(--color-danger)]' : ''}`}>{value}</div></div> }
-function SmallInfo({ label, value }: { label: string; value: string }) { return <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3"><div className="text-[10px] text-[var(--color-text-tertiary)]">{label}</div><div className="mt-1 text-xs font-medium">{value}</div></div> }
+const cardClass = 'flex min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm transition-shadow duration-200 hover:shadow-md'
+const inputClass = 'h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-teal-400 focus:ring-2 focus:ring-teal-500/15'
+const primaryButtonClass = 'rounded-lg bg-teal-600 text-white shadow-sm hover:bg-teal-700 active:bg-teal-800'
+const outlineButtonClass = 'rounded-lg border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+
+function CardHeading({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">{icon}</span>
+      <div className="min-w-0">
+        <CardTitle className="text-[14px] text-slate-800">{title}</CardTitle>
+        <CardDescription className="mt-1 text-[11px] leading-4 text-slate-400">{description}</CardDescription>
+      </div>
+    </div>
+  )
+}
+
+function StatusBadge({ tone, children }: { tone: 'success' | 'warning' | 'neutral'; children: React.ReactNode }) {
+  const style = tone === 'success' ? 'bg-emerald-50 text-emerald-700' : tone === 'warning' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'
+  return <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[10px] font-semibold ${style}`}>{children}</span>
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-[11px] font-semibold text-slate-600">{label}</span>{children}</label> }
+function Metric({ label, value, tone }: { label: string; value: string | number; tone?: 'success' | 'danger' }) { return <div className="rounded-xl bg-slate-50 px-2.5 py-2"><div className="text-[10px] font-medium text-slate-400">{label}</div><div className={`mt-0.5 text-[17px] font-bold tabular-nums ${tone === 'success' ? 'text-emerald-600' : tone === 'danger' ? 'text-red-500' : 'text-slate-800'}`}>{value}</div></div> }
+function SmallInfo({ label, value }: { label: string; value: string }) { return <div className="rounded-xl bg-slate-50 px-3 py-2.5"><div className="text-[10px] font-medium text-slate-400">{label}</div><div className="mt-1 truncate text-xs font-semibold tabular-nums text-slate-700" title={value}>{value}</div></div> }
 function formatTime(value?: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
+function formatCompactTime(value?: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—' }
