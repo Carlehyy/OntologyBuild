@@ -9,7 +9,6 @@ import {
   Boxes, Network, ArrowRight,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineFilterOption, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
-import { syncTasksApi, type SyncTask } from '@/api/v2/sync-tasks'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -119,12 +118,6 @@ export default function SyncTasksTab() {
   const [filterPipelineId, setFilterPipelineId] = useState(() => searchParams.get('pipeline_id') || '')
   const [pipelineOptions, setPipelineOptions] = useState<PipelineFilterOption[]>([])
 
-  // ── 旧版同步任务（DataSyncTask）—— 调度器仍在跑但页面不可见 ──
-  const [legacyTasks, setLegacyTasks] = useState<SyncTask[]>([])
-  const [legacyLoading, setLegacyLoading] = useState(true)
-  const [legacyDisablingId, setLegacyDisablingId] = useState<string | null>(null)
-  const [legacyError, setLegacyError] = useState('')
-
   useEffect(() => {
     const pid = searchParams.get('pipeline')
     if (pid) {
@@ -188,57 +181,6 @@ export default function SyncTasksTab() {
     const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 250)
     return () => clearTimeout(timer)
   }, [searchInput])
-
-  // ── 加载旧版同步任务 ──
-  const loadLegacy = useCallback(async () => {
-    setLegacyLoading(true)
-    try {
-      const res = await syncTasksApi.list({ page: 1, page_size: 100 })
-      setLegacyTasks(res.items ?? [])
-    } catch {
-      setLegacyTasks([])
-    } finally {
-      setLegacyLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { loadLegacy() }, [loadLegacy])
-
-  const handleDisableLegacy = async (id: string) => {
-    setLegacyDisablingId(id)
-    setLegacyError('')
-    try {
-      await syncTasksApi.toggle(id, false)
-      setLegacyTasks(prev => prev.map(t => t.id === id ? { ...t, enabled: false } : t))
-    } catch (error: unknown) {
-      const err = error as { detail?: string; message?: string }
-      setLegacyError(err.detail || err.message || '旧版同步任务停用失败，请重试')
-    } finally {
-      setLegacyDisablingId(null)
-    }
-  }
-
-  const handleDisableAllLegacy = async () => {
-    const enabled = legacyTasks.filter(t => t.enabled)
-    setLegacyError('')
-    const failed: string[] = []
-    for (const t of enabled) {
-      try {
-        await syncTasksApi.toggle(t.id, false)
-      } catch {
-        failed.push(t.name)
-      }
-    }
-    await loadLegacy()
-    if (failed.length > 0) {
-      setLegacyError(
-        `以下 ${failed.length} 个旧版任务未能停用：${failed.slice(0, 3).join('、')}${failed.length > 3 ? '…' : ''}`,
-      )
-    }
-  }
-
-  const legacyEnabledCount = legacyTasks.filter(t => t.enabled).length
-  const legacyHasActive = legacyTasks.some(t => t.enabled && (t.schedule_type === 'CRON' || t.schedule_type === 'INTERVAL'))
 
   const handleTabChange = (key: string) => { setActiveTab(key); setPage(1) }
   const handlePipelineFilter = (pipelineId: string) => {
@@ -398,45 +340,6 @@ export default function SyncTasksTab() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 2xl:grid-cols-12">
         <div className="col-span-1 flex min-h-0 flex-col 2xl:col-span-9">
-          {!legacyLoading && legacyTasks.length > 0 && (
-            <div className={`mb-3 shrink-0 rounded-xl border px-4 py-3 text-xs leading-relaxed ${
-              legacyHasActive
-                ? 'border-amber-200 bg-amber-50 text-amber-800'
-                : 'border-slate-200 bg-slate-50 text-slate-600'
-            }`}>
-              {legacyHasActive ? (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <span className="inline-flex items-center gap-2 font-medium">
-                    <AlertCircle size={14} className="shrink-0 text-amber-600" />
-                    发现 {legacyTasks.length} 个旧版同步任务，其中 {legacyEnabledCount} 个仍在运行
-                  </span>
-                  <span className="text-[11px] text-amber-700/80">建议停用遗留调度，避免继续生成 SYNC:: 数据集</span>
-                  <button
-                    type="button"
-                    onClick={handleDisableAllLegacy}
-                    className="ml-auto rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-medium text-amber-800 transition hover:bg-amber-100"
-                  >
-                    一键禁用
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={14} className="shrink-0 text-emerald-500" />
-                  <span>{legacyTasks.length} 个旧版同步任务均已停用，不会继续写入数据。</span>
-                </div>
-              )}
-            </div>
-          )}
-          {legacyError && (
-            <div className="mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700">
-              <XCircle size={14} className="shrink-0" />
-              <span className="flex-1">{legacyError}</span>
-              <button type="button" onClick={() => setLegacyError('')} aria-label="关闭旧版任务错误提示">
-                <X size={13} />
-              </button>
-            </div>
-          )}
-
           <div className={`${PANEL} flex min-h-0 flex-1 flex-col`}>
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-100 px-5 py-3">
               <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -693,49 +596,6 @@ export default function SyncTasksTab() {
             )}
           </div>
 
-          {!legacyLoading && legacyTasks.length > 0 && (
-            <div className={`${PANEL} mt-3 max-h-[150px] shrink-0`}>
-              <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
-                <History size={13} className="text-slate-400" />
-                <span className="text-xs font-medium text-slate-700">旧版同步任务（{legacyTasks.length}）</span>
-                <span className="text-[10px] text-slate-400">
-                  {legacyTasks.filter(t => t.enabled).length} 启用 · {legacyTasks.filter(t => t.schedule_type === 'INTERVAL').length} INTERVAL · {legacyTasks.filter(t => t.schedule_type === 'CRON').length} CRON
-                </span>
-              </div>
-              <div className="overflow-auto scrollbar-thin">
-                <table className="w-full text-xs">
-                  <tbody className="divide-y divide-slate-100">
-                    {legacyTasks.map(t => (
-                      <tr key={t.id} className="hover:bg-slate-50/80">
-                        <td className="px-4 py-2 text-slate-700">{t.name}</td>
-                        <td className="px-3 py-2 text-center text-[11px] text-slate-500">{t.sync_mode}</td>
-                        <td className="px-3 py-2 text-center text-[11px] text-slate-500">
-                          {t.schedule_type === 'INTERVAL' ? `${t.interval_seconds}s` : t.schedule_type === 'CRON' ? t.cron_expression : '手动'}
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <span className={`rounded-md px-2 py-1 text-[10px] ${t.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                            {t.enabled ? '启用' : '禁用'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2 text-right">
-                          {t.enabled && (
-                            <button
-                              type="button"
-                              onClick={() => handleDisableLegacy(t.id)}
-                              disabled={legacyDisablingId === t.id}
-                              className="rounded-lg px-2.5 py-1 text-[10px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
-                            >
-                              {legacyDisablingId === t.id ? '禁用中...' : '禁用'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
         </div>
 
         <aside className="hidden min-h-0 flex-col gap-3 2xl:col-span-3 2xl:flex">
