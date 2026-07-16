@@ -26,6 +26,11 @@ interface Overview {
     decisions: { total: number; approved: number; rejected: number; recentApprovalRate: number | null }
     firings7d: { total: number; fired: number; error: number }
     actionRuns7d: { total: number; success: number; failed: number }
+    daily7d: {
+      date: string
+      firings: { fired: number; error: number }
+      actionRuns: { success: number; failed: number }
+    }[]
   }
   facts: { total: number; byKind: Record<string, number> }
 }
@@ -78,6 +83,12 @@ const formatDateTime = (iso?: string | null, compact = false) => {
   return value.toLocaleString('zh-CN', compact
     ? { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
     : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+const formatRuntimeDay = (date: string) => {
+  const value = new Date(`${date}T00:00:00`)
+  if (Number.isNaN(value.getTime())) return date
+  return value.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
 const formatValue = (value: unknown, max = 30) => {
@@ -229,6 +240,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  const [runtimeRange, setRuntimeRange] = useState<[number, number]>([0, 6])
 
   const overviewQuery = useQuery<Overview>({
     queryKey: ['formal-overview', ontologyId],
@@ -247,6 +259,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   })
 
   const pending = pendingQuery.data ?? []
+  const runtimeDayCount = overviewQuery.data?.runtime.daily7d?.length || 7
   useEffect(() => {
     if (pending.length === 0) {
       setSelectedId(null)
@@ -254,6 +267,9 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     }
     if (!selectedId || !pending.some(item => item.id === selectedId)) setSelectedId(pending[0].id)
   }, [pending, selectedId])
+  useEffect(() => {
+    setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
+  }, [ontologyId, runtimeDayCount])
   const selected = pending.find(item => item.id === selectedId) ?? pending[0] ?? null
 
   const refreshOverview = () => {
@@ -309,17 +325,49 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const factParts = Object.entries(ov.facts.byKind)
     .filter(([, value]) => value > 0)
     .sort(([a], [b]) => (FACT_META[a] ? 0 : 1) - (FACT_META[b] ? 0 : 1))
-  const maxRuntime = Math.max(ov.runtime.firings7d.fired, ov.runtime.firings7d.error,
-    ov.runtime.actionRuns7d.success, ov.runtime.actionRuns7d.failed, 1)
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
   const sourceTotal = Math.max(ov.data.instances, 1)
   const boundPct = ov.data.mappings.total ? Math.round((ov.data.mappings.bound / ov.data.mappings.total) * 100) : 0
+  const runtimeDays = ov.runtime.daily7d?.length ? ov.runtime.daily7d : Array.from({ length: 7 }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (6 - index))
+    return {
+      date: date.toISOString().slice(0, 10),
+      firings: {
+        fired: index === 6 ? ov.runtime.firings7d.fired : 0,
+        error: index === 6 ? ov.runtime.firings7d.error : 0,
+      },
+      actionRuns: {
+        success: index === 6 ? ov.runtime.actionRuns7d.success : 0,
+        failed: index === 6 ? ov.runtime.actionRuns7d.failed : 0,
+      },
+    }
+  })
+  const runtimeRangeEnd = Math.min(runtimeRange[1], runtimeDays.length - 1)
+  const runtimeRangeStart = Math.min(runtimeRange[0], runtimeRangeEnd)
+  const selectedRuntimeDays = runtimeDays.slice(runtimeRangeStart, runtimeRangeEnd + 1)
+  const selectedRuntime = selectedRuntimeDays.reduce((summary, day) => ({
+    fired: summary.fired + day.firings.fired,
+    error: summary.error + day.firings.error,
+    success: summary.success + day.actionRuns.success,
+    failed: summary.failed + day.actionRuns.failed,
+  }), { fired: 0, error: 0, success: 0, failed: 0 })
+  const maxRuntime = Math.max(
+    selectedRuntime.fired, selectedRuntime.error,
+    selectedRuntime.success, selectedRuntime.failed, 1,
+  )
+  const runtimeStartLabel = formatRuntimeDay(runtimeDays[runtimeRangeStart].date)
+  const runtimeEndLabel = formatRuntimeDay(runtimeDays[runtimeRangeEnd].date)
+  const runtimeRangeLabel = runtimeRangeStart === runtimeRangeEnd
+    ? runtimeStartLabel
+    : `${runtimeStartLabel} – ${runtimeEndLabel}`
+  const runtimeRangeSpan = Math.max(runtimeDays.length - 1, 1)
 
   return (
     <main className="overview-dashboard" aria-label="本体总览">
       <div className="overview-hero-grid">
         <section className="overview-panel ontology-profile">
-          <PanelTitle title="本体概况" />
+          <PanelTitle title="本体概况" sub="当前发布投影" />
           <div className="profile-heading">
             <div className="profile-mark"><NetworkMark /></div>
             <div>
@@ -333,7 +381,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <div><dt>创建时间</dt><dd>{formatDateTime(ontology.created_at)}</dd></div>
             <div><dt>更新时间</dt><dd>{formatDateTime(ontology.updated_at)}</dd></div>
           </dl>
-          <div className="profile-trust"><ShieldCheck size={18} /><span>总览数据来自当前发布投影</span></div>
         </section>
 
         <section className="overview-panel kpi-rail" aria-label="关键指标">
@@ -403,16 +450,16 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
         </section>
 
         <section className="overview-panel runtime-summary">
-          <PanelTitle title="近 7 日运行汇总" sub="近 7 日聚合 · 分类对比" action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>} />
+          <PanelTitle title="近 7 日运行汇总" sub={`${runtimeRangeLabel} · ${selectedRuntimeDays.length} 日聚合`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>} />
           <div className="runtime-chart">
             <div className="runtime-group">
               <span className="runtime-group-name">哨兵评估</span>
               {[
-                ['命中', ov.runtime.firings7d.fired, 'teal'], ['错误', ov.runtime.firings7d.error, 'slate'],
+                ['命中', selectedRuntime.fired, 'teal'], ['错误', selectedRuntime.error, 'slate'],
               ].map(([label, value, tone]) => (
                 <div className="runtime-bar-item" key={String(label)}>
                   <span className="runtime-value">{value}</span>
-                  <span className={`runtime-bar tone-${tone}`} style={{ height: `${Math.max((Number(value) / maxRuntime) * 122, Number(value) ? 12 : 2)}px` }} />
+                  <span className={`runtime-bar tone-${tone}`} style={{ height: `${Math.max((Number(value) / maxRuntime) * 82, Number(value) ? 12 : 2)}px` }} />
                   <strong>{label}</strong>
                 </div>
               ))}
@@ -421,14 +468,59 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <div className="runtime-group">
               <span className="runtime-group-name">动作执行</span>
               {[
-                ['成功', ov.runtime.actionRuns7d.success, 'blue'], ['失败', ov.runtime.actionRuns7d.failed, 'slate'],
+                ['成功', selectedRuntime.success, 'blue'], ['失败', selectedRuntime.failed, 'slate'],
               ].map(([label, value, tone]) => (
                 <div className="runtime-bar-item" key={String(label)}>
                   <span className="runtime-value">{value}</span>
-                  <span className={`runtime-bar tone-${tone}`} style={{ height: `${Math.max((Number(value) / maxRuntime) * 122, Number(value) ? 12 : 2)}px` }} />
+                  <span className={`runtime-bar tone-${tone}`} style={{ height: `${Math.max((Number(value) / maxRuntime) * 82, Number(value) ? 12 : 2)}px` }} />
                   <strong>{label}</strong>
                 </div>
               ))}
+            </div>
+          </div>
+          <div className="runtime-range" aria-label="运行汇总时间范围">
+            <div className="runtime-range-heading">
+              <span>时间范围</span>
+              <output aria-live="polite">{runtimeRangeLabel}</output>
+            </div>
+            <div
+              className="runtime-range-control"
+              style={{
+                '--runtime-range-start': `${runtimeRangeStart / runtimeRangeSpan * 100}%`,
+                '--runtime-range-end': `${runtimeRangeEnd / runtimeRangeSpan * 100}%`,
+              } as React.CSSProperties}
+            >
+              <span className="runtime-range-track" aria-hidden="true"><i /></span>
+              <input
+                className="runtime-range-input"
+                type="range"
+                min="0"
+                max={runtimeDays.length - 1}
+                value={runtimeRangeStart}
+                aria-label="运行汇总开始日期"
+                aria-valuetext={runtimeStartLabel}
+                onChange={event => {
+                  const next = Math.min(Number(event.target.value), runtimeRangeEnd)
+                  setRuntimeRange([next, runtimeRangeEnd])
+                }}
+              />
+              <input
+                className="runtime-range-input"
+                type="range"
+                min="0"
+                max={runtimeDays.length - 1}
+                value={runtimeRangeEnd}
+                aria-label="运行汇总结束日期"
+                aria-valuetext={runtimeEndLabel}
+                onChange={event => {
+                  const next = Math.max(Number(event.target.value), runtimeRangeStart)
+                  setRuntimeRange([runtimeRangeStart, next])
+                }}
+              />
+            </div>
+            <div className="runtime-range-bounds" aria-hidden="true">
+              <time dateTime={runtimeDays[0].date}>{formatRuntimeDay(runtimeDays[0].date)}</time>
+              <time dateTime={runtimeDays.at(-1)?.date}>{formatRuntimeDay(runtimeDays.at(-1)?.date || '')}</time>
             </div>
           </div>
         </section>

@@ -1173,7 +1173,17 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     from datetime import timedelta
     _require_ontology(db, ontology_id)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    week_ago = now - timedelta(days=7)
+    window_start = (now - timedelta(days=6)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    runtime_days = [
+        {
+            "date": (window_start + timedelta(days=offset)).date().isoformat(),
+            "firings": {"fired": 0, "error": 0},
+            "actionRuns": {"success": 0, "failed": 0},
+        }
+        for offset in range(7)
+    ]
+    runtime_by_date = {item["date"]: item for item in runtime_days}
 
     # —— 模型 ——
     object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
@@ -1186,7 +1196,8 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
         sentinels = db.query(Sentinel).filter(Sentinel.ontology_id == ontology_id).all()
         firings_7d = (db.query(SentinelFiring)
                       .filter(SentinelFiring.ontology_id == ontology_id,
-                              SentinelFiring.created_at >= week_ago).all())
+                              SentinelFiring.created_at >= window_start,
+                              SentinelFiring.created_at <= now).all())
     except Exception:  # noqa: BLE001
         db.rollback()
         logger.warning("Overview 哨兵统计失败,已降级为空统计(ontology=%s)", ontology_id, exc_info=True)
@@ -1230,8 +1241,17 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     approved_n = sum(1 for l in decided if l.status == "approved")
     recent = decided[:20]
     recent_rate = (sum(1 for l in recent if l.status == "approved") / len(recent)) if recent else None
-    runs_7d = [l for l in logs if l.executed_at and l.executed_at >= week_ago
+    runs_7d = [l for l in logs if l.executed_at
+               and window_start <= l.executed_at <= now
                and l.status in ("success", "failed")]
+    for firing in firings_7d:
+        day = runtime_by_date.get(firing.created_at.date().isoformat())
+        if day and firing.status in ("fired", "error"):
+            day["firings"][firing.status] += 1
+    for log in runs_7d:
+        day = runtime_by_date.get(log.executed_at.date().isoformat())
+        if day:
+            day["actionRuns"][log.status] += 1
 
     # —— 事实流 ——
     facts_total = db.query(PropertyFact).filter(
@@ -1299,6 +1319,7 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
             "actionRuns7d": {"total": len(runs_7d),
                              "success": sum(1 for l in runs_7d if l.status == "success"),
                              "failed": sum(1 for l in runs_7d if l.status == "failed")},
+            "daily7d": runtime_days,
         },
         "facts": {"total": facts_total, "byKind": by_kind},
         "health": health,
