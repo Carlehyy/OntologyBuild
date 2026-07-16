@@ -476,7 +476,7 @@ def require_workflow_validation_evidence(
     if drift:
         raise ValidationAttestationError(
             f"{context}检测到 n8n 工作流在试跑校验后发生漂移（{', '.join(drift)}）。"
-            "旧发布凭证已失效，请重新执行预览并校验字段定义。"
+            "平台已自动使旧校验结果失效。请返回执行预览，平台会重新完成一致性校验。"
         )
     return current
 
