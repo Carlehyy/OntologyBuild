@@ -1,6 +1,7 @@
 """Alembic 必须能从空库独立建立数据管理主链路，不能依赖应用启动补表。"""
 
 from datetime import datetime, timezone
+import importlib.util
 import json
 from pathlib import Path
 
@@ -9,6 +10,14 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
+
+
+def _load_migration(path: Path):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _alembic_config(backend: Path, db_path: Path) -> Config:
@@ -147,6 +156,63 @@ def test_pipeline_validation_attestation_migration_round_trip(tmp_path, monkeypa
     engine.dispose()
 
 
+def test_pipeline_validation_attestation_widens_postgres_version_column(
+    monkeypatch,
+):
+    backend = Path(__file__).resolve().parents[2]
+    migration = _load_migration(
+        backend / "alembic" / "versions"
+        / "2026_07_17_0028_pipeline_validation_attestation.py"
+    )
+    calls = []
+    bind = type(
+        "PostgresBind",
+        (),
+        {"dialect": type("Dialect", (), {"name": "postgresql"})()},
+    )()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
+    monkeypatch.setattr(
+        migration.op,
+        "alter_column",
+        lambda table, column, **kwargs: calls.append((table, column, kwargs)),
+    )
+
+    migration._widen_alembic_version_column()
+
+    assert len(migration.revision) > 32
+    assert len(calls) == 1
+    table, column, kwargs = calls[0]
+    assert (table, column) == ("alembic_version", "version_num")
+    assert isinstance(kwargs["existing_type"], migration.sa.String)
+    assert kwargs["existing_type"].length == 32
+    assert isinstance(kwargs["type_"], migration.sa.String)
+    assert kwargs["type_"].length == 64
+    assert kwargs["existing_nullable"] is False
+
+
+def test_pipeline_validation_attestation_skips_version_ddl_on_sqlite(
+    monkeypatch,
+):
+    backend = Path(__file__).resolve().parents[2]
+    migration = _load_migration(
+        backend / "alembic" / "versions"
+        / "2026_07_17_0028_pipeline_validation_attestation.py"
+    )
+    bind = type(
+        "SqliteBind",
+        (),
+        {"dialect": type("Dialect", (), {"name": "sqlite"})()},
+    )()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: bind)
+    monkeypatch.setattr(
+        migration.op,
+        "alter_column",
+        lambda *args, **kwargs: pytest.fail("SQLite 不应修改 Alembic 版本列"),
+    )
+
+    migration._widen_alembic_version_column()
+
+
 def test_alembic_revision_graph_has_one_head(tmp_path, monkeypatch):
     backend = Path(__file__).resolve().parents[2]
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -155,6 +221,23 @@ def test_alembic_revision_graph_has_one_head(tmp_path, monkeypatch):
     heads = ScriptDirectory.from_config(cfg).get_heads()
 
     assert len(heads) == 1, f"Alembic 出现多 head，发布顺序不再唯一：{heads}"
+
+
+def test_alembic_revision_ids_fit_expanded_version_column(tmp_path, monkeypatch):
+    backend = Path(__file__).resolve().parents[2]
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = _alembic_config(backend, tmp_path / "unused.db")
+    revisions = list(ScriptDirectory.from_config(cfg).walk_revisions())
+    oversized = {
+        item.revision: len(item.revision)
+        for item in revisions
+        if len(item.revision) > 64
+    }
+
+    assert not oversized, (
+        "Alembic revision ID 超过 version_num VARCHAR(64)，部署会在记录版本号时失败："
+        f"{oversized}"
+    )
 
 
 def _seed_legacy_review(

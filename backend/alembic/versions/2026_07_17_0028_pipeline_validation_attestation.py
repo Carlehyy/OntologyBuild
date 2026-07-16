@@ -15,6 +15,26 @@ branch_labels = None
 depends_on = None
 
 
+def _widen_alembic_version_column() -> None:
+    """Allow this and future descriptive revision IDs on PostgreSQL.
+
+    Alembic creates ``alembic_version.version_num`` as ``VARCHAR(32)`` by
+    default.  This revision ID is longer than that, so PostgreSQL otherwise
+    rolls back the migration when Alembic records the new current revision.
+    SQLite does not enforce the declared VARCHAR length and needs no DDL.
+    """
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    op.alter_column(
+        "alembic_version",
+        "version_num",
+        existing_type=sa.String(length=32),
+        type_=sa.String(length=64),
+        existing_nullable=False,
+    )
+
+
 def _columns() -> set[str]:
     inspector = sa_inspect(op.get_bind())
     if "v2_pipelines" not in inspector.get_table_names():
@@ -23,6 +43,8 @@ def _columns() -> set[str]:
 
 
 def upgrade() -> None:
+    # This must run before Alembic updates version_num after upgrade() returns.
+    _widen_alembic_version_column()
     if "validation_attestation" not in _columns():
         op.add_column(
             "v2_pipelines",
