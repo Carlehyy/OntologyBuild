@@ -1,10 +1,12 @@
 """流水线调度任务路由：CRUD、手动触发、执行历史、统计"""
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import uuid
 
 from app.deps import get_current_user, get_db
@@ -14,6 +16,34 @@ from app.models.v2.pipeline import Pipeline, PipelineRun
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 WRITE_MODES = ("overwrite", "append", "upsert", "append_dedup")
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """数据库裸时间统一按 UTC 解释；带时区值统一转换为 UTC。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return _as_utc(value).isoformat().replace("+00:00", "Z")
+
+
+def _shanghai_day_start_utc(local_day) -> datetime:
+    """上海自然日零点转换为数据库使用的 UTC naive 边界。"""
+    local_start = datetime.combine(local_day, datetime.min.time(), tzinfo=SHANGHAI_TZ)
+    return local_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _shanghai_date(value: datetime):
+    return _as_utc(value).astimezone(SHANGHAI_TZ).date()
 
 
 class PipelineTaskCreate(BaseModel):
@@ -320,25 +350,26 @@ def stats_overview(db: Session = Depends(get_db)):
 
     # 执行次数/异常数：以任务触发的 PipelineRun 为口径（今日 + 累计）
     task_runs = db.query(PipelineRun).filter(PipelineRun.task_id.isnot(None))
-    today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    local_today = _now_utc().astimezone(SHANGHAI_TZ).date()
+    today_start = _shanghai_day_start_utc(local_today)
     today_runs = task_runs.filter(PipelineRun.created_at >= today_start).count()
     today_errors = task_runs.filter(
         PipelineRun.created_at >= today_start, PipelineRun.status == "failed").count()
     total_runs = task_runs.count()
     total_errors = task_runs.filter(PipelineRun.status == "failed").count()
     # 最近 7 个自然日的真实运行次数。前端不得用随机/合成曲线冒充观测数据。
-    first_day = datetime.utcnow().date() - timedelta(days=6)
+    first_day = local_today - timedelta(days=6)
     trend = {
         (first_day + timedelta(days=i)).isoformat(): {"runs": 0, "errors": 0}
         for i in range(7)
     }
     recent = task_runs.filter(
-        PipelineRun.created_at >= datetime.combine(first_day, datetime.min.time())
+        PipelineRun.created_at >= _shanghai_day_start_utc(first_day)
     ).with_entities(PipelineRun.created_at, PipelineRun.status).all()
     for created_at, run_status in recent:
         if not created_at:
             continue
-        key = created_at.date().isoformat()
+        key = _shanghai_date(created_at).isoformat()
         if key not in trend:
             continue
         trend[key]["runs"] += 1
@@ -400,7 +431,10 @@ def list_tasks(
 ):
     q = db.query(PipelineTask)
     if search:
-        q = q.filter(PipelineTask.name.ilike(f"%{search}%"))
+        q = q.join(Pipeline, Pipeline.id == PipelineTask.pipeline_id).filter(or_(
+            PipelineTask.name.ilike(f"%{search}%"),
+            Pipeline.name.ilike(f"%{search}%"),
+        ))
     if status:
         q = q.filter(PipelineTask.status == status)
     if enabled is not None:
@@ -537,8 +571,8 @@ def list_histories(
             "id": r.id,
             "status": r.status,
             "trigger_type": stats.get("trigger_type", "manual"),
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            "started_at": _utc_iso(r.started_at),
+            "finished_at": _utc_iso(r.finished_at),
             "rows_in": stats.get("rows_in", 0),
             "rows_out": stats.get("rows_out", 0),
             "lake_rows": stats.get("lake_rows"),

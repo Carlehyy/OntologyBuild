@@ -1,6 +1,6 @@
 """RestConnector 单元测试"""
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def make_connector(config=None):
@@ -74,3 +74,47 @@ def test_rest_test_connection_failure():
 def test_rest_registry_registered():
     from app.services.connection.registry import CONNECTOR_REGISTRY
     assert "rest" in CONNECTOR_REGISTRY
+
+
+def test_rest_legacy_ui_url_and_headers_are_normalized():
+    conn = make_connector({
+        "url": "https://api.example.com/v1/users?active=true",
+        "headers": '{"Authorization": "Bearer ui-token", "X-Tenant": "acme"}',
+    })
+
+    assert conn._config["base_url"] == "https://api.example.com"
+    assert conn.list_resources() == ["/v1/users?active=true"]
+    assert conn._config["headers"] == {
+        "Authorization": "Bearer ui-token",
+        "X-Tenant": "acme",
+    }
+
+
+@patch("httpx.Client")
+def test_rest_session_applies_normalized_headers(mock_client):
+    conn = make_connector({
+        "url": "https://api.example.com/users",
+        "headers": '{"X-Tenant": "acme"}',
+    })
+
+    conn._get_session()
+
+    assert mock_client.call_args.kwargs["headers"] == {"X-Tenant": "acme"}
+
+
+def test_rest_rejects_invalid_ui_headers():
+    with pytest.raises(ValueError, match="请求头不是合法 JSON"):
+        make_connector({
+            "url": "https://api.example.com/users",
+            "headers": "{invalid",
+        })
+
+
+def test_rest_pull_full_propagates_request_failure():
+    conn = make_connector()
+    mock_session = MagicMock()
+    mock_session.get.side_effect = RuntimeError("upstream unavailable")
+    conn._session = mock_session
+
+    with pytest.raises(RuntimeError, match="upstream unavailable"):
+        conn.pull_full("/orders")

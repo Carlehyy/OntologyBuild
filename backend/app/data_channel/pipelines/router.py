@@ -178,11 +178,112 @@ def _is_n8n_pipeline(pl: Pipeline) -> bool:
 
 
 def _column_definitions_hash(definitions: list | None) -> str:
-    """Canonical contract fingerprint used by n8n publish attestations."""
+    """Canonical contract fingerprint used by publish attestations."""
     from app.data_channel.datasets.lake_gate import normalize_definitions
     from app.data_channel.steward.service import canonical_json_hash
 
     return canonical_json_hash(normalize_definitions(definitions))
+
+
+def _pipeline_execution_hash(
+    *,
+    definition: dict | None,
+    source_dataset_id: str | None,
+    route: str | None,
+    spec: dict | None,
+) -> str:
+    """绑定所有会改变 Canvas 实际输出的流水线配置。"""
+    from app.data_channel.steward.service import canonical_json_hash
+
+    return canonical_json_hash({
+        "definition": definition or {},
+        "source_dataset_id": source_dataset_id,
+        "route": route,
+        "spec": spec or {},
+    })
+
+
+def _current_execution_hash(pl: Pipeline) -> str:
+    return _pipeline_execution_hash(
+        definition=pl.definition,
+        source_dataset_id=pl.source_dataset_id,
+        route=pl.route,
+        spec=pl.spec,
+    )
+
+
+def _invalidate_canvas_attestation(pl: Pipeline) -> None:
+    if not _is_n8n_pipeline(pl):
+        pl.validation_attestation = None
+
+
+def _require_canvas_publish_attestation(pl: Pipeline, db: Session) -> None:
+    """发布端独立验证最近一次全量校验凭证与暂存输出真身。"""
+    import json as _json
+    from app.data_channel.steward.service import canonical_json_hash
+    from app.services.storage_service import get_storage_service
+
+    attestation = pl.validation_attestation or {}
+    required = {
+        "column_definitions_hash",
+        "execution_hash",
+        "dry_run_id",
+        "output_checksum",
+    }
+    if any(not attestation.get(field) for field in required):
+        raise HTTPException(
+            400,
+            "发布前必须完成最近一次执行预览与字段定义的全量校验。"
+            "请通过流水线编辑向导重新执行预览并校验字段定义。",
+        )
+    if attestation["column_definitions_hash"] != _column_definitions_hash(
+        pl.column_definitions
+    ):
+        _invalidate_canvas_attestation(pl)
+        db.commit()
+        raise HTTPException(
+            400,
+            "字段定义在最近一次校验后发生变化，旧校验结果已失效。请重新校验字段定义。",
+        )
+    if attestation["execution_hash"] != _current_execution_hash(pl):
+        _invalidate_canvas_attestation(pl)
+        db.commit()
+        raise HTTPException(
+            400,
+            "流水线编排或数据源在最近一次校验后发生变化，旧校验结果已失效。"
+            "请重新执行预览并校验字段定义。",
+        )
+
+    try:
+        raw = get_storage_service().get_object(
+            _dry_run_uri(pl.id, str(attestation["dry_run_id"]))
+        )
+        payload = _json.loads(raw.decode("utf-8"))
+    except Exception:
+        _invalidate_canvas_attestation(pl)
+        db.commit()
+        raise HTTPException(
+            400,
+            "最近一次试运行结果不存在或已过期，请重新执行预览并校验字段定义。",
+        )
+
+    outputs = payload.get("outputs") or []
+    payload_checksum = str(payload.get("output_checksum") or "")
+    computed_checksum = canonical_json_hash(outputs)
+    if (
+        payload.get("pipeline_id") != pl.id
+        or payload.get("dry_run_id") != attestation["dry_run_id"]
+        or payload.get("truncated")
+        or payload_checksum != attestation["output_checksum"]
+        or computed_checksum != payload_checksum
+    ):
+        _invalidate_canvas_attestation(pl)
+        db.commit()
+        raise HTTPException(
+            400,
+            "最近一次试运行校验凭证与暂存输出不一致，平台已拒绝发布。"
+            "请重新执行预览并校验字段定义。",
+        )
 
 
 def _require_production_executable(pl: Pipeline) -> None:
@@ -420,6 +521,25 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
         update_data["column_definitions"] = normalize_definitions(
             update_data.get("column_definitions"))
 
+    if not _is_n8n_pipeline(pl) and pl.validation_attestation:
+        prospective_execution_hash = _pipeline_execution_hash(
+            definition=update_data.get("definition", pl.definition),
+            source_dataset_id=update_data.get(
+                "source_dataset_id", pl.source_dataset_id),
+            route=update_data.get("route", pl.route),
+            spec=update_data.get("spec", pl.spec),
+        )
+        definitions_hash = _column_definitions_hash(
+            update_data.get("column_definitions", pl.column_definitions)
+        )
+        if (
+            prospective_execution_hash
+            != pl.validation_attestation.get("execution_hash")
+            or definitions_hash
+            != pl.validation_attestation.get("column_definitions_hash")
+        ):
+            _invalidate_canvas_attestation(pl)
+
     # ── 改名重名校验（与创建同一口径）──
     if "name" in update_data:
         new_name = (update_data.get("name") or "").strip()
@@ -506,6 +626,16 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     if not pl:
         raise HTTPException(404, "Pipeline not found")
 
+    def version_has_rows(dataset, version) -> bool:
+        if not version:
+            return False
+        if version.rowcount is not None:
+            return version.rowcount > 0
+        # 历史 JSON/XML 版本可能没有行数元数据；回读一行判定可用性。
+        from app.services.v2.dataset_service import DatasetService
+        return bool(DatasetService(db).preview(
+            dataset.id, version.version_no, limit=1))
+
     errors = []
     warnings = []
     definition = pl.definition
@@ -553,7 +683,7 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
                 ver = db.query(DatasetVersion).filter(
                     DatasetVersion.dataset_id == ds.id
                 ).order_by(DatasetVersion.version_no.desc()).first()
-                if not ver or (ver.rowcount or 0) == 0:
+                if not version_has_rows(ds, ver):
                     warnings.append({
                         "node_id": "", "severity": "warning",
                         "message": f"源数据集「{ds.name}」暂无数据版本，请先执行同步任务拉取数据。",
@@ -642,7 +772,7 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
                         ver = db.query(DatasetVersion).filter(
                             DatasetVersion.dataset_id == ds.id
                         ).order_by(DatasetVersion.version_no.desc()).first()
-                        if ver and (ver.rowcount or 0) > 0:
+                        if version_has_rows(ds, ver):
                             all_connectors_empty = False  # at least one connector has data
                         else:
                             warnings.append({
@@ -669,7 +799,7 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
                     ver = db.query(DatasetVersion).filter(
                         DatasetVersion.dataset_id == ds.id
                     ).order_by(DatasetVersion.version_no.desc()).first()
-                    if ver and (ver.rowcount or 0) > 0:
+                    if version_has_rows(ds, ver):
                         all_connectors_empty = False  # 有后备数据源
                         warnings.append({
                             "node_id": "", "severity": "warning",
@@ -693,7 +823,7 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             ver = db.query(DatasetVersion).filter(
                 DatasetVersion.dataset_id == ds.id
             ).order_by(DatasetVersion.version_no.desc()).first()
-            if not ver or (ver.rowcount or 0) == 0:
+            if not version_has_rows(ds, ver):
                 warnings.append({
                     "node_id": "", "severity": "warning",
                     "message": f"源数据集「{ds.name}」暂无数据版本。",
@@ -956,6 +1086,22 @@ def validate_column_definitions(
             }
         rec.last_test_result = state
         db.commit()
+    elif not _is_n8n_pipeline(pl):
+        if has_blocking:
+            _invalidate_canvas_attestation(pl)
+        else:
+            pl.validation_attestation = {
+                "version": 1,
+                "engine": "canvas",
+                "column_definitions_hash": _column_definitions_hash(
+                    body.column_definitions),
+                "execution_hash": _current_execution_hash(pl),
+                "dry_run_id": dry_run_id,
+                "output_checksum": output_checksum or computed_output_checksum,
+                "dry_run_created_at": payload.get("created_at"),
+                "validated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        db.commit()
     return ValidateDefinitionsResult(valid=not has_blocking, errors=errors)
 
 
@@ -1000,6 +1146,9 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
     if structure_errors:
         raise HTTPException(
             400, f"字段契约结构非法：{'；'.join(structure_errors)}。请回到「设置主键组」修正。")
+
+    if not _is_n8n_pipeline(pl):
+        _require_canvas_publish_attestation(pl, db)
 
     # ── n8n：发布 = 激活 workflow + 固化 definition（webhook/期望列/revision）。
     #    激活是远端副作用，后续本地事务若失败必须补偿停用。──

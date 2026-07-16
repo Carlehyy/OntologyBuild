@@ -27,16 +27,14 @@ export default function TransformInspector({ config, onChange, readOnly = false,
   const steps = (config.steps || []) as Array<{ op: string; params?: Record<string, unknown> }>
   const [showCatalog, setShowCatalog] = useState(false)
   const [_previewMap, setPreviewMap] = useState<Record<number, { loading: boolean; data?: any[]; error?: string }>>({})
-  const [_models, setModels] = useState<Array<{ id: string; name: string; provider: string; models: string[] }>>([])
   const filteredOps = useMemo(() => PATH_OPS_MAP[currentPath] || AVAILABLE_OPS, [currentPath])
-  useEffect(() => { apiClientV2.get('/models').then((r: any) => setModels(Array.isArray(r) ? r : r?.data ?? [])).catch(() => {}) }, [])
 
   // Runtime stats (hooks must be at top level)
   const [runStats, setRunStats] = useState<{ rows_in: number; rows_out: number } | null>(null);
   useEffect(() => {
     if (!pipelineId || !readOnly) return;
     apiClientV2.get('/pipelines/' + pipelineId + '/runs').then((runs: any) => {
-      const last = Array.isArray(runs) && runs.length > 0 ? runs[runs.length - 1] : null;
+      const last = Array.isArray(runs) && runs.length > 0 ? runs[0] : null;
       if (last) apiClientV2.get('/pipelines/runs/' + last.id).then((d: any) => {
         if (d?.stats) setRunStats({ rows_in: d.stats.rows_in || 0, rows_out: d.stats.rows_out || 0 });
       }).catch(() => {});

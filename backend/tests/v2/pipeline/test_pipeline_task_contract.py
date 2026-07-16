@@ -2,13 +2,15 @@
 
 import pytest
 from fastapi import HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.data_channel.pipeline_tasks.models import PipelineTask
 from app.data_channel.pipeline_tasks.router import (
     PipelineTaskCreate,
     _validate,
     create_task,
+    list_histories,
+    list_tasks,
     stats_overview,
     toggle_task,
 )
@@ -116,6 +118,55 @@ def test_stats_returns_real_seven_day_series(db, monkeypatch):
     assert len(stats["trend_7d"]) == 7
     assert sum(day["runs"] for day in stats["trend_7d"]) == 2
     assert sum(day["errors"] for day in stats["trend_7d"]) == 1
+
+
+def test_task_search_includes_related_pipeline_name(db, monkeypatch):
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    create_task(_body(name="每日入湖"), db)
+
+    result = list_tasks(search="订单流水线", db=db)
+
+    assert result["total"] == 1
+    assert result["items"][0]["name"] == "每日入湖"
+
+
+def test_stats_and_histories_use_shanghai_day_and_explicit_utc(
+    db, monkeypatch,
+):
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._now_utc",
+        lambda: datetime(2026, 7, 16, 4, 0, tzinfo=timezone.utc),
+    )
+    task = create_task(_body(), db)
+    # UTC 7/15 16:30 = 上海 7/16 00:30，应计入上海“今日”。
+    db.add(PipelineRun(
+        pipeline_id="pipe-contract",
+        task_id=task["id"],
+        status="success",
+        created_at=datetime(2026, 7, 15, 16, 30),
+        started_at=datetime(2026, 7, 15, 16, 30),
+        finished_at=datetime(2026, 7, 15, 16, 30, 5),
+    ))
+    db.commit()
+
+    stats = stats_overview(db)
+    history = list_histories(task["id"], db=db)
+
+    assert stats["today_runs"] == 1
+    assert next(
+        day for day in stats["trend_7d"] if day["date"] == "2026-07-16"
+    )["runs"] == 1
+    assert history["items"][0]["started_at"] == "2026-07-15T16:30:00Z"
+    assert history["items"][0]["finished_at"] == "2026-07-15T16:30:05Z"
 
 
 def test_task_cannot_be_enabled_while_pipeline_is_disabled(db, monkeypatch):

@@ -183,8 +183,6 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
                 # 异步入口也必须透传 resource；丢失它会退回“第一个资源”，使调用
                 # 者请求的资源与最终 Dataset 身份不一致。
                 delay(connection_id, body.mode, body.resource)
-                conn.status = "active"
-                db.commit()
                 return {"connection_id": connection_id, "status": "sync_triggered"}
         except Exception as e:
             logger_detail = f"任务派发失败，回退同步执行: {e}"
@@ -197,6 +195,8 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
     from app.tasks.v2.connection_sync import sync_connection
     result = sync_connection(connection_id, mode=body.mode,
                              resource=body.resource, db=db)
+    if result.get("status") == "error":
+        raise HTTPException(502, result.get("error") or "连接同步失败")
     result["connection_id"] = connection_id
     if logger_detail:
         result["dispatch_note"] = logger_detail

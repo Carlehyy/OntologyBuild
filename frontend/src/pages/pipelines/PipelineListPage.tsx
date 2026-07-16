@@ -3,10 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, ListChecks, Sparkles, ExternalLink,
+  AlertCircle,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
+import type { StewardStatus } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { useToast } from '@/components/ui/Toast'
 import RunPreviewModal from './RunPreviewModal'
@@ -109,6 +111,7 @@ export default function PipelineListPage() {
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
   const [editTarget, setEditTarget] = useState<Pipeline | null>(null)
   const [n8nApiUrl, setN8nApiUrl] = useState('')
+  const [n8nStatus, setN8nStatus] = useState<StewardStatus['n8n'] | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -143,7 +146,18 @@ export default function PipelineListPage() {
   useEffect(() => { load() }, [load])
 
   useEffect(() => {
-    stewardApi.status().then(s => setN8nApiUrl(s.n8n.api_url)).catch(() => {})
+    stewardApi.status()
+      .then(s => {
+        setN8nStatus(s.n8n)
+        setN8nApiUrl(s.n8n.api_url)
+      })
+      .catch(() => setN8nStatus({
+        configured: false,
+        enabled: false,
+        api_url: '',
+        reachable: false,
+        error: '无法读取 n8n 配置状态',
+      }))
   }, [])
 
   const matchesActiveFilters = useCallback((pl: Pipeline) => {
@@ -574,6 +588,7 @@ export default function PipelineListPage() {
       {/* 新建弹窗 */}
       {showCreate && (
         <PipelineCreateModal
+          n8nStatus={n8nStatus}
           onClose={() => setShowCreate(false)}
           onCreated={(pl) => {
             setShowCreate(false)
@@ -598,18 +613,23 @@ export default function PipelineListPage() {
 }
 
 function PipelineCreateModal({
-  pipeline, onClose, onCreated, onSaved,
+  pipeline, n8nStatus, onClose, onCreated, onSaved,
 }: {
   pipeline?: Pipeline
+  n8nStatus?: StewardStatus['n8n'] | null
   onClose: () => void
   onCreated?: (pl: Pipeline) => void
   onSaved?: () => void
 }) {
+  const navigate = useNavigate()
   const { toast } = useToast()
   const isEdit = !!pipeline
+  const n8nReady = Boolean(
+    n8nStatus?.configured && n8nStatus.enabled && n8nStatus.reachable !== false,
+  )
   const defaultMode = isEdit
     ? (isN8nPipeline(pipeline) ? 'n8n' : 'canvas')
-    : 'n8n'
+    : (n8nReady ? 'n8n' : 'canvas')
 
   const [name, setName] = useState(pipeline?.name || '')
   const [description, setDescription] = useState(pipeline?.description || '')
@@ -619,6 +639,14 @@ function PipelineCreateModal({
   const handleSubmit = async () => {
     if (!name.trim()) {
       toast({ tone: 'warning', title: '请填写流水线名称' })
+      return
+    }
+    if (!isEdit && mode === 'n8n' && !n8nReady) {
+      toast({
+        tone: 'warning',
+        title: 'n8n 当前不可用',
+        description: '请先到系统设置完成配置、启用并通过连接测试。',
+      })
       return
     }
     setSaving(true)
@@ -690,8 +718,13 @@ function PipelineCreateModal({
                 <button
                   type="button"
                   onClick={() => setMode('n8n')}
+                  disabled={!n8nReady}
                   className={`text-left p-3 rounded-lg border-2 transition-all ${
-                    mode === 'n8n' ? 'border-teal-400 bg-teal-50/60' : 'border-gray-200 hover:border-gray-300'}`}
+                    mode === 'n8n'
+                      ? 'border-teal-400 bg-teal-50/60'
+                      : !n8nReady
+                        ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-55'
+                        : 'border-gray-200 hover:border-gray-300'}`}
                 >
                   <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'n8n' ? 'text-teal-700' : 'text-gray-900'}`}>
                     <Sparkles size={13} /> n8n 流水线
@@ -699,6 +732,27 @@ function PipelineCreateModal({
                   <div className="text-xs text-gray-500 mt-0.5">后台自动在 n8n 创建骨架工作流并加入列表；点击流水线可到数据管家用 AI 完善编排</div>
                 </button>
               </div>
+              {!n8nReady && (
+                <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <AlertCircle size={13} className="shrink-0" />
+                  <span className="flex-1">
+                    {!n8nStatus
+                      ? '正在检查 n8n 配置状态…'
+                      : !n8nStatus.configured
+                        ? '尚未配置 n8n 地址和 API Key。'
+                        : !n8nStatus.enabled
+                          ? 'n8n 集成当前处于停用状态。'
+                          : `n8n 当前不可达${n8nStatus.error ? `：${n8nStatus.error}` : '。'}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { onClose(); navigate('/settings/workflows') }}
+                    className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 font-medium hover:bg-amber-100"
+                  >
+                    去配置
+                  </button>
+                </div>
+              )}
             </div>
           )}
           <div>
@@ -726,7 +780,9 @@ function PipelineCreateModal({
           <p className="text-xs text-gray-400 max-w-[60%] leading-relaxed">
             {isEdit
               ? '名称和描述始终可修改；发布后仅编排与字段契约封版。'
-              : '推荐使用 n8n 流水线。系统流水线为旧版能力，仅保留兼容入口。'}
+              : n8nReady
+                ? '推荐使用 n8n 流水线。系统流水线为旧版能力，仅保留兼容入口。'
+                : 'n8n 可用后将作为推荐入口；当前可先使用兼容画布，或前往系统设置完成配置。'}
           </p>
           <div className="flex gap-3 shrink-0">
             <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">

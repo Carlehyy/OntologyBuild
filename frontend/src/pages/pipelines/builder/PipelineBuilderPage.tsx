@@ -108,7 +108,8 @@ export default function PipelineBuilderPage() {
     Promise.all([pipelinesApi.get(pipelineId), pipelinesApi.runs(pipelineId)])
       .then(([pl, runs]) => {
         setPipeline(pl)
-        const lastRun = Array.isArray(runs) && runs.length > 0 ? runs[runs.length - 1] : null
+        // runs 接口按 created_at DESC 返回；首项才是最近一次运行。
+        const lastRun = Array.isArray(runs) && runs.length > 0 ? runs[0] : null
         if (lastRun) {
           pipelinesApi.getRun(lastRun.id).catch(() => {}).then((detail: any) => {
             const curatedIds = detail?.stats?.curated_dataset_ids || []

@@ -40,7 +40,11 @@ def _check_upload_file(filename: str | None, content: bytes) -> str:
 
 
 def _estimate_rowcount(content: bytes, ext: str) -> int | None:
-    """估算数据行数（CSV 按换行数-表头；XLSX 读工作表）"""
+    """估算数据行数（CSV/Excel/JSON）。
+
+    行数元数据会被流水线的数据可用性校验消费，不能把可正常解析的 JSON
+    数组留成 ``None``，否则预览有数据而发布链路会误判为空。
+    """
     try:
         if ext == "csv":
             return max(0, content.count(b"\n") - 1)
@@ -52,6 +56,14 @@ def _estimate_rowcount(content: bytes, ext: str) -> int | None:
             n = max(0, (ws.max_row or 1) - 1)
             wb.close()
             return n
+        if ext == "json":
+            import json
+            parsed = json.loads(content.decode("utf-8-sig"))
+            if isinstance(parsed, list):
+                return len(parsed)
+            if isinstance(parsed, dict):
+                return 1
+            return 0
     except Exception:
         pass
     return None

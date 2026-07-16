@@ -1,7 +1,9 @@
 """REST API Connector — 支持分页与增量(since 参数)"""
 from __future__ import annotations
+import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from app.services.connection.base import ConnectorBase
 
 logger = logging.getLogger(__name__)
@@ -31,8 +33,52 @@ class RestConnector(ConnectorBase):
     """
 
     def __init__(self, config: dict):
-        self._config = config
+        self._config = self._normalize_config(config)
         self._session = None
+
+    @staticmethod
+    def _normalize_config(config: dict) -> dict:
+        """兼容页面单 URL 配置，并归一为连接器的 canonical 契约。"""
+        normalized = dict(config or {})
+
+        headers = normalized.get("headers", {})
+        if isinstance(headers, str):
+            try:
+                headers = json.loads(headers) if headers.strip() else {}
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"REST 请求头不是合法 JSON：{exc.msg}") from exc
+        if not isinstance(headers, dict):
+            raise ValueError("REST 请求头必须是 JSON 对象")
+        normalized["headers"] = {
+            str(key): str(value) for key, value in headers.items()
+        }
+
+        endpoints = normalized.get("endpoints")
+        if isinstance(endpoints, str):
+            endpoints = [endpoints]
+        if not isinstance(endpoints, list):
+            endpoints = []
+        endpoints = [str(item) for item in endpoints if str(item)]
+
+        # 页面只填写一个完整 URL 时，拆成 origin + path/query，避免 httpx
+        # base_url 的路径合并规则把用户请求地址改写掉。
+        url = str(normalized.get("url") or "").strip()
+        if url and not normalized.get("base_url"):
+            parsed = urlsplit(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("REST API URL 必须是有效的 http/https 地址")
+            normalized["base_url"] = urlunsplit(
+                (parsed.scheme, parsed.netloc, "", "", "")
+            )
+            target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+            if not endpoints:
+                endpoints = [target]
+
+        endpoint = str(normalized.get("endpoint") or "").strip()
+        if endpoint and not endpoints:
+            endpoints = [endpoint]
+        normalized["endpoints"] = endpoints
+        return normalized
 
     def _get_session(self):
         """返回 httpx 会话实例 (延迟初始化)"""
@@ -42,14 +88,21 @@ class RestConnector(ConnectorBase):
             except ImportError:
                 raise RuntimeError("httpx 未安装, 请执行 pip install httpx")
             auth_cfg = self._config.get("auth", {})
-            headers = {}
+            headers = dict(self._config.get("headers", {}))
+            client_auth = None
             if auth_cfg.get("type") == "bearer":
                 headers["Authorization"] = f"Bearer {auth_cfg.get('token', '')}"
             elif auth_cfg.get("type") == "api_key":
                 headers[auth_cfg.get("header", "X-API-Key")] = auth_cfg.get("token", "")
+            elif auth_cfg.get("type") == "basic":
+                client_auth = (
+                    str(auth_cfg.get("username", "")),
+                    str(auth_cfg.get("password", "")),
+                )
             self._session = httpx.Client(
                 base_url=self._config.get("base_url", ""),
                 headers=headers,
+                auth=client_auth,
                 timeout=30.0,
             )
         return self._session
@@ -60,7 +113,13 @@ class RestConnector(ConnectorBase):
         if not endpoints:
             return False
         try:
-            resp = self._get_session().get(endpoints[0], params={"page": 1, "page_size": 1})
+            pagination = self._config.get("pagination", {})
+            params = dict(self._config.get("params", {}))
+            params.update({
+                pagination.get("page_param", "page"): 1,
+                pagination.get("size_param", "page_size"): 1,
+            })
+            resp = self._get_session().get(endpoints[0], params=params)
             return resp.status_code < 400
         except Exception as e:
             logger.warning(f"REST 连接测试失败: {e}")
@@ -72,15 +131,15 @@ class RestConnector(ConnectorBase):
 
     def pull_sample(self, resource: str, limit: int = 100) -> list[dict]:
         """从端点查询样本数据"""
-        try:
-            params = dict(self._config.get("params", {}))
-            params.update({"page": 1, "page_size": min(limit, 100)})
-            resp = self._get_session().get(resource, params=params)
-            resp.raise_for_status()
-            return self._extract_records(resp.json())[:limit]
-        except Exception as e:
-            logger.warning(f"REST pull_sample 失败: {e}")
-            return []
+        pagination = self._config.get("pagination", {})
+        params = dict(self._config.get("params", {}))
+        params.update({
+            pagination.get("page_param", "page"): 1,
+            pagination.get("size_param", "page_size"): min(limit, 100),
+        })
+        resp = self._get_session().get(resource, params=params)
+        resp.raise_for_status()
+        return self._extract_records(resp.json())[:limit]
 
     def pull_full(self, resource: str) -> list[dict]:
         """通过分页查询全量数据"""
@@ -92,28 +151,25 @@ class RestConnector(ConnectorBase):
         page = 1
         base_params = dict(self._config.get("params", {}))
 
-        try:
-            session = self._get_session()
-            while True:
-                params = {**base_params, page_param: page, size_param: 100}
-                resp = session.get(resource, params=params)
-                resp.raise_for_status()
-                data = resp.json()
-                records = self._extract_records(data)
-                if not records:
+        session = self._get_session()
+        while True:
+            params = {**base_params, page_param: page, size_param: 100}
+            resp = session.get(resource, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            records = self._extract_records(data)
+            if not records:
+                break
+            all_records.extend(records)
+            # 检查是否存在下一页
+            if isinstance(data, dict):
+                if not data.get("next") and len(records) < 100:
                     break
-                all_records.extend(records)
-                # 检查是否存在下一页
-                if isinstance(data, dict):
-                    if not data.get("next") and len(records) < 100:
-                        break
-                else:
-                    break
-                page += 1
-                if page > 100:  # 安全上限
-                    break
-        except Exception as e:
-            logger.warning(f"REST pull_full 失败: {e}")
+            else:
+                break
+            page += 1
+            if page > 100:  # 安全上限
+                break
 
         return all_records
 
@@ -122,15 +178,11 @@ class RestConnector(ConnectorBase):
         if not since:
             return self.pull_full(resource)
         delta_param = self._config.get("delta_param", "since")
-        try:
-            params = dict(self._config.get("params", {}))
-            params[delta_param] = since
-            resp = self._get_session().get(resource, params=params)
-            resp.raise_for_status()
-            return self._extract_records(resp.json())
-        except Exception as e:
-            logger.warning(f"REST pull_delta 失败: {e}")
-            return []
+        params = dict(self._config.get("params", {}))
+        params[delta_param] = since
+        resp = self._get_session().get(resource, params=params)
+        resp.raise_for_status()
+        return self._extract_records(resp.json())
 
     def _extract_records(self, data: Any) -> list[dict]:
         """从 API 响应中提取记录列表"""

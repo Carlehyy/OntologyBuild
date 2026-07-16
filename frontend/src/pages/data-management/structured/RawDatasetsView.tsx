@@ -34,7 +34,14 @@ interface Banner {
   text: string
 }
 
-export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: string | null }) {
+export default function RawDatasetsView({
+  focusDatasetId,
+  source = 'manual',
+}: {
+  focusDatasetId?: string | null
+  source?: 'manual' | 'sync'
+}) {
+  const isSync = source === 'sync'
   const [items, setItems] = useState<DatasetOverviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -71,7 +78,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
     setLoading(true)
     setLoadError('')
     datasetsApi.overview({
-      source: 'manual',
+      source,
       search: searchQuery || undefined,
       sort_by: 'created_at',
       page,
@@ -92,11 +99,11 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
         setLoadError(
           typeof detail === 'string' ? detail
             : typeof e?.message === 'string' ? e.message
-              : '人工数据集加载失败，请检查网络后重试',
+              : `${isSync ? '连接同步数据集' : '人工数据集'}加载失败，请检查网络后重试`,
         )
       })
       .finally(() => setLoading(false))
-  }, [page, pageSize, searchQuery])
+  }, [isSync, page, pageSize, searchQuery, source])
 
   useEffect(() => { void load() }, [load])
   useEffect(() => { void loadPendingApprovals() }, [])
@@ -232,26 +239,30 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           <button onClick={load} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
             <RefreshCw size={12} /> 刷新
           </button>
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="flex items-center gap-1 px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-xs font-medium rounded-lg hover:bg-gray-50"
-            title="上传一个 CSV/Excel 自动识别并设置字段，或直接定义空表"
-          >
-            <Table2 size={12} />
-            在线新建表格
-          </button>
-          <button
-            onClick={() => setApprovalOpen(true)}
-            className="relative flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-            title="审批外部维护者提交的人工数据集修改；批准后才正式生效"
-          >
-            <ShieldCheck size={12} /> 审批任务
-            {pendingApprovals > 0 && (
-              <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-4 text-white shadow-sm">
-                {pendingApprovals > 99 ? '99+' : pendingApprovals}
-              </span>
-            )}
-          </button>
+          {!isSync && (
+            <>
+              <button
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1 px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-xs font-medium rounded-lg hover:bg-gray-50"
+                title="上传一个 CSV/Excel 自动识别并设置字段，或直接定义空表"
+              >
+                <Table2 size={12} />
+                在线新建表格
+              </button>
+              <button
+                onClick={() => setApprovalOpen(true)}
+                className="relative flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                title="审批外部维护者提交的人工数据集修改；批准后才正式生效"
+              >
+                <ShieldCheck size={12} /> 审批任务
+                {pendingApprovals > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-4 text-white shadow-sm">
+                    {pendingApprovals > 99 ? '99+' : pendingApprovals}
+                  </span>
+                )}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -283,16 +294,26 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       ) : loadError && items.length === 0 ? (
         <div className="rounded-xl border border-red-200 bg-red-50 p-10 text-center text-red-700">
           <XCircle size={28} className="mx-auto mb-2 opacity-70" />
-          <p className="text-sm font-medium">无法加载人工数据集</p>
+          <p className="text-sm font-medium">无法加载{isSync ? '连接同步数据集' : '人工数据集'}</p>
           <p className="mt-1 text-xs text-red-500">{loadError}</p>
           <button type="button" onClick={load} className="mt-3 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs hover:bg-red-100">重新加载</button>
         </div>
       ) : items.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <Database size={32} className="mx-auto opacity-30" />
-          <p className="text-sm font-medium">{searchQuery ? '没有匹配的人工数据集' : '暂无人工数据集'}</p>
-          <p className="text-xs">{searchQuery ? '请尝试其他数据集名称' : '在一个流程中上传 Excel/CSV 或定义空表，完成字段设置后即可在线维护'}</p>
-          {!searchQuery && (
+          <p className="text-sm font-medium">
+            {searchQuery
+              ? `没有匹配的${isSync ? '连接同步数据集' : '人工数据集'}`
+              : `暂无${isSync ? '连接同步数据集' : '人工数据集'}`}
+          </p>
+          <p className="text-xs">
+            {searchQuery
+              ? '请尝试其他数据集名称'
+              : isSync
+                ? '从数据连接执行同步后，生成的数据集会在这里显示'
+                : '在一个流程中上传 Excel/CSV 或定义空表，完成字段设置后即可在线维护'}
+          </p>
+          {!isSync && !searchQuery && (
             <div className="flex justify-center pt-1">
               <button
                 onClick={() => setCreateOpen(true)}
@@ -322,6 +343,11 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium text-gray-900">{ds.name}</span>
+                          {isSync && (
+                            <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[10px] text-blue-700">
+                              {ds.connection_name || '连接同步'}
+                            </span>
+                          )}
                           {ds.primary_key && (
                             <span className="inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200 shrink-0"
                               title={`主键契约：${ds.primary_key}（可直接被本体映射灌入）`}>
@@ -344,8 +370,11 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                       <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.created_at)}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.updated_at)}</td>
                       <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-0.5" aria-label={`数据集 ${ds.name} 的操作`}>
-                          <button
+                        {isSync ? (
+                          <span className="text-[11px] text-slate-400">由数据连接同步维护</span>
+                        ) : (
+                          <div className="flex items-center justify-end gap-0.5" aria-label={`数据集 ${ds.name} 的操作`}>
+                            <button
                             type="button"
                             onClick={() => setShareTarget(ds)}
                             className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
@@ -353,8 +382,8 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                             aria-label={`分享数据集 ${ds.name}`}
                           >
                             <Share2 size={15} strokeWidth={1.8} />
-                          </button>
-                          <button
+                            </button>
+                            <button
                             type="button"
                             onClick={() => setEditorTarget(ds)}
                             className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
@@ -362,8 +391,8 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                             aria-label={`维护数据集 ${ds.name}`}
                           >
                             <Pencil size={15} strokeWidth={1.8} />
-                          </button>
-                          <button
+                            </button>
+                            <button
                             type="button"
                             onClick={() => pickVersionFile(ds.id)}
                             disabled={uploadingVersionId === ds.id}
@@ -372,8 +401,8 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                             aria-label={`为数据集 ${ds.name} 上传新版本`}
                           >
                             {uploadingVersionId === ds.id ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} strokeWidth={1.8} />}
-                          </button>
-                          <button
+                            </button>
+                            <button
                             type="button"
                             onClick={() => setDeleteTarget(ds)}
                             className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/35"
@@ -381,8 +410,9 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
                             aria-label={`删除数据集 ${ds.name}`}
                           >
                             <Trash2 size={15} strokeWidth={1.8} />
-                          </button>
-                        </div>
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
               ))}
@@ -398,7 +428,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
             每页
             <select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
               className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-              aria-label="人工数据集每页显示条数">
+              aria-label={`${isSync ? '连接同步数据集' : '人工数据集'}每页显示条数`}>
               {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
             </select>
             条
@@ -407,16 +437,16 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
           <div className="flex items-center gap-1">
             <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1}
               className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="人工数据集上一页"><ChevronLeft size={14} /></button>
+              aria-label={`${isSync ? '连接同步数据集' : '人工数据集'}上一页`}><ChevronLeft size={14} /></button>
             <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages}
               className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="人工数据集下一页"><ChevronRight size={14} /></button>
+              aria-label={`${isSync ? '连接同步数据集' : '人工数据集'}下一页`}><ChevronRight size={14} /></button>
           </div>
         </div>
       )}
 
       {/* 在线新建表格 */}
-      {createOpen && (
+      {!isSync && createOpen && (
         <CreateTableModal
           onClose={() => setCreateOpen(false)}
           onCreated={handleTableCreated}
@@ -424,7 +454,7 @@ export default function RawDatasetsView({ focusDatasetId }: { focusDatasetId?: s
       )}
 
       {/* 在线维护编辑器 */}
-      {editorTarget && (
+      {!isSync && editorTarget && (
         <DatasetEditorModal
           dataset={editorTarget}
           onClose={() => setEditorTarget(null)}

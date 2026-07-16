@@ -123,6 +123,7 @@ export default function SyncTasksTab() {
   const [legacyTasks, setLegacyTasks] = useState<SyncTask[]>([])
   const [legacyLoading, setLegacyLoading] = useState(true)
   const [legacyDisablingId, setLegacyDisablingId] = useState<string | null>(null)
+  const [legacyError, setLegacyError] = useState('')
 
   useEffect(() => {
     const pid = searchParams.get('pipeline')
@@ -205,11 +206,13 @@ export default function SyncTasksTab() {
 
   const handleDisableLegacy = async (id: string) => {
     setLegacyDisablingId(id)
+    setLegacyError('')
     try {
       await syncTasksApi.toggle(id, false)
       setLegacyTasks(prev => prev.map(t => t.id === id ? { ...t, enabled: false } : t))
-    } catch {
-      // 静默失败
+    } catch (error: unknown) {
+      const err = error as { detail?: string; message?: string }
+      setLegacyError(err.detail || err.message || '旧版同步任务停用失败，请重试')
     } finally {
       setLegacyDisablingId(null)
     }
@@ -217,10 +220,21 @@ export default function SyncTasksTab() {
 
   const handleDisableAllLegacy = async () => {
     const enabled = legacyTasks.filter(t => t.enabled)
+    setLegacyError('')
+    const failed: string[] = []
     for (const t of enabled) {
-      try { await syncTasksApi.toggle(t.id, false) } catch { /* continue */ }
+      try {
+        await syncTasksApi.toggle(t.id, false)
+      } catch {
+        failed.push(t.name)
+      }
     }
-    loadLegacy()
+    await loadLegacy()
+    if (failed.length > 0) {
+      setLegacyError(
+        `以下 ${failed.length} 个旧版任务未能停用：${failed.slice(0, 3).join('、')}${failed.length > 3 ? '…' : ''}`,
+      )
+    }
   }
 
   const legacyEnabledCount = legacyTasks.filter(t => t.enabled).length
@@ -411,6 +425,15 @@ export default function SyncTasksTab() {
                   <span>{legacyTasks.length} 个旧版同步任务均已停用，不会继续写入数据。</span>
                 </div>
               )}
+            </div>
+          )}
+          {legacyError && (
+            <div className="mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700">
+              <XCircle size={14} className="shrink-0" />
+              <span className="flex-1">{legacyError}</span>
+              <button type="button" onClick={() => setLegacyError('')} aria-label="关闭旧版任务错误提示">
+                <X size={13} />
+              </button>
             </div>
           )}
 

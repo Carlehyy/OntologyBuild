@@ -49,7 +49,7 @@ const STATUS_STYLE: Record<string, string> = {
   rejected:       'bg-red-50 text-red-600 border-red-200',
 }
 
-type LakeTab = 'curated' | 'raw'
+type LakeTab = 'curated' | 'raw' | 'sync'
 
 const isPendingReview = (status: string) => status === 'pending_review' || status === 'pending' || status === 'in_review'
 const ASSET_CHANGED_EVENT = 'ontoprompt:data-assets-changed'
@@ -192,7 +192,10 @@ function AssetInsightStrip() {
 export default function StructuredDataPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab: LakeTab = searchParams.get('tab') === 'raw' ? 'raw' : 'curated'
+  const requestedTab = searchParams.get('tab')
+  const activeTab: LakeTab = requestedTab === 'raw' || requestedTab === 'sync'
+    ? requestedTab
+    : 'curated'
   const [insightSelected, setInsightSelected] = useState(true)
   const focusDatasetId = searchParams.get('dataset')
 
@@ -205,7 +208,11 @@ export default function StructuredDataPage() {
     }, { replace: true })
   }
 
-  const TABS: [LakeTab, string][] = [['curated', '成品数据集'], ['raw', '人工数据集']]
+  const TABS: [LakeTab, string][] = [
+    ['curated', '成品数据集'],
+    ['raw', '人工数据集'],
+    ['sync', '连接同步数据集'],
+  ]
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -227,18 +234,16 @@ export default function StructuredDataPage() {
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <div className="relative grid grid-cols-2 rounded-md">
-              <span
-                aria-hidden="true"
-                className={`absolute inset-y-0 left-0 w-1/2 rounded-md bg-emerald-600 shadow-sm transition-transform duration-300 ease-out ${activeTab === 'raw' ? 'translate-x-full' : 'translate-x-0'}`}
-              />
+            <div className="relative grid grid-cols-3 rounded-md">
               {TABS.map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
                   onClick={() => switchTab(key)}
                   className={`relative z-10 rounded-md px-4 py-2 text-sm font-medium transition-colors duration-200 ${
-                    activeTab === key ? 'text-white' : 'text-slate-500 hover:text-emerald-700'
+                    activeTab === key
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-emerald-700'
                   }`}
                 >
                   {label}
@@ -268,9 +273,14 @@ export default function StructuredDataPage() {
       {/* 下方内容区域 —— 单页展示，内容区可滚动 */}
       <div className="flex-1 min-h-0">
         <div key={activeTab} className="h-full animate-lake-tab-in">
-          {activeTab === 'raw'
-            ? <RawDatasetsView focusDatasetId={focusDatasetId} />
-            : <CuratedView />}
+          {activeTab === 'curated'
+            ? <CuratedView />
+            : (
+              <RawDatasetsView
+                focusDatasetId={focusDatasetId}
+                source={activeTab === 'sync' ? 'sync' : 'manual'}
+              />
+            )}
         </div>
       </div>
     </div>

@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
+from app.data_channel.datasets.router import _estimate_rowcount
 from app.data_channel.datasets.service import DatasetReadError, DatasetService, _parse_stored_rows
 from app.data_channel.pipeline_tasks.merge import load_latest_rows
 from app.models.v2.dataset import DatasetVersion, DatasetWriteLock, MediaItem
@@ -94,6 +95,11 @@ def test_parse_stored_rows_supports_uncapped_limit():
     rows = [{"id": str(i)} for i in range(50)]
     assert len(_parse_stored_rows(_csv_bytes(rows), limit=None)) == 50
     assert len(_parse_stored_rows(_csv_bytes(rows), limit=10)) == 10
+
+
+def test_json_upload_rowcount_is_recorded_for_pipeline_validation():
+    assert _estimate_rowcount(b'[{"id": 1}, {"id": 2}]', "json") == 2
+    assert _estimate_rowcount(b'{"id": 1}', "json") == 1
 
 
 def test_load_all_rows_raises_on_storage_failure(svc, storage):

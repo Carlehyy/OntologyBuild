@@ -65,6 +65,7 @@ export default function ConnectionsTab() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [syncing, setSyncing] = useState<string | null>(null)
+  const [syncResult, setSyncResult] = useState<{ id: string; ok: boolean; detail: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Connection | null>(null)
   const [testResult, setTestResult] = useState<{ id: string; ok: boolean; detail?: string } | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
@@ -94,6 +95,19 @@ export default function ConnectionsTab() {
 
   const handleSave = async () => {
     if (!formName.trim()) { setFormError('请填写连接名称'); return }
+    if (formKind === 'rest') {
+      if (!formConfig.url?.trim()) { setFormError('请填写 REST API URL'); return }
+      try {
+        const headers = formConfig.headers?.trim() ? JSON.parse(formConfig.headers) : {}
+        if (!headers || Array.isArray(headers) || typeof headers !== 'object') {
+          setFormError('请求头必须是 JSON 对象')
+          return
+        }
+      } catch {
+        setFormError('请求头不是合法 JSON')
+        return
+      }
+    }
     setSaving(true)
     setFormError('')
     try {
@@ -129,11 +143,27 @@ export default function ConnectionsTab() {
 
   const handleSync = async (id: string) => {
     setSyncing(id)
+    setSyncResult(null)
     try {
-      await apiClientV2.post(`/connections/${id}/sync`, {})
+      const result = await apiClientV2.post<{ status?: string; rows?: number }>(
+        `/connections/${id}/sync`,
+        {},
+      )
+      setSyncResult({
+        id,
+        ok: true,
+        detail: result.status === 'sync_triggered'
+          ? '同步任务已提交，完成后请刷新查看连接状态'
+          : `同步成功，共 ${result.rows ?? 0} 行`,
+      })
       loadConnections()
-    } catch {
-      // ignore sync errors silently
+    } catch (e: unknown) {
+      const err = e as { detail?: string; response?: { data?: { detail?: string } }; message?: string }
+      setSyncResult({
+        id,
+        ok: false,
+        detail: err?.detail || err?.response?.data?.detail || err?.message || '同步失败',
+      })
     } finally {
       setSyncing(null)
     }
@@ -318,6 +348,11 @@ export default function ConnectionsTab() {
                 {testResult?.id === c.id && (
                   <p className={`text-xs mt-2 ml-11 ${testResult.ok ? 'text-green-600' : 'text-red-500'}`}>
                     {testResult.ok ? '✓ 连接可用' : `✗ 连接失败${testResult.detail ? `：${testResult.detail}` : ''}`}
+                  </p>
+                )}
+                {syncResult?.id === c.id && (
+                  <p className={`text-xs mt-2 ml-11 ${syncResult.ok ? 'text-green-600' : 'text-red-500'}`}>
+                    {syncResult.ok ? `✓ ${syncResult.detail}` : `✗ ${syncResult.detail}`}
                   </p>
                 )}
               </div>

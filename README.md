@@ -44,6 +44,9 @@ docker compose -f docker-compose.v2.yml up --build
 
 ### 方式二 · 本地手动启动(最小依赖,无外部服务)
 
+**前置要求:** Python 3.11+（推荐 3.12）、Node.js 20.19+ 或 22.12+。
+较旧的运行时无法安装或运行当前锁定依赖版本。
+
 ```bash
 # 后端
 cd backend

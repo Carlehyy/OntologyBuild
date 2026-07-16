@@ -1,5 +1,7 @@
 import pytest
+from fastapi import HTTPException
 
+from app.data_channel.connections.router import SyncBody, trigger_sync
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.tasks.v2.connection_sync import sync_connection
@@ -24,6 +26,19 @@ class _ResourceConnector:
 
     def pull_full(self, resource):
         return [{"resource": resource}]
+
+
+class _NoResourceConnector:
+    def list_resources(self):
+        return []
+
+
+class _PullFailureConnector:
+    def list_resources(self):
+        return ["orders"]
+
+    def pull_full(self, _resource):
+        raise RuntimeError("upstream unavailable")
 
 
 class _Storage:
@@ -107,3 +122,95 @@ def test_connection_resources_have_independent_dataset_identity_and_retry_is_ide
     assert db.query(DatasetVersion).filter(
         DatasetVersion.dataset_id == customers["dataset_id"]
     ).count() == 1
+
+
+@pytest.mark.parametrize(
+    ("connector", "expected_error"),
+    [
+        (_NoResourceConnector(), "did not provide a resource"),
+        (_PullFailureConnector(), "upstream unavailable"),
+    ],
+)
+def test_failed_connection_sync_never_creates_empty_success_dataset(
+    db, monkeypatch, connector, expected_error,
+):
+    connection = Connection(
+        id=f"conn-failure-{connector.__class__.__name__}",
+        name="失败连接",
+        kind="rest",
+        config={},
+        status="inactive",
+    )
+    db.add(connection)
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.connection.registry.get_connector",
+        lambda _kind, _config: connector,
+    )
+
+    result = sync_connection(connection.id, db=db)
+
+    assert result["status"] == "error"
+    assert expected_error in result["error"]
+    db.refresh(connection)
+    assert connection.status == "error"
+    assert db.query(Dataset).filter(
+        Dataset.source_connection_id == connection.id
+    ).count() == 0
+
+
+def test_sync_endpoint_surfaces_connector_failure(db, monkeypatch):
+    connection = Connection(
+        id="conn-route-failure",
+        name="路由失败连接",
+        kind="rest",
+        config={},
+        status="inactive",
+    )
+    db.add(connection)
+    db.commit()
+    monkeypatch.setattr(
+        "app.tasks.v2.connection_sync.sync_connection",
+        lambda *_args, **_kwargs: {
+            "status": "error",
+            "error": "upstream unavailable",
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        trigger_sync(connection.id, SyncBody(), db)
+
+    assert exc_info.value.status_code == 502
+    assert "upstream unavailable" in str(exc_info.value.detail)
+
+
+def test_async_dispatch_does_not_mark_connection_active_before_completion(
+    db, monkeypatch,
+):
+    connection = Connection(
+        id="conn-async-dispatch",
+        name="异步连接",
+        kind="rest",
+        config={},
+        status="inactive",
+    )
+    db.add(connection)
+    db.commit()
+    dispatched = []
+    monkeypatch.setattr(
+        sync_connection,
+        "delay",
+        lambda *args: dispatched.append(args),
+        raising=False,
+    )
+
+    result = trigger_sync(
+        connection.id,
+        SyncBody(async_mode=True, resource="/orders"),
+        db,
+    )
+
+    db.refresh(connection)
+    assert result["status"] == "sync_triggered"
+    assert connection.status == "inactive"
+    assert dispatched == [(connection.id, "full", "/orders")]

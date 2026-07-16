@@ -64,8 +64,11 @@ export default function DatasetsTab() {
         const list = Array.isArray(vers) ? vers : []
         if (list.length > 0) {
           const latest = list[list.length - 1]
-          const pr = await apiClientV2.get(`/datasets/${id}/versions/${latest.version_no}/preview?limit=20`) as { rows?: Record<string, unknown>[] }
-          setPreviews(p => ({ ...p, [id]: pr.rows ?? [] }))
+          const pr = await apiClientV2.get(
+            `/datasets/${id}/versions/${latest.version_no}/preview?limit=20`,
+          ) as Record<string, unknown>[] | { rows?: Record<string, unknown>[] }
+          const rows = Array.isArray(pr) ? pr : (pr.rows ?? [])
+          setPreviews(p => ({ ...p, [id]: rows }))
         } else {
           setPreviews(p => ({ ...p, [id]: [] }))
         }

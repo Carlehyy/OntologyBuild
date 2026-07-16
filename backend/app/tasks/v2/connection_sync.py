@@ -62,6 +62,8 @@ def sync_connection(connection_id: str, mode: str = "full",
         try:
             connector = get_connector(conn.kind, config)
         except Exception as e:
+            conn.status = "error"
+            db.commit()
             return {"status": "error", "error": f"connector init failed: {e}"}
 
         # 选资源
@@ -76,11 +78,22 @@ def sync_connection(connection_id: str, mode: str = "full",
         # resource 是 Connection 内部的数据集身份，不是展示名称。保持原字符串
         # （不 strip/改大小写），同时拒绝无法被 schema 无损保存的连接器返回值。
         if not isinstance(res, str):
+            conn.status = "error"
+            db.commit()
             return {
                 "status": "error",
                 "error": "connector resource identity must be a string",
             }
+        if not res:
+            conn.status = "error"
+            db.commit()
+            return {
+                "status": "error",
+                "error": "connector did not provide a resource to synchronize",
+            }
         if len(res) > _RESOURCE_ID_MAX_LENGTH:
+            conn.status = "error"
+            db.commit()
             return {
                 "status": "error",
                 "error": (
@@ -120,29 +133,38 @@ def sync_connection(connection_id: str, mode: str = "full",
         ds_svc = DatasetService(db)
         resource_digest = hashlib.sha256(res.encode("utf-8")).hexdigest()
         stable_key = f"connection-sync::{connection_id}::{resource_digest}"
-        with dataset_write_lock(stable_key, bind=db.get_bind(), wait_timeout=30):
-            ds = (db.query(Dataset)
-                  .filter(
-                      Dataset.source_connection_id == connection_id,
-                      Dataset.source_resource == res,
-                  )
-                  .order_by(Dataset.created_at.desc()).first())
-            if ds is None:
-                ds_name = f"{conn.name}:{res}" if res else conn.name
-                # name 只用于展示；截断不能影响由 connection+resource 保存的身份。
-                if len(ds_name) > 200:
-                    ds_name = f"{ds_name[:197]}..."
-                ds = ds_svc.create_dataset(
-                    name=ds_name, kind=kind, connection_id=connection_id,
-                    source_resource=res,
-                    commit=False)
-                version_guard = nullcontext()
-            else:
-                version_guard = dataset_write_lock(
-                    f"dataset::{ds.id}", bind=db.get_bind(), wait_timeout=30)
-            with version_guard:
-                ver = ds_svc.create_version(
-                    ds.id, content, rowcount=rowcount, _lock_held=True)
+        try:
+            with dataset_write_lock(stable_key, bind=db.get_bind(), wait_timeout=30):
+                ds = (db.query(Dataset)
+                      .filter(
+                          Dataset.source_connection_id == connection_id,
+                          Dataset.source_resource == res,
+                      )
+                      .order_by(Dataset.created_at.desc()).first())
+                if ds is None:
+                    ds_name = f"{conn.name}:{res}" if res else conn.name
+                    # name 只用于展示；截断不能影响由 connection+resource 保存的身份。
+                    if len(ds_name) > 200:
+                        ds_name = f"{ds_name[:197]}..."
+                    ds = ds_svc.create_dataset(
+                        name=ds_name, kind=kind, connection_id=connection_id,
+                        source_resource=res,
+                        commit=False)
+                    version_guard = nullcontext()
+                else:
+                    version_guard = dataset_write_lock(
+                        f"dataset::{ds.id}", bind=db.get_bind(), wait_timeout=30)
+                with version_guard:
+                    ver = ds_svc.create_version(
+                        ds.id, content, rowcount=rowcount, _lock_held=True)
+        except Exception:
+            db.rollback()
+            failed_conn = db.query(Connection).filter(
+                Connection.id == connection_id).first()
+            if failed_conn is not None:
+                failed_conn.status = "error"
+                db.commit()
+            raise
 
         conn.status = "active"
         db.commit()

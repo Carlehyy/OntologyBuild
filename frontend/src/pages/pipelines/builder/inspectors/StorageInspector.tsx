@@ -9,7 +9,7 @@ export default function StorageInspector({ config, onChange, readOnly = false, p
   useEffect(() => {
     if (!readOnly || !pipelineId) return
     apiClientV2.get(`/pipelines/${pipelineId}/runs`).then((runs: any) => {
-      const lastRun = Array.isArray(runs) && runs.length > 0 ? runs[runs.length - 1] : null
+      const lastRun = Array.isArray(runs) && runs.length > 0 ? runs[0] : null
       if (!lastRun) return
       apiClientV2.get(`/pipelines/runs/${lastRun.id}`).then((detail: any) => {
         if (detail?.stats) {

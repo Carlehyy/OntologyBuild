@@ -19,6 +19,9 @@ class Pipeline(Base):
     # [{field_key, field_name, field_type, is_primary_key, nullable}]
     # 已发布后不可修改；首次 dryRun 后可从列信息自动初始化默认定义
     column_definitions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 最近一次“试运行输出 × 当前编排 × 字段契约”全量校验凭证。
+    # 发布端点必须独立核验该凭证，不能只依赖前端向导是否走过校验步骤。
+    validation_attestation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     target_curated_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # 生命周期：draft（草稿，可改）| published（封版）| archived（审计保留、不可运行）。

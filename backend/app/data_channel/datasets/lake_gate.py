@@ -196,7 +196,8 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
     if undeclared:
         raise LakeGateError(
             f"数据集「{dataset_name}」的流水线输出出现未声明字段 {undeclared[:20]}。"
-            "已发布数据契约不允许额外列静默入湖；请撤回发布、重新试跑并更新字段契约。")
+            "已发布数据契约不允许额外列静默入湖；请停用当前版本，新建流水线完成试跑、"
+            "字段契约校验与发布，验证稳定后再归档旧版本。")
 
     # 契约列按定义顺序重建；nullable 列缺值时显式补 None，保证物理快照仍有列。
     rows = [
@@ -213,7 +214,8 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
             if v is None or (isinstance(v, str) and not v.strip()):
                 raise LakeGateError(
                     f"数据集「{dataset_name}」第 {i + 1} 行的列「{col}」为空，但流水线契约声明该列不允许为空。"
-                    f"请在流水线中过滤/补全该列，或回到流水线（草稿态）放宽该列的空值约束。")
+                    "请在未发布草稿中过滤/补全该列或放宽空值约束；若当前版本已发布，"
+                    "请停用旧版本并新建替代流水线。")
 
     # 流水线与人工数据集共用同一个逻辑类型校验器，并校验全量而非抽样。
     validate_declared_types(

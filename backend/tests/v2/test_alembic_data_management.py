@@ -45,6 +45,9 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
     }
     assert required <= set(inspector.get_table_names())
     assert "task_id" in {c["name"] for c in inspector.get_columns("v2_pipeline_runs")}
+    assert "validation_attestation" in {
+        c["name"] for c in inspector.get_columns("v2_pipelines")
+    }
     assert "dataset_version_id" in {
         c["name"] for c in inspector.get_columns("v2_curated_reviews")}
     assert {"producer_pipeline_id", "output_key", "source_resource"} <= {
@@ -113,6 +116,34 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
     )
     assert "source_connection_id IS NOT NULL" in source_where
     assert "source_resource IS NOT NULL" in source_where
+    engine.dispose()
+
+
+def test_pipeline_validation_attestation_migration_round_trip(tmp_path, monkeypatch):
+    backend = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "pipeline-validation-attestation.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = _alembic_config(backend, db_path)
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite:///{db_path}")
+    assert "validation_attestation" in {
+        c["name"] for c in inspect(engine).get_columns("v2_pipelines")
+    }
+    engine.dispose()
+
+    command.downgrade(cfg, "0027_merge_agent_graph_reports")
+    engine = create_engine(f"sqlite:///{db_path}")
+    assert "validation_attestation" not in {
+        c["name"] for c in inspect(engine).get_columns("v2_pipelines")
+    }
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite:///{db_path}")
+    assert "validation_attestation" in {
+        c["name"] for c in inspect(engine).get_columns("v2_pipelines")
+    }
     engine.dispose()
 
 
