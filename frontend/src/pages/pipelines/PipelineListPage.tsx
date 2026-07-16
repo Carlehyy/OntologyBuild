@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
-  X, Loader2, CheckCircle2, XCircle, Clock, Table2, Sparkles, ExternalLink,
+  X, Loader2, CheckCircle2, XCircle, Clock, Table2, ListChecks, Sparkles, ExternalLink,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
@@ -44,14 +44,22 @@ function formatTime(iso?: string | null): string {
   } catch { return iso }
 }
 
-function EnabledSwitch({ on, busy, locked, onToggle }: { on: boolean; busy: boolean; locked?: boolean; onToggle: () => void }) {
+function EnabledSwitch({ on, busy, lockReason, onToggle, onLocked }: {
+  on: boolean
+  busy: boolean
+  lockReason?: string
+  onToggle: () => void
+  onLocked?: () => void
+}) {
+  const locked = !!lockReason
   return (
     <button
-      role="switch" aria-checked={on} disabled={busy || locked} onClick={onToggle}
+      role="switch" aria-checked={on} aria-disabled={locked} disabled={busy}
+      onClick={locked ? onLocked : onToggle}
       className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
         on ? 'bg-teal-700' : 'bg-slate-300'} ${busy ? 'opacity-60' : locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       title={locked
-        ? '只有已发布的流水线才能启用，请先在编辑向导中完成发布'
+        ? lockReason
         : on ? '已启用：任务池调度与联动触发会执行该流水线' : '未启用：任务池调度与联动触发将跳过（仍可手动执行试运行）'}
     >
       <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${on ? 'left-[18px]' : 'left-0.5'}`} />
@@ -247,18 +255,19 @@ export default function PipelineListPage() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
-          <table className="w-full min-w-[920px] text-sm table-fixed">
+          <table className="w-full min-w-[1080px] text-sm table-fixed">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '26%' }}>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '22%' }}>
                   流水线信息
                 </th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>流水线来源</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>发布状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线来源</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>发布状态</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>启用状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '16%' }}>最近执行结果</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '13%' }}>产物</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '15%' }}>操作</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '14%' }}>最近执行结果</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>产物</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>关联任务</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '14%' }}>操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -266,8 +275,14 @@ export default function PipelineListPage() {
                 const runMeta = pl.last_run_status ? RUN_STATUS_META[pl.last_run_status] : null
                 const runFailed = pl.last_run_status === 'failed' && !!pl.last_run_error
                 const curatedCount = pl.target_curated_ids?.length ?? 0
+                const taskCount = pl.task_count ?? 0
                 const n8n = isN8nPipeline(pl)
                 const enabled = pl.enabled ?? true
+                const enableLockReason = taskCount > 0
+                  ? `流水线「${pl.name}」已被 ${taskCount} 个数据任务关联。为避免影响任务调度，请先在数据任务池删除或改绑关联任务，解除关联后再更改启用状态。`
+                  : !enabled && normStatus(pl.status) !== 'published'
+                    ? '只有已发布的流水线才能启用，请先在编辑向导中完成发布'
+                    : undefined
                 return (
                   <tr
                     key={pl.id}
@@ -307,8 +322,9 @@ export default function PipelineListPage() {
                         <EnabledSwitch
                           on={enabled}
                           busy={togglingId === pl.id}
-                          locked={!enabled && normStatus(pl.status) !== 'published'}
+                          lockReason={enableLockReason}
                           onToggle={() => handleToggleEnabled(pl)}
+                          onLocked={() => enableLockReason && setPageError(enableLockReason)}
                         />
                         <span className={`text-xs whitespace-nowrap ${enabled ? 'text-teal-700' : 'text-slate-400'}`}>
                           {enabled ? '已启用' : '未启用'}
@@ -342,6 +358,19 @@ export default function PipelineListPage() {
                           title="点击查看数据集内容"
                         >
                           <Table2 size={12} /> {curatedCount} 个数据集
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-300">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      {taskCount > 0 ? (
+                        <button
+                          onClick={() => navigate(`/data/pipelines/sync-tasks?pipeline_id=${encodeURIComponent(pl.id)}`)}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-nav-bg)] transition-colors hover:bg-teal-50 hover:text-teal-800"
+                          title="点击查看关联的数据任务"
+                        >
+                          <ListChecks size={12} /> {taskCount} 个任务
                         </button>
                       ) : (
                         <span className="text-xs text-gray-300">-</span>

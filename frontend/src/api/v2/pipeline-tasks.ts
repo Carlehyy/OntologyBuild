@@ -192,9 +192,18 @@ export interface PipelineTaskPayload {
   enabled?: boolean
 }
 
+export interface PipelineFilterOption {
+  id: string
+  name: string
+  task_count: number
+}
+
 export const pipelineTasksApi = {
   list: (params?: Record<string, unknown>): Promise<{ total: number; items: PipelineTask[] }> =>
     apiClientV2.get('/pipeline-tasks', { params }),
+
+  pipelineOptions: (): Promise<{ items: PipelineFilterOption[] }> =>
+    apiClientV2.get('/pipeline-tasks/pipeline-options'),
 
   get: (id: string): Promise<PipelineTask> =>
     apiClientV2.get(`/pipeline-tasks/${id}`),

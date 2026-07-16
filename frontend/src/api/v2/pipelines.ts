@@ -16,6 +16,7 @@ export interface Pipeline {
   branch?: string
   version?: number
   target_curated_ids?: string[]
+  task_count?: number       // 数据任务池中的关联任务数（不区分任务启用状态）
   created_at?: string | null
   updated_at?: string | null
   last_run_status?: string

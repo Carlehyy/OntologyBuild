@@ -412,6 +412,34 @@ def list_tasks(
     return {"total": total, "items": _with_pipeline_info(db, tasks), "page": page, "page_size": page_size}
 
 
+@router.get("/pipeline-options")
+def pipeline_filter_options(db: Session = Depends(get_db)):
+    """任务池筛选候选：仅返回实际有关联任务的流水线及其任务数。"""
+    from sqlalchemy import func
+
+    rows = (
+        db.query(
+            PipelineTask.pipeline_id,
+            Pipeline.name,
+            func.count(PipelineTask.id).label("task_count"),
+        )
+        .outerjoin(Pipeline, Pipeline.id == PipelineTask.pipeline_id)
+        .group_by(PipelineTask.pipeline_id, Pipeline.name)
+        .order_by(Pipeline.name.asc(), PipelineTask.pipeline_id.asc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": pipeline_id,
+                "name": pipeline_name or "(流水线已删除)",
+                "task_count": int(task_count),
+            }
+            for pipeline_id, pipeline_name, task_count in rows
+        ]
+    }
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, db: Session = Depends(get_db)):
     task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()

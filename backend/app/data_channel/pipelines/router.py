@@ -2,7 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime, timezone
@@ -209,6 +209,15 @@ def _reject_if_sync_chain_refs(db: Session, pipeline_id: str, *, action: str) ->
             f"不能{action}。请先在这些同步任务中解除「同步后触发流水线」的配置。")
 
 
+def _pipeline_task_refs(db: Session, pipeline_id: str):
+    """返回任务池中与流水线建立关系的任务，不区分任务自身是否启用。"""
+    from app.data_channel.pipeline_tasks.models import PipelineTask
+
+    return db.query(PipelineTask).filter(
+        PipelineTask.pipeline_id == pipeline_id
+    ).order_by(PipelineTask.created_at.desc()).all()
+
+
 # ── CRUD ──────────────────────────────────────────────────────────
 
 @router.post("", response_model=PipelineResponse, status_code=201)
@@ -302,9 +311,24 @@ def list_pipelines(
         q = q.offset((page - 1) * page_size).limit(page_size)
     else:
         q = q.limit(100)
+    pipeline_rows = q.all()
+    pipeline_ids = [pl.id for pl in pipeline_rows]
+    task_counts: dict[str, int] = {}
+    if pipeline_ids:
+        from app.data_channel.pipeline_tasks.models import PipelineTask
+
+        task_counts = dict(
+            db.query(PipelineTask.pipeline_id, func.count(PipelineTask.id))
+            .filter(PipelineTask.pipeline_id.in_(pipeline_ids))
+            .group_by(PipelineTask.pipeline_id)
+            .all()
+        )
+
     results = []
-    for pl in q:
+    for pl in pipeline_rows:
         d = _format_pipeline(pl)
+        # 关联口径只看任务与流水线是否建立关系，不看任务是否启用。
+        d["task_count"] = int(task_counts.get(pl.id, 0))
         # n8n 流水线：附加 n8n_workflow_id 供前端拼接跳转地址
         if _is_n8n_pipeline(pl):
             n8n_def = (pl.definition or {}).get("n8n") or {}
@@ -455,8 +479,7 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         return {"status": "archived", "id": pipeline_id}
 
     # 引用保护：被调度任务引用的流水线不可删——删了任务会静默失效
-    from app.data_channel.pipeline_tasks.models import PipelineTask
-    refs = db.query(PipelineTask).filter(PipelineTask.pipeline_id == pipeline_id).all()
+    refs = _pipeline_task_refs(db, pipeline_id)
     if refs:
         names = "、".join(t.name for t in refs[:3])
         raise HTTPException(
@@ -1250,13 +1273,29 @@ class EnabledBody(BaseModel):
 def set_pipeline_enabled(pipeline_id: str, body: EnabledBody, db: Session = Depends(get_db)):
     """启用/停用流水线：停用后任务池调度与同步链式触发都不执行。
 
-    只有已发布的流水线才能启用（画布与 n8n 同一规则）；停用任何状态都允许。
+    只有已发布的流水线才能启用（画布与 n8n 同一规则）。只要已被任务池
+    关联，就锁定启用状态；任务自身是否启用不影响该保护。
     """
     pl = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pl:
         raise HTTPException(404, "Pipeline not found")
     if body.enabled and (pl.status or "") != "published":
         raise HTTPException(400, "只有已发布的流水线才能启用。请先在编辑向导中完成发布。")
+
+    current_enabled = True if pl.enabled is None else bool(pl.enabled)
+    if bool(body.enabled) == current_enabled:
+        return _format_pipeline(pl)
+
+    refs = _pipeline_task_refs(db, pipeline_id)
+    if refs:
+        names = "、".join(t.name for t in refs[:3])
+        suffix = "…" if len(refs) > 3 else ""
+        raise HTTPException(
+            409,
+            f"流水线「{pl.name}」已被 {len(refs)} 个数据任务关联（{names}{suffix}），"
+            "为避免影响任务调度，不允许更改启用状态。"
+            "请先在数据任务池删除或改绑这些任务，解除关联后再操作。",
+        )
 
     n8n_transition = None
     if _is_n8n_pipeline(pl):

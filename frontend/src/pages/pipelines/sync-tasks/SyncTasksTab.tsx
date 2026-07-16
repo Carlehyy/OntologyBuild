@@ -7,7 +7,7 @@ import {
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
     RotateCw, Activity, Waves, DatabaseZap, ExternalLink,
 } from 'lucide-react'
-import { pipelineTasksApi, WRITE_MODE_META, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
+import { pipelineTasksApi, WRITE_MODE_META, type PipelineFilterOption, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import { syncTasksApi, type SyncTask } from '@/api/v2/sync-tasks'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
@@ -79,6 +79,8 @@ export default function SyncTasksTab() {
   const [deleteTarget, setDeleteTarget] = useState<PipelineTask | null>(null)
   const [actionError, setActionError] = useState('')
   const [presetPipelineId, setPresetPipelineId] = useState<string | null>(null)
+  const [filterPipelineId, setFilterPipelineId] = useState(() => searchParams.get('pipeline_id') || '')
+  const [pipelineOptions, setPipelineOptions] = useState<PipelineFilterOption[]>([])
 
   // ── 旧版同步任务（DataSyncTask）—— 调度器仍在跑但页面不可见 ──
   const [legacyTasks, setLegacyTasks] = useState<SyncTask[]>([])
@@ -114,14 +116,17 @@ export default function SyncTasksTab() {
         params.status = activeTab
       }
       if (search) params.search = search
+      if (filterPipelineId) params.pipeline_id = filterPipelineId
 
-      const [listRes, statsRes] = await Promise.all([
+      const [listRes, statsRes, optionsRes] = await Promise.all([
         pipelineTasksApi.list(params),
         pipelineTasksApi.stats(),
+        pipelineTasksApi.pipelineOptions(),
       ])
       setTasks(listRes.items)
       setTotal(listRes.total)
       setStats(statsRes)
+      setPipelineOptions(optionsRes.items || [])
     } catch (err) {
       console.error('加载调度任务失败', err)
       setActionError('任务数据加载失败，请检查服务状态后重试')
@@ -130,7 +135,7 @@ export default function SyncTasksTab() {
       setRefreshing(false)
     }
 
-  }, [page, pageSize, activeTab, search])
+  }, [page, pageSize, activeTab, search, filterPipelineId])
 
   useEffect(() => { load() }, [load])
 
@@ -185,6 +190,22 @@ export default function SyncTasksTab() {
   const legacyHasActive = legacyTasks.some(t => t.enabled && (t.schedule_type === 'CRON' || t.schedule_type === 'INTERVAL'))
 
   const handleTabChange = (key: string) => { setActiveTab(key); setPage(1) }
+  const handlePipelineFilter = (pipelineId: string) => {
+    setFilterPipelineId(pipelineId)
+    setPage(1)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (pipelineId) next.set('pipeline_id', pipelineId)
+      else next.delete('pipeline_id')
+      return next
+    }, { replace: true })
+  }
+  const clearFilters = () => {
+    setSearchInput('')
+    setSearch('')
+    setActiveTab('')
+    handlePipelineFilter('')
+  }
   const handleCreate = () => { setEditingTask(null); setShowForm(true) }
   const handleEdit = (task: PipelineTask) => { setEditingTask(task); setShowForm(true) }
   const handleFormSaved = () => { setShowForm(false); setEditingTask(null); setPresetPipelineId(null); load() }
@@ -422,6 +443,20 @@ export default function SyncTasksTab() {
                   </button>
                 )}
               </div>
+              <select
+                value={filterPipelineId}
+                onChange={e => handlePipelineFilter(e.target.value)}
+                className="h-7 max-w-[220px] rounded-md border border-white/80 bg-white/70 px-2 text-[11.5px] text-slate-600 outline-none transition focus:ring-2 focus:ring-blue-200/60"
+                aria-label="按数据流水线筛选任务"
+                title="按数据流水线筛选任务"
+              >
+                <option value="">全部数据流水线</option>
+                {pipelineOptions.map(option => (
+                  <option key={option.id} value={option.id}>
+                    {option.name}（{option.task_count}）
+                  </option>
+                ))}
+              </select>
 
               <div className="flex-1" />
 
@@ -454,7 +489,7 @@ export default function SyncTasksTab() {
                   <span className="text-[12px]">加载中...</span>
                 </div>
               ) : tasks.length === 0 ? (
-                <EmptyState activeTab={activeTab} hasSearch={!!search} onClear={() => { setSearchInput(''); setSearch(''); handleTabChange('') }} onCreate={handleCreate} />
+                <EmptyState activeTab={activeTab} hasSearch={!!search || !!filterPipelineId} onClear={clearFilters} onCreate={handleCreate} />
               ) : (
                 <>
                   <div className="flex-1 overflow-auto scrollbar-thin min-h-0">
