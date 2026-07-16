@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import {
   X, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronLeft, ChevronRight,
   KeyRound, Eye, Save, Rocket, Info, Lock, Sparkles, Table2, GitBranch, ShieldCheck,
@@ -265,8 +266,8 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
     { num: 4, label: '确认配置' },
   ]
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px] sm:p-6" onClick={handleClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px] sm:p-6" onClick={handleClose}>
       <div
         className="flex max-h-[92vh] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
         onClick={e => e.stopPropagation()}
@@ -824,7 +825,8 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
