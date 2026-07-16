@@ -26,6 +26,7 @@ import {
 } from '@/api/steward'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
+import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import PipelineEditWizard from '../PipelineEditWizard'
 import { ReactFlow, ReactFlowProvider, Background, type Node, type Edge } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -511,10 +512,33 @@ export default function DataStewardPage() {
                 className="flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-700 transition hover:bg-sky-100">
                 <Monitor size={13} /> 实时浏览器
               </button>
-              <button onClick={() => { loadConversations(); setShowHistory(true) }}
-                className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs text-violet-700 transition hover:bg-violet-100">
-                <History size={13} /> 历史会话
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!showHistory) loadConversations()
+                    setShowHistory(value => !value)
+                  }}
+                  aria-label="查看历史会话"
+                  aria-expanded={showHistory}
+                  className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
+                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                >
+                  <History size={13} /> 历史会话
+                </button>
+                <SessionHistoryPopover
+                  open={showHistory}
+                  items={conversations}
+                  currentId={conversationId}
+                  onClose={() => setShowHistory(false)}
+                  onCreate={resetChat}
+                  onSelect={loadConversation}
+                  onDelete={removeConversation}
+                  renderItemIcon={() => <Sparkles size={16} />}
+                  emptyDescription="新建会话后，可随时回到之前的数据采集与流水线编排过程。"
+                />
+              </div>
             </div>
           </div>
           <div className="scrollbar-none flex-1 overflow-y-auto px-5 py-5">
@@ -760,39 +784,6 @@ export default function DataStewardPage() {
         <BrowserModal conversationId={conversationId} onClose={() => setShowBrowser(false)} />
       )}
 
-      {/* 会话管理弹窗 */}
-      {showHistory && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowHistory(false)}>
-          <div className="bg-white rounded-xl shadow-lg p-5 w-[480px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-semibold">会话管理</h3>
-              <button onClick={() => setShowHistory(false)} className="text-gray-400 hover:text-black"><X size={16} /></button>
-            </div>
-            <button onClick={resetChat}
-              className="w-full rounded-lg border border-teal-600 bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700">
-              + 创建新会话
-            </button>
-            <div className="mt-3 flex-1 overflow-auto space-y-1.5">
-              {conversations.length === 0 && (
-                <div className="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-gray-400">暂无历史会话</div>
-              )}
-              {conversations.map(c => (
-                <div key={c.id} className="group flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-gray-200 hover:bg-gray-50">
-                  <button onClick={() => loadConversation(c.id)}
-                    className={`min-w-0 flex-1 text-left ${c.id === conversationId ? 'text-teal-700' : 'text-gray-800'}`}>
-                    <p className="truncate text-sm font-medium">{c.title}</p>
-                    <p className="mt-0.5 text-[11px] text-gray-400">{new Date(c.updatedAt).toLocaleString()}</p>
-                  </button>
-                  <button onClick={() => removeConversation(c.id)} title="删除会话"
-                    className="flex h-7 w-7 items-center justify-center rounded-md text-gray-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100">
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

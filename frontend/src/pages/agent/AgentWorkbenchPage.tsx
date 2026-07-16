@@ -15,12 +15,12 @@ import * as XLSX from 'xlsx'
 import {
   Send, Bot, User, Sparkles, Boxes, Link2, Zap, Shield, History, Search, Eye,
   GitBranch, Sigma, ScrollText, ListChecks, FlaskConical, Plus, Loader2,
-  AlertTriangle, BadgeCheck, FileSearch, PenLine, Trash2, Network,
+  AlertTriangle, BadgeCheck, FileSearch, PenLine, Network,
   FunctionSquare, Minus, Maximize2, KeyRound, X, Download, ExternalLink,
   ChevronRight, Copy, Check, List, ArrowLeftRight, FileText, Workflow,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { Modal } from '@/components/ui/Modal'
+import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import { ontologyApi, modelApi } from '@/api/ontologies'
 import { useAuthStore } from '@/stores/authStore'
 import {
@@ -1445,11 +1445,32 @@ export default function AgentWorkbenchPage() {
                   <Plus size={14} />
                   <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">创建新会话</span>
                 </button>
-                <button onClick={() => setShowHistory(true)} disabled={!oid}
-                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-violet-200 bg-violet-50 text-violet-500 transition-colors hover:border-violet-300 hover:bg-violet-100 hover:text-violet-700 disabled:opacity-30 disabled:cursor-not-allowed">
-                  <History size={14} />
-                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">会话管理</span>
-                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowHistory(value => !value)}
+                    disabled={!oid}
+                    aria-label="查看历史会话"
+                    aria-expanded={showHistory}
+                    className={`group/tip relative flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
+                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                      : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                  >
+                    <History size={14} />
+                    <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">查看历史会话</span>
+                  </button>
+                  <SessionHistoryPopover
+                    open={showHistory}
+                    items={conversations}
+                    currentId={conversationId}
+                    onClose={() => setShowHistory(false)}
+                    onCreate={resetChat}
+                    onSelect={loadConversation}
+                    onDelete={removeConversation}
+                    renderItemIcon={() => <Bot size={16} />}
+                    emptyDescription="开始对话后，可随时回到之前的查询、分析与行动提案。"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1611,55 +1632,6 @@ export default function AgentWorkbenchPage() {
           </div>
         </section>
       </div>
-
-      <Modal
-        open={showHistory}
-        onClose={() => setShowHistory(false)}
-        size="xl"
-      >
-        <div className="flex flex-col max-h-[60vh]">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-baseline gap-2">
-              <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">会话管理</h3>
-              <p className="text-sm text-[var(--color-text-secondary)]">切换或删除当前本体下的智能助手会话</p>
-            </div>
-            <button onClick={() => setShowHistory(false)}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]">
-              <X size={16} />
-            </button>
-          </div>
-
-          <button onClick={resetChat}
-            className="mt-3 w-full rounded-md border border-emerald-600 bg-emerald-700 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-800">
-            + 创建新会话
-          </button>
-
-          <div className="mt-3 flex-1 overflow-auto">
-            {conversations.length === 0 && (
-              <div className="rounded-lg border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-tertiary)]">
-                暂无历史会话
-              </div>
-            )}
-            <div className="space-y-1.5">
-              {conversations.map(c => (
-                <div key={c.id} className="group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 hover:border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]">
-                  <button onClick={() => loadConversation(c.id)}
-                    className={`min-w-0 flex-1 text-left ${c.id === conversationId ? 'text-teal-700' : 'text-[var(--color-text-primary)]'}`}>
-                    <p className="truncate text-sm font-medium">{c.title}</p>
-                    <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-                      {new Date(c.updatedAt).toLocaleString()}
-                    </p>
-                  </button>
-                  <button onClick={() => removeConversation(c.id)} title="删除会话"
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-tertiary)] opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </Modal>
 
       <BoundaryDrawer oid={oid} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </div>
