@@ -6,10 +6,11 @@ import io
 
 from app.data_channel.datasets.service import DatasetService
 from app.models.ontology import OntologyProject
-from app.models.ontology_formal import ObjectInstance, PropertyFact
+from app.models.ontology_formal import ObjectInstance, ObjectType, PropertyFact
 from app.models.ontology_version import (
     OntologyTrialLink, OntologyTrialObject, OntologyTrialRun, OntologyVersion,
 )
+from app.models.v2.mapping import OntologyMapping
 from app.ontologies.versions.evolution_service import (
     impact_report, validate_release_mapping_contract,
 )
@@ -61,6 +62,65 @@ def _root(client, headers, ontology_id: str) -> dict:
     assert project["current_release_id"] == root["id"]
     assert listed["current_release_id"] == root["id"]
     return root
+
+
+def test_current_release_read_model_ignores_mutable_runtime_drift(
+        client, auth_headers, ontology, db):
+    """Detail structure/mapping reads are pinned to current_release_id.
+
+    Legacy mutable projection rows may still exist for compatibility, but they
+    must never leak into the management page before a real version promotion.
+    """
+    ontology_id = ontology["id"]
+    root = _root(client, auth_headers, ontology_id)
+    db.add_all([
+        ObjectType(
+            id="runtime-only-type", ontology_id=ontology_id,
+            name="RuntimeOnly", display_name="未发布运行表类型",
+            properties=[], interfaces=[], position_x=0, position_y=0,
+        ),
+        OntologyMapping(
+            id="runtime-only-mapping", ontology_id=ontology_id,
+            curated_dataset_id=None, entity_class="RuntimeOnly",
+            target_object_type_id="runtime-only-type",
+            field_mapping={"source": "target"}, status="draft",
+        ),
+    ])
+    db.commit()
+
+    # Prove the compatibility projections really have drifted.
+    live_types = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/object-types",
+        headers=auth_headers).json()["data"]
+    assert [item["id"] for item in live_types] == ["runtime-only-type"]
+    assert db.query(OntologyMapping).filter_by(
+        ontology_id=ontology_id).one().id == "runtime-only-mapping"
+
+    structure = client.get(
+        f"/api/v2/ontologies/{ontology_id}/current-release/workspace",
+        headers=auth_headers)
+    assert structure.status_code == 200, structure.text
+    payload = structure.json()["data"]
+    assert payload["version"] == "v0"
+    assert payload["versionId"] == root["id"]
+    assert payload["isCurrentRelease"] is True
+    assert payload["editable"] is False
+    assert payload["objectTypes"] == []
+    assert payload["linkTypes"] == []
+    assert payload["actions"] == []
+    assert payload["functions"] == []
+
+    mappings = client.get(
+        f"/api/v2/ontologies/{ontology_id}/current-release/mappings",
+        headers=auth_headers)
+    assert mappings.status_code == 200, mappings.text
+    payload = mappings.json()["data"]
+    assert payload["versionId"] == root["id"]
+    assert payload["versionNumber"] == "v0"
+    assert payload["isCurrentRelease"] is True
+    assert payload["editable"] is False
+    assert payload["mappings"] == []
+    assert payload["linkMappings"] == []
 
 
 def _draft(client, headers, ontology_id: str, source_id: str) -> dict:

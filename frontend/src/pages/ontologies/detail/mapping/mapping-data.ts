@@ -63,6 +63,19 @@ export interface LinkMappingRecord {
   is_fat: boolean
 }
 
+interface MappingWorkspaceResponse {
+  objectTypes?: MappingObjectType[]
+  linkTypes?: MappingLinkType[]
+  mappings?: unknown[]
+  linkMappings?: unknown[]
+  revision?: string
+  editable?: boolean
+  workspaceMode?: 'draft' | 'trial' | 'release' | 'archived'
+  versionId?: string
+  versionNumber?: string
+  isCurrentRelease?: boolean
+}
+
 export interface MappingDataset {
   id: string
   name: string
@@ -97,6 +110,67 @@ export function userFieldMapping(mapping: ObjectMappingRecord | undefined): Reco
   )
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+/** Normalize both immutable snapshot DTOs (camelCase) and legacy runtime DTOs. */
+export function normalizeObjectMapping(value: unknown): ObjectMappingRecord {
+  const raw = recordValue(value)
+  const fieldMapping = recordValue(raw.field_mapping ?? raw.fieldMapping) as ObjectMappingRecord['field_mapping']
+  const targetObjectTypeId = String(raw.target_object_type_id ?? raw.targetObjectTypeId ?? '') || null
+  const resolved = recordValue(raw.resolved_object_type)
+  const resolvedObjectType = resolved.id ? {
+    id: String(resolved.id),
+    name: String(resolved.name ?? ''),
+    display_name: String(resolved.display_name ?? resolved.displayName ?? ''),
+  } : null
+  const rawBindingMode = raw.binding_mode
+  const bindingMode: ObjectMappingRecord['binding_mode'] = rawBindingMode === 'name_match' || rawBindingMode === 'auto_create'
+    ? rawBindingMode
+    : targetObjectTypeId ? 'bound' : 'auto_create'
+  const curatedDatasetId = String(raw.curated_dataset_id ?? raw.curatedDatasetId ?? '') || null
+  return {
+    id: String(raw.id ?? ''),
+    curated_dataset_id: curatedDatasetId,
+    dataset_name: raw.dataset_name == null ? null : String(raw.dataset_name),
+    row_count: raw.row_count == null ? null : Number(raw.row_count),
+    entity_class: String(raw.entity_class ?? raw.entityClass ?? ''),
+    field_mapping: fieldMapping,
+    status: String(raw.status ?? 'draft'),
+    confidence: raw.confidence == null ? null : Number(raw.confidence),
+    target_object_type_id: targetObjectTypeId,
+    binding_mode: bindingMode,
+    resolved_object_type: resolvedObjectType,
+    auto_apply_on_review: Boolean(raw.auto_apply_on_review ?? fieldMapping.__auto_apply_on_review__),
+    auto_apply_on_version: Boolean(raw.auto_apply_on_version ?? fieldMapping.__auto_apply_on_version__),
+    dataset_kind: raw.dataset_kind == null ? null : String(raw.dataset_kind),
+    dataset_source: raw.dataset_source == null ? null : String(raw.dataset_source),
+  }
+}
+
+/** Normalize both immutable snapshot DTOs (camelCase) and legacy runtime DTOs. */
+export function normalizeLinkMapping(value: unknown): LinkMappingRecord {
+  const raw = recordValue(value)
+  const fieldMapping = recordValue(raw.field_mapping ?? raw.fieldMapping) as Record<string, string>
+  const edgeDatasetId = String(raw.edge_dataset_id ?? raw.edgeDatasetId ?? '') || null
+  return {
+    id: String(raw.id ?? ''),
+    relation_type: String(raw.relation_type ?? raw.relationType ?? ''),
+    src_key: String(raw.src_key ?? raw.srcKey ?? ''),
+    tgt_key: String(raw.tgt_key ?? raw.tgtKey ?? ''),
+    src_dataset_id: String(raw.src_dataset_id ?? raw.srcDatasetId ?? '') || null,
+    tgt_dataset_id: String(raw.tgt_dataset_id ?? raw.tgtDatasetId ?? '') || null,
+    edge_dataset_id: edgeDatasetId,
+    field_mapping: fieldMapping,
+    link_type_id: String(raw.link_type_id ?? raw.linkTypeId ?? '') || null,
+    status: raw.status == null ? undefined : String(raw.status),
+    is_fat: Boolean(raw.is_fat ?? edgeDatasetId),
+  }
+}
+
 export function mappingTargetId(mapping: ObjectMappingRecord): string | null {
   return mapping.target_object_type_id || mapping.resolved_object_type?.id || null
 }
@@ -125,53 +199,47 @@ export function useMappingData(
   ontologyId: string,
   requireCollectionStatus = false,
   versionId: string | null = null,
+  enabled = true,
 ) {
-  const objectTypesQuery = useQuery<MappingObjectType[]>({
-    queryKey: ['formal-object-types', ontologyId, versionId],
-    queryFn: async () => versionId
-      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace`)).objectTypes || []
-      : apiClientV2.get(`/formal/ontologies/${ontologyId}/object-types`),
+  const structurePath = versionId
+    ? `/ontologies/${ontologyId}/versions/${versionId}/workspace`
+    : `/ontologies/${ontologyId}/current-release/workspace`
+  const sourceKey = versionId || 'current-release'
+  const workspaceQuery = useQuery<MappingWorkspaceResponse>({
+    queryKey: ['mapping-snapshot', ontologyId, sourceKey],
+    enabled,
+    queryFn: () => apiClientV2.get(structurePath),
   })
-  const linkTypesQuery = useQuery<MappingLinkType[]>({
-    queryKey: ['formal-link-types', ontologyId, versionId],
-    queryFn: async () => versionId
-      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace`)).linkTypes || []
-      : apiClientV2.get(`/formal/ontologies/${ontologyId}/link-types`),
-  })
-  const mappingsQuery = useQuery<ObjectMappingRecord[]>({
-    queryKey: ['mappings', ontologyId, versionId],
-    queryFn: async () => versionId
-      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`)).mappings || []
-      : apiClientV2.get(`/ontologies/${ontologyId}/mappings`),
-  })
-  const linkMappingsQuery = useQuery<LinkMappingRecord[]>({
-    queryKey: ['link-mappings', ontologyId, versionId],
-    queryFn: async () => versionId
-      ? (await apiClientV2.get<any>(`/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`)).linkMappings || []
-      : apiClientV2.get(`/ontologies/${ontologyId}/link-mappings`),
-  })
-  const workspaceMetaQuery = useQuery<{ revision?: string }>({
-    queryKey: ['mapping-workspace-meta', ontologyId, versionId],
-    enabled: Boolean(versionId),
-    queryFn: () => apiClientV2.get(
-      `/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`),
-  })
+  const objectTypes = useMemo(
+    () => workspaceQuery.data?.objectTypes || [], [workspaceQuery.data?.objectTypes])
+  const linkTypes = useMemo(
+    () => workspaceQuery.data?.linkTypes || [], [workspaceQuery.data?.linkTypes])
+  const mappings = useMemo(
+    () => (workspaceQuery.data?.mappings || []).map(normalizeObjectMapping),
+    [workspaceQuery.data?.mappings],
+  )
+  const linkMappings = useMemo(
+    () => (workspaceQuery.data?.linkMappings || []).map(normalizeLinkMapping),
+    [workspaceQuery.data?.linkMappings],
+  )
   const curatedQuery = useQuery<CuratedDataset[]>({
     queryKey: ['curated-all'],
+    enabled,
     queryFn: () => apiClientV2.get('/curated'),
   })
   const manualQuery = useQuery<{ items: DatasetOverviewItem[] }>({
     queryKey: ['manual-datasets-overview'],
+    enabled,
     queryFn: () => apiClientV2.get('/datasets/overview'),
   })
   const instancesQuery = useQuery<ObjectInstanceSummary[]>({
     queryKey: ['mapping-object-instances', ontologyId],
-    enabled: !versionId,
+    enabled: enabled && requireCollectionStatus && !versionId,
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/instances`),
   })
   const linkInstancesQuery = useQuery<LinkInstanceSummary[]>({
     queryKey: ['mapping-link-instances', ontologyId],
-    enabled: !versionId,
+    enabled: enabled && requireCollectionStatus && !versionId,
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/link-instances`),
   })
 
@@ -205,7 +273,7 @@ export function useMappingData(
 
   const schemasQuery = useQuery<Record<string, DatasetSchemaColumn[]>>({
     queryKey: ['mapping-dataset-schemas', datasetBase.map(item => item.id).join(',')],
-    enabled: datasetBase.length > 0,
+    enabled: enabled && datasetBase.length > 0,
     queryFn: async () => {
       const pairs = await Promise.all(datasetBase.map(async dataset => {
         try {
@@ -228,18 +296,20 @@ export function useMappingData(
     isLoading: boolean
     isError: boolean
     refetch: () => Promise<unknown>
-  }> = [objectTypesQuery, linkTypesQuery, mappingsQuery, linkMappingsQuery, curatedQuery, manualQuery]
+  }> = [workspaceQuery, curatedQuery, manualQuery]
   if (requireCollectionStatus) requiredQueries.push(instancesQuery, linkInstancesQuery)
 
   return {
-    objectTypes: objectTypesQuery.data || [],
-    linkTypes: linkTypesQuery.data || [],
-    mappings: mappingsQuery.data || [],
-    linkMappings: linkMappingsQuery.data || [],
+    objectTypes,
+    linkTypes,
+    mappings,
+    linkMappings,
     objectInstances: instancesQuery.data || [],
     linkInstances: linkInstancesQuery.data || [],
     datasets,
-    workspaceRevision: workspaceMetaQuery.data?.revision || null,
+    workspaceRevision: workspaceQuery.data?.revision || null,
+    workspaceEditable: workspaceQuery.data?.editable ?? null,
+    workspaceMode: workspaceQuery.data?.workspaceMode || null,
     isLoading: requiredQueries.some(query => query.isLoading),
     isError: requiredQueries.some(query => query.isError),
     isLoadingSchemas: schemasQuery.isLoading,

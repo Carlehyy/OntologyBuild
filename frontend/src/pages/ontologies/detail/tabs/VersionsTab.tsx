@@ -117,6 +117,8 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       ['fi-ot', ontologyId], ['fi-inst', ontologyId],
       ['formal-object-types', ontologyId], ['formal-link-types', ontologyId],
       ['mappings', ontologyId], ['link-mappings', ontologyId],
+      ['mapping-snapshot', ontologyId],
+      ['current-release-workspace', ontologyId],
       ['mapping-object-instances', ontologyId], ['mapping-link-instances', ontologyId],
       ['gov-sentinels', ontologyId], ['gov-autonomy', ontologyId], ['gov-facts', ontologyId],
     ]

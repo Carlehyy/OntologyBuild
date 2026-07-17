@@ -41,6 +41,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const selectedRelation = selected?.kind === 'relation' ? data.linkTypes.find(item => item.id === selected.id) : undefined
   const selectedObjectMapping = selectedObject ? objectMapping(selectedObject.id) : undefined
   const selectedLinkMapping = selectedRelation ? linkMappingForType(selectedRelation, data.linkMappings) : undefined
+  const selectedMappingExists = Boolean(selectedObjectMapping || selectedLinkMapping)
   const selectedDatasetIds = selectedObjectMapping?.curated_dataset_id
     ? [selectedObjectMapping.curated_dataset_id]
     : selectedLinkMapping
@@ -96,7 +97,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         <div>
           <div className="dmo-eyebrow"><Layers3 size={13} /> DATA MAPPING</div>
           <h2>把本体结构，接到真实数据上</h2>
-          <p>查看映射覆盖、字段配置与数据采集结果；所有配置在独立工作台中集中维护。</p>
+          <p>查看当前最新发布快照中的映射覆盖、字段配置与数据采集结果；所有变更只能在草稿工作台中维护。</p>
         </div>
         <button className="dmo-primary-button" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>
           <Settings2 size={15} />在草稿中配置映射
@@ -151,8 +152,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           <div className="dmo-map-stage">
             {!selected ? (
               <div className="dmo-canvas-empty"><Layers3 size={28} /><b>选择一个对象实体或实体关系</b><span>画布将展示当前已建立的数据映射关系</span></div>
-            ) : selectedDatasets.length === 0 ? (
+            ) : !selectedMappingExists ? (
               <div className="dmo-canvas-empty dmo-canvas-empty--warning"><AlertCircle size={28} /><b>尚未建立映射</b><span>先创建草稿，再将数据字段连接到草稿本体属性</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>创建草稿</button></div>
+            ) : selectedDatasets.length === 0 ? (
+              <div className="dmo-canvas-empty dmo-canvas-empty--warning"><AlertCircle size={28} /><b>发布映射的数据源当前不可见</b><span>映射定义仍保留在当前发布快照中，请检查对应数据资产的可用状态</span></div>
             ) : (
               <div className="dmo-flow">
                 <div className="dmo-flow__sources">

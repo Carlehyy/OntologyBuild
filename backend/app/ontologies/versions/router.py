@@ -837,6 +837,97 @@ def _current_release(db: Session, project: OntologyProject) -> OntologyVersion:
     return current
 
 
+def _workspace_mode(version: OntologyVersion) -> str:
+    if version.node_kind == "release":
+        return "release"
+    if version.lifecycle_status == "trial_ready":
+        return "trial"
+    if version.lifecycle_status == "superseded":
+        return "archived"
+    return "draft"
+
+
+def _workspace_payload(
+        project: OntologyProject, version: OntologyVersion, *,
+        is_current_release: bool = False) -> dict:
+    """Serialize one immutable/versioned structure workspace.
+
+    The management detail page must never infer a release from mutable Formal
+    projection rows.  This payload is built only from the version snapshot
+    selected by the project's authoritative ``current_release_id`` pointer.
+    """
+    snap = _with_canvas_layout(version.snapshot_formal, version.canvas_layout)
+    workspace_mode = _workspace_mode(version)
+    return {
+        "id": project.id, "name": project.name,
+        "description": project.description, "version": version.version_number,
+        "revision": f"{version.revision}:{version.snapshot_hash}",
+        "objectTypes": snap["objectTypes"], "linkTypes": snap["linkTypes"],
+        "actions": snap["actions"], "functions": snap["functions"],
+        "mappings": snap["mappings"],
+        "linkMappings": snap["linkMappings"],
+        "sentinels": snap["sentinels"],
+        # Version nodes carry definitions only. Runtime instances/facts remain
+        # separate projections and are never allowed to redefine the schema.
+        "instances": [], "linkInstances": [], "executionLogs": [],
+        "workspaceMode": workspace_mode,
+        "editable": workspace_mode == "draft",
+        "versionId": version.id,
+        "nodeKind": version.node_kind,
+        "lifecycleStatus": version.lifecycle_status,
+        "isCurrentRelease": is_current_release,
+        "publishedAt": (
+            version.published_at.isoformat() if version.published_at else None),
+    }
+
+
+def _mapping_workspace_payload(version: OntologyVersion, *,
+                               is_current_release: bool = False) -> dict:
+    snap = complete_snapshot(version.snapshot_formal)
+    workspace_mode = _workspace_mode(version)
+    return {
+        "mappings": snap["mappings"],
+        "linkMappings": snap["linkMappings"],
+        "sentinels": snap["sentinels"],
+        "revision": f"{version.revision}:{version.snapshot_hash}",
+        "versionId": version.id,
+        "versionNumber": version.version_number,
+        "workspaceMode": workspace_mode,
+        "editable": workspace_mode == "draft",
+        "isCurrentRelease": is_current_release,
+    }
+
+
+@router.get("/{ontology_id}/current-release/workspace")
+def get_current_release_workspace(
+    ontology_id: str, db: Session = Depends(get_db),
+):
+    """Read the one authoritative published structure snapshot."""
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    release = _current_release(db, project)
+    payload = _workspace_payload(project, release, is_current_release=True)
+    db.commit()
+    return {"data": payload}
+
+
+@router.get("/{ontology_id}/current-release/mappings")
+def get_current_release_mappings(
+    ontology_id: str, db: Session = Depends(get_db),
+):
+    """Read mappings frozen into the authoritative published snapshot."""
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    release = _current_release(db, project)
+    payload = _mapping_workspace_payload(release, is_current_release=True)
+    db.commit()
+    return {"data": payload}
+
+
 @router.get("/{ontology_id}/version-tree")
 def get_version_tree(ontology_id: str, db: Session = Depends(get_db)):
     project = db.query(OntologyProject).filter(
@@ -961,29 +1052,10 @@ def get_version_workspace(
         raise HTTPException(404, "Version not found")
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).first()
-    snap = _with_canvas_layout(version.snapshot_formal, version.canvas_layout)
-    if version.node_kind == "release":
-        workspace_mode = "release"
-    elif version.lifecycle_status == "trial_ready":
-        workspace_mode = "trial"
-    elif version.lifecycle_status == "superseded":
-        workspace_mode = "archived"
-    else:
-        workspace_mode = "draft"
-    return {"data": {
-        "id": ontology_id, "name": project.name,
-        "description": project.description, "version": version.version_number,
-        "revision": f"{version.revision}:{version.snapshot_hash}",
-        "objectTypes": snap["objectTypes"], "linkTypes": snap["linkTypes"],
-        "actions": snap["actions"], "functions": snap["functions"],
-        # 版本节点只展示冻结结构；真实运行数据只属于当前发布投影。
-        "instances": [], "linkInstances": [], "executionLogs": [],
-        "workspaceMode": workspace_mode,
-        "editable": workspace_mode == "draft",
-        "versionId": version.id,
-        "nodeKind": version.node_kind,
-        "lifecycleStatus": version.lifecycle_status,
-    }}
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    return {"data": _workspace_payload(
+        project, version, is_current_release=project.current_release_id == version.id)}
 
 
 @router.put("/{ontology_id}/layout")
@@ -1078,13 +1150,19 @@ def save_draft_workspace(
 def get_draft_mappings(
     ontology_id: str, version_id: str, db: Session = Depends(get_db),
 ):
-    draft = _draft_or_404(db, ontology_id, version_id)
-    snap = complete_snapshot(draft.snapshot_formal)
-    return {"data": {
-        "mappings": snap["mappings"], "linkMappings": snap["linkMappings"],
-        "sentinels": snap["sentinels"],
-        "revision": f"{draft.revision}:{draft.snapshot_hash}",
-    }}
+    version = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if version is None:
+        raise HTTPException(404, "Version not found")
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id).first()
+    return {"data": _mapping_workspace_payload(
+        version,
+        is_current_release=bool(
+            project and project.current_release_id == version.id),
+    )}
 
 
 @router.put("/{ontology_id}/versions/{version_id}/workspace/mappings")

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiClientV2 } from '@/api/client'
-import { Box, GitBranch, Bolt, FunctionSquare, ExternalLink, KeyRound, Cpu } from 'lucide-react'
+import { AlertCircle, Box, GitBranch, Bolt, FunctionSquare, ExternalLink, KeyRound, Cpu, Loader2 } from 'lucide-react'
 
 /* 模型结构（只读速览）：只展示当前发布投影。
    图谱编辑器默认打开当前发布版，并在用户开始修改时自动创建完整草稿。 */
@@ -12,15 +12,30 @@ interface LT { id: string; name: string; displayName: string; sourceObjectTypeId
 interface ACT { id: string; name: string; displayName: string; objectTypeId: string; requiresApproval?: boolean; rules?: any[] }
 interface FN { id: string; name: string; displayName: string; functionType: string; language: string; enabled: boolean }
 interface INST { id: string; objectTypeId: string }
+interface PublishedWorkspace {
+  version: string
+  versionId: string
+  isCurrentRelease: boolean
+  publishedAt?: string | null
+  objectTypes: OT[]
+  linkTypes: LT[]
+  actions: ACT[]
+  functions: FN[]
+}
 
 export default function ModelStructureView({ ontologyId }: { ontologyId: string }) {
   const navigate = useNavigate()
   const base = `/formal/ontologies/${ontologyId}`
-  const { data: ots = [] } = useQuery<OT[]>({ queryKey: ['ms-ot', ontologyId], queryFn: () => apiClientV2.get(`${base}/object-types`) as any })
-  const { data: lts = [] } = useQuery<LT[]>({ queryKey: ['ms-lt', ontologyId], queryFn: () => apiClientV2.get(`${base}/link-types`) as any })
-  const { data: acts = [] } = useQuery<ACT[]>({ queryKey: ['ms-act', ontologyId], queryFn: () => apiClientV2.get(`${base}/actions`) as any })
-  const { data: fns = [] } = useQuery<FN[]>({ queryKey: ['ms-fn', ontologyId], queryFn: () => apiClientV2.get(`${base}/functions`) as any })
+  const releaseQuery = useQuery<PublishedWorkspace>({
+    queryKey: ['current-release-workspace', ontologyId],
+    queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/current-release/workspace`),
+  })
   const { data: insts = [] } = useQuery<INST[]>({ queryKey: ['ms-inst', ontologyId], queryFn: () => apiClientV2.get(`${base}/instances`) as any })
+  const release = releaseQuery.data
+  const ots = release?.objectTypes || []
+  const lts = release?.linkTypes || []
+  const acts = release?.actions || []
+  const fns = release?.functions || []
 
   const instCount: Record<string, number> = {}
   for (const i of insts) instCount[i.objectTypeId] = (instCount[i.objectTypeId] || 0) + 1
@@ -29,10 +44,17 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
     return o ? (o.displayName || o.name) : id.slice(0, 8)
   }
 
+  if (releaseQuery.isLoading) {
+    return <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500"><Loader2 className="animate-spin" size={18} />正在读取当前发布快照…</div>
+  }
+  if (releaseQuery.isError || !release?.isCurrentRelease) {
+    return <div className="flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 py-12 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示运行投影数据。</div>
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">这里始终展示当前最新发布版。进入图谱编辑器后，可查看正式运行结构，或基于它开始新的修改。</p>
+        <p className="text-sm text-gray-500">这里始终展示当前最新发布版 <span className="font-mono font-semibold text-teal-700" data-testid="published-structure-version">{release.version}</span> 的不可变结构快照。进入图谱编辑器后，可查看正式运行结构，或基于它开始新的修改。</p>
       </div>
 
       {/* 对象实体 */}

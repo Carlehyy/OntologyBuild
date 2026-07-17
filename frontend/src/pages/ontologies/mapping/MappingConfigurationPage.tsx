@@ -15,8 +15,8 @@ import {
 import { apiClientV2 } from '@/api/client'
 import {
   linkMappingForType, mappingTargetId, normalizeType, typesCompatible, userFieldMapping,
-  useMappingData, type LinkMappingRecord, type MappingDataset, type MappingLinkType,
-  type MappingObjectType, type MappingProperty, type ObjectMappingRecord,
+  useMappingData, type MappingDataset, type MappingLinkType,
+  type MappingObjectType, type MappingProperty,
 } from '../detail/mapping/mapping-data'
 import './mapping-configuration.css'
 
@@ -124,21 +124,6 @@ function errorMessage(error: unknown) {
   return '保存失败，请检查映射配置后重试。'
 }
 
-function sameObjectDefinition(existing: ObjectMappingRecord, desired: DesiredObjectMapping) {
-  return existing.curated_dataset_id === desired.datasetId
-    && mappingTargetId(existing) === desired.object.id
-    && JSON.stringify(userFieldMapping(existing)) === JSON.stringify(desired.fieldMapping)
-}
-
-function sameLinkDefinition(existing: LinkMappingRecord, desired: DesiredLinkMapping) {
-  return existing.src_dataset_id === desired.srcDatasetId
-    && existing.tgt_dataset_id === desired.tgtDatasetId
-    && existing.edge_dataset_id === desired.edgeDatasetId
-    && existing.src_key === desired.srcKey
-    && existing.tgt_key === desired.tgtKey
-    && JSON.stringify(existing.field_mapping || {}) === JSON.stringify(desired.fieldMapping)
-}
-
 function estimatedNodeHeight(node: MappingNode) {
   if (node.measured?.height) return node.measured.height
   if (node.data.kind === 'dataset') return 68 + node.data.dataset.columns.length * 33
@@ -158,7 +143,7 @@ export default function MappingConfigurationPage() {
   const versionId = searchParams.get('versionId')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const data = useMappingData(ontologyId, false, versionId)
+  const data = useMappingData(ontologyId, false, versionId, Boolean(versionId))
   const [nodes, setNodes, onNodesChange] = useNodesState<MappingNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [leftSearch, setLeftSearch] = useState('')
@@ -225,6 +210,14 @@ export default function MappingConfigurationPage() {
     }
     setDirty(true)
   }, [data.linkTypes, nodes, objectById, setNodes])
+
+  useEffect(() => {
+    initialized.current = false
+    setNodes([])
+    setEdges([])
+    setDirty(false)
+    setSelectedDatasetId(null)
+  }, [ontologyId, setEdges, setNodes, versionId])
 
   useEffect(() => {
     if (initialized.current || data.isLoading || data.isLoadingSchemas) return
@@ -387,6 +380,10 @@ export default function MappingConfigurationPage() {
   }, [data.mappings, desiredObjectMappings, edges, nodes])
 
   const saveAll = async () => {
+    if (!versionId || data.workspaceEditable !== true) {
+      setNotice({ tone: 'bad', text: '只允许在可编辑的草稿版本中维护映射，请从版本演进创建草稿后重试。' })
+      return
+    }
     const issues: SaveIssue[] = [...desiredLinkMappings.issues]
     if (invalidEdges.length) issues.push({ title: '字段类型不兼容', detail: `存在 ${invalidEdges.length} 条历史或草稿连线类型不一致，请删除后重新连接。` })
     for (const desired of desiredObjectMappings) {
@@ -397,72 +394,35 @@ export default function MappingConfigurationPage() {
 
     setSaving(true); setSaveIssues([]); setNotice(null)
     try {
-      if (versionId) {
-        const mappings = desiredObjectMappings.map(desired => {
-          const existing = data.mappings.find(item => item.curated_dataset_id === desired.datasetId && mappingTargetId(item) === desired.object.id)
-          return {
-            id: existing?.id || crypto.randomUUID(),
-            curatedDatasetId: desired.datasetId,
-            entityClass: desired.object.name,
-            targetObjectTypeId: desired.object.id,
-            fieldMapping: desired.fieldMapping,
-            status: 'draft', confidence: 1,
-          }
-        })
-        const linkMappings = desiredLinkMappings.desired.map(desired => {
-          const existing = linkMappingForType(desired.relation, data.linkMappings)
-          return {
-            id: existing?.id || crypto.randomUUID(),
-            srcDatasetId: desired.srcDatasetId, tgtDatasetId: desired.tgtDatasetId,
-            edgeDatasetId: desired.edgeDatasetId,
-            relationType: desired.relation.name, linkTypeId: desired.relation.id,
-            srcKey: desired.srcKey, tgtKey: desired.tgtKey,
-            fieldMapping: desired.fieldMapping, status: 'draft',
-          }
-        })
-        await apiClientV2.put(
-          `/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`,
-          { baseRevision: data.workspaceRevision, mappings, linkMappings },
-        )
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['mappings', ontologyId, versionId] }),
-          queryClient.invalidateQueries({ queryKey: ['link-mappings', ontologyId, versionId] }),
-          queryClient.invalidateQueries({ queryKey: ['mapping-workspace-meta', ontologyId, versionId] }),
-        ])
-        setDirty(false)
-        setNotice({ tone: 'good', text: `草稿映射已保存：${mappings.length} 个对象映射、${linkMappings.length} 个关系映射。` })
-        return
-      }
-      const desiredLinksByType = new Map(desiredLinkMappings.desired.map(item => [item.relation.id, item]))
-      for (const relation of data.linkTypes) {
-        const existing = linkMappingForType(relation, data.linkMappings)
-        const desired = desiredLinksByType.get(relation.id)
-        if (existing && (!desired || !sameLinkDefinition(existing, desired))) await apiClientV2.delete(`/ontologies/${ontologyId}/link-mappings/${existing.id}`)
-      }
-
-      for (const existing of data.mappings) {
-        const targetId = mappingTargetId(existing)
-        if (!targetId) continue
-        const desired = desiredObjectMappings.find(item => item.datasetId === existing.curated_dataset_id && item.object.id === targetId)
-        if (!desired) await apiClientV2.delete(`/ontologies/${ontologyId}/mappings/${existing.id}`)
-      }
-      for (const desired of desiredObjectMappings) {
+      const mappings = desiredObjectMappings.map(desired => {
         const existing = data.mappings.find(item => item.curated_dataset_id === desired.datasetId && mappingTargetId(item) === desired.object.id)
-        if (existing) {
-          if (!sameObjectDefinition(existing, desired)) await apiClientV2.put(`/ontologies/${ontologyId}/mappings/${existing.id}`, { entity_class: desired.object.name, target_object_type_id: desired.object.id, field_mapping: desired.fieldMapping, ignored_fields: [] })
-        } else {
-          await apiClientV2.post(`/ontologies/${ontologyId}/mappings`, { curated_dataset_id: desired.datasetId, entity_class: desired.object.name, target_object_type_id: desired.object.id, field_mapping: desired.fieldMapping, ignored_fields: [], confidence: 1 })
+        return {
+          id: existing?.id || crypto.randomUUID(),
+          curatedDatasetId: desired.datasetId,
+          entityClass: desired.object.name,
+          targetObjectTypeId: desired.object.id,
+          fieldMapping: desired.fieldMapping,
+          status: 'draft', confidence: 1,
         }
-      }
-      for (const desired of desiredLinkMappings.desired) {
+      })
+      const linkMappings = desiredLinkMappings.desired.map(desired => {
         const existing = linkMappingForType(desired.relation, data.linkMappings)
-        if (!existing || !sameLinkDefinition(existing, desired)) await apiClientV2.post(`/ontologies/${ontologyId}/link-mappings`, { src_dataset_id: desired.srcDatasetId, tgt_dataset_id: desired.tgtDatasetId, edge_dataset_id: desired.edgeDatasetId, relation_type: desired.relation.name, link_type_id: desired.relation.id, src_key: desired.srcKey, tgt_key: desired.tgtKey, field_mapping: desired.fieldMapping })
-      }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['mappings', ontologyId] }),
-        queryClient.invalidateQueries({ queryKey: ['link-mappings', ontologyId] }),
-      ])
-      setDirty(false); setNotice({ tone: 'good', text: `配置已保存：${desiredObjectMappings.length} 个对象映射、${desiredLinkMappings.desired.length} 个关系映射已同步到数据库。` })
+        return {
+          id: existing?.id || crypto.randomUUID(),
+          srcDatasetId: desired.srcDatasetId, tgtDatasetId: desired.tgtDatasetId,
+          edgeDatasetId: desired.edgeDatasetId,
+          relationType: desired.relation.name, linkTypeId: desired.relation.id,
+          srcKey: desired.srcKey, tgtKey: desired.tgtKey,
+          fieldMapping: desired.fieldMapping, status: 'draft',
+        }
+      })
+      await apiClientV2.put(
+        `/ontologies/${ontologyId}/versions/${versionId}/workspace/mappings`,
+        { baseRevision: data.workspaceRevision, mappings, linkMappings },
+      )
+      await queryClient.invalidateQueries({ queryKey: ['mapping-snapshot', ontologyId, versionId] })
+      setDirty(false)
+      setNotice({ tone: 'good', text: `草稿映射已保存：${mappings.length} 个对象映射、${linkMappings.length} 个关系映射。` })
     } catch (error) {
       setNotice({ tone: 'bad', text: errorMessage(error) })
     } finally { setSaving(false) }
@@ -495,7 +455,9 @@ export default function MappingConfigurationPage() {
     { icon: Eye, title: '预览数据，最后统一保存', text: '点击数据集的眼睛可在底部核对实例。所有操作先保存在当前前端草稿，只有右上角“保存配置”才会写入数据库。' },
   ]
 
+  if (!versionId) return <div className="dmc-page-loading dmc-page-loading--error"><AlertCircle /><span>映射结构只能在草稿版本中维护，当前入口未指定草稿。</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>前往版本演进</button></div>
   if (data.isLoading) return <div className="dmc-page-loading"><Loader2 className="animate-spin" />正在加载映射工作台…</div>
+  if (data.workspaceEditable === false) return <div className="dmc-page-loading dmc-page-loading--error"><AlertCircle /><span>当前版本处于{data.workspaceMode === 'trial' ? '试跑冻结态' : '只读态'}，不可修改映射。</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>返回版本演进</button></div>
   if (data.isError) return <div className="dmc-page-loading dmc-page-loading--error"><AlertCircle />映射工作台加载失败，请返回后重试。</div>
 
   const filteredDatasets = data.datasets.filter(item => item.name.toLowerCase().includes(leftSearch.toLowerCase()))
