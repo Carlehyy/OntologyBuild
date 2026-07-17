@@ -8,6 +8,7 @@
  * 右侧：可编排流水线看板（只展示未发布、未启用的 n8n 流水线）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -24,8 +25,10 @@ import {
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep, type StewardTablePreview,
 } from '@/api/steward'
+import { modelApi } from '@/api/ontologies'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
+import type { ModelConfig } from '@/types/ontology'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import PipelineEditWizard from '../PipelineEditWizard'
 import { ReactFlow, ReactFlowProvider, Background, type Node, type Edge } from '@xyflow/react'
@@ -267,6 +270,12 @@ export default function DataStewardPage() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [webSearch, setWebSearch] = useState(false)
+  const { data: models = [] } = useQuery<ModelConfig[]>({
+    queryKey: ['models'],
+    queryFn: () => modelApi.list(),
+  })
+  const llmModels = models.filter(model => model.config_type === 'llm' || !model.config_type)
+  const [modelId, setModelId] = useState('')
   const [showMessageHistory, setShowMessageHistory] = useState(false)
   const [files, setFiles] = useState<StewardArtifact[]>([])
   const [uploads, setUploads] = useState<{ uid: string; name: string; ts: number }[]>([])
@@ -582,6 +591,7 @@ export default function DataStewardPage() {
         {
           message: text,
           conversationId,
+          modelId: modelId || undefined,
           targetRecordId: target?.id,
           webSearch,
         },
@@ -668,6 +678,18 @@ export default function DataStewardPage() {
               </h2>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <select
+                value={modelId}
+                onChange={event => setModelId(event.target.value)}
+                aria-label="选择数据管家对话模型"
+                title="对话模型"
+                className="h-8 cursor-pointer rounded-md border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 outline-none transition-colors hover:border-teal-300 focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+              >
+                <option value="">默认模型</option>
+                {llmModels.map(model => (
+                  <option key={model.id} value={model.id}>{model.name}</option>
+                ))}
+              </select>
               <button
                 onClick={openFiles}
                 title="查看会话文件"
