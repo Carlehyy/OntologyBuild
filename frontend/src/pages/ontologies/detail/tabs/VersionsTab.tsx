@@ -111,6 +111,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const keys = [
       ['ontologies'], ['ontology', ontologyId],
       ['formal-overview', ontologyId], ['recent-facts', ontologyId],
+      ['overview-pending', ontologyId],
       ['ms-ot', ontologyId], ['ms-lt', ontologyId], ['ms-act', ontologyId],
       ['ms-fn', ontologyId], ['ms-inst', ontologyId],
       ['fi-ot', ontologyId], ['fi-inst', ontologyId],

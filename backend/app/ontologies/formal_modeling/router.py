@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional
@@ -31,6 +32,7 @@ from app.ontologies.formal_modeling.derived import recompute_instance_derived
 from app.ontologies.formal_modeling.validation import (
     validate_model, validate_instance_contract, validate_link_instance_contract,
 )
+from app.ontologies.versions.evolution_service import complete_snapshot
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
@@ -53,6 +55,102 @@ def _require_ontology(
 
 def _ok(data):
     return {"data": data}
+
+
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize persisted timestamps before comparing SQLite/Postgres rows."""
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _current_release_view(
+        db: Session, project: OntologyProject) -> tuple[OntologyVersion, dict]:
+    """Resolve the immutable release that owns the detail-page runtime view.
+
+    ``current_release_id`` is the authority.  The ordered fallback only keeps
+    legacy rows readable when their pointer was never backfilled; it must not
+    replace a valid pointer by guessing from a version number.
+    """
+    release = None
+    if project.current_release_id:
+        release = db.query(OntologyVersion).filter(
+            OntologyVersion.id == project.current_release_id,
+            OntologyVersion.ontology_id == project.id,
+            OntologyVersion.node_kind == "release",
+        ).first()
+    if release is None:
+        release = db.query(OntologyVersion).filter(
+            OntologyVersion.ontology_id == project.id,
+            OntologyVersion.node_kind == "release",
+        ).order_by(
+            OntologyVersion.published_at.desc(),
+            OntologyVersion.created_at.desc(),
+        ).first()
+    if release is None:
+        raise HTTPException(409, detail={
+            "code": "published_release_missing",
+            "message": "本体还没有可展示的发布版本",
+        })
+    return release, complete_snapshot(release.snapshot_formal)
+
+
+def _release_fact_query(
+        db: Session,
+        ontology_id: str,
+        release: OntologyVersion,
+        snapshot: dict,
+):
+    """Facts produced by, or after, the selected current release only."""
+    object_type_ids = {
+        str(item.get("id")) for item in snapshot["objectTypes"] if item.get("id")
+    }
+    link_type_ids = {
+        str(item.get("id")) for item in snapshot["linkTypes"] if item.get("id")
+    }
+    sentinel_ids = {
+        str(item.get("id")) for item in snapshot["sentinels"] if item.get("id")
+    }
+    action_ids = {
+        str(item.get("id")) for item in snapshot["actions"] if item.get("id")
+    }
+    log_ids = {
+        item[0] for item in db.query(ActionExecutionLog.id).filter(
+            ActionExecutionLog.ontology_id == ontology_id,
+            ActionExecutionLog.ontology_version == release.version_number,
+            ActionExecutionLog.action_id.in_(action_ids),
+        ).all()
+    } if action_ids else set()
+
+    subjects = []
+    schema_ids = object_type_ids | link_type_ids
+    if schema_ids:
+        subjects.append(PropertyFact.object_type_id.in_(schema_ids))
+    if log_ids:
+        subjects.append(and_(
+            PropertyFact.kind == "decision",
+            PropertyFact.instance_id.in_(log_ids),
+        ))
+    if sentinel_ids:
+        subjects.append(and_(
+            PropertyFact.kind == "absence",
+            PropertyFact.instance_id.in_(sentinel_ids),
+        ))
+
+    query = db.query(PropertyFact).filter(PropertyFact.ontology_id == ontology_id)
+    query = query.filter(or_(*subjects) if subjects else false())
+    published_at = _naive_utc(release.published_at or release.created_at)
+    release_source = f"ontology-release://{release.id}"
+    if published_at is not None:
+        query = query.filter(or_(
+            PropertyFact.source == release_source,
+            PropertyFact.recorded_at >= published_at,
+        ))
+    else:
+        query = query.filter(PropertyFact.source == release_source)
+    return query
 
 
 def _approval_instance_label(instance: ObjectInstance, object_type: Optional[ObjectType]) -> str:
@@ -1038,14 +1136,27 @@ def run_action(ontology_id: str, body: S.RunActionRequest,
 
 @router.get("/{ontology_id}/pending-actions")
 def list_pending_actions(ontology_id: str,
+                         current_release_only: bool = False,
                          db: Session = Depends(get_db), _=Depends(get_current_user)):
     """待审批动作（requires_approval 的动作真实执行先落 pending，等人拍板）。"""
-    _require_ontology(db, ontology_id)
-    items = (db.query(ActionExecutionLog)
-             .filter(ActionExecutionLog.ontology_id == ontology_id,
-                     ActionExecutionLog.status == "pending",
-                     ActionExecutionLog.dry_run == False)  # noqa: E712
-             .order_by(ActionExecutionLog.executed_at.desc()).limit(100).all())
+    project = _require_ontology(db, ontology_id)
+    release_snapshot = None
+    query = db.query(ActionExecutionLog).filter(
+        ActionExecutionLog.ontology_id == ontology_id,
+        ActionExecutionLog.status == "pending",
+        ActionExecutionLog.dry_run == False,  # noqa: E712
+    )
+    if current_release_only:
+        release, release_snapshot = _current_release_view(db, project)
+        action_ids = {
+            str(item.get("id")) for item in release_snapshot["actions"] if item.get("id")
+        }
+        query = query.filter(
+            ActionExecutionLog.ontology_version == release.version_number,
+            ActionExecutionLog.action_id.in_(action_ids) if action_ids else false(),
+        )
+    items = query.order_by(
+        ActionExecutionLog.executed_at.desc()).limit(100).all()
     instance_ids = {item.object_instance_id for item in items if item.object_instance_id}
     instances = (db.query(ObjectInstance)
                  .filter(ObjectInstance.ontology_id == ontology_id,
@@ -1053,10 +1164,22 @@ def list_pending_actions(ontology_id: str,
     instances_by_id = {item.id: item for item in instances}
     object_type_ids = {item.object_type_id for item in items if item.object_type_id}
     object_type_ids.update(item.object_type_id for item in instances if item.object_type_id)
-    object_types = (db.query(ObjectType)
-                    .filter(ObjectType.ontology_id == ontology_id,
-                            ObjectType.id.in_(object_type_ids)).all()) if object_type_ids else []
-    object_types_by_id = {item.id: item for item in object_types}
+    if release_snapshot is not None:
+        object_types_by_id = {
+            str(item.get("id")): SimpleNamespace(
+                id=str(item.get("id")),
+                name=item.get("name") or "",
+                display_name=item.get("displayName") or item.get("name") or "",
+                primary_key=item.get("primaryKey"),
+                properties=item.get("properties") or [],
+            )
+            for item in release_snapshot["objectTypes"] if item.get("id")
+        }
+    else:
+        object_types = (db.query(ObjectType)
+                        .filter(ObjectType.ontology_id == ontology_id,
+                                ObjectType.id.in_(object_type_ids)).all()) if object_type_ids else []
+        object_types_by_id = {item.id: item for item in object_types}
 
     result = []
     for item in items:
@@ -1189,12 +1312,22 @@ def object_set_aggregates(ontology_id: str, object_type_id: str,
 # ============================================================
 @router.get("/{ontology_id}/overview")
 def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """详情页总览聚合：一次调用拿全驾驶舱数据（面向"治理+推演"的用户视角）。"""
+    """Latest-release dashboard backed by the immutable release snapshot.
+
+    Schema/configuration counts come from ``current_release_id`` rather than
+    mutable runtime tables.  Runtime projections and telemetry are then
+    constrained to identifiers/version lineage owned by that release.
+    """
     from datetime import timedelta
-    _require_ontology(db, ontology_id)
+    project = _require_ontology(db, ontology_id)
+    release, snapshot = _current_release_view(db, project)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     window_start = (now - timedelta(days=6)).replace(
         hour=0, minute=0, second=0, microsecond=0)
+    release_started_at = _naive_utc(release.published_at or release.created_at)
+    release_window_start = max(
+        [value for value in (window_start, release_started_at) if value is not None]
+    )
     runtime_days = [
         {
             "date": (window_start + timedelta(days=offset)).date().isoformat(),
@@ -1205,56 +1338,84 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     ]
     runtime_by_date = {item["date"]: item for item in runtime_days}
 
-    # —— 模型 ——
-    object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
-    link_types_n = db.query(LinkType).filter(LinkType.ontology_id == ontology_id).count()
-    actions = db.query(ActionType).filter(ActionType.ontology_id == ontology_id).all()
-    functions_n = db.query(OntologyFunction).filter(
-        OntologyFunction.ontology_id == ontology_id).count()
+    # —— 发布模型：不可变 current release 快照是唯一口径 ——
+    object_types = snapshot["objectTypes"]
+    link_types = snapshot["linkTypes"]
+    actions = snapshot["actions"]
+    functions = snapshot["functions"]
+    snapshot_sentinels = snapshot["sentinels"]
+    object_type_ids = {
+        str(item.get("id")) for item in object_types if item.get("id")
+    }
+    link_type_ids = {
+        str(item.get("id")) for item in link_types if item.get("id")
+    }
+    sentinel_ids = {
+        str(item.get("id")) for item in snapshot_sentinels if item.get("id")
+    }
+    action_ids = {
+        str(item.get("id")) for item in actions if item.get("id")
+    }
     try:
         from app.models.sentinel import Sentinel, SentinelFiring
-        sentinels = db.query(Sentinel).filter(Sentinel.ontology_id == ontology_id).all()
-        firings_7d = (db.query(SentinelFiring)
-                      .filter(SentinelFiring.ontology_id == ontology_id,
-                              SentinelFiring.created_at >= window_start,
-                              SentinelFiring.created_at <= now).all())
+        live_sentinels = db.query(Sentinel).filter(
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.id.in_(sentinel_ids),
+        ).all() if sentinel_ids else []
+        live_sentinel_by_id = {item.id: item for item in live_sentinels}
+        firings_7d = (db.query(SentinelFiring).filter(
+            SentinelFiring.ontology_id == ontology_id,
+            SentinelFiring.sentinel_id.in_(sentinel_ids),
+            SentinelFiring.created_at >= release_window_start,
+            SentinelFiring.created_at <= now,
+        ).all()) if sentinel_ids else []
     except Exception:  # noqa: BLE001
         db.rollback()
         logger.warning("Overview 哨兵统计失败,已降级为空统计(ontology=%s)", ontology_id, exc_info=True)
-        sentinels, firings_7d = [], []
+        live_sentinel_by_id, firings_7d = {}, []
 
-    # —— 数据 ——
-    instances = db.query(ObjectInstance).filter(
-        ObjectInstance.ontology_id == ontology_id).all()
+    def sentinel_flag(item: dict, field: str, default: bool) -> bool:
+        live = live_sentinel_by_id.get(str(item.get("id")))
+        return bool(getattr(live, field)) if live is not None else bool(item.get(field, default))
+
+    # —— 当前运行投影：只接收发布结构中仍然存在的类型 ——
+    instances = (db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.object_type_id.in_(object_type_ids),
+    ).all()) if object_type_ids else []
     by_source: dict[str, int] = {}
     inst_by_type: dict[str, int] = {}
     for i in instances:
         by_source[i.source or "manual"] = by_source.get(i.source or "manual", 0) + 1
         inst_by_type[i.object_type_id] = inst_by_type.get(i.object_type_id, 0) + 1
-    link_instances_n = db.query(LinkInstance).filter(
-        LinkInstance.ontology_id == ontology_id).count()
-    mappings_stat = {"total": 0, "bound": 0, "nameMatch": 0, "autoCreate": 0, "autoApply": 0}
-    try:
-        from app.models.v2.mapping import OntologyMapping
-        ot_names = {o.name for o in object_types} | {o.display_name for o in object_types}
-        for m in db.query(OntologyMapping).filter(OntologyMapping.ontology_id == ontology_id).all():
-            mappings_stat["total"] += 1
-            if m.target_object_type_id:
-                mappings_stat["bound"] += 1
-            elif m.entity_class in ot_names:
-                mappings_stat["nameMatch"] += 1
-            else:
-                mappings_stat["autoCreate"] += 1
-            if (m.field_mapping or {}).get("__auto_apply_on_review__"):
-                mappings_stat["autoApply"] += 1
-    except Exception:  # noqa: BLE001
-        db.rollback()
-        logger.warning("Overview 映射统计失败,已降级为默认统计(ontology=%s)", ontology_id, exc_info=True)
+    link_instances_n = (db.query(LinkInstance).filter(
+        LinkInstance.ontology_id == ontology_id,
+        LinkInstance.link_type_id.in_(link_type_ids),
+    ).count()) if link_type_ids else 0
 
-    # —— 运行（治理与推演的核心指标）——
-    logs = db.query(ActionExecutionLog).filter(
+    # Mapping 定义属于发布结构；运行表中的 applied 版本戳不改变定义口径。
+    mappings_stat = {"total": 0, "bound": 0, "nameMatch": 0, "autoCreate": 0, "autoApply": 0}
+    ot_names = {
+        str(value) for item in object_types
+        for value in (item.get("name"), item.get("displayName")) if value
+    }
+    for mapping in snapshot["mappings"]:
+        mappings_stat["total"] += 1
+        if mapping.get("targetObjectTypeId"):
+            mappings_stat["bound"] += 1
+        elif mapping.get("entityClass") in ot_names:
+            mappings_stat["nameMatch"] += 1
+        else:
+            mappings_stat["autoCreate"] += 1
+        if (mapping.get("fieldMapping") or {}).get("__auto_apply_on_review__"):
+            mappings_stat["autoApply"] += 1
+
+    # —— 运行：动作日志显式带发布版本血缘 ——
+    logs = (db.query(ActionExecutionLog).filter(
         ActionExecutionLog.ontology_id == ontology_id,
-        ActionExecutionLog.dry_run == False).all()  # noqa: E712
+        ActionExecutionLog.ontology_version == release.version_number,
+        ActionExecutionLog.action_id.in_(action_ids),
+        ActionExecutionLog.dry_run == False).all()) if action_ids else []  # noqa: E712
     pending_n = sum(1 for l in logs if l.status == "pending")
     decided = sorted([l for l in logs if l.status in ("approved", "rejected")],
                      key=lambda l: (l.decided_at or l.executed_at), reverse=True)
@@ -1262,7 +1423,7 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     recent = decided[:20]
     recent_rate = (sum(1 for l in recent if l.status == "approved") / len(recent)) if recent else None
     runs_7d = [l for l in logs if l.executed_at
-               and window_start <= l.executed_at <= now
+               and release_window_start <= l.executed_at <= now
                and l.status in ("success", "failed")]
     for firing in firings_7d:
         day = runtime_by_date.get(firing.created_at.date().isoformat())
@@ -1273,12 +1434,11 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
         if day:
             day["actionRuns"][log.status] += 1
 
-    # —— 事实流 ——
-    facts_total = db.query(PropertyFact).filter(
-        PropertyFact.ontology_id == ontology_id).count()
+    # —— 事实流：仅统计当前发布产生/发布后追加且仍属于该结构的事实 ——
+    facts_query = _release_fact_query(db, ontology_id, release, snapshot)
+    facts_total = facts_query.count()
     by_kind: dict[str, int] = {}
-    for kind, in db.query(PropertyFact.kind).filter(
-            PropertyFact.ontology_id == ontology_id).all():
+    for kind, in facts_query.with_entities(PropertyFact.kind).all():
         by_kind[kind or "property"] = by_kind.get(kind or "property", 0) + 1
 
     # —— 健康检查（可操作的下一步建议）——
@@ -1286,7 +1446,10 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     if not object_types:
         health.append({"level": "info", "message": "还没有对象实体",
                        "hint": "打开图谱编辑器开始建模，或在「数据映射」由数据生成类型"})
-    no_pk = [o.display_name or o.name for o in object_types if not o.primary_key]
+    no_pk = [
+        item.get("displayName") or item.get("name") or str(item.get("id") or "")
+        for item in object_types if not item.get("primaryKey")
+    ]
     if no_pk:
         health.append({"level": "warn", "message": f"{len(no_pk)} 个对象实体未设主键：{', '.join(no_pk[:3])}{'…' if len(no_pk) > 3 else ''}",
                        "hint": "无主键会影响数据灌入去重与动作的实例定位"})
@@ -1296,10 +1459,11 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     if mappings_stat["autoCreate"] > 0:
         health.append({"level": "warn", "message": f"{mappings_stat['autoCreate']} 条映射未绑定对象实体（将由数据自建类型）",
                        "hint": "建议在映射维护里显式绑定，防止产生平行类型"})
-    if sentinels and all(s.muted for s in sentinels):
+    if snapshot_sentinels and all(
+            sentinel_flag(item, "muted", False) for item in snapshot_sentinels):
         health.append({"level": "warn", "message": "所有哨兵都处于影子（静默）状态",
                        "hint": "确认规律无误后，在哨兵面板解除静默让治理真正生效"})
-    if not sentinels and instances:
+    if not snapshot_sentinels and instances:
         health.append({"level": "info", "message": "已有数据但还没有哨兵",
                        "hint": "在图谱编辑器建哨兵，让平台替你盯住状态变化"})
     err_firings = sum(1 for f in firings_7d if f.status == "error")
@@ -1311,21 +1475,33 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
                        "hint": "到「治理与推演 → 治理驾驶舱」批准或拒绝"})
 
     return _ok({
+        "release": {
+            "id": release.id,
+            "version": release.version_number,
+            "publishedAt": release.published_at.isoformat() if release.published_at else None,
+        },
         "model": {
-            "objectTypes": len(object_types), "linkTypes": link_types_n,
+            "objectTypes": len(object_types), "linkTypes": len(link_types),
             "actions": len(actions),
-            "actionsRequiringApproval": sum(1 for a in actions if a.requires_approval),
-            "functions": functions_n,
-            "sentinels": {"total": len(sentinels),
-                          "enabled": sum(1 for s in sentinels if s.enabled),
-                          "muted": sum(1 for s in sentinels if s.muted)},
+            "actionsRequiringApproval": sum(
+                1 for item in actions if item.get("requiresApproval")),
+            "functions": len(functions),
+            "sentinels": {"total": len(snapshot_sentinels),
+                          "enabled": sum(
+                              1 for item in snapshot_sentinels
+                              if sentinel_flag(item, "enabled", True)),
+                          "muted": sum(
+                              1 for item in snapshot_sentinels
+                              if sentinel_flag(item, "muted", False))},
         },
         "data": {
             "instances": len(instances), "instancesBySource": by_source,
             "linkInstances": link_instances_n, "mappings": mappings_stat,
             "topTypes": sorted(
-                [{"id": o.id, "name": o.display_name or o.name,
-                  "count": inst_by_type.get(o.id, 0)} for o in object_types],
+                [{"id": str(item.get("id") or ""),
+                  "name": item.get("displayName") or item.get("name") or str(item.get("id") or ""),
+                  "count": inst_by_type.get(str(item.get("id") or ""), 0)}
+                 for item in object_types],
                 key=lambda x: -x["count"])[:6],
         },
         "runtime": {
@@ -1348,10 +1524,16 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
 
 @router.get("/{ontology_id}/facts/recent")
 def recent_facts(ontology_id: str, limit: int = 30, kind: Optional[str] = None,
+                 current_release_only: bool = False,
                  db: Session = Depends(get_db), _=Depends(get_current_user)):
     """本体级事实流（跨实例，时间倒序），带可读主体标签——治理页的时间线。"""
-    _require_ontology(db, ontology_id)
-    q = db.query(PropertyFact).filter(PropertyFact.ontology_id == ontology_id)
+    project = _require_ontology(db, ontology_id)
+    release_snapshot = None
+    if current_release_only:
+        release, release_snapshot = _current_release_view(db, project)
+        q = _release_fact_query(db, ontology_id, release, release_snapshot)
+    else:
+        q = db.query(PropertyFact).filter(PropertyFact.ontology_id == ontology_id)
     if kind:
         q = q.filter(PropertyFact.kind == kind)
     items = q.order_by(*fact_order_clause()).limit(min(limit, 200)).all()
@@ -1368,8 +1550,14 @@ def recent_facts(ontology_id: str, limit: int = 30, kind: Optional[str] = None,
         sent_map = {}
     log_map = {l.id: l for l in db.query(ActionExecutionLog).filter(
         ActionExecutionLog.id.in_(inst_ids)).all()} if inst_ids else {}
-    type_names = {o.id: (o.display_name or o.name) for o in
-                  db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()}
+    if release_snapshot is not None:
+        type_names = {
+            str(item.get("id")): item.get("displayName") or item.get("name") or str(item.get("id"))
+            for item in release_snapshot["objectTypes"] if item.get("id")
+        }
+    else:
+        type_names = {o.id: (o.display_name or o.name) for o in
+                      db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()}
 
     def _label(f: PropertyFact) -> str:
         inst = inst_map.get(f.instance_id)

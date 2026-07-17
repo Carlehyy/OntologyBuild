@@ -10,6 +10,7 @@ import type { OntologyDetail } from '@/types/ontology'
 import './overview-dashboard.css'
 
 interface Overview {
+  release: { id: string; version: string; publishedAt: string | null }
   model: {
     objectTypes: number; linkTypes: number; actions: number
     actionsRequiringApproval: number; functions: number
@@ -249,12 +250,14 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   })
   const factsQuery = useQuery<FactRow[]>({
     queryKey: ['recent-facts', ontologyId],
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/facts/recent?limit=8`) as Promise<FactRow[]>,
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/facts/recent?limit=8&current_release_only=true`) as Promise<FactRow[]>,
     refetchInterval: 30000,
   })
   const pendingQuery = useQuery<PendingLog[]>({
-    queryKey: ['gov-pending', ontologyId],
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/pending-actions`) as Promise<PendingLog[]>,
+    queryKey: ['overview-pending', ontologyId],
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/pending-actions?current_release_only=true`) as Promise<PendingLog[]>,
     refetchInterval: 15000,
   })
 
@@ -273,7 +276,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const selected = pending.find(item => item.id === selectedId) ?? pending[0] ?? null
 
   const refreshOverview = () => {
-    queryClient.invalidateQueries({ queryKey: ['gov-pending', ontologyId] })
+    queryClient.invalidateQueries({ queryKey: ['overview-pending', ontologyId] })
     queryClient.invalidateQueries({ queryKey: ['formal-overview', ontologyId] })
     queryClient.invalidateQueries({ queryKey: ['recent-facts', ontologyId] })
     queryClient.invalidateQueries({ queryKey: ['gov-facts', ontologyId] })
@@ -377,10 +380,11 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           </div>
           <p className="profile-description">{ontology.description || '暂无本体描述。可在本体管理中补充业务范围与使用说明。'}</p>
           <dl className="profile-meta">
-            <div><dt>当前发布</dt><dd>{ontology.current_release_version || ontology.version || '—'}</dd></div>
+            <div><dt>当前发布</dt><dd>{ov.release.version}</dd></div>
             <div><dt>创建时间</dt><dd>{formatDateTime(ontology.created_at)}</dd></div>
             <div><dt>更新时间</dt><dd>{formatDateTime(ontology.updated_at)}</dd></div>
           </dl>
+          <div className="profile-reserved" aria-hidden="true" />
         </section>
 
         <section className="overview-panel kpi-rail" aria-label="关键指标">
@@ -415,7 +419,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             </em>
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('governance')}>
-            <span className="kpi-label">累计事实流</span>
+            <span className="kpi-label">当前版本事实流</span>
             <strong>{ov.facts.total}<small>条</small></strong>
             <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_META[kind]?.label || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
             <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>
@@ -587,7 +591,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
         </section>
 
         <section className="overview-panel recent-facts">
-          <PanelTitle title="最近发生了什么" sub="事实流 · 追加不修改" action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看全部 <ChevronRight size={15} /></button>} />
+          <PanelTitle title="最近发生了什么" sub={`${ov.release.version} 事实流 · 追加不修改`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看全部 <ChevronRight size={15} /></button>} />
           {factsQuery.isLoading ? <div className="recent-empty"><Loader2 className="spin" size={18} />正在读取事实流…</div> : facts.length === 0 ? (
             <div className="recent-empty"><Sparkles size={20} />还没有事实记录；数据灌入或动作执行后会在这里留痕。</div>
           ) : (

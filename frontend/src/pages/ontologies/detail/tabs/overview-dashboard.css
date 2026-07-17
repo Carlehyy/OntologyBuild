@@ -133,10 +133,11 @@
   line-height: 1.72;
   overflow-wrap: anywhere;
 }
-.profile-meta { display: grid; gap: 9px; margin: auto 0 0; padding: 18px 0 0; border-top: 1px solid #edf1f5; }
+.profile-meta { display: grid; gap: 9px; margin: 18px 0 0; padding: 18px 0 0; border-top: 1px solid #edf1f5; }
 .profile-meta div { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; }
 .profile-meta dt { color: #8a96a8; font-size: 11px; }
 .profile-meta dd { overflow: hidden; margin: 0; color: #40506a; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.profile-reserved { min-height: 64px; flex: 1 1 96px; margin-top: 18px; border-top: 1px solid #edf1f5; }
 
 .kpi-rail {
   display: grid;
@@ -235,12 +236,11 @@
 .route-approved { border-right: 2px solid #a9b5c2; border-radius: 0 12px 0 0; }
 .route-rejected { align-self: start; border-right: 2px solid #a9b5c2; border-top: 0; border-bottom: 2px solid #a9b5c2; border-radius: 0 0 12px 0; }
 
-.overview-row { display: grid; gap: 14px; }
+.overview-row { display: grid; align-items: stretch; gap: 14px; }
 .overview-row-model { grid-template-columns: minmax(420px, var(--ov-side-width)) minmax(0, 1fr); }
 .overview-row-data { grid-template-columns: minmax(0, 1.03fr) minmax(430px, .97fr); }
 .overview-row-facts { grid-template-columns: minmax(460px, .78fr) minmax(0, 1.22fr); }
 .model-composition, .runtime-summary, .instance-distribution, .mapping-status, .fact-composition, .recent-facts { padding: 20px 24px; }
-.model-composition, .fact-composition { align-self: start; }
 
 .model-composition-body { display: grid; grid-template-columns: 230px minmax(0, 1fr); align-items: center; gap: 22px; min-height: 208px; }
 .overview-donut { position: relative; display: grid; width: 180px; height: 180px; place-items: center; justify-self: center; border-radius: 50%; transform: rotate(-90deg); }
@@ -364,6 +364,7 @@
   .profile-heading { margin-top: 18px; }
   .profile-description { margin: 18px 0; }
   .profile-meta { margin-top: 0; padding: 13px 0 0; }
+  .profile-reserved { min-height: 48px; flex-basis: 48px; margin-top: 16px; }
   .approval-pipeline { min-height: 330px; }
   .overview-row-model, .overview-row-data, .overview-row-facts { grid-template-columns: 1fr; }
 }
@@ -390,6 +391,7 @@
   .profile-heading h1 { font-size: 20px; }
   .profile-description { margin: 12px 0; }
   .profile-meta { width: 100%; padding: 12px 0; }
+  .profile-reserved { min-height: 32px; flex-basis: 32px; margin-top: 12px; }
   .kpi-rail { grid-template-columns: 1fr; }
   .kpi-cell { border-right: 0; border-bottom: 1px solid var(--ov-border); }
   .kpi-cell:last-child { border-bottom: 0; }
