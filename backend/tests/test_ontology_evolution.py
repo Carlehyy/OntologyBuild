@@ -448,6 +448,33 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
     assert frozen_mapping.status_code == 409, frozen_mapping.text
     assert frozen_mapping.json()["detail"]["code"] == "trial_snapshot_frozen"
 
+    # 画布坐标属于独立展示元数据：试跑快照冻结后仍可调整，且不会推进
+    # revision、改变 snapshot_hash 或污染被试跑验证的正式模型快照。
+    frozen_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
+    frozen_revision = frozen_row.revision
+    frozen_hash = frozen_row.snapshot_hash
+    saved_layout = client.put(
+        f"/api/v2/ontologies/{oid}/layout",
+        headers=auth_headers,
+        json={
+            "versionId": draft["id"],
+            "positions": {"ot-order": {"x": 640, "y": 360}},
+        },
+    )
+    assert saved_layout.status_code == 200, saved_layout.text
+    moved_workspace = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers,
+    ).json()["data"]
+    assert moved_workspace["objectTypes"][0]["positionX"] == 640
+    assert moved_workspace["objectTypes"][0]["positionY"] == 360
+    db.expire_all()
+    frozen_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
+    assert frozen_row.revision == frozen_revision
+    assert frozen_row.snapshot_hash == frozen_hash
+    assert frozen_row.snapshot_formal["objectTypes"][0]["positionX"] == 10
+    assert frozen_row.snapshot_formal["objectTypes"][0]["positionY"] == 20
+
     rerun = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
         headers=auth_headers, json={})
@@ -464,6 +491,12 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
         headers=auth_headers).json()["data"]
     assert next_workspace["workspaceMode"] == "draft"
     assert next_workspace["editable"] is True
+    assert next_workspace["objectTypes"][0]["positionX"] == 640
+    assert next_workspace["objectTypes"][0]["positionY"] == 360
+    next_row = db.query(OntologyVersion).filter_by(id=next_draft["id"]).one()
+    assert next_row.snapshot_formal["objectTypes"][0]["positionX"] == 10
+    assert next_row.snapshot_formal["objectTypes"][0]["positionY"] == 20
+    assert next_row.canvas_layout["ot-order"] == {"x": 640.0, "y": 360.0}
 
 
 def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
@@ -499,6 +532,28 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 4
     assert db.query(OntologyVersion).filter_by(id=root["id"]).one().snapshot_formal is not None
     assert db.query(OntologyVersion).filter_by(id=draft["id"]).one().lifecycle_status == "superseded"
+
+    # 当前发布和历史发布同样允许保存布局；运行时 full 视图读取布局覆盖，
+    # 发布快照的哈希和内容保持原样。
+    release_row = db.query(OntologyVersion).filter_by(id=release["id"]).one()
+    release_hash = release_row.snapshot_hash
+    moved_release = client.put(
+        f"/api/v2/ontologies/{oid}/layout",
+        headers=auth_headers,
+        json={"positions": {"ot-order": {"x": 720, "y": 420}}},
+    )
+    assert moved_release.status_code == 200, moved_release.text
+    assert moved_release.json()["data"]["versionId"] == release["id"]
+    runtime = client.get(
+        f"/api/v2/formal/ontologies/{oid}/full", headers=auth_headers,
+    ).json()["data"]
+    assert runtime["objectTypes"][0]["positionX"] == 720
+    assert runtime["objectTypes"][0]["positionY"] == 420
+    db.expire_all()
+    release_row = db.query(OntologyVersion).filter_by(id=release["id"]).one()
+    assert release_row.snapshot_hash == release_hash
+    assert release_row.snapshot_formal["objectTypes"][0]["positionX"] == 10
+    assert release_row.snapshot_formal["objectTypes"][0]["positionY"] == 20
 
     # 同一完整结构和映射可以继续从 v1 分支、试跑并晋级为 v2；复用稳定
     # 定义 ID 时不能和当前生产投影冲突，也不能重建对象身份。

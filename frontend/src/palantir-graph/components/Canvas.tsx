@@ -21,6 +21,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 import { useOntologyStore } from '../store/ontologyStore';
+import { saveCanvasLayout } from '../api/formalApi';
 import ObjectTypeNode from './nodes/ObjectTypeNode';
 import MultiConnectionEdge from './edges/MultiConnectionEdge';
 import ConnectLinkDialog from './ConnectLinkDialog';
@@ -49,7 +50,7 @@ interface CanvasProps {
   onBrowseInstances?: (objectTypeId: string) => void;
   /** 只读版本禁止结构写入，但仍允许查看、选择、移动节点与缩放画布 */
   readOnly?: boolean;
-  /** 切换版本时重置只读画布的临时布局，避免不同快照之间串位 */
+  /** 切换版本时重载该版本的布局，避免不同快照之间串位 */
   layoutScope?: string;
 }
 
@@ -103,6 +104,8 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
     openPanel,
     setPendingNodePosition,
     autoLayout,
+    backendId,
+    workspaceVersionId,
   } = useOntologyStore();
   const { screenToFlowPosition, fitView } = useReactFlow();
 
@@ -135,6 +138,9 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(selectedStoreNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(selectedStoreEdges);
+  const [layoutSaveError, setLayoutSaveError] = useState('');
+
+  useEffect(() => setLayoutSaveError(''), [layoutScope]);
 
   const renderNodes = useMemo(
     () => readOnly
@@ -153,7 +159,8 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
 
   const previousLayoutScope = useRef(layoutScope);
 
-  // 草稿直接跟随可保存结构；只读状态保留本次查看期间的临时位置，不写回版本快照。
+  // 草稿直接跟随可保存结构；冻结状态在布局 API 回写期间保留当前拖动位置，
+  // 且永远不把视觉坐标写回版本快照。
   useEffect(() => {
     const scopeChanged = previousLayoutScope.current !== layoutScope;
     previousLayoutScope.current = layoutScope;
@@ -202,11 +209,28 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
 
   const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
-      // 发布/试跑/历史版本仅调整本地视图，不改快照、不产生脏数据。
-      if (readOnly) return;
+      if (readOnly) {
+        // 冻结状态只持久化独立布局元数据；不改模型快照，也不产生脏数据。
+        if (backendId) {
+          setLayoutSaveError('');
+          void saveCanvasLayout(
+            backendId,
+            { [node.id]: node.position },
+            workspaceVersionId,
+          ).catch((error: any) => {
+            const detail = error?.response?.data?.detail ?? error?.detail;
+            setLayoutSaveError(
+              typeof detail === 'string'
+                ? detail
+                : detail?.message || error?.message || '节点位置保存失败',
+            );
+          });
+        }
+        return;
+      }
       updateNodePosition(node.id, node.position);
     },
-    [updateNodePosition, readOnly]
+    [backendId, readOnly, updateNodePosition, workspaceVersionId]
   );
 
   const onNodeClick = useCallback(
@@ -365,6 +389,15 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
           maskColor="rgba(10, 14, 23, 0.8)"
         />
       </ReactFlow>
+
+      {layoutSaveError && (
+        <div
+          role="alert"
+          className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-red-500/40 bg-red-950/95 px-3 py-2 text-xs text-red-200 shadow-lg"
+        >
+          {layoutSaveError}
+        </div>
+      )}
 
       {/* 空态引导：还没有任何对象类型时给出下一步指引 */}
       {storeNodes.length === 0 && (

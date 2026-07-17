@@ -1,8 +1,9 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { CubeIcon, KeyIcon, BoltIcon } from '@heroicons/react/24/outline';
+import { KeyIcon, BoltIcon } from '@heroicons/react/24/outline';
 import type { ObjectType } from '../../types/ontology';
 import { useOntologyStore } from '../../store/ontologyStore';
+import { objectTypeIconGlyph } from '../../utils/objectTypeIcon';
 
 interface ObjectTypeNodeProps {
   data: ObjectType;
@@ -26,11 +27,12 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
   const visibleProperties = data.properties.slice(0, 5);
   const remainingCount = data.properties.length - 5;
   const propertyLabel = (prop: ObjectType['properties'][number]) => prop.displayName || prop.name;
+  const iconGlyph = objectTypeIconGlyph(data.icon);
 
   return (
     <div
       onDoubleClick={handleDoubleClick}
-      title={readOnly ? '双击查看对象定义；拖动可调整当前视图' : '双击编辑对象定义'}
+      title={readOnly ? '双击查看对象定义；拖动可保存画布布局' : '双击编辑对象定义'}
       className={`
         min-w-[240px] max-w-[320px] rounded-xl overflow-hidden
         bg-gradient-to-b from-surface-800 to-surface-900
@@ -55,11 +57,7 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
           className="w-8 h-8 rounded-lg flex items-center justify-center"
           style={{ backgroundColor: `${data.color || '#6366f1'}33` }}
         >
-          {data.icon ? (
-            <span className="text-lg">{data.icon}</span>
-          ) : (
-            <CubeIcon className="w-5 h-5" style={{ color: data.color || '#6366f1' }} />
-          )}
+          <span className="text-lg" data-testid="object-type-icon">{iconGlyph}</span>
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-display font-semibold text-surface-100 truncate">

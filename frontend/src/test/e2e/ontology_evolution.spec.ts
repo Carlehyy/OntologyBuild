@@ -58,12 +58,19 @@ async function verifyReadonlyGraphInspection(page: Page, objectTypeId: string) {
 
   const node = page.locator(`.react-flow__node[data-id="${objectTypeId}"]`)
   await expect(node).toBeVisible()
+  await expect(node.getByTestId('object-type-icon')).toHaveText('📦')
+  await expect(node.getByTestId('object-type-icon')).not.toContainText('真机订单')
   const before = await node.boundingBox()
   expect(before).toBeTruthy()
+  const layoutSaved = page.waitForResponse(response =>
+    response.request().method() === 'PUT'
+      && response.url().includes('/api/v2/ontologies/')
+      && response.url().endsWith('/layout'))
   await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2)
   await page.mouse.down()
   await page.mouse.move(before!.x + before!.width / 2 + 110, before!.y + before!.height / 2 + 70, { steps: 8 })
   await page.mouse.up()
+  expect((await layoutSaved).ok()).toBeTruthy()
   const after = await node.boundingBox()
   expect(after).toBeTruthy()
   expect(Math.abs(after!.x - before!.x)).toBeGreaterThan(50)
@@ -94,7 +101,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
     baseRevision: `${draft.revision}:${draft.snapshot_hash}`,
     version: draft.version_number,
     objectTypes: [{
-      id: objectTypeId, name: 'BrowserOrder', displayName: '真机订单',
+      id: objectTypeId, name: 'BrowserOrder', displayName: '真机订单', icon: '真机订单',
       primaryKey: 'p-id', positionX: 100, positionY: 100,
       properties: [
         { id: 'p-id', name: 'id', displayName: '订单号', type: 'string', required: true },
@@ -194,11 +201,12 @@ test('complete branch → real-data trial → reviewed release works in the brow
 
   // 试跑态虽然冻结结构，但模型定义必须可查看，画布仍可移动。
   await page.goto(`/#/ontologies/${ontology.id}/graph?versionId=${draft.id}`)
-  await expect(page.getByText(/试跑态 v0\.1 · 可查看定义和调整画布视图/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/试跑态 v0\.1 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
   await verifyReadonlyGraphInspection(page, objectTypeId)
-  const unchangedTrial = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace`)
-  const trialObject = unchangedTrial.objectTypes.find((item: any) => item.id === objectTypeId)
-  expect({ x: trialObject.positionX, y: trialObject.positionY }).toEqual({ x: 100, y: 100 })
+  const movedTrial = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace`)
+  const trialObject = movedTrial.objectTypes.find((item: any) => item.id === objectTypeId)
+  const trialPosition = { x: trialObject.positionX, y: trialObject.positionY }
+  expect(trialPosition).not.toEqual({ x: 100, y: 100 })
   await page.goto(`/#/ontologies/${ontology.id}`)
   await page.getByRole('button', { name: '查看历史版本' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()
@@ -212,18 +220,29 @@ test('complete branch → real-data trial → reviewed release works in the brow
   // 只有版本演进里可以打开历史快照，且历史发布版严格只读。
   await page.getByTestId('version-node-v0').getByRole('button', { name: '查看快照' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
-  await expect(page.getByText(/历史发布 v0 · 可查看定义和调整画布视图/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/历史发布 v0 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
 
   // 本体结构页的主 CTA 始终进入最新发布版；开始修改时无需再次选择版本。
   await page.goto(`/#/ontologies/${ontology.id}?tab=design`)
   await expect(page.getByTestId('current-release-version')).toHaveText('v1')
   await page.getByRole('button', { name: '打开图谱编辑器修改模型' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph$`))
-  await expect(page.getByText(/当前发布 v1 · 可查看定义和调整画布视图/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/当前发布 v1 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
+  const inheritedRelease = await api<any>(request, token, 'get', `/api/v2/formal/ontologies/${ontology.id}/full`)
+  const inheritedReleaseObject = inheritedRelease.objectTypes.find((item: any) => item.id === objectTypeId)
+  expect({ x: inheritedReleaseObject.positionX, y: inheritedReleaseObject.positionY }).toEqual(trialPosition)
   await verifyReadonlyGraphInspection(page, objectTypeId)
-  const unchangedRelease = await api<any>(request, token, 'get', `/api/v2/formal/ontologies/${ontology.id}/full`)
-  const releaseObject = unchangedRelease.objectTypes.find((item: any) => item.id === objectTypeId)
-  expect({ x: releaseObject.positionX, y: releaseObject.positionY }).toEqual({ x: 100, y: 100 })
+  const movedRelease = await api<any>(request, token, 'get', `/api/v2/formal/ontologies/${ontology.id}/full`)
+  const releaseObject = movedRelease.objectTypes.find((item: any) => item.id === objectTypeId)
+  expect({ x: releaseObject.positionX, y: releaseObject.positionY }).not.toEqual(trialPosition)
+
+  // 哨兵入口只出现在当前发布态；只读模型不应阻止运行态面板挂载。
+  await page.getByTitle('打开菜单').click()
+  await expect(page.getByRole('button', { name: 'API 文档' })).toHaveCount(0)
+  await page.getByRole('button', { name: '哨兵引擎' }).click()
+  await expect(page.getByRole('heading', { name: '哨兵引擎' })).toBeVisible()
+  await page.getByRole('button', { name: '关闭哨兵引擎' }).click()
+
   await page.getByRole('button', { name: '基于此版本开始修改' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
   await expect(page.getByText(/草稿 v1\.1 · 可编辑并查看全部模型定义/)).toBeVisible({ timeout: 20_000 })

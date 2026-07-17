@@ -7,6 +7,7 @@ import RuleEditor from './editors/RuleEditor';
 import FunctionParameterEditor from './editors/FunctionParameterEditor';
 import type { Property, ActionParameter, ActionRule, FunctionParameter, FunctionType, FunctionLanguage, CacheStrategy as FunctionCacheStrategy, PropertyType } from '../types/ontology';
 import { sanitizeIdentifier } from '../utils/identifier';
+import { objectTypeIconGlyph } from '../utils/objectTypeIcon';
 import ReadonlyDefinitionPanel from './ReadonlyDefinitionPanel';
 
 // Color options for objects
@@ -112,7 +113,7 @@ function ObjectTypePanel({
   const [displayName, setDisplayName] = useState(existingObject?.displayName || '');
   const [description, setDescription] = useState(existingObject?.description || '');
   const [color, setColor] = useState(existingObject?.color || colorOptions[0]);
-  const [icon, setIcon] = useState(existingObject?.icon || '📦');
+  const [icon, setIcon] = useState(objectTypeIconGlyph(existingObject?.icon));
   const [properties, setProperties] = useState<Property[]>(existingObject?.properties || []);
   const [primaryKey, setPrimaryKey] = useState(existingObject?.primaryKey || '');
 
@@ -122,7 +123,7 @@ function ObjectTypePanel({
       setDisplayName(existingObject.displayName);
       setDescription(existingObject.description || '');
       setColor(existingObject.color || colorOptions[0]);
-      setIcon(existingObject.icon || '📦');
+      setIcon(objectTypeIconGlyph(existingObject.icon));
       setProperties(existingObject.properties);
       setPrimaryKey(existingObject.primaryKey);
     }

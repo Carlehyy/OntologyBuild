@@ -24,7 +24,6 @@ const GraphDatabaseView = lazy(() => import('../../../palantir-graph/components/
 const FunctionTester = lazy(() => import('../../../palantir-graph/components/panels/FunctionTester'));
 const ActionRunner = lazy(() => import('../../../palantir-graph/components/panels/ActionRunner'));
 import InstanceBrowser from '../../../palantir-graph/components/panels/InstanceBrowser';
-const ApiDocs = lazy(() => import('../../../palantir-graph/components/panels/ApiDocs'));
 const RunHistoryPanel = lazy(() => import('../../../palantir-graph/components/panels/RunHistoryPanel'));
 const AutonomyPanel = lazy(() => import('../../../palantir-graph/components/panels/AutonomyPanel'));
 
@@ -54,7 +53,6 @@ export default function OntologyGraphPage() {
   const [runInstanceId, setRunInstanceId] = useState<string>('');
   const [showInstanceBrowser, setShowInstanceBrowser] = useState(false);
   const [instanceBrowserTypeId, setInstanceBrowserTypeId] = useState<string>('');
-  const [showApiDocs, setShowApiDocs] = useState(false);
   const [showActionPanel, setShowActionPanel] = useState(false);
   const [showFunctionPanel, setShowFunctionPanel] = useState(false);
   const [showLinkPanel, setShowLinkPanel] = useState(false);
@@ -207,12 +205,12 @@ export default function OntologyGraphPage() {
   const stage = workspaceMode === 'draft'
     ? { tone: 'sky', text: `草稿 ${ontology?.version || ''} · 可编辑并查看全部模型定义，不产生 Fact、不执行本体网络` }
     : workspaceMode === 'trial'
-      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 可查看定义和调整画布视图，真实数据仅写入隔离空间` }
+      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 可查看定义并保存画布布局，真实数据仅写入隔离空间` }
       : workspaceMode === 'release'
-        ? { tone: 'slate', text: `历史发布 ${ontology?.version || ''} · 可查看定义和调整画布视图，不承载当前运行数据` }
+        ? { tone: 'slate', text: `历史发布 ${ontology?.version || ''} · 可查看定义并保存画布布局，不承载当前运行数据` }
         : workspaceMode === 'archived'
-          ? { tone: 'slate', text: `已归档分支 ${ontology?.version || ''} · 可查看定义和调整画布视图` }
-          : { tone: 'emerald', text: `当前发布 ${ontology?.version || ''} · 可查看定义和调整画布视图，正式数据与本体网络持续运行` };
+          ? { tone: 'slate', text: `已归档分支 ${ontology?.version || ''} · 可查看定义并保存画布布局` }
+          : { tone: 'emerald', text: `当前发布 ${ontology?.version || ''} · 可查看定义并保存画布布局，正式数据与本体网络持续运行` };
 
   const stageClass = {
     sky: 'border-sky-500/40 bg-sky-950/90 text-sky-200',
@@ -291,7 +289,7 @@ export default function OntologyGraphPage() {
         />
         <LinkList readOnly={readOnly} isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
         <ObjectList readOnly={readOnly} isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />
-        {!readOnly && <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />}
+        <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />
 
         {!readOnly && showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
         {!readOnly && deleteTarget && (
@@ -302,7 +300,6 @@ export default function OntologyGraphPage() {
           onOpenHelp={() => setShowHelp(true)}
           onOpenFunctionTest={() => openFunctionTest()}
           onOpenActionRun={() => openActionRun()}
-          onOpenApiDocs={() => setShowApiDocs(true)}
           onOpenSentinel={() => setShowSentinel(true)}
           onOpenInstances={() => {
             setInstanceBrowserTypeId('');
@@ -338,7 +335,6 @@ export default function OntologyGraphPage() {
               onRunAction={openActionRun}
             />
           )}
-          {showApiDocs && <ApiDocs isOpen={showApiDocs} onClose={() => setShowApiDocs(false)} />}
           {workspaceMode === 'runtime' && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
           {workspaceMode === 'runtime' && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
         </Suspense>

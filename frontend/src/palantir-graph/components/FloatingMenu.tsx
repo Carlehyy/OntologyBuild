@@ -3,7 +3,6 @@ import {
   Bars3Icon,
   XMarkIcon,
   QuestionMarkCircleIcon,
-  CodeBracketIcon,
   PlayIcon,
   CommandLineIcon,
   ShieldExclamationIcon,
@@ -23,7 +22,6 @@ interface MenuItem {
 
 interface FloatingMenuProps {
   onOpenHelp: () => void;
-  onOpenApiDocs: () => void;
   onOpenFunctionTest: () => void;
   onOpenActionRun: () => void;
   onOpenSentinel: () => void;
@@ -34,7 +32,6 @@ interface FloatingMenuProps {
 
 export const FloatingMenu = ({
   onOpenHelp,
-  onOpenApiDocs,
   onOpenFunctionTest,
   onOpenActionRun,
   onOpenSentinel,
@@ -97,17 +94,6 @@ export const FloatingMenu = ({
       bgColor: 'bg-purple-500/20 hover:bg-purple-500/30',
       onClick: () => {
         onOpenHelp();
-        setIsOpen(false);
-      },
-    },
-    {
-      id: 'apidocs',
-      label: 'API 文档',
-      icon: CodeBracketIcon,
-      color: 'text-lime-400',
-      bgColor: 'bg-lime-500/20 hover:bg-lime-500/30',
-      onClick: () => {
-        onOpenApiDocs();
         setIsOpen(false);
       },
     },

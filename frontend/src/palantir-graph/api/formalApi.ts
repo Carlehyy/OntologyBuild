@@ -160,6 +160,21 @@ export async function saveFullOntology(
   };
 }
 
+/**
+ * 保存画布展示布局。该接口只写版本的 canvas_layout，不改变模型快照、
+ * revision 或发布/试跑状态；versionId 为空时保存到当前发布版。
+ */
+export async function saveCanvasLayout(
+  id: string,
+  positions: Record<string, { x: number; y: number }>,
+  versionId?: string | null,
+): Promise<{ versionId: string; positions: Record<string, { x: number; y: number }> }> {
+  return apiClientV2.put(`ontologies/${id}/layout`, {
+    ...(versionId ? { versionId } : {}),
+    positions,
+  });
+}
+
 // ============ 增量保存 (delta PATCH) ============
 export type DeltaKind = 'objectTypes' | 'linkTypes' | 'actions' | 'functions' | 'instances' | 'linkInstances';
 

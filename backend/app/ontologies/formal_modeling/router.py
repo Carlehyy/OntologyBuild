@@ -17,6 +17,7 @@ from typing import Optional
 from app.deps import get_db, get_current_user, require_admin
 from app.ontologies.access import ontology_access_guard
 from app.models.ontology import OntologyProject
+from app.models.ontology_version import OntologyVersion
 from app.models.ontology_formal import (
     ObjectType, LinkType, ActionType, OntologyFunction,
     ObjectInstance, LinkInstance, ActionExecutionLog,
@@ -258,10 +259,29 @@ def get_full_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends
     def q(model):
         return db.query(model).filter(model.ontology_id == ontology_id).all()
 
+    # 当前发布版的画布布局独立于模型快照保存。运行投影读取时覆盖展示坐标，
+    # 但不把纯视觉调整伪装成一次模式层发布。
+    canvas_layout: dict = {}
+    if p.current_release_id:
+        release = db.query(OntologyVersion).filter(
+            OntologyVersion.id == p.current_release_id,
+            OntologyVersion.ontology_id == ontology_id,
+        ).first()
+        if release and isinstance(release.canvas_layout, dict):
+            canvas_layout = release.canvas_layout
+    object_types = []
+    for row in q(ObjectType):
+        item = S.ObjectTypeOut.model_validate(row)
+        position = canvas_layout.get(row.id)
+        if isinstance(position, dict) and "x" in position and "y" in position:
+            item.position_x = float(position["x"])
+            item.position_y = float(position["y"])
+        object_types.append(item)
+
     out = S.FullOntologyOut(
         id=p.id, name=p.name, description=p.description, version=p.version or "1.0.0",
         revision=_revision_of(p),
-        object_types=[S.ObjectTypeOut.model_validate(x) for x in q(ObjectType)],
+        object_types=object_types,
         link_types=[S.LinkTypeOut.model_validate(x) for x in q(LinkType)],
         actions=[S.ActionTypeOut.model_validate(x) for x in q(ActionType)],
         functions=[S.FunctionOut.model_validate(x) for x in q(OntologyFunction)],

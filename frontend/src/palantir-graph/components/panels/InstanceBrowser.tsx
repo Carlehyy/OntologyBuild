@@ -16,6 +16,7 @@ import { fetchObjectSetAggregates, type ObjectSetAggregate } from '../../api/for
 import { executeFunction } from '../../engine/functionEngine';
 import InstanceFactsDrawer from './InstanceFactsDrawer';
 import type { ObjectInstance, Property } from '../../types/ontology';
+import { objectTypeIconGlyph } from '../../utils/objectTypeIcon';
 
 interface InstanceBrowserProps {
   isOpen?: boolean;
@@ -227,7 +228,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
             <option value="">选择对象实体...</option>
             {objectTypes.map((ot) => (
               <option key={ot.id} value={ot.id}>
-                {ot.icon} {ot.displayName} ({(ontology?.instances || []).filter((i: ObjectInstance) => i.objectTypeId === ot.id).length})
+                {objectTypeIconGlyph(ot.icon)} {ot.displayName} ({(ontology?.instances || []).filter((i: ObjectInstance) => i.objectTypeId === ot.id).length})
               </option>
             ))}
           </select>

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -101,6 +102,55 @@ def _raise_publish_errors(errors: list[dict], message: str = "本体发布门禁
 def _json_safe(value: Any) -> Any:
     """快照只保留 JSON 值；不把 ORM/时间对象渗入 JSON 列。"""
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _with_canvas_layout(snapshot: dict | None, layout: dict | None) -> dict:
+    """把独立画布布局投影到工作区 DTO，不改动被哈希的模型快照。"""
+    out = complete_snapshot(snapshot)
+    positions = layout if isinstance(layout, dict) else {}
+    for object_type in out["objectTypes"]:
+        position = positions.get(str(object_type.get("id")))
+        if not isinstance(position, dict):
+            continue
+        if "x" in position and "y" in position:
+            object_type["positionX"] = position["x"]
+            object_type["positionY"] = position["y"]
+    return out
+
+
+def _validated_canvas_positions(raw: Any, valid_ids: set[str]) -> dict[str, dict[str, float]]:
+    if not isinstance(raw, dict):
+        raise HTTPException(422, detail={
+            "code": "invalid_canvas_layout",
+            "message": "positions 必须是节点 ID 到坐标的对象",
+        })
+    positions: dict[str, dict[str, float]] = {}
+    for raw_id, raw_position in raw.items():
+        node_id = str(raw_id)
+        if node_id not in valid_ids:
+            raise HTTPException(422, detail={
+                "code": "invalid_canvas_layout",
+                "message": f"节点 {node_id} 不属于该版本",
+            })
+        if not isinstance(raw_position, dict):
+            raise HTTPException(422, detail={
+                "code": "invalid_canvas_layout",
+                "message": f"节点 {node_id} 的坐标格式无效",
+            })
+        x, y = raw_position.get("x"), raw_position.get("y")
+        if isinstance(x, bool) or isinstance(y, bool):
+            x = y = None
+        try:
+            x_value, y_value = float(x), float(y)
+        except (TypeError, ValueError):
+            x_value = y_value = math.nan
+        if not math.isfinite(x_value) or not math.isfinite(y_value):
+            raise HTTPException(422, detail={
+                "code": "invalid_canvas_layout",
+                "message": f"节点 {node_id} 的坐标必须是有限数字",
+            })
+        positions[node_id] = {"x": x_value, "y": y_value}
+    return positions
 
 
 def _action_has_usable_default(parameter: dict) -> bool:
@@ -838,6 +888,8 @@ def create_draft_version(
         OntologyVersion.parent_version_id == source.id,
     ).all()]
     number = next_draft_number(source.version_number, siblings)
+    # 从任何状态分支时继承视觉布局，但仍与新草稿的模型快照分开保存，
+    # 避免仅调整过位置就被版本差异误报为对象定义变更。
     snap = complete_snapshot(source.snapshot_formal)
     base_release_id = source.id if source.node_kind == "release" else (
         source.base_release_id or current.id)
@@ -849,6 +901,7 @@ def create_draft_version(
         parent_version_id=source.id, base_release_id=base_release_id,
         node_kind="draft", lifecycle_status="editing", revision=0,
         snapshot_formal=snap, snapshot_hash=snapshot_hash(snap),
+        canvas_layout=_json_safe(source.canvas_layout or {}),
         snapshot_entities=_json_safe(source.snapshot_entities or []),
         snapshot_relations=_json_safe(source.snapshot_relations or []),
         snapshot_logic=_json_safe(source.snapshot_logic or []),
@@ -908,7 +961,7 @@ def get_version_workspace(
         raise HTTPException(404, "Version not found")
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).first()
-    snap = complete_snapshot(version.snapshot_formal)
+    snap = _with_canvas_layout(version.snapshot_formal, version.canvas_layout)
     if version.node_kind == "release":
         workspace_mode = "release"
     elif version.lifecycle_status == "trial_ready":
@@ -930,6 +983,46 @@ def get_version_workspace(
         "versionId": version.id,
         "nodeKind": version.node_kind,
         "lifecycleStatus": version.lifecycle_status,
+    }}
+
+
+@router.put("/{ontology_id}/layout")
+def save_canvas_layout(
+    ontology_id: str, body: dict, db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """保存共享画布布局；不推进模型 revision，也不改变 snapshot_hash。"""
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id,
+    ).with_for_update().first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+
+    version_id = body.get("versionId", body.get("version_id"))
+    if version_id:
+        version = db.query(OntologyVersion).filter(
+            OntologyVersion.id == str(version_id),
+            OntologyVersion.ontology_id == ontology_id,
+        ).with_for_update().first()
+    else:
+        version = _current_release(db, project)
+    if version is None:
+        raise HTTPException(404, "Version not found")
+
+    snapshot = complete_snapshot(version.snapshot_formal)
+    valid_ids = {str(item.get("id")) for item in snapshot["objectTypes"] if item.get("id")}
+    updates = _validated_canvas_positions(body.get("positions"), valid_ids)
+    current = version.canvas_layout if isinstance(version.canvas_layout, dict) else {}
+    merged = {
+        str(node_id): value for node_id, value in current.items()
+        if str(node_id) in valid_ids and isinstance(value, dict)
+    }
+    merged.update(updates)
+    version.canvas_layout = merged
+    db.commit()
+    return {"data": {
+        "versionId": version.id,
+        "positions": merged,
     }}
 
 
@@ -963,6 +1056,13 @@ def save_draft_workspace(
     errors = validate_snapshot(candidate, require_object_type=False)
     _raise_publish_errors(errors, "草稿结构校验未通过")
     draft.snapshot_formal = candidate
+    draft.canvas_layout = {
+        str(item["id"]): {
+            "x": float(item.get("positionX") or 0),
+            "y": float(item.get("positionY") or 0),
+        }
+        for item in candidate["objectTypes"] if item.get("id")
+    }
     draft.revision = (draft.revision or 0) + 1
     draft.snapshot_hash = snapshot_hash(candidate)
     draft.lifecycle_status = "editing"
@@ -1370,6 +1470,7 @@ def promote_draft(
             promoted_from_id=draft.id, node_kind="release",
             lifecycle_status="released", revision=0,
             snapshot_formal=snap, snapshot_hash=current_hash,
+            canvas_layout=_json_safe(draft.canvas_layout or {}),
             published_at=datetime.now(timezone.utc),
             change_summary={"formal": _diff_formal(current.snapshot_formal, snap),
                             "impact": report},

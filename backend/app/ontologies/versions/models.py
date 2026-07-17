@@ -54,6 +54,9 @@ class OntologyVersion(Base):
     # 正规本体模型快照（图谱编辑器的 fo_* 模式层）
     # {objectTypes: [], linkTypes: [], actions: [], functions: []}
     snapshot_formal: Mapped[dict] = mapped_column(JSON, nullable=True)
+    # 画布布局是展示元数据，不参与 snapshot_hash / revision / 试跑冻结契约。
+    # 这样发布、试跑和历史快照都能调整节点位置，而不会伪造模型变更。
+    canvas_layout: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
 
     # 变更统计
     change_summary: Mapped[dict] = mapped_column(JSON, default=dict)  # {added: N, modified: N, deleted: N}

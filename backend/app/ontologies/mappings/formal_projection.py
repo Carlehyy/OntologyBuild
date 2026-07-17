@@ -455,7 +455,7 @@ def project_to_formal_ontology(
                 name=ec,
                 display_name=ec,
                 description=f"由数据流水线投影生成（来源 entity_class={ec}）",
-                icon="cube",
+                icon="📦",
                 color=color,
                 primary_key=pk_prop_id,
                 properties=data_props,

@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { objectTypeIconGlyph } from '../../utils/objectTypeIcon';
 
 interface GraphNode {
   id: string;
@@ -90,7 +91,7 @@ export function ForceGraph({
         label: node.label,
         displayName: node.displayName,
         color: node.color || '#6366f1',
-        icon: node.icon,
+        icon: objectTypeIconGlyph(node.icon),
         x: centerX + radius * Math.cos(angle) + (Math.random() - 0.5) * 50,
         y: centerY + radius * Math.sin(angle) + (Math.random() - 0.5) * 50,
         vx: 0,
@@ -333,12 +334,12 @@ export function ForceGraph({
         ctx.lineWidth = isSelected ? 3 : isHovered ? 2 : 1;
         ctx.stroke();
 
-        // Icon or first letter
+        // 图标（不再用实体名称首字作为头像）
         ctx.font = `${radius * 0.8}px sans-serif`;
         ctx.fillStyle = '#fff';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(node.icon || node.displayName[0], node.x, node.y);
+        ctx.fillText(objectTypeIconGlyph(node.icon), node.x, node.y);
 
         // Label
         ctx.font = '11px sans-serif';
@@ -576,7 +577,7 @@ export function ForceGraph({
                     className="w-6 h-6 rounded-full flex items-center justify-center text-sm"
                     style={{ backgroundColor: node.color }}
                   >
-                    {node.icon || node.displayName[0]}
+                    {objectTypeIconGlyph(node.icon)}
                   </span>
                   <span className="font-medium text-white text-sm">{node.displayName}</span>
                 </div>
