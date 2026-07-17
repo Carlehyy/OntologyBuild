@@ -120,7 +120,11 @@ export default function OntologyDetailPage() {
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
   return (
-    <div className="onto-glass-root space-y-4">
+    <div className={`onto-glass-root ${
+      activeGroup === 'data'
+        ? 'flex h-full min-h-0 flex-col gap-4 overflow-hidden'
+        : 'space-y-4'
+    }`}>
       {/* ═══ 功能导航与低频操作 ═══ */}
       <div className="onto-glass-header flex items-center justify-between gap-3 px-5 py-4">
         <div className="min-w-0 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
@@ -218,7 +222,7 @@ export default function OntologyDetailPage() {
           <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
-        <div className="onto-glass-card onto-glass-in p-4">
+        <div className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
           <FormalInstancesView ontologyId={id!} />
         </div>
       ) : (

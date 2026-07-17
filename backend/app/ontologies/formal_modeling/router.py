@@ -9,8 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, false, or_
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import String, and_, cast, false, func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional
@@ -904,6 +904,202 @@ def list_instances(ontology_id: str, object_type_id: Optional[str] = None,
         q = q.filter(ObjectInstance.object_type_id == object_type_id)
     items = q.order_by(ObjectInstance.created_at.desc()).all()
     return _ok([S.ObjectInstanceOut.model_validate(x).model_dump(by_alias=True) for x in items])
+
+
+def _release_catalog_item(items: list[dict], item_id: str, kind: str) -> dict:
+    item = next(
+        (candidate for candidate in items if str(candidate.get("id")) == item_id),
+        None,
+    )
+    if item is None:
+        raise HTTPException(404, detail={
+            "code": "release_type_not_found",
+            "message": f"当前发布版本中不存在该{kind}",
+        })
+    return item
+
+
+def _instance_browser_release(release: OntologyVersion) -> dict:
+    return {
+        "id": release.id,
+        "version": release.version_number,
+        "publishedAt": release.published_at.isoformat() if release.published_at else None,
+    }
+
+
+def _instance_summary(instance: Optional[ObjectInstance], object_types: list[dict]) -> Optional[dict]:
+    if instance is None:
+        return None
+    object_type = next(
+        (item for item in object_types
+         if str(item.get("id")) == instance.object_type_id),
+        {},
+    )
+    properties = instance.properties or {}
+    primary_key = object_type.get("primaryKey")
+    schema_properties = object_type.get("properties") or []
+    primary_property = next(
+        (item for item in schema_properties
+         if item.get("id") == primary_key or item.get("name") == primary_key),
+        None,
+    )
+    candidates = []
+    if primary_property and primary_property.get("name"):
+        candidates.append(primary_property["name"])
+    candidates.extend(["name", "title", "label", "displayName", "id"])
+    label = next(
+        (properties.get(name) for name in candidates
+         if properties.get(name) not in (None, "")),
+        instance.external_id or instance.id,
+    )
+    return {
+        "id": instance.id,
+        "objectTypeId": instance.object_type_id,
+        "label": str(label),
+        "externalId": instance.external_id,
+    }
+
+
+@router.get("/{ontology_id}/instance-browser/catalog")
+def instance_browser_catalog(
+        ontology_id: str,
+        db: Session = Depends(get_db),
+        _=Depends(get_current_user)):
+    """Published schema tree plus counts from its current runtime projection."""
+    project = _require_ontology(db, ontology_id)
+    release, snapshot = _current_release_view(db, project)
+    object_type_ids = {
+        str(item.get("id")) for item in snapshot["objectTypes"] if item.get("id")
+    }
+    link_type_ids = {
+        str(item.get("id")) for item in snapshot["linkTypes"] if item.get("id")
+    }
+    object_counts = dict(db.query(
+        ObjectInstance.object_type_id, func.count(ObjectInstance.id),
+    ).filter(
+        ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.object_type_id.in_(object_type_ids),
+    ).group_by(ObjectInstance.object_type_id).all()) if object_type_ids else {}
+    link_counts = dict(db.query(
+        LinkInstance.link_type_id, func.count(LinkInstance.id),
+    ).filter(
+        LinkInstance.ontology_id == ontology_id,
+        LinkInstance.link_type_id.in_(link_type_ids),
+    ).group_by(LinkInstance.link_type_id).all()) if link_type_ids else {}
+
+    return _ok({
+        "release": _instance_browser_release(release),
+        "objectTypes": [
+            {**item, "instanceCount": object_counts.get(str(item.get("id")), 0)}
+            for item in snapshot["objectTypes"]
+        ],
+        "linkTypes": [
+            {**item, "instanceCount": link_counts.get(str(item.get("id")), 0)}
+            for item in snapshot["linkTypes"]
+        ],
+    })
+
+
+@router.get("/{ontology_id}/instance-browser/objects")
+def instance_browser_objects(
+        ontology_id: str,
+        object_type_id: str = Query(..., min_length=1),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        keyword: Optional[str] = Query(None, max_length=200),
+        db: Session = Depends(get_db),
+        _=Depends(get_current_user)):
+    project = _require_ontology(db, ontology_id)
+    release, snapshot = _current_release_view(db, project)
+    _release_catalog_item(
+        snapshot["objectTypes"], object_type_id, "对象实体",
+    )
+    query = db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.object_type_id == object_type_id,
+    )
+    term = (keyword or "").strip()
+    if term:
+        pattern = f"%{term}%"
+        query = query.filter(or_(
+            ObjectInstance.id.ilike(pattern),
+            ObjectInstance.external_id.ilike(pattern),
+            ObjectInstance.source.ilike(pattern),
+            cast(ObjectInstance.properties, String).ilike(pattern),
+            cast(ObjectInstance.computed, String).ilike(pattern),
+        ))
+    total = query.count()
+    items = query.order_by(
+        ObjectInstance.updated_at.desc(), ObjectInstance.id.asc(),
+    ).offset((page - 1) * page_size).limit(page_size).all()
+    return _ok({
+        "release": _instance_browser_release(release),
+        "objectTypeId": object_type_id,
+        "items": [
+            S.ObjectInstanceOut.model_validate(item).model_dump(by_alias=True)
+            for item in items
+        ],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+    })
+
+
+@router.get("/{ontology_id}/instance-browser/links")
+def instance_browser_links(
+        ontology_id: str,
+        link_type_id: str = Query(..., min_length=1),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        keyword: Optional[str] = Query(None, max_length=200),
+        db: Session = Depends(get_db),
+        _=Depends(get_current_user)):
+    project = _require_ontology(db, ontology_id)
+    release, snapshot = _current_release_view(db, project)
+    _release_catalog_item(snapshot["linkTypes"], link_type_id, "实体关系")
+    query = db.query(LinkInstance).filter(
+        LinkInstance.ontology_id == ontology_id,
+        LinkInstance.link_type_id == link_type_id,
+    )
+    term = (keyword or "").strip()
+    if term:
+        pattern = f"%{term}%"
+        query = query.filter(or_(
+            LinkInstance.id.ilike(pattern),
+            LinkInstance.source_object_id.ilike(pattern),
+            LinkInstance.target_object_id.ilike(pattern),
+            cast(LinkInstance.properties, String).ilike(pattern),
+        ))
+    total = query.count()
+    items = query.order_by(
+        LinkInstance.created_at.desc(), LinkInstance.id.asc(),
+    ).offset((page - 1) * page_size).limit(page_size).all()
+    endpoint_ids = {
+        endpoint_id for item in items
+        for endpoint_id in (item.source_object_id, item.target_object_id)
+    }
+    endpoints = (db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.id.in_(endpoint_ids),
+    ).all()) if endpoint_ids else []
+    endpoint_by_id = {item.id: item for item in endpoints}
+    serialized = []
+    for item in items:
+        payload = S.LinkInstanceOut.model_validate(item).model_dump(by_alias=True)
+        payload["sourceRelationId"] = item.source_relation_id
+        payload["sourceObject"] = _instance_summary(
+            endpoint_by_id.get(item.source_object_id), snapshot["objectTypes"])
+        payload["targetObject"] = _instance_summary(
+            endpoint_by_id.get(item.target_object_id), snapshot["objectTypes"])
+        serialized.append(payload)
+    return _ok({
+        "release": _instance_browser_release(release),
+        "linkTypeId": link_type_id,
+        "items": serialized,
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+    })
 
 
 @router.post("/{ontology_id}/instances", status_code=201)
