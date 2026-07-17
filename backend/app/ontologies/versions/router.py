@@ -1489,13 +1489,15 @@ def promote_draft(
                 record_link_fact(
                     db, ontology_id=ontology_id, link_instance_id=item.id,
                     link_type_id=item.link_type_id, exists=False,
-                    source=source, actor_id=current_user.id, caused_by=run.id)
+                    source=source, actor_id=current_user.id, caused_by=run.id,
+                    ontology_version=release_number)
         for item in old_objects:
             if item.id not in candidate_ids:
                 record_object_tombstone(
                     db, ontology_id=ontology_id, instance_id=item.id,
                     object_type_id=item.object_type_id, source=source,
-                    actor_id=current_user.id, caused_by=run.id)
+                    actor_id=current_user.id, caused_by=run.id,
+                    ontology_version=release_number)
 
         db.query(FoLinkInstance).filter(
             FoLinkInstance.ontology_id == ontology_id).delete(synchronize_session=False)
@@ -1517,7 +1519,8 @@ def promote_draft(
                 db, ontology_id=ontology_id, instance_id=item.object_id,
                 object_type_id=item.object_type_id, old_props=old_props,
                 new_props=fact_props, source=source, actor_id=current_user.id,
-                caused_by=run.id, confidence=1.0)
+                caused_by=run.id, confidence=1.0,
+                ontology_version=release_number)
             db.add(FoObjectInstance(
                 id=item.object_id, ontology_id=ontology_id,
                 object_type_id=item.object_type_id,
@@ -1535,7 +1538,8 @@ def promote_draft(
             record_link_fact(
                 db, ontology_id=ontology_id, link_instance_id=item.link_id,
                 link_type_id=item.link_type_id, exists=True,
-                source=source, actor_id=current_user.id, caused_by=run.id)
+                source=source, actor_id=current_user.id, caused_by=run.id,
+                ontology_version=release_number)
         db.flush()
         _raise_publish_errors(_release_errors(db, ontology_id))
 

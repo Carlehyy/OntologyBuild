@@ -33,6 +33,7 @@ from app.ontologies.formal_modeling.validation import (
     validate_model, validate_instance_contract, validate_link_instance_contract,
 )
 from app.ontologies.versions.evolution_service import complete_snapshot
+from app.ontologies.release_context import current_release_context
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
@@ -992,6 +993,7 @@ def _fact_to_dict(f: PropertyFact) -> dict:
         "supersedesId": f.supersedes_id,
         "derivedFrom": f.derived_from or [],
         "confidence": f.confidence,
+        "ontologyVersion": f.ontology_version,
         "seq": f.seq,
         "recordedAt": f.recorded_at.isoformat() if f.recorded_at else None,
     }
@@ -1135,25 +1137,38 @@ def run_action(ontology_id: str, body: S.RunActionRequest,
 
 
 @router.get("/{ontology_id}/pending-actions")
-def list_pending_actions(ontology_id: str,
+def list_pending_actions(ontology_id: str, release_id: Optional[str] = None,
                          current_release_only: bool = False,
                          db: Session = Depends(get_db), _=Depends(get_current_user)):
     """待审批动作（requires_approval 的动作真实执行先落 pending，等人拍板）。"""
     project = _require_ontology(db, ontology_id)
     release_snapshot = None
+    release_version = None
+    if release_id:
+        release = current_release_context(
+            db, ontology_id, expected_release_id=release_id)
+        release_snapshot = release.snapshot
+        release_version = release.version
+    elif current_release_only:
+        release_row, release_snapshot = _current_release_view(db, project)
+        release_version = release_row.version_number
     query = db.query(ActionExecutionLog).filter(
         ActionExecutionLog.ontology_id == ontology_id,
         ActionExecutionLog.status == "pending",
         ActionExecutionLog.dry_run == False,  # noqa: E712
     )
-    if current_release_only:
-        release, release_snapshot = _current_release_view(db, project)
-        action_ids = {
-            str(item.get("id")) for item in release_snapshot["actions"] if item.get("id")
+    released_actions_by_id = {}
+    if release_snapshot is not None:
+        released_actions_by_id = {
+            str(item["id"]): item
+            for item in release_snapshot["actions"] if item.get("id")
         }
+        action_ids = set(released_actions_by_id)
+        if not action_ids:
+            return _ok([])
         query = query.filter(
-            ActionExecutionLog.ontology_version == release.version_number,
-            ActionExecutionLog.action_id.in_(action_ids) if action_ids else false(),
+            ActionExecutionLog.ontology_version == release_version,
+            ActionExecutionLog.action_id.in_(action_ids),
         )
     items = query.order_by(
         ActionExecutionLog.executed_at.desc()).limit(100).all()
@@ -1165,21 +1180,19 @@ def list_pending_actions(ontology_id: str,
     object_type_ids = {item.object_type_id for item in items if item.object_type_id}
     object_type_ids.update(item.object_type_id for item in instances if item.object_type_id)
     if release_snapshot is not None:
-        object_types_by_id = {
-            str(item.get("id")): SimpleNamespace(
-                id=str(item.get("id")),
-                name=item.get("name") or "",
-                display_name=item.get("displayName") or item.get("name") or "",
-                primary_key=item.get("primaryKey"),
-                properties=item.get("properties") or [],
-            )
-            for item in release_snapshot["objectTypes"] if item.get("id")
-        }
+        object_types = [SimpleNamespace(
+            id=str(item.get("id") or ""),
+            name=str(item.get("name") or ""),
+            display_name=item.get("displayName") or item.get("display_name"),
+            primary_key=item.get("primaryKey") or item.get("primary_key"),
+            properties=item.get("properties") or [],
+        ) for item in release_snapshot["objectTypes"]
+            if str(item.get("id") or "") in object_type_ids]
     else:
         object_types = (db.query(ObjectType)
                         .filter(ObjectType.ontology_id == ontology_id,
                                 ObjectType.id.in_(object_type_ids)).all()) if object_type_ids else []
-        object_types_by_id = {item.id: item for item in object_types}
+    object_types_by_id = {item.id: item for item in object_types}
 
     result = []
     for item in items:
@@ -1188,6 +1201,11 @@ def list_pending_actions(ontology_id: str,
             instance.object_type_id if instance is not None else item.object_type_id)
         payload = S.ActionLogOut.model_validate(item).model_dump(by_alias=True)
         payload.update({
+            "actionName": (
+                released_actions_by_id.get(item.action_id, {}).get("displayName")
+                or released_actions_by_id.get(item.action_id, {}).get("name")
+                or payload.get("actionName")
+            ),
             "objectTypeName": ((object_type.display_name or object_type.name)
                                if object_type is not None else None),
             "objectInstanceLabel": (_approval_instance_label(instance, object_type)
@@ -1216,13 +1234,25 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
     decision = (body.decision or "").lower()
     if decision not in ("approved", "rejected"):
         raise HTTPException(422, "decision 必须是 approved 或 rejected")
-    if decision == "approved":
-        if not log.ontology_version:
-            raise HTTPException(409, "该待办动作缺少本体版本血缘，不能安全批准；可选择拒绝")
-        if log.ontology_version != project.version:
+    release = (
+        current_release_context(
+            db, ontology_id, expected_release_id=body.release_id)
+        if body.release_id else None
+    )
+    current_version = release.version if release is not None else project.version
+    if release is not None:
+        if not log.ontology_version or log.ontology_version != current_version:
             raise HTTPException(
                 409,
-                f"该动作属于本体 {log.ontology_version}，当前为 {project.version}；"
+                f"该动作不属于当前发布本体 {current_version}，跨版本审批已拒绝",
+            )
+    elif decision == "approved":
+        if not log.ontology_version:
+            raise HTTPException(409, "该待办动作缺少本体版本血缘，不能安全批准；可选择拒绝")
+        if log.ontology_version != current_version:
+            raise HTTPException(
+                409,
+                f"该动作属于本体 {log.ontology_version}，当前为 {current_version}；"
                 "跨版本审批已拒绝",
             )
 
@@ -1232,7 +1262,8 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
     fact = record_decision_fact(
         db, ontology_id=ontology_id, action_log_id=log.id,
         decision=decision.upper(), source=f"user://{uname}",
-        actor_id=uid, reason=body.reason)
+        actor_id=uid, reason=body.reason,
+        ontology_version=log.ontology_version)
 
     log.decided_by = uid
     log.decided_at = datetime.now(timezone.utc)
@@ -1524,16 +1555,21 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
 
 @router.get("/{ontology_id}/facts/recent")
 def recent_facts(ontology_id: str, limit: int = 30, kind: Optional[str] = None,
+                 release_id: Optional[str] = None,
                  current_release_only: bool = False,
                  db: Session = Depends(get_db), _=Depends(get_current_user)):
     """本体级事实流（跨实例，时间倒序），带可读主体标签——治理页的时间线。"""
     project = _require_ontology(db, ontology_id)
     release_snapshot = None
-    if current_release_only:
-        release, release_snapshot = _current_release_view(db, project)
-        q = _release_fact_query(db, ontology_id, release, release_snapshot)
-    else:
-        q = db.query(PropertyFact).filter(PropertyFact.ontology_id == ontology_id)
+    q = db.query(PropertyFact).filter(PropertyFact.ontology_id == ontology_id)
+    if release_id:
+        release = current_release_context(
+            db, ontology_id, expected_release_id=release_id)
+        q = q.filter(PropertyFact.ontology_version == release.version)
+        release_snapshot = release.snapshot
+    elif current_release_only:
+        release_row, release_snapshot = _current_release_view(db, project)
+        q = _release_fact_query(db, ontology_id, release_row, release_snapshot)
     if kind:
         q = q.filter(PropertyFact.kind == kind)
     items = q.order_by(*fact_order_clause()).limit(min(limit, 200)).all()
@@ -1542,22 +1578,34 @@ def recent_facts(ontology_id: str, limit: int = 30, kind: Optional[str] = None,
     inst_ids = {f.instance_id for f in items}
     inst_map = {i.id: i for i in db.query(ObjectInstance).filter(
         ObjectInstance.id.in_(inst_ids)).all()} if inst_ids else {}
-    try:
-        from app.models.sentinel import Sentinel
-        sent_map = {s.id: s for s in db.query(Sentinel).filter(
-            Sentinel.id.in_(inst_ids)).all()} if inst_ids else {}
-    except Exception:  # noqa: BLE001
-        sent_map = {}
+    if release_snapshot is not None:
+        sent_map = {
+            str(item["id"]): SimpleNamespace(
+                display_name=item.get("displayName"), name=item.get("name"))
+            for item in release_snapshot["sentinels"] if item.get("id")
+        }
+    else:
+        try:
+            from app.models.sentinel import Sentinel
+            sent_map = {s.id: s for s in db.query(Sentinel).filter(
+                Sentinel.id.in_(inst_ids)).all()} if inst_ids else {}
+        except Exception:  # noqa: BLE001
+            sent_map = {}
     log_map = {l.id: l for l in db.query(ActionExecutionLog).filter(
         ActionExecutionLog.id.in_(inst_ids)).all()} if inst_ids else {}
     if release_snapshot is not None:
         type_names = {
-            str(item.get("id")): item.get("displayName") or item.get("name") or str(item.get("id"))
+            str(item["id"]): item.get("displayName") or item.get("name") or ""
             for item in release_snapshot["objectTypes"] if item.get("id")
+        }
+        action_names = {
+            str(item["id"]): item.get("displayName") or item.get("name") or ""
+            for item in release_snapshot["actions"] if item.get("id")
         }
     else:
         type_names = {o.id: (o.display_name or o.name) for o in
                       db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()}
+        action_names = {}
 
     def _label(f: PropertyFact) -> str:
         inst = inst_map.get(f.instance_id)
@@ -1571,7 +1619,7 @@ def recent_facts(ontology_id: str, limit: int = 30, kind: Optional[str] = None,
             return f"哨兵·{s.display_name or s.name}"
         l = log_map.get(f.instance_id)
         if l is not None:
-            return f"动作·{l.action_name or l.action_id[:8]}"
+            return f"动作·{action_names.get(l.action_id) or l.action_name or l.action_id[:8]}"
         return f.instance_id[:8]
 
     out = []
@@ -1591,7 +1639,8 @@ AUTONOMY_DEMOTE_FAILRATE = 0.2  # 自动执行失败率超过则建议降级
 
 
 @router.get("/{ontology_id}/autonomy")
-def autonomy_stats(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def autonomy_stats(ontology_id: str, release_id: Optional[str] = None,
+                   db: Session = Depends(get_db), _=Depends(get_current_user)):
     """按动作统计 HITL 决策历史，给出自治等级与晋升/降级建议。
 
     等级模型（自治是挣来的，不是配出来的）：
@@ -1601,16 +1650,51 @@ def autonomy_stats(ontology_id: str, db: Session = Depends(get_db), _=Depends(ge
     晋升依据 = 近期人工批准率（人几乎总是点"批准"，说明规则已可信）。
     """
     _require_ontology(db, ontology_id)
-    actions = db.query(ActionType).filter(ActionType.ontology_id == ontology_id).all()
-    logs = (db.query(ActionExecutionLog)
-            .filter(ActionExecutionLog.ontology_id == ontology_id,
-                    ActionExecutionLog.dry_run == False)  # noqa: E712
-            .all())
-    try:
-        from app.models.sentinel import Sentinel
-        sentinels = db.query(Sentinel).filter(Sentinel.ontology_id == ontology_id).all()
-    except Exception:  # noqa: BLE001
-        sentinels = []
+    release = (
+        current_release_context(
+            db, ontology_id, expected_release_id=release_id)
+        if release_id else None
+    )
+    logs_query = db.query(ActionExecutionLog).filter(
+        ActionExecutionLog.ontology_id == ontology_id,
+        ActionExecutionLog.dry_run == False,  # noqa: E712
+    )
+    if release is not None:
+        actions = [SimpleNamespace(
+            id=str(item.get("id") or ""),
+            name=str(item.get("name") or ""),
+            display_name=item.get("displayName") or item.get("display_name"),
+            requires_approval=bool(
+                item.get("requiresApproval", item.get("requires_approval", False))),
+        ) for item in release.snapshot["actions"] if item.get("id")]
+        logs_query = logs_query.filter(
+            ActionExecutionLog.ontology_version == release.version)
+        try:
+            sentinels = []
+            for item in release.snapshot["sentinels"]:
+                sentinel_id = str(item.get("id") or "")
+                if not sentinel_id:
+                    continue
+                sentinels.append(SimpleNamespace(
+                    id=sentinel_id,
+                    name=str(item.get("name") or ""),
+                    display_name=item.get("displayName") or item.get("name") or "",
+                    action_ids=item.get("actionIds") or item.get("action_ids") or [],
+                    muted=bool(item.get("muted", False)),
+                    enabled=bool(item.get("enabled", True)),
+                ))
+        except Exception:  # noqa: BLE001
+            sentinels = []
+    else:
+        actions = db.query(ActionType).filter(
+            ActionType.ontology_id == ontology_id).all()
+        try:
+            from app.models.sentinel import Sentinel
+            sentinels = db.query(Sentinel).filter(
+                Sentinel.ontology_id == ontology_id).all()
+        except Exception:  # noqa: BLE001
+            sentinels = []
+    logs = logs_query.all()
 
     by_action: dict[str, list] = {}
     for l in logs:

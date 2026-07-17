@@ -17,7 +17,7 @@ import {
 interface PendingLog {
   id: string; actionId: string; actionName: string | null
   objectInstanceId: string | null; parameters: Record<string, unknown>
-  actorId: string | null; executedAt: string
+  actorId: string | null; executedAt: string; ontologyVersion?: string | null
 }
 
 interface AutonomyStat {
@@ -36,6 +36,13 @@ interface FactRow {
   id: string; subjectLabel: string; propertyName: string; value: unknown
   kind: string; source: string; actorId?: string | null
   causedBy?: string | null; supersedesId?: string | null; recordedAt: string | null
+  ontologyVersion?: string | null
+}
+
+interface GovernanceTabProps {
+  ontologyId: string
+  currentReleaseId?: string | null
+  currentReleaseVersion: string
 }
 
 const KIND_META: Record<string, { label: string; cls: string; title: string }> = {
@@ -66,41 +73,82 @@ function SectionHead({ icon: Icon, iconCls, title, sub, extra }: {
   )
 }
 
-export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
+function errorMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') return '治理数据加载失败'
+  const candidate = error as { detail?: unknown; message?: unknown }
+  if (typeof candidate.detail === 'string') return candidate.detail
+  if (candidate.detail && typeof candidate.detail === 'object' && 'message' in candidate.detail) {
+    const message = (candidate.detail as { message?: unknown }).message
+    if (typeof message === 'string') return message
+  }
+  return typeof candidate.message === 'string' ? candidate.message : '治理数据加载失败'
+}
+
+export default function GovernanceTab({
+  ontologyId, currentReleaseId, currentReleaseVersion,
+}: GovernanceTabProps) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [kindFilter, setKindFilter] = useState('')
 
-  const { data: pending = [] } = useQuery<PendingLog[]>({
-    queryKey: ['gov-pending', ontologyId],
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/pending-actions`) as any,
+  const releaseParam = currentReleaseId
+    ? `release_id=${encodeURIComponent(currentReleaseId)}`
+    : ''
+  const queryEnabled = Boolean(currentReleaseId)
+  const pendingQuery = useQuery<PendingLog[]>({
+    queryKey: ['gov-pending', ontologyId, currentReleaseId],
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/pending-actions?${releaseParam}`) as any,
+    enabled: queryEnabled,
     refetchInterval: 15000,
   })
-  const { data: autonomy = [] } = useQuery<AutonomyStat[]>({
-    queryKey: ['gov-autonomy', ontologyId],
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/autonomy`) as any,
-  })
-  const { data: sentinels = [] } = useQuery<Sentinel[]>({
-    queryKey: ['gov-sentinels', ontologyId],
-    queryFn: () => sentinelApi.list(ontologyId) as any,
-  })
-  const { data: firings = [] } = useQuery<SentinelFiring[]>({
-    queryKey: ['gov-firings', ontologyId],
-    queryFn: () => sentinelApi.firings(ontologyId) as any,
-  })
-  const { data: facts = [] } = useQuery<FactRow[]>({
-    queryKey: ['gov-facts', ontologyId, kindFilter],
+  const autonomyQuery = useQuery<AutonomyStat[]>({
+    queryKey: ['gov-autonomy', ontologyId, currentReleaseId],
     queryFn: () => apiClientV2.get(
-      `/formal/ontologies/${ontologyId}/facts/recent?limit=50${kindFilter ? `&kind=${kindFilter}` : ''}`) as any,
+      `/formal/ontologies/${ontologyId}/autonomy?${releaseParam}`) as any,
+    enabled: queryEnabled,
   })
+  const sentinelsQuery = useQuery<Sentinel[]>({
+    queryKey: ['gov-sentinels', ontologyId, currentReleaseId],
+    queryFn: () => sentinelApi.list(ontologyId, currentReleaseId) as any,
+    enabled: queryEnabled,
+  })
+  const firingsQuery = useQuery<SentinelFiring[]>({
+    queryKey: ['gov-firings', ontologyId, currentReleaseId],
+    queryFn: () => sentinelApi.firings(ontologyId, currentReleaseId) as any,
+    enabled: queryEnabled,
+  })
+  const factsQuery = useQuery<FactRow[]>({
+    queryKey: ['gov-facts', ontologyId, currentReleaseId, kindFilter],
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/facts/recent?limit=50&${releaseParam}${kindFilter ? `&kind=${kindFilter}` : ''}`) as any,
+    enabled: queryEnabled,
+  })
+  const pending = pendingQuery.data ?? []
+  const autonomy = autonomyQuery.data ?? []
+  const sentinels = sentinelsQuery.data ?? []
+  const firings = firingsQuery.data ?? []
+  const facts = factsQuery.data ?? []
+  const governanceQueries = [
+    pendingQuery, autonomyQuery, sentinelsQuery, firingsQuery, factsQuery,
+  ]
+  const failedQuery = governanceQueries.find(query => query.isError)
+  const isInitialLoading = governanceQueries.some(query => query.isLoading)
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ['gov-pending', ontologyId] })
     qc.invalidateQueries({ queryKey: ['gov-autonomy', ontologyId] })
+    qc.invalidateQueries({ queryKey: ['gov-sentinels', ontologyId] })
+    qc.invalidateQueries({ queryKey: ['gov-firings', ontologyId] })
     qc.invalidateQueries({ queryKey: ['gov-facts', ontologyId] })
     qc.invalidateQueries({ queryKey: ['formal-overview', ontologyId] })
+  }
+
+  const reloadReleaseContext = () => {
+    qc.invalidateQueries({ queryKey: ['ontology', ontologyId] })
+    refreshAll()
   }
 
   const decide = async (log: PendingLog, decision: 'approved' | 'rejected') => {
@@ -114,26 +162,11 @@ export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
     setMsg(null)
     try {
       await apiClientV2.post(`/formal/ontologies/${ontologyId}/action-logs/${log.id}/decide`,
-        { decision, reason })
+        { decision, reason, releaseId: currentReleaseId })
       setMsg({ ok: true, text: decision === 'approved' ? '已批准并执行，决策已写入事实流。' : '已拒绝，决策已写入事实流。' })
       refreshAll()
     } catch (e: any) {
       setMsg({ ok: false, text: e?.detail?.message || e?.detail || e?.message || '决策失败' })
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const toggleGate = async (s: AutonomyStat, requiresApproval: boolean) => {
-    const verb = requiresApproval ? '降级到 L1（加回人工审批）' : '晋升到 L2（关闭审批，命中即自动执行）'
-    if (!window.confirm(`确定把「${s.actionName}」${verb}？`)) return
-    setBusy(s.actionId)
-    try {
-      await apiClientV2.put(`/formal/ontologies/${ontologyId}/actions/${s.actionId}`,
-        { requiresApproval })
-      refreshAll()
-    } catch (e: any) {
-      setMsg({ ok: false, text: e?.detail || e?.message || '切换失败' })
     } finally {
       setBusy(null)
     }
@@ -149,8 +182,41 @@ export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
   }
   const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%`)
 
+  if (!currentReleaseId) {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        当前本体没有有效的发布指针。为避免混入草稿数据，治理推演已停止加载。
+      </div>
+    )
+  }
+
+  if (isInitialLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500">
+        <Loader2 size={16} className="animate-spin" /> 正在加载当前发布版治理数据…
+      </div>
+    )
+  }
+
+  if (failedQuery) {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <p className="font-medium">当前发布版治理数据加载失败</p>
+        <p className="mt-1 text-xs">{errorMessage(failedQuery.error)}。页面已停止展示，避免把失败误判为“暂无数据”。</p>
+        <button type="button" onClick={reloadReleaseContext}
+          className="mt-3 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs hover:bg-red-100">
+          重新加载
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
+      <div className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-700">
+        <CheckCircle2 size={13} />
+        数据范围已锁定到最新发布版 <span className="font-mono font-semibold">{currentReleaseVersion}</span>
+      </div>
       {msg && (
         <div className={`px-3 py-2 rounded-lg border text-xs ${
           msg.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'
@@ -219,22 +285,22 @@ export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
                     ))}
                     <div className="ml-auto flex gap-1.5">
                       {s.level === 'L1' && (
-                        <button onClick={() => void toggleGate(s, false)}
-                          disabled={busy === s.actionId || s.recommendation !== 'promote'}
-                          title={s.recommendation === 'promote' ? '批准率达标，可放权自动执行'
+                        <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+                          disabled={s.recommendation !== 'promote'}
+                          title={s.recommendation === 'promote' ? '批准率达标，请在版本草稿中变更后重新发布'
                             : `晋升条件：近 ${s.thresholds.promoteMinDecisions} 次批准率 ≥ ${Math.round(s.thresholds.promoteRate * 100)}%（当前 ${s.decisions.recentCount} 次 / ${pct(r)}）`}
                           className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] border ${
                             s.recommendation === 'promote'
                               ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
                               : 'border-gray-200 text-gray-300 cursor-not-allowed'
                           }`}>
-                          <ArrowUpCircle size={12} /> 晋升 L2
+                          <ArrowUpCircle size={12} /> 去草稿晋升
                         </button>
                       )}
                       {s.level === 'L2' && (
-                        <button onClick={() => void toggleGate(s, true)} disabled={busy === s.actionId}
+                        <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] border border-blue-300 text-blue-600 hover:bg-blue-50">
-                          <ArrowDownCircle size={12} /> 降级 L1
+                          <ArrowDownCircle size={12} /> 去草稿调整
                         </button>
                       )}
                     </div>
@@ -277,10 +343,10 @@ export default function GovernanceTab({ ontologyId }: { ontologyId: string }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
             {sentinels.map(s => (
               <div key={s.id} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${!s.enabled ? 'bg-gray-300' : (s as any).muted ? 'bg-amber-400' : 'bg-emerald-500'}`}
-                  title={!s.enabled ? '已停用' : (s as any).muted ? '影子（只记录不执行）' : '在线'} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${!s.enabled ? 'bg-gray-300' : s.muted ? 'bg-amber-400' : 'bg-emerald-500'}`}
+                  title={!s.enabled ? '已停用' : s.muted ? '影子（只记录不执行）' : '在线'} />
                 <span className="text-gray-800 font-medium truncate">{s.displayName}</span>
-                {(s as any).muted && <span className="text-[10px] px-1 rounded bg-amber-50 text-amber-600 border border-amber-200">影子</span>}
+                {s.muted && <span className="text-[10px] px-1 rounded bg-amber-50 text-amber-600 border border-amber-200">影子</span>}
                 {s.condition && <code className="text-gray-400 truncate flex-1" title={s.condition}>{s.condition}</code>}
               </div>
             ))}

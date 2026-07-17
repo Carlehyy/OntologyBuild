@@ -223,7 +223,11 @@ export default function OntologyDetailPage() {
         </div>
       ) : (
         <div className="onto-glass-card onto-glass-in p-4">
-          <GovernanceTab ontologyId={id!} />
+          <GovernanceTab
+            ontologyId={id!}
+            currentReleaseId={ontology.current_release_id}
+            currentReleaseVersion={ontology.current_release_version || ontology.version}
+          />
         </div>
       )}
 

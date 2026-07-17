@@ -16,6 +16,7 @@ from app.deps import get_db, get_current_user
 from app.schemas.ontology_formal import CamelModel
 from app.models.sentinel import Sentinel, SentinelFiring, SentinelMatchState, Notification
 from app.models.ontology import OntologyProject
+from app.ontologies.release_context import current_release_context
 from app.services.sentinel.engine import run_manual
 from app.ontologies.access import ontology_access_guard
 
@@ -102,8 +103,60 @@ def _dict(s: Sentinel) -> dict[str, Any]:
     }
 
 
+def _released_dict(ontology_id: str, raw: dict, live: Sentinel | None) -> dict[str, Any]:
+    """Serialize definition fields only from the immutable release snapshot.
+
+    ``sentinels`` is also the mutable runtime projection and can contain a draft
+    that has not been promoted yet.  Only last-scanned telemetry is safe to
+    overlay; enabled/muted remain the values that were actually published.
+    """
+    return {
+        "id": str(raw.get("id") or ""),
+        "ontologyId": ontology_id,
+        "name": str(raw.get("name") or ""),
+        "displayName": raw.get("displayName") or raw.get("name") or "",
+        "description": raw.get("description"),
+        "bindings": raw.get("bindings") or [],
+        "links": raw.get("links") or [],
+        "condition": raw.get("condition"),
+        "conditionRows": raw.get("conditionRows") or [],
+        "conditionLogic": raw.get("conditionLogic") or "and",
+        "primaryAlias": raw.get("primaryAlias"),
+        "actionIds": raw.get("actionIds") or [],
+        "actionParameters": raw.get("actionParameters") or {},
+        "onChange": bool(raw.get("onChange", True)),
+        "onSchedule": bool(raw.get("onSchedule", False)),
+        "scanIntervalSeconds": int(raw.get("scanIntervalSeconds") or 300),
+        "triggerMode": raw.get("triggerMode") or "on_enter",
+        "muted": bool(raw.get("muted", False)),
+        "lastScannedAt": (
+            live.last_scanned_at.isoformat()
+            if live is not None and live.last_scanned_at else None
+        ),
+        "enabled": bool(raw.get("enabled", True)),
+        "status": "published",
+        "source": raw.get("source"),
+        "createdAt": None,
+        "updatedAt": None,
+    }
+
+
 @router.get("/")
-def list_sentinels(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def list_sentinels(ontology_id: str, release_id: Optional[str] = None,
+                   db: Session = Depends(get_db), _=Depends(get_current_user)):
+    if release_id:
+        release = current_release_context(
+            db, ontology_id, expected_release_id=release_id)
+        released = [item for item in release.snapshot["sentinels"] if item.get("id")]
+        ids = {str(item["id"]) for item in released}
+        live_by_id = {item.id: item for item in db.query(Sentinel).filter(
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.id.in_(ids),
+        ).all()} if ids else {}
+        return {"data": [
+            _released_dict(ontology_id, item, live_by_id.get(str(item["id"])))
+            for item in released
+        ]}
     items = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id).order_by(Sentinel.created_at.desc()).all()
     return {"data": [_dict(s) for s in items]}
@@ -132,18 +185,40 @@ def run(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_u
 
 @router.get("/firings")
 def list_firings(ontology_id: str, sentinel_id: Optional[str] = None, limit: int = 50,
+                 release_id: Optional[str] = None,
                  db: Session = Depends(get_db), _=Depends(get_current_user)):
     q = db.query(SentinelFiring).filter(SentinelFiring.ontology_id == ontology_id)
+    released_names: dict[str, str] = {}
+    if release_id:
+        release = current_release_context(
+            db, ontology_id, expected_release_id=release_id)
+        sentinel_ids = {
+            str(item["id"]) for item in release.snapshot["sentinels"] if item.get("id")
+        }
+        released_names = {
+            str(item["id"]): str(item.get("displayName") or item.get("name") or "")
+            for item in release.snapshot["sentinels"] if item.get("id")
+        }
+        if sentinel_id and sentinel_id not in sentinel_ids:
+            return {"data": []}
+        if not sentinel_ids:
+            return {"data": []}
+        q = q.filter(
+            SentinelFiring.ontology_version == release.version,
+            SentinelFiring.sentinel_id.in_(sentinel_ids),
+        )
     if sentinel_id:
         q = q.filter(SentinelFiring.sentinel_id == sentinel_id)
     items = q.order_by(SentinelFiring.created_at.desc()).limit(limit).all()
     return {"data": [{
-        "id": f.id, "sentinelId": f.sentinel_id, "sentinelName": f.sentinel_name,
+        "id": f.id, "sentinelId": f.sentinel_id,
+        "sentinelName": released_names.get(f.sentinel_id) or f.sentinel_name,
         "triggerSource": f.trigger_source, "status": f.status,
         "matchCount": f.match_count, "matches": f.matches or [],
         "entered": f.entered or [], "left": f.left or [],
         "actionResults": f.action_results or [], "error": f.error,
         "durationMs": f.duration_ms,
+        "ontologyVersion": f.ontology_version,
         "createdAt": f.created_at.isoformat() if f.created_at else None,
     } for f in items]}
 

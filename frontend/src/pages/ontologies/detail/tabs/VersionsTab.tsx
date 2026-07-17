@@ -120,7 +120,8 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       ['mapping-snapshot', ontologyId],
       ['current-release-workspace', ontologyId],
       ['mapping-object-instances', ontologyId], ['mapping-link-instances', ontologyId],
-      ['gov-sentinels', ontologyId], ['gov-autonomy', ontologyId], ['gov-facts', ontologyId],
+      ['gov-pending', ontologyId], ['gov-sentinels', ontologyId],
+      ['gov-firings', ontologyId], ['gov-autonomy', ontologyId], ['gov-facts', ontologyId],
     ]
     await Promise.all(keys.map(queryKey => qc.invalidateQueries({ queryKey })))
   }

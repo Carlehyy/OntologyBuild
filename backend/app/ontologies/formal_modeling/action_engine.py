@@ -506,7 +506,10 @@ def execute_action(db: Session, ontology_id: str, body,
     if not body.dry_run:
         project_query = project_query.with_for_update()
     project = project_query.first()
-    ontology_version = project.version if project is not None else None
+    from app.ontologies.release_context import runtime_release_version
+    ontology_version = (
+        runtime_release_version(db, ontology_id) if project is not None else None
+    )
     if project is None:
         return _fail_log(
             db, ontology_id, action, body, start, "本体不存在",
@@ -843,6 +846,7 @@ def execute_action(db: Session, ontology_id: str, body,
                 instance_id=pf["instance_id"], object_type_id=pf["object_type_id"],
                 old_props=pf["old_props"], new_props=pf["new_props"],
                 source=src, actor_id=actor_id, caused_by=causal,
+                ontology_version=ontology_version,
             )
             if new_facts:
                 affected.setdefault(pf["instance_id"], []).extend(new_facts)
@@ -851,6 +855,7 @@ def execute_action(db: Session, ontology_id: str, body,
                 db, ontology_id=ontology_id,
                 link_instance_id=pl["link_id"], link_type_id=pl["link_type_id"],
                 exists=pl["exists"], source=src, actor_id=actor_id, caused_by=causal,
+                ontology_version=ontology_version,
             )
         for iid, trigger in affected.items():
             inst = db.query(ObjectInstance).filter(

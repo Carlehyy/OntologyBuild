@@ -254,6 +254,8 @@ class DecisionRequest(CamelModel):
     """HITL 审批请求：approved | rejected，可附理由（理由进入决策事实）。"""
     decision: str
     reason: Optional[str] = None
+    # Compare-and-decide guard supplied by the governance page.
+    release_id: Optional[str] = None
 
 
 # ============ 整体本体导出 (供图谱编辑页一次性加载) ============

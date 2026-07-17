@@ -29,6 +29,7 @@ export interface Sentinel {
   onSchedule: boolean
   scanIntervalSeconds: number
   lastScannedAt?: string
+  muted: boolean
   enabled: boolean
   status: string
   createdAt?: string
@@ -46,14 +47,18 @@ export interface SentinelFiring {
   actionResults: any[]
   error?: string
   durationMs?: number
+  ontologyVersion?: string | null
   createdAt?: string
 }
 
 const base = (ontologyId: string) => `/ontologies/${ontologyId}/sentinels`
+const releaseQuery = (releaseId?: string | null) => releaseId
+  ? `?release_id=${encodeURIComponent(releaseId)}`
+  : ''
 
 export const sentinelApi = {
-  list: (ontologyId: string) =>
-    apiClient.get<Sentinel[]>(`${base(ontologyId)}/`),
+  list: (ontologyId: string, releaseId?: string | null) =>
+    apiClient.get<Sentinel[]>(`${base(ontologyId)}/${releaseQuery(releaseId)}`),
   create: (ontologyId: string, body: Partial<Sentinel>) =>
     apiClient.post<Sentinel>(`${base(ontologyId)}/`, body),
   update: (ontologyId: string, id: string, body: Partial<Sentinel>) =>
@@ -64,8 +69,8 @@ export const sentinelApi = {
     apiClient.post<{ enabled: boolean }>(`${base(ontologyId)}/${id}/toggle`),
   run: (ontologyId: string) =>
     apiClient.post<any>(`${base(ontologyId)}/run`),
-  firings: (ontologyId: string) =>
-    apiClient.get<SentinelFiring[]>(`${base(ontologyId)}/firings`),
+  firings: (ontologyId: string, releaseId?: string | null) =>
+    apiClient.get<SentinelFiring[]>(`${base(ontologyId)}/firings${releaseQuery(releaseId)}`),
   notifications: (ontologyId: string) =>
     apiClient.get<SentinelNotification[]>(`${base(ontologyId)}/notifications`),
 }

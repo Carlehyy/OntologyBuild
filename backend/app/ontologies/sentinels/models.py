@@ -145,6 +145,11 @@ class SentinelFiring(Base):
     error: Mapped[str] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=True)
 
+    # Immutable ontology release that owned this evaluation.  Sentinel ids can
+    # survive multiple releases, so the id alone cannot safely scope history.
+    ontology_version: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 

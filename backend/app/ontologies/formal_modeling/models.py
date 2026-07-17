@@ -238,6 +238,11 @@ class PropertyFact(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=True)    # 来源置信度（采集/推理可低于 1）
     valid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # 业务生效时间（缺省=记录时间）
 
+    # Bind every runtime fact to the immutable release that produced it.
+    # Governance queries use this field to avoid mixing facts across releases.
+    ontology_version: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, index=True)
+
     # 同一 (instance, property) 链内单调递增，供同毫秒事实的确定性排序
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
