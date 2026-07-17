@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle, AlertTriangle, Clock,
@@ -49,7 +49,12 @@ const STATUS_STYLE: Record<string, string> = {
   rejected:       'bg-red-50 text-red-600 border-red-200',
 }
 
-type LakeTab = 'curated' | 'raw' | 'sync'
+type LakeTab = 'curated' | 'raw'
+
+const LAKE_TABS: [LakeTab, string][] = [
+  ['curated', '成品数据集'],
+  ['raw', '人工数据集'],
+]
 
 const isPendingReview = (status: string) => status === 'pending_review' || status === 'pending' || status === 'in_review'
 const ASSET_CHANGED_EVENT = 'ontoprompt:data-assets-changed'
@@ -193,11 +198,34 @@ export default function StructuredDataPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
-  const activeTab: LakeTab = requestedTab === 'raw' || requestedTab === 'sync'
-    ? requestedTab
-    : 'curated'
+  const activeTab: LakeTab = requestedTab === 'raw' ? 'raw' : 'curated'
   const [insightSelected, setInsightSelected] = useState(true)
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
   const focusDatasetId = searchParams.get('dataset')
+
+  useEffect(() => {
+    if (!requestedTab || requestedTab === 'curated' || requestedTab === 'raw') return
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.set('tab', 'curated')
+      next.delete('dataset')
+      return next
+    }, { replace: true })
+  }, [requestedTab, setSearchParams])
+
+  useEffect(() => {
+    const container = tabsRef.current
+    if (!container) return
+    const activeButton = container.querySelector(`[data-tab-value="${activeTab}"]`) as HTMLElement | null
+    if (!activeButton) return
+    const containerRect = container.getBoundingClientRect()
+    const buttonRect = activeButton.getBoundingClientRect()
+    setIndicatorPos({
+      left: buttonRect.left - containerRect.left,
+      width: buttonRect.width,
+    })
+  }, [activeTab])
 
   const switchTab = (tab: LakeTab) => {
     setSearchParams(prev => {
@@ -207,12 +235,6 @@ export default function StructuredDataPage() {
       return n
     }, { replace: true })
   }
-
-  const TABS: [LakeTab, string][] = [
-    ['curated', '成品数据集'],
-    ['raw', '人工数据集'],
-    ['sync', '连接同步数据集'],
-  ]
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -234,15 +256,22 @@ export default function StructuredDataPage() {
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-            <div className="relative grid grid-cols-3 rounded-md">
-              {TABS.map(([key, label]) => (
+            <div ref={tabsRef} className="relative flex items-center gap-1 rounded-md">
+              <div
+                data-testid="asset-lake-tab-indicator"
+                className="absolute top-0 h-full rounded-md bg-emerald-600 shadow-sm transition-all duration-300 ease-out"
+                style={{ left: `${indicatorPos.left}px`, width: `${indicatorPos.width}px` }}
+              />
+              {LAKE_TABS.map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
                   onClick={() => switchTab(key)}
+                  data-tab-value={key}
+                  aria-pressed={activeTab === key}
                   className={`relative z-10 rounded-md px-4 py-2 text-sm font-medium transition-colors duration-200 ${
                     activeTab === key
-                      ? 'bg-emerald-600 text-white shadow-sm'
+                      ? 'text-white'
                       : 'text-slate-500 hover:text-emerald-700'
                   }`}
                 >
@@ -275,12 +304,7 @@ export default function StructuredDataPage() {
         <div key={activeTab} className="h-full animate-lake-tab-in">
           {activeTab === 'curated'
             ? <CuratedView />
-            : (
-              <RawDatasetsView
-                focusDatasetId={focusDatasetId}
-                source={activeTab === 'sync' ? 'sync' : 'manual'}
-              />
-            )}
+            : <RawDatasetsView focusDatasetId={focusDatasetId} source="manual" />}
         </div>
       </div>
     </div>

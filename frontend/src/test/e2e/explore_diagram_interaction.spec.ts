@@ -17,6 +17,21 @@ const canvas = {
   actors: [], behaviors: [], events: [], rules: [], scenarios: [], questions: [],
 }
 
+const sessionDetail = (id: string, title: string) => ({
+  id, title, canvasVersion: 1, status: 'active', createdAt: '', updatedAt: '',
+  canvas,
+  completeness: { counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0 }, gaps: [] },
+  readiness,
+  messages: id === 's1' ? [{
+    id: 'm1', role: 'assistant', createdAt: '2026-07-12T00:00:00Z',
+    content: '下方是业务示意图：\n\n![业务示意图](/mock-image.svg)',
+    steps: [{
+      tool: 'show_diagram', arguments: { kind: 'state' }, summary: '展示状态图', durationMs: 1,
+      diagram: { kind: 'state', title: '工单状态图', mermaid: diagram, warnings: [] },
+    }],
+  }] : [],
+})
+
 const readiness = {
   ready: false, stage: '阶段0 · 定边界', gatesPassed: 2, gatesTotal: 9,
   blockingCount: 2, advisoryCount: 0, openQuestions: { blocking: 0, advisory: 0 },
@@ -62,24 +77,15 @@ async function mockExplore(page: Page) {
       body: JSON.stringify({ data, message: 'ok' }),
     })
     if (path === '/api/v2/exploration/sessions') {
-      return ok([{ id: 's1', title: '图表交互测试', canvasVersion: 1, status: 'active', createdAt: '', updatedAt: '' }])
+      return ok([
+        { id: 's1', title: '图表交互测试', canvasVersion: 1, status: 'active', createdAt: '', updatedAt: '' },
+        { id: 's2', title: '第二个业务会话', canvasVersion: 1, status: 'active', createdAt: '', updatedAt: '' },
+      ])
     }
     if (path === '/api/v2/exploration/sessions/s1') {
-      return ok({
-        id: 's1', title: '图表交互测试', canvasVersion: 1, status: 'active', createdAt: '', updatedAt: '',
-        canvas,
-        completeness: { counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0 }, gaps: [] },
-        readiness,
-        messages: [{
-          id: 'm1', role: 'assistant', createdAt: '2026-07-12T00:00:00Z',
-          content: '下方是业务示意图：\n\n![业务示意图](/mock-image.svg)',
-          steps: [{
-            tool: 'show_diagram', arguments: { kind: 'state' }, summary: '展示状态图', durationMs: 1,
-            diagram: { kind: 'state', title: '工单状态图', mermaid: diagram, warnings: [] },
-          }],
-        }],
-      })
+      return ok(sessionDetail('s1', '图表交互测试'))
     }
+    if (path === '/api/v2/exploration/sessions/s2') return ok(sessionDetail('s2', '第二个业务会话'))
     if (path === '/api/v2/exploration/sessions/s1/attachments') return ok([htmlAttachment])
     if (path === '/api/v2/exploration/sessions/s1/attachments/html-1/preview') {
       return ok({
@@ -123,7 +129,7 @@ async function expectWheelAndDrag(page: Page, testId: string) {
 test.describe('业务探索图表与图片交互', () => {
   test.beforeEach(async ({ page }) => {
     await mockExplore(page)
-    await page.goto('/#/explore')
+    await page.goto('/#/explore', { waitUntil: 'domcontentloaded' })
     await expect(page.getByTestId('diagram-thumbnail')).toBeVisible({ timeout: 10_000 })
   })
 
@@ -174,6 +180,31 @@ test.describe('业务探索图表与图片交互', () => {
     expect(sendBox!.x).toBeLessThan(historyBox!.x)
     expect(toolbarBox!.y).toBeLessThan(uploadBox!.y + uploadBox!.height)
     expect(toolbarBox!.y).toBeLessThan(sendBox!.y + sendBox!.height)
+  })
+
+  test('输入区承载层与输入框使用一致背景色', async ({ page }) => {
+    const region = page.getByTestId('exploration-composer-region')
+    const shell = page.getByTestId('exploration-composer-shell')
+
+    const regionBackground = await region.evaluate(element => getComputedStyle(element).backgroundColor)
+    const shellBackground = await shell.evaluate(element => getComputedStyle(element).backgroundColor)
+    expect(regionBackground).toBe(shellBackground)
+  })
+
+  test('模型分组进入和切换会话后默认折叠，可由用户自行展开', async ({ page }) => {
+    const objectSection = page.getByRole('button', { name: /对象模型/ })
+    const objectCard = page.getByTitle('查看详情')
+    await expect(objectSection).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectCard).toBeHidden()
+
+    await objectSection.click()
+    await expect(objectSection).toHaveAttribute('aria-expanded', 'true')
+    await expect(objectCard).toBeVisible()
+
+    await page.getByRole('button', { name: '查看会话记录' }).click()
+    await page.getByRole('button', { name: /^第二个业务会话/ }).click()
+    await expect(objectSection).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectCard).toBeHidden()
   })
 
   test('文件清单中的 HTML 使用隔离网页预览并保留源码编辑', async ({ page }) => {

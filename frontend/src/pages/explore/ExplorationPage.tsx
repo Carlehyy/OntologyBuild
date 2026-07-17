@@ -766,7 +766,10 @@ export default function ExplorationPage() {
           </div>
         </div>
 
-        <div className="relative px-4 pb-4 pt-3">
+        <div
+          data-testid="exploration-composer-region"
+          className="relative bg-[var(--color-bg-elevated)] px-4 pb-4 pt-3"
+        >
           <input
             ref={fileInputRef}
             type="file"

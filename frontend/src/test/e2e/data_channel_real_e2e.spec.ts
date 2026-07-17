@@ -115,16 +115,14 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
     timeout: 20_000,
   })
 
-  // 同步结果必须进入正式资产湖的“连接同步数据集”视图，且为只读维护入口。
+  // 资产湖顶部只保留成品与人工数据集；同步结果继续由正式资产接口承载并在下方核验。
   await page.goto('/#/data/structured?tab=sync')
-  await expect(page.getByRole('button', { name: '连接同步数据集' })).toBeVisible()
-  const syncedRow = page.getByRole('row').filter({ hasText: connectionName })
-  await expect(syncedRow).toContainText('/orders')
-  await expect(syncedRow).toContainText('2 行')
-  await expect(syncedRow).toContainText('由数据连接同步维护')
-  await expect(syncedRow.getByRole('button')).toHaveCount(0)
+  await expect(page).toHaveURL(/tab=curated/)
+  await expect(page.getByRole('button', { name: '成品数据集' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '人工数据集' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '连接同步数据集' })).toHaveCount(0)
   await page.screenshot({
-    path: testInfo.outputPath('01-sync-dataset-in-lake.png'),
+    path: testInfo.outputPath('01-asset-lake-tabs.png'),
     fullPage: true,
   })
 

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
   CircleCheck, CircleHelp, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2, FileText,
@@ -253,6 +253,11 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   const counts = completeness?.counts || {}
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
 
+  // 每次切换会话都从折叠态开始；当前会话内仍保留用户手动展开的选择。
+  useEffect(() => {
+    setCollapsed({})
+  }, [sessionId])
+
   const scenarioNames = (canvas?.scenarios || []).map(s => String(s.display_name || s.name))
   const objectNames = (canvas?.objects || [])
     .filter(o => ((o.attributes as { name?: string; display_name?: string; enum?: string[] }[] | undefined) || [])
@@ -334,11 +339,12 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
         {SECTIONS.map((section) => {
           const { key, label, icon: Icon, tint } = section
           const items = (canvas?.[key] || []) as CanvasElement[]
-          const isCollapsed = collapsed[key] ?? items.length === 0
+          const isCollapsed = collapsed[key] ?? true
           return (
             <div key={key} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
               <button
                 onClick={() => setCollapsed(c => ({ ...c, [key]: !isCollapsed }))}
+                aria-expanded={!isCollapsed}
                 className="w-full flex items-center gap-2 px-3 py-2 text-left"
               >
                 <span className={`w-5 h-5 rounded-md flex items-center justify-center ${tint}`}>
