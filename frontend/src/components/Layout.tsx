@@ -6,6 +6,8 @@ import {
   Database, ChevronLeft, ChevronRight, GitBranch, Table2,
   Sparkles, ChevronDown, Repeat, Bot, PlugZap, Workflow, Compass,
   Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2, ClipboardList, Globe, Waypoints, History, KeyRound,
+  BrainCircuit,
+  Menu, X,
 } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 
@@ -22,6 +24,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const [inboxOpen, setInboxOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
@@ -97,6 +100,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const navItems: NavItem[] = [
     { to: '/overview', icon: LayoutDashboard, label: '平台概览' },
+    { to: '/super-assistant', icon: BrainCircuit, label: '超级助手' },
     { to: '/explore', icon: Compass, label: '业务探索' },
     { to: '/ontologies', icon: Network, label: '本体管理' },
     { to: '/agent', icon: Bot, label: '智能助手' },
@@ -129,21 +133,37 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const isMappingWorkspace = /^\/ontologies\/[^/]+\/mapping-config$/.test(location.pathname)
   const isOntologyStructurePage = /^\/ontologies\/[^/]+$/.test(location.pathname)
     && new URLSearchParams(location.search).get('tab') === 'design'
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events') || isActive('/api-hub') || isMappingWorkspace
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/api-hub') || isMappingWorkspace
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true
 
   return (
     <div className="flex h-screen bg-[var(--color-bg-base)]" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+      {mobileNavOpen && (
+        <button
+          type="button"
+          aria-label="关闭平台导航"
+          onClick={() => setMobileNavOpen(false)}
+          className="fixed inset-0 z-40 bg-black/30 md:hidden"
+        />
+      )}
       {/* Sidebar */}
-      <aside className={`bg-[var(--color-bg-elevated)] border-r border-[var(--color-border)] flex flex-col transition-all duration-300 ease-out ${collapsed ? 'w-16' : 'w-56'}`}>
+      <aside className={`${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-all duration-300 ease-out md:static md:z-auto md:translate-x-0 ${collapsed ? 'md:w-16' : 'md:w-56'}`}>
         {/* Logo */}
         <div className={`h-14 border-b border-[var(--color-border)] flex items-center gap-3 transition-all ${collapsed ? 'justify-center px-0' : 'px-4'}`}>
           <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--color-nav-bg)' }}>
             <Network size={18} className="text-white" />
           </div>
           {!collapsed && <span className="font-semibold text-[var(--color-text-primary)] tracking-tight text-sm">OpenOntology</span>}
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="关闭平台导航"
+            className="ml-auto flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] md:hidden"
+          >
+            <X size={17} />
+          </button>
         </div>
 
         {/* Nav */}
@@ -164,6 +184,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       setExpandedGroup(item.to)
                       if (item.subItems && item.subItems.length > 0) {
                         navigate(item.subItems[0].to)
+                        setMobileNavOpen(false)
                       }
                     }
                   }}
@@ -182,7 +203,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         const exact = item.subItems?.find(s => location.pathname === s.to)
                         const subActive = exact ? sub.to === exact.to : isActive(sub.to)
                         return (
-                          <Link key={sub.to} to={sub.to}
+                          <Link key={sub.to} to={sub.to} onClick={() => setMobileNavOpen(false)}
                             className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors ${subActive ? 'bg-[#b5f3e6] text-[var(--color-nav-bg)] font-medium' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}>
                             <SubIcon size={14} />
                             <span>{sub.label}</span>
@@ -196,7 +217,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             }
 
             return (
-              <Link key={item.to} to={item.to}
+              <Link key={item.to} to={item.to} onClick={() => setMobileNavOpen(false)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${isActive(item.to)
                     ? 'text-white shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
                 style={isActive(item.to) ? { background: 'var(--color-nav-bg)' } : {}}
@@ -211,7 +232,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Footer */}
         <div className="border-t border-[var(--color-border)]">
           <button onClick={() => setCollapsed(!collapsed)}
-            className={`flex items-center gap-2 px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors w-full ${collapsed ? 'justify-center' : ''}`}>
+            className={`hidden md:flex items-center gap-2 px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors w-full ${collapsed ? 'justify-center' : ''}`}>
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             {!collapsed && <span>折叠起来</span>}
           </button>
@@ -224,13 +245,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="min-w-0 flex-1 flex flex-col overflow-hidden">
         {/* 通用标签栏 */}
         {showTopTabBar && (
           <div className="h-14 shrink-0 flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4">
             {/* 左侧预留 */}
             <div className="flex items-center gap-2">
-              {/* 后续可放置用户空间等功能 */}
+              <button
+                type="button"
+                onClick={() => { setCollapsed(false); setMobileNavOpen(true) }}
+                aria-label="打开平台导航"
+                className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 md:hidden"
+              >
+                <Menu size={18} />
+              </button>
             </div>
             
             {/* 右侧：收件箱 + 用户中心 */}

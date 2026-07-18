@@ -97,6 +97,11 @@ def _seed_db():
         from app.events.models import (  # noqa: F401
             RegisteredEvent, EventAttachment, EventAuditLog, EventIngestKey,
         )
+        # 超级助手（独立会话、目录型 Skill、MCP 客户端配置）
+        from app.super_assistant.models import (  # noqa: F401
+            SuperAssistantConversation, SuperAssistantMessage,
+            SuperAssistantToolRun, SuperAssistantSkill, SuperAssistantMcpServer,
+        )
         # 生产 schema 只认 Alembic。create_all 会把漏跑迁移伪装成“可启动”，
         # 却没有回填、外键与唯一约束；开发/测试仍保留零配置建库便利。
         if settings.environment != "production":
@@ -568,6 +573,13 @@ app.include_router(exploration_router.router, prefix="/api/v2/exploration", tags
 # 能力注册中心 — 平台级技能包管理（P2 扩展 MCP）
 from app.capabilities import router as capabilities_router
 app.include_router(capabilities_router.router, prefix="/api/v2/capabilities", tags=["capabilities"])
+# 超级助手 — 与本体、业务探索完全解耦的通用 Agent 运行时
+from app.super_assistant import router as super_assistant_router
+app.include_router(
+    super_assistant_router.router,
+    prefix="/api/v2/super-assistant",
+    tags=["super-assistant"],
+)
 app.include_router(sentinel_router.router, prefix="/api/v1/ontologies/{ontology_id}/sentinels", tags=["sentinel"])
 # 数据采集器 — AI HOT 等真实数据源接入
 app.include_router(collectors_router.router, prefix="/api/v2/collectors", tags=["collectors"])

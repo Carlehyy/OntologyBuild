@@ -16,6 +16,21 @@ class Settings(BaseSettings):
     uploads_dir: str = "./uploads"
     access_token_expire_minutes: int = 1440
 
+    # Super Assistant is intentionally isolated from ontology/exploration
+    # runtimes. Skills are real directories rooted below this path; an empty
+    # value resolves to <uploads_dir>/super-assistant/skills.
+    super_assistant_skill_root: str = ""
+    super_assistant_max_skill_archive_mb: int = 20
+    super_assistant_max_skill_files: int = 500
+    super_assistant_max_skill_file_mb: int = 5
+    super_assistant_max_tool_rounds: int = 8
+    super_assistant_tool_result_chars: int = 30000
+    super_assistant_approval_timeout_seconds: int = 180
+    # Comma-separated exact hosts, wildcard suffixes (*.example.com), or CIDRs.
+    # Development permits loopback MCP servers; production requires an explicit
+    # allowlist and never inherits the API-Hub proxy policy implicitly.
+    super_assistant_mcp_allowed_hosts: str = "localhost,127.0.0.1,::1"
+
     # Data-steward conversation workspace and its isolated browser runtime.
     # Empty workspace root resolves to <uploads_dir>/steward-sessions.
     steward_workspace_root: str = ""

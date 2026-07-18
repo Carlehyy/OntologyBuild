@@ -47,6 +47,7 @@ MODEL_MODULES = (
     "app.settings.prompts.models",
     "app.settings.rules.models",
     "app.settings.workflows.models",
+    "app.super_assistant.models",
 )
 
 

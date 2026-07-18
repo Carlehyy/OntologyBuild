@@ -28,6 +28,7 @@ import AgentWorkbenchPage from '@/pages/agent/AgentWorkbenchPage'
 import ReportStudioPage from '@/pages/agent/ReportStudioPage'
 import EventRegistryPage from '@/pages/events/EventRegistryPage'
 import ExplorationPage from '@/pages/explore/ExplorationPage'
+import SuperAssistantPage from '@/pages/super-assistant/SuperAssistantPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
@@ -94,6 +95,7 @@ export default function App() {
           <Route path="/agent/reports" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent/reports/:templateId" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent" element={<ProtectedRoute><AgentWorkbenchPage /></ProtectedRoute>} />
+          <Route path="/super-assistant" element={<ProtectedRoute><SuperAssistantPage /></ProtectedRoute>} />
           <Route path="/events" element={<ProtectedRoute><EventRegistryPage /></ProtectedRoute>} />
           <Route path="/rag" element={<Navigate to="/agent" replace />} />
           <Route path="/settings" element={<Navigate to="/settings/extraction" replace />} />
