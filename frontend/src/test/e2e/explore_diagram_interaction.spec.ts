@@ -289,6 +289,13 @@ test.describe('业务探索图表与图片交互', () => {
       const switchBox = await modeSwitch.boundingBox()
       return (indicatorBox?.x || 0) - (switchBox?.x || 0)
     }).toBeGreaterThan((indicatorBefore?.x || 0) - (modeSwitchBefore?.x || 0) + 20)
+    const saveButton = page.getByRole('button', { name: '保存', exact: true })
+    const copyButton = page.getByRole('button', { name: '复制文件内容' })
+    await expect(saveButton).toBeVisible()
+    await expect(copyButton).toHaveClass(/border-/)
+    const saveBox = await saveButton.boundingBox()
+    const copyBox = await copyButton.boundingBox()
+    expect(saveBox?.x).toBeLessThan(copyBox?.x || 0)
     await expect(page.getByLabel('文件内容编辑器')).toContainText('Anthropic 全景时间线')
   })
 

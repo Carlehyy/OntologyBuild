@@ -402,11 +402,17 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   <div className="flex shrink-0 items-center gap-1.5">
                     {editor && (
                       <div className="mr-1 flex items-center gap-1">
+                        {viewMode === 'edit' && (
+                          <button onClick={() => void save()} disabled={saving || draft === editor.content}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-600 px-3 text-xs font-medium text-white transition-[background-color,box-shadow,transform] duration-200 hover:bg-teal-700 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2">
+                            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}保存
+                          </button>
+                        )}
                         <button onClick={() => void copy()} title="复制文件内容" aria-label={copied ? '已复制' : '复制文件内容'}
-                          className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] transition-colors ${copied
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-base)] hover:text-teal-700'}`}>
-                          {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? '已复制' : '复制'}
+                          className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2 ${copied
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700'}`}>
+                          {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}
                         </button>
                         <div data-testid="workspace-view-mode-switch" className="relative grid grid-cols-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-0.5">
                           <span
@@ -431,12 +437,6 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                           </button>
                         </div>
                       </div>
-                    )}
-                    {viewMode === 'edit' && editor && (
-                      <button onClick={() => void save()} disabled={saving || draft === editor.content}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-600 px-3 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-40">
-                        {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}保存
-                      </button>
                     )}
                     <button onClick={() => void download(activeFile)} title="下载文件"
                       className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
