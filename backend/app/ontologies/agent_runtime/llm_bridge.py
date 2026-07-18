@@ -22,6 +22,11 @@ class LLMError(Exception):
     """LLM 调用失败 — 配置错误 / 网络 / provider 不支持工具调用等。"""
 
 
+def _failure_status(exc: Exception) -> str:
+    message = str(exc).lower()
+    return "timeout" if "timeout" in message or "timed out" in message else "error"
+
+
 def chat(call_kwargs: dict, messages: list[dict], tools: list[dict]) -> dict[str, Any]:
     provider = (call_kwargs.get("provider") or "openai").lower()
     model_name = call_kwargs.get("model", "unknown")
@@ -36,11 +41,11 @@ def chat(call_kwargs: dict, messages: list[dict], tools: list[dict]) -> dict[str
             result = _chat_openai(call_kwargs, messages, tools)
         return _strip_think(result)
     except LLMError as e:
-        status = "error"
+        status = _failure_status(e)
         error_msg = str(e)
         raise
     except Exception as e:  # noqa: BLE001 — provider SDK 的异常统一收口
-        status = "error"
+        status = _failure_status(e)
         error_msg = str(e)
         raise LLMError(f"LLM 调用失败({provider}/{call_kwargs.get('model')}): {e}") from e
     finally:

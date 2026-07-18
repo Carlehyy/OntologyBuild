@@ -2,17 +2,6 @@ import { useState, useCallback, useEffect } from 'react'
 import type { ModelConfig } from '@/types/ontology'
 import { modelApi } from '@/api/ontologies'
 
-export interface CallRecord {
-  id: string
-  modelId: string
-  modelName: string
-  timestamp: string
-  status: 'success' | 'error' | 'timeout'
-  latency: number
-  promptTokens: number
-  completionTokens: number
-}
-
 export interface DailyStats {
   date: string
   callCount: number
@@ -176,10 +165,6 @@ export function useMockModels() {
     }
   }, [])
 
-  const getModelDailyStats = useCallback((_modelId: string): DailyStats[] => {
-    return []  // 详情抽屉暂未对接真实统计，保留接口
-  }, [])
-
   const getModelHeatCells = useCallback((modelId: string, n = 60): HeatCell[] => {
     const model = models.find(m => m.id === modelId)
     const s = modelStats[modelId]
@@ -231,7 +216,6 @@ export function useMockModels() {
     getModelHeatCells,
     getModelRunStatus,
     getModelSummary,
-    getModelDailyStats,
     isEnabled,
     toggleEnabled,
     reload: loadModels,

@@ -37,6 +37,9 @@ class ModelConfig(Base):
 class ModelCallLog(Base):
     """每次 LLM 调用的轻量统计记录 — 不保存调用内容，仅保存指标。"""
     __tablename__ = "model_call_logs"
+    __table_args__ = (
+        Index("ix_model_call_logs_model_created", "model_config_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     model_config_id: Mapped[str] = mapped_column(String, ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False, index=True)

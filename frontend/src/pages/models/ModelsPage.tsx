@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import {
   Plus, Trash2, TestTube2, Pencil, X, Loader2, CheckCircle2, XCircle,
-  Star, Search, Upload, Download, Settings2, BarChart3,
+  Star, Search, Upload, Download, Settings2, FileClock,
 } from 'lucide-react'
 import type { ModelConfig } from '@/types/ontology'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -134,7 +134,7 @@ export default function ModelsPage() {
   const { t } = useTranslation()
   const {
     models, loading, error, defaultModelId, setDefault, createModel, updateModel, deleteModel, importModels,
-    testConnection, getModelDailyStats,
+    testConnection,
     isEnabled, toggleEnabled, getModelRunStatus, getModelSummary, getModelHeatCells,
   } = useMockModels()
 
@@ -167,8 +167,6 @@ export default function ModelsPage() {
 
   // Test States
   const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'success' | 'error'>>({})
-  const [drawerTestStatus, setDrawerTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
-  const [drawerTestResult, setDrawerTestResult] = useState('')
 
   // Toast
   const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error' | 'warning' | 'info'; message: string }>>([])
@@ -288,17 +286,6 @@ export default function ModelsPage() {
     if (result.ok) addToast('success', result.message)
     else addToast('error', result.message)
     setTimeout(() => setTestStatus(prev => ({ ...prev, [id]: 'idle' })), 3000)
-  }
-
-  const handleDrawerTest = async () => {
-    if (!detailModel) return
-    setDrawerTestStatus('testing')
-    const result = await testConnection(detailModel.id)
-    setDrawerTestStatus(result.ok ? 'success' : 'error')
-    setDrawerTestResult(result.message)
-    if (result.ok) addToast('success', result.message)
-    else addToast('error', result.message)
-    setTimeout(() => setDrawerTestStatus('idle'), 3000)
   }
 
   const openEdit = (m: ModelConfig) => {
@@ -451,7 +438,7 @@ export default function ModelsPage() {
                       <div className="flex items-center gap-1.5">
                         <h3
                           className={`font-semibold text-[14px] truncate cursor-pointer hover:text-teal-700 transition-colors ${enabled ? 'text-slate-800' : 'text-slate-400'}`}
-                          onClick={() => { setDetailModel(m); setDrawerTestStatus('idle'); setDrawerTestResult('') }}
+                          onClick={() => setDetailModel(m)}
                         >
                           {m.name}
                         </h3>
@@ -549,10 +536,10 @@ export default function ModelsPage() {
                     测试
                   </button>
                   <button
-                    onClick={() => { setDetailModel(m); setDrawerTestStatus('idle'); setDrawerTestResult('') }}
+                    onClick={() => setDetailModel(m)}
                     className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
                   >
-                    <BarChart3 size={11} /> 详情
+                    <FileClock size={11} /> 日志
                   </button>
                   {!isDefault && (
                     <button
@@ -740,20 +727,6 @@ export default function ModelsPage() {
         model={detailModel}
         isOpen={!!detailModel}
         onClose={() => setDetailModel(null)}
-        isDefault={detailModel?.id === defaultModelId}
-        onSetDefault={async () => {
-          if (!detailModel) return
-          try {
-            await setDefault(detailModel.id)
-            addToast('success', `"${detailModel.name}" 已设为默认模型`)
-          } catch {
-            addToast('error', `"${detailModel.name}" 设置默认失败`)
-          }
-        }}
-        testStatus={drawerTestStatus}
-        testResult={drawerTestResult}
-        onTest={handleDrawerTest}
-        dailyStats={detailModel ? getModelDailyStats(detailModel.id) : []}
       />
 
       {/* Delete Confirm */}

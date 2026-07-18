@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
@@ -77,9 +77,29 @@ def _safe_test_error(exc: Exception) -> tuple[str, str]:
         return "TIMEOUT", "连接超时，请检查接入地址和网络后重试"
     if any(token in lower for token in ("connection", "connect", "dns", "name or service not known")):
         return "NETWORK_ERROR", "无法连接到服务，请检查 API Base 和网络"
-    scrubbed = re.sub(r"(?i)(sk-[A-Za-z0-9_-]{8,}|bearer\s+[A-Za-z0-9._-]+)", "[已隐藏]", raw)
-    scrubbed = " ".join(scrubbed.split())[:240]
+    scrubbed = _safe_log_error(raw)
     return "CONNECTION_FAILED", f"连接失败：{scrubbed or '服务未返回可识别的错误信息'}"
+
+
+def _safe_log_error(raw: str | None) -> str | None:
+    """脱敏并压缩调用错误，避免令牌或超长 SDK 响应进入前端。"""
+    if not raw:
+        return None
+    scrubbed = re.sub(
+        r"(?i)(sk-[A-Za-z0-9_-]{8,}|bearer\s+[A-Za-z0-9._-]+|api[_-]?key\s*[=:]\s*[^\s,;]+)",
+        "[已隐藏]",
+        raw,
+    )
+    return " ".join(scrubbed.split())[:240] or None
+
+
+def _utc_naive(value: datetime | None) -> datetime | None:
+    """模型日志按 UTC 存储；查询前统一成数据库兼容的 naive UTC。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _save_test_result(db: Session, config: ModelConfig, ok: bool, message: str) -> str:
@@ -473,7 +493,7 @@ def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_
         elif log.status == "error":
             color = "#e5484d"
             cell_status = "error"
-            title = f"异常: {log.error_message or '未知错误'}"
+            title = f"异常: {_safe_log_error(log.error_message) or '未知错误'}"
         else:
             color = "#f0a020"
             cell_status = "timeout"
@@ -501,5 +521,67 @@ def get_model_stats(model_id: str, db: Session = Depends(get_db), _=Depends(get_
             "lastCall": _iso_utc(last_call.created_at) if last_call else None,
             "successRate": round(success_30d / total_30d * 100, 1) if total_30d > 0 else None,
             "heatCells": heat_cells,
+        }
+    }
+
+
+@router.get("/{model_id}/calls")
+def list_model_calls(
+    model_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str = "",
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """按模型配置分页查询业务调用日志，最新调用优先。"""
+    from app.model_configs.models import ModelCallLog
+
+    if not db.query(ModelConfig.id).filter(ModelConfig.id == model_id).first():
+        raise HTTPException(404, "Not found")
+
+    normalized_status = status.strip().lower()
+    if normalized_status in {"", "all"}:
+        normalized_status = ""
+    elif normalized_status not in {"success", "error", "timeout"}:
+        raise HTTPException(400, "不支持的调用状态筛选")
+
+    start_utc = _utc_naive(start)
+    end_utc = _utc_naive(end)
+    if start_utc and end_utc and start_utc > end_utc:
+        raise HTTPException(400, "开始时间不能晚于结束时间")
+
+    query = db.query(ModelCallLog).filter(ModelCallLog.model_config_id == model_id)
+    if normalized_status:
+        query = query.filter(ModelCallLog.status == normalized_status)
+    if start_utc:
+        query = query.filter(ModelCallLog.created_at >= start_utc)
+    if end_utc:
+        query = query.filter(ModelCallLog.created_at <= end_utc)
+
+    total = query.count()
+    rows = (
+        query.order_by(ModelCallLog.created_at.desc(), ModelCallLog.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "data": {
+            "items": [
+                {
+                    "id": row.id,
+                    "status": row.status,
+                    "latency_ms": row.latency_ms,
+                    "error_summary": _safe_log_error(row.error_message),
+                    "created_at": _iso_utc(row.created_at),
+                }
+                for row in rows
+            ],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
         }
     }

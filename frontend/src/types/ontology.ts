@@ -113,4 +113,21 @@ export interface ModelConfig {
   updated_at: string
 }
 
+export type ModelCallStatus = 'success' | 'error' | 'timeout'
+
+export interface ModelCallLog {
+  id: string
+  status: ModelCallStatus
+  latency_ms: number
+  error_summary?: string | null
+  created_at: string
+}
+
+export interface ModelCallLogPage {
+  items: ModelCallLog[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export const DOMAINS = ['供应链','采购','财务','医疗','金融','法律','教育','科技','制造','能源','其他']

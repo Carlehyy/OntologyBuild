@@ -19,6 +19,14 @@ type Model = {
   updated_at: string
 }
 
+type CallLog = {
+  id: string
+  status: 'success' | 'error' | 'timeout'
+  latency_ms: number
+  error_summary: string | null
+  created_at: string
+}
+
 const now = '2026-07-12T06:00:00+00:00'
 
 function model(overrides: Partial<Model> = {}): Model {
@@ -54,8 +62,9 @@ const emptyStats = {
   })),
 }
 
-async function mockModelsApi(page: Page, initial: Model[] = [model()]) {
+async function mockModelsApi(page: Page, initial: Model[] = [model()], initialLogs: CallLog[] = []) {
   let models = [...initial]
+  const callLogs = [...initialLogs]
   let testShouldPass = false
   let createCalls = 0
 
@@ -82,6 +91,25 @@ async function mockModelsApi(page: Page, initial: Model[] = [model()]) {
 
     if (method === 'GET' && path === '/api/v1/models') return json(models)
     if (method === 'GET' && path.endsWith('/stats')) return json(emptyStats)
+    if (method === 'GET' && path.endsWith('/calls')) {
+      const pageNumber = Math.max(1, Number(url.searchParams.get('page') || 1))
+      const pageSize = Math.max(1, Number(url.searchParams.get('page_size') || 20))
+      const status = url.searchParams.get('status') || ''
+      const start = url.searchParams.get('start')
+      const end = url.searchParams.get('end')
+      const filtered = callLogs
+        .filter(item => !status || item.status === status)
+        .filter(item => !start || new Date(item.created_at) >= new Date(start))
+        .filter(item => !end || new Date(item.created_at) <= new Date(end))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      const offset = (pageNumber - 1) * pageSize
+      return json({
+        items: filtered.slice(offset, offset + pageSize),
+        total: filtered.length,
+        page: pageNumber,
+        page_size: pageSize,
+      })
+    }
     if (method === 'GET' && /^\/api\/v1\/models\/[^/]+$/.test(path)) {
       return json(models.find(item => path.endsWith(item.id)))
     }
@@ -152,6 +180,36 @@ async function mockModelsApi(page: Page, initial: Model[] = [model()]) {
 }
 
 test.describe('模型配置稳定性流程', () => {
+  test('日志抽屉按状态筛选并分页展示调用记录', async ({ page }) => {
+    const logs: CallLog[] = Array.from({ length: 21 }, (_, index) => ({
+      id: `log-${index}`,
+      status: index % 3 === 0 ? 'error' : index % 3 === 1 ? 'timeout' : 'success',
+      latency_ms: 320 + index * 80,
+      error_summary: index % 3 === 0 ? `上游调用失败 ${index}` : null,
+      created_at: `2026-07-12T06:${String(index).padStart(2, '0')}:00+00:00`,
+    }))
+    await mockModelsApi(page, [model()], logs)
+    await page.goto('/#/models')
+
+    await page.getByRole('button', { name: '日志' }).click()
+    const drawer = page.getByRole('dialog', { name: 'DeepSeek Pro 调用日志' })
+    await expect(drawer).toBeVisible()
+    await expect(drawer.getByRole('columnheader', { name: '调用时间' })).toBeVisible()
+    await expect(drawer.getByRole('columnheader', { name: '状态' })).toBeVisible()
+    await expect(drawer.getByRole('columnheader', { name: '耗时' })).toBeVisible()
+    await expect(drawer.getByRole('columnheader', { name: '错误摘要' })).toBeVisible()
+    await expect(drawer.getByText('显示 1–20 / 21 条')).toBeVisible()
+    await expect(drawer.getByRole('button', { name: /测试/ })).toHaveCount(0)
+
+    await drawer.getByRole('button', { name: '下一页' }).click()
+    await expect(drawer.getByText('显示 21–21 / 21 条')).toBeVisible()
+
+    await drawer.getByLabel('调用状态').selectOption('error')
+    await drawer.getByRole('button', { name: '查询' }).click()
+    await expect(drawer.getByText('显示 1–7 / 7 条')).toBeVisible()
+    await expect(drawer.locator('tbody').getByText('失败', { exact: true })).toHaveCount(7)
+  })
+
   test('失败信息只显示在提示中，不写入模型卡片底部', async ({ page }) => {
     await mockModelsApi(page)
     await page.goto('/#/models')
@@ -182,7 +240,7 @@ test.describe('模型配置稳定性流程', () => {
   test('创建配置后保持停用', async ({ page }) => {
     const api = await mockModelsApi(page)
     await page.goto('/#/models')
-    await page.getByRole('button', { name: '添加提供商' }).click()
+    await page.getByRole('button', { name: '添加模型' }).click()
 
     await page.getByPlaceholder('如：GPT-4o 生产环境').fill('MiniMax M3')
     await page.getByPlaceholder('gpt-4o', { exact: true }).fill('MiniMax-M3')

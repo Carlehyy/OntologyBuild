@@ -19,6 +19,84 @@ def test_stats_last_call_is_utc_aware(client, auth_headers, db):
     assert stats["lastCall"] == "2026-07-09T17:20:13+00:00"
 
 
+def test_model_call_logs_support_pagination_and_filters(client, auth_headers, db):
+    import datetime
+    from app.model_configs.models import ModelCallLog
+
+    cfg = client.post("/api/v1/models", json={
+        "name": "Logs", "provider": "compatible", "models": ["model-a"],
+    }, headers=auth_headers).json()["data"]
+    base = datetime.datetime(2026, 7, 1, 0, 0, 0)
+    statuses = ("success", "error", "timeout")
+    for index in range(25):
+        status = statuses[index % len(statuses)]
+        db.add(ModelCallLog(
+            id=f"log-{index:02d}",
+            model_config_id=cfg["id"],
+            model_name="model-a",
+            provider="compatible",
+            status=status,
+            latency_ms=100 + index,
+            error_message="401 api_key=sk-super-secret-value" if status == "error" else None,
+            created_at=base + datetime.timedelta(minutes=index),
+        ))
+    db.commit()
+
+    second_page = client.get(
+        f"/api/v1/models/{cfg['id']}/calls?page=2&page_size=10",
+        headers=auth_headers,
+    )
+    assert second_page.status_code == 200
+    page_data = second_page.json()["data"]
+    assert page_data["total"] == 25
+    assert page_data["page"] == 2
+    assert page_data["page_size"] == 10
+    assert len(page_data["items"]) == 10
+    assert page_data["items"][0]["id"] == "log-14"
+
+    failed = client.get(
+        f"/api/v1/models/{cfg['id']}/calls?status=error&page_size=100",
+        headers=auth_headers,
+    ).json()["data"]
+    assert failed["total"] == 8
+    assert all(item["status"] == "error" for item in failed["items"])
+    assert all("sk-super" not in (item["error_summary"] or "") for item in failed["items"])
+    assert all("[已隐藏]" in (item["error_summary"] or "") for item in failed["items"])
+
+    ranged = client.get(
+        f"/api/v1/models/{cfg['id']}/calls"
+        "?start=2026-07-01T00:10:00Z&end=2026-07-01T00:12:00Z",
+        headers=auth_headers,
+    ).json()["data"]
+    assert ranged["total"] == 3
+    assert [item["id"] for item in ranged["items"]] == ["log-12", "log-11", "log-10"]
+
+
+def test_model_call_log_filters_validate_status_and_time_range(client, auth_headers):
+    cfg = client.post("/api/v1/models", json={
+        "name": "Log validation", "provider": "compatible", "models": ["model-a"],
+    }, headers=auth_headers).json()["data"]
+
+    invalid_status = client.get(
+        f"/api/v1/models/{cfg['id']}/calls?status=pending",
+        headers=auth_headers,
+    )
+    invalid_range = client.get(
+        f"/api/v1/models/{cfg['id']}/calls"
+        "?start=2026-07-02T00:00:00Z&end=2026-07-01T00:00:00Z",
+        headers=auth_headers,
+    )
+    assert invalid_status.status_code == 400
+    assert invalid_range.status_code == 400
+
+
+def test_model_call_timeout_errors_use_timeout_status():
+    from app.ontologies.agent_runtime.llm_bridge import LLMError, _failure_status
+
+    assert _failure_status(LLMError("request timed out after 30 seconds")) == "timeout"
+    assert _failure_status(LLMError("authentication failed")) == "error"
+
+
 def test_create_model_is_staged_disabled(client, auth_headers):
     r = client.post("/api/v1/models", json={
         "name": "GPT-4o", "provider": "openai", "api_key": "sk-test",

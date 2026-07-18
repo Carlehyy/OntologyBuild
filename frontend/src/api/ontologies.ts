@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { OntologyListItem, OntologyDetail, Entity, LogicRule, Action, UploadedFile, Prompt, ModelConfig } from '@/types/ontology'
+import type { OntologyListItem, OntologyDetail, Entity, LogicRule, Action, UploadedFile, Prompt, ModelConfig, ModelCallLogPage } from '@/types/ontology'
 
 export interface OntologyImportResult {
   ontology: OntologyDetail
@@ -120,6 +120,9 @@ export const modelApi = {
     lastCall: string | null; successRate: number | null;
     heatCells: Array<{ color: string; title: string; status: string }>;
   }>(`/models/${id}/stats`),
+  calls: (id: string, params: {
+    page?: number; page_size?: number; status?: string; start?: string; end?: string;
+  }) => apiClient.get<ModelCallLogPage>(`/models/${id}/calls`, { params }),
 }
 
 export const settingsApi = {
