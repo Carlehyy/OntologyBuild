@@ -31,6 +31,14 @@ class CurrentReleaseContext:
         return self.release.version_number
 
 
+@dataclass(frozen=True)
+class RuntimeReleaseIdentity:
+    """Exact immutable lineage for newly-created runtime records."""
+
+    id: str
+    version: str
+
+
 def current_release_context(
     db: Session,
     ontology_id: str,
@@ -79,6 +87,35 @@ def current_release_context(
     )
 
 
+def runtime_release_identity(
+    db: Session,
+    ontology_id: str,
+) -> RuntimeReleaseIdentity | None:
+    """Return exact current-release lineage, or ``None`` when it is unsafe.
+
+    Unlike governance reads this helper does not raise: runtime writers must be
+    able to preserve legacy behavior, but a missing/invalid release pointer must
+    never be guessed into an immutable release id.
+    """
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id,
+    ).first()
+    if project is None or not project.current_release_id:
+        return None
+    release = db.query(OntologyVersion).filter(
+        OntologyVersion.id == project.current_release_id,
+        OntologyVersion.ontology_id == ontology_id,
+        OntologyVersion.node_kind == "release",
+        OntologyVersion.lifecycle_status == "released",
+    ).first()
+    if release is None:
+        return None
+    return RuntimeReleaseIdentity(
+        id=str(release.id),
+        version=str(release.version_number),
+    )
+
+
 def runtime_release_version(db: Session, ontology_id: str) -> str | None:
     """Return the release version that owns a newly-created runtime record.
 
@@ -91,13 +128,7 @@ def runtime_release_version(db: Session, ontology_id: str) -> str | None:
     ).first()
     if project is None:
         return None
-    if project.current_release_id:
-        version = db.query(OntologyVersion.version_number).filter(
-            OntologyVersion.id == project.current_release_id,
-            OntologyVersion.ontology_id == ontology_id,
-            OntologyVersion.node_kind == "release",
-            OntologyVersion.lifecycle_status == "released",
-        ).scalar()
-        if version:
-            return str(version)
+    identity = runtime_release_identity(db, ontology_id)
+    if identity is not None:
+        return identity.version
     return str(project.version) if project.version else None

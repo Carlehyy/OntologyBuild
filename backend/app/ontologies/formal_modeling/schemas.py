@@ -243,6 +243,7 @@ class ActionLogOut(CamelModel):
     idempotency_key: Optional[str] = None
     sentinel_match_state_id: Optional[str] = None
     ontology_version: Optional[str] = None
+    ontology_release_id: Optional[str] = None
     # 总览审批流水线所需的可读上下文。它们由查询端根据当前投影补充，
     # 不落动作日志表，避免为了展示复制业务对象数据。
     object_type_name: Optional[str] = None

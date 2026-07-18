@@ -218,7 +218,6 @@ class PropertyFact(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)
-
     instance_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     object_type_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
     property_name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -238,10 +237,14 @@ class PropertyFact(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=True)    # 来源置信度（采集/推理可低于 1）
     valid_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # 业务生效时间（缺省=记录时间）
 
-    # Bind every runtime fact to the immutable release that produced it.
-    # Governance queries use this field to avoid mixing facts across releases.
+    # Bind every runtime fact to the immutable release that produced it.  The
+    # release id is authoritative; version is retained for display/compatibility.
+    # NULL lineage means a legacy record cannot be safely attributed and must
+    # stay out of release-scoped governance views.
     ontology_version: Mapped[str | None] = mapped_column(
         String(20), nullable=True, index=True)
+    ontology_release_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
 
     # 同一 (instance, property) 链内单调递增，供同毫秒事实的确定性排序
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -295,6 +298,9 @@ class ActionExecutionLog(Base):
         String, nullable=True, index=True)
     # Bind an approval/idempotency record to the immutable ontology release that
     # produced it.  A pending v1 action must never execute after v2 is published.
-    ontology_version: Mapped[str] = mapped_column(String(20), nullable=True, index=True)
+    ontology_version: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, index=True)
+    ontology_release_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
 
     executed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

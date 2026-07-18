@@ -343,7 +343,8 @@ def _idempotent_replay(
 
 
 def _same_idempotent_request(log: ActionExecutionLog, action: ActionType,
-                             body, params: dict, ontology_version: str | None) -> bool:
+                             body, params: dict, ontology_version: str | None,
+                             ontology_release_id: str | None) -> bool:
     return (
         log.action_id == action.id
         and log.object_instance_id == body.target_instance_id
@@ -351,6 +352,7 @@ def _same_idempotent_request(log: ActionExecutionLog, action: ActionType,
         and bool(log.dry_run) == bool(body.dry_run)
         and log.sentinel_match_state_id == _match_state_id(body)
         and log.ontology_version == ontology_version
+        and log.ontology_release_id == ontology_release_id
     )
 
 
@@ -461,7 +463,8 @@ def _fail_log(db: Session, ontology_id: str, action: Optional[ActionType], body,
               validation_errors: Optional[list] = None,
               actor_id: Optional[str] = None,
               parameters: Optional[dict] = None,
-              ontology_version: str | None = None) -> dict:
+              ontology_version: str | None = None,
+              ontology_release_id: str | None = None) -> dict:
     log = ActionExecutionLog(
         ontology_id=ontology_id,
         action_id=body.action_id,
@@ -477,6 +480,7 @@ def _fail_log(db: Session, ontology_id: str, action: Optional[ActionType], body,
         idempotency_key=None,
         sentinel_match_state_id=_match_state_id(body),
         ontology_version=ontology_version,
+        ontology_release_id=ontology_release_id,
     )
     db.add(log); db.commit(); db.refresh(log)
     return _log_to_dict(log)
@@ -506,15 +510,27 @@ def execute_action(db: Session, ontology_id: str, body,
     if not body.dry_run:
         project_query = project_query.with_for_update()
     project = project_query.first()
-    from app.ontologies.release_context import runtime_release_version
+    from app.ontologies.release_context import (
+        runtime_release_identity,
+        runtime_release_version,
+    )
+    release_identity = (
+        runtime_release_identity(db, ontology_id) if project is not None else None
+    )
     ontology_version = (
-        runtime_release_version(db, ontology_id) if project is not None else None
+        release_identity.version if release_identity is not None
+        else runtime_release_version(db, ontology_id) if project is not None
+        else None
+    )
+    ontology_release_id = (
+        release_identity.id if release_identity is not None else None
     )
     if project is None:
         return _fail_log(
             db, ontology_id, action, body, start, "本体不存在",
             validation_errors=["ontology_not_found"], actor_id=actor_id,
-            ontology_version=ontology_version)
+            ontology_version=ontology_version,
+            ontology_release_id=ontology_release_id)
     if not body.dry_run:
         from app.config import settings
         if settings.environment == "production":
@@ -528,7 +544,8 @@ def execute_action(db: Session, ontology_id: str, body,
                     db, ontology_id, action, body, start,
                     "本体数据投影正在更新或处于失败态，真实动作已阻断；请先完成全量映射对账",
                     validation_errors=["ontology_projection_not_ready"],
-                    actor_id=actor_id, ontology_version=ontology_version)
+                    actor_id=actor_id, ontology_version=ontology_version,
+                    ontology_release_id=ontology_release_id)
 
     params, parameter_errors = prepare_action_parameters(action, body.parameters)
     rules, rule_definition_errors = _prepare_action_rules(action)
@@ -563,20 +580,23 @@ def execute_action(db: Session, ontology_id: str, body,
     if errors:
         return _fail_log(db, ontology_id, action, body, start,
                          "校验未通过", validation_errors=errors, actor_id=actor_id,
-                         parameters=params, ontology_version=ontology_version)
+                         parameters=params, ontology_version=ontology_version,
+                         ontology_release_id=ontology_release_id)
 
     # Check after normalization/validation so a reused key cannot smuggle a
     # different target or parameter payload behind the first successful call.
     owner = _idempotency_owner(db, ontology_id, idem_key)
     if owner is not None:
         if not _same_idempotent_request(
-                owner, action, body, params, ontology_version):
+                owner, action, body, params, ontology_version,
+                ontology_release_id):
             return _fail_log(
                 db, ontology_id, action, body, start,
                 "同一 idempotency_key 对应的动作、目标或参数不一致",
                 validation_errors=["idempotency_key_payload_mismatch"],
                 actor_id=actor_id, parameters=params,
                 ontology_version=ontology_version,
+                ontology_release_id=ontology_release_id,
             )
         return _idempotent_replay(db, ontology_id, idem_key)
 
@@ -591,6 +611,7 @@ def execute_action(db: Session, ontology_id: str, body,
             idempotency_key=idem_key,
             sentinel_match_state_id=_match_state_id(body),
             ontology_version=ontology_version,
+            ontology_release_id=ontology_release_id,
         )
         db.add(log)
         try:
@@ -807,12 +828,14 @@ def execute_action(db: Session, ontology_id: str, body,
         db.rollback()
         return _fail_log(db, ontology_id, action, body, start, str(e),
                          effects=effects, actor_id=actor_id,
-                         ontology_version=ontology_version)
+                         ontology_version=ontology_version,
+                         ontology_release_id=ontology_release_id)
     except Exception as e:  # noqa: BLE001 — 任何意外都必须留下失败日志而非 500
         db.rollback()
         return _fail_log(db, ontology_id, action, body, start,
                          f"动作执行意外失败: {e}", effects=effects, actor_id=actor_id,
-                         ontology_version=ontology_version)
+                         ontology_version=ontology_version,
+                         ontology_release_id=ontology_release_id)
 
     log = ActionExecutionLog(
         ontology_id=ontology_id, action_id=action.id, action_name=action.display_name,
@@ -823,6 +846,7 @@ def execute_action(db: Session, ontology_id: str, body,
         idempotency_key=idem_key,
         sentinel_match_state_id=_match_state_id(body),
         ontology_version=ontology_version,
+        ontology_release_id=ontology_release_id,
     )
     db.add(log)
     try:
@@ -847,6 +871,7 @@ def execute_action(db: Session, ontology_id: str, body,
                 old_props=pf["old_props"], new_props=pf["new_props"],
                 source=src, actor_id=actor_id, caused_by=causal,
                 ontology_version=ontology_version,
+                ontology_release_id=ontology_release_id,
             )
             if new_facts:
                 affected.setdefault(pf["instance_id"], []).extend(new_facts)
@@ -856,6 +881,7 @@ def execute_action(db: Session, ontology_id: str, body,
                 link_instance_id=pl["link_id"], link_type_id=pl["link_type_id"],
                 exists=pl["exists"], source=src, actor_id=actor_id, caused_by=causal,
                 ontology_version=ontology_version,
+                ontology_release_id=ontology_release_id,
             )
         for iid, trigger in affected.items():
             inst = db.query(ObjectInstance).filter(
@@ -896,4 +922,5 @@ def _log_to_dict(log: ActionExecutionLog) -> dict[str, Any]:
         "idempotencyKey": log.idempotency_key,
         "sentinelMatchStateId": log.sentinel_match_state_id,
         "ontologyVersion": log.ontology_version,
+        "ontologyReleaseId": log.ontology_release_id,
     }

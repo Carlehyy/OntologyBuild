@@ -69,33 +69,9 @@ def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
 
 def _current_release_view(
         db: Session, project: OntologyProject) -> tuple[OntologyVersion, dict]:
-    """Resolve the immutable release that owns the detail-page runtime view.
-
-    ``current_release_id`` is the authority.  The ordered fallback only keeps
-    legacy rows readable when their pointer was never backfilled; it must not
-    replace a valid pointer by guessing from a version number.
-    """
-    release = None
-    if project.current_release_id:
-        release = db.query(OntologyVersion).filter(
-            OntologyVersion.id == project.current_release_id,
-            OntologyVersion.ontology_id == project.id,
-            OntologyVersion.node_kind == "release",
-        ).first()
-    if release is None:
-        release = db.query(OntologyVersion).filter(
-            OntologyVersion.ontology_id == project.id,
-            OntologyVersion.node_kind == "release",
-        ).order_by(
-            OntologyVersion.published_at.desc(),
-            OntologyVersion.created_at.desc(),
-        ).first()
-    if release is None:
-        raise HTTPException(409, detail={
-            "code": "published_release_missing",
-            "message": "本体还没有可展示的发布版本",
-        })
-    return release, complete_snapshot(release.snapshot_formal)
+    """Resolve the exact immutable release selected by the project pointer."""
+    context = current_release_context(db, project.id)
+    return context.release, context.snapshot
 
 
 def _release_fact_query(
@@ -120,7 +96,7 @@ def _release_fact_query(
     log_ids = {
         item[0] for item in db.query(ActionExecutionLog.id).filter(
             ActionExecutionLog.ontology_id == ontology_id,
-            ActionExecutionLog.ontology_version == release.version_number,
+            ActionExecutionLog.ontology_release_id == release.id,
             ActionExecutionLog.action_id.in_(action_ids),
         ).all()
     } if action_ids else set()
@@ -140,17 +116,11 @@ def _release_fact_query(
             PropertyFact.instance_id.in_(sentinel_ids),
         ))
 
-    query = db.query(PropertyFact).filter(PropertyFact.ontology_id == ontology_id)
+    query = db.query(PropertyFact).filter(
+        PropertyFact.ontology_id == ontology_id,
+        PropertyFact.ontology_release_id == release.id,
+    )
     query = query.filter(or_(*subjects) if subjects else false())
-    published_at = _naive_utc(release.published_at or release.created_at)
-    release_source = f"ontology-release://{release.id}"
-    if published_at is not None:
-        query = query.filter(or_(
-            PropertyFact.source == release_source,
-            PropertyFact.recorded_at >= published_at,
-        ))
-    else:
-        query = query.filter(PropertyFact.source == release_source)
     return query
 
 
@@ -1190,6 +1160,7 @@ def _fact_to_dict(f: PropertyFact) -> dict:
         "derivedFrom": f.derived_from or [],
         "confidence": f.confidence,
         "ontologyVersion": f.ontology_version,
+        "ontologyReleaseId": f.ontology_release_id,
         "seq": f.seq,
         "recordedAt": f.recorded_at.isoformat() if f.recorded_at else None,
     }
@@ -1339,15 +1310,15 @@ def list_pending_actions(ontology_id: str, release_id: Optional[str] = None,
     """待审批动作（requires_approval 的动作真实执行先落 pending，等人拍板）。"""
     project = _require_ontology(db, ontology_id)
     release_snapshot = None
-    release_version = None
+    release_identifier = None
     if release_id:
         release = current_release_context(
             db, ontology_id, expected_release_id=release_id)
         release_snapshot = release.snapshot
-        release_version = release.version
+        release_identifier = release.id
     elif current_release_only:
         release_row, release_snapshot = _current_release_view(db, project)
-        release_version = release_row.version_number
+        release_identifier = release_row.id
     query = db.query(ActionExecutionLog).filter(
         ActionExecutionLog.ontology_id == ontology_id,
         ActionExecutionLog.status == "pending",
@@ -1363,7 +1334,7 @@ def list_pending_actions(ontology_id: str, release_id: Optional[str] = None,
         if not action_ids:
             return _ok([])
         query = query.filter(
-            ActionExecutionLog.ontology_version == release_version,
+            ActionExecutionLog.ontology_release_id == release_identifier,
             ActionExecutionLog.action_id.in_(action_ids),
         )
     items = query.order_by(
@@ -1437,10 +1408,16 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
     )
     current_version = release.version if release is not None else project.version
     if release is not None:
-        if not log.ontology_version or log.ontology_version != current_version:
+        if (
+            not log.ontology_release_id
+            or log.ontology_release_id != release.id
+            or not log.ontology_version
+            or log.ontology_version != current_version
+        ):
             raise HTTPException(
                 409,
-                f"该动作不属于当前发布本体 {current_version}，跨版本审批已拒绝",
+                f"该动作不属于当前发布本体 {current_version}，"
+                "跨版本审批已拒绝（发布节点不一致）",
             )
     elif decision == "approved":
         if not log.ontology_version:
@@ -1459,7 +1436,8 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
         db, ontology_id=ontology_id, action_log_id=log.id,
         decision=decision.upper(), source=f"user://{uname}",
         actor_id=uid, reason=body.reason,
-        ontology_version=log.ontology_version)
+        ontology_version=log.ontology_version,
+        ontology_release_id=log.ontology_release_id)
 
     log.decided_by = uid
     log.decided_at = datetime.now(timezone.utc)
@@ -1592,6 +1570,7 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
         live_sentinel_by_id = {item.id: item for item in live_sentinels}
         firings_7d = (db.query(SentinelFiring).filter(
             SentinelFiring.ontology_id == ontology_id,
+            SentinelFiring.ontology_release_id == release.id,
             SentinelFiring.sentinel_id.in_(sentinel_ids),
             SentinelFiring.created_at >= release_window_start,
             SentinelFiring.created_at <= now,
@@ -1640,7 +1619,7 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     # —— 运行：动作日志显式带发布版本血缘 ——
     logs = (db.query(ActionExecutionLog).filter(
         ActionExecutionLog.ontology_id == ontology_id,
-        ActionExecutionLog.ontology_version == release.version_number,
+        ActionExecutionLog.ontology_release_id == release.id,
         ActionExecutionLog.action_id.in_(action_ids),
         ActionExecutionLog.dry_run == False).all()) if action_ids else []  # noqa: E712
     pending_n = sum(1 for l in logs if l.status == "pending")
@@ -1761,7 +1740,7 @@ def recent_facts(ontology_id: str, limit: int = 30, kind: Optional[str] = None,
     if release_id:
         release = current_release_context(
             db, ontology_id, expected_release_id=release_id)
-        q = q.filter(PropertyFact.ontology_version == release.version)
+        q = q.filter(PropertyFact.ontology_release_id == release.id)
         release_snapshot = release.snapshot
     elif current_release_only:
         release_row, release_snapshot = _current_release_view(db, project)
@@ -1864,7 +1843,7 @@ def autonomy_stats(ontology_id: str, release_id: Optional[str] = None,
                 item.get("requiresApproval", item.get("requires_approval", False))),
         ) for item in release.snapshot["actions"] if item.get("id")]
         logs_query = logs_query.filter(
-            ActionExecutionLog.ontology_version == release.version)
+            ActionExecutionLog.ontology_release_id == release.id)
         try:
             sentinels = []
             for item in release.snapshot["sentinels"]:

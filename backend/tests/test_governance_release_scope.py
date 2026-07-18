@@ -88,13 +88,17 @@ def _seed_release_and_drift(db, ontology: dict) -> str:
             object_type_id=object_type.id, object_instance_id=instance.id,
             parameters={}, status="pending", dry_run=False,
             ontology_version="v0",
+            ontology_release_id=release_id,
         ),
         ActionExecutionLog(
             id="pending-old", ontology_id=ontology_id,
             action_id="action-published", action_name="旧版动作",
             object_type_id=object_type.id, object_instance_id=instance.id,
             parameters={}, status="pending", dry_run=False,
-            ontology_version="v-old",
+            # Reused version label simulates rollback/re-release (ABA).  The
+            # immutable release id must still keep this historical row out.
+            ontology_version="v0",
+            ontology_release_id="release-old-same-version",
         ),
         ActionExecutionLog(
             id="pending-draft-action", ontology_id=ontology_id,
@@ -102,33 +106,39 @@ def _seed_release_and_drift(db, ontology: dict) -> str:
             object_type_id=object_type.id, object_instance_id=instance.id,
             parameters={}, status="pending", dry_run=False,
             ontology_version="v0",
+            ontology_release_id=release_id,
         ),
         PropertyFact(
             id="fact-current", ontology_id=ontology_id,
             instance_id=instance.id, object_type_id=object_type.id,
             property_name="status", value={"v": "current"},
             kind="property", source="test", ontology_version="v0",
+            ontology_release_id=release_id,
         ),
         PropertyFact(
             id="fact-old", ontology_id=ontology_id,
             instance_id=instance.id, object_type_id=object_type.id,
             property_name="status", value={"v": "old"},
-            kind="property", source="test", ontology_version="v-old",
+            kind="property", source="test", ontology_version="v0",
+            ontology_release_id="release-old-same-version",
         ),
         SentinelFiring(
             id="firing-current", ontology_id=ontology_id,
             sentinel_id="sentinel-published", sentinel_name="草稿哨兵名",
             trigger_source="manual", status="fired", ontology_version="v0",
+            ontology_release_id=release_id,
         ),
         SentinelFiring(
             id="firing-old", ontology_id=ontology_id,
             sentinel_id="sentinel-published", sentinel_name="旧版哨兵",
-            trigger_source="manual", status="fired", ontology_version="v-old",
+            trigger_source="manual", status="fired", ontology_version="v0",
+            ontology_release_id="release-old-same-version",
         ),
         SentinelFiring(
             id="firing-draft", ontology_id=ontology_id,
             sentinel_id="sentinel-draft-only", sentinel_name="未发布哨兵",
             trigger_source="manual", status="fired", ontology_version="v0",
+            ontology_release_id=release_id,
         ),
     ])
     db.commit()
@@ -153,6 +163,7 @@ def test_governance_reads_only_current_release_snapshot(
     assert pending[0]["objectTypeName"] == "发布订单"
     assert pending[0]["objectInstanceLabel"] == "发布订单 · SO-1"
     assert pending[0]["ontologyVersion"] == "v0"
+    assert pending[0]["ontologyReleaseId"] == release_id
 
     autonomy_response = client.get(
         f"/api/v2/formal/ontologies/{ontology_id}/autonomy?{release_query}",
@@ -191,6 +202,7 @@ def test_governance_reads_only_current_release_snapshot(
     assert [item["id"] for item in firings] == ["firing-current"]
     assert firings[0]["sentinelName"] == "发布哨兵"
     assert firings[0]["ontologyVersion"] == "v0"
+    assert firings[0]["ontologyReleaseId"] == release_id
 
     facts_response = client.get(
         f"/api/v2/formal/ontologies/{ontology_id}/facts/recent?{release_query}",
@@ -201,6 +213,7 @@ def test_governance_reads_only_current_release_snapshot(
     assert [item["id"] for item in facts] == ["fact-current"]
     assert facts[0]["subjectLabel"] == "发布订单·SO-1"
     assert facts[0]["ontologyVersion"] == "v0"
+    assert facts[0]["ontologyReleaseId"] == release_id
 
 
 def test_governance_rejects_changed_or_cross_release_context(
@@ -241,3 +254,4 @@ def test_new_runtime_facts_inherit_current_release(ontology, db):
 
     assert len(facts) == 1
     assert facts[0].ontology_version == "v0"
+    assert facts[0].ontology_release_id == ontology["current_release_id"]

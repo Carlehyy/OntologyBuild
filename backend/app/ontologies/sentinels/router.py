@@ -204,7 +204,7 @@ def list_firings(ontology_id: str, sentinel_id: Optional[str] = None, limit: int
         if not sentinel_ids:
             return {"data": []}
         q = q.filter(
-            SentinelFiring.ontology_version == release.version,
+            SentinelFiring.ontology_release_id == release.id,
             SentinelFiring.sentinel_id.in_(sentinel_ids),
         )
     if sentinel_id:
@@ -219,6 +219,7 @@ def list_firings(ontology_id: str, sentinel_id: Optional[str] = None, limit: int
         "actionResults": f.action_results or [], "error": f.error,
         "durationMs": f.duration_ms,
         "ontologyVersion": f.ontology_version,
+        "ontologyReleaseId": f.ontology_release_id,
         "createdAt": f.created_at.isoformat() if f.created_at else None,
     } for f in items]}
 

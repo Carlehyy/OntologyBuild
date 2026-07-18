@@ -18,12 +18,35 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from .models import PropertyFact
-from app.ontologies.release_context import runtime_release_version
+from app.ontologies.release_context import (
+    runtime_release_identity,
+    runtime_release_version,
+)
 
 
 def _wrap(v: Any) -> dict:
     """JSON 列统一包一层 {"v": ...}，标量/None/嵌套结构都能存。"""
     return {"v": v}
+
+
+def _runtime_lineage(
+    db: Session,
+    ontology_id: str,
+    ontology_version: Optional[str],
+    ontology_release_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve lineage without attributing explicit legacy versions by guess.
+
+    Callers forwarding lineage from another record must pass both fields.  If
+    they only provide a version, the release id intentionally remains NULL:
+    version labels are mutable/reusable and are not an immutable identity.
+    """
+    if ontology_version is not None:
+        return ontology_version, ontology_release_id
+    identity = runtime_release_identity(db, ontology_id)
+    if identity is not None:
+        return identity.version, ontology_release_id or identity.id
+    return runtime_release_version(db, ontology_id), ontology_release_id
 
 
 def fact_order_clause():
@@ -47,6 +70,7 @@ def record_property_facts(
     derived_from: Optional[list[str]] = None,
     confidence: Optional[float] = None,
     ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
 ) -> list[PropertyFact]:
     """对比新旧属性，把发生变化的属性逐条追加为事实。返回新追加的事实列表。
 
@@ -60,7 +84,8 @@ def record_property_facts(
                    if k not in old_props or old_props.get(k) != v]
     if not changed:
         return []
-    release_version = ontology_version or runtime_release_version(db, ontology_id)
+    release_version, release_id = _runtime_lineage(
+        db, ontology_id, ontology_version, ontology_release_id)
 
     # 每个变更属性当前最新的事实 —— 作为 supersedes 指针与 seq 基准
     changed_keys = [k for k, _ in changed]
@@ -91,6 +116,7 @@ def record_property_facts(
             derived_from=list(derived_from) if derived_from else None,
             confidence=confidence,
             ontology_version=release_version,
+            ontology_release_id=release_id,
             seq=(prev.seq or 0) + 1 if prev is not None else 1,
         )
         db.add(fact)
@@ -121,12 +147,15 @@ def record_link_fact(
     actor_id: Optional[str] = None,
     caused_by: Optional[str] = None,
     ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """链接存在性事实（kind='link'）。建链 exists=True，删链 exists=False 并
     supersede 建链事实——关系变化从此可时态回放。同值幂等（不重复追加）。"""
     prev = _latest_fact(db, ontology_id, link_instance_id, "exists")
     if prev is not None and (prev.value or {}).get("v") == exists:
         return None  # 幂等：状态没变不追加
+    release_version, release_id = _runtime_lineage(
+        db, ontology_id, ontology_version, ontology_release_id)
     fact = PropertyFact(
         ontology_id=ontology_id,
         instance_id=link_instance_id,
@@ -137,7 +166,8 @@ def record_link_fact(
         source=source,
         actor_id=actor_id,
         caused_by=caused_by,
-        ontology_version=(ontology_version or runtime_release_version(db, ontology_id)),
+        ontology_version=release_version,
+        ontology_release_id=release_id,
         supersedes_id=prev.id if prev is not None else None,
         seq=(prev.seq or 0) + 1 if prev is not None else 1,
     )
@@ -156,12 +186,15 @@ def record_object_tombstone(
     actor_id: Optional[str] = None,
     caused_by: Optional[str] = None,
     ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """实例删除墓碑（kind='object'，exists=False）。投影硬删后，
     事实流仍能回答"它存在过、何时被谁删除"。幂等。"""
     prev = _latest_fact(db, ontology_id, instance_id, "exists")
     if prev is not None and (prev.value or {}).get("v") is False:
         return None
+    release_version, release_id = _runtime_lineage(
+        db, ontology_id, ontology_version, ontology_release_id)
     fact = PropertyFact(
         ontology_id=ontology_id,
         instance_id=instance_id,
@@ -172,7 +205,8 @@ def record_object_tombstone(
         source=source,
         actor_id=actor_id,
         caused_by=caused_by,
-        ontology_version=(ontology_version or runtime_release_version(db, ontology_id)),
+        ontology_version=release_version,
+        ontology_release_id=release_id,
         supersedes_id=prev.id if prev is not None else None,
         seq=(prev.seq or 0) + 1 if prev is not None else 1,
     )
@@ -191,6 +225,7 @@ def record_absence_fact(
     source: str,
     detail: Optional[dict] = None,
     ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """缺席事实（kind='absence'）：连"没有"也要溯源。
 
@@ -212,6 +247,8 @@ def record_absence_fact(
     payload: dict = {"empty": empty, "scanned": scanned}
     if detail:
         payload.update(detail)
+    release_version, release_id = _runtime_lineage(
+        db, ontology_id, ontology_version, ontology_release_id)
     fact = PropertyFact(
         ontology_id=ontology_id,
         instance_id=subject_id,
@@ -220,7 +257,8 @@ def record_absence_fact(
         value=_wrap(payload),
         kind="absence",
         source=source,
-        ontology_version=(ontology_version or runtime_release_version(db, ontology_id)),
+        ontology_version=release_version,
+        ontology_release_id=release_id,
         supersedes_id=prev.id if prev is not None else None,
         seq=(prev.seq or 0) + 1 if prev is not None else 1,
     )
@@ -239,10 +277,13 @@ def record_decision_fact(
     actor_id: Optional[str],
     reason: Optional[str] = None,
     ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
 ) -> PropertyFact:
     """HITL 决策事实（kind='decision'）：批准与拒绝都要记录、都可回放。
     subject=动作执行日志，predicate=decision，value=APPROVED/REJECTED。"""
     prev = _latest_fact(db, ontology_id, action_log_id, "decision")
+    release_version, release_id = _runtime_lineage(
+        db, ontology_id, ontology_version, ontology_release_id)
     fact = PropertyFact(
         ontology_id=ontology_id,
         instance_id=action_log_id,
@@ -252,7 +293,8 @@ def record_decision_fact(
         kind="decision",
         source=source,
         actor_id=actor_id,
-        ontology_version=(ontology_version or runtime_release_version(db, ontology_id)),
+        ontology_version=release_version,
+        ontology_release_id=release_id,
         supersedes_id=prev.id if prev is not None else None,
         seq=(prev.seq or 0) + 1 if prev is not None else 1,
     )

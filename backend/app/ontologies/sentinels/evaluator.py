@@ -31,7 +31,10 @@ from app.models.ontology_formal import ActionType, ObjectInstance, LinkInstance
 from app.models.sentinel import Sentinel, SentinelFiring, SentinelMatchState
 from app.services.formal.action_engine import execute_action
 from app.services.formal.safe_eval import safe_eval, SafeEvalError
-from app.ontologies.release_context import runtime_release_version
+from app.ontologies.release_context import (
+    runtime_release_identity,
+    runtime_release_version,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -565,6 +568,7 @@ def resume_sentinel_match_claim(db: Session, ontology_id: str,
             firing_status = "skipped"
         else:
             firing_status = "fired"
+        release_identity = runtime_release_identity(db, ontology_id)
         firing = SentinelFiring(
             ontology_id=ontology_id, sentinel_id=sentinel.id,
             sentinel_name=sentinel.display_name, trigger_source="approval",
@@ -577,7 +581,13 @@ def resume_sentinel_match_claim(db: Session, ontology_id: str,
                 if item.get("status") == "failed" and item.get("errorMessage")
             ) or None,
             duration_ms=0,
-            ontology_version=runtime_release_version(db, ontology_id),
+            ontology_version=(
+                release_identity.version if release_identity is not None
+                else runtime_release_version(db, ontology_id)
+            ),
+            ontology_release_id=(
+                release_identity.id if release_identity is not None else None
+            ),
         )
         db.add(firing)
         db.commit()
@@ -597,11 +607,17 @@ def evaluate_sentinel(db: Session, ontology_id: str, sentinel: Sentinel,
     整体异常防护：单个哨兵怎么坏（配置损坏/表达式炸/动作抛错）都不能让
     手动触发 500、扫描 tick 崩溃或 CDC 线程静默吞错——统一落 status=error 日志。"""
     start = time.time()
-    release_version = runtime_release_version(db, ontology_id)
+    release_identity = runtime_release_identity(db, ontology_id)
+    release_version = (
+        release_identity.version if release_identity is not None
+        else runtime_release_version(db, ontology_id)
+    )
+    release_id = release_identity.id if release_identity is not None else None
     try:
         with _sentinel_execution_lock(db, sentinel.id):
             return _evaluate_inner(
-                db, ontology_id, sentinel, source, start, release_version)
+                db, ontology_id, sentinel, source, start,
+                release_version, release_id)
     except Exception as e:  # noqa: BLE001
         db.rollback()
         firing = SentinelFiring(
@@ -610,14 +626,16 @@ def evaluate_sentinel(db: Session, ontology_id: str, sentinel: Sentinel,
             matches=[], match_count=0, entered=[], left=[],
             action_results=[], status="error", error=str(e),
             duration_ms=int((time.time() - start) * 1000),
-            ontology_version=release_version)
+            ontology_version=release_version,
+            ontology_release_id=release_id)
         db.add(firing); db.commit(); db.refresh(firing)
         return firing
 
 
 def _evaluate_inner(db: Session, ontology_id: str, sentinel: Sentinel,
                     source: str, start: float,
-                    release_version: str | None) -> SentinelFiring:
+                    release_version: str | None,
+                    release_id: str | None) -> SentinelFiring:
     primary = sentinel.primary_alias or (sentinel.bindings[0]["alias"]
                                          if sentinel.bindings else None)
     mode = sentinel.trigger_mode or "on_enter"
@@ -725,7 +743,8 @@ def _evaluate_inner(db: Session, ontology_id: str, sentinel: Sentinel,
                 source=f"sentinel://{sentinel.name or sentinel.id}@{source}",
                 detail={"condition": sentinel.condition or "",
                         "sentinelName": sentinel.display_name},
-                ontology_version=release_version)
+                ontology_version=release_version,
+                ontology_release_id=release_id)
             nested.commit()
         except Exception:  # noqa: BLE001 — 取证失败不能影响评估主流程
             if nested is not None and nested.is_active:
@@ -765,6 +784,7 @@ def _evaluate_inner(db: Session, ontology_id: str, sentinel: Sentinel,
               if r.get("status") == "failed" and r.get("errorMessage")],
         ]) or None),
         duration_ms=int((time.time() - start) * 1000),
-        ontology_version=release_version)
+        ontology_version=release_version,
+        ontology_release_id=release_id)
     db.add(firing); db.commit(); db.refresh(firing)
     return firing
