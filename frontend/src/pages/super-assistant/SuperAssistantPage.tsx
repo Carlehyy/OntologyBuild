@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Bot, Check, ChevronRight, CircleAlert, FileCode2, FileText, Folder,
-  Loader2, Menu, MessageSquare, PanelRight, Pencil, PlugZap, Plus,
+  History, Loader2, MessageSquare, Pencil, PlugZap, Plus,
   Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
   Wrench, X,
 } from 'lucide-react'
@@ -19,6 +19,7 @@ import {
   type ToolStep,
 } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
+import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import type { ModelConfig } from '@/types/ontology'
 
 
@@ -28,26 +29,14 @@ const errorText = (error: any, fallback = '操作失败') =>
 
 function EmptyState() {
   return (
-    <div className="mx-auto flex max-w-xl flex-1 flex-col items-center justify-center px-6 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-100">
-        <Bot size={27} strokeWidth={1.8} />
+    <div className="absolute inset-x-0 bottom-full mb-8 flex flex-col items-center px-4 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-100">
+        <Bot size={23} strokeWidth={1.8} />
       </div>
-      <h1 className="mt-5 text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">超级助手</h1>
-      <p className="mt-2 max-w-md text-sm leading-6 text-[var(--color-text-secondary)]">
-        独立于本体业务的通用助手。它会按需读取你的目录型 Skill，并在获得确认后调用已连接的 MCP 工具。
+      <h1 className="mt-4 text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">有什么可以帮你？</h1>
+      <p className="mt-2 max-w-lg text-sm leading-6 text-[var(--color-text-secondary)]">
+        直接描述任务；超级助手会按需读取 Skill，并在调用外部 MCP 工具前请求确认。
       </p>
-      <div className="mt-6 grid w-full grid-cols-1 gap-2 text-left sm:grid-cols-3">
-        {[
-          ['目录型 Skill', 'SKILL.md + scripts / references / assets'],
-          ['外部 MCP', 'Streamable HTTP，工具清单按连接发现'],
-          ['执行确认', '外部工具默认先展示参数再执行'],
-        ].map(([title, description]) => (
-          <div key={title} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3">
-            <p className="text-xs font-medium text-[var(--color-text-primary)]">{title}</p>
-            <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">{description}</p>
-          </div>
-        ))}
-      </div>
     </div>
   )
 }
@@ -157,56 +146,6 @@ function ConfirmationCard({ pending, busy, onDecision }: {
 }
 
 
-function ConversationSidebar({ conversations, selectedId, open, onClose, onCreate, onSelect, onDelete }: {
-  conversations: SuperConversation[]
-  selectedId: string | null
-  open: boolean
-  onClose: () => void
-  onCreate: () => void
-  onSelect: (id: string) => void
-  onDelete: (conversation: SuperConversation) => void
-}) {
-  return (
-    <>
-      {open && <button aria-label="关闭会话列表" className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={onClose} />}
-      <aside className={`${open ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-transform lg:static lg:z-auto lg:w-64 lg:translate-x-0`}>
-        <div className="flex h-14 items-center justify-between border-b border-[var(--color-border)] px-3">
-          <p className="text-sm font-semibold text-[var(--color-text-primary)]">会话</p>
-          <div className="flex gap-1">
-            <button type="button" onClick={onCreate} aria-label="新建会话" title="新建会话"
-              className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
-              <Plus size={17} />
-            </button>
-            <button type="button" onClick={onClose} aria-label="关闭会话列表"
-              className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] lg:hidden"><X size={17} /></button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {conversations.length === 0 ? (
-            <div className="px-3 py-10 text-center">
-              <MessageSquare size={22} className="mx-auto text-[var(--color-text-tertiary)]" />
-              <p className="mt-2 text-xs text-[var(--color-text-tertiary)]">发送第一条消息后创建会话</p>
-            </div>
-          ) : conversations.map(conversation => (
-            <div key={conversation.id} className={`group mb-1 flex items-center rounded-lg ${selectedId === conversation.id ? 'bg-teal-50 text-teal-900' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}>
-              <button type="button" onClick={() => { onSelect(conversation.id); onClose() }}
-                className="min-w-0 flex-1 px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
-                <p className="truncate text-xs font-medium">{conversation.title}</p>
-                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">{new Date(conversation.updated_at).toLocaleString()}</p>
-              </button>
-              <button type="button" onClick={() => onDelete(conversation)} aria-label={`删除会话 ${conversation.title}`}
-                className="mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md opacity-0 transition-all hover:bg-red-50 hover:text-red-600 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 group-hover:opacity-100">
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
-        </div>
-      </aside>
-    </>
-  )
-}
-
-
 function DialogShell({ title, description, wide = false, onClose, children }: {
   title: string
   description?: string
@@ -214,14 +153,15 @@ function DialogShell({ title, description, wide = false, onClose, children }: {
   onClose: () => void
   children: React.ReactNode
 }) {
+  const titleId = useId()
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={onClose}>
-      <section role="dialog" aria-modal="true" aria-labelledby="sa-dialog-title"
+      <section role="dialog" aria-modal="true" aria-labelledby={titleId}
         onMouseDown={event => event.stopPropagation()}
         className={`flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl ${wide ? 'max-w-5xl' : 'max-w-xl'}`}>
         <header className="flex items-start justify-between border-b border-[var(--color-border)] px-5 py-4">
           <div>
-            <h2 id="sa-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h2>
+            <h2 id={titleId} className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h2>
             {description && <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{description}</p>}
           </div>
           <button type="button" onClick={onClose} aria-label="关闭"
@@ -479,8 +419,7 @@ function McpDialog({ server, onClose, onSaved }: {
 }
 
 
-function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, refreshServers }: {
-  open: boolean
+function ConfigurationDialog({ onClose, skills, servers, refreshSkills, refreshServers }: {
   onClose: () => void
   skills: SuperSkill[]
   servers: SuperMcpServer[]
@@ -534,29 +473,34 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
 
   return (
     <>
-      {open && <button aria-label="关闭配置" className="fixed inset-0 z-30 bg-black/30 xl:hidden" onClick={onClose} />}
-      <aside className={`${open ? 'translate-x-0' : 'translate-x-full xl:hidden'} fixed inset-y-0 right-0 z-40 flex w-[min(390px,94vw)] flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-transform xl:static xl:z-auto xl:w-[360px]`}>
-        <div className="flex h-14 items-center justify-between border-b border-[var(--color-border)] px-4">
-          <div className="flex items-center gap-2"><Settings2 size={16} className="text-teal-700" /><span className="text-sm font-semibold text-[var(--color-text-primary)]">助手配置</span></div>
-          <button onClick={onClose} aria-label="关闭配置" className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><X size={17} /></button>
+      <DialogShell
+        wide
+        title="助手配置"
+        description="管理目录型 Skill 与 MCP Server；配置仅作用于超级助手。"
+        onClose={onClose}
+      >
+        <div className="grid grid-cols-2 border-b border-[var(--color-border)] bg-[var(--color-bg-base)] p-1.5 sm:mx-5 sm:mt-3 sm:rounded-xl sm:border">
+          <button type="button" onClick={() => setTab('skills')} className={`min-h-10 rounded-lg text-xs font-medium transition-colors ${tab === 'skills' ? 'bg-white text-teal-800 shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}>Skills <span className="ml-1 text-[10px] tabular-nums">{skills.length}</span></button>
+          <button type="button" onClick={() => setTab('mcp')} className={`min-h-10 rounded-lg text-xs font-medium transition-colors ${tab === 'mcp' ? 'bg-white text-teal-800 shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}>MCP <span className="ml-1 text-[10px] tabular-nums">{servers.length}</span></button>
         </div>
-        <div className="grid grid-cols-2 border-b border-[var(--color-border)] p-1.5">
-          <button onClick={() => setTab('skills')} className={`min-h-10 rounded-lg text-xs font-medium ${tab === 'skills' ? 'bg-teal-50 text-teal-800' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}>Skills <span className="ml-1 text-[10px]">{skills.length}</span></button>
-          <button onClick={() => setTab('mcp')} className={`min-h-10 rounded-lg text-xs font-medium ${tab === 'mcp' ? 'bg-teal-50 text-teal-800' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}>MCP <span className="ml-1 text-[10px]">{servers.length}</span></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
           {tab === 'skills' ? (
             <>
-              <div className="mb-3 flex gap-2">
-                <button onClick={() => setCreatingSkill(true)} className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3 text-xs font-medium text-white hover:bg-teal-800"><Plus size={13} /> 新建</button>
-                <button onClick={() => uploadRef.current?.click()} className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"><Upload size={13} /> 导入 ZIP</button>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-[var(--color-text-primary)]">目录型 Skills</p>
+                  <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">ZIP 根目录或唯一外层目录必须包含 SKILL.md，可继续维护 scripts、references 与 assets。</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button type="button" onClick={() => setCreatingSkill(true)} className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 active:scale-[0.98]"><Plus size={13} /> 新建</button>
+                  <button type="button" onClick={() => uploadRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] px-4 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] active:scale-[0.98]"><Upload size={13} /> 导入 ZIP</button>
+                </div>
                 <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
               </div>
-              <p className="mb-3 text-[10px] leading-4 text-[var(--color-text-tertiary)]">Skill 是完整目录；ZIP 根目录或唯一外层目录必须包含 SKILL.md。</p>
-              <div className="space-y-2">
-                {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-6 text-center text-xs text-[var(--color-text-tertiary)]"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)] sm:col-span-2"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
                 {skills.map(skill => (
-                  <div key={skill.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3">
+                  <article key={skill.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 transition-colors hover:border-teal-200">
                     <div className="flex items-start gap-2">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Folder size={16} /></div>
                       <div className="min-w-0 flex-1">
@@ -567,21 +511,26 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                     </div>
                     <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
                     <div className="mt-2 flex justify-end gap-1">
-                      <button onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
-                      <button onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.display_name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                      <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
+                      <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.display_name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                     </div>
-                  </div>
+                  </article>
                 ))}
               </div>
             </>
           ) : (
             <>
-              <button onClick={() => setEditingMcp('new')} className="mb-3 inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3 text-xs font-medium text-white hover:bg-teal-800"><Plus size={13} /> 添加 MCP Server</button>
-              <p className="mb-3 text-[10px] leading-4 text-[var(--color-text-tertiary)]">保存后执行连接测试，成功发现的工具才会进入助手工具目录。</p>
-              <div className="space-y-2">
-                {servers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-6 text-center text-xs text-[var(--color-text-tertiary)]"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-[var(--color-text-primary)]">MCP Servers</p>
+                  <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">保存后测试连接；只有测试成功并发现的工具才会进入助手工具目录。</p>
+                </div>
+                <button type="button" onClick={() => setEditingMcp('new')} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 active:scale-[0.98]"><Plus size={13} /> 添加 MCP Server</button>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {servers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)] sm:col-span-2"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
                 {servers.map(server => (
-                  <div key={server.id} className="rounded-xl border border-[var(--color-border)] p-3">
+                  <article key={server.id} className="rounded-xl border border-[var(--color-border)] p-4 transition-colors hover:border-teal-200">
                     <div className="flex items-start gap-2">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><PlugZap size={16} /></div>
                       <div className="min-w-0 flex-1">
@@ -596,17 +545,17 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                     </div>
                     {server.last_test_message && <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]">{server.last_test_message}</p>}
                     <div className="mt-2 flex justify-end gap-1">
-                      <button onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
-                      <button onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>
-                      <button onClick={() => void removeServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                      <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
+                      <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>
+                      <button type="button" onClick={() => void removeServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                     </div>
-                  </div>
+                  </article>
                 ))}
               </div>
             </>
           )}
         </div>
-      </aside>
+      </DialogShell>
       {creatingSkill && <SkillCreateDialog onClose={() => setCreatingSkill(false)} onSaved={refreshSkills} />}
       {editingSkill && <SkillEditor skill={editingSkill} onClose={() => setEditingSkill(null)} onSaved={refreshSkills} />}
       {editingMcp && <McpDialog server={editingMcp === 'new' ? undefined : editingMcp} onClose={() => setEditingMcp(null)} onSaved={refreshServers} />}
@@ -629,9 +578,7 @@ export default function SuperAssistantPage() {
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [sessionsOpen, setSessionsOpen] = useState(false)
-  const [configOpen, setConfigOpen] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
-  )
+  const [configOpen, setConfigOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -776,32 +723,114 @@ export default function SuperAssistantPage() {
 
   const canSend = input.trim().length > 0 && !running && models.length > 0
   const placeholder = models.length ? '输入消息；Shift + Enter 换行' : '请先到“模型配置”启用一个文本 LLM'
+  const hasMessages = messages.length > 0
+
+  const renderComposer = (prominent = false) => (
+    <div className="w-full">
+      <div className={`flex items-end gap-2 rounded-2xl border bg-[var(--color-bg-elevated)] p-2 transition-all focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${prominent
+        ? 'border-slate-200 shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
+        : 'border-[var(--color-border)] shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}>
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={event => setInput(event.target.value)}
+          rows={1}
+          aria-label="向超级助手发送消息"
+          placeholder={placeholder}
+          disabled={running || models.length === 0}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              if (canSend) void send()
+            }
+          }}
+          className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-60"
+        />
+        {running ? (
+          <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+            {stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}
+          </button>
+        ) : (
+          <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40">
+            <Send size={16} />
+          </button>
+        )}
+      </div>
+      <p className="mt-2 text-center text-[10px] text-[var(--color-text-tertiary)]">超级助手可能出错；重要结果请核验。外部 MCP 工具默认需要你的确认。</p>
+    </div>
+  )
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden bg-[var(--color-bg-base)]">
-      <ConversationSidebar conversations={conversations} selectedId={selectedId} open={sessionsOpen} onClose={() => setSessionsOpen(false)} onCreate={() => void createConversation()} onSelect={setSelectedId} onDelete={conversation => void deleteConversation(conversation)} />
-
       <section className="flex min-w-0 flex-1 flex-col bg-[var(--color-bg-elevated)]">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
-          <button onClick={() => setSessionsOpen(true)} aria-label="打开会话列表" className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] lg:hidden"><Menu size={18} /></button>
+        <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{selectedConversation?.title || '新的超级助手会话'}</p>
             <p className="mt-0.5 hidden text-[10px] text-[var(--color-text-tertiary)] sm:block">独立助手 · Skill 渐进披露 · MCP 工具确认</p>
           </div>
           <label className="sr-only" htmlFor="super-assistant-model">会话模型</label>
           <select id="super-assistant-model" value={selectedModelId} onChange={event => void changeModel(event.target.value)} disabled={!selectedId || running}
-            className="h-10 max-w-48 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs text-[var(--color-text-secondary)] outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60">
+            className="h-9 w-32 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60 sm:w-48">
             {models.length === 0 && <option value="">无可用模型</option>}
             {models.map(model => <option key={model.id} value={model.id}>{model.name} · {model.models?.[0]}</option>)}
           </select>
-          <button onClick={() => setConfigOpen(value => !value)} aria-label="打开助手配置" title="助手配置"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><PanelRight size={18} /></button>
+          <button
+            type="button"
+            onClick={() => { setSessionsOpen(false); setConfigOpen(true) }}
+            aria-label="打开助手配置"
+            title="助手配置"
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${configOpen
+              ? 'border-teal-300 bg-teal-50 text-teal-700'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+          >
+            <Settings2 size={15} />
+          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => { setConfigOpen(false); setSessionsOpen(value => !value) }}
+              aria-label="查看会话记录"
+              aria-expanded={sessionsOpen}
+              title="查看会话记录"
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${sessionsOpen
+                ? 'border-teal-300 bg-teal-50 text-teal-700'
+                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+            >
+              <History size={15} />
+            </button>
+            <SessionHistoryPopover
+              open={sessionsOpen}
+              items={conversations.map(conversation => ({ ...conversation, updatedAt: conversation.updated_at }))}
+              currentId={selectedId}
+              onClose={() => setSessionsOpen(false)}
+              onCreate={async () => {
+                const created = await createConversation()
+                if (created) setSessionsOpen(false)
+              }}
+              onSelect={id => { setSelectedId(id); setSessionsOpen(false) }}
+              onDelete={id => {
+                const conversation = conversations.find(item => item.id === id)
+                if (conversation) return deleteConversation(conversation)
+              }}
+              renderItemIcon={() => <MessageSquare size={16} />}
+              emptyDescription="新建会话后，可随时回到之前的任务、Skill 调用与 MCP 执行记录。"
+            />
+          </div>
         </header>
 
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <main className={`flex min-h-0 flex-1 flex-col ${hasMessages ? 'overflow-y-auto' : 'overflow-hidden'}`}>
           {loading ? (
             <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-teal-600" /></div>
-          ) : messages.length === 0 ? <EmptyState /> : (
+          ) : !hasMessages ? (
+            <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
+              <div className="relative w-full max-w-3xl translate-y-3">
+                <EmptyState />
+                {renderComposer(true)}
+              </div>
+            </div>
+          ) : (
             <div className="mx-auto w-full max-w-4xl space-y-7 px-4 py-6 sm:px-8">
               {messages.map(message => <ChatMessage key={message.id} message={message} />)}
               {pending && <ConfirmationCard pending={pending} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
@@ -810,28 +839,24 @@ export default function SuperAssistantPage() {
           )}
         </main>
 
-        <footer className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 sm:p-4">
-          <div className="mx-auto max-w-4xl">
-            <div className="flex items-end gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-2 shadow-sm focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100">
-              <textarea ref={textareaRef} value={input} onChange={event => setInput(event.target.value)} rows={1} placeholder={placeholder} disabled={running || models.length === 0}
-                onKeyDown={event => {
-                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (canSend) void send() }
-                }}
-                className="max-h-40 min-h-10 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-60" />
-              {running ? (
-                <button onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-text-primary)] text-white hover:opacity-90 disabled:opacity-50">{stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}</button>
-              ) : (
-                <button onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"><Send size={16} /></button>
-              )}
+        {hasMessages && (
+          <footer className="shrink-0 bg-[var(--color-bg-elevated)] px-4 pb-5 pt-2 sm:px-8 sm:pb-6">
+            <div className="mx-auto max-w-4xl">
+              {renderComposer()}
             </div>
-            <p className="mt-1.5 text-center text-[10px] text-[var(--color-text-tertiary)]">超级助手可能出错；重要结果请核验。外部 MCP 工具默认需要你的确认。</p>
-          </div>
-        </footer>
+          </footer>
+        )}
       </section>
 
-      <ConfigurationPanel open={configOpen} onClose={() => setConfigOpen(false)} skills={skills} servers={servers} refreshSkills={refreshSkills} refreshServers={refreshServers} />
+      {configOpen && (
+        <ConfigurationDialog
+          onClose={() => setConfigOpen(false)}
+          skills={skills}
+          servers={servers}
+          refreshSkills={refreshSkills}
+          refreshServers={refreshServers}
+        />
+      )}
     </div>
   )
 }
