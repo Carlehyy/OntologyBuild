@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Bot, Check, ChevronRight, CircleAlert, FileCode2, FileText, Folder,
-  History, Loader2, MessageSquare, Pencil, PlugZap, Plus,
+  Bot, Check, ChevronRight, CircleAlert, FileCode2, FileText, Folder, Gauge,
+  History, List, Loader2, MessageSquare, Pencil, PlugZap, Plus,
   Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
   Wrench, X,
 } from 'lucide-react'
@@ -34,9 +34,6 @@ function EmptyState() {
         <Bot size={23} strokeWidth={1.8} />
       </div>
       <h1 className="mt-4 text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">有什么可以帮你？</h1>
-      <p className="mt-2 max-w-lg text-sm leading-6 text-[var(--color-text-secondary)]">
-        直接描述任务；超级助手会按需读取 Skill，并在调用外部 MCP 工具前请求确认。
-      </p>
     </div>
   )
 }
@@ -71,7 +68,10 @@ function ToolSteps({ steps }: { steps: ToolStep[] }) {
 function ChatMessage({ message }: { message: SuperMessage }) {
   const assistant = message.role === 'assistant'
   return (
-    <article className={`flex gap-3 ${assistant ? '' : 'justify-end'}`}>
+    <article
+      id={assistant ? undefined : `super-assistant-msg-${message.id}`}
+      className={`flex scroll-mt-6 gap-3 ${assistant ? '' : 'justify-end'}`}
+    >
       {assistant && (
         <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">
           <Bot size={16} />
@@ -101,6 +101,59 @@ function ChatMessage({ message }: { message: SuperMessage }) {
         </div>
       )}
     </article>
+  )
+}
+
+
+const usageNumber = (value: unknown) => {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : 0
+}
+
+const formatTokenCount = (value: number) => value >= 1000
+  ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
+  : String(Math.round(value))
+
+function ContextUsage({ messages, model }: { messages: SuperMessage[]; model?: ModelConfig }) {
+  const lastAssistant = [...messages].reverse().find(message => (
+    message.role === 'assistant' && message.status === 'complete' && Object.keys(message.token_usage || {}).length > 0
+  ))
+  const usage = lastAssistant?.token_usage || {}
+  const configuredLimit = usageNumber(model?.options?.max_context_tokens)
+  const limit = usageNumber(usage.contextLimit) || configuredLimit || 64_000
+  const hasSnapshot = usageNumber(usage.contextTokens) > 0
+  const used = hasSnapshot ? usageNumber(usage.contextTokens) : usageNumber(usage.inputTokens)
+  const percentage = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0
+  const tone = percentage >= 85
+    ? 'bg-rose-500'
+    : percentage >= 65
+      ? 'bg-amber-500'
+      : 'bg-teal-600'
+
+  return (
+    <aside
+      aria-label={`当前上下文占比 ${percentage}%`}
+      className="absolute bottom-3 right-3 z-10 w-48 rounded-xl border border-[var(--color-border)] bg-[color:var(--color-bg-elevated)]/95 p-3 shadow-[0_14px_34px_rgba(15,23,42,0.12)] backdrop-blur"
+    >
+      <div className="flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+          <Gauge size={14} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-medium text-[var(--color-text-tertiary)]">当前上下文</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-[var(--color-text-primary)]">{percentage}%</p>
+        </div>
+        <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+          {formatTokenCount(used)} / {formatTokenCount(limit)}
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
+        <div className={`h-full rounded-full transition-[width] duration-300 ${tone}`} style={{ width: `${percentage}%` }} />
+      </div>
+      <p className="mt-2 text-[9px] leading-4 text-[var(--color-text-tertiary)]">
+        {hasSnapshot ? '最近一次模型输入' : used ? '历史会话按累计输入估算' : '发送消息后更新'}
+      </p>
+    </aside>
   )
 }
 
@@ -419,7 +472,7 @@ function McpDialog({ server, onClose, onSaved }: {
 }
 
 
-function ConfigurationDialog({ onClose, skills, servers, refreshSkills, refreshServers }: {
+function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshServers }: {
   onClose: () => void
   skills: SuperSkill[]
   servers: SuperMcpServer[]
@@ -473,17 +526,23 @@ function ConfigurationDialog({ onClose, skills, servers, refreshSkills, refreshS
 
   return (
     <>
-      <DialogShell
-        wide
-        title="助手配置"
-        description="管理目录型 Skill 与 MCP Server；配置仅作用于超级助手。"
-        onClose={onClose}
-      >
-        <div className="grid grid-cols-2 border-b border-[var(--color-border)] bg-[var(--color-bg-base)] p-1.5 sm:mx-5 sm:mt-3 sm:rounded-xl sm:border">
+      <aside className="absolute inset-y-0 right-0 z-30 flex w-[min(26rem,calc(100%-0.5rem))] shrink-0 p-2 lg:relative lg:inset-auto lg:z-auto lg:w-[26rem] lg:pl-0">
+        <section aria-label="助手配置" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_44px_rgba(15,23,42,0.12)] lg:shadow-[0_8px_30px_rgba(15,23,42,0.07)]">
+          <header className="flex shrink-0 items-start justify-between border-b border-[var(--color-border)] px-4 py-3.5">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">助手配置</h2>
+              <p className="mt-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">管理当前助手可用的 Skill 与 MCP Server</p>
+            </div>
+            <button type="button" onClick={onClose} aria-label="关闭助手配置"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+              <X size={16} />
+            </button>
+          </header>
+          <div className="mx-4 mt-3 grid grid-cols-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-1.5">
           <button type="button" onClick={() => setTab('skills')} className={`min-h-10 rounded-lg text-xs font-medium transition-colors ${tab === 'skills' ? 'bg-white text-teal-800 shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}>Skills <span className="ml-1 text-[10px] tabular-nums">{skills.length}</span></button>
           <button type="button" onClick={() => setTab('mcp')} className={`min-h-10 rounded-lg text-xs font-medium transition-colors ${tab === 'mcp' ? 'bg-white text-teal-800 shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}>MCP <span className="ml-1 text-[10px] tabular-nums">{servers.length}</span></button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {tab === 'skills' ? (
             <>
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -497,8 +556,8 @@ function ConfigurationDialog({ onClose, skills, servers, refreshSkills, refreshS
                 </div>
                 <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)] sm:col-span-2"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
+              <div className="grid gap-3">
+                {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
                 {skills.map(skill => (
                   <article key={skill.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 transition-colors hover:border-teal-200">
                     <div className="flex items-start gap-2">
@@ -527,8 +586,8 @@ function ConfigurationDialog({ onClose, skills, servers, refreshSkills, refreshS
                 </div>
                 <button type="button" onClick={() => setEditingMcp('new')} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 active:scale-[0.98]"><Plus size={13} /> 添加 MCP Server</button>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {servers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)] sm:col-span-2"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
+              <div className="grid gap-3">
+                {servers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
                 {servers.map(server => (
                   <article key={server.id} className="rounded-xl border border-[var(--color-border)] p-4 transition-colors hover:border-teal-200">
                     <div className="flex items-start gap-2">
@@ -554,8 +613,9 @@ function ConfigurationDialog({ onClose, skills, servers, refreshSkills, refreshS
               </div>
             </>
           )}
-        </div>
-      </DialogShell>
+          </div>
+        </section>
+      </aside>
       {creatingSkill && <SkillCreateDialog onClose={() => setCreatingSkill(false)} onSaved={refreshSkills} />}
       {editingSkill && <SkillEditor skill={editingSkill} onClose={() => setEditingSkill(null)} onSaved={refreshSkills} />}
       {editingMcp && <McpDialog server={editingMcp === 'new' ? undefined : editingMcp} onClose={() => setEditingMcp(null)} onSaved={refreshServers} />}
@@ -578,7 +638,11 @@ export default function SuperAssistantPage() {
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [showMessageHistory, setShowMessageHistory] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [savingTitle, setSavingTitle] = useState(false)
   const [loading, setLoading] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -610,6 +674,8 @@ export default function SuperAssistantPage() {
   }, [toast])
 
   useEffect(() => {
+    setShowMessageHistory(false)
+    setEditingTitle(false)
     if (!selectedId) { setMessages([]); return }
     let alive = true
     superAssistantApi.messages(selectedId).then(data => { if (alive) setMessages(data) })
@@ -621,6 +687,8 @@ export default function SuperAssistantPage() {
 
   const selectedConversation = conversations.find(item => item.id === selectedId) || null
   const selectedModelId = selectedConversation?.model_config_id || models.find(model => model.is_default)?.id || models[0]?.id || ''
+  const selectedModel = models.find(model => model.id === selectedModelId)
+  const myMessages = useMemo(() => messages.filter(message => message.role === 'user'), [messages])
 
   const createConversation = async () => {
     try {
@@ -647,6 +715,40 @@ export default function SuperAssistantPage() {
       const updated = await superAssistantApi.updateConversation(selectedId, { model_config_id: modelId || null })
       setConversations(current => current.map(item => item.id === updated.id ? updated : item))
     } catch (error) { toast({ tone: 'error', title: '模型切换失败', description: errorText(error) }) }
+  }
+
+  const saveTitle = async () => {
+    if (!selectedId || savingTitle) return
+    const title = titleDraft.trim()
+    if (!title) {
+      toast({ tone: 'error', title: '会话名称不能为空' })
+      return
+    }
+    if (title === selectedConversation?.title) {
+      setEditingTitle(false)
+      return
+    }
+    setSavingTitle(true)
+    try {
+      const updated = await superAssistantApi.updateConversation(selectedId, { title })
+      setConversations(current => current.map(item => item.id === updated.id ? updated : item))
+      setEditingTitle(false)
+      toast({ tone: 'success', title: '会话名称已保存' })
+    } catch (error) {
+      toast({ tone: 'error', title: '名称保存失败', description: errorText(error) })
+    } finally {
+      setSavingTitle(false)
+    }
+  }
+
+  const jumpToMessage = (messageId: string) => {
+    setShowMessageHistory(false)
+    requestAnimationFrame(() => {
+      document.getElementById(`super-assistant-msg-${messageId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+    })
   }
 
   const send = async () => {
@@ -746,40 +848,116 @@ export default function SuperAssistantPage() {
           }}
           className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-60"
         />
-        {running ? (
-          <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-            {stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}
+        <div className="relative flex shrink-0 items-center gap-2">
+          {running ? (
+            <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+              {stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}
+            </button>
+          ) : (
+            <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40">
+              <Send size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowMessageHistory(value => !value)}
+            disabled={myMessages.length === 0}
+            title="我发送的消息 · 快速跳转"
+            aria-label="查看我发送的消息"
+            aria-expanded={showMessageHistory}
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showMessageHistory
+              ? 'border-teal-300 bg-teal-50 text-teal-700'
+              : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+          >
+            <List size={16} />
           </button>
-        ) : (
-          <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40">
-            <Send size={16} />
-          </button>
-        )}
+          {showMessageHistory && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
+              <div className="absolute bottom-full right-0 z-30 mb-3 w-72 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
+                <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
+                  <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">我发送的消息</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
+                </div>
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {[...myMessages].reverse().map((message, index) => (
+                    <button
+                      type="button"
+                      key={message.id}
+                      onClick={() => jumpToMessage(message.id)}
+                      title={message.content}
+                      className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] focus-visible:outline-none"
+                    >
+                      <span className="mt-0.5 shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">#{myMessages.length - index}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">{message.content}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
-      <p className="mt-2 text-center text-[10px] text-[var(--color-text-tertiary)]">超级助手可能出错；重要结果请核验。外部 MCP 工具默认需要你的确认。</p>
     </div>
   )
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-[var(--color-bg-base)]">
+    <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--color-bg-base)]">
       <section className="flex min-w-0 flex-1 flex-col bg-[var(--color-bg-elevated)]">
         <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{selectedConversation?.title || '新的超级助手会话'}</p>
-            <p className="mt-0.5 hidden text-[10px] text-[var(--color-text-tertiary)] sm:block">独立助手 · Skill 渐进披露 · MCP 工具确认</p>
+            {editingTitle ? (
+              <form className="flex max-w-lg items-center gap-1.5" onSubmit={event => { event.preventDefault(); void saveTitle() }}>
+                <input
+                  autoFocus
+                  value={titleDraft}
+                  maxLength={200}
+                  onChange={event => setTitleDraft(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Escape') setEditingTitle(false)
+                  }}
+                  aria-label="编辑会话名称"
+                  className="h-9 min-w-0 flex-1 rounded-lg border border-teal-300 bg-[var(--color-bg-base)] px-2.5 text-sm font-semibold text-[var(--color-text-primary)] outline-none ring-2 ring-teal-100"
+                />
+                <button type="submit" disabled={savingTitle} aria-label="保存会话名称"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition-colors hover:bg-teal-800 disabled:opacity-50">
+                  {savingTitle ? <Loader2 size={14} className="animate-spin" /> : <Check size={15} />}
+                </button>
+                <button type="button" onClick={() => setEditingTitle(false)} aria-label="取消编辑会话名称"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]">
+                  <X size={14} />
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                disabled={!selectedConversation}
+                onClick={() => {
+                  if (!selectedConversation) return
+                  setTitleDraft(selectedConversation.title)
+                  setEditingTitle(true)
+                }}
+                title={selectedConversation ? '点击编辑会话名称' : undefined}
+                className="group flex max-w-full items-center gap-1.5 rounded-md py-1 text-left text-sm font-semibold text-[var(--color-text-primary)] outline-none transition-colors hover:text-teal-800 focus-visible:ring-2 focus-visible:ring-teal-400 disabled:cursor-default disabled:hover:text-[var(--color-text-primary)]"
+              >
+                <span className="truncate">{selectedConversation?.title || '新的超级助手会话'}</span>
+                {selectedConversation && <Pencil size={12} className="shrink-0 opacity-0 transition-opacity group-hover:opacity-70 group-focus-visible:opacity-70" />}
+              </button>
+            )}
           </div>
           <label className="sr-only" htmlFor="super-assistant-model">会话模型</label>
           <select id="super-assistant-model" value={selectedModelId} onChange={event => void changeModel(event.target.value)} disabled={!selectedId || running}
-            className="h-9 w-32 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60 sm:w-48">
+            className="h-9 w-48 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60 sm:w-64 xl:w-80">
             {models.length === 0 && <option value="">无可用模型</option>}
             {models.map(model => <option key={model.id} value={model.id}>{model.name} · {model.models?.[0]}</option>)}
           </select>
           <button
             type="button"
-            onClick={() => { setSessionsOpen(false); setConfigOpen(true) }}
-            aria-label="打开助手配置"
+            onClick={() => { setSessionsOpen(false); setConfigOpen(value => !value) }}
+            aria-label={configOpen ? '关闭助手配置' : '打开助手配置'}
+            aria-expanded={configOpen}
             title="助手配置"
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${configOpen
               ? 'border-teal-300 bg-teal-50 text-teal-700'
@@ -820,23 +998,26 @@ export default function SuperAssistantPage() {
           </div>
         </header>
 
-        <main className={`flex min-h-0 flex-1 flex-col ${hasMessages ? 'overflow-y-auto' : 'overflow-hidden'}`}>
+        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {loading ? (
             <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-teal-600" /></div>
           ) : !hasMessages ? (
             <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
-              <div className="relative w-full max-w-3xl translate-y-3">
+              <div className="relative w-full max-w-3xl -translate-y-10 sm:-translate-y-14">
                 <EmptyState />
                 {renderComposer(true)}
               </div>
             </div>
           ) : (
-            <div className="mx-auto w-full max-w-4xl space-y-7 px-4 py-6 sm:px-8">
-              {messages.map(message => <ChatMessage key={message.id} message={message} />)}
-              {pending && <ConfirmationCard pending={pending} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
-              <div ref={messagesEndRef} />
+            <div className="h-full overflow-y-auto">
+              <div className="mx-auto w-full max-w-4xl space-y-7 px-4 pb-28 pt-6 sm:px-8">
+                {messages.map(message => <ChatMessage key={message.id} message={message} />)}
+                {pending && <ConfirmationCard pending={pending} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
+                <div ref={messagesEndRef} />
+              </div>
             </div>
           )}
+          {!loading && selectedConversation && <ContextUsage messages={messages} model={selectedModel} />}
         </main>
 
         {hasMessages && (
@@ -849,7 +1030,7 @@ export default function SuperAssistantPage() {
       </section>
 
       {configOpen && (
-        <ConfigurationDialog
+        <ConfigurationPanel
           onClose={() => setConfigOpen(false)}
           skills={skills}
           servers={servers}

@@ -21,6 +21,9 @@ from app.super_assistant.models import (
 from app.super_assistant.skill_store import read_text_file
 
 
+_DEFAULT_CONTEXT_TOKENS = 64_000
+
+
 def sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
@@ -170,6 +173,8 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         call_kwargs = llm_call_kwargs(model_config)
         if not call_kwargs:
             raise provider.ProviderError("没有可用的文本模型，请先到“模型配置”启用一个 LLM")
+        context_limit = max(8_192, int(call_kwargs.get("max_context_tokens") or _DEFAULT_CONTEXT_TOKENS))
+        call_kwargs["max_context_tokens"] = context_limit
         conversation.model_config_id = model_config.id
 
         skills = db.query(SuperAssistantSkill).filter(
@@ -191,6 +196,7 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         messages.extend({"role": item.role, "content": item.content} for item in stored_messages if item.role in {"user", "assistant"})
         steps: list[dict[str, Any]] = []
         total_usage = {"inputTokens": 0, "outputTokens": 0}
+        last_input_tokens = 0
         final_content = ""
 
         for round_index in range(settings.super_assistant_max_tool_rounds):
@@ -203,6 +209,8 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                 value = (result.get("usage") or {}).get(key)
                 if isinstance(value, int):
                     total_usage[key] += value
+                    if key == "inputTokens":
+                        last_input_tokens = value
             content = str(result.get("content") or "")
             calls = result.get("tool_calls") or []
             if not calls:
@@ -301,6 +309,12 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
             # Final synthesis without tools prevents an infinite tool loop.
             messages.append({"role": "user", "content": "请停止调用工具，根据已有结果给出最终答复。"})
             result = provider.chat(call_kwargs, messages, [])
+            for key in total_usage:
+                value = (result.get("usage") or {}).get(key)
+                if isinstance(value, int):
+                    total_usage[key] += value
+                    if key == "inputTokens":
+                        last_input_tokens = value
             final_content = str(result.get("content") or "已达到工具调用轮次上限。")
 
         for delta in _chunk_text(final_content):
@@ -311,7 +325,12 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
 
         assistant_message.content = final_content
         assistant_message.steps = steps
-        assistant_message.token_usage = total_usage
+        usage_snapshot = {
+            **total_usage,
+            "contextTokens": last_input_tokens,
+            "contextLimit": context_limit,
+        }
+        assistant_message.token_usage = usage_snapshot
         assistant_message.status = "complete"
         conversation.updated_at = datetime.now(timezone.utc)
         db.commit()
@@ -320,7 +339,7 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                 "id": assistant_message.id,
                 "content": final_content,
                 "steps": steps,
-                "tokenUsage": total_usage,
+                "tokenUsage": usage_snapshot,
             },
         })
     except GeneratorExit:

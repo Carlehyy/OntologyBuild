@@ -96,7 +96,12 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
         saved = db.get(SuperAssistantMessage, "assistant-message-1")
         assert saved.status == "complete"
         assert saved.content == "已按目录 Skill 完成。"
-        assert saved.token_usage == {"inputTokens": 30, "outputTokens": 10}
+        assert saved.token_usage == {
+            "inputTokens": 30,
+            "outputTokens": 10,
+            "contextTokens": 20,
+            "contextLimit": 64_000,
+        }
         tool_run = db.query(SuperAssistantToolRun).one()
         assert tool_run.tool_name == "use_skill"
         assert tool_run.status == "success"
