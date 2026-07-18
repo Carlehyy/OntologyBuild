@@ -407,7 +407,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           </div>
           <button type="button" disabled={!pathSource || !pathTarget || pathSource === pathTarget} onClick={runPathSearch} className="h-8 rounded-lg bg-cyan-700 px-3 text-xs font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-40">查找路径</button>
           {paths.length > 0 && <span className="ml-1 text-[11px] text-cyan-700">找到 {paths.length} 条（最多展示 5 条）</span>}
-          {pathAttempted && paths.length === 0 && <span className="ml-1 text-[11px] text-amber-700">6 跳内未找到路径</span>}
+          {pathAttempted && paths.length === 0 && <span className="ml-1 text-[11px] text-amber-700">未找到可达路径</span>}
         </div>
       )}
 

@@ -252,9 +252,18 @@ export function buildStructureGraph(workspace: PublishedWorkspace) {
 
 export function findPaths(
   links: StructureLink[], sourceId: string, targetId: string, direction: 'outgoing' | 'both',
-  maxDepth = 6, maxPaths = 5,
+  maxDepth?: number, maxPaths = 5,
 ): GraphPath[] {
   if (!sourceId || !targetId || sourceId === targetId) return []
+  // A simple path can contain at most N-1 edges. Deriving the limit from the
+  // actual graph avoids silently missing valid long paths while still making
+  // the breadth-first enumeration finite.
+  const objectIds = new Set([sourceId, targetId])
+  links.forEach(link => {
+    objectIds.add(link.sourceObjectTypeId)
+    objectIds.add(link.targetObjectTypeId)
+  })
+  const depthLimit = maxDepth ?? Math.max(1, objectIds.size - 1)
   const adjacency = new Map<string, Array<{ next: string; edge: string }>>()
   links.forEach(link => {
     adjacency.set(link.sourceObjectTypeId, [
@@ -272,7 +281,7 @@ export function findPaths(
   const results: GraphPath[] = []
   while (queue.length && results.length < maxPaths) {
     const path = queue.shift()!
-    if (path.edges.length >= maxDepth) continue
+    if (path.edges.length >= depthLimit) continue
     const current = path.nodes[path.nodes.length - 1]
     for (const candidate of adjacency.get(current) || []) {
       if (path.nodes.includes(candidate.next)) continue
