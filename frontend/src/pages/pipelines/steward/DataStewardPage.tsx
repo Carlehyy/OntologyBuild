@@ -16,7 +16,7 @@ import {
   Activity, AlertTriangle, BookOpen, Bot, ChevronDown, ChevronRight,
   CheckCircle2, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
   Folder, GitBranch, Globe, Globe2, GripHorizontal, History, KeyRound, Library, List, Loader2, Maximize2,
-  Monitor, MousePointer2, Paperclip, Pencil, PictureInPicture2, Plus, RefreshCw, Search, Send, Settings,
+  Monitor, MousePointer2, MoveDiagonal2, Paperclip, Pencil, PictureInPicture2, Plus, RefreshCw, Search, Send, Settings,
   ShieldCheck, Sparkles, Table2, Trash2, Upload,
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
@@ -101,6 +101,12 @@ const TEXTAREA_MAX_LINES = 10
 const TEXTAREA_MIN_HEIGHT = 28
 const TEXTAREA_MAX_HEIGHT = TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + 8
 const PIP_VIEWPORT_MARGIN = 12
+const PIP_DEFAULT_WIDTH = 400
+const PIP_MIN_WIDTH = 280
+const PIP_MAX_WIDTH = 880
+const PIP_HEADER_HEIGHT = 44
+const PIP_FRAME_EXTRA_HEIGHT = 1
+const PIP_PREVIEW_ASPECT_RATIO = 16 / 9
 
 type BrowserDisplayMode = 'closed' | 'modal' | 'pip'
 
@@ -1533,8 +1539,32 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
     height: number
     moved: boolean
   } | null>(null)
+  const pipResizeRef = useRef<{
+    pointerId: number
+    startClientX: number
+    startClientY: number
+    startLeft: number
+    startTop: number
+    startWidth: number
+    moved: boolean
+  } | null>(null)
   const [pipPosition, setPipPosition] = useState<{ x: number; y: number } | null>(null)
+  const [pipWidth, setPipWidth] = useState<number | null>(null)
   const [pipDragging, setPipDragging] = useState(false)
+  const [pipResizing, setPipResizing] = useState(false)
+
+  const pipHeightForWidth = useCallback((width: number) => PIP_HEADER_HEIGHT + PIP_FRAME_EXTRA_HEIGHT + width / PIP_PREVIEW_ASPECT_RATIO, [])
+
+  const maxPipWidthAtPosition = useCallback((left: number, top: number) => Math.max(0, Math.min(
+    PIP_MAX_WIDTH,
+    window.innerWidth - left - PIP_VIEWPORT_MARGIN,
+    (window.innerHeight - top - PIP_VIEWPORT_MARGIN - PIP_HEADER_HEIGHT - PIP_FRAME_EXTRA_HEIGHT) * PIP_PREVIEW_ASPECT_RATIO,
+  )), [])
+
+  const clampPipWidth = useCallback((width: number, left: number, top: number) => {
+    const maxWidth = maxPipWidthAtPosition(left, top)
+    return Math.min(Math.max(Math.min(PIP_MIN_WIDTH, maxWidth), width), maxWidth)
+  }, [maxPipWidthAtPosition])
 
   const clampPipPosition = useCallback((x: number, y: number, width: number, height: number) => ({
     x: Math.min(Math.max(PIP_VIEWPORT_MARGIN, x), Math.max(PIP_VIEWPORT_MARGIN, window.innerWidth - width - PIP_VIEWPORT_MARGIN)),
@@ -1555,12 +1585,21 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
     if (mode !== 'pip') return
     const keepInsideViewport = () => {
       const rect = pipWindowRef.current?.getBoundingClientRect()
-      if (!rect || pipPosition === null) return
-      setPipPosition(clampPipPosition(rect.left, rect.top, rect.width, rect.height))
+      if (!rect) return
+      const nextWidth = Math.min(rect.width, maxPipWidthAtPosition(PIP_VIEWPORT_MARGIN, PIP_VIEWPORT_MARGIN))
+      const nextHeight = pipHeightForWidth(nextWidth)
+      if (nextWidth < rect.width - 0.5) setPipWidth(nextWidth)
+      setPipPosition(current => current === null
+        ? current
+        : clampPipPosition(rect.left, rect.top, nextWidth, nextHeight))
     }
+    const initialFrame = window.requestAnimationFrame(keepInsideViewport)
     window.addEventListener('resize', keepInsideViewport)
-    return () => window.removeEventListener('resize', keepInsideViewport)
-  }, [clampPipPosition, mode, pipPosition])
+    return () => {
+      window.cancelAnimationFrame(initialFrame)
+      window.removeEventListener('resize', keepInsideViewport)
+    }
+  }, [clampPipPosition, maxPipWidthAtPosition, mode, pipHeightForWidth])
 
   const movePipWithKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     const directions: Record<string, readonly [number, number]> = {
@@ -1595,33 +1634,114 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
       moved: false,
     }
     setPipPosition({ x: rect.left, y: rect.top })
-    event.currentTarget.setPointerCapture(event.pointerId)
     event.preventDefault()
   }
 
-  const dragPip = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = pipDragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    const deltaX = event.clientX - drag.startClientX
-    const deltaY = event.clientY - drag.startClientY
-    if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) return
-    drag.moved = true
-    setPipDragging(true)
-    setPipPosition(clampPipPosition(
-      drag.startLeft + deltaX,
-      drag.startTop + deltaY,
-      drag.width,
-      drag.height,
-    ))
+  const resizePipWithKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const directions: Record<string, number> = {
+      ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1,
+    }
+    const direction = directions[event.key]
+    if (!direction) return
+    event.preventDefault()
+    const rect = pipWindowRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const distance = event.shiftKey ? 72 : 24
+    const maxWidth = maxPipWidthAtPosition(PIP_VIEWPORT_MARGIN, PIP_VIEWPORT_MARGIN)
+    const minWidth = Math.min(PIP_MIN_WIDTH, maxWidth)
+    const nextWidth = Math.min(Math.max(minWidth, rect.width + direction * distance), maxWidth)
+    const nextHeight = pipHeightForWidth(nextWidth)
+    setPipWidth(nextWidth)
+    setPipPosition(clampPipPosition(rect.left, rect.top, nextWidth, nextHeight))
   }
 
-  const stopPipDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = pipDragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    pipDragRef.current = null
-    setPipDragging(false)
+  const startPipResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    const rect = pipWindowRef.current?.getBoundingClientRect()
+    if (!rect) return
+    pipResizeRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeft: rect.left,
+      startTop: rect.top,
+      startWidth: rect.width,
+      moved: false,
+    }
+    setPipPosition({ x: rect.left, y: rect.top })
+    setPipWidth(rect.width)
+    event.preventDefault()
+    event.stopPropagation()
   }
+
+  useEffect(() => {
+    if (mode !== 'pip') return
+    const trackPointer = (event: PointerEvent) => {
+      const drag = pipDragRef.current
+      if (drag?.pointerId === event.pointerId) {
+        const deltaX = event.clientX - drag.startClientX
+        const deltaY = event.clientY - drag.startClientY
+        if (drag.moved || Math.hypot(deltaX, deltaY) >= 4) {
+          drag.moved = true
+          setPipDragging(true)
+          setPipPosition(clampPipPosition(
+            drag.startLeft + deltaX,
+            drag.startTop + deltaY,
+            drag.width,
+            drag.height,
+          ))
+        }
+      }
+
+      const resize = pipResizeRef.current
+      if (resize?.pointerId === event.pointerId) {
+        const deltaX = event.clientX - resize.startClientX
+        const deltaY = event.clientY - resize.startClientY
+        if (resize.moved || Math.hypot(deltaX, deltaY) >= 4) {
+          resize.moved = true
+          setPipResizing(true)
+          const widthFromVerticalMove = deltaY * PIP_PREVIEW_ASPECT_RATIO
+          const widthDelta = Math.abs(deltaX) >= Math.abs(widthFromVerticalMove) ? deltaX : widthFromVerticalMove
+          setPipWidth(clampPipWidth(
+            resize.startWidth + widthDelta,
+            resize.startLeft,
+            resize.startTop,
+          ))
+        }
+      }
+      if (drag || resize) event.preventDefault()
+    }
+
+    const finishPointer = (event: PointerEvent) => {
+      if (pipDragRef.current?.pointerId === event.pointerId) {
+        pipDragRef.current = null
+        setPipDragging(false)
+      }
+      if (pipResizeRef.current?.pointerId === event.pointerId) {
+        pipResizeRef.current = null
+        setPipResizing(false)
+      }
+    }
+
+    const finishAllPointers = () => {
+      pipDragRef.current = null
+      pipResizeRef.current = null
+      setPipDragging(false)
+      setPipResizing(false)
+    }
+
+    window.addEventListener('pointermove', trackPointer)
+    window.addEventListener('pointerup', finishPointer)
+    window.addEventListener('pointercancel', finishPointer)
+    window.addEventListener('blur', finishAllPointers)
+    return () => {
+      window.removeEventListener('pointermove', trackPointer)
+      window.removeEventListener('pointerup', finishPointer)
+      window.removeEventListener('pointercancel', finishPointer)
+      window.removeEventListener('blur', finishAllPointers)
+      finishAllPointers()
+    }
+  }, [clampPipPosition, clampPipWidth, mode])
 
   const loadSources = useCallback(async () => {
     try {
@@ -1942,10 +2062,13 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
         ref={pipWindowRef}
         role="region"
         aria-label="实时浏览器画中画"
-        className={`fixed z-[70] w-[min(400px,calc(100vw-24px))] overflow-hidden rounded-xl border border-slate-700/80 bg-[#15171b] shadow-[0_20px_54px_rgba(15,23,42,0.38)] transition-shadow motion-reduce:transition-none ${pipDragging ? 'shadow-[0_26px_64px_rgba(15,23,42,0.48)]' : ''}`}
-        style={pipPosition
-          ? { left: 0, top: 0, transform: `translate3d(${pipPosition.x}px, ${pipPosition.y}px, 0)` }
-          : { right: PIP_VIEWPORT_MARGIN, bottom: PIP_VIEWPORT_MARGIN }}
+        className={`fixed z-[70] overflow-hidden rounded-xl border bg-[#15171b] shadow-[0_20px_54px_rgba(15,23,42,0.38)] transition-[border-color,box-shadow] motion-reduce:transition-none ${pipDragging || pipResizing ? 'border-teal-400/70 shadow-[0_26px_64px_rgba(15,23,42,0.48)]' : 'border-slate-700/80'}`}
+        style={{
+          width: pipWidth ?? `min(${PIP_DEFAULT_WIDTH}px, calc(100vw - ${PIP_VIEWPORT_MARGIN * 2}px))`,
+          ...(pipPosition
+            ? { left: 0, top: 0, transform: `translate3d(${pipPosition.x}px, ${pipPosition.y}px, 0)` }
+            : { right: PIP_VIEWPORT_MARGIN, bottom: PIP_VIEWPORT_MARGIN }),
+        }}
       >
         <div className="flex h-11 items-stretch border-b border-white/10 bg-slate-900 text-slate-200">
           <button
@@ -1953,9 +2076,6 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
             aria-label="拖动画中画窗口；也可使用方向键移动"
             title="拖动窗口；方向键可微调，按住 Shift 可快速移动"
             onPointerDown={startPipDrag}
-            onPointerMove={dragPip}
-            onPointerUp={stopPipDrag}
-            onPointerCancel={stopPipDrag}
             onKeyDown={movePipWithKeyboard}
             className={`flex min-w-0 flex-1 touch-none select-none items-center gap-2 px-3 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
           >
@@ -2013,6 +2133,22 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
               <p className="line-clamp-2">{error}</p>
             </div>
           )}
+          {pipResizing && pipWidth !== null && (
+            <span className="pointer-events-none absolute bottom-2 right-12 z-10 rounded-md bg-slate-950/85 px-2 py-1 font-mono text-[9px] tabular-nums text-slate-200 shadow-lg">
+              {Math.round(pipWidth)} × {Math.round(pipHeightForWidth(pipWidth))} px
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label="调整画中画窗口大小；也可使用方向键缩放"
+            aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
+            title="拖动调整大小；方向键可微调，按住 Shift 可快速缩放"
+            onPointerDown={startPipResize}
+            onKeyDown={resizePipWithKeyboard}
+            className={`absolute bottom-0 right-0 z-20 flex h-11 w-11 touch-none select-none items-end justify-end rounded-tl-xl p-2 outline-none transition-colors hover:bg-white/[0.08] focus-visible:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipResizing ? 'cursor-nwse-resize bg-teal-400/10 text-teal-300' : 'cursor-nwse-resize text-slate-400'}`}
+          >
+            <MoveDiagonal2 size={17} />
+          </button>
         </div>
       </section>
     )
