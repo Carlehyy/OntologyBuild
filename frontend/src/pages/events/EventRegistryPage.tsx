@@ -1,10 +1,13 @@
 import { useMemo, useState, useEffect } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { eventsApi } from '../../api/events'
 import type { EventItem, EventStats } from '../../api/events'
-import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, CircleDot, ExternalLink, Archive } from 'lucide-react'
+import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, Archive, ArchiveRestore, Paperclip, Pencil, Trash2 } from 'lucide-react'
+import { ConfirmModal } from '@/components/ui/Modal'
+import { useToast } from '@/components/ui/Toast'
 import EventFormModal from './EventFormModal'
+import EventAttachmentsModal from './EventAttachmentsModal'
 import IngestKeysDrawer from './IngestKeysDrawer'
 
 // 与「数据资产湖」一致的基础面板：白底、细边框、轻阴影。
@@ -30,15 +33,18 @@ function useList(params: { page: number; pageSize: number; q?: string; sourceTyp
 }
 
 export default function EventRegistryPage() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [search, setSearch] = useState('')
   const [sourceType, setSourceType] = useState<string>('')
   const [severity, setSeverity] = useState<string>('')
   const [status, setStatus] = useState<string>('active')
-  const [onlyAbnormal, setOnlyAbnormal] = useState(false)
   const [page, setPage] = useState(1)
   const [formOpen, setFormOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
   const [editing, setEditing] = useState<EventItem | null>(null)
+  const [attachmentEventId, setAttachmentEventId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<EventItem | null>(null)
 
   const statsQ = useStats()
   const stats: EventStats | undefined = statsQ.data
@@ -46,16 +52,43 @@ export default function EventRegistryPage() {
     page, pageSize: PAGE_SIZE,
     q: search || undefined,
     sourceType: sourceType || undefined,
-    severity: (severity || (onlyAbnormal ? 'critical' : '')) || undefined,
+    severity: severity || undefined,
     status: status || 'active',
   })
 
-  useEffect(() => { setPage(1) }, [search, sourceType, severity, onlyAbnormal, status])
+  useEffect(() => { setPage(1) }, [search, sourceType, severity, status])
 
   const totalPages = Math.max(1, Math.ceil((listQ.data?.total ?? 0) / PAGE_SIZE))
   const refresh = () => { statsQ.refetch(); listQ.refetch() }
 
-  const abnormalCount = useMemo(() => (stats?.bySeverity?.critical ?? 0) + (stats?.bySeverity?.high ?? 0), [stats])
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status: nextStatus }: { id: string; status: 'active' | 'archived' }) =>
+      eventsApi.changeStatus(id, nextStatus),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['events'] })
+      toast({ tone: 'success', title: variables.status === 'archived' ? '事件已归档' : '事件已恢复' })
+    },
+    onError: (cause: any) => toast({
+      tone: 'error',
+      title: '事件状态更新失败',
+      description: cause?.detail || cause?.message || '请稍后重试',
+    }),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => eventsApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['events'] })
+      setDeleteTarget(null)
+      toast({ tone: 'success', title: '事件已删除' })
+    },
+    onError: (cause: any) => toast({
+      tone: 'error',
+      title: '事件删除失败',
+      description: cause?.detail || cause?.message || '物理删除仅管理员可执行',
+    }),
+  })
+
   const apiCoverage = useMemo(() => {
     const total = stats?.total ?? 0
     return total ? Math.round((stats?.api ?? 0) / total * 100) : 0
@@ -64,22 +97,27 @@ export default function EventRegistryPage() {
   // 级别分布环形图
   const severityOption = useMemo(() => {
     const order = ['critical', 'high', 'medium', 'low', 'info'] as const
-    const labels: Record<string, string> = { critical: '严重', high: '高', medium: '中', low: '低', info: '信息' }
+    const labels: Record<string, string> = { critical: '严重', high: '高级', medium: '中级', low: '低级', info: '信息' }
     const colors = [PALETTE.red, PALETTE.orange, PALETTE.gold, PALETTE.teal, PALETTE.blue]
-    const data = order.map((k, i) => ({ name: labels[k], value: stats?.bySeverity?.[k] ?? 0, itemStyle: { color: colors[i] } }))
-    const total = data.reduce((s, d) => s + d.value, 0)
+    const counts = order.map(key => stats?.bySeverity?.[key] ?? 0)
+    const total = counts.reduce((sum, value) => sum + value, 0)
+    const data = order.map((key, index) => ({
+      name: labels[key],
+      value: counts[index],
+      itemStyle: { color: colors[index] },
+    }))
     return {
       animationDuration: 600,
       tooltip: {
         trigger: 'item',
         backgroundColor: 'rgba(255,255,255,0.96)', borderColor: 'rgba(148,163,184,0.2)', borderWidth: 1,
-        textStyle: { color: '#475569', fontSize: 11 },
+        textStyle: { color: '#475569', fontSize: 12 },
         extraCssText: 'backdrop-filter:blur(12px);border-radius:8px;box-shadow:0 4px 16px rgba(15,23,42,0.08);',
         formatter: '{b}: {c} ({d}%)',
       },
       series: [{
-        name: '级别', type: 'pie', radius: ['60%', '82%'], center: ['50%', '50%'],
-        itemStyle: { borderRadius: 4, borderColor: '#fff', borderWidth: 2 },
+        name: '级别', type: 'pie', radius: ['62%', '86%'], center: ['50%', '50%'],
+        itemStyle: { borderColor: '#fff', borderWidth: 1 },
         label: { show: false }, labelLine: { show: false },
         emphasis: { scale: true, scaleSize: 3 },
         data,
@@ -108,7 +146,7 @@ export default function EventRegistryPage() {
       tooltip: {
         trigger: 'axis',
         backgroundColor: 'rgba(255,255,255,0.96)', borderColor: 'rgba(148,163,184,0.2)', borderWidth: 1,
-        textStyle: { color: '#475569', fontSize: 11 },
+        textStyle: { color: '#475569', fontSize: 12 },
         extraCssText: 'backdrop-filter:blur(12px);border-radius:8px;box-shadow:0 4px_16px rgba(15,23,42,0.08);',
         axisPointer: { type: 'line', lineStyle: { color: 'rgba(148,163,184,0.3)', type: 'dashed' } },
       },
@@ -116,19 +154,19 @@ export default function EventRegistryPage() {
         type: 'category', data: days, boundaryGap: false,
         axisLine: { lineStyle: { color: 'rgba(148,163,184,0.2)' } },
         axisTick: { show: false },
-        axisLabel: { color: '#94A3B8', fontSize: 10 },
+        axisLabel: { color: '#94A3B8', fontSize: 11 },
       },
       yAxis: {
         type: 'value',
         axisLine: { show: false }, axisTick: { show: false },
         splitLine: { lineStyle: { color: 'rgba(148,163,184,0.12)', type: 'dashed' } },
-        axisLabel: { color: '#94A3B8', fontSize: 10 },
+        axisLabel: { color: '#94A3B8', fontSize: 11 },
       },
       series: [
         { name: '严重', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.08, 1), itemStyle: { color: PALETTE.red }, areaStyle: { color: PALETTE.red, opacity: 0.25 } },
-        { name: '高', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.15, 2), itemStyle: { color: PALETTE.orange }, areaStyle: { color: PALETTE.orange, opacity: 0.25 } },
-        { name: '中', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.27, 3), itemStyle: { color: PALETTE.gold }, areaStyle: { color: PALETTE.gold, opacity: 0.25 } },
-        { name: '低', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 4), itemStyle: { color: PALETTE.teal }, areaStyle: { color: PALETTE.teal, opacity: 0.25 } },
+        { name: '高级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.15, 2), itemStyle: { color: PALETTE.orange }, areaStyle: { color: PALETTE.orange, opacity: 0.25 } },
+        { name: '中级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.27, 3), itemStyle: { color: PALETTE.gold }, areaStyle: { color: PALETTE.gold, opacity: 0.25 } },
+        { name: '低级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 4), itemStyle: { color: PALETTE.teal }, areaStyle: { color: PALETTE.teal, opacity: 0.25 } },
         { name: '信息', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 5), itemStyle: { color: PALETTE.blue }, areaStyle: { color: PALETTE.blue, opacity: 0.25 } },
       ],
     }
@@ -153,12 +191,6 @@ export default function EventRegistryPage() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            {abnormalCount > 0 && (
-              <button type="button" onClick={() => setOnlyAbnormal(!onlyAbnormal)} aria-pressed={onlyAbnormal}
-                className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${onlyAbnormal ? 'border-red-200 bg-red-50 text-red-600' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
-                <AlertOctagon className="h-4 w-4" />{abnormalCount} 待关注
-              </button>
-            )}
             <button type="button" onClick={() => setKeysOpen(true)}
               className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800">
               <Code2 className="h-4 w-4" />接入管理
@@ -182,26 +214,26 @@ export default function EventRegistryPage() {
         </div>
 
         {/* 级别分布环 */}
-        <div className={`${PANEL} flex min-h-[132px] items-center gap-4 overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-3`}>
-            <div className="relative h-[78px] w-[78px] shrink-0">
+        <div className={`${PANEL} flex min-h-[156px] items-center gap-5 overflow-hidden px-5 py-3 lg:col-span-4 xl:col-span-3`}>
+            <div className="relative h-[108px] w-[108px] shrink-0">
               <div className="w-full h-full overflow-hidden rounded-full">
-                <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
+                <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} notMerge />
               </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-[15px] font-semibold text-slate-800 tabular-nums leading-none">{severityOption._centerTotal as number}</span>
-                <span className="text-[9px] text-slate-400 mt-0.5">合计</span>
+                <span className="text-xl font-semibold text-slate-800 tabular-nums leading-none">{severityOption._centerTotal as number}</span>
+                <span className="mt-1 text-xs text-slate-400">合计</span>
               </div>
             </div>
-            <div className="flex-1 min-w-0 grid grid-cols-2 gap-x-2 gap-y-0.5">
+            <div className="grid min-w-0 flex-1 grid-cols-1 gap-y-1">
               {(['critical', 'high', 'medium', 'low', 'info'] as const).map((k, i) => {
                 const colors = [PALETTE.red, PALETTE.orange, PALETTE.gold, PALETTE.teal, PALETTE.blue]
-                const labels: Record<string, string> = { critical: '严重', high: '高', medium: '中', low: '低', info: '信息' }
+                const labels: Record<string, string> = { critical: '严重', high: '高级', medium: '中级', low: '低级', info: '信息' }
                 const v = stats?.bySeverity?.[k] ?? 0
                 return (
                   <div key={k} className="flex items-center gap-1.5 min-w-0">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: colors[i], boxShadow: `0 0 5px ${colors[i]}66` }} />
-                    <span className="text-[10px] text-slate-500 truncate">{labels[k]}</span>
-                    <span className="text-[11px] font-semibold text-slate-700 tabular-nums ml-auto">{v}</span>
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colors[i], boxShadow: `0 0 5px ${colors[i]}66` }} />
+                    <span className="truncate text-xs text-slate-500">{labels[k]}</span>
+                    <span className="ml-auto text-sm font-semibold tabular-nums text-slate-700">{v}</span>
                   </div>
                 )
               })}
@@ -209,21 +241,21 @@ export default function EventRegistryPage() {
           </div>
 
         {/* 7日趋势 */}
-        <div className={`${PANEL} flex min-h-[132px] min-w-0 flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-5`}>
+        <div className={`${PANEL} flex min-h-[156px] min-w-0 flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-5`}>
             <div className="flex items-center justify-between mb-1 shrink-0">
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-medium text-slate-700">近 7 日事件趋势</span>
-                <span className="text-[9px] text-slate-400">按级别堆叠</span>
+                <span className="text-sm font-medium text-slate-700">近 7 日事件趋势</span>
+                <span className="text-xs text-slate-400">按级别堆叠</span>
               </div>
-              <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <LegendDot color={PALETTE.blue} label="信息" />
-                <LegendDot color={PALETTE.teal} label="低" />
-                <LegendDot color={PALETTE.gold} label="中" />
-                <LegendDot color={PALETTE.orange} label="高" />
+                <LegendDot color={PALETTE.teal} label="低级" />
+                <LegendDot color={PALETTE.gold} label="中级" />
+                <LegendDot color={PALETTE.orange} label="高级" />
                 <LegendDot color={PALETTE.red} label="严重" />
               </div>
             </div>
-            <div className="min-h-0 w-full flex-1 overflow-hidden" style={{ height: 96 }}>
+            <div className="min-h-0 w-full flex-1 overflow-hidden" style={{ height: 114 }}>
               <ReactECharts option={trendOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
         </div>
@@ -237,18 +269,13 @@ export default function EventRegistryPage() {
               className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 placeholder:text-slate-400" />
           </div>
           <Select value={severity} onChange={setSeverity} options={[
-            { v: '', l: '全部级别' }, { v: 'critical', l: '严重' }, { v: 'high', l: '高' }, { v: 'medium', l: '中' }, { v: 'low', l: '低' }, { v: 'info', l: '信息' },
+            { v: '', l: '全部级别' }, { v: 'critical', l: '严重' }, { v: 'high', l: '高级' }, { v: 'medium', l: '中级' }, { v: 'low', l: '低级' }, { v: 'info', l: '信息' },
           ]} />
           <Select value={sourceType} onChange={setSourceType} options={[
             { v: '', l: '全部来源' }, { v: 'platform', l: '平台录入' }, { v: 'api', l: 'API 上报' }, { v: 'system', l: '系统生成' },
           ]} />
-          <div className="h-5 w-px bg-slate-200" />
-          <button type="button" onClick={() => setOnlyAbnormal(!onlyAbnormal)} aria-pressed={onlyAbnormal}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${onlyAbnormal ? 'border-red-200 bg-red-50 text-red-600' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
-            <CircleDot className="h-3.5 w-3.5" />仅异常
-          </button>
           <div className="ml-auto flex items-center gap-1">
-            <span className="text-[11px] text-slate-400 mr-1">共 <span className="font-semibold text-slate-700 tabular-nums">{listQ.data?.total ?? 0}</span> 条</span>
+            <span className="mr-1 text-sm text-slate-400">共 <span className="font-semibold tabular-nums text-slate-700">{listQ.data?.total ?? 0}</span> 条</span>
             <button type="button" onClick={refresh}
               className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800" title="刷新" aria-label="刷新事件列表">
               <RefreshCcw className={`h-4 w-4 ${statsQ.isFetching || listQ.isFetching ? 'animate-spin' : ''}`} />
@@ -259,77 +286,93 @@ export default function EventRegistryPage() {
       {/* 表格区 */}
       <div className={`${PANEL} flex min-h-0 flex-1 flex-col overflow-hidden`}>
           <div className="flex-1 min-h-0 overflow-auto thin-scroll">
-            <table className="w-full text-xs">
+            <table className="w-full min-w-[960px] table-fixed text-sm">
               <thead>
-                <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs text-slate-600">
-                  <th className="w-[26%] px-4 py-2.5 text-left font-medium">事件</th>
-                  <th className="w-[16%] px-3 py-2.5 text-left font-medium">来源</th>
-                  <th className="w-[9%] px-3 py-2.5 text-left font-medium">级别</th>
-                  <th className="w-[22%] px-3 py-2.5 text-left font-medium">描述</th>
-                  <th className="w-[8%] px-3 py-2.5 text-left font-medium">附件</th>
-                  <th className="w-[12%] px-3 py-2.5 text-left font-medium">发生时间</th>
-                  <th className="w-[7%] px-4 py-2.5 text-right font-medium">操作</th>
+                <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-sm text-slate-600">
+                  <th className="w-[22%] px-4 py-3 text-center font-medium">事件</th>
+                  <th className="w-[13%] px-3 py-3 text-center font-medium">来源</th>
+                  <th className="w-[9%] px-3 py-3 text-center font-medium">级别</th>
+                  <th className="w-[19%] px-3 py-3 text-center font-medium">描述</th>
+                  <th className="w-[11%] px-3 py-3 text-center font-medium">附件</th>
+                  <th className="w-[12%] px-3 py-3 text-center font-medium">发生时间</th>
+                  <th className="w-[14%] px-2 py-3 text-center font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {listQ.isLoading ? (
-                  <tr><td colSpan={7} className="text-center py-16 text-slate-400 text-xs">加载中...</td></tr>
+                  <tr><td colSpan={7} className="py-16 text-center text-sm text-slate-400">加载中...</td></tr>
                 ) : listQ.data?.items?.length === 0 ? (
                   <tr><td colSpan={7} className="text-center py-16">
                     <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100">
                       <Filter className="w-5 h-5 text-slate-300" />
                     </div>
-                    <p className="text-slate-400 text-xs">暂无匹配事件</p>
-                    <p className="text-slate-300 text-[11px] mt-1">尝试调整筛选条件，或登记新事件</p>
+                    <p className="text-sm text-slate-400">暂无匹配事件</p>
+                    <p className="mt-1 text-xs text-slate-300">尝试调整筛选条件，或登记新事件</p>
                     <button onClick={() => { setEditing(null); setFormOpen(true) }}
-                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100">
-                      <PlusCircle className="w-3 h-3" />立即登记
+                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100">
+                      <PlusCircle className="h-3.5 w-3.5" />立即登记
                     </button>
                   </td></tr>
                 ) : (listQ.data?.items ?? []).map((r, i) => (
                   <tr key={r.id}
                     className={`group border-t border-slate-100 transition-colors hover:bg-slate-50 ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
                     style={{ animation: `rowIn 0.35s ease-out ${i * 30}ms both` }}>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2">
+                    <td className="px-4 py-3 text-center align-middle">
+                      <div className="flex items-stretch justify-center gap-2">
                         {(r.severity === 'critical' || r.severity === 'high') && (
                           <span className="w-1 self-stretch rounded-full shrink-0" style={{ background: r.severity === 'critical' ? PALETTE.red : PALETTE.orange }} />
                         )}
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-slate-800 truncate flex items-center gap-1">
+                        <div className="min-w-0">
+                          <div className="flex items-center justify-center gap-1 truncate font-medium text-slate-800">
                             {r.title}
-                            {r.severity === 'critical' && <AlertOctagon className="w-3 h-3 text-red-400 shrink-0" />}
+                            {r.severity === 'critical' && <AlertOctagon className="h-3.5 w-3.5 shrink-0 text-red-400" />}
                           </div>
-                          <div className="text-[10px] text-slate-400 font-mono">{r.eventNo}</div>
+                          <div className="mt-0.5 font-mono text-xs text-slate-400">{r.eventNo}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5">
-                      <SourceTag sourceType={r.sourceType} reporter={r.reporterName} sourceLabel={r.sourceLabel} />
+                    <td className="px-3 py-3 text-center align-middle">
+                      <div className="flex justify-center"><SourceTag sourceType={r.sourceType} reporter={r.reporterName} sourceLabel={r.sourceLabel} /></div>
                     </td>
-                    <td className="px-3 py-2.5"><SeverityBadge sev={r.severity} /></td>
-                    <td className="px-3 py-2.5 text-slate-500 max-w-0">
-                      <div className="truncate">{r.description || <span className="text-slate-300 italic">无描述</span>}</div>
-                      {r.tags?.length > 0 && (
-                        <div className="flex gap-1 mt-0.5 flex-wrap">
-                          {r.tags.slice(0, 2).map(t => (
-                            <span key={t} className="text-[9px] px-1 rounded bg-slate-100 text-slate-500">{t}</span>
-                          ))}
-                          {r.tags.length > 2 && <span className="text-[9px] text-slate-400">+{r.tags.length - 2}</span>}
-                        </div>
-                      )}
+                    <td className="px-3 py-3 text-center align-middle"><SeverityBadge sev={r.severity} /></td>
+                    <td className="max-w-0 px-3 py-3 text-center align-middle text-slate-500">
+                      <div className="truncate" title={r.description || undefined}>{r.description || <span className="italic text-slate-300">无描述</span>}</div>
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-3 text-center align-middle">
                       {r.attachmentCount && r.attachmentCount > 0 ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-500 text-[10px] font-medium">📎 {r.attachmentCount}</span>
-                      ) : <span className="text-slate-300 text-[10px]">—</span>}
+                        <button
+                          type="button"
+                          onClick={() => setAttachmentEventId(r.id)}
+                          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 hover:text-emerald-800"
+                          title="点击查看附件清单"
+                        >
+                          <Paperclip size={14} /> {r.attachmentCount} 个附件
+                        </button>
+                      ) : <span className="text-sm text-slate-300">—</span>}
                     </td>
-                    <td className="px-3 py-2.5 text-slate-500 tabular-nums text-[11px] whitespace-nowrap">{fmt(r.occurredAt)}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      <div className="inline-flex items-center gap-0.5">
+                    <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-slate-500">{fmt(r.occurredAt)}</td>
+                    <td className="px-2 py-3 text-center align-middle">
+                      <div className="inline-flex items-center justify-center gap-1">
                         <button onClick={() => { setEditing(r); setFormOpen(true) }}
-                          className="rounded-md p-1 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-700" title="查看/编辑">
-                          <ExternalLink className="w-3 h-3" />
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-700" title="编辑事件" aria-label={`编辑事件 ${r.title}`}>
+                          <Pencil size={15} />
+                        </button>
+                        <button
+                          onClick={() => statusMutation.mutate({ id: r.id, status: r.status === 'archived' ? 'active' : 'archived' })}
+                          disabled={statusMutation.isPending}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
+                          title={r.status === 'archived' ? '恢复事件' : '归档事件'}
+                          aria-label={`${r.status === 'archived' ? '恢复' : '归档'}事件 ${r.title}`}
+                        >
+                          {r.status === 'archived' ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(r)}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                          title="删除事件（仅管理员）"
+                          aria-label={`删除事件 ${r.title}`}
+                        >
+                          <Trash2 size={15} />
                         </button>
                       </div>
                     </td>
@@ -341,7 +384,7 @@ export default function EventRegistryPage() {
 
           {/* 分页 */}
           <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 py-2">
-            <div className="text-[11px] text-slate-400 tabular-nums">
+            <div className="text-sm tabular-nums text-slate-400">
               显示 {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, listQ.data?.total ?? 0)} / {listQ.data?.total ?? 0}
             </div>
             <div className="flex items-center gap-1">
@@ -354,7 +397,7 @@ export default function EventRegistryPage() {
                 if (totalPages > 5) { if (page > 3) p = Math.min(totalPages - 4, page - 2) + i }
                 return (
                   <button key={p} onClick={() => setPage(p)}
-                    className={`flex h-7 w-7 items-center justify-center rounded-lg text-[11px] font-medium transition-colors ${p === page ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition-colors ${p === page ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
                     {p}
                   </button>
                 )
@@ -374,7 +417,22 @@ export default function EventRegistryPage() {
       </button>
 
       <EventFormModal open={formOpen} onClose={() => { setFormOpen(false); setEditing(null) }} editing={editing} />
+      <EventAttachmentsModal
+        open={Boolean(attachmentEventId)}
+        eventId={attachmentEventId}
+        onClose={() => setAttachmentEventId(null)}
+      />
       <IngestKeysDrawer open={keysOpen} onClose={() => setKeysOpen(false)} />
+      <ConfirmModal
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { if (deleteTarget) deleteMutation.mutate(deleteTarget.id) }}
+        title="删除事件"
+        description={deleteTarget ? `确认永久删除事件“${deleteTarget.title}”？附件和审计记录也会一并删除，此操作无法恢复。` : undefined}
+        confirmText="确认删除"
+        variant="danger"
+        loading={deleteMutation.isPending}
+      />
 
       <style>{`
         @keyframes rowIn {
@@ -393,10 +451,10 @@ export default function EventRegistryPage() {
 // ─── 小型指标卡 ──────────────────────────────────────────
 function MetricCard({ label, value, sub }: { label: string; value: number; sub?: string }) {
   return (
-    <div className={`${PANEL} min-w-0 px-3 py-2`}>
-      <p className="text-[11px] font-medium text-slate-500">{label}</p>
-      <p className="mt-0.5 text-xl font-semibold tabular-nums text-slate-900">{value.toLocaleString()}</p>
-      <p className="mt-0.5 truncate text-[10px] text-slate-400" title={sub}>{sub}</p>
+    <div className={`${PANEL} min-w-0 px-3 py-2.5`}>
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className="mt-0.5 text-2xl font-semibold tabular-nums text-slate-900">{value.toLocaleString()}</p>
+      <p className="mt-0.5 truncate text-xs text-slate-400" title={sub}>{sub}</p>
     </div>
   )
 }
@@ -405,7 +463,7 @@ function MetricCard({ label, value, sub }: { label: string; value: number; sub?:
 function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[] }) {
   return (
     <select value={value} onChange={e => onChange(e.target.value)}
-      className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-8 text-xs text-slate-600 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+      className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-8 text-sm text-slate-600 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
       style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
       {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
     </select>
@@ -420,15 +478,15 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 function SeverityBadge({ sev }: { sev: string }) {
   const map: Record<string, { bg: string; text: string; dot: string; label: string; glow: string }> = {
     critical: { bg: 'bg-red-50', text: 'text-red-600', dot: PALETTE.red, label: '严重', glow: 'rgba(251,113,133,0.4)' },
-    high: { bg: 'bg-orange-50', text: 'text-orange-600', dot: PALETTE.orange, label: '高', glow: 'rgba(253,186,116,0.4)' },
-    medium: { bg: 'bg-amber-50', text: 'text-amber-600', dot: PALETTE.gold, label: '中', glow: 'rgba(252,211,77,0.4)' },
-    low: { bg: 'bg-teal-50', text: 'text-teal-600', dot: PALETTE.teal, label: '低', glow: 'rgba(94,234,212,0.4)' },
+    high: { bg: 'bg-orange-50', text: 'text-orange-600', dot: PALETTE.orange, label: '高级', glow: 'rgba(253,186,116,0.4)' },
+    medium: { bg: 'bg-amber-50', text: 'text-amber-600', dot: PALETTE.gold, label: '中级', glow: 'rgba(252,211,77,0.4)' },
+    low: { bg: 'bg-teal-50', text: 'text-teal-600', dot: PALETTE.teal, label: '低级', glow: 'rgba(94,234,212,0.4)' },
     info: { bg: 'bg-blue-50', text: 'text-blue-600', dot: PALETTE.blue, label: '信息', glow: 'rgba(59,130,246,0.4)' },
   }
   const c = map[sev] ?? map.info
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full ${c.bg} ${c.text} text-[10px] font-medium whitespace-nowrap`}>
-      <span className="w-1 h-1 rounded-full" style={{ background: c.dot, boxShadow: `0 0 4px ${c.glow}` }} />{c.label}
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 ${c.bg} ${c.text} text-xs font-medium whitespace-nowrap`}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.dot, boxShadow: `0 0 4px ${c.glow}` }} />{c.label}
     </span>
   )
 }
@@ -444,11 +502,11 @@ function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; 
           <Code2 className="w-2.5 h-2.5" />
         </span>
         <div className="min-w-0">
-          <div className="text-slate-700 text-[11px] truncate flex items-center gap-0.5">
+          <div className="flex items-center gap-0.5 truncate text-sm text-slate-700">
             <span className="truncate max-w-[100px]">{name}</span>
             <ArrowUpRight className="w-2.5 h-2.5 text-slate-400 shrink-0" />
           </div>
-          <div className="text-[9px] text-emerald-600">API 接入</div>
+          <div className="text-xs text-emerald-600">API 接入</div>
         </div>
       </div>
     )
@@ -460,18 +518,18 @@ function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; 
           <Activity className="w-2.5 h-2.5" />
         </span>
         <div className="min-w-0">
-          <div className="text-slate-700 text-[11px] truncate">{name}</div>
-          <div className="text-[9px] text-slate-400">系统生成</div>
+          <div className="truncate text-sm text-slate-700">{name}</div>
+          <div className="text-xs text-slate-400">系统生成</div>
         </div>
       </div>
     )
   }
   return (
     <div className="flex items-center gap-1.5">
-      <span className="w-5 h-5 rounded-full bg-teal-100 text-teal-700 text-[9px] font-semibold flex items-center justify-center shrink-0">{initial}</span>
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xs font-semibold text-teal-700">{initial}</span>
       <div className="min-w-0">
-        <div className="text-slate-700 text-[11px] truncate">{name}</div>
-        <div className="text-[9px] text-slate-400">平台录入</div>
+        <div className="truncate text-sm text-slate-700">{name}</div>
+        <div className="text-xs text-slate-400">平台录入</div>
       </div>
     </div>
   )

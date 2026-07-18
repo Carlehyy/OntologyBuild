@@ -147,6 +147,9 @@ export const eventsApi = {
   archive: (id: string): Promise<EventItem> =>
     apiClientV2.delete(`/events/${id}`),
 
+  remove: (id: string): Promise<{ status: string; id: string }> =>
+    apiClientV2.delete(`/events/${id}`, { params: { hard: true } }),
+
   stats: (): Promise<EventStats> =>
     apiClientV2.get('/events/stats/summary'),
 
@@ -179,9 +182,9 @@ export const eventsApi = {
 
 export const SEVERITY_META: Record<string, { label: string; cls: string; dot: string }> = {
   info: { label: '信息', cls: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400' },
-  low: { label: '低', cls: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400' },
-  medium: { label: '中', cls: 'bg-amber-50 text-amber-700', dot: 'bg-amber-500' },
-  high: { label: '高', cls: 'bg-orange-50 text-orange-700', dot: 'bg-orange-500' },
+  low: { label: '低级', cls: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400' },
+  medium: { label: '中级', cls: 'bg-amber-50 text-amber-700', dot: 'bg-amber-500' },
+  high: { label: '高级', cls: 'bg-orange-50 text-orange-700', dot: 'bg-orange-500' },
   critical: { label: '严重', cls: 'bg-red-50 text-red-600', dot: 'bg-red-500' },
 }
 
