@@ -269,12 +269,12 @@ def test_http_proxy_auth_scope_query_headers_response_and_audit(proxy_env):
     assert run["proxy_key_name"] == "测试调用方"
     assert run["source_ip"] == "testclient"
     assert key["secret"] not in run["request_snapshot"]
-    assert "upstream-token" not in run["request_snapshot"]
+    assert "upstream-token" in run["request_snapshot"]
     request_snapshot = json.loads(run["request_snapshot"])
     snapshot_headers = {
         item["key"].lower(): item["value"] for item in request_snapshot["headers"]
     }
-    assert snapshot_headers["authorization"] == "***"
+    assert snapshot_headers["authorization"] == "Bearer upstream-token"
 
     listed = client.get("/proxy/keys").json()
     assert "secret" not in listed[0]
@@ -377,17 +377,19 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
 
     with db.get_conn() as conn:
         persisted_run = conn.execute(
-            "SELECT request_snapshot, response_body FROM runs r "
+            "SELECT request_snapshot, response_headers, response_body FROM runs r "
             "JOIN interfaces i ON i.id=r.interface_id "
             "WHERE i.proxy_slug='post-echo' ORDER BY r.id DESC"
         ).fetchone()
     snapshot_text = persisted_run["request_snapshot"]
     snapshot = json.loads(snapshot_text)
-    assert "private" not in snapshot_text
-    assert json.loads(snapshot["body_content"])["password"] == "***"
+    assert "private" in snapshot_text
+    assert json.loads(snapshot["body_content"])["password"] == "private"
     assert "platform-cookie" not in snapshot_text
-    assert "private" not in persisted_run["response_body"]
-    assert "***" in persisted_run["response_body"]
+    response_headers = json.loads(persisted_run["response_headers"])
+    assert response_headers["Set-Cookie"] == "UPSTREAM_SECRET=must-not-leak"
+    assert "private" in persisted_run["response_body"]
+    assert "platform-cookie" in persisted_run["response_body"]
 
 
 def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):

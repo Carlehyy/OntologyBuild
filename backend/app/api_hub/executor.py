@@ -6,13 +6,11 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 
@@ -35,15 +33,6 @@ _HOP_BY_HOP_HEADERS = {
     "host",
     "content-length",
 }
-_SENSITIVE_NAME_RE = re.compile(
-    r"(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)",
-    re.IGNORECASE,
-)
-_SENSITIVE_TEXT_RE = re.compile(
-    r"(?i)\b(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)"
-    r"\b(\s*[:=]\s*)([^\s,;&]+)"
-)
-_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 
 
 @dataclass
@@ -151,60 +140,8 @@ def _caller_cookies(cookie_header: str) -> dict[str, str]:
     return {key: morsel.value for key, morsel in parsed.items()}
 
 
-def _redact_value(name: str, value: Any) -> Any:
-    return "***" if _SENSITIVE_NAME_RE.search(name or "") else value
-
-
-def _redact_mapping(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key): _redact_value(str(key), _redact_mapping(item))
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_mapping(item) for item in value]
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.startswith(("{", "[")):
-            try:
-                return json.dumps(
-                    _redact_mapping(json.loads(stripped)), ensure_ascii=False
-                )
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return _redact_text(value)
-    return value
-
-
-def _redact_text(text: str) -> str:
-    text = _BEARER_RE.sub("Bearer ***", text)
-    return _SENSITIVE_TEXT_RE.sub(
-        lambda match: f"{match.group(1)}{match.group(2)}***",
-        text,
-    )
-
-
-def _redact_url(url: str) -> str:
-    try:
-        parsed = urlsplit(url or "")
-        query = [
-            (key, str(_redact_value(key, value)))
-            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        ]
-        return urlunsplit(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                urlencode(query, doseq=True),
-                "",
-            )
-        )
-    except ValueError:
-        return _redact_text(url or "")
-
-
-def _redact_body(value: Any, content_type: str | None) -> Any:
+def _snapshot_body(value: Any) -> Any:
+    """保留调用历史中的原始请求体，仅限制快照大小。"""
     if value is _UNSET:
         return None
     if isinstance(value, bytes):
@@ -212,45 +149,25 @@ def _redact_body(value: Any, content_type: str | None) -> Any:
     elif isinstance(value, str):
         text = value
     else:
-        return _redact_mapping(value)
+        return value
 
     if len(text) > _MAX_SNAPSHOT_BODY_CHARS:
         text = text[:_MAX_SNAPSHOT_BODY_CHARS] + "\n…（请求体快照已截断）"
-    lowered = (content_type or "").lower()
-    if "json" in lowered or text.lstrip().startswith(("{", "[")):
-        try:
-            return json.dumps(
-                _redact_mapping(json.loads(text)), ensure_ascii=False
-            )
-        except (json.JSONDecodeError, TypeError):
-            pass
-    if "x-www-form-urlencoded" in lowered:
-        return "&".join(
-            f"{key}={_redact_value(key, item)}"
-            for key, item in parse_qsl(text, keep_blank_values=True)
-        )
-    return _redact_text(text)
+    return text
 
 
-def _redact_response_body(value: str, content_type: str | None) -> str:
-    redacted = _redact_body(value or "", content_type)
-    return redacted if isinstance(redacted, str) else json.dumps(
-        redacted, ensure_ascii=False
-    )
+def _snapshot_response_body(value: str) -> str:
+    text = value or ""
+    if len(text) > _MAX_SNAPSHOT_BODY_CHARS:
+        return text[:_MAX_SNAPSHOT_BODY_CHARS] + "\n…（响应体快照已截断）"
+    return text
 
 
-def _redact_headers(headers: dict[str, str]) -> list[dict[str, str]]:
+def _snapshot_headers(headers: dict[str, str]) -> list[dict[str, str]]:
     return [
-        {"key": key, "value": str(_redact_value(key, value))}
+        {"key": key, "value": str(value)}
         for key, value in headers.items()
     ]
-
-
-def _redact_response_headers(headers: dict[str, str]) -> dict[str, str]:
-    return {
-        key: str(_redact_value(key, value))
-        for key, value in (headers or {}).items()
-    }
 
 
 def _build_kwargs(
@@ -268,7 +185,6 @@ def _build_kwargs(
     }
 
     body_for_snapshot: Any = _UNSET
-    body_content_type = overrides.content_type
     if overrides.body is not _UNSET:
         kwargs["data"] = overrides.body
         body_for_snapshot = overrides.body
@@ -280,14 +196,12 @@ def _build_kwargs(
         if body_type == "json" and body.strip():
             kwargs["data"] = body.encode("utf-8")
             body_for_snapshot = body
-            body_content_type = "application/json"
             if not any(key.lower() == "content-type" for key in headers):
                 headers["Content-Type"] = "application/json; charset=utf-8"
         elif body_type == "form" and body.strip():
             form = _parse_form(body)
             kwargs["data"] = form
             body_for_snapshot = body
-            body_content_type = "application/x-www-form-urlencoded"
         elif body_type == "raw" and body:
             kwargs["data"] = body.encode("utf-8")
             body_for_snapshot = body
@@ -313,14 +227,14 @@ def _build_kwargs(
     kwargs["headers"] = headers or None
     snapshot = {
         "method": iface.get("method"),
-        "url": _redact_url(iface.get("url") or ""),
+        "url": iface.get("url") or "",
         "query_params": [
-            {"key": key, "value": str(_redact_value(key, value))}
+            {"key": key, "value": str(value)}
             for key, value in query
         ],
-        "headers": _redact_headers(headers),
+        "headers": _snapshot_headers(headers),
         "body_type": iface.get("body_type"),
-        "body_content": _redact_body(body_for_snapshot, body_content_type),
+        "body_content": _snapshot_body(body_for_snapshot),
         "use_w3": iface.get("use_w3"),
         "source": overrides.source,
         "proxy_key_name": overrides.proxy_key_name,
@@ -451,7 +365,7 @@ def run_interface(
         result["ok"] = result["error"] is None
     except requests.Timeout as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = _redact_text(f"请求超时：{exc}")
+        result["error"] = f"请求超时：{exc}"
         result["error_type"] = "timeout"
     except OutboundTargetError as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
@@ -459,7 +373,7 @@ def run_interface(
         result["error_type"] = "configuration"
     except requests.RequestException as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = _redact_text(f"请求失败：{exc}")
+        result["error"] = f"请求失败：{exc}"
         result["error_type"] = "network"
 
     _save_run(iface, result, overrides, snapshot)
@@ -478,15 +392,15 @@ def _save_run(
     if snapshot is None:
         snapshot = {
             "method": iface.get("method"),
-            "url": _redact_url(iface.get("url") or ""),
+            "url": iface.get("url") or "",
             "query_params": [
                 {
                     "key": item.get("key", ""),
-                    "value": str(_redact_value(item.get("key", ""), item.get("value", ""))),
+                    "value": str(item.get("value", "")),
                 }
                 for item in iface.get("query_params", [])
             ],
-            "headers": _redact_headers(
+            "headers": _snapshot_headers(
                 {
                     item.get("key", ""): item.get("value", "")
                     for item in iface.get("headers", [])
@@ -494,10 +408,7 @@ def _save_run(
                 }
             ),
             "body_type": iface.get("body_type"),
-            "body_content": _redact_body(
-                iface.get("body_content", ""),
-                "application/json" if iface.get("body_type") == "json" else None,
-            ),
+            "body_content": _snapshot_body(iface.get("body_content", "")),
             "use_w3": iface.get("use_w3"),
             "source": overrides.source,
             "proxy_key_name": overrides.proxy_key_name,
@@ -516,13 +427,11 @@ def _save_run(
                 result["elapsed_ms"],
                 json.dumps(snapshot, ensure_ascii=False),
                 json.dumps(
-                    _redact_response_headers(result["response_headers"]),
+                    result["response_headers"],
                     ensure_ascii=False,
                 ),
-                _redact_response_body(
-                    result["response_body"], result.get("content_type")
-                ),
-                _redact_text(result["error"]) if result["error"] else None,
+                _snapshot_response_body(result["response_body"]),
+                result["error"],
                 1 if result["relogin"] else 0,
                 overrides.source,
                 overrides.proxy_key_id,
@@ -543,11 +452,4 @@ def _save_run(
             (interface_id, interface_id, config.MAX_RUNS_PER_INTERFACE),
         )
     if iface.get("use_w3"):
-        db.record_credential_usage(
-            iface,
-            {
-                **result,
-                "error": _redact_text(result["error"]) if result["error"] else None,
-            },
-            now,
-        )
+        db.record_credential_usage(iface, result, now)

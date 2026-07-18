@@ -383,7 +383,7 @@ def test_online_credential_config_is_encrypted_and_password_is_never_returned(hu
     assert "允许清单" in malicious_login_url.json()["detail"]
 
 
-def test_preview_run_uses_draft_without_saving_and_redacts_history(
+def test_preview_run_uses_draft_without_saving_and_keeps_full_history(
     hub_client, monkeypatch
 ):
     item = hub_client.post("/interfaces", json=_interface(name="已保存名称")).json()
@@ -427,8 +427,7 @@ def test_preview_run_uses_draft_without_saving_and_redacts_history(
     detail = hub_client.get(
         f"/interfaces/{item['id']}/runs/{history[0]['id']}"
     ).json()
-    assert "upstream-secret" not in detail["response_body"]
-    assert "***" in detail["response_body"]
+    assert "upstream-secret" in detail["response_body"]
 
 
 def test_outbound_urls_need_no_allowlist_and_mcp_tokens_fail_closed(

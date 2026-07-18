@@ -585,19 +585,40 @@ function ResultTabs({
     { key: 'failed', label: '失败' },
     { key: 'slow', label: `慢调用 ≥ ${slowThreshold}ms` },
   ]
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
+
+  useEffect(() => {
+    const container = tabsRef.current
+    if (!container) return
+    const activeButton = container.querySelector(`[data-tab-value="${value}"]`) as HTMLElement | null
+    if (!activeButton) return
+    const containerRect = container.getBoundingClientRect()
+    const buttonRect = activeButton.getBoundingClientRect()
+    setIndicatorPos({
+      left: buttonRect.left - containerRect.left,
+      width: buttonRect.width,
+    })
+  }, [slowThreshold, value])
 
   return (
-    <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1" aria-label="调用结果筛选">
+    <div ref={tabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5" aria-label="调用结果筛选">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+        style={{ left: `${indicatorPos.left}px`, width: `${indicatorPos.width}px` }}
+      />
       {tabs.map(tab => (
         <button
           key={tab.key}
           type="button"
+          data-tab-value={tab.key}
           onClick={() => onChange(tab.key)}
           aria-pressed={value === tab.key}
-          className={`rounded-md px-3 py-1.5 text-[11px] font-medium transition ${
+          className={`relative z-10 rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 ${
             value === tab.key
-              ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
-              : 'text-slate-500 hover:text-slate-800'
+              ? 'text-white'
+              : 'text-slate-500 hover:text-slate-700'
           }`}
         >
           {tab.label}
@@ -837,9 +858,9 @@ function RunDetailDrawer({
     ? detail.request_snapshot.url
     : ''
   const tabs: Array<{ key: DetailTab; label: string }> = [
-    { key: 'request', label: '请求快照（已脱敏）' },
+    { key: 'request', label: '请求快照' },
     { key: 'response', label: '响应体' },
-    { key: 'headers', label: '响应头（已脱敏）' },
+    { key: 'headers', label: '响应头' },
   ]
 
   return (
