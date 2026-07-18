@@ -420,6 +420,7 @@ class BrowserManager:
         self._tickets: dict[str, tuple[str, str | None, float]] = {}
         self._ticket_lock = threading.Lock()
         self._live_clients: dict[str, int] = {}
+        self._live_leases: dict[str, dict[str, float]] = {}
         self._reaper_task: asyncio.Task | None = None
         self._registry_lock = asyncio.Lock()
 
@@ -463,7 +464,31 @@ class BrowserManager:
                 logger.warning("steward browser idle reaper failed", exc_info=True)
 
     def _is_live(self, conversation_id: str) -> bool:
-        return self._live_clients.get(conversation_id, 0) > 0
+        self._prune_live_leases(conversation_id)
+        leases = getattr(self, "_live_leases", {}).get(conversation_id, {})
+        return self._live_clients.get(conversation_id, 0) > 0 or bool(leases)
+
+    def _prune_live_leases(self, conversation_id: str | None = None) -> None:
+        """Drop abandoned HTTP takeover leases.
+
+        Native WebSockets have a close event, while HTTP polling does not.  The
+        renewable lease makes a crashed tab fail open for the Agent after a
+        bounded delay instead of holding the conversation forever.
+        """
+        registry = getattr(self, "_live_leases", None)
+        if not registry:
+            return
+        now = time.monotonic()
+        conversation_ids = [conversation_id] if conversation_id else list(registry)
+        for cid in conversation_ids:
+            leases = registry.get(cid)
+            if not leases:
+                continue
+            for lease_id, expires_at in list(leases.items()):
+                if expires_at <= now:
+                    leases.pop(lease_id, None)
+            if not leases:
+                registry.pop(cid, None)
 
     @staticmethod
     def _is_busy(session: BrowserSession) -> bool:
@@ -559,6 +584,72 @@ class BrowserManager:
 
     async def detach_live(self, conversation_id: str) -> None:
         await self.acall(self._detach_live(conversation_id), timeout=10)
+
+    def _http_lease_ttl(self) -> int:
+        return max(5, int(settings.steward_browser_http_lease_seconds))
+
+    async def _attach_http_live(self, conversation_id: str) -> dict:
+        session = await self._require(conversation_id)
+        async with session.operation_lock:
+            lease_id = secrets.token_urlsafe(24)
+            expires_at = time.monotonic() + self._http_lease_ttl()
+            self._live_leases.setdefault(conversation_id, {})[lease_id] = expires_at
+            session.touch()
+        return {
+            "leaseId": lease_id,
+            "expiresIn": self._http_lease_ttl(),
+            "frameIntervalMs": max(250, int(settings.steward_browser_http_frame_interval_ms)),
+        }
+
+    def attach_http_live(self, conversation_id: str) -> dict:
+        return self.call(
+            self._attach_http_live(conversation_id),
+            timeout=max(10, int(settings.steward_browser_timeout_seconds) + 5),
+        )
+
+    async def _renew_http_live(self, conversation_id: str, lease_id: str) -> None:
+        self._prune_live_leases(conversation_id)
+        leases = self._live_leases.get(conversation_id, {})
+        if not lease_id or lease_id not in leases:
+            raise BrowserRuntimeError("HTTP 实时浏览器接管已过期，请重新连接")
+        leases[lease_id] = time.monotonic() + self._http_lease_ttl()
+        session = await self._require(conversation_id)
+        session.touch()
+
+    async def _http_live_screenshot(self, conversation_id: str, lease_id: str) -> dict:
+        await self._renew_http_live(conversation_id, lease_id)
+        return await self._screenshot(conversation_id)
+
+    def http_live_screenshot(self, conversation_id: str, lease_id: str) -> dict:
+        return self.call(
+            self._http_live_screenshot(conversation_id, lease_id),
+            timeout=max(10, int(settings.steward_browser_timeout_seconds) + 5),
+        )
+
+    async def _http_live_input(
+        self, conversation_id: str, lease_id: str, message: dict,
+    ) -> None:
+        await self._renew_http_live(conversation_id, lease_id)
+        await self._input(conversation_id, message)
+
+    def http_live_input(self, conversation_id: str, lease_id: str, message: dict) -> None:
+        self.call(
+            self._http_live_input(conversation_id, lease_id, message),
+            timeout=max(10, int(settings.steward_browser_timeout_seconds) + 5),
+        )
+
+    async def _release_http_live(self, conversation_id: str, lease_id: str) -> None:
+        leases = self._live_leases.get(conversation_id)
+        if leases:
+            leases.pop(lease_id, None)
+            if not leases:
+                self._live_leases.pop(conversation_id, None)
+        session = self._sessions.get(conversation_id)
+        if session:
+            session.touch()
+
+    def release_http_live(self, conversation_id: str, lease_id: str) -> None:
+        self.call(self._release_http_live(conversation_id, lease_id), timeout=10)
 
     async def _capacity_status(self) -> dict:
         await self._reap_idle()
@@ -1039,6 +1130,8 @@ class BrowserManager:
                 if session.capture_tasks:
                     await asyncio.gather(*session.capture_tasks, return_exceptions=True)
                 await session.context.close()
+        self._live_clients.pop(conversation_id, None)
+        self._live_leases.pop(conversation_id, None)
 
     def close(self, conversation_id: str) -> None:
         self.call(self._close(conversation_id), timeout=20)

@@ -187,6 +187,14 @@ export const stewardApi = {
     apiClientV2.get<{ active: boolean; url: string; live: boolean }>(`/steward/conversations/${cid}/browser/session`),
   browserTicket: (cid: string) =>
     apiClientV2.post<{ ticket: string; expiresIn: number }>(`/steward/conversations/${cid}/browser/ticket`),
+  browserLiveHttpAttach: (cid: string) =>
+    apiClientV2.post<{ leaseId: string; expiresIn: number; frameIntervalMs: number }>(`/steward/conversations/${cid}/browser/live-http`),
+  browserLiveHttpFrame: (cid: string, leaseId: string) =>
+    apiClientV2.post<{ data: string; url: string }>(`/steward/conversations/${cid}/browser/live-http/frame`, { leaseId }),
+  browserLiveHttpInput: (cid: string, leaseId: string, message: Record<string, unknown>) =>
+    apiClientV2.post<{ accepted: boolean }>(`/steward/conversations/${cid}/browser/live-http/input`, { leaseId, message }),
+  browserLiveHttpRelease: (cid: string, leaseId: string) =>
+    apiClientV2.post<{ released: boolean }>(`/steward/conversations/${cid}/browser/live-http/release`, { leaseId }),
   browserCaptures: (cid: string, keyword = '') =>
     apiClientV2.get<BrowserCapture[]>(`/steward/conversations/${cid}/browser/captures`, { params: { keyword, limit: 100 } }),
   downloadCapture: (cid: string, captureId: string) =>

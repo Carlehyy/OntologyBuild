@@ -464,6 +464,82 @@ def test_live_browser_handoff_blocks_agent_but_allows_user_actions():
     manager._assert_actor_allowed("conversation", "user")
 
 
+def test_http_live_lease_blocks_agent_and_expires(monkeypatch):
+    session = SimpleNamespace(
+        conversation_id="conversation",
+        operation_lock=asyncio.Lock(),
+        touch=lambda: None,
+        page=SimpleNamespace(is_closed=lambda: False),
+    )
+    manager = BrowserManager.__new__(BrowserManager)
+    manager._sessions = {"conversation": session}
+    manager._live_clients = {}
+    manager._live_leases = {}
+    monkeypatch.setattr(settings, "steward_browser_http_lease_seconds", 5)
+    monkeypatch.setattr(settings, "steward_browser_http_frame_interval_ms", 500)
+
+    attached = asyncio.run(manager._attach_http_live("conversation"))
+
+    assert attached["expiresIn"] == 5
+    assert attached["frameIntervalMs"] == 500
+    with pytest.raises(BrowserRuntimeError, match="手动接管"):
+        manager._assert_actor_allowed("conversation", "agent")
+
+    manager._live_leases["conversation"][attached["leaseId"]] = time.monotonic() - 1
+    manager._assert_actor_allowed("conversation", "agent")
+    assert manager._live_leases == {}
+
+
+def test_http_live_fallback_routes_keep_auth_and_input_contract(
+    client, auth_headers, monkeypatch,
+):
+    conversation = client.post(
+        "/api/v2/steward/conversations", json={"title": "HTTP 实时浏览器"},
+        headers=auth_headers,
+    ).json()["data"]
+    calls = []
+    monkeypatch.setattr(browser_manager, "attach_http_live", lambda cid: {
+        "leaseId": "lease-1", "expiresIn": 30, "frameIntervalMs": 500,
+    })
+    monkeypatch.setattr(browser_manager, "http_live_screenshot", lambda cid, lease: {
+        "data": "jpeg-base64", "url": "https://example.com/current",
+    })
+    monkeypatch.setattr(
+        browser_manager, "http_live_input",
+        lambda cid, lease, message: calls.append((cid, lease, message)),
+    )
+    monkeypatch.setattr(
+        browser_manager, "release_http_live",
+        lambda cid, lease: calls.append((cid, lease, "released")),
+    )
+    base = f"/api/v2/steward/conversations/{conversation['id']}/browser/live-http"
+
+    unauthorized = client.post(base)
+    assert unauthorized.status_code in {401, 403}
+    attached = client.post(base, headers=auth_headers)
+    assert attached.status_code == 200
+    assert attached.json()["data"]["leaseId"] == "lease-1"
+    frame = client.post(
+        f"{base}/frame", json={"leaseId": "lease-1"}, headers=auth_headers,
+    )
+    assert frame.json()["data"]["data"] == "jpeg-base64"
+    assert frame.headers["cache-control"] == "no-store"
+    sent = client.post(
+        f"{base}/input",
+        json={"leaseId": "lease-1", "message": {"type": "key", "key": "Enter"}},
+        headers=auth_headers,
+    )
+    assert sent.json()["data"] == {"accepted": True}
+    released = client.post(
+        f"{base}/release", json={"leaseId": "lease-1"}, headers=auth_headers,
+    )
+    assert released.json()["data"] == {"released": True}
+    assert calls == [
+        (conversation["id"], "lease-1", {"type": "key", "key": "Enter"}),
+        (conversation["id"], "lease-1", "released"),
+    ]
+
+
 def test_browser_session_info_reports_existing_agent_page():
     class Page:
         url = "https://example.com/current"

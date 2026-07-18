@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     steward_browser_timeout_seconds: int = 30
     steward_browser_max_captures: int = 300
     steward_browser_frame_interval_ms: int = 250
+    # WebSocket-blocked clients fall back to authenticated HTTP frame polling.
+    # A short renewable lease preserves manual-takeover semantics without
+    # leaving the Agent paused forever when a tab or network disappears.
+    steward_browser_http_lease_seconds: int = 30
+    steward_browser_http_frame_interval_ms: int = 500
     # One Chromium process is shared, while every active conversation owns an
     # isolated BrowserContext.  Bound those contexts and suspend idle ones so a
     # user cannot exhaust the sidecar simply by creating conversations.

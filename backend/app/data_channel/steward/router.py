@@ -25,7 +25,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -341,6 +341,14 @@ class BindBrowserSourceBody(BaseModel):
     sourceId: str | None = None
 
 
+class BrowserLiveLeaseBody(BaseModel):
+    leaseId: str
+
+
+class BrowserLiveInputBody(BrowserLiveLeaseBody):
+    message: dict[str, object]
+
+
 def _browser_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (BrowserRuntimeError, StewardError, workspace.WorkspaceError)):
         return HTTPException(422, str(exc))
@@ -572,6 +580,54 @@ def browser_live_ticket(conversation_id: str, db: Session = Depends(get_db),
     _require_conversation(db, conversation_id, current_user)
     ticket = browser_manager.issue_ticket(conversation_id, getattr(current_user, "id", None))
     return _ok({"ticket": ticket, "expiresIn": 60})
+
+
+@router.post("/conversations/{conversation_id}/browser/live-http")
+def attach_browser_live_http(conversation_id: str, db: Session = Depends(get_db),
+                             current_user=Depends(get_current_user)):
+    """Start the authenticated HTTP fallback when WebSocket is unavailable."""
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        return _ok(browser_manager.attach_http_live(conversation_id))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/live-http/frame")
+def browser_live_http_frame(conversation_id: str, body: BrowserLiveLeaseBody,
+                            response: Response,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        response.headers["Cache-Control"] = "no-store"
+        return _ok(browser_manager.http_live_screenshot(conversation_id, body.leaseId))
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/live-http/input")
+def browser_live_http_input(conversation_id: str, body: BrowserLiveInputBody,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        browser_manager.http_live_input(conversation_id, body.leaseId, body.message)
+        return _ok({"accepted": True})
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/live-http/release")
+def release_browser_live_http(conversation_id: str, body: BrowserLiveLeaseBody,
+                              db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        browser_manager.release_http_live(conversation_id, body.leaseId)
+        return _ok({"released": True})
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
 
 
 # ── 受管流水线面板 ────────────────────────────────────────────────

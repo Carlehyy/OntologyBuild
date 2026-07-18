@@ -1479,6 +1479,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
   const [currentUrl, setCurrentUrl] = useState('')
   const [frame, setFrame] = useState('')
   const [connected, setConnected] = useState(false)
+  const [liveTransport, setLiveTransport] = useState<'websocket' | 'http' | ''>('')
   const [attaching, setAttaching] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -1494,7 +1495,13 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
   const [pairing, setPairing] = useState<{ sourceId: string; token: string } | null>(null)
   const [sourceBusy, setSourceBusy] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  const httpLeaseRef = useRef<string | null>(null)
+  const liveRunRef = useRef(0)
+  const inputQueueRef = useRef<Promise<void>>(Promise.resolve())
   const imageRef = useRef<HTMLImageElement>(null)
+  const sourceButtonRef = useRef<HTMLButtonElement>(null)
+  const sourceDrawerRef = useRef<HTMLDivElement>(null)
+  const sourceDrawerCloseRef = useRef<HTMLButtonElement>(null)
 
   const loadSources = useCallback(async () => {
     try {
@@ -1510,20 +1517,158 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
 
   useEffect(() => { void loadSources() }, [loadSources])
 
+  const closeSources = useCallback(() => {
+    setShowSources(false)
+    window.requestAnimationFrame(() => sourceButtonRef.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    if (!showSources) return
+    const focusFrame = window.requestAnimationFrame(() => sourceDrawerCloseRef.current?.focus())
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeSources()
+    }
+    window.addEventListener('keydown', closeOnEscape, true)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      window.removeEventListener('keydown', closeOnEscape, true)
+    }
+  }, [closeSources, showSources])
+
+  const trapSourceDrawerFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Tab') return
+    const focusable = [...(sourceDrawerRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) || [])].filter(element => !element.hasAttribute('inert'))
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus()
+    }
+  }
+
+  const stopLive = useCallback(() => {
+    liveRunRef.current += 1
+    const ws = wsRef.current
+    wsRef.current = null
+    ws?.close()
+    const leaseId = httpLeaseRef.current
+    httpLeaseRef.current = null
+    if (leaseId) void stewardApi.browserLiveHttpRelease(conversationId, leaseId).catch(() => undefined)
+    setConnected(false)
+    setLiveTransport('')
+  }, [conversationId])
+
+  const startHttpFallback = useCallback(async (runId: number) => {
+    const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms))
+    while (liveRunRef.current === runId) {
+      let attached: { leaseId: string; expiresIn: number; frameIntervalMs: number }
+      try {
+        attached = await stewardApi.browserLiveHttpAttach(conversationId)
+        if (liveRunRef.current !== runId) {
+          void stewardApi.browserLiveHttpRelease(conversationId, attached.leaseId).catch(() => undefined)
+          return
+        }
+        httpLeaseRef.current = attached.leaseId
+        setConnected(true)
+        setLiveTransport('http')
+        setError('')
+      } catch (err: unknown) {
+        if (liveRunRef.current !== runId) return
+        setConnected(false)
+        setAttaching(false)
+        setError(errorText(err, '实时画面的 HTTP 兼容模式连接失败，正在重试'))
+        await wait(1500)
+        continue
+      }
+      const leaseId = attached.leaseId
+      const frameIntervalMs = attached.frameIntervalMs
+
+      let failures = 0
+      while (liveRunRef.current === runId && httpLeaseRef.current === leaseId) {
+        try {
+          const nextFrame = await stewardApi.browserLiveHttpFrame(conversationId, leaseId)
+          if (liveRunRef.current !== runId || httpLeaseRef.current !== leaseId) break
+          failures = 0
+          setConnected(true)
+          setAttaching(false)
+          setError('')
+          setFrame(`data:image/jpeg;base64,${nextFrame.data}`)
+          if (nextFrame.url) { setCurrentUrl(nextFrame.url); setUrl(nextFrame.url) }
+        } catch (err: unknown) {
+          if (liveRunRef.current !== runId) break
+          failures += 1
+          if (failures >= 3) {
+            setConnected(false)
+            setError(errorText(err, 'HTTP 兼容画面暂时中断，正在重连'))
+            break
+          }
+        }
+        await wait(failures ? 1000 : frameIntervalMs)
+      }
+
+      if (httpLeaseRef.current === leaseId) httpLeaseRef.current = null
+      if (leaseId) void stewardApi.browserLiveHttpRelease(conversationId, leaseId).catch(() => undefined)
+      if (liveRunRef.current === runId) await wait(1000)
+    }
+  }, [conversationId])
+
   const connectLive = useCallback(async () => {
-    wsRef.current?.close()
-    const { ticket } = await stewardApi.browserTicket(conversationId)
+    stopLive()
+    const runId = liveRunRef.current
+    setAttaching(true)
+    let ticket: string
+    try {
+      ticket = (await stewardApi.browserTicket(conversationId)).ticket
+    } catch {
+      if (liveRunRef.current === runId) void startHttpFallback(runId)
+      return
+    }
+    if (liveRunRef.current !== runId) return
     const runtimeBase = ((window as Window & { __API_BASE_URL__?: string }).__API_BASE_URL__ || window.location.origin).replace(/\/$/, '')
     const wsBase = runtimeBase.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
-    const ws = new WebSocket(`${wsBase}/api/v2/steward/conversations/${conversationId}/browser/live?ticket=${encodeURIComponent(ticket)}`)
+    let ws: WebSocket
+    try {
+      ws = new WebSocket(`${wsBase}/api/v2/steward/conversations/${conversationId}/browser/live?ticket=${encodeURIComponent(ticket)}`)
+    } catch {
+      void startHttpFallback(runId)
+      return
+    }
     wsRef.current = ws
-    ws.onopen = () => { setConnected(true); setError('') }
-    ws.onclose = () => { setConnected(false); setAttaching(false) }
-    ws.onerror = () => { setAttaching(false); setError('实时画面连接失败') }
+    let fallbackStarted = false
+    let receivedFrame = false
+    let timeoutId = 0
+    const fallback = () => {
+      if (fallbackStarted || liveRunRef.current !== runId) return
+      fallbackStarted = true
+      window.clearTimeout(timeoutId)
+      if (wsRef.current === ws) wsRef.current = null
+      ws.close()
+      setConnected(false)
+      setLiveTransport('')
+      void startHttpFallback(runId)
+    }
+    timeoutId = window.setTimeout(() => { if (!receivedFrame) fallback() }, 4000)
+    ws.onopen = () => {
+      if (liveRunRef.current !== runId) return
+      setConnected(true)
+      setLiveTransport('websocket')
+      setError('')
+    }
+    ws.onclose = fallback
+    ws.onerror = fallback
     ws.onmessage = event => {
       try {
         const msg = JSON.parse(event.data)
         if (msg.type === 'frame') {
+          receivedFrame = true
+          window.clearTimeout(timeoutId)
           setAttaching(false)
           setFrame(`data:image/jpeg;base64,${msg.data}`)
           if (msg.url) { setCurrentUrl(msg.url); setUrl(msg.url) }
@@ -1533,7 +1678,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
         }
       } catch { /* 忽略损坏帧 */ }
     }
-  }, [conversationId])
+  }, [conversationId, startHttpFallback, stopLive])
 
   useEffect(() => {
     let cancelled = false
@@ -1555,9 +1700,9 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
     void attachExisting()
     return () => {
       cancelled = true
-      wsRef.current?.close()
+      stopLive()
     }
-  }, [conversationId, connectLive])
+  }, [conversationId, connectLive, stopLive])
 
   const open = async () => {
     if (!url.trim()) return
@@ -1577,7 +1722,8 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
     setSourceBusy(true); setError('')
     try {
       await stewardApi.bindBrowserSource(conversationId, sourceId)
-      wsRef.current?.close(); setConnected(false); setFrame(''); setCurrentUrl('')
+      stopLive()
+      setFrame(''); setCurrentUrl('')
       setSelectedSource(sourceId)
     } catch (err: unknown) { setError(errorText(err, '浏览器来源切换失败')) }
     finally { setSourceBusy(false) }
@@ -1628,7 +1774,19 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
     : ''
 
   const send = (message: Record<string, unknown>) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(message))
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(message))
+      return
+    }
+    const leaseId = httpLeaseRef.current
+    if (!leaseId) return
+    inputQueueRef.current = inputQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (httpLeaseRef.current !== leaseId) return
+        await stewardApi.browserLiveHttpInput(conversationId, leaseId, message)
+      })
+      .catch((err: unknown) => setError(errorText(err, '浏览器操作发送失败')))
   }
 
   const point = (event: React.MouseEvent<HTMLImageElement>) => {
@@ -1664,6 +1822,10 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
         <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-2">
           <Monitor size={15} className="text-teal-600" />
           <div className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+          {connected && liveTransport === 'http' && (
+            <span title="当前网络禁止 WebSocket，画面与操作已自动切换到 HTTPS"
+              className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">HTTP 兼容模式</span>
+          )}
           <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && void open()}
             className="h-8 min-w-0 flex-1 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-teal-400" />
           <button onClick={() => void open()} disabled={busy}
@@ -1674,19 +1836,39 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
             className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600'}`}>
             <Activity size={12} /> 接口请求
           </button>
-          <button onClick={() => setShowSources(v => !v)}
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showSources ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600'}`}>
+          <button ref={sourceButtonRef} type="button" aria-expanded={showSources} aria-controls="browser-source-drawer"
+            onClick={() => { if (showSources) closeSources(); else setShowSources(true) }}
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showSources ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600 hover:bg-white'}`}>
             <Settings size={12} /> 浏览器来源
           </button>
           <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-gray-400 hover:text-gray-700"><X size={17} /></button>
         </div>
         {error && <div className={`border-b px-4 py-2 text-xs ${error.startsWith('✓') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>{error}</div>}
-        {showSources && (
-          <div className="grid max-h-[360px] shrink-0 grid-cols-[minmax(260px,0.8fr)_minmax(360px,1.2fr)] overflow-auto border-b bg-[#fafafa]">
-            <div className="border-r p-4">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <button type="button" tabIndex={-1} aria-hidden="true" onClick={closeSources}
+            className={`absolute inset-0 z-20 bg-black/30 transition-opacity duration-200 motion-reduce:transition-none ${showSources ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`} />
+          <div id="browser-source-drawer" ref={sourceDrawerRef} role="dialog"
+            aria-label="浏览器来源" aria-hidden={!showSources} inert={!showSources}
+            onKeyDown={trapSourceDrawerFocus}
+            className={`absolute inset-x-0 top-0 z-30 flex max-h-[min(520px,82%)] flex-col overflow-hidden border-b border-slate-200 bg-[#fafafa] shadow-[0_24px_48px_rgba(15,23,42,0.24)] transition-[transform,opacity] duration-[240ms] ease-out will-change-transform motion-reduce:transition-none ${showSources ? 'translate-y-0 opacity-100' : 'pointer-events-none -translate-y-full opacity-0'}`}>
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Settings size={14} /></span>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-800">浏览器来源</p>
+                  <p className="truncate text-[10px] text-slate-400">选择当前会话使用的平台、本机或远程浏览器</p>
+                </div>
+                {sourceBusy && <Loader2 size={13} className="ml-1 animate-spin text-teal-600" />}
+              </div>
+              <button ref={sourceDrawerCloseRef} type="button" aria-label="关闭浏览器来源抽屉" onClick={closeSources}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(260px,0.8fr)_minmax(360px,1.2fr)]">
+            <div className="border-b border-slate-200 p-4 lg:border-b-0 lg:border-r">
               <div className="mb-3 flex items-center justify-between">
                 <div><p className="text-xs font-semibold text-gray-800">当前会话的浏览器</p><p className="mt-0.5 text-[11px] text-gray-400">每个会话独立绑定，切换会关闭原浏览器上下文</p></div>
-                {sourceBusy && <Loader2 size={13} className="animate-spin text-teal-600" />}
               </div>
               <div className="space-y-2">
                 {sources.map(source => (
@@ -1737,8 +1919,8 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
               )}
             </div>
           </div>
-        )}
-        <div className="flex min-h-0 flex-1 bg-[#15171b]">
+          </div>
+        <div className="flex h-full min-h-0 bg-[#15171b]">
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-2">
             {frame ? (
               <img ref={imageRef} src={frame} draggable={false} tabIndex={0} alt="会话浏览器实时画面"
@@ -1788,6 +1970,7 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
               </div>
             </aside>
           )}
+        </div>
         </div>
         <div className="border-t bg-white px-4 py-2 text-[11px] text-gray-500">
           登录凭据由你直接输入到隔离浏览器，数据管家不会读取密码；完成登录后关闭弹窗并在对话中告诉它继续即可。
