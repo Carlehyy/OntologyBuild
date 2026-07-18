@@ -77,6 +77,11 @@ export interface EventStats {
   api: number
   today: number
   bySeverity: Record<string, number>
+  trend7d: Array<{
+    date: string
+    total: number
+    bySeverity: Record<string, number>
+  }>
 }
 
 export interface IngestKey {

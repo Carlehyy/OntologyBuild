@@ -126,29 +126,45 @@ export default function EventRegistryPage() {
     }
   }, [stats])
 
-  // 7日趋势（构造示例序列 - 实际后端有 7d 接口可替换）
+  // 7 日趋势：直接展示后端按上海自然日聚合的真实登记数据。
   const trendOption = useMemo(() => {
-    const days: string[] = []
-    const today = new Date()
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(today); d.setDate(d.getDate() - i)
-      days.push(`${d.getMonth() + 1}/${d.getDate()}`)
-    }
-    const todayCnt = stats?.today ?? 0
-    const rand = (seed: number) => { const x = Math.sin(seed * 9999) * 10000; return x - Math.floor(x) }
-    const build = (ratio: number, seed: number) => days.map((_, i) => {
-      if (i === 6) return Math.max(0, Math.round(todayCnt * ratio))
-      return Math.max(0, Math.round(todayCnt * 1.2 * ratio * (0.5 + rand(seed + i) * 0.9)))
+    const trend = stats?.trend7d ?? []
+    const days = trend.map(item => {
+      const [, month = '', day = ''] = item.date.split('-')
+      return `${Number(month)}/${Number(day)}`
     })
+    const values = (severity: string) => trend.map(item => item.bySeverity?.[severity] ?? 0)
     return {
       animationDuration: 800,
       grid: { top: 22, right: 12, bottom: 24, left: 32, containLabel: false },
       tooltip: {
         trigger: 'axis',
+        confine: true,
+        padding: [6, 8],
         backgroundColor: 'rgba(255,255,255,0.96)', borderColor: 'rgba(148,163,184,0.2)', borderWidth: 1,
-        textStyle: { color: '#475569', fontSize: 12 },
-        extraCssText: 'backdrop-filter:blur(12px);border-radius:8px;box-shadow:0 4px_16px rgba(15,23,42,0.08);',
+        textStyle: { color: '#475569', fontSize: 11, lineHeight: 14 },
+        extraCssText: 'backdrop-filter:blur(12px);border-radius:8px;box-shadow:0 4px 16px rgba(15,23,42,0.08);',
         axisPointer: { type: 'line', lineStyle: { color: 'rgba(148,163,184,0.3)', type: 'dashed' } },
+        formatter: (rawParams: unknown) => {
+          const params = (Array.isArray(rawParams) ? rawParams : [rawParams]) as Array<{
+            axisValueLabel?: string
+            marker?: string
+            seriesName?: string
+            value?: number | string
+          }>
+          const rows = params.map(item => `
+            <div style="display:flex;align-items:center;gap:3px;min-width:58px">
+              ${item.marker ?? ''}<span>${item.seriesName ?? ''}</span>
+              <strong style="margin-left:auto;color:#334155">${item.value ?? 0}</strong>
+            </div>
+          `).join('')
+          return `
+            <div style="min-width:150px">
+              <div style="margin-bottom:3px;font-weight:600;color:#334155">${params[0]?.axisValueLabel ?? ''}</div>
+              <div style="display:grid;grid-template-columns:repeat(2,minmax(58px,1fr));gap:2px 10px">${rows}</div>
+            </div>
+          `
+        },
       },
       xAxis: {
         type: 'category', data: days, boundaryGap: false,
@@ -163,11 +179,11 @@ export default function EventRegistryPage() {
         axisLabel: { color: '#94A3B8', fontSize: 11 },
       },
       series: [
-        { name: '严重', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.08, 1), itemStyle: { color: PALETTE.red }, areaStyle: { color: PALETTE.red, opacity: 0.25 } },
-        { name: '高级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.15, 2), itemStyle: { color: PALETTE.orange }, areaStyle: { color: PALETTE.orange, opacity: 0.25 } },
-        { name: '中级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.27, 3), itemStyle: { color: PALETTE.gold }, areaStyle: { color: PALETTE.gold, opacity: 0.25 } },
-        { name: '低级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 4), itemStyle: { color: PALETTE.teal }, areaStyle: { color: PALETTE.teal, opacity: 0.25 } },
-        { name: '信息', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: build(0.25, 5), itemStyle: { color: PALETTE.blue }, areaStyle: { color: PALETTE.blue, opacity: 0.25 } },
+        { name: '严重', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: values('critical'), itemStyle: { color: PALETTE.red }, areaStyle: { color: PALETTE.red, opacity: 0.25 } },
+        { name: '高级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: values('high'), itemStyle: { color: PALETTE.orange }, areaStyle: { color: PALETTE.orange, opacity: 0.25 } },
+        { name: '中级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: values('medium'), itemStyle: { color: PALETTE.gold }, areaStyle: { color: PALETTE.gold, opacity: 0.25 } },
+        { name: '低级', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: values('low'), itemStyle: { color: PALETTE.teal }, areaStyle: { color: PALETTE.teal, opacity: 0.25 } },
+        { name: '信息', type: 'line', stack: 'total', smooth: true, showSymbol: false, data: values('info'), itemStyle: { color: PALETTE.blue }, areaStyle: { color: PALETTE.blue, opacity: 0.25 } },
       ],
     }
   }, [stats])

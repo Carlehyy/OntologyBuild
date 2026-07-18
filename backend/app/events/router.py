@@ -26,8 +26,9 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
@@ -45,6 +46,28 @@ from app.events.schemas import (
 
 router = APIRouter()
 ingest_router = APIRouter()
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """数据库中的裸时间按 UTC 解释，带时区时间统一转换为 UTC。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _shanghai_day_start_utc(local_day) -> datetime:
+    """把上海自然日零点转换为数据库使用的 UTC 裸时间。"""
+    local_start = datetime.combine(local_day, datetime.min.time(), tzinfo=SHANGHAI_TZ)
+    return local_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _shanghai_date(value: datetime):
+    return _as_utc(value).astimezone(SHANGHAI_TZ).date()
 
 
 def _ok(data):
@@ -132,7 +155,33 @@ def stats_summary(db: Session = Depends(get_db), _=Depends(get_current_user)):
             query = query.filter(f)
         return query.scalar() or 0
 
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    local_today = _now_utc().astimezone(SHANGHAI_TZ).date()
+    today_start = _shanghai_day_start_utc(local_today)
+    tomorrow_start = _shanghai_day_start_utc(local_today + timedelta(days=1))
+    first_day = local_today - timedelta(days=6)
+    trend = {
+        (first_day + timedelta(days=i)).isoformat(): {
+            sev: 0 for sev in m.SEVERITIES
+        }
+        for i in range(7)
+    }
+    recent = (
+        db.query(RegisteredEvent.recorded_at, RegisteredEvent.severity)
+        .filter(
+            RegisteredEvent.recorded_at >= _shanghai_day_start_utc(first_day),
+            RegisteredEvent.recorded_at < tomorrow_start,
+        )
+        .all()
+    )
+    for recorded_at, severity in recent:
+        if not recorded_at:
+            continue
+        day = _shanghai_date(recorded_at).isoformat()
+        if day not in trend:
+            continue
+        normalized_severity = severity if severity in m.SEVERITIES else "info"
+        trend[day][normalized_severity] += 1
+
     by_severity = {sev: _count(RegisteredEvent.severity == sev,
                                RegisteredEvent.status == m.STATUS_ACTIVE)
                    for sev in m.SEVERITIES}
@@ -142,8 +191,19 @@ def stats_summary(db: Session = Depends(get_db), _=Depends(get_current_user)):
         "archived": _count(RegisteredEvent.status == m.STATUS_ARCHIVED),
         "platform": _count(RegisteredEvent.source_type == m.SOURCE_PLATFORM),
         "api": _count(RegisteredEvent.source_type == m.SOURCE_API),
-        "today": _count(RegisteredEvent.recorded_at >= today),
+        "today": _count(
+            RegisteredEvent.recorded_at >= today_start,
+            RegisteredEvent.recorded_at < tomorrow_start,
+        ),
         "bySeverity": by_severity,
+        "trend7d": [
+            {
+                "date": day,
+                "total": sum(counts.values()),
+                "bySeverity": counts,
+            }
+            for day, counts in trend.items()
+        ],
     })
 
 
