@@ -141,7 +141,6 @@ def proxy_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
     monkeypatch.setattr(config, "HTTP_TIMEOUT", 5)
     monkeypatch.setattr(config, "PROXY_MAX_REQUEST_BYTES", 1024 * 1024)
-    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ("127.0.0.1",))
     db.init_db()
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), EchoHandler)

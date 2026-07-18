@@ -1,0 +1,140 @@
+import { expect, test } from '@playwright/test'
+
+const publishedInterface = {
+  id: 7,
+  name: '创建订单',
+  description: '创建第三方订单',
+  group_name: '订单服务',
+  method: 'POST',
+  url: 'https://vendor.example/v1/orders',
+  query_params: [
+    { key: 'page', value: '1' },
+    { key: 'access_token', value: 'real-query-secret' },
+  ],
+  headers: [
+    { key: 'Authorization', value: 'Bearer real-header-secret' },
+    { key: 'X-Trace-ID', value: 'trace-default' },
+  ],
+  body_type: 'json',
+  body_content: '{"productId":1001,"password":"private"}',
+  use_w3: false,
+  mcp_enabled: false,
+  open_enabled: false,
+  http_enabled: true,
+  proxy_slug: 'orders',
+  proxy_query_keys: ['page'],
+  proxy_header_keys: ['X-Trace-ID'],
+  proxy_body_enabled: true,
+  proxy_body_keys: ['/productId'],
+}
+
+const forwardingPackage = {
+  key_id: 21,
+  key_name: '创建订单 · 调用包',
+  secret: 'hub_one_time_secret',
+  path: '/proxy/orders',
+  key_header: 'X-API-Hub-Key',
+  method: 'POST',
+  query_params: [{ key: 'page', value: '1' }],
+  header_params: [{ key: 'X-Trace-ID', value: '' }],
+  body_type: 'json',
+  body_template: '{\n  "productId": 1001\n}',
+  editable_body_keys: ['/productId'],
+  generated_at: '2026-07-18T10:00:00Z',
+}
+
+test('已转发接口可一键复制完整且不泄露平台敏感配置的调用示例', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'admin-token')
+    localStorage.setItem('auth-store', JSON.stringify({
+      state: {
+        token: 'admin-token',
+        user: {
+          id: 1,
+          username: 'admin',
+          email: 'admin@example.com',
+          role: 'admin',
+          is_active: true,
+        },
+      },
+      version: 0,
+    }))
+  })
+  await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
+  await page.route('**/api/api-hub/**', async route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'GET' && path === '/api/api-hub/interfaces') {
+      await route.fulfill({ json: [publishedInterface] })
+      return
+    }
+    if (request.method() === 'GET' && path === '/api/api-hub/interfaces/7') {
+      await route.fulfill({ json: publishedInterface })
+      return
+    }
+    if (request.method() === 'POST' && path === '/api/api-hub/interfaces/7/http-publication/auto') {
+      await route.fulfill({ json: publishedInterface })
+      return
+    }
+    if (request.method() === 'POST' && path === '/api/api-hub/proxy/packages/7') {
+      await route.fulfill({ json: forwardingPackage })
+      return
+    }
+    if (request.method() === 'GET' && path === '/api/api-hub/credential/status') {
+      await route.fulfill({ json: {
+        configured: false,
+        has_session: false,
+        expired: false,
+        expires_at: null,
+        acquired_at: null,
+        last_result: null,
+        message: '',
+        refreshed_at: null,
+        cron: '0 */2 * * *',
+        next_run: null,
+        username: '',
+        credential_source: 'environment',
+      } })
+      return
+    }
+    if (request.method() === 'GET' && path === '/api/api-hub/proxy/info') {
+      await route.fulfill({ json: {
+        path: '/proxy',
+        key_header: 'X-API-Hub-Key',
+        port: 8000,
+        key_count: 1,
+        published: [{ id: 7, name: '创建订单', method: 'POST', proxy_slug: 'orders' }],
+      } })
+      return
+    }
+    await route.fulfill({ json: {} })
+  })
+
+  await page.goto('/#/api-hub/interfaces')
+  await expect(page.getByText('创建订单').first()).toBeVisible()
+  await page.getByRole('button', { name: '转发调用', exact: true }).click()
+
+  const dialog = page.getByRole('dialog', { name: /转发调用/ })
+  await dialog.getByRole('button', { name: '生成新的调用包' }).click()
+  const executableExample = dialog.locator('pre')
+  await expect(executableExample).toContainText('/proxy/orders?page=1')
+  await expect(executableExample).toContainText('X-API-Hub-Key: hub_one_time_secret')
+  await expect(executableExample).toContainText('X-Trace-ID: <X-Trace-ID>')
+  await expect(executableExample).toContainText('"productId": 1001')
+  await expect(executableExample).not.toContainText('password')
+  await dialog.getByRole('button', { name: '复制当前代码' }).click()
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('hub_one_time_secret')
+
+  await dialog.getByRole('button', { name: '完成' }).click()
+  await page.getByRole('button', { name: '复制“创建订单”的转发调用示例' }).click()
+  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  expect(copied).toContain('/proxy/orders?page=1')
+  expect(copied).toContain('X-API-Hub-Key: <调用密钥>')
+  expect(copied).toContain('X-Trace-ID: YOUR_X_TRACE_ID')
+  expect(copied).toContain('"productId": 1001')
+  expect(copied).not.toContain('real-query-secret')
+  expect(copied).not.toContain('real-header-secret')
+  expect(copied).not.toContain('password')
+  expect(copied).not.toContain('private')
+})

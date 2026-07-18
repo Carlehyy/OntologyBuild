@@ -10,6 +10,7 @@ import {
   OpenInterfacesModal, ProxyKeysModal, SystemDataModal,
 } from './InterfaceDataModals'
 import { HttpPublicationModal } from './HttpPublicationModal'
+import { buildProxyCallExample } from './proxyCallExample'
 
 interface Props {
   interfaces: HubInterface[]
@@ -44,6 +45,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [curl, setCurl] = useState('')
   const [openInterfaces, setOpenInterfaces] = useState(false)
   const [publicationTarget, setPublicationTarget] = useState<HubInterface | null>(null)
+  const [publicationCopying, setPublicationCopying] = useState(false)
+  const [publicationCopied, setPublicationCopied] = useState(false)
   const [proxyKeys, setProxyKeys] = useState(false)
   const [systemData, setSystemData] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -132,6 +135,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [isDirty])
+
+  useEffect(() => setPublicationCopied(false), [selectedId])
 
   const save = async (): Promise<HubInterface | null> => {
     if (!draft.name.trim()) { onError('请填写接口名称'); return null }
@@ -226,6 +231,33 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     }
   }
 
+  const copyPublishedExample = async () => {
+    if (!draft.id) return
+    setPublicationCopying(true)
+    try {
+      const [saved, info] = await Promise.all([
+        apiHub.getInterface(draft.id),
+        apiHub.proxyInfo(),
+      ])
+      if (!saved.http_enabled) {
+        onError('该接口尚未启用转发调用')
+        return
+      }
+      const example = buildProxyCallExample({
+        item: saved,
+        origin: window.location.origin,
+        proxyPath: info.path,
+        keyHeader: info.key_header,
+      })
+      await navigator.clipboard.writeText(example)
+      setPublicationCopied(true)
+    } catch (error) {
+      onError(apiError(error) || '复制失败，请检查浏览器剪贴板权限')
+    } finally {
+      setPublicationCopying(false)
+    }
+  }
+
   return (
     <div ref={containerRef} className="scrollbar-none grid h-full min-h-0 overflow-x-auto overflow-y-hidden p-1" style={{ gridTemplateColumns: `minmax(250px, ${sizes[0]}fr) 4px minmax(680px, ${sizes[1]}fr)` }}>
       <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
@@ -283,6 +315,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint('') }}><Copy size={14} /></Button>}
           {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
           {draft.id && <Button variant="outline" size="sm" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />转发调用</Button>}
+          {draft.id && draft.http_enabled && <Button variant="outline" size="sm" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的转发调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? '转发调用示例复制成功' : ''}</span></Button>}
           <Button variant="outline" size="sm" onClick={showCurl}><FileCode2 size={14} />cURL</Button>
           <Button variant="outline" size="sm" loading={saving} onClick={save}><Check size={14} />保存</Button>
           {isDirty && <span className="rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}

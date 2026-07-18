@@ -1,7 +1,10 @@
-"""Outbound URL validation and redirect handling for API-Hub."""
+"""Outbound URL validation and redirect handling for API-Hub.
+
+Interface targets are intentionally not restricted by a deployment-level host
+allowlist.  Registered interfaces may call any valid HTTP/HTTPS endpoint.
+"""
 from __future__ import annotations
 
-import ipaddress
 from collections.abc import Callable
 from urllib.parse import urljoin, urlsplit
 
@@ -12,32 +15,6 @@ from . import config
 
 class OutboundTargetError(ValueError):
     pass
-
-
-def _text_host_allowed(hostname: str) -> bool:
-    hostname = hostname.lower().rstrip(".")
-    for raw in config.OUTBOUND_ALLOWED_HOSTS:
-        allowed = raw.lower().strip().rstrip(".")
-        if not allowed:
-            continue
-        if allowed.startswith("*.") and hostname.endswith(allowed[1:]):
-            return True
-        try:
-            ipaddress.ip_network(allowed, strict=False)
-        except ValueError:
-            if hostname == allowed:
-                return True
-    return False
-
-
-def _ip_allowed(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    for raw in config.OUTBOUND_ALLOWED_HOSTS:
-        try:
-            if address in ipaddress.ip_network(raw.strip(), strict=False):
-                return True
-        except ValueError:
-            continue
-    return False
 
 
 def validate_outbound_url(url: str) -> str:
@@ -52,20 +29,7 @@ def validate_outbound_url(url: str) -> str:
     except ValueError as exc:
         raise OutboundTargetError("接口 URL 端口无效") from exc
 
-    hostname = parsed.hostname.lower().rstrip(".")
-    if _text_host_allowed(hostname):
-        return value
-
-    try:
-        address = ipaddress.ip_address(hostname)
-        if _ip_allowed(address):
-            return value
-    except ValueError:
-        pass
-
-    raise OutboundTargetError(
-        f"接口目标未进入 API_HUB_OUTBOUND_ALLOWED_HOSTS：{hostname}"
-    )
+    return value
 
 
 def request_with_safe_redirects(

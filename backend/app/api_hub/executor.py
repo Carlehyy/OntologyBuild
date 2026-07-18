@@ -455,8 +455,8 @@ def run_interface(
         result["error_type"] = "timeout"
     except OutboundTargetError as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"目标地址被安全策略拒绝：{exc}"
-        result["error_type"] = "ssrf_blocked"
+        result["error"] = f"接口 URL 无效：{exc}"
+        result["error_type"] = "configuration"
     except requests.RequestException as exc:
         result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
         result["error"] = _redact_text(f"请求失败：{exc}")

@@ -55,7 +55,7 @@
 - **三类浏览器来源** — 每个会话可独立选择平台 Docker 浏览器、管理员配置的加密远程 CDP，或用户电脑上的浏览器助手；切换来源不会影响其他会话
 - **接口与分页发现** — 记录同会话浏览器的 XHR/fetch/文件响应，脱敏展示认证头，并识别 page/offset/cursor 等分页模式及返回结构
 - **授权下载与接口代理** — 在浏览器登录态下重放已捕获的 GET 文件请求；内网接口可登记到接口代理，由 n8n 通过受令牌保护的 `/api-hub/proxy/{id}` 间接调用
-- **普通 HTTP 接口发布** — 已登记接口可发布为稳定的 `/proxy/{公开路径}`；调用方使用独立密钥，平台按配置开放 Query、业务 Header 和 Body，并视情况自动注入 W3 登录态
+- **普通 HTTP 接口发布** — 已登记接口可发布为稳定的 `/proxy/{公开路径}`；调用方使用独立密钥，平台按配置开放 Query、业务 Header 和 Body，并可一键复制完整 cURL 调用示例
 - **受治理的 n8n 编排** — 数据管家仍只新建和编排未发布、未启用的工作流；试跑、字段封版、发布与启用继续由流水线编辑向导把关
 
 ### 平台
@@ -132,9 +132,8 @@ Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 S
 手动启动时如需数据管家的实时浏览器，还要准备一个开放 CDP 的 Chromium，并设置
 `STEWARD_BROWSER_CDP_URL`（默认 `http://localhost:9222`）。生产环境应同时配置
 `API_HUB_SYSTEM_MCP_TOKEN`，在 n8n 中以 Header Auth 凭据保存该令牌；不要把令牌直接写入工作流 JSON。
-接口代理的每个目标域名或网段还必须显式写入 `API_HUB_OUTBOUND_ALLOWED_HOSTS`
-（支持精确域名、`*.example.com` 和 CIDR）；留空会拒绝全部出站调用。内网自签 CA 应通过
-`API_HUB_TLS_CA_BUNDLE` 指定信任链，平台不会关闭 TLS 证书校验。MCP 令牌留空时对应入口保持禁用；
+接口代理中登记的接口可直接调用任意 HTTP/HTTPS 目标，无需额外配置出站域名白名单。内网自签 CA
+应通过 `API_HUB_TLS_CA_BUNDLE` 指定信任链，平台不会关闭 TLS 证书校验。MCP 令牌留空时对应入口保持禁用；
 从外部生产域名访问 MCP 时，还需同步配置 `API_HUB_MCP_ALLOWED_HOSTS` 和
 `API_HUB_MCP_ALLOWED_ORIGINS`。
 

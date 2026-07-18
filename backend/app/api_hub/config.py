@@ -54,7 +54,6 @@ MAX_RUNS_PER_INTERFACE = int(
     _env("API_HUB_MAX_RUNS_PER_INTERFACE", _env("MAX_RUNS_PER_INTERFACE", "20"))
 )
 TLS_CA_BUNDLE = _env("API_HUB_TLS_CA_BUNDLE")
-OUTBOUND_ALLOWED_HOSTS = _csv_env("API_HUB_OUTBOUND_ALLOWED_HOSTS")
 OUTBOUND_MAX_REDIRECTS = max(0, int(_env("API_HUB_OUTBOUND_MAX_REDIRECTS", "5")))
 
 # Public HTTP proxy publishing. Management APIs stay under the platform JWT

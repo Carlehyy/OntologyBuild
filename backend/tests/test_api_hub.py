@@ -17,7 +17,6 @@ def hub_client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
     monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
     monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
-    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ("service.example",))
     monkeypatch.setattr(
         config,
         "W3_LOGIN_ALLOWED_HOSTS",
@@ -432,14 +431,15 @@ def test_preview_run_uses_draft_without_saving_and_redacts_history(
     assert "***" in detail["response_body"]
 
 
-def test_ssrf_guard_and_mcp_tokens_fail_closed(hub_client, monkeypatch):
-    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ())
-    with pytest.raises(OutboundTargetError):
-        validate_outbound_url("http://127.0.0.1:8000/private")
-    with pytest.raises(OutboundTargetError):
-        validate_outbound_url("https://public.example/data")
-    monkeypatch.setattr(config, "OUTBOUND_ALLOWED_HOSTS", ("public.example",))
+def test_outbound_urls_need_no_allowlist_and_mcp_tokens_fail_closed(
+    hub_client, monkeypatch
+):
+    assert validate_outbound_url("http://127.0.0.1:8000/private").startswith("http://")
     assert validate_outbound_url("https://public.example/data").startswith("https://")
+    with pytest.raises(OutboundTargetError):
+        validate_outbound_url("file:///etc/passwd")
+    with pytest.raises(OutboundTargetError):
+        validate_outbound_url("https://user:password@public.example/data")
 
     from app.main import app as platform_app
 
