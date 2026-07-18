@@ -233,7 +233,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
   await expect(page.getByText(/历史发布 v0 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
 
-  // 本体结构页的主 CTA 始终进入最新发布版；开始修改时无需再次选择版本。
+  // 本体结构页只展示最新发布快照，不提供任何图谱编辑器入口。
   await page.goto(`/#/ontologies/${ontology.id}?tab=design`)
   await expect(page.getByTestId('current-release-version')).toHaveText('v1')
   await expect(page.getByTestId('published-structure-version')).toHaveText('v1')
@@ -244,6 +244,9 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('structure-node-action')).toHaveCount(0)
   await expect(page.getByTestId('structure-edge-relation')).toHaveCount(1)
   await expect(page.getByLabel('搜索本体结构')).toHaveAttribute('placeholder', '搜索对象实体或实体关系')
+  await expect(page.getByTestId('published-structure-readonly')).toHaveText('发布快照 · 结构只读')
+  await expect(page.getByRole('button', { name: '打开图谱编辑器修改模型' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '查看当前发布图谱' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '智能整理图谱' })).toBeVisible()
   const l1LayoutSaved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/layout'))
   await page.getByRole('button', { name: '智能整理图谱' }).click()
@@ -269,10 +272,12 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.mouse.up()
   expect((await l2LayoutSaved).ok()).toBeTruthy()
   const structureWorkspace = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/current-release/workspace`)
+  expect(structureWorkspace).toMatchObject({ isCurrentRelease: true, workspaceMode: 'release', editable: false })
   expect(structureWorkspace.canvasLayout[`l2:property:${objectTypeId}:p-name`]).toBeTruthy()
 
   await expect(page.getByText('真机订单', { exact: true }).first()).toBeVisible()
-  await page.getByRole('button', { name: '打开图谱编辑器修改模型' }).click()
+  // 直接访问图谱路由验证纵深防线：当前发布版仍只能查看，模型写入被前后端共同冻结。
+  await page.goto(`/#/ontologies/${ontology.id}/graph`)
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph$`))
   await expect(page.getByText(/当前发布 v1 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
   const inheritedRelease = await api<any>(request, token, 'get', `/api/v2/formal/ontologies/${ontology.id}/full`)

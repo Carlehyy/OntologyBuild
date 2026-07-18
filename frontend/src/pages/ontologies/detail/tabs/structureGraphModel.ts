@@ -85,6 +85,8 @@ export interface StructureSentinel {
 export interface PublishedWorkspace {
   version: string
   versionId: string
+  workspaceMode: 'release'
+  editable: false
   isCurrentRelease: boolean
   publishedAt?: string | null
   objectTypes: StructureObject[]

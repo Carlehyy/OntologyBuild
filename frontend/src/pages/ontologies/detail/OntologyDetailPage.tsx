@@ -20,7 +20,7 @@ import {
 /* ═════════════════════════════════════════════════════════════
    信息架构（按用户操作旅程重组，五段式）：
    ① 本体总览  —— 进来先看懂"这本体是什么、健康吗"
-   ② 本体结构  —— 展示现有本体的对象实体/关系/动作/函数结构；主入口=图谱编辑器
+   ② 本体结构  —— 只读展示当前发布快照的对象实体/关系/动作/函数结构
    ③ 数据映射  —— 把 curated 数据集绑定灌入已有对象实体（先建模、再灌数据）
    ④ 实例数据  —— 真实数据进来了吗、长啥样（formal 实例的当前态投影）
    ⑤ 治理推演  —— 待审批 / 自治等级 / 哨兵 / 事实流 / 版本
@@ -162,15 +162,17 @@ export default function OntologyDetailPage() {
           >
             {ontology.current_release_version || ontology.version || 'v0'}
           </span>
-          <button
-            type="button"
-            onClick={() => navigate(`/ontologies/${id}/graph`)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-            title="查看当前发布图谱"
-            aria-label="查看当前发布图谱"
-          >
-            <Network size={18} />
-          </button>
+          {activeGroup !== 'design' && (
+            <button
+              type="button"
+              onClick={() => navigate(`/ontologies/${id}/graph`)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+              title="查看当前发布图谱"
+              aria-label="查看当前发布图谱"
+            >
+              <Network size={18} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowVersionModal(true)}

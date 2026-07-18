@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
 import {
   Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider,
   applyNodeChanges, useReactFlow, type NodeChange,
@@ -8,7 +7,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, ChevronRight,
-  ExternalLink, Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
+  Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
   Maximize2, Route, Search, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
   Bolt, Clock3, Database,
 } from 'lucide-react'
@@ -171,7 +170,6 @@ function DetailPanel({ workspace, selection, onClose }: {
 }
 
 function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspace: PublishedWorkspace }) {
-  const navigate = useNavigate()
   const { fitView, zoomIn, zoomOut } = useReactFlow<StructureNode, StructureEdge>()
   const [level, setLevel] = useState<Level>(1)
   const builtGraph = useMemo(() => buildStructureGraph(workspace, level), [level, workspace])
@@ -405,11 +403,13 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           </select>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          <span data-testid="published-structure-readonly" title="当前页面只允许调整并保存画布布局，不允许修改本体模型结构" className="mr-1 inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-medium text-slate-600">
+            <ShieldCheck size={13} className="text-teal-700" />发布快照 · 结构只读
+          </span>
           <button type="button" onClick={organizeGraph} aria-label="智能整理图谱" title="按关系重新计算紧凑布局" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
           <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
           <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
           <button type="button" onClick={() => void fitView({ padding: 0.2, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
-          <button type="button" onClick={() => navigate(`/ontologies/${ontologyId}/graph`)} className="ml-1 inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-700 px-3 text-xs font-semibold text-white shadow-sm hover:bg-teal-800"><ExternalLink size={13} />打开图谱编辑器修改模型</button>
         </div>
       </div>
 
@@ -473,7 +473,7 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
     queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/current-release/workspace`),
   })
   if (releaseQuery.isLoading) return <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
-  if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease) return <div className="flex h-full items-center justify-center gap-2 bg-red-50 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示运行投影数据。</div>
+  if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease || releaseQuery.data.workspaceMode !== 'release' || releaseQuery.data.editable !== false) return <div className="flex h-full items-center justify-center gap-2 bg-red-50 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示可变模型数据。</div>
   if (releaseQuery.data.objectTypes.length === 0) return <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100"><Database size={22} /></span><p className="text-sm">当前发布版还没有对象实体</p></div>
   return <ReactFlowProvider><StructureGraph ontologyId={ontologyId} workspace={releaseQuery.data} /></ReactFlowProvider>
 }
