@@ -526,8 +526,8 @@ function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshSe
 
   return (
     <>
-      <aside className="absolute inset-y-0 right-0 z-30 flex w-[min(26rem,calc(100%-0.5rem))] shrink-0 p-2 lg:relative lg:inset-auto lg:z-auto lg:w-[26rem] lg:pl-0">
-        <section aria-label="助手配置" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_44px_rgba(15,23,42,0.12)] lg:shadow-[0_8px_30px_rgba(15,23,42,0.07)]">
+      <aside className="absolute inset-y-0 right-0 z-30 flex w-[min(26rem,100%)] shrink-0 lg:relative lg:inset-auto lg:z-auto lg:w-[26rem]">
+        <section aria-label="助手配置" className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[-10px_0_34px_rgba(15,23,42,0.08)]">
           <header className="flex shrink-0 items-start justify-between border-b border-[var(--color-border)] px-4 py-3.5">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">助手配置</h2>
@@ -538,23 +538,23 @@ function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshSe
               <X size={16} />
             </button>
           </header>
-          <div className="mx-4 mt-3 grid grid-cols-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-1.5">
-          <button type="button" onClick={() => setTab('skills')} className={`min-h-10 rounded-lg text-xs font-medium transition-colors ${tab === 'skills' ? 'bg-white text-teal-800 shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}>Skills <span className="ml-1 text-[10px] tabular-nums">{skills.length}</span></button>
-          <button type="button" onClick={() => setTab('mcp')} className={`min-h-10 rounded-lg text-xs font-medium transition-colors ${tab === 'mcp' ? 'bg-white text-teal-800 shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}>MCP <span className="ml-1 text-[10px] tabular-nums">{servers.length}</span></button>
-        </div>
+          <div className="relative mx-4 mt-3 grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+            <div className={`absolute bottom-0.5 top-0.5 w-[calc(50%_-_4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out ${tab === 'skills' ? 'left-0.5' : 'left-[calc(50%_+_2px)]'}`} />
+            <button type="button" onClick={() => setTab('skills')}
+              className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'skills' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
+              Skill <span className={`ml-1 text-[10px] tabular-nums ${tab === 'skills' ? 'text-teal-100' : 'text-slate-400'}`}>{skills.length}</span>
+            </button>
+            <button type="button" onClick={() => setTab('mcp')}
+              className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'mcp' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
+              MCP <span className={`ml-1 text-[10px] tabular-nums ${tab === 'mcp' ? 'text-teal-100' : 'text-slate-400'}`}>{servers.length}</span>
+            </button>
+          </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {tab === 'skills' ? (
             <>
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-[var(--color-text-primary)]">目录型 Skills</p>
-                  <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">ZIP 根目录或唯一外层目录必须包含 SKILL.md，可继续维护 scripts、references 与 assets。</p>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <button type="button" onClick={() => setCreatingSkill(true)} className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 active:scale-[0.98]"><Plus size={13} /> 新建</button>
-                  <button type="button" onClick={() => uploadRef.current?.click()} className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] px-4 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] active:scale-[0.98]"><Upload size={13} /> 导入 ZIP</button>
-                </div>
-                <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
+              <div className="mb-4 min-w-0">
+                <p className="text-xs font-medium text-[var(--color-text-primary)]">目录型 Skills</p>
+                <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">ZIP 根目录或唯一外层目录必须包含 SKILL.md，可继续维护 scripts、references 与 assets。</p>
               </div>
               <div className="grid gap-3">
                 {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
@@ -579,12 +579,9 @@ function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshSe
             </>
           ) : (
             <>
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-[var(--color-text-primary)]">MCP Servers</p>
-                  <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">保存后测试连接；只有测试成功并发现的工具才会进入助手工具目录。</p>
-                </div>
-                <button type="button" onClick={() => setEditingMcp('new')} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 active:scale-[0.98]"><Plus size={13} /> 添加 MCP Server</button>
+              <div className="mb-4 min-w-0">
+                <p className="text-xs font-medium text-[var(--color-text-primary)]">MCP Servers</p>
+                <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">保存后测试连接；只有测试成功并发现的工具才会进入助手工具目录。</p>
               </div>
               <div className="grid gap-3">
                 {servers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
@@ -614,6 +611,26 @@ function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshSe
             </>
           )}
           </div>
+          <footer className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3">
+            {tab === 'skills' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setCreatingSkill(true)}
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                  <Plus size={14} /> 新建 Skill
+                </button>
+                <button type="button" onClick={() => uploadRef.current?.click()}
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                  <Upload size={14} /> 导入 ZIP
+                </button>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setEditingMcp('new')}
+                className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                <Plus size={14} /> 添加 MCP Server
+              </button>
+            )}
+            <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
+          </footer>
         </section>
       </aside>
       {creatingSkill && <SkillCreateDialog onClose={() => setCreatingSkill(false)} onSaved={refreshSkills} />}
