@@ -329,7 +329,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
         </div>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-y-auto bg-[#f8fbff] bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.08),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.08),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] px-3 pb-3 pt-3">
+      <div className="flex-1 space-y-2 overflow-y-auto bg-white px-3 pb-3 pt-3">
         {/* 质量门：与草稿生成闸门同一口径 */}
         {readiness && total > 0 && <GatePanel readiness={readiness} />}
 

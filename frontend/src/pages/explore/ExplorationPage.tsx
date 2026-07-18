@@ -669,7 +669,7 @@ export default function ExplorationPage() {
           </div>
         )}
 
-        <div ref={chatScrollRef} onScroll={updateScrollStickiness} className="flex-1 overflow-y-auto bg-[#f8fbff] bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.08),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.08),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] px-4 py-4">
+        <div ref={chatScrollRef} onScroll={updateScrollStickiness} className="flex-1 overflow-y-auto bg-white px-4 py-4">
           {timeline.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center gap-4">
               <div className="w-12 h-12 rounded-2xl bg-teal-50 flex items-center justify-center">
