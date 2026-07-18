@@ -169,7 +169,7 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
         aria-label="关闭调用日志"
       />
 
-      <section className="relative flex h-full w-full max-w-4xl flex-col bg-slate-50 shadow-2xl animate-slide-in-right">
+      <section className="relative flex h-full w-full max-w-3xl flex-col bg-slate-50 shadow-2xl animate-slide-in-right">
         <header className="shrink-0 border-b border-slate-200 bg-white px-6 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -272,10 +272,10 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
           <table className="w-full min-w-[720px] border-collapse text-left text-xs">
             <thead className="sticky top-0 z-10 bg-slate-50/95 text-slate-500 backdrop-blur [&_th]:align-middle">
               <tr>
-                <th className="w-52 border-b border-slate-200 px-6 py-3 font-medium">调用时间</th>
-                <th className="w-28 border-b border-slate-200 px-4 py-3 font-medium">状态</th>
-                <th className="w-32 border-b border-slate-200 px-4 py-3 font-medium">耗时</th>
-                <th className="border-b border-slate-200 px-4 py-3 font-medium">错误摘要</th>
+                <th className="w-52 border-b border-slate-200 px-6 py-3 text-center font-medium">调用时间</th>
+                <th className="w-28 border-b border-slate-200 px-4 py-3 text-center font-medium">状态</th>
+                <th className="w-32 border-b border-slate-200 px-4 py-3 text-center font-medium">耗时</th>
+                <th className="border-b border-slate-200 px-4 py-3 text-left font-medium">错误摘要</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 [&_td]:align-middle">
@@ -336,17 +336,17 @@ function LogRow({ item }: { item: ModelCallLog }) {
   const summary = item.error_summary || '—'
   return (
     <tr className="transition hover:bg-slate-50/80">
-      <td className="px-6 py-3 tabular-nums text-slate-600">
+      <td className="px-6 py-3 text-center tabular-nums text-slate-600">
         <p>{time.date}</p>
         <p className="mt-0.5 text-[10px] text-slate-400">{time.time}</p>
       </td>
-      <td className="px-4 py-3">
+      <td className="px-4 py-3 text-center">
         <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium ${status.badge}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
           {status.label}
         </span>
       </td>
-      <td className="px-4 py-3 font-mono text-[11px] tabular-nums text-slate-600">{formatLatency(item.latency_ms)}</td>
+      <td className="px-4 py-3 text-center font-mono text-[11px] tabular-nums text-slate-600">{formatLatency(item.latency_ms)}</td>
       <td className="max-w-0 px-4 py-3">
         <p className={`truncate ${item.error_summary ? 'text-red-600' : 'text-slate-300'}`} title={item.error_summary || undefined}>{summary}</p>
       </td>
@@ -357,9 +357,9 @@ function LogRow({ item }: { item: ModelCallLog }) {
 function LogSkeleton() {
   return (
     <tr className="animate-pulse">
-      <td className="px-6 py-4"><div className="h-3 w-28 rounded bg-slate-100" /><div className="mt-2 h-2.5 w-20 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-6 w-14 rounded bg-slate-100" /></td>
-      <td className="px-4 py-4"><div className="h-3 w-16 rounded bg-slate-100" /></td>
+      <td className="px-6 py-4"><div className="mx-auto h-3 w-28 rounded bg-slate-100" /><div className="mx-auto mt-2 h-2.5 w-20 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-6 w-14 rounded bg-slate-100" /></td>
+      <td className="px-4 py-4"><div className="mx-auto h-3 w-16 rounded bg-slate-100" /></td>
       <td className="px-4 py-4"><div className="h-3 w-3/4 rounded bg-slate-100" /></td>
     </tr>
   )
