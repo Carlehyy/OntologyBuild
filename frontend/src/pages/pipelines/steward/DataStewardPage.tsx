@@ -15,8 +15,9 @@ import remarkGfm from 'remark-gfm'
 import {
   Activity, AlertTriangle, BookOpen, Bot, ChevronDown, ChevronRight,
   CheckCircle2, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
-  Folder, GitBranch, Globe, Globe2, History, KeyRound, Library, List, Loader2, Monitor, MousePointer2,
-  Paperclip, Pencil, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Table2, Trash2, Upload,
+  Folder, GitBranch, Globe, Globe2, GripHorizontal, History, KeyRound, Library, List, Loader2, Maximize2,
+  Monitor, MousePointer2, Paperclip, Pencil, PictureInPicture2, Plus, RefreshCw, Search, Send, Settings,
+  ShieldCheck, Sparkles, Table2, Trash2, Upload,
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
@@ -99,6 +100,9 @@ const TEXTAREA_LINE_HEIGHT = 20
 const TEXTAREA_MAX_LINES = 10
 const TEXTAREA_MIN_HEIGHT = 28
 const TEXTAREA_MAX_HEIGHT = TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + 8
+const PIP_VIEWPORT_MARGIN = 12
+
+type BrowserDisplayMode = 'closed' | 'modal' | 'pip'
 
 function Md({ text }: { text: string }) {
   return (
@@ -265,7 +269,7 @@ export default function DataStewardPage() {
   const [conversations, setConversations] = useState<StewardConversationDTO[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [showFiles, setShowFiles] = useState(false)
-  const [showBrowser, setShowBrowser] = useState(false)
+  const [browserDisplay, setBrowserDisplay] = useState<BrowserDisplayMode>('closed')
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [webSearch, setWebSearch] = useState(false)
@@ -466,7 +470,7 @@ export default function DataStewardPage() {
   const openBrowser = async () => {
     try {
       await ensureConversation()
-      setShowBrowser(true)
+      setBrowserDisplay('modal')
     } catch { /* 同上 */ }
   }
 
@@ -704,8 +708,8 @@ export default function DataStewardPage() {
               </button>
               <button
                 onClick={openBrowser}
-                title="打开实时浏览器"
-                aria-label="打开实时浏览器"
+                title={browserDisplay === 'pip' ? '恢复实时浏览器大窗口' : '打开实时浏览器'}
+                aria-label={browserDisplay === 'pip' ? '恢复实时浏览器大窗口' : '打开实时浏览器'}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <Monitor size={15} />
@@ -1128,8 +1132,15 @@ export default function DataStewardPage() {
           }}
         />
       )}
-      {showBrowser && conversationId && (
-        <BrowserModal conversationId={conversationId} onClose={() => setShowBrowser(false)} />
+      {browserDisplay !== 'closed' && conversationId && (
+        <BrowserModal
+          key={conversationId}
+          conversationId={conversationId}
+          mode={browserDisplay}
+          onMinimize={() => setBrowserDisplay('pip')}
+          onRestore={() => setBrowserDisplay('modal')}
+          onClose={() => setBrowserDisplay('closed')}
+        />
       )}
     </div>
   )
@@ -1474,7 +1485,13 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
   )
 }
 
-function BrowserModal({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: {
+  conversationId: string
+  mode: Exclude<BrowserDisplayMode, 'closed'>
+  onMinimize: () => void
+  onRestore: () => void
+  onClose: () => void
+}) {
   const [url, setUrl] = useState('https://')
   const [currentUrl, setCurrentUrl] = useState('')
   const [frame, setFrame] = useState('')
@@ -1502,6 +1519,109 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
   const sourceButtonRef = useRef<HTMLButtonElement>(null)
   const sourceDrawerRef = useRef<HTMLDivElement>(null)
   const sourceDrawerCloseRef = useRef<HTMLButtonElement>(null)
+  const modalPipButtonRef = useRef<HTMLButtonElement>(null)
+  const pipWindowRef = useRef<HTMLElement>(null)
+  const pipRestoreButtonRef = useRef<HTMLButtonElement>(null)
+  const previousModeRef = useRef(mode)
+  const pipDragRef = useRef<{
+    pointerId: number
+    startClientX: number
+    startClientY: number
+    startLeft: number
+    startTop: number
+    width: number
+    height: number
+    moved: boolean
+  } | null>(null)
+  const [pipPosition, setPipPosition] = useState<{ x: number; y: number } | null>(null)
+  const [pipDragging, setPipDragging] = useState(false)
+
+  const clampPipPosition = useCallback((x: number, y: number, width: number, height: number) => ({
+    x: Math.min(Math.max(PIP_VIEWPORT_MARGIN, x), Math.max(PIP_VIEWPORT_MARGIN, window.innerWidth - width - PIP_VIEWPORT_MARGIN)),
+    y: Math.min(Math.max(PIP_VIEWPORT_MARGIN, y), Math.max(PIP_VIEWPORT_MARGIN, window.innerHeight - height - PIP_VIEWPORT_MARGIN)),
+  }), [])
+
+  useEffect(() => {
+    const previousMode = previousModeRef.current
+    previousModeRef.current = mode
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (mode === 'pip') pipRestoreButtonRef.current?.focus()
+      else if (previousMode === 'pip') modalPipButtonRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(focusFrame)
+  }, [mode])
+
+  useEffect(() => {
+    if (mode !== 'pip') return
+    const keepInsideViewport = () => {
+      const rect = pipWindowRef.current?.getBoundingClientRect()
+      if (!rect || pipPosition === null) return
+      setPipPosition(clampPipPosition(rect.left, rect.top, rect.width, rect.height))
+    }
+    window.addEventListener('resize', keepInsideViewport)
+    return () => window.removeEventListener('resize', keepInsideViewport)
+  }, [clampPipPosition, mode, pipPosition])
+
+  const movePipWithKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const directions: Record<string, readonly [number, number]> = {
+      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    }
+    const direction = directions[event.key]
+    if (!direction) return
+    event.preventDefault()
+    const rect = pipWindowRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const distance = event.shiftKey ? 48 : 16
+    setPipPosition(clampPipPosition(
+      rect.left + direction[0] * distance,
+      rect.top + direction[1] * distance,
+      rect.width,
+      rect.height,
+    ))
+  }
+
+  const startPipDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    const rect = pipWindowRef.current?.getBoundingClientRect()
+    if (!rect) return
+    pipDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeft: rect.left,
+      startTop: rect.top,
+      width: rect.width,
+      height: rect.height,
+      moved: false,
+    }
+    setPipPosition({ x: rect.left, y: rect.top })
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const dragPip = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = pipDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - drag.startClientX
+    const deltaY = event.clientY - drag.startClientY
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) return
+    drag.moved = true
+    setPipDragging(true)
+    setPipPosition(clampPipPosition(
+      drag.startLeft + deltaX,
+      drag.startTop + deltaY,
+      drag.width,
+      drag.height,
+    ))
+  }
+
+  const stopPipDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = pipDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    pipDragRef.current = null
+    setPipDragging(false)
+  }
 
   const loadSources = useCallback(async () => {
     try {
@@ -1816,9 +1936,91 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
     return () => { window.clearTimeout(first); window.clearInterval(timer) }
   }, [showNetwork, loadCaptures])
 
+  if (mode === 'pip') {
+    return (
+      <section
+        ref={pipWindowRef}
+        role="region"
+        aria-label="实时浏览器画中画"
+        className={`fixed z-[70] w-[min(400px,calc(100vw-24px))] overflow-hidden rounded-xl border border-slate-700/80 bg-[#15171b] shadow-[0_20px_54px_rgba(15,23,42,0.38)] transition-shadow motion-reduce:transition-none ${pipDragging ? 'shadow-[0_26px_64px_rgba(15,23,42,0.48)]' : ''}`}
+        style={pipPosition
+          ? { left: 0, top: 0, transform: `translate3d(${pipPosition.x}px, ${pipPosition.y}px, 0)` }
+          : { right: PIP_VIEWPORT_MARGIN, bottom: PIP_VIEWPORT_MARGIN }}
+      >
+        <div className="flex h-11 items-stretch border-b border-white/10 bg-slate-900 text-slate-200">
+          <button
+            type="button"
+            aria-label="拖动画中画窗口；也可使用方向键移动"
+            title="拖动窗口；方向键可微调，按住 Shift 可快速移动"
+            onPointerDown={startPipDrag}
+            onPointerMove={dragPip}
+            onPointerUp={stopPipDrag}
+            onPointerCancel={stopPipDrag}
+            onKeyDown={movePipWithKeyboard}
+            className={`flex min-w-0 flex-1 touch-none select-none items-center gap-2 px-3 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          >
+            <GripHorizontal size={16} className="shrink-0 text-slate-500" />
+            <span className={`h-2 w-2 shrink-0 rounded-full ${connected ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[11px] font-medium text-slate-100">实时浏览器</span>
+              <span className="block truncate text-[9px] text-slate-400">{currentUrl || (attaching ? '正在连接当前会话…' : '等待打开网页')}</span>
+            </span>
+            {connected && liveTransport === 'http' && (
+              <span title="WebSocket 不可用，已自动切换到 HTTPS" className="shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">HTTP</span>
+            )}
+          </button>
+          <button
+            ref={pipRestoreButtonRef}
+            type="button"
+            onClick={onRestore}
+            aria-label="恢复实时浏览器大窗口"
+            title="恢复大窗口"
+            className="flex w-11 shrink-0 items-center justify-center border-l border-white/10 text-slate-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400"
+          >
+            <Maximize2 size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭实时浏览器画中画"
+            title="关闭画中画"
+            className="flex w-11 shrink-0 items-center justify-center border-l border-white/10 text-slate-400 outline-none transition-colors hover:bg-red-500/15 hover:text-red-300 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="relative aspect-video bg-[#15171b]" aria-live="polite">
+          {frame ? (
+            <img
+              src={frame}
+              draggable={false}
+              alt="会话浏览器画中画预览"
+              className="pointer-events-none h-full w-full select-none object-contain"
+            />
+          ) : attaching ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-slate-400">
+              <Loader2 size={22} className="animate-spin opacity-60" />
+              正在连接当前会话的浏览器…
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-slate-400">
+              <Monitor size={25} className="opacity-40" />
+              暂无浏览器画面
+            </div>
+          )}
+          {error && (
+            <div className={`absolute inset-x-2 bottom-2 rounded-md px-2 py-1.5 text-[10px] shadow-lg ${error.startsWith('✓') ? 'bg-emerald-950/90 text-emerald-200' : 'bg-red-950/90 text-red-200'}`}>
+              <p className="line-clamp-2">{error}</p>
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-3" onClick={onClose}>
-      <div className="flex h-[88vh] w-[min(1500px,96vw)] flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="实时浏览器" className="flex h-[88vh] w-[min(1500px,96vw)] flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-2">
           <Monitor size={15} className="text-teal-600" />
           <div className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-300'}`} />
@@ -1840,6 +2042,16 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
             onClick={() => { if (showSources) closeSources(); else setShowSources(true) }}
             className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showSources ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600 hover:bg-white'}`}>
             <Settings size={12} /> 浏览器来源
+          </button>
+          <button
+            ref={modalPipButtonRef}
+            type="button"
+            onClick={() => { setShowSources(false); onMinimize() }}
+            aria-label="切换到画中画"
+            title="画中画"
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs text-gray-600 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          >
+            <PictureInPicture2 size={12} /> 画中画
           </button>
           <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-gray-400 hover:text-gray-700"><X size={17} /></button>
         </div>
