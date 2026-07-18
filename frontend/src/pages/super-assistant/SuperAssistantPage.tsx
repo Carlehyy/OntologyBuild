@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Bot, Check, ChevronRight, CircleAlert, FileCode2, FileText, Folder, Gauge,
+  Bot, Check, ChevronRight, CircleAlert, Copy, FileCode2, FileText, Folder, Gauge,
   History, List, Loader2, MessageSquare, Pencil, PlugZap, Plus,
-  Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
+  Move, Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
   Wrench, X,
 } from 'lucide-react'
 
@@ -65,6 +65,149 @@ function ToolSteps({ steps }: { steps: ToolStep[] }) {
 }
 
 
+const markdownText = (child: unknown): string => {
+  if (typeof child === 'string' || typeof child === 'number') return String(child)
+  if (Array.isArray(child)) return child.map(markdownText).join('')
+  if (child && typeof child === 'object' && 'props' in child) {
+    return markdownText((child as { props?: { children?: unknown } }).props?.children)
+  }
+  return ''
+}
+
+/**
+ * 部分模型会把整段答复包进 ```markdown / ````markdown 围栏。
+ * react-markdown 会正确但不符合预期地把它显示为“Markdown 源码”；当围栏内容占答复主体时，
+ * 去掉这一层展示围栏，同时保留里面真正的代码围栏。
+ */
+function normalizeAssistantMarkdown(value: string) {
+  const normalized = value.replace(/\r\n?/g, '\n')
+  const lines = normalized.split('\n')
+  const blocks: Array<{ start: number; end: number; contentLength: number }> = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = /^\s*(`{3,}|~{3,})[ \t]*(?:markdown|md)[ \t]*$/i.exec(lines[index])
+    if (!opening) continue
+    const marker = opening[1][0]
+    const minimumLength = opening[1].length
+
+    for (let end = index + 1; end < lines.length; end += 1) {
+      const closing = /^\s*(`+|~+)\s*$/.exec(lines[end])
+      if (!closing || closing[1][0] !== marker || closing[1].length < minimumLength) continue
+      blocks.push({
+        start: index,
+        end,
+        contentLength: lines.slice(index + 1, end).join('\n').trim().length,
+      })
+      index = end
+      break
+    }
+  }
+
+  if (blocks.length > 0) {
+    const dominant = blocks.reduce((best, block) => block.contentLength > best.contentLength ? block : best)
+    const outside = [...lines.slice(0, dominant.start), ...lines.slice(dominant.end + 1)].join('\n').trim()
+    const totalLength = normalized.trim().length || 1
+    if (dominant.contentLength / totalLength >= 0.45 || outside.length <= 240) {
+      return [
+        ...lines.slice(0, dominant.start),
+        ...lines.slice(dominant.start + 1, dominant.end),
+        ...lines.slice(dominant.end + 1),
+      ].join('\n').trim()
+    }
+  }
+
+  // 流式响应尚未收到闭合围栏时，也先按 Markdown 展示，避免生成过程中整段闪成源码。
+  const unfinishedOpening = lines.findIndex(line => /^\s*(`{3,}|~{3,})[ \t]*(?:markdown|md)[ \t]*$/i.test(line))
+  if (blocks.length === 0 && unfinishedOpening >= 0 && lines.slice(0, unfinishedOpening).join('\n').trim().length <= 240) {
+    return [...lines.slice(0, unfinishedOpening), ...lines.slice(unfinishedOpening + 1)].join('\n').trim()
+  }
+
+  return normalized
+}
+
+function MarkdownCodeBlock({ children }: { children: React.ReactNode }) {
+  const [copied, setCopied] = useState(false)
+  const child = Array.isArray(children) ? children[0] : children
+  const childProps = child && typeof child === 'object' && 'props' in child
+    ? (child as { props?: { className?: string; children?: unknown } }).props
+    : undefined
+  const language = /language-([^\s]+)/.exec(childProps?.className || '')?.[1]
+  const source = markdownText(childProps?.children ?? children).replace(/\n$/, '')
+
+  const copy = () => {
+    navigator.clipboard?.writeText(source).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    }).catch(() => undefined)
+  }
+
+  return (
+    <div className="my-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm">
+      <div className="flex min-h-9 items-center justify-between border-b border-white/10 bg-slate-900 px-3">
+        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+          {language || 'code'}
+        </span>
+        <button
+          type="button"
+          onClick={copy}
+          className="inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-[10px] text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+          aria-label={copied ? '代码已复制' : '复制代码'}
+        >
+          {copied ? <Check size={11} /> : <Copy size={11} />}
+          {copied ? '已复制' : '复制'}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-4 text-[12px] leading-6 text-slate-100">
+        <code className="font-mono">{source}</code>
+      </pre>
+    </div>
+  )
+}
+
+const assistantMarkdownComponents: Components = {
+  p: ({ className, ...props }) => <p className={`mb-3 text-sm leading-7 text-[var(--color-text-primary)] last:mb-0 ${className || ''}`} {...props} />,
+  h1: ({ className, ...props }) => <h2 className={`mb-3 mt-7 text-xl font-semibold leading-tight tracking-tight text-[var(--color-text-primary)] first:mt-0 ${className || ''}`} {...props} />,
+  h2: ({ className, ...props }) => <h3 className={`mb-2.5 mt-6 text-base font-semibold leading-snug tracking-tight text-[var(--color-text-primary)] first:mt-0 ${className || ''}`} {...props} />,
+  h3: ({ className, ...props }) => <h4 className={`mb-2 mt-5 text-sm font-semibold leading-snug text-[var(--color-text-primary)] first:mt-0 ${className || ''}`} {...props} />,
+  h4: ({ className, ...props }) => <h5 className={`mb-2 mt-4 text-sm font-semibold text-[var(--color-text-primary)] first:mt-0 ${className || ''}`} {...props} />,
+  h5: ({ className, ...props }) => <h6 className={`mb-2 mt-4 text-xs font-semibold text-[var(--color-text-primary)] first:mt-0 ${className || ''}`} {...props} />,
+  h6: ({ className, ...props }) => <h6 className={`mb-2 mt-4 text-xs font-medium text-[var(--color-text-secondary)] first:mt-0 ${className || ''}`} {...props} />,
+  strong: ({ className, ...props }) => <strong className={`font-semibold text-[var(--color-text-primary)] ${className || ''}`} {...props} />,
+  em: ({ className, ...props }) => <em className={`italic text-[var(--color-text-secondary)] ${className || ''}`} {...props} />,
+  del: ({ className, ...props }) => <del className={`text-[var(--color-text-tertiary)] decoration-slate-400 ${className || ''}`} {...props} />,
+  ul: ({ className, ...props }) => <ul className={`mb-3 ml-1 list-disc space-y-1.5 pl-5 marker:text-teal-600 [&.contains-task-list]:list-none [&.contains-task-list]:pl-0 ${className || ''}`} {...props} />,
+  ol: ({ className, ...props }) => <ol className={`mb-3 ml-1 list-decimal space-y-1.5 pl-5 marker:font-medium marker:text-[var(--color-text-tertiary)] ${className || ''}`} {...props} />,
+  li: ({ className, ...props }) => <li className={`pl-1 text-sm leading-7 text-[var(--color-text-primary)] [&.task-list-item]:list-none [&.task-list-item]:pl-0 ${className || ''}`} {...props} />,
+  input: ({ className, ...props }) => <input className={`mr-2 h-3.5 w-3.5 translate-y-0.5 rounded border-slate-300 accent-teal-600 ${className || ''}`} {...props} />,
+  blockquote: ({ className, ...props }) => <blockquote className={`my-4 rounded-r-lg border-l-[3px] border-teal-500 bg-teal-50/60 py-2 pl-4 pr-3 text-[var(--color-text-secondary)] [&>p]:text-[var(--color-text-secondary)] ${className || ''}`} {...props} />,
+  a: ({ className, ...props }) => <a className={`font-medium text-teal-700 underline decoration-teal-200 underline-offset-4 transition-colors hover:text-teal-900 hover:decoration-teal-500 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${className || ''}`} target="_blank" rel="noreferrer noopener" {...props} />,
+  img: ({ className, alt, ...props }) => <img className={`my-4 max-h-[32rem] max-w-full rounded-xl border border-[var(--color-border)] object-contain shadow-sm ${className || ''}`} alt={alt || 'Markdown 图片'} loading="lazy" decoding="async" {...props} />,
+  code: ({ className, ...props }) => <code className={`rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[0.86em] text-slate-800 ${className || ''}`} {...props} />,
+  pre: ({ children }) => <MarkdownCodeBlock>{children}</MarkdownCodeBlock>,
+  table: ({ className, ...props }) => (
+    <div className="my-4 max-w-full overflow-x-auto rounded-xl border border-[var(--color-border)] shadow-sm">
+      <table className={`w-full min-w-[32rem] border-collapse text-left text-xs ${className || ''}`} {...props} />
+    </div>
+  ),
+  thead: ({ className, ...props }) => <thead className={`bg-slate-50 text-[var(--color-text-secondary)] ${className || ''}`} {...props} />,
+  tbody: ({ className, ...props }) => <tbody className={`divide-y divide-[var(--color-border)] bg-[var(--color-bg-elevated)] ${className || ''}`} {...props} />,
+  th: ({ className, ...props }) => <th className={`border-b border-[var(--color-border)] px-3.5 py-2.5 font-semibold whitespace-nowrap ${className || ''}`} {...props} />,
+  td: ({ className, ...props }) => <td className={`px-3.5 py-2.5 leading-5 text-[var(--color-text-primary)] ${className || ''}`} {...props} />,
+  hr: ({ className, ...props }) => <hr className={`my-6 border-0 border-t border-[var(--color-border)] ${className || ''}`} {...props} />,
+}
+
+function AssistantMarkdown({ content }: { content: string }) {
+  const normalized = useMemo(() => normalizeAssistantMarkdown(content), [content])
+  return (
+    <div className="min-w-0 break-words [overflow-wrap:anywhere]">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+        {normalized}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+
 function ChatMessage({ message }: { message: SuperMessage }) {
   const assistant = message.role === 'assistant'
   return (
@@ -80,11 +223,11 @@ function ChatMessage({ message }: { message: SuperMessage }) {
       <div className={`min-w-0 ${assistant ? 'w-full max-w-3xl' : 'max-w-[82%]'}`}>
         {assistant && <ToolSteps steps={message.steps} />}
         <div className={assistant
-          ? 'prose prose-sm max-w-none text-[var(--color-text-primary)] prose-headings:text-[var(--color-text-primary)] prose-p:text-[var(--color-text-primary)] prose-code:break-words'
+          ? 'max-w-none text-[var(--color-text-primary)]'
           : 'rounded-2xl rounded-br-md bg-[var(--color-nav-bg)] px-4 py-2.5 text-sm leading-6 text-white'}>
           {assistant ? (
             message.content
-              ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+              ? <AssistantMarkdown content={message.content} />
               : <span className="inline-flex items-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={14} className="animate-spin" /> 正在思考…</span>
           ) : message.content}
         </div>
@@ -115,6 +258,107 @@ const formatTokenCount = (value: number) => value >= 1000
   : String(Math.round(value))
 
 function ContextUsage({ messages, model }: { messages: SuperMessage[]; model?: ModelConfig }) {
+  const panelRef = useRef<HTMLElement>(null)
+  const dragRef = useRef<{
+    pointerId: number
+    clientX: number
+    clientY: number
+    x: number
+    y: number
+  } | null>(null)
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const clampPosition = useCallback((next: { x: number; y: number }) => {
+    const panel = panelRef.current
+    const container = panel?.offsetParent as HTMLElement | null
+    if (!panel || !container) return next
+    const padding = 12
+    const maximumX = Math.max(padding, container.clientWidth - panel.offsetWidth - padding)
+    const maximumY = Math.max(padding, container.clientHeight - panel.offsetHeight - padding)
+    return {
+      x: Math.min(maximumX, Math.max(padding, next.x)),
+      y: Math.min(maximumY, Math.max(padding, next.y)),
+    }
+  }, [])
+
+  const currentPosition = useCallback(() => {
+    const panel = panelRef.current
+    const container = panel?.offsetParent as HTMLElement | null
+    if (!panel || !container) return { x: 12, y: 12 }
+    const panelRect = panel.getBoundingClientRect()
+    const containerRect = container.getBoundingClientRect()
+    return clampPosition({
+      x: panelRect.left - containerRect.left,
+      y: panelRect.top - containerRect.top,
+    })
+  }, [clampPosition])
+
+  useEffect(() => {
+    const panel = panelRef.current
+    const container = panel?.offsetParent as HTMLElement | null
+    if (!panel || !container || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      setPosition(current => current ? clampPosition(current) : current)
+    })
+    observer.observe(panel)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [clampPosition])
+
+  const startDragging = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const start = currentPosition()
+    setPosition(start)
+    setDragging(true)
+    dragRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: start.x,
+      y: start.y,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const moveDragging = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setPosition(clampPosition({
+      x: drag.x + event.clientX - drag.clientX,
+      y: drag.y + event.clientY - drag.clientY,
+    }))
+  }
+
+  const stopDragging = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    dragRef.current = null
+    setDragging(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const moveWithKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setPosition(null)
+      return
+    }
+    const directions: Record<string, { x: number; y: number }> = {
+      ArrowLeft: { x: -12, y: 0 },
+      ArrowRight: { x: 12, y: 0 },
+      ArrowUp: { x: 0, y: -12 },
+      ArrowDown: { x: 0, y: 12 },
+    }
+    const direction = directions[event.key]
+    if (!direction) return
+    event.preventDefault()
+    const current = position || currentPosition()
+    setPosition(clampPosition({ x: current.x + direction.x, y: current.y + direction.y }))
+  }
+
   const lastAssistant = [...messages].reverse().find(message => (
     message.role === 'assistant' && message.status === 'complete' && Object.keys(message.token_usage || {}).length > 0
   ))
@@ -132,10 +376,32 @@ function ContextUsage({ messages, model }: { messages: SuperMessage[]; model?: M
 
   return (
     <aside
+      ref={panelRef}
       aria-label={`当前上下文占比 ${percentage}%`}
-      className="absolute bottom-3 right-3 z-10 w-48 rounded-xl border border-[var(--color-border)] bg-[color:var(--color-bg-elevated)]/95 p-3 shadow-[0_14px_34px_rgba(15,23,42,0.12)] backdrop-blur"
+      style={position ? {
+        left: 0,
+        top: 0,
+        right: 'auto',
+        bottom: 'auto',
+        transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
+      } : undefined}
+      className={`absolute bottom-3 right-3 z-10 w-48 rounded-xl border bg-[color:var(--color-bg-elevated)]/95 p-3 backdrop-blur transition-[border-color,box-shadow] duration-200 ${dragging
+        ? 'border-teal-300 shadow-[0_20px_44px_rgba(15,118,110,0.18)] ring-2 ring-teal-100'
+        : 'border-[var(--color-border)] shadow-[0_14px_34px_rgba(15,23,42,0.12)]'}`}
     >
-      <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onPointerDown={startDragging}
+        onPointerMove={moveDragging}
+        onPointerUp={stopDragging}
+        onPointerCancel={stopDragging}
+        onLostPointerCapture={() => { dragRef.current = null; setDragging(false) }}
+        onKeyDown={moveWithKeyboard}
+        onDoubleClick={() => setPosition(null)}
+        aria-label="移动当前上下文窗口；方向键微调，Home 键或双击归位"
+        title="拖动调整位置 · 双击归位"
+        className={`flex w-full touch-none select-none items-center gap-2 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      >
         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
           <Gauge size={14} />
         </span>
@@ -146,7 +412,8 @@ function ContextUsage({ messages, model }: { messages: SuperMessage[]; model?: M
         <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
           {formatTokenCount(used)} / {formatTokenCount(limit)}
         </span>
-      </div>
+        <Move size={12} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+      </button>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
         <div className={`h-full rounded-full transition-[width] duration-300 ${tone}`} style={{ width: `${percentage}%` }} />
       </div>
