@@ -244,6 +244,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('structure-node-action')).toHaveCount(0)
   await expect(page.getByTestId('structure-edge-relation')).toHaveCount(1)
   await expect(page.getByLabel('搜索本体结构')).toHaveAttribute('placeholder', '搜索对象实体或实体关系')
+  await expect(page.getByRole('button', { name: '智能整理图谱' })).toBeVisible()
+  const l1LayoutSaved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/layout'))
+  await page.getByRole('button', { name: '智能整理图谱' }).click()
+  expect((await l1LayoutSaved).ok()).toBeTruthy()
 
   // L2 追加属性和动作；函数/哨兵保持为分析选择器，不成为常驻节点。
   await page.getByRole('button', { name: 'L2', exact: true }).click()
@@ -265,7 +269,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.mouse.up()
   expect((await l2LayoutSaved).ok()).toBeTruthy()
   const structureWorkspace = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/current-release/workspace`)
-  expect(structureWorkspace.canvasLayout[`property:${objectTypeId}:p-name`]).toBeTruthy()
+  expect(structureWorkspace.canvasLayout[`l2:property:${objectTypeId}:p-name`]).toBeTruthy()
 
   await expect(page.getByText('真机订单', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '打开图谱编辑器修改模型' }).click()

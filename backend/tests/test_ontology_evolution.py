@@ -521,12 +521,20 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
             "positions": {
                 "ot-order": {"x": 640, "y": 360},
                 "property:ot-order:p-name": {"x": 920, "y": 430},
+                "l1:ot-order": {"x": 180, "y": 140},
+                "l2:property:ot-order:p-name": {"x": 480, "y": 320},
             },
         },
     )
     assert saved_layout.status_code == 200, saved_layout.text
     assert saved_layout.json()["data"]["positions"]["property:ot-order:p-name"] == {
         "x": 920.0, "y": 430.0,
+    }
+    assert saved_layout.json()["data"]["positions"]["l1:ot-order"] == {
+        "x": 180.0, "y": 140.0,
+    }
+    assert saved_layout.json()["data"]["positions"]["l2:property:ot-order:p-name"] == {
+        "x": 480.0, "y": 320.0,
     }
     moved_workspace = client.get(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
@@ -536,6 +544,12 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
     assert moved_workspace["objectTypes"][0]["positionY"] == 360
     assert moved_workspace["canvasLayout"]["property:ot-order:p-name"] == {
         "x": 920.0, "y": 430.0,
+    }
+    assert moved_workspace["canvasLayout"]["l1:ot-order"] == {
+        "x": 180.0, "y": 140.0,
+    }
+    assert moved_workspace["canvasLayout"]["l2:property:ot-order:p-name"] == {
+        "x": 480.0, "y": 320.0,
     }
     db.expire_all()
     frozen_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
@@ -565,12 +579,22 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
     assert next_workspace["canvasLayout"]["property:ot-order:p-name"] == {
         "x": 920.0, "y": 430.0,
     }
+    assert next_workspace["canvasLayout"]["l1:ot-order"] == {
+        "x": 180.0, "y": 140.0,
+    }
+    assert next_workspace["canvasLayout"]["l2:property:ot-order:p-name"] == {
+        "x": 480.0, "y": 320.0,
+    }
     next_row = db.query(OntologyVersion).filter_by(id=next_draft["id"]).one()
     assert next_row.snapshot_formal["objectTypes"][0]["positionX"] == 10
     assert next_row.snapshot_formal["objectTypes"][0]["positionY"] == 20
     assert next_row.canvas_layout["ot-order"] == {"x": 640.0, "y": 360.0}
     assert next_row.canvas_layout["property:ot-order:p-name"] == {
         "x": 920.0, "y": 430.0,
+    }
+    assert next_row.canvas_layout["l1:ot-order"] == {"x": 180.0, "y": 140.0}
+    assert next_row.canvas_layout["l2:property:ot-order:p-name"] == {
+        "x": 480.0, "y": 320.0,
     }
 
 

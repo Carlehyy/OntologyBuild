@@ -173,9 +173,9 @@ function DetailPanel({ workspace, selection, onClose }: {
 function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspace: PublishedWorkspace }) {
   const navigate = useNavigate()
   const { fitView, zoomIn, zoomOut } = useReactFlow<StructureNode, StructureEdge>()
-  const builtGraph = useMemo(() => buildStructureGraph(workspace), [workspace])
-  const [allNodes, setAllNodes] = useState<StructureNode[]>(builtGraph.nodes)
   const [level, setLevel] = useState<Level>(1)
+  const builtGraph = useMemo(() => buildStructureGraph(workspace, level), [level, workspace])
+  const [allNodes, setAllNodes] = useState<StructureNode[]>(builtGraph.nodes)
   const [mode, setMode] = useState<'browse' | 'path'>('browse')
   const [detail, setDetail] = useState<DetailSelection>(null)
   const [searchText, setSearchText] = useState('')
@@ -197,15 +197,18 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
 
   useEffect(() => {
     setAllNodes(builtGraph.nodes)
+    const timer = window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.9, duration: 260 }), 80)
+    return () => window.clearTimeout(timer)
+  }, [builtGraph, fitView])
+
+  useEffect(() => {
     setDetail(null)
     setSearchText('')
     setSearchFocus(null)
     setPaths([])
     setFunctionId('')
     setSentinelId('')
-    const timer = window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.9, duration: 260 }), 80)
-    return () => window.clearTimeout(timer)
-  }, [builtGraph, fitView])
+  }, [workspace.versionId])
 
   const flushLayout = useCallback(async () => {
     if (saveInFlight.current || Object.keys(pendingPositions.current).length === 0) return
@@ -229,13 +232,19 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     }
   }, [ontologyId, workspace.versionId])
 
-  const scheduleLayoutSave = useCallback((node: StructureNode) => {
-    pendingPositions.current[node.id] = node.position
+  const schedulePositionSave = useCallback((positions: Record<string, { x: number; y: number }>) => {
+    Object.entries(positions).forEach(([nodeId, position]) => {
+      pendingPositions.current[`l${level}:${nodeId}`] = position
+    })
     setSaveState('pending')
     setSaveError('')
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => void flushLayout(), 3000)
-  }, [flushLayout])
+  }, [flushLayout, level])
+
+  const scheduleLayoutSave = useCallback((node: StructureNode) => {
+    schedulePositionSave({ [node.id]: node.position })
+  }, [schedulePositionSave])
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -352,13 +361,21 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.88, duration: 280 }), 30)
   }, [fitView])
 
+  const organizeGraph = useCallback(() => {
+    const organized = buildStructureGraph(workspace, level, { ignoreSaved: true })
+    setAllNodes(organized.nodes)
+    schedulePositionSave(Object.fromEntries(organized.nodes.map(node => [node.id, node.position])))
+    setDetail(null)
+    window.setTimeout(() => void fitView({ padding: level === 1 ? 0.26 : 0.16, maxZoom: level === 1 ? 1.05 : 0.86, duration: 420 }), 40)
+  }, [fitView, level, schedulePositionSave, workspace])
+
   const saveLabel = saveState === 'pending' ? '3 秒后自动保存' : saveState === 'saving' ? '正在保存布局' : saveState === 'saved' ? '布局已保存' : saveState === 'error' ? '保存失败' : '拖动后自动保存布局'
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-50/70" data-testid="ontology-structure-graph">
       <div className="z-40 flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2.5" style={{ scrollbarWidth: 'none' }}>
         <div className="flex shrink-0 rounded-lg bg-slate-100 p-1" aria-label="图谱视角">
-          {([1, 2] as Level[]).map(item => <button key={item} type="button" onClick={() => { setLevel(item); setSearchText(''); setSearchFocus(null) }} className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${level === item ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>L{item}</button>)}
+          {([1, 2] as Level[]).map(item => <button key={item} type="button" onClick={() => { setLevel(item); setSearchText(''); setSearchFocus(null); setFunctionId(''); setSentinelId(''); setPaths([]); setDetail(null) }} className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${level === item ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>L{item}</button>)}
         </div>
         <div className="flex shrink-0 rounded-lg border border-slate-200 bg-white p-1">
           <button type="button" onClick={() => setMode('browse')} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${mode === 'browse' ? 'bg-teal-50 font-semibold text-teal-700' : 'text-slate-500'}`}><Focus size={13} />浏览</button>
@@ -388,6 +405,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           </select>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button type="button" onClick={organizeGraph} aria-label="智能整理图谱" title="按关系重新计算紧凑布局" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
           <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
           <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
           <button type="button" onClick={() => void fitView({ padding: 0.2, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>

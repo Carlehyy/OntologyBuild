@@ -133,17 +133,19 @@ def _canvas_node_ids(snapshot: dict | None) -> set[str]:
         object_type_id = str(object_type.get("id") or "")
         if not object_type_id:
             continue
-        valid_ids.add(object_type_id)
+        valid_ids.update({object_type_id, f"l1:{object_type_id}", f"l2:{object_type_id}"})
         for prop in object_type.get("properties") or []:
             if not isinstance(prop, dict):
                 continue
             property_id = str(prop.get("id") or prop.get("name") or "")
             if property_id:
-                valid_ids.add(f"property:{object_type_id}:{property_id}")
+                node_id = f"property:{object_type_id}:{property_id}"
+                valid_ids.update({node_id, f"l2:{node_id}"})
     for action in snap["actions"]:
         action_id = str(action.get("id") or "")
         if action_id:
-            valid_ids.add(f"action:{action_id}")
+            node_id = f"action:{action_id}"
+            valid_ids.update({node_id, f"l2:{node_id}"})
     return valid_ids
 
 
