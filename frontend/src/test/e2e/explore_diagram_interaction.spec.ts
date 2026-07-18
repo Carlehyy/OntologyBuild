@@ -230,13 +230,20 @@ test.describe('业务探索图表与图片交互', () => {
     expect(toolbarBox!.y).toBeLessThan(sendBox!.y + sendBox!.height)
   })
 
-  test('输入区承载层与输入框使用一致背景色', async ({ page }) => {
+  test('会话、输入与业务场景使用本体拓扑画布背景色', async ({ page }) => {
+    const chat = page.getByTestId('exploration-chat-region')
     const region = page.getByTestId('exploration-composer-region')
     const shell = page.getByTestId('exploration-composer-shell')
+    const scenario = page.getByTestId('business-scenario-region')
 
+    const chatBackground = await chat.evaluate(element => getComputedStyle(element).backgroundColor)
     const regionBackground = await region.evaluate(element => getComputedStyle(element).backgroundColor)
     const shellBackground = await shell.evaluate(element => getComputedStyle(element).backgroundColor)
+    const scenarioBackground = await scenario.evaluate(element => getComputedStyle(element).backgroundColor)
+    expect(chatBackground).toBe('rgb(248, 251, 255)')
     expect(regionBackground).toBe(shellBackground)
+    expect(regionBackground).toBe(chatBackground)
+    expect(scenarioBackground).toBe(chatBackground)
   })
 
   test('模型分组进入和切换会话后默认折叠，可由用户自行展开', async ({ page }) => {

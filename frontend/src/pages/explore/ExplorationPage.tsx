@@ -507,7 +507,7 @@ export default function ExplorationPage() {
 
   const canvasCount = completeness
     ? Object.values(completeness.counts).reduce((a, b) => a + b, 0) : 0
-  const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm'
+  const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-sm'
 
   // 开放堵门问题 → 输入框上方的快捷答复（最多展示 2 个，按登记顺序）
   const openBlocking = (canvas?.questions || [])
@@ -526,7 +526,7 @@ export default function ExplorationPage() {
         style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(300px, ${sizes[1]}fr)` }}
       >
       {/* 对话区 */}
-      <section className={`${panelClass} flex flex-col bg-white`}>
+      <section className={`${panelClass} workspace-topology-surface flex flex-col`}>
         <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
           <div className="flex w-full min-w-0 items-center justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -669,7 +669,12 @@ export default function ExplorationPage() {
           </div>
         )}
 
-        <div ref={chatScrollRef} onScroll={updateScrollStickiness} className="flex-1 overflow-y-auto bg-white px-4 py-4">
+        <div
+          ref={chatScrollRef}
+          data-testid="exploration-chat-region"
+          onScroll={updateScrollStickiness}
+          className="workspace-topology-surface flex-1 overflow-y-auto px-4 py-4"
+        >
           {timeline.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center gap-4">
               <div className="w-12 h-12 rounded-2xl bg-teal-50 flex items-center justify-center">
@@ -768,7 +773,7 @@ export default function ExplorationPage() {
 
         <div
           data-testid="exploration-composer-region"
-          className="relative bg-[var(--color-bg-elevated)] px-4 pb-4 pt-3"
+          className="workspace-topology-surface relative px-4 pb-4 pt-3"
         >
           <input
             ref={fileInputRef}
@@ -799,7 +804,7 @@ export default function ExplorationPage() {
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
             <div
               data-testid="exploration-composer-shell"
-              className="relative overflow-visible rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-colors focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500/10"
+              className="workspace-topology-surface relative overflow-visible rounded-xl border border-[var(--color-border)] transition-colors focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500/10"
             >
               <div data-testid="exploration-composer-input" className="px-3 pb-2 pt-2.5">
                 <textarea
@@ -907,7 +912,7 @@ export default function ExplorationPage() {
       <ExplorationSplitHandle onPointerDown={startResize} />
 
       {/* 业务场景 */}
-      <aside className={`${panelClass} flex flex-col bg-white`}>
+      <aside className={`${panelClass} workspace-topology-surface flex flex-col`}>
         <CanvasPanel
           sessionId={sid || undefined}
           canvas={canvas}

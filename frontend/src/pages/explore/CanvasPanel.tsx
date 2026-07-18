@@ -304,7 +304,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   const detail = detailStack[detailStack.length - 1] || null
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="workspace-topology-surface flex h-full flex-col">
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-white px-4">
         <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务场景</div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -329,7 +329,10 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
         </div>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-y-auto bg-white px-3 pb-3 pt-3">
+      <div
+        data-testid="business-scenario-region"
+        className="workspace-topology-surface flex-1 space-y-2 overflow-y-auto px-3 pb-3 pt-3"
+      >
         {/* 质量门：与草稿生成闸门同一口径 */}
         {readiness && total > 0 && <GatePanel readiness={readiness} />}
 

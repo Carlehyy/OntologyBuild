@@ -621,8 +621,7 @@ function OntologyNetworkView({
   }
 
   return (
-    <div className="relative h-full overflow-hidden bg-[#f8fbff]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.10),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.10),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))]" />
+    <div className="workspace-topology-surface relative h-full overflow-hidden">
       <div className="absolute inset-x-4 top-4 z-10 flex flex-nowrap items-center justify-center gap-2">
         {[
           { icon: Boxes, label: `${objectTypes.length} 对象实体`, className: 'border-sky-100 bg-white/88 text-sky-700' },
