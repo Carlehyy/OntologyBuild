@@ -106,6 +106,7 @@ export interface BrowserSource {
 export interface StewardArtifact {
   id: string
   filename: string
+  relativePath?: string
   source: 'upload' | 'download' | string
   sourceUrl?: string | null
   mimeType: string

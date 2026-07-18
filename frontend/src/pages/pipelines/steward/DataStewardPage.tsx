@@ -9,13 +9,13 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Activity, AlertTriangle, ArrowLeft, BookOpen, Bot, ChevronDown, ChevronRight,
+  Activity, AlertTriangle, BookOpen, Bot, ChevronDown, ChevronRight,
   CheckCircle2, ClipboardCheck, Copy, Download, ExternalLink, Eye, FileArchive, FileText, FolderOpen,
-  GitBranch, Globe, Globe2, History, KeyRound, Library, List, Loader2, Monitor, MousePointer2,
+  Folder, GitBranch, Globe, Globe2, History, KeyRound, Library, List, Loader2, Monitor, MousePointer2,
   Paperclip, Pencil, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Table2, Trash2, Upload,
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
@@ -257,7 +257,6 @@ function StepTrace({ steps, running }: { steps: StewardStep[]; running?: boolean
 // ---------- 主页面 ----------
 
 export default function DataStewardPage() {
-  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
   const [status, setStatus] = useState<StewardStatus | null>(null)
@@ -694,7 +693,7 @@ export default function DataStewardPage() {
                 onClick={openFiles}
                 title="查看会话文件"
                 aria-label="查看会话文件"
-                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
               >
                 <FolderOpen size={15} />
                 {files.length > 0 && (
@@ -707,7 +706,7 @@ export default function DataStewardPage() {
                 onClick={openBrowser}
                 title="打开实时浏览器"
                 aria-label="打开实时浏览器"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <Monitor size={15} />
               </button>
@@ -721,9 +720,9 @@ export default function DataStewardPage() {
                   title="查看会话记录"
                   aria-label="查看会话记录"
                   aria-expanded={showHistory}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
-                    ? 'border-teal-300 bg-teal-50 text-teal-700'
-                    : 'border-slate-200 text-slate-500 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${showHistory
+                    ? 'border-violet-400 bg-violet-100 text-violet-800'
+                    : 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 hover:bg-violet-100'}`}
                 >
                   <History size={15} />
                 </button>
@@ -865,7 +864,7 @@ export default function DataStewardPage() {
             <div
               ref={targetPickerRef}
               data-testid="steward-composer-shell"
-              className="relative overflow-visible rounded-xl border border-slate-200 bg-white transition-colors focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500/10"
+              className="relative overflow-visible rounded-xl border border-teal-400 bg-white ring-1 ring-teal-100 transition-colors focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-200/80"
             >
               <div className="flex min-h-10 items-center gap-2 border-b border-slate-100 px-3.5 py-2">
                 <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-500">
@@ -1104,7 +1103,6 @@ export default function DataStewardPage() {
           expandedId={expandedId}
           onExpand={setExpandedId}
           onChanged={() => { loadRecords(); loadStatus() }}
-          onBack={() => navigate('/data/pipelines')}
           n8nApiUrl={n8nApiUrl}
           onOpenWizard={(pipelineId: string) => {
             pipelinesApi.get(pipelineId).then(setEditTarget).catch(() => {})
@@ -1160,6 +1158,70 @@ type WorkspacePreview = {
   truncated?: boolean
 }
 
+interface StewardTreeDirectory {
+  name: string
+  path: string
+  directories: Map<string, StewardTreeDirectory>
+  files: StewardArtifact[]
+}
+
+type StewardTreeRow =
+  | { type: 'directory'; key: string; name: string; path: string; depth: number; childCount: number }
+  | { type: 'file'; key: string; file: StewardArtifact; name: string; depth: number }
+
+const stewardDirectoryPaths = (files: StewardArtifact[]) => {
+  const paths = new Set<string>()
+  files.forEach(file => {
+    const parts = (file.relativePath || file.filename).split('/').filter(Boolean)
+    parts.slice(0, -1).forEach((_, index) => paths.add(parts.slice(0, index + 1).join('/')))
+  })
+  return paths
+}
+
+const buildStewardTreeRows = (files: StewardArtifact[], collapsed: Set<string>): StewardTreeRow[] => {
+  const root: StewardTreeDirectory = { name: '', path: '', directories: new Map(), files: [] }
+  files.forEach(file => {
+    const parts = (file.relativePath || file.filename).split('/').filter(Boolean)
+    let cursor = root
+    parts.slice(0, -1).forEach(part => {
+      const path = cursor.path ? `${cursor.path}/${part}` : part
+      if (!cursor.directories.has(part)) {
+        cursor.directories.set(part, { name: part, path, directories: new Map(), files: [] })
+      }
+      cursor = cursor.directories.get(part)!
+    })
+    cursor.files.push(file)
+  })
+
+  const rows: StewardTreeRow[] = []
+  const visit = (directory: StewardTreeDirectory, depth: number) => {
+    [...directory.directories.values()]
+      .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+      .forEach(child => {
+        rows.push({
+          type: 'directory',
+          key: `dir-${child.path}`,
+          name: child.name,
+          path: child.path,
+          depth,
+          childCount: child.directories.size + child.files.length,
+        })
+        if (!collapsed.has(child.path)) visit(child, depth + 1)
+      })
+    directory.files
+      .sort((left, right) => left.filename.localeCompare(right.filename, 'zh-CN'))
+      .forEach(file => rows.push({
+        type: 'file',
+        key: file.id,
+        file,
+        name: (file.relativePath || file.filename).split('/').pop() || file.filename,
+        depth,
+      }))
+  }
+  visit(root, 0)
+  return rows
+}
+
 function WorkspaceModal({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
   const [files, setFiles] = useState<StewardArtifact[]>([])
   const [loading, setLoading] = useState(true)
@@ -1168,6 +1230,23 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [preview, setPreview] = useState<WorkspacePreview>({ kind: 'empty' })
   const inputRef = useRef<HTMLInputElement>(null)
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set())
+  const knownDirectoryPaths = useRef(new Set<string>())
+
+  const allDirectoryPaths = useMemo(() => stewardDirectoryPaths(files), [files])
+  const treeRows = useMemo(() => buildStewardTreeRows(files, collapsedDirs), [files, collapsedDirs])
+
+  useEffect(() => {
+    const known = knownDirectoryPaths.current
+    setCollapsedDirs(current => {
+      const next = new Set([...current].filter(path => allDirectoryPaths.has(path)))
+      allDirectoryPaths.forEach(path => {
+        if (!known.has(path)) next.add(path)
+      })
+      return next
+    })
+    knownDirectoryPaths.current = new Set(allDirectoryPaths)
+  }, [allDirectoryPaths])
 
   const reload = useCallback(() => {
     setLoading(true)
@@ -1292,14 +1371,45 @@ function WorkspaceModal({ conversationId, onClose }: { conversationId: string; o
               {loading ? <div className="py-16 text-center text-sm text-slate-400">加载中…</div> : files.length === 0 ? (
                 <div className="mx-1 rounded-xl border border-dashed border-slate-300 bg-white/70 px-3 py-12 text-center text-xs text-slate-400">当前会话还没有文件</div>
               ) : (
-                <div className="space-y-1">
-                  {files.map(file => (
-                    <button key={file.id} type="button" onClick={() => setSelectedId(file.id)}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition ${selectedId === file.id ? 'bg-white text-teal-800 shadow-sm ring-1 ring-teal-200' : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'}`}>
-                      <FileText size={15} className={selectedId === file.id ? 'shrink-0 text-teal-600' : 'shrink-0 text-slate-400'} />
+                <div>
+                  {treeRows.map(row => row.type === 'directory' ? (
+                    <button
+                      key={row.key}
+                      type="button"
+                      aria-expanded={!collapsedDirs.has(row.path)}
+                      aria-label={`${row.name}，下一级 ${row.childCount} 项`}
+                      onClick={() => setCollapsedDirs(current => {
+                        const next = new Set(current)
+                        if (next.has(row.path)) next.delete(row.path); else next.add(row.path)
+                        return next
+                      })}
+                      className="flex h-8 w-full items-center gap-1.5 rounded-md pr-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-white"
+                      style={{ paddingLeft: `${8 + row.depth * 16}px` }}
+                    >
+                      {collapsedDirs.has(row.path) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                      {collapsedDirs.has(row.path)
+                        ? <Folder size={14} className="shrink-0 text-amber-500" />
+                        : <FolderOpen size={14} className="shrink-0 text-amber-500" />}
+                      <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                      <span aria-hidden="true" className="ml-auto shrink-0 tabular-nums text-[10px] font-medium text-slate-400">
+                        {row.childCount}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      key={row.key}
+                      type="button"
+                      onClick={() => setSelectedId(row.file.id)}
+                      title={row.file.relativePath || row.file.filename}
+                      className={`flex min-h-9 w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors ${selectedId === row.file.id
+                        ? 'bg-teal-50 text-teal-800'
+                        : 'text-slate-600 hover:bg-white'}`}
+                      style={{ paddingLeft: `${25 + row.depth * 16}px` }}
+                    >
+                      <FileText size={14} className={selectedId === row.file.id ? 'shrink-0 text-teal-600' : 'shrink-0 text-slate-400'} />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-xs font-medium" title={file.filename}>{file.filename}</span>
-                        <span className="mt-0.5 block text-[10px] text-slate-400">{formatBytes(file.size)}</span>
+                        <span className="block truncate text-xs font-medium">{row.name}</span>
+                        <span className="mt-0.5 block text-[9px] text-slate-400">{formatBytes(row.file.size)}</span>
                       </span>
                     </button>
                   ))}
@@ -1689,13 +1799,12 @@ function BrowserModal({ conversationId, onClose }: { conversationId: string; onC
 
 // ---------- 受管流水线面板 ----------
 
-function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged, onBack, n8nApiUrl, onOpenWizard }: {
+function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChanged, n8nApiUrl, onOpenWizard }: {
   records: StewardPipeline[]
   loading: boolean
   expandedId: string | null
   onExpand: (id: string | null) => void
   onChanged: () => void
-  onBack: () => void
   n8nApiUrl: string
   onOpenWizard: (pipelineId: string) => void
 }) {
@@ -1709,12 +1818,8 @@ function ManagedPipelinesPanel({ records, loading, expandedId, onExpand, onChang
           <p className="mt-0.5 whitespace-nowrap text-[10px] text-slate-400">此工作区只展示处于未发布的n8n流水线</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button onClick={onBack}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-50">
-            <ArrowLeft size={13} /> 返回流水线
-          </button>
           <button onClick={onChanged}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-50">
+            className="flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
             <RefreshCw size={13} /> 手动刷新
           </button>
         </div>
