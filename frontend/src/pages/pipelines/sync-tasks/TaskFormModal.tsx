@@ -82,7 +82,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     declaredPk && contractPk
     && splitPk(declaredPk).join('\u0000') !== splitPk(contractPk).join('\u0000'),
   )
-  const contractColumns = contract?.columns?.map(c => ({ name: c.name, type: c.type })) ?? []
+  const contractColumns = contract?.columns ?? []
 
   // 选中流水线后默认锁定第一个成品数据集
   useEffect(() => {
@@ -104,7 +104,8 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
   const validateStep = (s: number): string | null => {
     if (s === 0 && !form.name.trim()) return '请填写任务名称'
-    if (s === 1 && !form.pipeline_id) return '请选择一条已产出数据的流水线'
+    if (s === 0 && !form.description.trim()) return '请填写任务描述'
+    if (s === 1 && !form.pipeline_id) return '请选择一条已发布且已启用的流水线'
     if (s === 2 && pkMismatch)
       return '资产湖主键与流水线发布契约不一致，请先修复契约漂移后再创建任务'
     if (s === 2 && form.write_mode === 'upsert' && !contractPk)
@@ -170,17 +171,17 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   const show = (s: number) => isEdit || step === s
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-[0_24px_70px_rgba(15,23,42,0.18)] border border-white/70 w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+      <div data-testid="pipeline-task-modal" role="dialog" aria-modal="true" aria-labelledby="pipeline-task-modal-title" className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-[0_24px_70px_rgba(6,78,59,0.18)]">
         {/* 头部（居中） */}
-        <div className="relative px-6 py-5 border-b border-slate-100 text-center">
-          <h3 className="text-lg font-semibold text-slate-800">
+        <div className="relative border-b border-emerald-100 bg-emerald-50/35 px-6 py-5 text-center">
+          <h3 id="pipeline-task-modal-title" className="text-lg font-semibold text-slate-800">
             {isEdit ? '编辑调度任务' : '新建调度任务'}
           </h3>
           <p className="text-xs text-slate-400 mt-1 max-w-lg mx-auto">
             任务按计划触发已发布的流水线，并把最终产物按入库方式写进数据资产湖
           </p>
-          <button onClick={onClose} className="absolute right-5 top-5 text-slate-400 hover:text-slate-600 transition-colors">
+          <button type="button" onClick={onClose} aria-label="关闭弹窗" className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-emerald-100 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30">
             <X size={18} />
           </button>
         </div>
@@ -193,7 +194,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <div className="flex items-center gap-1.5">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
                     ${i < step ? 'bg-emerald-100 text-emerald-600'
-                      : i === step ? 'bg-blue-500 text-white shadow-sm shadow-blue-500/30'
+                      : i === step ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/25'
                       : 'bg-slate-100 text-slate-400'}`}>
                     {i < step ? <Check size={12} /> : i + 1}
                   </div>
@@ -218,21 +219,21 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
           {show(0) && (
             <StepShell title="基本信息" subtitle="给任务起个一眼能认出用途的名字">
               <Field label="任务名称" required>
-                <input type="text" value={form.name} onChange={e => update('name', e.target.value)}
+                <input type="text" aria-label="任务名称" value={form.name} onChange={e => update('name', e.target.value)}
                   placeholder="例如：订单数据每日入湖" autoFocus={!isEdit}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" />
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 transition" />
               </Field>
-              <Field label="任务描述">
-                <textarea value={form.description} onChange={e => update('description', e.target.value)}
-                  placeholder="任务用途说明（可选）" rows={2}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 resize-none transition" />
+              <Field label="任务描述" required>
+                <textarea aria-label="任务描述" value={form.description} onChange={e => update('description', e.target.value)}
+                  placeholder="例如：每天同步订单数据，为经营分析提供最新资产" rows={2}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-none transition" />
               </Field>
             </StepShell>
           )}
 
           {/* Step 1: 选择流水线（已发布且已启用）+ 数据预览 */}
           {show(1) && (
-            <StepShell title="选择流水线" subtitle="只列出已发布且已启用的流水线；有字段契约的流水线即使还没产出数据也可挂接" wide>
+            <StepShell wide>
               {pipelinesLoading ? (
                 <div className="text-sm text-slate-400 flex items-center justify-center gap-1.5 py-8">
                   <Loader2 size={14} className="animate-spin" />加载可用流水线...
@@ -250,7 +251,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                   <p>还没有「已发布且已启用」的流水线。</p>
                   <p className="text-xs text-slate-400">请先在编辑向导中发布流水线，再回到流水线列表打开启用开关。</p>
                   <button onClick={() => navigate('/data/pipelines')}
-                    className="mt-1 inline-flex items-center gap-1 text-xs px-3 py-1.5 border border-blue-200 rounded-lg hover:bg-blue-50 text-blue-600">
+                    className="mt-1 inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50">
                     去流水线 <ArrowRight size={11} />
                   </button>
                 </div>
@@ -266,6 +267,8 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <div className="text-xs text-emerald-600 mt-2 text-center">已自动选中刚发布的流水线</div>
               )}
 
+              {selectedPipeline && <PipelineSchemaPanel pipeline={selectedPipeline} />}
+
               {/* 成品数据集选择 + 数据预览 */}
               {selectedPipeline && activeCurated && (
                 <div className="mt-4 border border-slate-100 rounded-xl overflow-hidden">
@@ -274,7 +277,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                     <span className="text-xs text-slate-500">预览成品数据集</span>
                     {curatedList.length > 1 ? (
                       <select value={activeCurated.id} onChange={e => setActiveCuratedId(e.target.value)}
-                        className="text-xs px-2 py-1 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-blue-400">
+                        className="text-xs px-2 py-1 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-emerald-500">
                         {curatedList.map(c => <option key={c.id} value={c.id}>{c.name}（{c.rowcount} 行）</option>)}
                       </select>
                     ) : (
@@ -282,29 +285,16 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                     )}
                     <span className="text-xs text-slate-400 ml-auto">共 {activeCurated.rowcount} 行 · {activeCurated.columns.length} 列</span>
                   </div>
-                  <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} />
+                  <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} contractColumns={contractColumns} />
                 </div>
               )}
 
-              {/* 尚未产出数据但有字段契约：展示契约列，说明首次入湖由任务完成 */}
+              {/* 尚未产出数据但有字段契约：首次入湖提示 */}
               {selectedPipeline && !activeCurated && contract && (
-                <div className="mt-4 border border-slate-100 rounded-xl p-4 bg-slate-50/50 space-y-2.5">
+                <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/45 p-3.5">
                   <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                    <Database size={13} className="text-slate-400" />
-                    该流水线还没有产出过数据——创建任务后，首次执行将按下方字段契约完成首次入湖。
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {contract.columns.map(c => (
-                      <span key={c.name}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[11px] font-mono ${
-                          splitPk(contract.primary_key).includes(c.name)
-                            ? 'border-violet-200 bg-violet-50 text-violet-700'
-                            : 'border-slate-200 bg-white text-slate-600'}`}>
-                        {splitPk(contract.primary_key).includes(c.name) && <KeyRound size={9} />}
-                        {c.name}
-                        <span className="text-slate-400 font-sans">{c.type}</span>
-                      </span>
-                    ))}
+                    <Database size={13} className="text-emerald-600" />
+                    该流水线还没有产出过数据——创建任务后，首次执行将按上述字段契约完成首次入湖。
                   </div>
                 </div>
               )}
@@ -313,7 +303,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
           {/* Step 2: 入库方式；主键只读继承流水线发布契约 */}
           {show(2) && (
-            <StepShell title="设置入库方式" subtitle="流水线最终产物与资产湖已有数据的合并策略">
+            <StepShell>
               <Field label="入库方式" required>
                 <div className="grid grid-cols-2 gap-2">
                   {(Object.keys(WRITE_MODE_META) as WriteMode[]).map(mode => (
@@ -325,18 +315,18 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 </div>
               </Field>
 
-              <div className={`space-y-3 p-3.5 rounded-xl border ${contractPk ? 'bg-violet-50/40 border-violet-100' : 'bg-slate-50/60 border-slate-100'}`}>
+              <div className={`space-y-3 p-3.5 rounded-xl border ${contractPk ? 'bg-emerald-50/40 border-emerald-100' : 'bg-slate-50/60 border-slate-100'}`}>
                 <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                   <KeyRound size={13} className="text-slate-400" />
                   流水线主键契约
-                  <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded-full border bg-violet-50 text-violet-600 border-violet-100">
+                  <span className="ml-1 rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
                     发布时封版 · 任务只读
                   </span>
                 </div>
                 {contractPk ? (
                   <div className="flex flex-wrap gap-1.5">
                     {splitPk(contractPk).map(col => (
-                      <span key={col} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-violet-200 bg-white text-xs font-mono text-violet-700">
+                      <span key={col} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 py-1 font-mono text-xs text-emerald-700">
                         <KeyRound size={10} />{col}
                       </span>
                     ))}
@@ -357,21 +347,21 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                   <Field label="软删除列（可选）" hint="产物中的逻辑删除标识列；命中的行会打上 __deleted__ 标记而非物理删除">
                     {contractColumns.length > 0 ? (
                       <select value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-400">
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-emerald-500">
                         <option value="">— 不使用 —</option>
-                        {contractColumns.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                        {contractColumns.map(c => <option key={c.name} value={c.name}>{c.field_name}（{c.name}）</option>)}
                       </select>
                     ) : (
                       <input type="text" value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
                         placeholder="例如：is_deleted"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-blue-400" />
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-emerald-500" />
                     )}
                   </Field>
                 )}
               </div>
 
               <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
-                <input type="checkbox" checked={form.skip_empty ?? true} onChange={e => update('skip_empty', e.target.checked)} className="mt-0.5 accent-blue-500" />
+                <input type="checkbox" checked={form.skip_empty ?? true} onChange={e => update('skip_empty', e.target.checked)} className="mt-0.5 accent-emerald-600" />
                 <span>
                   空输出保护
                   <span className="block text-xs text-slate-400">流水线本次输出 0 行时跳过入库，防止源端异常导致资产被清空（建议开启）</span>
@@ -382,7 +372,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
           {/* Step 3: 调度 */}
           {show(3) && (
-            <StepShell title="调度设置" subtitle="决定任务何时触发">
+            <StepShell>
               <Field label="调度方式" required>
                 <div className="grid grid-cols-3 gap-2">
                   <ModeCard active={form.schedule_type === 'MANUAL'} onClick={() => update('schedule_type', 'MANUAL' as PipelineTaskScheduleType)} title="手动触发" desc="仅在任务池手动执行" />
@@ -395,7 +385,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="Cron 表达式" required hint="5 段格式：分 时 日 月 周。如 0 2 * * * 表示每天凌晨 2 点">
                   <input type="text" value={form.cron_expression} onChange={e => update('cron_expression', e.target.value)}
                     placeholder="0 2 * * *"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" />
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 transition" />
                 </Field>
               )}
 
@@ -403,12 +393,12 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="间隔秒数" required hint="最小 10 秒">
                   <input type="number" min={10} value={form.interval_seconds}
                     onChange={e => update('interval_seconds', parseInt(e.target.value) || 0)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" />
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 transition" />
                 </Field>
               )}
 
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                <input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)} className="accent-blue-500" />
+                <input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)} className="accent-emerald-600" />
                 {isEdit ? '启用任务' : '创建后立即启用'}
               </label>
             </StepShell>
@@ -416,7 +406,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
           {/* Step 4: 确认配置 */}
           {!isEdit && step === 4 && (
-            <StepShell title="确认配置" subtitle="核对所有设置，确认无误后创建">
+            <StepShell>
               <div className="rounded-xl border border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
                 <SummaryRow label="任务名" value={form.name} />
                 <SummaryRow label="流水线" value={selectedPipeline ? `${selectedPipeline.name}${selectedPipeline.version ? ` (v${selectedPipeline.version})` : ''}` : '-'} />
@@ -434,8 +424,8 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
               </div>
 
               {/* 预期效果（自然语言） */}
-              <div className="mt-4 p-4 rounded-xl bg-gradient-to-br from-blue-50/70 to-violet-50/50 border border-blue-100">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-blue-600 mb-1.5">
+              <div className="mt-4 rounded-xl border border-emerald-100 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 p-4">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
                   <Sparkles size={13} /> 预期效果
                 </div>
                 <p className="text-sm text-slate-600 leading-relaxed">{buildEffectText()}</p>
@@ -446,24 +436,27 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
         {/* 底部 */}
         <div className="flex items-center justify-between px-6 py-3.5 border-t border-slate-100 bg-slate-50/60">
-          <div>
+          <div className="flex items-center gap-2">
+            {(step === 0 || isEdit) && (
+              <button type="button" onClick={onClose} className="rounded-lg px-4 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-700">取消</button>
+            )}
             {step > 0 && !isEdit && (
-              <button onClick={() => { setStep(s => s - 1); setError('') }}
+              <button type="button" onClick={() => { setStep(s => s - 1); setError('') }}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-slate-500 hover:text-slate-800">
                 <ChevronLeft size={14} /> 上一步
               </button>
             )}
           </div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-1.5 text-sm text-slate-500 hover:bg-slate-100 rounded-lg transition">取消</button>
+            {step > 0 && !isEdit && <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-slate-500 hover:bg-slate-100 rounded-lg transition">取消</button>}
             {!isEdit && step < STEPS.length - 1 ? (
-              <button onClick={handleNext}
-                className="inline-flex items-center gap-1 px-4 py-1.5 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition shadow-sm shadow-blue-500/30">
+              <button type="button" onClick={handleNext}
+                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm text-white shadow-sm shadow-emerald-600/25 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/35">
                 下一步 <ChevronRight size={14} />
               </button>
             ) : (
-              <button onClick={handleSubmit} disabled={submitting}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition shadow-sm shadow-blue-500/30">
+              <button type="button" onClick={handleSubmit} disabled={submitting}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm text-white shadow-sm shadow-emerald-600/25 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/35 disabled:opacity-50">
                 {submitting && <Loader2 size={13} className="animate-spin" />}
                 {isEdit ? '保存修改' : '创建任务'}
               </button>
@@ -477,14 +470,16 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
 /** 每个步骤的居中外壳 */
 function StepShell({ title, subtitle, wide, children }: {
-  title: string; subtitle?: string; wide?: boolean; children: React.ReactNode
+  title?: string; subtitle?: string; wide?: boolean; children: React.ReactNode
 }) {
   return (
     <div className={`mx-auto w-full ${wide ? 'max-w-2xl' : 'max-w-lg'}`}>
-      <div className="text-center mb-4">
-        <h4 className="text-base font-semibold text-slate-800">{title}</h4>
-        {subtitle && <p className="text-xs text-slate-400 mt-1">{subtitle}</p>}
-      </div>
+      {(title || subtitle) && (
+        <div className="text-center mb-4">
+          {title && <h4 className="text-base font-semibold text-slate-800">{title}</h4>}
+          {subtitle && <p className="text-xs text-slate-400 mt-1">{subtitle}</p>}
+        </div>
+      )}
       <div className="space-y-4">{children}</div>
     </div>
   )
@@ -496,17 +491,17 @@ function PipelineCard({ pipeline, active, onClick }: {
   return (
     <button type="button" onClick={onClick}
       className={`w-full text-left p-3.5 rounded-xl border-2 transition-all
-        ${active ? 'border-blue-400 bg-blue-50/40 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+        ${active ? 'border-emerald-500 bg-emerald-50/45 shadow-sm' : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/20'}`}>
       <div className="flex items-center gap-2">
-        <GitBranch size={14} className={active ? 'text-blue-500' : 'text-slate-400'} />
+        <GitBranch size={14} className={active ? 'text-emerald-600' : 'text-slate-400'} />
         <span className="text-sm font-medium text-slate-800 truncate">{pipeline.name}</span>
         {pipeline.version ? <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">v{pipeline.version}</span> : null}
-        {active && <CheckCircle2 size={15} className="text-blue-500 ml-auto shrink-0" />}
+        {active && <CheckCircle2 size={15} className="text-emerald-600 ml-auto shrink-0" />}
       </div>
       <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400 flex-wrap">
         {pipeline.domain && <span className="px-1.5 py-0.5 rounded-full bg-slate-50 border border-slate-100">{pipeline.domain}</span>}
         {pipeline.contract && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-violet-50 border border-violet-100 text-violet-600">
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
             <KeyRound size={9} /> 字段契约{pipeline.contract.primary_key ? `（主键 ${pipeline.contract.primary_key}）` : ''}
           </span>
         )}
@@ -523,8 +518,75 @@ function PipelineCard({ pipeline, active, onClick }: {
   )
 }
 
+/** 完整展示所选流水线的发布字段契约：中文名、字段标识、类型与约束。 */
+function PipelineSchemaPanel({ pipeline }: { pipeline: SelectablePipeline }) {
+  const contractColumns = pipeline.contract?.columns ?? []
+  const fallbackPk = new Set(
+    pipeline.curated_datasets.flatMap(dataset => splitPk(dataset.primary_key)),
+  )
+  const fallbackColumns = pipeline.curated_datasets.flatMap(dataset =>
+    dataset.columns.map(column => ({
+      name: column.name,
+      field_name: column.name,
+      type: column.type,
+      is_primary_key: fallbackPk.has(column.name),
+      nullable: !fallbackPk.has(column.name),
+    })),
+  ).filter((column, index, all) => all.findIndex(item => item.name === column.name) === index)
+  const columns = contractColumns.length > 0 ? contractColumns : fallbackColumns
+
+  if (columns.length === 0) return null
+  return (
+    <div className="mt-4 overflow-hidden rounded-xl border border-emerald-100 bg-white">
+      <div className="flex items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50/45 px-3.5 py-2.5">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-800">
+          <Table2 size={13} /> 完整字段契约
+        </div>
+        <span className="text-[11px] text-emerald-700/70">{columns.length} 列 · 发布版本只读</span>
+      </div>
+      <div className="max-h-64 overflow-auto scrollbar-thin">
+        <table className="w-full min-w-[560px] border-collapse text-xs">
+          <thead className="sticky top-0 z-10 bg-slate-50">
+            <tr className="border-b border-slate-100 text-slate-500">
+              <th className="px-3 py-2 text-left font-medium">中文名称</th>
+              <th className="px-3 py-2 text-left font-medium">字段标识</th>
+              <th className="px-3 py-2 text-left font-medium">数据类型</th>
+              <th className="px-3 py-2 text-left font-medium">字段约束</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {columns.map(column => (
+              <tr key={column.name} className="hover:bg-emerald-50/25">
+                <td className="px-3 py-2 font-medium text-slate-700">{column.field_name || column.name}</td>
+                <td className="px-3 py-2 font-mono text-slate-600">{column.name}</td>
+                <td className="px-3 py-2 text-slate-500">{column.type}</td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {column.is_primary_key && (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                        <KeyRound size={9} /> 主键
+                      </span>
+                    )}
+                    <span className={`rounded-md px-1.5 py-0.5 text-[10px] ${column.nullable ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-700'}`}>
+                      {column.nullable ? '可为空' : '非空'}
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 /** 成品数据集分页预览面板 */
-function CuratedDataPreview({ datasetId, totalRows }: { datasetId: string; totalRows: number }) {
+function CuratedDataPreview({ datasetId, totalRows, contractColumns }: {
+  datasetId: string
+  totalRows: number
+  contractColumns: NonNullable<SelectablePipeline['contract']>['columns']
+}) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<CuratedPreview | null>(null)
   const [loading, setLoading] = useState(false)
@@ -551,7 +613,7 @@ function CuratedDataPreview({ datasetId, totalRows }: { datasetId: string; total
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)}
-        className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50/50 transition flex items-center justify-center gap-1.5">
+        className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs text-emerald-700 transition hover:bg-emerald-50/60">
         <Table2 size={12} /> 查看实际数据（分页预览）
       </button>
     )
@@ -571,9 +633,19 @@ function CuratedDataPreview({ datasetId, totalRows }: { datasetId: string; total
             <thead className="sticky top-0 bg-slate-50 z-10">
               <tr>
                 <th className="px-2 py-1.5 text-left text-slate-400 font-medium border-b border-slate-100 whitespace-nowrap">#</th>
-                {columns.map(c => (
-                  <th key={c} className="px-2.5 py-1.5 text-left text-slate-500 font-medium border-b border-slate-100 whitespace-nowrap font-mono">{c}</th>
-                ))}
+                {columns.map(c => {
+                  const meta = contractColumns.find(column => column.name === c)
+                  return (
+                    <th key={c} className="min-w-28 whitespace-nowrap border-b border-slate-100 px-2.5 py-2 text-left font-medium text-slate-500">
+                      <div className="font-sans text-slate-700">{meta?.field_name || c}</div>
+                      <div className="mt-0.5 flex items-center gap-1 font-mono text-[10px] font-normal text-slate-400">
+                        {c}
+                        {meta?.is_primary_key && <span className="rounded bg-emerald-100 px-1 font-sans text-[9px] text-emerald-700">主键</span>}
+                        {meta && !meta.nullable && <span className="rounded bg-amber-50 px-1 font-sans text-[9px] text-amber-700">非空</span>}
+                      </div>
+                    </th>
+                  )
+                })}
               </tr>
             </thead>
             <tbody>
@@ -634,8 +706,8 @@ function ModeCard({ active, onClick, title, desc, disabled = false }: {
     <button type="button" onClick={onClick} disabled={disabled}
       className={`text-left p-3 rounded-xl border-2 transition-all
         ${disabled ? 'border-slate-100 bg-slate-50 opacity-55 cursor-not-allowed'
-          : active ? 'border-blue-400 bg-blue-50/40' : 'border-slate-200 hover:border-slate-300'}`}>
-      <div className={`text-sm font-medium ${active ? 'text-blue-600' : 'text-slate-800'}`}>{title}</div>
+          : active ? 'border-emerald-500 bg-emerald-50/45' : 'border-slate-200 hover:border-emerald-200 hover:bg-emerald-50/20'}`}>
+      <div className={`text-sm font-medium ${active ? 'text-emerald-700' : 'text-slate-800'}`}>{title}</div>
       <div className="text-xs text-slate-500 mt-0.5">{disabled ? `${desc}（流水线未声明主键）` : desc}</div>
     </button>
   )

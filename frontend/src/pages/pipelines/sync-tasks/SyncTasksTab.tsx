@@ -8,17 +8,17 @@ import {
   RotateCw, Activity, Waves, ExternalLink, Workflow, ListChecks,
   Boxes, Network, ArrowRight,
 } from 'lucide-react'
-import { pipelineTasksApi, WRITE_MODE_META, type PipelineFilterOption, type PipelineTask, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
+import { pipelineTasksApi, WRITE_MODE_META, type PipelineFilterOption, type PipelineTask, type PipelineTaskRecentRun, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ── 常量 ──────────────────────────────────────────────
 const QUICK_TABS = [
-  { key: '',          label: '全部',   dot: '' },
-  { key: 'running',   label: '运行中', dot: '#3B82F6' },
-  { key: 'failed',    label: '异常',   dot: '#F87171' },
-  { key: 'disabled',  label: '已停用', dot: '#94A3B8' },
+  { key: '',          label: '全部' },
+  { key: 'running',   label: '运行中' },
+  { key: 'failed',    label: '异常' },
+  { key: 'disabled',  label: '已停用' },
 ] as const
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
@@ -117,6 +117,8 @@ export default function SyncTasksTab() {
   const [presetPipelineId, setPresetPipelineId] = useState<string | null>(null)
   const [filterPipelineId, setFilterPipelineId] = useState(() => searchParams.get('pipeline_id') || '')
   const [pipelineOptions, setPipelineOptions] = useState<PipelineFilterOption[]>([])
+  const quickTabsRef = useRef<HTMLDivElement>(null)
+  const [quickIndicator, setQuickIndicator] = useState({ left: 0, width: 0 })
 
   useEffect(() => {
     const pid = searchParams.get('pipeline')
@@ -169,6 +171,25 @@ export default function SyncTasksTab() {
   }, [page, pageSize, activeTab, search, filterPipelineId])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const updateIndicator = () => {
+      const container = quickTabsRef.current
+      if (!container) return
+      const value = activeTab || 'all'
+      const activeButton = container.querySelector(`[data-tab-value="${value}"]`) as HTMLElement | null
+      if (!activeButton) return
+      const containerRect = container.getBoundingClientRect()
+      const buttonRect = activeButton.getBoundingClientRect()
+      setQuickIndicator({
+        left: buttonRect.left - containerRect.left,
+        width: buttonRect.width,
+      })
+    }
+    updateIndicator()
+    window.addEventListener('resize', updateIndicator)
+    return () => window.removeEventListener('resize', updateIndicator)
+  }, [activeTab])
 
   const loadRef = useRef(load)
   loadRef.current = load
@@ -229,12 +250,6 @@ export default function SyncTasksTab() {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const attentionTasks = useMemo(
-    () => tasks.filter(t => t.status === 'failed' || t.pipeline_status === 'deleted'
-      || (t.pipeline_status && t.pipeline_status !== 'published') || t.pipeline_enabled === false),
-    [tasks],
-  )
-
   // 今日成功率 =（今日执行次数 - 今日异常数）/ 今日执行次数；今日无执行则显示 —
   const todaySuccessRate = useMemo(() => {
     const runs = stats?.today_runs ?? 0
@@ -250,17 +265,20 @@ export default function SyncTasksTab() {
       return `${Number(month)}/${Number(day)}`
     })
     const series = source.map(item => item.runs)
-    return { days, series, total7d: series.reduce((a, b) => a + b, 0) }
+    const errors = source.map(item => item.errors)
+    return { days, series, errors, total7d: series.reduce((a, b) => a + b, 0) }
   }, [stats])
 
   // ECharts: 环形状态分布 - 固定尺寸容器、禁用 tooltip 防止溢出
   const pieOption = useMemo(() => {
     const s = stats
-    const idle = Math.max(0, (s?.total ?? 0) - (s?.running ?? 0) - (s?.failed ?? 0))
+    const success = s?.success ?? 0
+    const idle = s?.idle ?? Math.max(0, (s?.total ?? 0) - (s?.running ?? 0) - (s?.failed ?? 0) - success)
     const data = [
       { name: '运行中', value: s?.running ?? 0, itemStyle: { color: '#0D9488' } },
-      { name: '待运行', value: idle, itemStyle: { color: '#CBD5E1' } },
-      { name: '异常',   value: s?.failed ?? 0, itemStyle: { color: '#F87171' } },
+      { name: '上次成功', value: success, itemStyle: { color: '#34D399' } },
+      { name: '上次失败', value: s?.failed ?? 0, itemStyle: { color: '#F87171' } },
+      { name: '空闲', value: idle, itemStyle: { color: '#CBD5E1' } },
     ].filter(d => d.value > 0)
     return {
       tooltip: { show: false },
@@ -276,30 +294,34 @@ export default function SyncTasksTab() {
     }
   }, [stats])
 
-  // ECharts: 迷你趋势
+  // ECharts: 近七日真实执行趋势
   const miniTrendOption = useMemo(() => ({
-    grid: { left: 2, right: 2, top: 4, bottom: 2 },
-    xAxis: { type: 'category', show: false, data: trendData.days, boundaryGap: false },
-    yAxis: { type: 'value', show: false, scale: true },
-    tooltip: { show: false },
-    series: [{
-      type: 'line', smooth: true, symbol: 'none',
-      data: trendData.series,
-      lineStyle: { width: 2, color: '#0D9488' },
-      areaStyle: {
-        color: {
-          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [
-            { offset: 0, color: 'rgba(13,148,136,0.28)' },
-            { offset: 1, color: 'rgba(13,148,136,0.01)' },
-          ],
-        },
+    grid: { left: 24, right: 6, top: 14, bottom: 24 },
+    xAxis: {
+      type: 'category', data: trendData.days, boundaryGap: true,
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#94A3B8', fontSize: 9, margin: 8 },
+    },
+    yAxis: {
+      type: 'value', minInterval: 1,
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#CBD5E1', fontSize: 9 },
+      splitLine: { lineStyle: { color: '#F1F5F9' } },
+    },
+    tooltip: { trigger: 'axis', confine: true },
+    series: [
+      {
+        name: '执行', type: 'bar', data: trendData.series, barMaxWidth: 18,
+        itemStyle: { color: '#0D9488', borderRadius: [4, 4, 0, 0] },
       },
-      animationDuration: 700,
-    }],
+      {
+        name: '异常', type: 'line', smooth: true, symbol: 'circle', symbolSize: 4,
+        data: trendData.errors,
+        lineStyle: { width: 1.5, color: '#F87171' },
+        itemStyle: { color: '#F87171' },
+      },
+    ],
   }), [trendData])
-
-  const failedCount = stats?.failed ?? 0
 
   return (
     <div className="flex h-full min-h-[640px] flex-col gap-3">
@@ -342,21 +364,27 @@ export default function SyncTasksTab() {
         <div className="col-span-1 flex min-h-0 flex-col 2xl:col-span-9">
           <div className={`${PANEL} flex min-h-0 flex-1 flex-col`}>
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-100 px-5 py-3">
-              <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+              <div ref={quickTabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+                <span
+                  data-testid="task-filter-indicator"
+                  className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+                  style={{ left: `${quickIndicator.left}px`, width: `${quickIndicator.width}px` }}
+                />
                 {QUICK_TABS.map(tab => {
                   const active = activeTab === tab.key
                   return (
                     <button
                       key={tab.key}
                       type="button"
+                      data-tab-value={tab.key || 'all'}
+                      aria-pressed={active}
                       onClick={() => handleTabChange(tab.key)}
-                      className={`flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors ${
+                      className={`relative z-10 flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors duration-200 ${
                         active
-                          ? 'bg-emerald-600 text-white shadow-sm'
-                          : 'text-slate-500 hover:bg-white hover:text-emerald-700'
+                          ? 'text-white'
+                          : 'text-slate-500 hover:text-slate-700'
                       }`}
                     >
-                      {tab.dot && <span className="h-1.5 w-1.5 rounded-full" style={{ background: active ? '#fff' : tab.dot }} />}
                       {tab.label}
                     </button>
                   )
@@ -445,15 +473,15 @@ export default function SyncTasksTab() {
               ) : (
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="overflow-auto scrollbar-thin">
-                    <table className="w-full min-w-[900px] text-sm">
+                    <table className="w-full min-w-[960px] text-sm">
                       <thead className="bg-slate-50">
                         <tr className="border-b border-slate-200 text-xs text-slate-600">
                           <th className="px-4 py-2.5 text-left font-medium">任务</th>
                           <th className="px-4 py-2.5 text-left font-medium">关联流水线</th>
-                          <th className="px-4 py-2.5 text-left font-medium">调度与入库</th>
-                          <th className="px-4 py-2.5 text-left font-medium">状态</th>
+                          <th className="px-4 py-2.5 text-left font-medium">入库策略</th>
+                          <th className="px-4 py-2.5 text-left font-medium">调度计划</th>
+                          <th className="px-4 py-2.5 text-left font-medium">启停</th>
                           <th className="px-4 py-2.5 text-left font-medium">最近执行与入湖</th>
-                          <th className="px-4 py-2.5 text-left font-medium">下次执行</th>
                           <th className="px-4 py-2.5 text-right font-medium">操作</th>
                         </tr>
                       </thead>
@@ -496,37 +524,40 @@ export default function SyncTasksTab() {
                                 <div className="flex items-center gap-1.5">
                                   <span className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700" title={wm?.desc}>
                                     {wm?.label || t.write_mode}
-                                    {t.skip_empty && <ShieldCheck size={10} />}
                                   </span>
                                 </div>
-                                <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-500">
+                                {t.skip_empty && (
+                                  <div className="mt-1.5 flex items-center gap-1 text-[10px] text-slate-400">
+                                    <ShieldCheck size={10} className="text-teal-500" /> 空输出保护
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 align-top">
+                                <div className="flex items-center gap-1 text-[11px] text-slate-600">
                                   <SchIcon size={11} className={sch.color} />
                                   <span>{sch.label}</span>
-                                  {t.schedule_type === 'CRON' && t.cron_expression && (
-                                    <span className="max-w-[86px] truncate font-mono text-slate-400" title={t.cron_expression}>· {t.cron_expression}</span>
-                                  )}
-                                  {t.schedule_type === 'INTERVAL' && !!t.interval_seconds && (
-                                    <span className="text-slate-400">· 每 {relativeDuration(t.interval_seconds)}</span>
-                                  )}
+                                  {t.schedule_type === 'CRON' && t.cron_expression && <span className="font-mono text-slate-400">· {t.cron_expression}</span>}
+                                  {t.schedule_type === 'INTERVAL' && !!t.interval_seconds && <span className="text-slate-400">· 每 {relativeDuration(t.interval_seconds)}</span>}
                                 </div>
+                                {t.schedule_type !== 'MANUAL' && <div className="mt-1.5"><NextRunCell task={t} compact /></div>}
                               </td>
                               <td className="px-4 py-3 align-top">
                                 <div className="flex items-center gap-2">
                                   <Switch checked={t.enabled} onChange={() => handleToggle(t)} />
-                                  <TaskRunBadge status={t.status} enabled={t.enabled} />
+                                  <span className={`text-[11px] font-medium ${t.enabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                    {t.enabled ? '已启用' : '已停用'}
+                                  </span>
                                 </div>
                               </td>
                               <td className="max-w-[150px] px-4 py-3 align-top">
-                                <TimeStack iso={t.last_run_at} withSeconds align="left" />
+                                <RunStateBadge task={t} />
+                                {t.last_run_at && <div className="mt-1.5"><TimeStack iso={t.last_run_at} withSeconds align="left" /></div>}
                                 {t.status === 'failed' && t.last_error && (
                                   <div className="mt-1 max-w-[140px] truncate text-[10px] text-rose-500" title={t.last_error}>{t.last_error}</div>
                                 )}
-                                <div className="mt-1.5">
-                                  <ExecResultCell impact={t.last_impact} status={t.status} />
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 align-top">
-                                <NextRunCell task={t} />
+                                {(t.last_impact || t.status === 'failed') && (
+                                  <div className="mt-1.5"><ExecResultCell impact={t.last_impact} status={t.status} /></div>
+                                )}
                               </td>
                               <td className="px-4 py-2 text-right align-middle">
                                 <div className="flex items-center justify-end gap-0.5">
@@ -614,73 +645,25 @@ export default function SyncTasksTab() {
               </div>
               <div className="flex flex-1 flex-col gap-2 pl-3">
                 <LegendRow color="#0D9488" label="运行中" value={stats?.running ?? 0} />
-                <LegendRow color="#F87171" label="异常" value={stats?.failed ?? 0} />
-                <LegendRow color="#CBD5E1" label="待运行" value={Math.max(0, (stats?.total ?? 0) - (stats?.running ?? 0) - (stats?.failed ?? 0))} />
+                <LegendRow color="#34D399" label="上次成功" value={stats?.success ?? 0} />
+                <LegendRow color="#F87171" label="上次失败" value={stats?.failed ?? 0} />
+                <LegendRow color="#CBD5E1" label="空闲" value={stats?.idle ?? Math.max(0, (stats?.total ?? 0) - (stats?.running ?? 0) - (stats?.failed ?? 0) - (stats?.success ?? 0))} />
               </div>
             </div>
           </div>
 
-          <div className={`${PANEL} flex min-h-0 flex-1 flex-col p-4`}>
-            <div className="mb-2 flex shrink-0 items-center justify-between">
+          <div className={`${PANEL} flex h-[196px] shrink-0 flex-col p-4`}>
+            <div className="mb-2.5 flex shrink-0 items-center justify-between">
               <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                {failedCount > 0 ? (
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-60" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-rose-500" />
-                  </span>
-                ) : (
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                )}
-                {failedCount > 0 ? '待关注任务' : '运行正常'}
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                最近执行记录
               </h3>
-              {attentionTasks.length > 0 && (
-                <span className="rounded-md border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-600 tabular-nums">{attentionTasks.length}</span>
-              )}
+              <span className="text-[10px] text-slate-400">实时留痕</span>
             </div>
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-auto pr-0.5 scrollbar-thin">
-              {attentionTasks.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-2 py-4 text-xs text-slate-400">
-                  <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-500">
-                    <CheckCircle2 size={20} />
-                  </span>
-                  <span>暂无异常任务</span>
-                </div>
-              ) : (
-                attentionTasks.slice(0, 8).map(t => (
-                  <div key={t.id} className="group rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 transition hover:border-slate-200 hover:bg-white">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-xs font-medium text-slate-700">{t.name}</div>
-                        <div className="mt-1 flex items-center gap-1 text-[10px] text-rose-500">
-                          <AlertCircle size={10} className="shrink-0" />
-                          <span className="truncate">
-                            {t.pipeline_status === 'deleted' ? '关联流水线已删除'
-                              : t.pipeline_status && t.pipeline_status !== 'published' ? '流水线未发布'
-                              : t.pipeline_enabled === false ? '流水线已停用'
-                              : t.last_error ? t.last_error.slice(0, 26) : '执行失败'}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
-                        {t.status === 'failed' && t.pipeline_status === 'published' && t.pipeline_enabled !== false && (
-                          <button type="button" onClick={() => handleTrigger(t)} title="重试"
-                            className="grid h-7 w-7 place-items-center rounded-lg text-teal-700 hover:bg-teal-50">
-                            <RotateCw size={12} />
-                          </button>
-                        )}
-                        <button type="button" onClick={() => handleEdit(t)} title="编辑"
-                          className="grid h-7 w-7 place-items-center rounded-lg text-slate-500 hover:bg-slate-100">
-                          <Edit2 size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+            <RecentRunFeed runs={stats?.recent_runs ?? []} />
           </div>
 
-          <div className={`${PANEL} shrink-0 p-4`}>
+          <div data-testid="seven-day-chart" className={`${PANEL} flex min-h-0 flex-1 flex-col p-4`}>
             <div className="mb-1 flex items-center justify-between">
               <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
                 <span className="h-1.5 w-1.5 rounded-full bg-teal-600" />
@@ -688,7 +671,7 @@ export default function SyncTasksTab() {
               </h3>
               <span className="text-[11px] text-slate-500 tabular-nums">{trendData.total7d} 次</span>
             </div>
-            <div className="h-12 overflow-hidden">
+            <div className="min-h-[128px] flex-1 overflow-hidden">
               <ReactECharts option={miniTrendOption} style={{ height: '100%', width: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
           </div>
@@ -789,31 +772,91 @@ function EmptyState({ activeTab, hasSearch, onClear, onCreate }: {
 }) {
   const isFiltered = activeTab || hasSearch
   return (
-    <div className="flex min-h-56 flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 py-8 text-center">
-      <div className="mb-3 grid h-12 w-12 place-items-center rounded-xl bg-teal-50 text-teal-600">
-        <Repeat size={20} />
+    <div data-testid="task-empty-state" className="flex h-full min-h-56 flex-1 items-center justify-center rounded-xl border-2 border-dashed border-slate-200 py-8 text-center">
+      <div className="flex -translate-y-4 flex-col items-center">
+        <div className="mb-3 grid h-12 w-12 place-items-center rounded-xl bg-teal-50 text-teal-600">
+          <Repeat size={20} />
+        </div>
+        {isFiltered ? (
+          <>
+            <div className="mb-1 text-sm font-medium text-slate-700">没有匹配的任务</div>
+            <div className="mb-3 text-xs text-slate-400">调整状态、关键词或流水线筛选条件</div>
+            <button type="button" onClick={onClear}
+              className="inline-flex items-center gap-1 rounded-lg bg-teal-50 px-3 py-1.5 text-xs text-teal-700 transition-colors hover:bg-teal-100">
+              <X size={12} /> 清除筛选
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="mb-1 text-sm font-medium text-slate-700">暂无调度任务</div>
+            <div className="mb-3 max-w-xs text-xs leading-relaxed text-slate-400">
+              选择一条已发布的流水线，设定入库方式，产物将按计划写入资产湖
+            </div>
+            <button type="button" onClick={onCreate}
+              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700">
+              <Plus size={12} /> 新建第一个任务
+            </button>
+          </>
+        )}
       </div>
-      {isFiltered ? (
-        <>
-          <div className="mb-1 text-sm font-medium text-slate-700">没有匹配的任务</div>
-          <div className="mb-3 text-xs text-slate-400">调整状态、关键词或流水线筛选条件</div>
-          <button type="button" onClick={onClear}
-            className="inline-flex items-center gap-1 rounded-lg bg-teal-50 px-3 py-1.5 text-xs text-teal-700 transition-colors hover:bg-teal-100">
-            <X size={12} /> 清除筛选
-          </button>
-        </>
-      ) : (
-        <>
-          <div className="mb-1 text-sm font-medium text-slate-700">暂无调度任务</div>
-          <div className="mb-3 max-w-xs text-xs leading-relaxed text-slate-400">
-            选择一条已发布的流水线，设定入库方式，产物将按计划写入资产湖
+    </div>
+  )
+}
+
+function formatFeedTime(iso: string | null): string {
+  if (!iso) return '刚刚'
+  try {
+    const diff = Math.max(0, Date.now() - toLocalDate(iso).getTime())
+    if (diff < 60_000) return '刚刚'
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+    return `${Math.floor(diff / 86_400_000)} 天前`
+  } catch { return iso }
+}
+
+function RecentRunFeed({ runs }: { runs: PipelineTaskRecentRun[] }) {
+  if (runs.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 text-xs text-slate-400">
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-500">
+          <History size={17} />
+        </span>
+        <span>任务执行后会在这里留痕</span>
+      </div>
+    )
+  }
+  const statusMeta: Record<string, { label: string; dot: string; text: string }> = {
+    pending: { label: '排队', dot: 'bg-slate-400', text: 'text-slate-500' },
+    running: { label: '执行中', dot: 'bg-teal-500', text: 'text-teal-700' },
+    success: { label: '成功', dot: 'bg-emerald-500', text: 'text-emerald-700' },
+    failed: { label: '失败', dot: 'bg-rose-500', text: 'text-rose-600' },
+  }
+  return (
+    <div className="min-h-0 flex-1 overflow-auto pr-1 scrollbar-thin">
+      {runs.slice(0, 6).map((run, index) => {
+        const meta = statusMeta[run.status] || statusMeta.pending
+        return (
+          <div key={run.id} className="relative flex gap-2.5 pb-2.5 last:pb-0">
+            <div className="relative flex w-2 shrink-0 justify-center pt-1.5">
+              <span className={`relative z-10 h-2 w-2 rounded-full ring-2 ring-white ${meta.dot}`} />
+              {index < Math.min(runs.length, 6) - 1 && <span className="absolute bottom-0 top-2.5 w-px bg-slate-100" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] font-medium ${meta.text}`}>{meta.label}</span>
+                <span className="truncate text-xs font-medium text-slate-700" title={run.task_name}>{run.task_name}</span>
+                <time className="ml-auto shrink-0 text-[9px] text-slate-400">{formatFeedTime(run.started_at)}</time>
+              </div>
+              <div className="mt-0.5 flex items-center gap-1 truncate text-[10px] text-slate-400" title={run.error_message || run.pipeline_name}>
+                <GitBranch size={9} className="shrink-0" />
+                <span className="truncate">{run.pipeline_name}</span>
+                {run.status === 'success' && <span className="shrink-0">· 输出 {run.rows_out} 行</span>}
+                {run.status === 'failed' && <span className="truncate text-rose-500">· {run.error_message || '执行失败'}</span>}
+              </div>
+            </div>
           </div>
-          <button type="button" onClick={onCreate}
-            className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700">
-            <Plus size={12} /> 新建第一个任务
-          </button>
-        </>
-      )}
+        )
+      })}
     </div>
   )
 }
@@ -835,17 +878,18 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: () => void 
   )
 }
 
-function TaskRunBadge({ status, enabled }: { status: string; enabled: boolean }) {
-  if (!enabled) {
-    return <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-500">已停用</span>
-  }
+function RunStateBadge({ task }: { task: PipelineTask }) {
+  const { status } = task
   const meta = {
-    running: { label: '运行中', className: 'bg-teal-50 text-teal-700' },
-    failed: { label: '异常', className: 'bg-rose-50 text-rose-600' },
+    running: { label: '执行中', className: 'bg-teal-50 text-teal-700' },
+    failed: { label: '上次失败', className: 'bg-rose-50 text-rose-600' },
     success: { label: '上次成功', className: 'bg-emerald-50 text-emerald-700' },
-    idle: { label: '待运行', className: 'bg-slate-100 text-slate-500' },
+    idle: {
+      label: task.last_run_at ? '空闲' : '尚未执行',
+      className: 'bg-slate-100 text-slate-500',
+    },
   }[status] || { label: status, className: 'bg-slate-100 text-slate-500' }
-  return <span className={`rounded-md px-2 py-1 text-[10px] ${meta.className}`}>{meta.label}</span>
+  return <span className={`inline-flex rounded-md px-2 py-1 text-[10px] ${meta.className}`}>{meta.label}</span>
 }
 
 // ── 下一次执行时间 ─────────────────────────────────────
@@ -860,7 +904,7 @@ function formatFuture(iso: string): string {
   } catch { return '' }
 }
 
-function NextRunCell({ task }: { task: PipelineTask }) {
+function NextRunCell({ task, compact = false }: { task: PipelineTask; compact?: boolean }) {
   if (task.schedule_type === 'MANUAL')
     return <span className="text-[11px] text-slate-400">手动触发</span>
   if (!task.enabled)
@@ -869,6 +913,7 @@ function NextRunCell({ task }: { task: PipelineTask }) {
     return <span className="text-[11px] text-slate-400">—</span>
   return (
     <div className="flex flex-col items-start">
+      {compact && <div className="mb-1 text-[9px] text-slate-400">下次执行</div>}
       <TimeStack iso={task.next_run_at} align="left" />
       <div className="mt-1 whitespace-nowrap text-[10px] text-teal-600">{formatFuture(task.next_run_at)}</div>
     </div>

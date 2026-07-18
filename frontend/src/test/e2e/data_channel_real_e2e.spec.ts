@@ -290,6 +290,7 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
     '/api/v2/pipeline-tasks',
     {
       name: taskName,
+      description: '验证真实数据流水线的手动入湖任务',
       pipeline_id: pipeline.id,
       write_mode: 'overwrite',
       schedule_type: 'MANUAL',

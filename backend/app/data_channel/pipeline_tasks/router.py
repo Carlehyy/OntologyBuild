@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -48,7 +48,7 @@ def _shanghai_date(value: datetime):
 
 class PipelineTaskCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = ""
+    description: str = Field(..., min_length=1, max_length=1000)
     pipeline_id: str
     write_mode: Literal["overwrite", "append", "upsert", "append_dedup"] = "overwrite"
     # deprecated：只为兼容旧客户端；服务端只接受与流水线发布契约一致的值，
@@ -61,10 +61,18 @@ class PipelineTaskCreate(BaseModel):
     interval_seconds: Optional[int] = 0
     enabled: bool = True
 
+    @field_validator("name", "description")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("不能为空")
+        return value
+
 
 class PipelineTaskUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, min_length=1, max_length=1000)
     pipeline_id: Optional[str] = None
     write_mode: Optional[Literal["overwrite", "append", "upsert", "append_dedup"]] = None
     primary_key: Optional[str] = None
@@ -74,6 +82,16 @@ class PipelineTaskUpdate(BaseModel):
     cron_expression: Optional[str] = None
     interval_seconds: Optional[int] = None
     enabled: Optional[bool] = None
+
+    @field_validator("name", "description")
+    @classmethod
+    def required_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("不能为空")
+        return value
 
 
 def _validate(db: Session, body, existing: PipelineTask | None = None) -> tuple[Pipeline, str]:
@@ -320,7 +338,9 @@ def selectable_pipelines(db: Session = Depends(get_db)):
         contract = {
             "primary_key": contract_pk(p.column_definitions),
             "columns": [{"name": d["field_key"], "type": d["field_type"],
-                         "field_name": d["field_name"]} for d in defs],
+                         "field_name": d["field_name"],
+                         "is_primary_key": d["is_primary_key"],
+                         "nullable": d["nullable"]} for d in defs],
         } if defs else None
 
         # 既无契约也无已产出数据：无从配置入库方式，不进候选
@@ -345,6 +365,8 @@ def selectable_pipelines(db: Session = Depends(get_db)):
 def stats_overview(db: Session = Depends(get_db)):
     total = db.query(PipelineTask).count()
     running = db.query(PipelineTask).filter(PipelineTask.status == "running").count()
+    success = db.query(PipelineTask).filter(PipelineTask.status == "success").count()
+    idle = db.query(PipelineTask).filter(PipelineTask.status == "idle").count()
     enabled = db.query(PipelineTask).filter(PipelineTask.enabled.is_(True)).count()
     failed = db.query(PipelineTask).filter(PipelineTask.status == "failed").count()
 
@@ -376,9 +398,21 @@ def stats_overview(db: Session = Depends(get_db)):
         if run_status == "failed":
             trend[key]["errors"] += 1
 
+    # 右侧执行动态：按执行创建时间倒序展示任务触发的真实记录，口径与统计一致。
+    recent_runs = (
+        db.query(PipelineRun, PipelineTask, Pipeline)
+        .join(PipelineTask, PipelineTask.id == PipelineRun.task_id)
+        .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+        .order_by(PipelineRun.created_at.desc())
+        .limit(8)
+        .all()
+    )
+
     return {
         "total": total,
         "running": running,
+        "success": success,
+        "idle": idle,
         "enabled": enabled,
         "failed": failed,
         "today_runs": today_runs,
@@ -388,6 +422,22 @@ def stats_overview(db: Session = Depends(get_db)):
         "trend_7d": [
             {"date": day, "runs": counts["runs"], "errors": counts["errors"]}
             for day, counts in trend.items()
+        ],
+        "recent_runs": [
+            {
+                "id": run.id,
+                "task_id": task.id,
+                "task_name": task.name,
+                "pipeline_name": pipeline.name,
+                "status": run.status,
+                "trigger_type": (run.stats or {}).get("trigger_type", "manual"),
+                "started_at": _utc_iso(run.started_at or run.created_at),
+                "finished_at": _utc_iso(run.finished_at),
+                "rows_out": (run.stats or {}).get("rows_out", 0),
+                "lake_impact": (run.stats or {}).get("lake_impact"),
+                "error_message": run.error_log or "",
+            }
+            for run, task, pipeline in recent_runs
         ],
     }
 
@@ -400,7 +450,7 @@ def create_task(body: PipelineTaskCreate, db: Session = Depends(get_db)):
     task = PipelineTask(
         id=str(uuid.uuid4()),
         name=body.name,
-        description=body.description or "",
+        description=body.description,
         pipeline_id=body.pipeline_id,
         write_mode=body.write_mode,
         primary_key=pipe_pk,

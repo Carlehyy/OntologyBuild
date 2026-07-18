@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from datetime import datetime, timedelta, timezone
 
 from app.data_channel.pipeline_tasks.models import PipelineTask
@@ -11,6 +12,7 @@ from app.data_channel.pipeline_tasks.router import (
     create_task,
     list_histories,
     list_tasks,
+    selectable_pipelines,
     stats_overview,
     toggle_task,
 )
@@ -51,6 +53,7 @@ def _published_pipeline(db, *, primary_key: str | None = "order_id") -> Pipeline
 def _body(**overrides) -> PipelineTaskCreate:
     data = {
         "name": "订单每日入湖",
+        "description": "将订单流水线产物按计划写入资产湖",
         "pipeline_id": "pipe-contract",
         "write_mode": "upsert",
         "schedule_type": "MANUAL",
@@ -64,6 +67,39 @@ def test_task_rejects_primary_key_not_in_pipeline_contract(db):
 
     with pytest.raises(HTTPException, match="数据任务不再定义主键"):
         _validate(db, _body(primary_key="customer_id"))
+
+
+@pytest.mark.parametrize("field", ["name", "description"])
+def test_task_requires_non_blank_name_and_description(field):
+    with pytest.raises(ValidationError, match=field):
+        _body(**{field: "   "})
+
+
+def test_selectable_pipeline_contract_exposes_labels_and_constraints(db):
+    _published_pipeline(db)
+    db.add_all([
+        Pipeline(
+            id="pipe-disabled", name="已停用流水线", spec={}, status="published",
+            enabled=False, column_definitions=[{"field_key": "id"}],
+        ),
+        Pipeline(
+            id="pipe-draft", name="草稿流水线", spec={}, status="draft",
+            enabled=True, column_definitions=[{"field_key": "id"}],
+        ),
+    ])
+    db.commit()
+
+    result = selectable_pipelines(db)
+
+    assert result["total"] == 1
+    assert result["items"][0]["id"] == "pipe-contract"
+    assert result["items"][0]["contract"]["columns"][0] == {
+        "name": "order_id",
+        "type": "string",
+        "field_name": "订单编号",
+        "is_primary_key": True,
+        "nullable": False,
+    }
 
 
 def test_upsert_requires_pipeline_contract_primary_key(db):
@@ -118,6 +154,10 @@ def test_stats_returns_real_seven_day_series(db, monkeypatch):
     assert len(stats["trend_7d"]) == 7
     assert sum(day["runs"] for day in stats["trend_7d"]) == 2
     assert sum(day["errors"] for day in stats["trend_7d"]) == 1
+    assert stats["idle"] == 1
+    assert stats["success"] == 0
+    assert [item["status"] for item in stats["recent_runs"]] == ["success", "failed"]
+    assert all(item["task_name"] == "订单每日入湖" for item in stats["recent_runs"])
 
 
 def test_task_search_includes_related_pipeline_name(db, monkeypatch):

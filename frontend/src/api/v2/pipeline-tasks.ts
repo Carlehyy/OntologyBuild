@@ -123,6 +123,8 @@ export interface RunAudit {
 export interface PipelineTaskStats {
   total: number
   running: number
+  success?: number
+  idle?: number
   enabled: number
   failed: number
   today_runs: number
@@ -130,6 +132,21 @@ export interface PipelineTaskStats {
   total_runs?: number
   total_errors?: number
   trend_7d?: Array<{ date: string; runs: number; errors: number }>
+  recent_runs?: PipelineTaskRecentRun[]
+}
+
+export interface PipelineTaskRecentRun {
+  id: string
+  task_id: string
+  task_name: string
+  pipeline_name: string
+  status: string
+  trigger_type: string
+  started_at: string | null
+  finished_at: string | null
+  rows_out: number
+  lake_impact?: LakeImpact | null
+  error_message: string
 }
 
 export interface CuratedColumn {
@@ -151,7 +168,13 @@ export interface CuratedDataset {
 export interface PipelineContract {
   /** 契约声明的主键（入湖列名，逗号分隔）；非空即锁定，任务不可改写 */
   primary_key: string
-  columns: Array<{ name: string; type: string; field_name?: string }>
+  columns: Array<{
+    name: string
+    type: string
+    field_name: string
+    is_primary_key: boolean
+    nullable: boolean
+  }>
 }
 
 /** 「选择流水线」阶段的候选：已发布且已启用的流水线 */
@@ -181,7 +204,7 @@ export interface CuratedPreview {
 
 export interface PipelineTaskPayload {
   name: string
-  description?: string
+  description: string
   pipeline_id: string
   write_mode: WriteMode
   soft_delete_column?: string
@@ -233,7 +256,7 @@ export const pipelineTasksApi = {
   stats: (): Promise<PipelineTaskStats> =>
     apiClientV2.get('/pipeline-tasks/stats'),
 
-  /** 「选择流水线」候选：仅已发布且已产出数据的流水线（附成品数据集/列/主键契约） */
+  /** 「选择流水线」候选：仅已发布且已启用的流水线（附成品数据集/列/主键契约） */
   selectablePipelines: (): Promise<{ total: number; items: SelectablePipeline[] }> =>
     apiClientV2.get('/pipeline-tasks/selectable-pipelines'),
 
