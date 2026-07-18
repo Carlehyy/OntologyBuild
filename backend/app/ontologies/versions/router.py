@@ -1605,6 +1605,13 @@ def promote_draft(
             created_by=current_user.id,
         )
         db.add(release)
+        # ``OntologyProject.current_release_id`` is a real PostgreSQL foreign
+        # key.  SQLAlchemy cannot infer the flush dependency from plain FK
+        # scalar assignments, so updating the project pointer in the same
+        # flush can issue the UPDATE before the version INSERT.  Persist the
+        # release row first; the surrounding transaction still makes the
+        # promotion atomic and a later failure rolls both changes back.
+        db.flush()
         project.current_release_id = release.id
         project.version = release_number
         project.status = "published"
@@ -1759,6 +1766,12 @@ def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
         created_by=current_user.id,
     )
     db.add(version)
+
+    # Persist the FK target before switching the project's release pointer.
+    # PostgreSQL otherwise may execute the project UPDATE before this INSERT
+    # because these models are connected only through scalar FK values rather
+    # than an ORM relationship.
+    db.flush()
 
     # 更新项目版本号
     project.version = new_version

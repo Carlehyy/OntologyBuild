@@ -4,6 +4,8 @@ from __future__ import annotations
 import csv
 import io
 
+from sqlalchemy import event
+
 from app.data_channel.datasets.service import DatasetService
 from app.models.ontology import OntologyProject
 from app.models.ontology_formal import ObjectInstance, ObjectType, PropertyFact
@@ -613,12 +615,29 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     impact = client.get(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
         headers=auth_headers).json()["data"]
-    promoted = client.post(
-        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
-        headers=auth_headers,
-        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
-    )
+    unsafe_pointer_flushes: list[str] = []
+
+    def capture_release_pointer_order(session, _flush_context, _instances):
+        new_release_ids = {
+            item.id for item in session.new
+            if isinstance(item, OntologyVersion) and item.node_kind == "release"
+        }
+        for item in session.dirty:
+            if (isinstance(item, OntologyProject)
+                    and item.current_release_id in new_release_ids):
+                unsafe_pointer_flushes.append(item.current_release_id)
+
+    event.listen(db, "before_flush", capture_release_pointer_order)
+    try:
+        promoted = client.post(
+            f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+            headers=auth_headers,
+            json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+        )
+    finally:
+        event.remove(db, "before_flush", capture_release_pointer_order)
     assert promoted.status_code == 201, promoted.text
+    assert unsafe_pointer_flushes == []
     release = promoted.json()["data"]
     assert release["version_number"] == "v1"
     assert release["node_kind"] == "release"
