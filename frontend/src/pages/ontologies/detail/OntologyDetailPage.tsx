@@ -122,7 +122,7 @@ export default function OntologyDetailPage() {
   return (
     <div className={`onto-glass-root ${
       activeGroup === 'data'
-        ? 'flex h-full min-h-0 flex-col gap-4 overflow-hidden'
+        ? 'onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 overflow-hidden'
         : 'space-y-4'
     }`}>
       {/* ═══ 功能导航与低频操作 ═══ */}

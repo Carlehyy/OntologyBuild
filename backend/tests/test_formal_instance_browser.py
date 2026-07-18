@@ -4,6 +4,7 @@ from app.models.ontology_formal import (
     LinkInstance, ObjectInstance, ObjectType,
 )
 from app.models.ontology_version import OntologyVersion
+from app.models.v2.dataset import Dataset
 
 
 def _seed_release_instance_data(ontology_id, release, db):
@@ -167,6 +168,28 @@ def test_instance_browser_catalog_uses_only_current_release(
         id=ontology["current_release_id"],
     ).one()
     _seed_release_instance_data(ontology["id"], release, db)
+    snapshot = dict(release.snapshot_formal)
+    snapshot["mappings"] = [{
+        "id": "mapping-orders",
+        "curatedDatasetId": "dataset-orders",
+        "targetObjectTypeId": "ot-order",
+        "entityClass": "Order",
+    }]
+    snapshot["linkMappings"] = [{
+        "id": "mapping-owner-link",
+        "linkTypeId": "lt-owner",
+        "relationType": "owned_by",
+        "srcDatasetId": "dataset-orders",
+        "tgtDatasetId": "dataset-owners",
+        "edgeDatasetId": "dataset-ownerships",
+    }]
+    release.snapshot_formal = snapshot
+    db.add_all([
+        Dataset(id="dataset-orders", name="订单数据", kind="curated"),
+        Dataset(id="dataset-owners", name="负责人数据", kind="structured"),
+        Dataset(id="dataset-ownerships", name="订单负责人关系", kind="structured"),
+    ])
+    db.commit()
 
     response = client.get(
         f"/api/v2/formal/ontologies/{ontology['id']}/instance-browser/catalog",
@@ -184,6 +207,22 @@ def test_instance_browser_catalog_uses_only_current_release(
     assert [(item["id"], item["instanceCount"]) for item in body["linkTypes"]] == [
         ("lt-owner", 1),
     ]
+    assert body["objectTypes"][0]["associatedDatasets"] == [{
+        "id": "dataset-orders",
+        "name": "订单数据",
+        "kind": "curated",
+        "roles": ["实体数据"],
+        "available": True,
+    }]
+    assert body["objectTypes"][1]["associatedDatasets"] == []
+    assert {
+        item["id"]: item["roles"]
+        for item in body["linkTypes"][0]["associatedDatasets"]
+    } == {
+        "dataset-orders": ["源实体数据"],
+        "dataset-owners": ["目标实体数据"],
+        "dataset-ownerships": ["关系数据"],
+    }
 
 
 def test_instance_browser_pages_objects_and_rejects_unpublished_type(

@@ -24,6 +24,7 @@ from app.models.ontology_formal import (
     ObjectInstance, LinkInstance, ActionExecutionLog,
 )
 from app.models.ontology_formal import PropertyFact
+from app.models.v2.dataset import Dataset
 from app.ontologies.formal_modeling.facts import (
     record_property_facts, record_link_fact, record_object_tombstone,
     record_decision_fact, fact_order_clause,
@@ -930,6 +931,105 @@ def _instance_summary(instance: Optional[ObjectInstance], object_types: list[dic
     }
 
 
+def _mapping_value(mapping: dict, camel: str, snake: str):
+    """Read both current camelCase snapshots and legacy snake_case snapshots."""
+    return mapping.get(camel) if camel in mapping else mapping.get(snake)
+
+
+def _mapping_matches_object_type(mapping: dict, object_type: dict) -> bool:
+    target_id = _mapping_value(
+        mapping, "targetObjectTypeId", "target_object_type_id")
+    if target_id:
+        return str(target_id) == str(object_type.get("id"))
+    entity_class = _mapping_value(mapping, "entityClass", "entity_class")
+    if not entity_class:
+        return False
+    candidate = str(entity_class).strip().casefold()
+    return candidate in {
+        str(object_type.get(field) or "").strip().casefold()
+        for field in ("id", "name", "displayName")
+    }
+
+
+def _mapping_matches_link_type(mapping: dict, link_type: dict) -> bool:
+    target_id = _mapping_value(mapping, "linkTypeId", "link_type_id")
+    if target_id:
+        return str(target_id) == str(link_type.get("id"))
+    relation_type = _mapping_value(mapping, "relationType", "relation_type")
+    if not relation_type:
+        return False
+    candidate = str(relation_type).strip().casefold()
+    return candidate in {
+        str(link_type.get(field) or "").strip().casefold()
+        for field in ("id", "name", "displayName")
+    }
+
+
+def _release_dataset_associations(db: Session, snapshot: dict) -> tuple[dict, dict]:
+    """Build dataset lineage owned by the immutable release snapshot."""
+    object_dataset_roles: dict[str, dict[str, set[str]]] = {}
+    for object_type in snapshot["objectTypes"]:
+        object_type_id = str(object_type.get("id") or "")
+        if not object_type_id:
+            continue
+        roles: dict[str, set[str]] = {}
+        for mapping in snapshot["mappings"]:
+            if not _mapping_matches_object_type(mapping, object_type):
+                continue
+            dataset_id = _mapping_value(
+                mapping, "curatedDatasetId", "curated_dataset_id")
+            if dataset_id:
+                roles.setdefault(str(dataset_id), set()).add("实体数据")
+        object_dataset_roles[object_type_id] = roles
+
+    link_dataset_roles: dict[str, dict[str, set[str]]] = {}
+    link_role_fields = (
+        ("srcDatasetId", "src_dataset_id", "源实体数据"),
+        ("tgtDatasetId", "tgt_dataset_id", "目标实体数据"),
+        ("edgeDatasetId", "edge_dataset_id", "关系数据"),
+    )
+    for link_type in snapshot["linkTypes"]:
+        link_type_id = str(link_type.get("id") or "")
+        if not link_type_id:
+            continue
+        roles: dict[str, set[str]] = {}
+        for mapping in snapshot["linkMappings"]:
+            if not _mapping_matches_link_type(mapping, link_type):
+                continue
+            for camel, snake, role in link_role_fields:
+                dataset_id = _mapping_value(mapping, camel, snake)
+                if dataset_id:
+                    roles.setdefault(str(dataset_id), set()).add(role)
+        link_dataset_roles[link_type_id] = roles
+
+    dataset_ids = {
+        dataset_id
+        for type_roles in (*object_dataset_roles.values(), *link_dataset_roles.values())
+        for dataset_id in type_roles
+    }
+    datasets = db.query(Dataset).filter(Dataset.id.in_(dataset_ids)).all() \
+        if dataset_ids else []
+    dataset_by_id = {str(item.id): item for item in datasets}
+
+    def serialize(roles: dict[str, set[str]]) -> list[dict]:
+        result = []
+        for dataset_id, dataset_roles in roles.items():
+            dataset = dataset_by_id.get(dataset_id)
+            result.append({
+                "id": dataset_id,
+                "name": dataset.name if dataset else "数据集已不可用",
+                "kind": dataset.kind if dataset else None,
+                "roles": sorted(dataset_roles),
+                "available": dataset is not None,
+            })
+        return sorted(result, key=lambda item: (item["name"], item["id"]))
+
+    return (
+        {type_id: serialize(roles) for type_id, roles in object_dataset_roles.items()},
+        {type_id: serialize(roles) for type_id, roles in link_dataset_roles.items()},
+    )
+
+
 @router.get("/{ontology_id}/instance-browser/catalog")
 def instance_browser_catalog(
         ontology_id: str,
@@ -956,15 +1056,24 @@ def instance_browser_catalog(
         LinkInstance.ontology_id == ontology_id,
         LinkInstance.link_type_id.in_(link_type_ids),
     ).group_by(LinkInstance.link_type_id).all()) if link_type_ids else {}
+    object_datasets, link_datasets = _release_dataset_associations(db, snapshot)
 
     return _ok({
         "release": _instance_browser_release(release),
         "objectTypes": [
-            {**item, "instanceCount": object_counts.get(str(item.get("id")), 0)}
+            {
+                **item,
+                "instanceCount": object_counts.get(str(item.get("id")), 0),
+                "associatedDatasets": object_datasets.get(str(item.get("id")), []),
+            }
             for item in snapshot["objectTypes"]
         ],
         "linkTypes": [
-            {**item, "instanceCount": link_counts.get(str(item.get("id")), 0)}
+            {
+                **item,
+                "instanceCount": link_counts.get(str(item.get("id")), 0),
+                "associatedDatasets": link_datasets.get(str(item.get("id")), []),
+            }
             for item in snapshot["linkTypes"]
         ],
     })

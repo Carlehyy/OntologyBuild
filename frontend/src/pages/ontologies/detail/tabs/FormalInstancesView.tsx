@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -30,6 +30,14 @@ interface SchemaProperty {
   source?: string
 }
 
+interface AssociatedDataset {
+  id: string
+  name: string
+  kind?: string | null
+  roles: string[]
+  available: boolean
+}
+
 interface ObjectTypeNode {
   id: string
   name: string
@@ -38,6 +46,7 @@ interface ObjectTypeNode {
   primaryKey?: string | null
   properties: SchemaProperty[]
   instanceCount: number
+  associatedDatasets: AssociatedDataset[]
 }
 
 interface LinkTypeNode {
@@ -50,6 +59,7 @@ interface LinkTypeNode {
   cardinality?: string
   properties: SchemaProperty[]
   instanceCount: number
+  associatedDatasets: AssociatedDataset[]
 }
 
 interface InstanceCatalog {
@@ -334,11 +344,8 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
             <div>
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                 <Database size={15} className="text-teal-600" />
-                发布模型目录
+                实体模型目录
               </div>
-              <p className="mt-1 text-[10px] text-slate-400">
-                当前版本 {catalog?.release.version || '—'} · 只读结构
-              </p>
             </div>
             <span className="rounded-md border border-teal-100 bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium text-teal-700">
               已发布
@@ -382,8 +389,8 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
               <TypeTreeButton
                 key={item.id}
                 active={selection?.kind === 'link' && selection.id === item.id}
-                label={typeLabel(item)}
-                code={item.name}
+                label={`${objectTypeName(catalog, item.sourceObjectTypeId)} → ${objectTypeName(catalog, item.targetObjectTypeId)}`}
+                code={typeLabel(item) === item.name ? item.name : `${typeLabel(item)} · ${item.name}`}
                 count={item.instanceCount}
                 onClick={() => selectType({ kind: 'link', id: item.id })}
               />
@@ -416,6 +423,12 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
                 }`}>
                   {selection?.kind === 'link' ? '关系数据集' : '对象数据集'}
                 </span>
+                {selectedType && (
+                  <DatasetAssociationPopover
+                    key={`${selection?.kind}:${selection?.id}`}
+                    datasets={selectedType.associatedDatasets || []}
+                  />
+                )}
               </div>
               <p className="mt-1 text-[11px] leading-5 text-slate-500">
                 {activeLink
@@ -423,15 +436,6 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
                   : activeObject?.description || '当前发布对象类型对应的实时实例投影'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              disabled={catalogQuery.isFetching || dataQuery.isFetching}
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:opacity-50"
-            >
-              <RefreshCw size={12} className={catalogQuery.isFetching || dataQuery.isFetching ? 'animate-spin' : ''} />
-              刷新
-            </button>
           </div>
         </header>
 
@@ -447,7 +451,7 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
             <input
               value={draftKeyword}
               onChange={event => setDraftKeyword(event.target.value)}
-              placeholder={selection?.kind === 'link' ? '搜索关系 ID、端点 ID 或属性值' : '搜索实例 ID、外部 ID 或属性值'}
+              placeholder={selection?.kind === 'link' ? '搜索关系端点或属性值' : '搜索外部 ID 或属性值'}
               className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 outline-none placeholder:text-slate-400"
             />
           </label>
@@ -466,19 +470,15 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
               清除
             </button>
           )}
-          <label className="ml-auto flex h-8 items-center gap-2 text-[11px] text-slate-500">
-            每页
-            <select
-              value={pageSize}
-              onChange={event => {
-                setPageSize(Number(event.target.value))
-                setPage(1)
-              }}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-teal-400"
-            >
-              {[20, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
-            </select>
-          </label>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={catalogQuery.isFetching || dataQuery.isFetching}
+            className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 active:translate-y-px disabled:cursor-wait disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={catalogQuery.isFetching || dataQuery.isFetching ? 'animate-spin' : ''} />
+            刷新
+          </button>
         </form>
 
         {dataQuery.isError && (
@@ -518,6 +518,19 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
             <span className="hidden text-slate-300 xl:inline">完整字段值可在表格内横向、纵向滚动查看</span>
           </div>
           <div className="flex items-center gap-2">
+            <label className="mr-2 flex h-8 items-center gap-2 text-[11px] text-slate-500">
+              每页
+              <select
+                value={pageSize}
+                onChange={event => {
+                  setPageSize(Number(event.target.value))
+                  setPage(1)
+                }}
+                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+              >
+                {[20, 50, 100].map(size => <option key={size} value={size}>{size} 条</option>)}
+              </select>
+            </label>
             <button
               type="button"
               disabled={page <= 1 || dataQuery.isFetching}
@@ -610,6 +623,103 @@ function objectTypeName(catalog: InstanceCatalog | undefined, objectTypeId: stri
   return objectType ? typeLabel(objectType) : objectTypeId
 }
 
+const DATASET_KIND_LABEL: Record<string, string> = {
+  curated: '成品数据集',
+  structured: '结构化数据集',
+  semi: '半结构化数据集',
+  unstructured: '非结构化数据集',
+}
+
+function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[] }) {
+  const [open, setOpen] = useState(false)
+  const popoverRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!popoverRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  return (
+    <div ref={popoverRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(current => !current)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${
+          open
+            ? 'border-teal-200 bg-teal-50 text-teal-700'
+            : 'border-slate-200 bg-white text-slate-600 hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700'
+        }`}
+      >
+        <Database size={12} />
+        关联{datasets.length}个数据集
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="关联数据集"
+          className="absolute left-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg shadow-slate-200/70"
+        >
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-800">关联数据集</p>
+              <p className="mt-0.5 text-[10px] text-slate-400">基于当前发布版本的数据映射</p>
+            </div>
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] tabular-nums text-slate-500">
+              {datasets.length} 个
+            </span>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {datasets.length ? (
+              <div className="divide-y divide-slate-100">
+                {datasets.map(dataset => (
+                  <div key={dataset.id} className="flex items-start gap-3 px-4 py-3 transition hover:bg-slate-50">
+                    <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                      dataset.available ? 'bg-teal-50 text-teal-600' : 'bg-amber-50 text-amber-600'
+                    }`}>
+                      <Database size={15} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium text-slate-700" title={dataset.name}>
+                        {dataset.name}
+                      </span>
+                      <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
+                        <span>{dataset.kind ? DATASET_KIND_LABEL[dataset.kind] || dataset.kind : '历史数据集'}</span>
+                        {dataset.roles.map(role => (
+                          <span key={role} className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{role}</span>
+                        ))}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="px-6 py-10 text-center">
+                <Database size={22} className="mx-auto text-slate-300" />
+                <p className="mt-2 text-xs font-medium text-slate-500">尚未关联数据集</p>
+                <p className="mt-1 text-[10px] text-slate-400">可在“数据映射”中查看当前配置</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function InstanceTable({
   kind,
   rows,
@@ -625,15 +735,17 @@ function InstanceTable({
     <table className="w-max min-w-full border-separate border-spacing-0 text-left text-xs">
       <thead className="sticky top-0 z-20 bg-slate-50/95 text-slate-500 backdrop-blur">
         <tr>
-          <HeaderCell sticky>{kind === 'link' ? '关系 ID' : '实例 ID'}</HeaderCell>
           {kind === 'link' && (
             <>
-              <HeaderCell>源对象</HeaderCell>
+              <HeaderCell sticky>源对象</HeaderCell>
               <HeaderCell>目标对象</HeaderCell>
             </>
           )}
           {columns.map((column, index) => (
-            <HeaderCell key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}>
+            <HeaderCell
+              key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}
+              sticky={kind === 'object' && index === 0}
+            >
               <div className="flex min-w-40 items-center gap-1.5">
                 <span className="font-medium text-slate-600">{column.label}</span>
                 {column.primary && (
@@ -694,9 +806,11 @@ function HeaderCell({ children, sticky = false }: { children: React.ReactNode; s
 function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[] }) {
   return (
     <tr className="group align-top hover:bg-teal-50/30">
-      <DataCell sticky><Identifier value={row.id} /></DataCell>
       {columns.map((column, index) => (
-        <DataCell key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}>
+        <DataCell
+          key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}
+          sticky={index === 0}
+        >
           <FullValue value={column.computed
             ? row.computed?.[column.name] ?? row.properties?.[column.name]
             : row.properties?.[column.name]} />
@@ -725,18 +839,15 @@ function LinkDataRow({
 }) {
   return (
     <tr className="group align-top hover:bg-teal-50/30">
-      <DataCell sticky><Identifier value={row.id} /></DataCell>
-      <DataCell>
+      <DataCell sticky>
         <EndpointCell
           endpoint={row.sourceObject}
-          fallbackId={row.sourceObjectId}
           catalog={catalog}
         />
       </DataCell>
       <DataCell>
         <EndpointCell
           endpoint={row.targetObject}
-          fallbackId={row.targetObjectId}
           catalog={catalog}
         />
       </DataCell>
@@ -767,17 +878,14 @@ function Identifier({ value }: { value?: string | null }) {
 
 function EndpointCell({
   endpoint,
-  fallbackId,
   catalog,
 }: {
   endpoint?: EndpointSummary | null
-  fallbackId: string
   catalog?: InstanceCatalog
 }) {
   return (
     <div className="min-w-56 max-w-96">
       <div className="font-medium text-slate-800">{endpoint?.label || '端点实例不可用'}</div>
-      <div className="mt-1 break-all font-mono text-[10px] text-slate-400">{endpoint?.id || fallbackId}</div>
       {endpoint?.objectTypeId && (
         <div className="mt-1 text-[10px] text-teal-700">{objectTypeName(catalog, endpoint.objectTypeId)}</div>
       )}

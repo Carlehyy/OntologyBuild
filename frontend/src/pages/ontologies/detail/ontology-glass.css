@@ -89,6 +89,13 @@
   box-shadow: var(--glass-shadow);
 }
 
+/* 实例数据页与其余工作区保持同一平面层级，避免导航和目录卡片浮起。 */
+.onto-glass-root--flat > .onto-glass-header,
+.onto-glass-root--flat > .onto-glass-card,
+.onto-glass-root--flat > .onto-glass-card:hover {
+  box-shadow: none;
+}
+
 /* 次级玻璃按钮 */
 .onto-glass-btn {
   background: var(--glass-bg);
