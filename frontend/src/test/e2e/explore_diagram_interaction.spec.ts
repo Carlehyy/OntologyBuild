@@ -54,6 +54,26 @@ const htmlContent = `<!doctype html>
   </body>
 </html>`
 
+const textAttachment = {
+  ...htmlAttachment,
+  id: 'text-1', filename: 'brief.md', relativePath: 'notes/brief.md', mimeType: 'text/markdown',
+  fileSize: 128, charCount: 48, sha256: 'text-sha', version: 1, source: 'agent',
+  createdAt: '2026-07-11T02:00:00Z', updatedAt: '2026-07-11T02:00:00Z',
+}
+
+const archivedTextAttachment = {
+  ...textAttachment,
+  id: 'text-2', filename: 'old.md', relativePath: 'notes/archive/old.md', sha256: 'old-text-sha',
+  createdAt: '2026-07-11T01:00:00Z', updatedAt: '2026-07-11T01:00:00Z',
+}
+
+const binaryAttachment = {
+  ...htmlAttachment,
+  id: 'pdf-1', filename: 'reference.pdf', relativePath: 'uploads/reference.pdf', mimeType: 'application/pdf',
+  fileSize: 2048, charCount: 36, sha256: 'pdf-sha', version: 1, source: 'upload', editable: false,
+  createdAt: '2026-07-11T03:00:00Z', updatedAt: '2026-07-11T03:00:00Z',
+}
+
 async function mockExplore(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
@@ -61,6 +81,10 @@ async function mockExplore(page: Page) {
       state: { token: 'e2e-token', user: { id: 'u1', username: 'tester', role: 'admin' } },
       version: 0,
     }))
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (text: string) => sessionStorage.setItem('last-copied-text', text) },
+    })
   })
   await page.route('**/mock-image.svg', route => route.fulfill({
     status: 200,
@@ -86,7 +110,9 @@ async function mockExplore(page: Page) {
       return ok(sessionDetail('s1', '图表交互测试'))
     }
     if (path === '/api/v2/exploration/sessions/s2') return ok(sessionDetail('s2', '第二个业务会话'))
-    if (path === '/api/v2/exploration/sessions/s1/attachments') return ok([htmlAttachment])
+    if (path === '/api/v2/exploration/sessions/s1/attachments') {
+      return ok([htmlAttachment, textAttachment, archivedTextAttachment, binaryAttachment])
+    }
     if (path === '/api/v2/exploration/sessions/s1/attachments/html-1/preview') {
       return ok({
         id: htmlAttachment.id,
@@ -95,6 +121,28 @@ async function mockExplore(page: Page) {
         version: htmlAttachment.version,
         mimeType: htmlAttachment.mimeType,
         editable: true,
+        truncated: false,
+      })
+    }
+    if (path === '/api/v2/exploration/sessions/s1/attachments/text-1/preview') {
+      return ok({
+        id: textAttachment.id,
+        relativePath: textAttachment.relativePath,
+        content: '# 业务简报\n\n这里是可复制的文本内容。',
+        version: textAttachment.version,
+        mimeType: textAttachment.mimeType,
+        editable: true,
+        truncated: false,
+      })
+    }
+    if (path === '/api/v2/exploration/sessions/s1/attachments/pdf-1/preview') {
+      return ok({
+        id: binaryAttachment.id,
+        relativePath: binaryAttachment.relativePath,
+        content: '这是从 PDF 附件抽取的只读文本。',
+        version: binaryAttachment.version,
+        mimeType: binaryAttachment.mimeType,
+        editable: false,
         truncated: false,
       })
     }
@@ -220,7 +268,66 @@ test.describe('业务探索图表与图片交互', () => {
     await expect(htmlFrame.getByText('HTML 脚本已执行')).toBeVisible()
     await expect(page.getByText('<!doctype html>', { exact: false })).toBeHidden()
 
-    await page.getByRole('button', { name: '编辑' }).click()
+    const indicator = page.getByTestId('workspace-view-mode-indicator')
+    const modeSwitch = page.getByTestId('workspace-view-mode-switch')
+    const previewButton = page.getByRole('button', { name: '预览', exact: true })
+    const editButton = page.getByRole('button', { name: '编辑', exact: true })
+    const indicatorBefore = await indicator.boundingBox()
+    const modeSwitchBefore = await modeSwitch.boundingBox()
+    await expect(previewButton).toHaveAttribute('aria-pressed', 'true')
+    await editButton.click()
+    await expect(editButton).toHaveAttribute('aria-pressed', 'true')
+    await expect.poll(async () => {
+      const indicatorBox = await indicator.boundingBox()
+      const switchBox = await modeSwitch.boundingBox()
+      return (indicatorBox?.x || 0) - (switchBox?.x || 0)
+    }).toBeGreaterThan((indicatorBefore?.x || 0) - (modeSwitchBefore?.x || 0) + 20)
     await expect(page.getByLabel('文件内容编辑器')).toContainText('Anthropic 全景时间线')
+  })
+
+  test('文件树默认折叠并显示直属数量，复制仅对文本文件开放', async ({ page }) => {
+    await page.getByRole('button', { name: '查看文件清单' }).click()
+
+    const notesDirectory = page.getByRole('button', { name: 'notes，下一级 2 项' })
+    const uploadsDirectory = page.getByRole('button', { name: 'uploads，下一级 1 项' })
+    await expect(notesDirectory).toHaveAttribute('aria-expanded', 'false')
+    await expect(uploadsDirectory).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('button', { name: /brief\.md/ })).toBeHidden()
+
+    await page.getByRole('button', { name: '展开全部文件夹' }).click()
+    await expect(notesDirectory).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByRole('button', { name: 'archive，下一级 1 项' })).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByRole('button', { name: /old\.md/ })).toBeVisible()
+
+    await page.getByRole('button', { name: '折叠全部文件夹' }).click()
+    await expect(notesDirectory).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('button', { name: /brief\.md/ })).toBeHidden()
+
+    await notesDirectory.click()
+    await page.getByRole('button', { name: /brief\.md/ }).click()
+    await expect(page.getByRole('button', { name: '复制文件内容' })).toBeVisible()
+    await page.getByRole('button', { name: '复制文件内容' }).click()
+    await expect(page.getByRole('button', { name: '已复制' })).toBeVisible()
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
+      .toContain('可复制的文本内容')
+
+    await uploadsDirectory.click()
+    await page.getByRole('button', { name: /reference\.pdf/ }).click()
+    await expect(page.getByRole('button', { name: '复制文件内容' })).toBeHidden()
+    await expect(page.getByTitle('删除文件')).toHaveClass(/bg-rose-50\/80/)
+  })
+
+  test('文件清单只能通过右上角关闭按钮关闭', async ({ page }) => {
+    await page.getByRole('button', { name: '查看文件清单' }).click()
+    const drawer = page.getByTestId('workspace-drawer')
+    await expect(drawer).toBeVisible()
+
+    await page.getByTestId('workspace-dialog-backdrop').click({ position: { x: 2, y: 2 } })
+    await expect(drawer).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(drawer).toBeVisible()
+
+    await page.getByRole('button', { name: '关闭文件清单' }).click()
+    await expect(drawer).toBeHidden()
   })
 })

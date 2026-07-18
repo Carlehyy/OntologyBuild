@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ChevronDown, ChevronRight, Download, Eye, File, FileCode2, FilePlus2, Folder,
-  FolderOpen, Loader2, Pencil, Save, Trash2, X,
+  Check, ChevronDown, ChevronRight, Copy, Download, Eye, File, FileCode2, FilePlus2, Folder,
+  FolderOpen, FoldVertical, Loader2, Pencil, Save, Trash2, UnfoldVertical, X,
 } from 'lucide-react'
 import {
   explorationApi, type BxAttachment, type BxWorkspacePreview, type BxWorkspaceText,
@@ -29,8 +29,17 @@ interface TreeDirectory {
 }
 
 type TreeRow =
-  | { type: 'directory'; key: string; name: string; path: string; depth: number }
+  | { type: 'directory'; key: string; name: string; path: string; depth: number; childCount: number }
   | { type: 'file'; key: string; file: BxAttachment; name: string; depth: number }
+
+const directoryPaths = (files: BxAttachment[]) => {
+  const paths = new Set<string>()
+  files.forEach(file => {
+    const parts = (file.relativePath || file.filename).split('/').filter(Boolean)
+    parts.slice(0, -1).forEach((_, index) => paths.add(parts.slice(0, index + 1).join('/')))
+  })
+  return paths
+}
 
 const buildTreeRows = (files: BxAttachment[], collapsed: Set<string>): TreeRow[] => {
   const root: TreeDirectory = { name: '', path: '', directories: new Map(), files: [] }
@@ -52,7 +61,10 @@ const buildTreeRows = (files: BxAttachment[], collapsed: Set<string>): TreeRow[]
     [...directory.directories.values()]
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
       .forEach(child => {
-        rows.push({ type: 'directory', key: `dir-${child.path}`, name: child.name, path: child.path, depth })
+        rows.push({
+          type: 'directory', key: `dir-${child.path}`, name: child.name, path: child.path, depth,
+          childCount: child.directories.size + child.files.length,
+        })
         if (!collapsed.has(child.path)) visit(child, depth + 1)
       })
     directory.files
@@ -84,23 +96,44 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
   const [saving, setSaving] = useState(false)
   const [confirmId, setConfirmId] = useState('')
   const [error, setError] = useState('')
-  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set())
+  const initialDirectoryPaths = useRef(directoryPaths(files)).current // 仅用于弹窗首次打开态
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => new Set(initialDirectoryPaths))
+  const knownDirectoryPaths = useRef(new Set(initialDirectoryPaths))
+  const [copied, setCopied] = useState(false)
 
   const sorted = useMemo(() => [...files].sort((a, b) =>
     Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt)), [files])
+  const allDirectoryPaths = useMemo(() => directoryPaths(files), [files])
   const rows = useMemo(() => buildTreeRows(sorted, collapsedDirs), [sorted, collapsedDirs])
   const activeFile = files.find(file => file.id === activeId) || null
 
+  // 文件可能在弹窗打开后才加载完成：新出现的目录仍保持默认折叠，同时保留用户
+  // 已经手动展开的既有目录。
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+    const known = knownDirectoryPaths.current
+    setCollapsedDirs(current => {
+      const next = new Set([...current].filter(path => allDirectoryPaths.has(path)))
+      allDirectoryPaths.forEach(path => {
+        if (!known.has(path)) next.add(path)
+      })
+      return next
+    })
+    knownDirectoryPaths.current = new Set(allDirectoryPaths)
+  }, [allDirectoryPaths])
+
+  useEffect(() => {
+    setCopied(false)
+  }, [activeId])
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 1600)
+    return () => window.clearTimeout(timer)
+  }, [copied])
 
   const openFile = useCallback(async (file: BxAttachment) => {
     setActiveId(file.id)
+    setCopied(false)
     setCreating(false)
     setViewMode('preview')
     setConfirmId('')
@@ -144,6 +177,18 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
     } catch (e) {
       setError(errorText(e, '文件下载失败'))
     } finally { setLoadingId('') }
+  }
+
+  const copy = async () => {
+    if (!editor) return
+    setError('')
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法访问剪贴板')
+      await navigator.clipboard.writeText(draft)
+      setCopied(true)
+    } catch (e) {
+      setError(errorText(e, '文件内容复制失败'))
+    }
   }
 
   const save = async () => {
@@ -207,14 +252,16 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
   const htmlPreview = extension === 'html' || extension === 'htm'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
+    <div
+      data-testid="workspace-dialog-backdrop"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]"
+    >
       <section
         data-testid="workspace-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="workspace-dialog-title"
         className="flex h-[78vh] min-h-[520px] w-[1120px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
-        onMouseDown={event => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3.5">
           <div>
@@ -239,8 +286,31 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                 <FilePlus2 size={14} /> 新建文本文件
               </button>
             </div>
-            <div className="flex items-center gap-1.5 px-4 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-              <Folder size={12} /> 文件树
+            <div className="flex items-center gap-1.5 px-3 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+              <Folder size={12} />
+              <span>文件树</span>
+              <div className="ml-auto flex items-center gap-0.5">
+                <button
+                  type="button"
+                  aria-label="展开全部文件夹"
+                  title="展开全部"
+                  disabled={allDirectoryPaths.size === 0}
+                  onClick={() => setCollapsedDirs(new Set())}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] transition-colors hover:bg-white hover:text-teal-700 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                >
+                  <UnfoldVertical size={13} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="折叠全部文件夹"
+                  title="折叠全部"
+                  disabled={allDirectoryPaths.size === 0}
+                  onClick={() => setCollapsedDirs(new Set(allDirectoryPaths))}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] transition-colors hover:bg-white hover:text-teal-700 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                >
+                  <FoldVertical size={13} />
+                </button>
+              </div>
             </div>
             <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 pb-3">
               {rows.length === 0 && (
@@ -252,6 +322,8 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                 <button
                   key={row.key}
                   type="button"
+                  aria-expanded={!collapsedDirs.has(row.path)}
+                  aria-label={`${row.name}，下一级 ${row.childCount} 项`}
                   onClick={() => setCollapsedDirs(current => {
                     const next = new Set(current)
                     if (next.has(row.path)) next.delete(row.path); else next.add(row.path)
@@ -262,7 +334,13 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                 >
                   {collapsedDirs.has(row.path) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                   {collapsedDirs.has(row.path) ? <Folder size={14} className="text-amber-500" /> : <FolderOpen size={14} className="text-amber-500" />}
-                  <span className="truncate">{row.name}</span>
+                  <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                  <span
+                    aria-hidden="true"
+                    className="ml-auto shrink-0 tabular-nums text-[10px] font-medium text-[var(--color-text-tertiary)]"
+                  >
+                    {row.childCount}
+                  </span>
                 </button>
               ) : (
                 <button
@@ -323,15 +401,35 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {editor && (
-                      <div className="mr-1 flex rounded-md bg-[var(--color-bg-base)] p-0.5">
-                        <button onClick={() => setViewMode('preview')}
-                          className={`inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] ${viewMode === 'preview' ? 'bg-white text-teal-700 shadow-sm' : 'text-[var(--color-text-tertiary)]'}`}>
-                          <Eye size={12} />预览
+                      <div className="mr-1 flex items-center gap-1">
+                        <button onClick={() => void copy()} title="复制文件内容" aria-label={copied ? '已复制' : '复制文件内容'}
+                          className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] transition-colors ${copied
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-base)] hover:text-teal-700'}`}>
+                          {copied ? <Check size={12} /> : <Copy size={12} />}{copied ? '已复制' : '复制'}
                         </button>
-                        <button onClick={() => setViewMode('edit')}
-                          className={`inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] ${viewMode === 'edit' ? 'bg-white text-teal-700 shadow-sm' : 'text-[var(--color-text-tertiary)]'}`}>
-                          <Pencil size={12} />编辑
-                        </button>
+                        <div data-testid="workspace-view-mode-switch" className="relative grid grid-cols-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-0.5">
+                          <span
+                            data-testid="workspace-view-mode-indicator"
+                            className={`pointer-events-none absolute left-0.5 top-0.5 h-[calc(100%-4px)] w-[calc(50%-2px)] rounded-md bg-teal-600 shadow-sm transition-transform duration-300 ease-out ${viewMode === 'edit' ? 'translate-x-full' : 'translate-x-0'}`}
+                          />
+                          <button
+                            type="button"
+                            aria-pressed={viewMode === 'preview'}
+                            onClick={() => setViewMode('preview')}
+                            className={`relative z-10 inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors duration-200 ${viewMode === 'preview' ? 'text-white' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
+                          >
+                            <Eye size={12} />预览
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={viewMode === 'edit'}
+                            onClick={() => setViewMode('edit')}
+                            className={`relative z-10 inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors duration-200 ${viewMode === 'edit' ? 'text-white' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
+                          >
+                            <Pencil size={12} />编辑
+                          </button>
+                        </div>
                       </div>
                     )}
                     {viewMode === 'edit' && editor && (
@@ -351,7 +449,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                       </>
                     ) : (
                       <button onClick={() => setConfirmId(activeFile.id)} title="删除文件"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent px-2.5 text-xs text-[var(--color-text-tertiary)] hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600">
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50/80 px-2.5 text-xs font-medium text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-100 active:bg-rose-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
                         <Trash2 size={13} />删除
                       </button>
                     )}
