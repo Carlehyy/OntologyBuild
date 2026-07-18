@@ -518,16 +518,25 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
         headers=auth_headers,
         json={
             "versionId": draft["id"],
-            "positions": {"ot-order": {"x": 640, "y": 360}},
+            "positions": {
+                "ot-order": {"x": 640, "y": 360},
+                "property:ot-order:p-name": {"x": 920, "y": 430},
+            },
         },
     )
     assert saved_layout.status_code == 200, saved_layout.text
+    assert saved_layout.json()["data"]["positions"]["property:ot-order:p-name"] == {
+        "x": 920.0, "y": 430.0,
+    }
     moved_workspace = client.get(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
         headers=auth_headers,
     ).json()["data"]
     assert moved_workspace["objectTypes"][0]["positionX"] == 640
     assert moved_workspace["objectTypes"][0]["positionY"] == 360
+    assert moved_workspace["canvasLayout"]["property:ot-order:p-name"] == {
+        "x": 920.0, "y": 430.0,
+    }
     db.expire_all()
     frozen_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
     assert frozen_row.revision == frozen_revision
@@ -553,10 +562,16 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
     assert next_workspace["editable"] is True
     assert next_workspace["objectTypes"][0]["positionX"] == 640
     assert next_workspace["objectTypes"][0]["positionY"] == 360
+    assert next_workspace["canvasLayout"]["property:ot-order:p-name"] == {
+        "x": 920.0, "y": 430.0,
+    }
     next_row = db.query(OntologyVersion).filter_by(id=next_draft["id"]).one()
     assert next_row.snapshot_formal["objectTypes"][0]["positionX"] == 10
     assert next_row.snapshot_formal["objectTypes"][0]["positionY"] == 20
     assert next_row.canvas_layout["ot-order"] == {"x": 640.0, "y": 360.0}
+    assert next_row.canvas_layout["property:ot-order:p-name"] == {
+        "x": 920.0, "y": 430.0,
+    }
 
 
 def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(

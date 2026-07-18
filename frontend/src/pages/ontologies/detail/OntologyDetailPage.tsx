@@ -121,7 +121,7 @@ export default function OntologyDetailPage() {
 
   return (
     <div className={`onto-glass-root ${
-      activeGroup === 'data'
+      activeGroup === 'data' || activeGroup === 'design'
         ? 'onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 overflow-hidden'
         : 'space-y-4'
     }`}>
@@ -214,7 +214,7 @@ export default function OntologyDetailPage() {
           <OverviewDashboard ontologyId={id!} ontology={ontology} onGoGroup={selectGroup} />
         </div>
       ) : activeGroup === 'design' ? (
-        <div className="onto-glass-card onto-glass-in p-4">
+        <div className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
           <ModelStructureView ontologyId={id!} />
         </div>
       ) : activeGroup === 'data-mapping' ? (

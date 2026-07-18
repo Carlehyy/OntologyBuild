@@ -118,6 +118,35 @@ def _with_canvas_layout(snapshot: dict | None, layout: dict | None) -> dict:
     return out
 
 
+def _canvas_node_ids(snapshot: dict | None) -> set[str]:
+    """Return every stable node id accepted by the read-only structure canvas.
+
+    Object type ids intentionally keep their historical, unprefixed form so the
+    full-screen editor and the management detail page share the same positions.
+    L2-only nodes use namespaced ids to avoid collisions across object
+    properties and actions.  Functions and sentinels are analysis overlays, not
+    persistent canvas nodes.
+    """
+    snap = complete_snapshot(snapshot)
+    valid_ids: set[str] = set()
+    for object_type in snap["objectTypes"]:
+        object_type_id = str(object_type.get("id") or "")
+        if not object_type_id:
+            continue
+        valid_ids.add(object_type_id)
+        for prop in object_type.get("properties") or []:
+            if not isinstance(prop, dict):
+                continue
+            property_id = str(prop.get("id") or prop.get("name") or "")
+            if property_id:
+                valid_ids.add(f"property:{object_type_id}:{property_id}")
+    for action in snap["actions"]:
+        action_id = str(action.get("id") or "")
+        if action_id:
+            valid_ids.add(f"action:{action_id}")
+    return valid_ids
+
+
 def _validated_canvas_positions(raw: Any, valid_ids: set[str]) -> dict[str, dict[str, float]]:
     if not isinstance(raw, dict):
         raise HTTPException(422, detail={
@@ -867,6 +896,7 @@ def _workspace_payload(
         "mappings": snap["mappings"],
         "linkMappings": snap["linkMappings"],
         "sentinels": snap["sentinels"],
+        "canvasLayout": _json_safe(version.canvas_layout or {}),
         # Version nodes carry definitions only. Runtime instances/facts remain
         # separate projections and are never allowed to redefine the schema.
         "instances": [], "linkInstances": [], "executionLogs": [],
@@ -1082,7 +1112,7 @@ def save_canvas_layout(
         raise HTTPException(404, "Version not found")
 
     snapshot = complete_snapshot(version.snapshot_formal)
-    valid_ids = {str(item.get("id")) for item in snapshot["objectTypes"] if item.get("id")}
+    valid_ids = _canvas_node_ids(snapshot)
     updates = _validated_canvas_positions(body.get("positions"), valid_ids)
     current = version.canvas_layout if isinstance(version.canvas_layout, dict) else {}
     merged = {
@@ -1128,13 +1158,23 @@ def save_draft_workspace(
     errors = validate_snapshot(candidate, require_object_type=False)
     _raise_publish_errors(errors, "草稿结构校验未通过")
     draft.snapshot_formal = candidate
-    draft.canvas_layout = {
+    valid_layout_ids = _canvas_node_ids(candidate)
+    previous_layout = draft.canvas_layout if isinstance(draft.canvas_layout, dict) else {}
+    next_layout = {
+        str(node_id): value for node_id, value in previous_layout.items()
+        if str(node_id) in valid_layout_ids and isinstance(value, dict)
+    }
+    # Object coordinates are still edited by the full-screen graph workspace.
+    # Preserve the independent L2 property/action coordinates while refreshing
+    # those shared object positions from the submitted model workspace.
+    next_layout.update({
         str(item["id"]): {
             "x": float(item.get("positionX") or 0),
             "y": float(item.get("positionY") or 0),
         }
         for item in candidate["objectTypes"] if item.get("id")
-    }
+    })
+    draft.canvas_layout = next_layout
     draft.revision = (draft.revision or 0) + 1
     draft.snapshot_hash = snapshot_hash(candidate)
     draft.lifecycle_status = "editing"

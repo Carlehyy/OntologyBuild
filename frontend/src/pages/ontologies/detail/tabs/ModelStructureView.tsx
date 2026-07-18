@@ -1,169 +1,461 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import {
+  Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider,
+  applyNodeChanges, useReactFlow, type NodeChange,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+import {
+  AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, ChevronRight,
+  ExternalLink, Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
+  Maximize2, Route, Search, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
+  Bolt, Clock3, Database,
+} from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
-import { AlertCircle, Box, GitBranch, Bolt, FunctionSquare, ExternalLink, KeyRound, Cpu, Loader2 } from 'lucide-react'
+import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
+import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
+import {
+  actionNodeId, buildStructureGraph, findPaths, functionUsage, propertyNodeId,
+  relationEdgeId, sentinelUsage,
+  type GraphPath, type HighlightSet, type PublishedWorkspace, type StructureEdge,
+  type StructureNode,
+} from './structureGraphModel'
 
-/* 模型结构（只读速览）：只展示当前发布投影。
-   图谱编辑器默认打开当前发布版，并在用户开始修改时自动创建完整草稿。 */
+type Level = 1 | 2
+type Direction = 'outgoing' | 'both'
+type SearchKind = 'object' | 'relation' | 'property' | 'action'
+type DetailSelection = { kind: SearchKind; id: string; parentObjectId?: string } | null
 
-interface OT { id: string; name: string; displayName: string; primaryKey?: string | null
-  properties: { id: string; name: string; displayName?: string; type?: string; source?: string; functionId?: string }[] }
-interface LT { id: string; name: string; displayName: string; sourceObjectTypeId: string; targetObjectTypeId: string; cardinality: string }
-interface ACT { id: string; name: string; displayName: string; objectTypeId: string; requiresApproval?: boolean; rules?: any[] }
-interface FN { id: string; name: string; displayName: string; functionType: string; language: string; enabled: boolean }
-interface INST { id: string; objectTypeId: string }
-interface PublishedWorkspace {
-  version: string
-  versionId: string
-  isCurrentRelease: boolean
-  publishedAt?: string | null
-  objectTypes: OT[]
-  linkTypes: LT[]
-  actions: ACT[]
-  functions: FN[]
+interface SearchResult {
+  id: string
+  kind: SearchKind
+  label: string
+  technicalName: string
+  context?: string
+}
+
+const NODE_TYPES = { structure: StructureGraphNode }
+const EDGE_TYPES = { structure: StructureGraphEdge }
+const EMPTY_HIGHLIGHT: HighlightSet = {
+  nodes: new Set(), edges: new Set(), contextNodes: new Set(), primaryNodes: new Set(), summary: '',
+}
+
+const kindLabel: Record<SearchKind, string> = {
+  object: '对象实体', relation: '实体关系', property: '实体属性', action: '执行动作',
+}
+
+function errorMessage(error: unknown) {
+  const value = error as { detail?: unknown; message?: string; response?: { data?: { detail?: unknown } } }
+  const detail = value.response?.data?.detail ?? value.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') return detail.message
+  return value.message || '布局保存失败'
+}
+
+function objectName(workspace: PublishedWorkspace, id: string) {
+  const item = workspace.objectTypes.find(objectType => objectType.id === id)
+  return item?.displayName || item?.name || id
+}
+
+function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return (
+    <div className="grid grid-cols-[82px_minmax(0,1fr)] gap-3 border-b border-slate-100 py-2.5 last:border-0">
+      <dt className="text-[11px] text-slate-400">{label}</dt>
+      <dd className={`min-w-0 break-words text-xs text-slate-700 ${mono ? 'font-mono' : ''}`}>{value || '—'}</dd>
+    </div>
+  )
+}
+
+function Pill({ children, tone = 'slate' }: { children: React.ReactNode; tone?: 'slate' | 'teal' | 'amber' | 'violet' }) {
+  const styles = {
+    slate: 'border-slate-200 bg-slate-50 text-slate-600',
+    teal: 'border-teal-200 bg-teal-50 text-teal-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    violet: 'border-violet-200 bg-violet-50 text-violet-700',
+  }
+  return <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] ${styles[tone]}`}>{children}</span>
+}
+
+function DetailPanel({ workspace, selection, onClose }: {
+  workspace: PublishedWorkspace
+  selection: DetailSelection
+  onClose: () => void
+}) {
+  if (!selection) return null
+  let panel: { title: string; technicalName: string; icon: React.ReactNode; content: React.ReactNode }
+
+  if (selection.kind === 'object') {
+    const item = workspace.objectTypes.find(objectType => objectType.id === selection.id)
+    if (!item) return null
+    const actions = workspace.actions.filter(action => action.objectTypeId === item.id)
+    const primary = item.properties.find(property => property.id === item.primaryKey || property.name === item.primaryKey)
+    panel = {
+      title: item.displayName || item.name,
+      technicalName: item.name,
+      icon: <Box size={17} />,
+      content: (
+      <>
+        <dl><DetailRow label="类型" value="对象实体" /><DetailRow label="描述" value={item.description} /><DetailRow label="主键" value={primary?.displayName || primary?.name} mono /></dl>
+        <div className="mt-5">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">属性 · {item.properties.length}</p>
+          <div className="space-y-1.5">
+            {item.properties.map(property => (
+              <div key={property.id || property.name} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2">
+                {(property.id === item.primaryKey || property.name === item.primaryKey) ? <KeyRound size={12} className="text-amber-600" /> : <Braces size={12} className="text-violet-500" />}
+                <span className="min-w-0 flex-1 truncate text-xs text-slate-700">{property.displayName || property.name}</span>
+                <Pill tone={property.source === 'computed' ? 'violet' : 'slate'}>{property.type || 'unknown'}</Pill>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-5">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">动作 · {actions.length}</p>
+          {actions.length ? actions.map(action => <div key={action.id} className="mb-1.5 flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50/60 px-2.5 py-2 text-xs text-slate-700"><Bolt size={12} className="text-amber-600" />{action.displayName || action.name}</div>) : <p className="text-xs text-slate-400">暂无执行动作</p>}
+        </div>
+      </>
+      ),
+    }
+  } else if (selection.kind === 'relation') {
+    const item = workspace.linkTypes.find(link => link.id === selection.id)
+    if (!item) return null
+    panel = {
+      title: item.displayName || item.name,
+      technicalName: item.name,
+      icon: <GitBranch size={17} />,
+      content: (
+      <dl>
+        <DetailRow label="类型" value="实体关系" />
+        <DetailRow label="描述" value={item.description} />
+        <DetailRow label="方向" value={<span className="inline-flex items-center gap-1.5">{objectName(workspace, item.sourceObjectTypeId)}<ArrowRight size={12} />{objectName(workspace, item.targetObjectTypeId)}</span>} />
+        <DetailRow label="基数" value={<Pill tone="teal">{item.cardinality || '—'}</Pill>} />
+        <DetailRow label="源角色" value={item.sourceRole} />
+        <DetailRow label="目标角色" value={item.targetRole} />
+        <DetailRow label="关系属性" value={(item.properties || []).length ? (item.properties || []).map(property => property.displayName || property.name).join('、') : '无'} />
+      </dl>
+      ),
+    }
+  } else if (selection.kind === 'property') {
+    const parent = workspace.objectTypes.find(objectType => objectType.id === selection.parentObjectId)
+    const item = parent?.properties.find(property => (property.id || property.name) === selection.id)
+    if (!parent || !item) return null
+    const fn = workspace.functions.find(candidate => candidate.id === item.functionId)
+    panel = {
+      title: item.displayName || item.name,
+      technicalName: item.name,
+      icon: <Braces size={17} />,
+      content: <dl><DetailRow label="类型" value="实体属性" /><DetailRow label="所属对象" value={parent.displayName || parent.name} /><DetailRow label="数据类型" value={<Pill tone="violet">{item.type || 'unknown'}</Pill>} /><DetailRow label="是否必填" value={item.required ? '是' : '否'} /><DetailRow label="来源" value={item.source === 'computed' ? '函数派生' : '存储字段'} /><DetailRow label="激活函数" value={fn?.displayName || fn?.name} /><DetailRow label="描述" value={item.description} /></dl>,
+    }
+  } else {
+    const item = workspace.actions.find(action => action.id === selection.id)
+    if (!item) return null
+    const fn = workspace.functions.find(candidate => candidate.id === item.validationFunctionId)
+    panel = {
+      title: item.displayName || item.name,
+      technicalName: item.name,
+      icon: <Bolt size={17} />,
+      content: <dl><DetailRow label="类型" value="执行动作" /><DetailRow label="所属对象" value={objectName(workspace, item.objectTypeId)} /><DetailRow label="描述" value={item.description} /><DetailRow label="人工审批" value={item.requiresApproval ? '需要' : '不需要'} /><DetailRow label="校验函数" value={fn?.displayName || fn?.name} /><DetailRow label="参数" value={`${(item.parameters || []).length} 个`} /><DetailRow label="规则" value={`${(item.rules || []).length} 条`} /></dl>,
+    }
+  }
+
+  return (
+    <aside data-testid="structure-detail-panel" className="absolute bottom-3 right-3 top-3 z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+      <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-4 py-4">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">{panel.icon}</span>
+        <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold text-slate-800">{panel.title}</h3><p className="truncate font-mono text-[10px] text-slate-400">{panel.technicalName}</p></div>
+        <button type="button" onClick={onClose} aria-label="关闭详情" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={15} /></button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">{panel.content}</div>
+    </aside>
+  )
+}
+
+function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspace: PublishedWorkspace }) {
+  const navigate = useNavigate()
+  const { fitView, zoomIn, zoomOut } = useReactFlow<StructureNode, StructureEdge>()
+  const builtGraph = useMemo(() => buildStructureGraph(workspace), [workspace])
+  const [allNodes, setAllNodes] = useState<StructureNode[]>(builtGraph.nodes)
+  const [level, setLevel] = useState<Level>(1)
+  const [mode, setMode] = useState<'browse' | 'path'>('browse')
+  const [detail, setDetail] = useState<DetailSelection>(null)
+  const [searchText, setSearchText] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchFocus, setSearchFocus] = useState<{ type: 'node' | 'edge'; id: string; context: string[] } | null>(null)
+  const [pathSource, setPathSource] = useState('')
+  const [pathTarget, setPathTarget] = useState('')
+  const [direction, setDirection] = useState<Direction>('both')
+  const [paths, setPaths] = useState<GraphPath[]>([])
+  const [activePathIndex, setActivePathIndex] = useState(0)
+  const [pathAttempted, setPathAttempted] = useState(false)
+  const [functionId, setFunctionId] = useState('')
+  const [sentinelId, setSentinelId] = useState('')
+  const [saveState, setSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState('')
+  const pendingPositions = useRef<Record<string, { x: number; y: number }>>({})
+  const saveTimer = useRef<number | null>(null)
+  const saveInFlight = useRef(false)
+
+  useEffect(() => {
+    setAllNodes(builtGraph.nodes)
+    setDetail(null)
+    setSearchText('')
+    setSearchFocus(null)
+    setPaths([])
+    setFunctionId('')
+    setSentinelId('')
+    const timer = window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.9, duration: 260 }), 80)
+    return () => window.clearTimeout(timer)
+  }, [builtGraph, fitView])
+
+  const flushLayout = useCallback(async () => {
+    if (saveInFlight.current || Object.keys(pendingPositions.current).length === 0) return
+    const batch = pendingPositions.current
+    pendingPositions.current = {}
+    saveInFlight.current = true
+    setSaveState('saving')
+    setSaveError('')
+    try {
+      await saveCanvasLayout(ontologyId, batch, workspace.versionId)
+      setSaveState('saved')
+    } catch (error) {
+      pendingPositions.current = { ...batch, ...pendingPositions.current }
+      setSaveState('error')
+      setSaveError(errorMessage(error))
+    } finally {
+      saveInFlight.current = false
+      if (Object.keys(pendingPositions.current).length > 0) {
+        saveTimer.current = window.setTimeout(() => void flushLayout(), 3000)
+      }
+    }
+  }, [ontologyId, workspace.versionId])
+
+  const scheduleLayoutSave = useCallback((node: StructureNode) => {
+    pendingPositions.current[node.id] = node.position
+    setSaveState('pending')
+    setSaveError('')
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => void flushLayout(), 3000)
+  }, [flushLayout])
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') void flushLayout()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+      void flushLayout()
+    }
+  }, [flushLayout])
+
+  const onNodesChange = useCallback((changes: NodeChange<StructureNode>[]) => {
+    setAllNodes(nodes => applyNodeChanges(changes, nodes))
+  }, [])
+
+  const searchIndex = useMemo<SearchResult[]>(() => {
+    const objectResults = workspace.objectTypes.map(item => ({ id: item.id, kind: 'object' as const, label: item.displayName || item.name, technicalName: item.name }))
+    const relationResults = workspace.linkTypes.map(item => ({ id: relationEdgeId(item.id), kind: 'relation' as const, label: item.displayName || item.name, technicalName: item.name, context: `${objectName(workspace, item.sourceObjectTypeId)} → ${objectName(workspace, item.targetObjectTypeId)}` }))
+    if (level === 1) return [...objectResults, ...relationResults]
+    const properties = workspace.objectTypes.flatMap(objectType => objectType.properties.map(property => ({ id: propertyNodeId(objectType.id, property), kind: 'property' as const, label: property.displayName || property.name, technicalName: property.name, context: objectType.displayName || objectType.name })))
+    const actions = workspace.actions.map(item => ({ id: actionNodeId(item.id), kind: 'action' as const, label: item.displayName || item.name, technicalName: item.name, context: objectName(workspace, item.objectTypeId) }))
+    return [...objectResults, ...relationResults, ...properties, ...actions]
+  }, [level, workspace])
+
+  const searchResults = useMemo(() => {
+    const query = searchText.trim().toLocaleLowerCase()
+    if (!query) return []
+    return searchIndex.filter(item => `${item.label} ${item.technicalName} ${item.context || ''}`.toLocaleLowerCase().includes(query)).slice(0, 8)
+  }, [searchIndex, searchText])
+
+  const chooseSearchResult = useCallback((result: SearchResult) => {
+    setSearchText(result.label)
+    setSearchOpen(false)
+    setPaths([])
+    setFunctionId('')
+    setSentinelId('')
+    if (result.kind === 'relation') {
+      const edge = builtGraph.edges.find(item => item.id === result.id)
+      if (!edge) return
+      setSearchFocus({ type: 'edge', id: edge.id, context: [edge.source, edge.target] })
+      void fitView({ nodes: allNodes.filter(node => node.id === edge.source || node.id === edge.target), padding: 0.6, maxZoom: 1.25, duration: 320 })
+      return
+    }
+    const node = allNodes.find(item => item.id === result.id)
+    if (!node) return
+    setSearchFocus({ type: 'node', id: node.id, context: node.data.parentObjectId ? [node.data.parentObjectId] : [] })
+    void fitView({ nodes: [node], padding: 1.4, maxZoom: 1.35, duration: 320 })
+  }, [allNodes, builtGraph.edges, fitView])
+
+  const runPathSearch = useCallback(() => {
+    setPathAttempted(true)
+    setSearchFocus(null)
+    setFunctionId('')
+    setSentinelId('')
+    const nextPaths = findPaths(workspace.linkTypes, pathSource, pathTarget, direction)
+    setPaths(nextPaths)
+    setActivePathIndex(0)
+    if (nextPaths[0]) {
+      void fitView({ nodes: allNodes.filter(node => nextPaths[0].nodes.includes(node.id)), padding: 0.45, maxZoom: 1.05, duration: 340 })
+    }
+  }, [allNodes, direction, fitView, pathSource, pathTarget, workspace.linkTypes])
+
+  const dependencyHighlight = useMemo(() => {
+    if (functionId) return functionUsage(workspace, functionId)
+    if (sentinelId) return sentinelUsage(workspace, sentinelId)
+    return EMPTY_HIGHLIGHT
+  }, [functionId, sentinelId, workspace])
+  const activePath = paths[activePathIndex]
+  const hasDependency = Boolean(functionId || sentinelId)
+  const hasHighlight = hasDependency || Boolean(activePath) || Boolean(searchFocus)
+
+  const visibleNodes = useMemo(() => allNodes
+    .filter(node => level === 2 || node.data.kind === 'object')
+    .map(node => {
+      let emphasis = null as StructureNode['data']['emphasis']
+      if (hasDependency) {
+        if (dependencyHighlight.primaryNodes.has(node.id)) emphasis = 'primary'
+        else if (dependencyHighlight.nodes.has(node.id)) emphasis = 'dependency'
+        else if (dependencyHighlight.contextNodes.has(node.id)) emphasis = 'context'
+      } else if (activePath?.nodes.includes(node.id)) emphasis = 'path'
+      else if (searchFocus?.type === 'node' && searchFocus.id === node.id) emphasis = 'search'
+      else if (searchFocus?.context.includes(node.id)) emphasis = 'context'
+      return { ...node, data: { ...node.data, emphasis, dimmed: hasHighlight && !emphasis } }
+    }), [activePath, allNodes, dependencyHighlight, hasDependency, hasHighlight, level, searchFocus])
+
+  const visibleEdges = useMemo(() => builtGraph.edges
+    .filter(edge => level === 2 || edge.data?.kind === 'relation')
+    .map((edge): StructureEdge => {
+      let emphasis = null as NonNullable<StructureEdge['data']>['emphasis']
+      if (hasDependency && dependencyHighlight.edges.has(edge.id)) emphasis = 'dependency'
+      else if (!hasDependency && activePath?.edges.includes(edge.id)) emphasis = 'path'
+      else if (!hasDependency && searchFocus?.type === 'edge' && searchFocus.id === edge.id) emphasis = 'search'
+      const contextualRelation = searchFocus?.type === 'node' && searchFocus.context.length === 0 && (edge.source === searchFocus.id || edge.target === searchFocus.id)
+      return { ...edge, data: { ...edge.data!, emphasis, dimmed: hasHighlight && !emphasis && !contextualRelation } }
+    }), [activePath, builtGraph.edges, dependencyHighlight.edges, hasDependency, hasHighlight, level, searchFocus])
+
+  const selectNode = useCallback((node: StructureNode) => {
+    if (node.data.kind === 'property') setDetail({ kind: 'property', id: node.data.entityId, parentObjectId: node.data.parentObjectId })
+    else if (node.data.kind === 'action') setDetail({ kind: 'action', id: node.data.entityId, parentObjectId: node.data.parentObjectId })
+    else setDetail({ kind: 'object', id: node.data.entityId })
+  }, [])
+
+  const chooseDependency = useCallback((kind: 'function' | 'sentinel', id: string) => {
+    setLevel(2)
+    setMode('browse')
+    setSearchText('')
+    setSearchFocus(null)
+    setPaths([])
+    setPathAttempted(false)
+    if (kind === 'function') { setFunctionId(id); setSentinelId('') }
+    else { setSentinelId(id); setFunctionId('') }
+    window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.88, duration: 280 }), 30)
+  }, [fitView])
+
+  const saveLabel = saveState === 'pending' ? '3 秒后自动保存' : saveState === 'saving' ? '正在保存布局' : saveState === 'saved' ? '布局已保存' : saveState === 'error' ? '保存失败' : '拖动后自动保存布局'
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-slate-50/70" data-testid="ontology-structure-graph">
+      <div className="z-40 flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2.5" style={{ scrollbarWidth: 'none' }}>
+        <div className="flex shrink-0 rounded-lg bg-slate-100 p-1" aria-label="图谱视角">
+          {([1, 2] as Level[]).map(item => <button key={item} type="button" onClick={() => { setLevel(item); setSearchText(''); setSearchFocus(null) }} className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${level === item ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>L{item}</button>)}
+        </div>
+        <div className="flex shrink-0 rounded-lg border border-slate-200 bg-white p-1">
+          <button type="button" onClick={() => setMode('browse')} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${mode === 'browse' ? 'bg-teal-50 font-semibold text-teal-700' : 'text-slate-500'}`}><Focus size={13} />浏览</button>
+          <button type="button" onClick={() => { setMode('path'); setSearchFocus(null); setFunctionId(''); setSentinelId('') }} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${mode === 'path' ? 'bg-cyan-50 font-semibold text-cyan-700' : 'text-slate-500'}`}><Route size={13} />路径</button>
+        </div>
+        <div className="relative w-[260px] shrink-0">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100" />
+          {searchText && <button type="button" aria-label="清空搜索" onClick={() => { setSearchText(''); setSearchFocus(null); setSearchOpen(false) }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-200"><X size={12} /></button>}
+          {searchOpen && searchText.trim() && (
+            <div className="absolute left-0 top-11 z-50 max-h-72 w-[320px] overflow-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+              {searchResults.length ? searchResults.map(result => <button key={`${result.kind}:${result.id}`} type="button" onMouseDown={event => event.preventDefault()} onClick={() => chooseSearchResult(result)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-slate-50"><Pill tone={result.kind === 'relation' ? 'teal' : result.kind === 'property' ? 'violet' : result.kind === 'action' ? 'amber' : 'slate'}>{kindLabel[result.kind]}</Pill><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-slate-700">{result.label}</span><span className="block truncate font-mono text-[10px] text-slate-400">{result.technicalName}{result.context ? ` · ${result.context}` : ''}</span></span><ChevronRight size={13} className="text-slate-300" /></button>) : <p className="px-3 py-5 text-center text-xs text-slate-400">当前 L{level} 视角没有匹配项</p>}
+            </div>
+          )}
+        </div>
+        <div className="h-6 w-px shrink-0 bg-slate-200" />
+        <div className="relative shrink-0">
+          <FunctionSquare size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-violet-500" />
+          <select value={functionId} onChange={event => chooseDependency('function', event.target.value)} aria-label="查看激活函数使用关系" className="h-9 w-[190px] appearance-none rounded-lg border border-slate-200 bg-white pl-8 pr-7 text-xs text-slate-600 outline-none focus:border-violet-400">
+            <option value="">激活函数：查看使用关系</option>{workspace.functions.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}
+          </select>
+        </div>
+        <div className="relative shrink-0">
+          <ShieldCheck size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fuchsia-500" />
+          <select value={sentinelId} onChange={event => chooseDependency('sentinel', event.target.value)} aria-label="查看哨兵覆盖范围" className="h-9 w-[180px] appearance-none rounded-lg border border-slate-200 bg-white pl-8 pr-7 text-xs text-slate-600 outline-none focus:border-fuchsia-400">
+            <option value="">哨兵：查看覆盖范围</option>{workspace.sentinels.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}
+          </select>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
+          <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
+          <button type="button" onClick={() => void fitView({ padding: 0.2, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
+          <button type="button" onClick={() => navigate(`/ontologies/${ontologyId}/graph`)} className="ml-1 inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-700 px-3 text-xs font-semibold text-white shadow-sm hover:bg-teal-800"><ExternalLink size={13} />打开图谱编辑器修改模型</button>
+        </div>
+      </div>
+
+      {mode === 'path' && (
+        <div className="z-30 flex shrink-0 items-center gap-2 border-b border-cyan-100 bg-cyan-50/70 px-3 py-2">
+          <Route size={14} className="shrink-0 text-cyan-700" /><span className="shrink-0 text-xs font-semibold text-cyan-800">对象路径</span>
+          <select value={pathSource} onChange={event => { setPathSource(event.target.value); setPaths([]); setPathAttempted(false) }} aria-label="路径起点" className="h-8 min-w-[160px] rounded-lg border border-cyan-200 bg-white px-2 text-xs text-slate-700"><option value="">选择起点（对象实体）</option>{workspace.objectTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}</select>
+          <ArrowRight size={13} className="text-cyan-500" />
+          <select value={pathTarget} onChange={event => { setPathTarget(event.target.value); setPaths([]); setPathAttempted(false) }} aria-label="路径终点" className="h-8 min-w-[160px] rounded-lg border border-cyan-200 bg-white px-2 text-xs text-slate-700"><option value="">选择终点（对象实体）</option>{workspace.objectTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}</select>
+          <div className="ml-1 flex rounded-lg border border-cyan-200 bg-white p-0.5">
+            <button type="button" onClick={() => { setDirection('outgoing'); setPaths([]) }} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${direction === 'outgoing' ? 'bg-cyan-100 font-semibold text-cyan-800' : 'text-slate-500'}`}><ArrowRight size={11} />单向</button>
+            <button type="button" onClick={() => { setDirection('both'); setPaths([]) }} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${direction === 'both' ? 'bg-cyan-100 font-semibold text-cyan-800' : 'text-slate-500'}`}><ArrowLeftRight size={11} />双向</button>
+          </div>
+          <button type="button" disabled={!pathSource || !pathTarget || pathSource === pathTarget} onClick={runPathSearch} className="h-8 rounded-lg bg-cyan-700 px-3 text-xs font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-40">查找路径</button>
+          {paths.length > 0 && <span className="ml-1 text-[11px] text-cyan-700">找到 {paths.length} 条（最多展示 5 条）</span>}
+          {pathAttempted && paths.length === 0 && <span className="ml-1 text-[11px] text-amber-700">6 跳内未找到路径</span>}
+        </div>
+      )}
+
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <ReactFlow<StructureNode, StructureEdge>
+          nodes={visibleNodes} edges={visibleEdges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES}
+          onNodesChange={onNodesChange} onNodeDragStop={(_event, node) => scheduleLayoutSave(node)}
+          onNodeClick={(_event, node) => selectNode(node)}
+          onEdgeClick={(_event, edge) => { if (edge.data?.kind === 'relation' && edge.data.entityId) setDetail({ kind: 'relation', id: edge.data.entityId }) }}
+          onPaneClick={() => { setDetail(null); setSearchOpen(false) }}
+          nodesDraggable nodesConnectable={false} elementsSelectable minZoom={0.2} maxZoom={2.4}
+          defaultViewport={{ x: 0, y: 0, zoom: 0.78 }} proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd5e1" />
+          <MiniMap pannable zoomable position="bottom-left" className="!m-3 !h-[96px] !w-[150px] !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#0f766e' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
+        </ReactFlow>
+
+        <div className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] text-slate-500 shadow-sm backdrop-blur">
+          <Layers3 size={13} className="text-teal-600" /><span>L{level} · {workspace.objectTypes.length} 对象 · {workspace.linkTypes.length} 关系{level === 2 ? ` · ${workspace.objectTypes.reduce((sum, item) => sum + item.properties.length, 0)} 属性 · ${workspace.actions.length} 动作` : ''}</span>
+          <span className="h-3 w-px bg-slate-200" />
+          <span className={`inline-flex items-center gap-1 ${saveState === 'error' ? 'text-red-600' : saveState === 'saved' ? 'text-emerald-600' : ''}`} title={saveError}><Clock3 size={11} />{saveLabel}</span>
+          <span className="h-3 w-px bg-slate-200" />
+          <span>发布版 <span className="font-mono font-semibold text-teal-700" data-testid="published-structure-version">{workspace.version}</span></span>
+        </div>
+
+        {(hasDependency || paths.length > 0) && (
+          <div className="absolute bottom-4 left-1/2 z-20 max-w-[min(720px,calc(100%-360px))] -translate-x-1/2 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+            {hasDependency ? (
+              <div className="flex items-center gap-2 text-xs text-slate-700"><Sparkles size={14} className={sentinelId ? 'text-fuchsia-600' : 'text-violet-600'} /><span className="font-medium">{dependencyHighlight.summary || '没有找到直接使用节点'}</span><button type="button" onClick={() => { setFunctionId(''); setSentinelId('') }} className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-100"><X size={12} /></button></div>
+            ) : (
+              <div className="flex items-center gap-2"><span className="text-[11px] font-medium text-slate-500">路径</span>{paths.map((path, index) => <button key={`${path.edges.join(':')}:${index}`} type="button" onClick={() => { setActivePathIndex(index); void fitView({ nodes: allNodes.filter(node => path.nodes.includes(node.id)), padding: 0.45, maxZoom: 1.05, duration: 280 }) }} className={`rounded-md px-2 py-1 text-[11px] ${activePathIndex === index ? 'bg-cyan-100 font-semibold text-cyan-800' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{index + 1} · {path.edges.length} 跳</button>)}</div>
+            )}
+          </div>
+        )}
+
+        <DetailPanel workspace={workspace} selection={detail} onClose={() => setDetail(null)} />
+      </div>
+    </div>
+  )
 }
 
 export default function ModelStructureView({ ontologyId }: { ontologyId: string }) {
-  const navigate = useNavigate()
-  const base = `/formal/ontologies/${ontologyId}`
   const releaseQuery = useQuery<PublishedWorkspace>({
     queryKey: ['current-release-workspace', ontologyId],
     queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/current-release/workspace`),
   })
-  const { data: insts = [] } = useQuery<INST[]>({ queryKey: ['ms-inst', ontologyId], queryFn: () => apiClientV2.get(`${base}/instances`) as any })
-  const release = releaseQuery.data
-  const ots = release?.objectTypes || []
-  const lts = release?.linkTypes || []
-  const acts = release?.actions || []
-  const fns = release?.functions || []
-
-  const instCount: Record<string, number> = {}
-  for (const i of insts) instCount[i.objectTypeId] = (instCount[i.objectTypeId] || 0) + 1
-  const otName = (id: string) => {
-    const o = ots.find(x => x.id === id)
-    return o ? (o.displayName || o.name) : id.slice(0, 8)
-  }
-
-  if (releaseQuery.isLoading) {
-    return <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500"><Loader2 className="animate-spin" size={18} />正在读取当前发布快照…</div>
-  }
-  if (releaseQuery.isError || !release?.isCurrentRelease) {
-    return <div className="flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 py-12 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示运行投影数据。</div>
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">这里始终展示当前最新发布版 <span className="font-mono font-semibold text-teal-700" data-testid="published-structure-version">{release.version}</span> 的不可变结构快照。进入图谱编辑器后，可查看正式运行结构，或基于它开始新的修改。</p>
-      </div>
-
-      {/* 对象实体 */}
-      <div className="rounded-xl border bg-white p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Box size={15} className="text-violet-500" />
-          <p className="text-sm font-medium text-gray-700">对象实体（{ots.length}）</p>
-        </div>
-        {ots.length === 0 ? (
-          <p className="text-xs text-gray-400 py-3 text-center">当前发布版还没有对象实体，可进入图谱编辑器开始建模。</p>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {ots.map(ot => {
-              const pkProp = ot.properties.find(p => p.id === ot.primaryKey || p.name === ot.primaryKey)
-              const computed = ot.properties.filter(p => p.source === 'computed')
-              return (
-                <div key={ot.id} className="rounded-lg border border-gray-200 px-3 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-800">{ot.displayName || ot.name}</span>
-                    <span className="text-[10px] text-gray-400 font-mono">{ot.name}</span>
-                    <span className="ml-auto text-xs text-gray-500">{instCount[ot.id] || 0} 实例</span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1 text-[11px] text-gray-500 flex-wrap">
-                    <span>{ot.properties.length} 属性</span>
-                    {computed.length > 0 && <span className="text-purple-500 inline-flex items-center gap-0.5"><Cpu size={10} />{computed.length} 派生</span>}
-                    {pkProp
-                      ? <span className="inline-flex items-center gap-0.5 text-amber-600"><KeyRound size={10} />{pkProp.name}</span>
-                      : <span className="text-red-400">无主键</span>}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* 实体关系 */}
-      <div className="rounded-xl border bg-white p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <GitBranch size={15} className="text-cyan-500" />
-          <p className="text-sm font-medium text-gray-700">实体关系（{lts.length}）</p>
-        </div>
-        {lts.length === 0 ? (
-          <p className="text-xs text-gray-400 py-3 text-center">还没有实体关系。</p>
-        ) : (
-          <div className="space-y-1">
-            {lts.map(lt => (
-              <div key={lt.id} className="flex items-center gap-2 text-xs py-1">
-                <span className="text-gray-700">{otName(lt.sourceObjectTypeId)}</span>
-                <span className="text-cyan-500 font-medium">—{lt.displayName || lt.name}→</span>
-                <span className="text-gray-700">{otName(lt.targetObjectTypeId)}</span>
-                <span className="ml-auto text-gray-400 font-mono">{lt.cardinality}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 动作与函数 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="rounded-xl border bg-white p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Bolt size={15} className="text-amber-500" />
-            <p className="text-sm font-medium text-gray-700">可执行动作（{acts.length}）</p>
-          </div>
-          {acts.length === 0 ? <p className="text-xs text-gray-400 py-2 text-center">暂无</p> : (
-            <div className="space-y-1">
-              {acts.map(a => (
-                <div key={a.id} className="flex items-center gap-2 text-xs py-1">
-                  <span className="text-gray-700">{a.displayName || a.name}</span>
-                  <span className="text-gray-400">@ {otName(a.objectTypeId)}</span>
-                  <span className="text-gray-400">{(a.rules || []).length} 规则</span>
-                  {a.requiresApproval && (
-                    <span className="ml-auto text-[10px] px-1.5 rounded bg-blue-50 text-blue-600 border border-blue-200">需人工审批</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="rounded-xl border bg-white p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <FunctionSquare size={15} className="text-emerald-500" />
-            <p className="text-sm font-medium text-gray-700">函数（{fns.length}）</p>
-          </div>
-          {fns.length === 0 ? <p className="text-xs text-gray-400 py-2 text-center">暂无</p> : (
-            <div className="space-y-1">
-              {fns.map(f => (
-                <div key={f.id} className="flex items-center gap-2 text-xs py-1">
-                  <span className="text-gray-700">{f.displayName || f.name}</span>
-                  <span className="text-gray-400">{f.functionType}</span>
-                  <span className={`ml-auto text-[10px] px-1.5 rounded border ${
-                    f.language === 'expression'
-                      ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                      : 'bg-amber-50 text-amber-600 border-amber-200'
-                  }`} title={f.language === 'expression' ? '后端权威执行（派生/校验/哨兵可用）' : '仅前端模拟执行'}>
-                    {f.language}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <button onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}
-        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-teal-300 text-teal-700 text-sm font-medium hover:bg-teal-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2">
-        <ExternalLink size={14} /> 打开图谱编辑器修改模型
-      </button>
-    </div>
-  )
+  if (releaseQuery.isLoading) return <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
+  if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease) return <div className="flex h-full items-center justify-center gap-2 bg-red-50 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示运行投影数据。</div>
+  if (releaseQuery.data.objectTypes.length === 0) return <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100"><Database size={22} /></span><p className="text-sm">当前发布版还没有对象实体</p></div>
+  return <ReactFlowProvider><StructureGraph ontologyId={ontologyId} workspace={releaseQuery.data} /></ReactFlowProvider>
 }
