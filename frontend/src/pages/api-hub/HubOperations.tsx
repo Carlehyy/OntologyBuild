@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, UserRoundCheck } from 'lucide-react'
+import { AlertCircle, Check, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, UserRoundCheck } from 'lucide-react'
 import {
   apiError, apiHub, type CredentialConfig, type CredentialStatus,
   type CredentialUsage, type McpInfo,
@@ -13,6 +13,10 @@ interface Props {
   onError: (message: string) => void
 }
 
+type PageMessage = { text: string; kind: 'success' | 'error' }
+
+const MESSAGE_DURATION_MS = 4000
+
 export default function HubOperations({ credential, reloadCredential, onError }: Props) {
   const [config, setConfig] = useState<CredentialConfig | null>(null)
   const [usage, setUsage] = useState<CredentialUsage | null>(null)
@@ -24,7 +28,13 @@ export default function HubOperations({ credential, reloadCredential, onError }:
   const [savingConfig, setSavingConfig] = useState(false)
   const [savingCron, setSavingCron] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  const [message, setMessage] = useState<{ text: string; kind: 'success' | 'error' } | null>(null)
+  const [message, setMessage] = useState<PageMessage | null>(null)
+
+  useEffect(() => {
+    if (!message) return undefined
+    const timer = window.setTimeout(() => setMessage(null), MESSAGE_DURATION_MS)
+    return () => window.clearTimeout(timer)
+  }, [message])
 
   useEffect(() => {
     Promise.all([apiHub.credentialConfig(), apiHub.credentialUsage(60), apiHub.systemMcpInfo()])
@@ -88,12 +98,16 @@ export default function HubOperations({ credential, reloadCredential, onError }:
   return (
     <div className="relative min-h-full bg-[var(--color-bg-base)] p-4 xl:h-full xl:min-h-0 xl:overflow-hidden">
       {message && (
-        <div className={`absolute left-1/2 top-3 z-20 flex w-[min(680px,calc(100%-32px))] -translate-x-1/2 items-center justify-between rounded-xl border px-4 py-2.5 text-xs shadow-lg ${message.kind === 'success' ? 'border-[#cde8d5] bg-[#e8f5e9] text-[#2d8a4e]' : 'border-[#f2caca] bg-[#fde8e8] text-[#c23b3b]'}`}>
+        <div
+          role={message.kind === 'error' ? 'alert' : 'status'}
+          aria-live={message.kind === 'error' ? 'assertive' : 'polite'}
+          className={`absolute left-1/2 top-[42%] z-50 flex w-[min(560px,calc(100%-32px))] -translate-x-1/2 -translate-y-1/2 items-center justify-between rounded-xl border bg-white/95 px-4 py-3 text-xs shadow-[0_18px_52px_rgba(15,23,42,0.16)] backdrop-blur-xl animate-fade-in ${message.kind === 'success' ? 'border-[#cde8d5] text-[#2d8a4e]' : 'border-[#f2caca] text-[#c23b3b]'}`}
+        >
           <span className="flex min-w-0 items-center gap-2">
             {message.kind === 'success' ? <CheckCircle2 size={14} className="shrink-0" /> : <AlertCircle size={14} className="shrink-0" />}
-            <span className="truncate">{message.text}</span>
+            <span className="leading-5">{message.text}</span>
           </span>
-          <button onClick={() => setMessage(null)} className="ml-4 shrink-0 font-medium transition-opacity hover:opacity-70">关闭</button>
+          <button type="button" onClick={() => setMessage(null)} className="ml-4 shrink-0 rounded-md px-2 py-1 font-medium transition-colors hover:bg-slate-100/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">关闭</button>
         </div>
       )}
 
@@ -179,7 +193,7 @@ export default function HubOperations({ credential, reloadCredential, onError }:
           </CardContent>
         </Card>
 
-        <SystemMcpCard info={systemMcp} />
+        <SystemMcpCard info={systemMcp} onMessage={setMessage} />
       </div>
     </div>
   )
@@ -194,9 +208,41 @@ function CredentialHeatStrip({ usage }: { usage: CredentialUsage | null }) {
   return <div className="flex gap-px">{cells.map((record, index) => { const label = record ? `${record.interface_name} · ${record.ok ? '成功' : '失败'} · ${formatTime(record.created_at)}` : '暂无调用'; return <span key={record?.id ?? `empty-${index}`} role="img" tabIndex={0} aria-label={label} title={label} className="h-4 min-w-0 flex-1 rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500" style={{ background: record ? credentialHeatColor(record) : '#eceef1' }} /> })}</div>
 }
 
-function SystemMcpCard({ info }: { info: McpInfo | null }) {
+function SystemMcpCard({ info, onMessage }: { info: McpInfo | null; onMessage: (message: PageMessage) => void }) {
+  const [copied, setCopied] = useState<'endpoint' | 'config' | null>(null)
   const endpoint = info ? `${window.location.origin}${info.endpoint}` : ''
-  const config = info ? JSON.stringify({ mcpServers: { [info.server_name]: { type: 'streamable-http', url: endpoint, headers: { Authorization: 'Bearer <API_HUB_SYSTEM_MCP_TOKEN>' } } } }) : ''
+  const config = info ? JSON.stringify({
+    mcpServers: {
+      [info.server_name]: {
+        type: 'streamable-http',
+        url: endpoint,
+        headers: {
+          Authorization: 'Bearer <API_HUB_SYSTEM_MCP_TOKEN>',
+        },
+      },
+    },
+  }, null, 2) : ''
+
+  useEffect(() => {
+    if (!copied) return undefined
+    const timer = window.setTimeout(() => setCopied(null), 2000)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+
+  const copy = async (value: string, target: 'endpoint' | 'config', label: string) => {
+    if (!value) {
+      onMessage({ text: `${label}尚未加载完成，请稍后重试。`, kind: 'error' })
+      return
+    }
+    try {
+      await writeToClipboard(value)
+      setCopied(target)
+      onMessage({ text: `${label}已复制到剪贴板。`, kind: 'success' })
+    } catch {
+      onMessage({ text: `${label}复制失败，请检查浏览器剪贴板权限后重试。`, kind: 'error' })
+    }
+  }
+
   return (
     <Card className={`${cardClass} xl:col-span-7`}>
       <CardHeader className="flex-row items-start justify-between gap-4 p-4 pb-3">
@@ -207,17 +253,61 @@ function SystemMcpCard({ info }: { info: McpInfo | null }) {
         <Field label="服务地址">
           <div className="flex gap-2">
             <input readOnly value={endpoint} className={`${inputClass} font-mono text-[11px]`} />
-            <Button size="icon" variant="outline" onClick={() => navigator.clipboard.writeText(endpoint)} className={`${outlineButtonClass} shrink-0`} aria-label="复制服务地址"><Copy size={14} /></Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              disabled={!endpoint}
+              onClick={() => void copy(endpoint, 'endpoint', '服务地址')}
+              className={`${outlineButtonClass} shrink-0`}
+              aria-label={copied === 'endpoint' ? '服务地址已复制' : '复制服务地址'}
+            >
+              {copied === 'endpoint' ? <Check size={14} /> : <Copy size={14} />}
+            </Button>
           </div>
         </Field>
         <div className="flex items-center justify-between text-[11px]">
           <span className="font-medium text-slate-500">Agent 配置 JSON（请替换占位符）</span>
-          <button onClick={() => navigator.clipboard.writeText(config)} className="font-medium text-teal-700 transition-colors hover:text-teal-900">复制配置</button>
+          <button
+            type="button"
+            disabled={!config}
+            onClick={() => void copy(config, 'config', 'Agent 配置')}
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 font-medium text-teal-700 transition-colors hover:bg-teal-50 hover:text-teal-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {copied === 'config' ? <Check size={13} /> : <Copy size={13} />}
+            {copied === 'config' ? '已复制' : '复制配置'}
+          </button>
         </div>
-        <pre className="min-h-24 flex-1 whitespace-pre-wrap break-all rounded-xl bg-slate-900 p-3 font-mono text-[10px] leading-4 text-slate-100 shadow-inner">{config || '正在读取配置…'}</pre>
+        <pre className="min-h-24 flex-1 overflow-auto whitespace-pre rounded-xl border border-slate-700/80 bg-slate-950 p-3.5 font-mono text-[11px] leading-[1.65] text-slate-100 shadow-inner [tab-size:2]"><code>{config || '正在读取配置…'}</code></pre>
       </CardContent>
     </Card>
   )
+}
+
+async function writeToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return
+    } catch {
+      // Clipboard API may be blocked on non-HTTPS deployments; fall back below.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  try {
+    textarea.focus()
+    textarea.select()
+    textarea.setSelectionRange(0, value.length)
+    if (!document.execCommand('copy')) throw new Error('Clipboard copy was rejected')
+  } finally {
+    textarea.remove()
+  }
 }
 
 const cardClass = 'flex min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm transition-all duration-200 hover:shadow-lg'
