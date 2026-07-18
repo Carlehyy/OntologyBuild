@@ -166,6 +166,11 @@ function columnsFor(
     return weight(left) - weight(right)
   })
 
+  // Object tables are the published object schema rendered as data. Instance
+  // JSON can still contain legacy projection keys, but those are not ontology
+  // properties and must not silently become business columns.
+  if (kind === 'object') return schemaColumns
+
   const schemaNames = new Set(schemaColumns.map(column => column.name))
   const runtimeColumns = new Map<string, DataColumn>()
   rows.forEach(row => {
@@ -174,18 +179,6 @@ function columnsFor(
         runtimeColumns.set(`stored:${name}`, { name, label: name, runtime: true })
       }
     })
-    if ('computed' in row) {
-      Object.keys(row.computed || {}).forEach(name => {
-        if (!schemaNames.has(name)) {
-          runtimeColumns.set(`computed:${name}`, {
-            name,
-            label: name,
-            computed: true,
-            runtime: true,
-          })
-        }
-      })
-    }
   })
   return [...schemaColumns, ...Array.from(runtimeColumns.values())]
 }
@@ -728,13 +721,13 @@ function InstanceTable({
               <HeaderCell sticky>
                 <EndpointHeader
                   label={objectTypeName(catalog, linkType?.sourceObjectTypeId || '')}
-                  role="源端对象业务标识"
+                  side="source"
                 />
               </HeaderCell>
               <HeaderCell>
                 <EndpointHeader
                   label={objectTypeName(catalog, linkType?.targetObjectTypeId || '')}
-                  role="目标端对象业务标识"
+                  side="target"
                 />
               </HeaderCell>
             </>
@@ -784,11 +777,21 @@ function InstanceTable({
   )
 }
 
-function EndpointHeader({ label, role }: { label: string; role: string }) {
+function EndpointHeader({ label, side }: { label: string; side: 'source' | 'target' }) {
+  const source = side === 'source'
   return (
     <div className="min-w-48">
-      <div className="font-medium text-slate-700">{label}</div>
-      <div className="mt-1 text-[9px] font-normal text-slate-400">{role}</div>
+      <div className="flex items-center gap-2">
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+          source
+            ? 'border-sky-200 bg-sky-50 text-sky-800'
+            : 'border-violet-200 bg-violet-50 text-violet-800'
+        }`}>
+          {source ? '源端' : '目标端'}
+        </span>
+        <span className="font-medium text-slate-700">{label}</span>
+      </div>
+      <div className="mt-1 text-[9px] font-normal text-slate-400">对象业务标识</div>
     </div>
   )
 }
