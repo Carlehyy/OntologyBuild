@@ -363,9 +363,11 @@ class MoveBody(BaseModel):
 @router.put("/{iid}/move")
 def move_interface(iid: int, body: MoveBody):
     """移动接口到指定分组的指定位置。后端重排该组所有接口的 sort_order。"""
+    _check_group_name(body.group_name)
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
-        _get_or_404(conn, iid)
+        current = _row_to_dict(_get_or_404(conn, iid))
+        source_group = current["group_name"]
         # 更新分组
         conn.execute(
             "UPDATE interfaces SET group_name = ?, updated_at = ? WHERE id = ?",
@@ -385,6 +387,16 @@ def move_interface(iid: int, body: MoveBody):
         # 重新编号 sort_order
         for i, rid in enumerate(ids):
             conn.execute("UPDATE interfaces SET sort_order = ? WHERE id = ?", (i, rid))
+        if source_group != body.group_name:
+            source_rows = conn.execute(
+                "SELECT id FROM interfaces WHERE group_name = ? ORDER BY sort_order, id",
+                (source_group,),
+            ).fetchall()
+            for i, row in enumerate(source_rows):
+                conn.execute(
+                    "UPDATE interfaces SET sort_order = ? WHERE id = ?",
+                    (i, row["id"]),
+                )
     return {"ok": True}
 
 

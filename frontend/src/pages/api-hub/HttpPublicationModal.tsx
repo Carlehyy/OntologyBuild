@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  CheckCircle2, Code2, Copy, RefreshCw, Share2, Sparkles,
+  Check, CheckCircle2, Code2, Copy, RefreshCw, Share2, ShieldCheck, SlidersHorizontal,
 } from 'lucide-react'
 import {
   apiError, apiHub, type ForwardingPackage, type HubInterface,
@@ -16,6 +16,14 @@ interface Props {
   onError: (message: string) => void
 }
 
+interface PublicationDraft {
+  slug: string
+  queryKeys: string[]
+  headerKeys: string[]
+  bodyEnabled: boolean
+  bodyKeys: string[]
+}
+
 export function HttpPublicationModal({ open, onClose, item, reload, onError }: Props) {
   const [current, setCurrent] = useState<HubInterface | null>(item)
   const [callPackage, setCallPackage] = useState<ForwardingPackage | null>(null)
@@ -23,6 +31,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState('')
   const [proxyPath, setProxyPath] = useState('/proxy')
+  const [configuration, setConfiguration] = useState<PublicationDraft | null>(null)
 
   useEffect(() => {
     if (!open || !item) return
@@ -30,27 +39,40 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
     setCallPackage(null)
     setTab('curl')
     setCopied('')
+    setConfiguration(publicationDraft(item))
     apiHub.proxyInfo().then(info => setProxyPath(info.path)).catch(error => onError(apiError(error)))
   }, [item, onError, open])
 
-  if (!item || !current) return null
+  const candidates = useMemo(() => publicationCandidates(current), [current])
 
-  const inferredCount = current.proxy_query_keys.length
-    + current.proxy_header_keys.length
-    + current.proxy_body_keys.length
+  if (!item || !current || !configuration) return null
+
+  const editableCount = configuration.queryKeys.length
+    + configuration.headerKeys.length
+    + configuration.bodyKeys.length
+    + (configuration.bodyEnabled && !configuration.bodyKeys.length ? 1 : 0)
   const publicUrl = current.http_enabled && current.proxy_slug
     ? `${window.location.origin}${proxyPath}/${current.proxy_slug}`
     : ''
 
-  const autoPublish = async (createPackage: boolean) => {
+  const savePublication = async (createPackage: boolean) => {
     if (!current.id) return
+    if (!configuration.slug.trim()) { onError('请填写转发公开路径'); return }
     setBusy(true)
     try {
-      const published = await apiHub.autoHttpPublication(current.id)
+      const published = await apiHub.setHttpPublication(current.id, {
+        enabled: true,
+        slug: configuration.slug,
+        query_keys: configuration.queryKeys,
+        header_keys: configuration.headerKeys,
+        body_enabled: configuration.bodyEnabled,
+        body_keys: configuration.bodyKeys,
+      })
       setCurrent(published)
+      setConfiguration(publicationDraft(published))
       await reload()
       if (createPackage) {
-        setCallPackage(await apiHub.createForwardingPackage(current.id))
+        setCallPackage(await apiHub.createForwardingPackage(published.id!))
         setTab('curl')
       }
     } catch (error) { onError(apiError(error)) }
@@ -70,6 +92,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
         body_keys: current.proxy_body_keys,
       })
       setCurrent(disabled)
+      setConfiguration(publicationDraft(disabled))
       setCallPackage(null)
       await reload()
     } catch (error) { onError(apiError(error)) }
@@ -90,9 +113,9 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
       open={open}
       onClose={onClose}
       title={`转发调用 · ${current.name}`}
-      description="平台自动识别可修改的数据、保管敏感信息，并生成别人拿来就能用的调用代码。"
+      description="明确选择调用方可以传入的参数；未开放的固定值、认证信息和 W3 登录态继续由平台保管。"
       size="3xl"
-      headerIcon={<Share2 size={19} className="text-violet-700" />}
+      headerIcon={<Share2 size={19} className="text-emerald-700" />}
       footer={callPackage ? (
         <>
           <Button variant="outline" onClick={onClose}>完成</Button>
@@ -101,31 +124,58 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
       ) : (
         <>
           {current.http_enabled && <Button variant="ghost" onClick={() => void disable()} disabled={busy} className="mr-auto text-slate-500">停止转发</Button>}
-          {current.http_enabled && <Button variant="outline" onClick={() => void autoPublish(false)} loading={busy}><RefreshCw size={14} />重新识别</Button>}
-          <Button onClick={() => void autoPublish(true)} loading={busy}><Sparkles size={14} />{current.http_enabled ? '生成新的调用包' : '发布并生成调用包'}</Button>
+          <Button variant="outline" onClick={() => setConfiguration(suggestedPublicationDraft(current))} disabled={busy}><RefreshCw size={14} />恢复推荐选择</Button>
+          <Button variant="outline" onClick={() => void savePublication(false)} loading={busy}>保存转发配置</Button>
+          <Button onClick={() => void savePublication(true)} loading={busy}><Share2 size={14} />{current.http_enabled ? '保存并生成调用包' : '发布并生成调用包'}</Button>
         </>
       )}
     >
       <div className="max-h-[66vh] space-y-5 overflow-y-auto pr-1">
-        <section className={`flex items-center justify-between gap-5 rounded-xl border px-4 py-4 ${current.http_enabled ? 'border-emerald-200 bg-emerald-50/70' : 'border-violet-100 bg-violet-50/60'}`}>
+        <section className={`flex items-center justify-between gap-5 rounded-xl border px-4 py-4 ${current.http_enabled ? 'border-emerald-200 bg-emerald-50/70' : 'border-teal-100 bg-teal-50/60'}`}>
           <div className="flex min-w-0 items-start gap-3">
-            <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${current.http_enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-violet-100 text-violet-700'}`}>
-              {current.http_enabled ? <CheckCircle2 size={18} /> : <Sparkles size={18} />}
+            <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${current.http_enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-teal-100 text-teal-700'}`}>
+              {current.http_enabled ? <CheckCircle2 size={18} /> : <SlidersHorizontal size={18} />}
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-900">{current.http_enabled ? '转发已经可以使用' : '平台将自动完成全部配置'}</div>
-              <p className="mt-1 text-xs leading-5 text-slate-600">{current.http_enabled ? `已识别 ${inferredCount} 个调用方可修改的数据；认证信息与固定参数继续由平台保管。` : '无需填写地址、参数位置或授权规则。平台会基于当前已保存请求生成安全配置。'}</p>
+              <div className="text-sm font-semibold text-slate-900">{current.http_enabled ? '转发已经可以使用' : '请确认转发参数'}</div>
+              <p className="mt-1 text-xs leading-5 text-slate-600">已选择 {editableCount} 项调用方可修改的数据；未选择的参数会继续使用接口中保存的固定值。</p>
             </div>
           </div>
-          <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold ${current.http_enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-violet-700'}`}>{current.http_enabled ? '已转发' : '待生成'}</span>
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold ${current.http_enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-teal-700'}`}>{current.http_enabled ? '已转发' : '待发布'}</span>
         </section>
 
         {!callPackage && (
-          <section className="grid grid-cols-1 gap-3 sm:grid-cols-3" aria-label="平台自动处理的步骤">
-            <AutoStep index="1" title="识别业务数据" text="从当前请求中找出调用方需要修改的内容" />
-            <AutoStep index="2" title="保护敏感配置" text="登录态、密钥和敏感字段只保留在平台" />
-            <AutoStep index="3" title="生成可用代码" text="自动创建专属凭证和完整调用示例" />
-          </section>
+          <>
+            <section className="rounded-xl border border-[var(--color-border)] bg-white p-4">
+              <label className="text-xs font-semibold text-slate-800" htmlFor="api-hub-proxy-slug">转发公开路径</label>
+              <p className="mt-1 text-[11px] leading-5 text-slate-500">保存后调用地址保持稳定；只能使用小写字母、数字、短横线和下划线。</p>
+              <div className="mt-3 flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100">
+                <span className="flex min-w-0 items-center truncate border-r border-slate-200 px-3 font-mono text-[11px] text-slate-500">{window.location.origin}{proxyPath}/</span>
+                <input id="api-hub-proxy-slug" value={configuration.slug} onChange={event => setConfiguration(value => value && ({ ...value, slug: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') }))} className="h-10 min-w-[180px] flex-1 bg-white px-3 font-mono text-xs outline-none" placeholder="interface-path" />
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-[var(--color-border)] bg-white p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><SlidersHorizontal size={17} /></div>
+                <div><div className="text-xs font-semibold text-slate-800">允许调用方传入的参数</div><p className="mt-1 text-[11px] leading-5 text-slate-500">选中的值可在每次转发时覆盖。认证字段会默认排除，固定参数不会暴露给调用方。</p></div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <ParameterGroup title="Query 参数" items={candidates.query} selected={configuration.queryKeys} emptyText="接口未配置 Query 参数" onToggle={key => setConfiguration(value => value && ({ ...value, queryKeys: toggleValue(value.queryKeys, key) }))} />
+                <ParameterGroup title="业务请求头" items={candidates.headers} selected={configuration.headerKeys} emptyText="没有可安全开放的请求头" onToggle={key => setConfiguration(value => value && ({ ...value, headerKeys: toggleValue(value.headerKeys, key, true) }))} />
+                <ParameterGroup title="请求 Body" items={candidates.body} selected={configuration.bodyKeys} emptyText={candidates.rawBody ? 'Raw Body 只能整段开放' : '没有可开放的 Body 字段'} onToggle={key => setConfiguration(value => {
+                  if (!value) return value
+                  const bodyKeys = toggleValue(value.bodyKeys, key)
+                  return { ...value, bodyKeys, bodyEnabled: bodyKeys.length > 0 }
+                })} rawBody={candidates.rawBody} rawEnabled={configuration.bodyEnabled} onToggleRaw={() => setConfiguration(value => value && ({ ...value, bodyEnabled: !value.bodyEnabled, bodyKeys: [] }))} />
+              </div>
+            </section>
+
+            <section className="flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+              <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-700" />
+              <div><div className="text-xs font-semibold text-emerald-900">{current.use_w3 ? '转发时将注入 W3 登录态' : '转发时不注入 W3 登录态'}</div><p className="mt-1 text-[10px] leading-4 text-emerald-800">{current.use_w3 ? '登录 Cookie 由平台维护，不会作为转发参数暴露；过期时仍会自动重登。' : '如目标是需要 W3 认证的内网接口，请回到接口详情开启“注入 W3 登录态”并保存。'}</p></div>
+            </section>
+          </>
         )}
 
         {current.http_enabled && !callPackage && (
@@ -146,7 +196,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
 
             <div className="rounded-xl border border-[var(--color-border)] bg-white p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2"><Code2 size={15} className="text-violet-700" /><span className="text-xs font-semibold text-slate-800">可直接使用的调用代码</span></div>
+                <div className="flex items-center gap-2"><Code2 size={15} className="text-emerald-700" /><span className="text-xs font-semibold text-slate-800">可直接使用的调用代码</span></div>
                 <div className="flex rounded-lg bg-slate-100 p-1">
                   {(['curl', 'python', 'javascript'] as const).map(value => (
                     <button key={value} type="button" onClick={() => { setTab(value); setCopied('') }} className={`rounded-md px-3 py-1 text-[10px] font-semibold transition-colors ${tab === value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{value === 'curl' ? 'cURL' : value === 'python' ? 'Python' : 'JavaScript'}</button>
@@ -166,27 +216,139 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
           </section>
         )}
 
-        {current.http_enabled && !callPackage && (
-          <details className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-xs">
-            <summary className="cursor-pointer font-medium text-slate-600">查看平台生成的配置</summary>
-            <div className="mt-3 grid grid-cols-1 gap-3 text-[10px] text-slate-500 sm:grid-cols-3">
-              <GeneratedField title="地址参数" value={current.proxy_query_keys.join('、') || '无需修改'} />
-              <GeneratedField title="业务请求头" value={current.proxy_header_keys.join('、') || '平台固定提供'} />
-              <GeneratedField title="请求数据" value={current.proxy_body_keys.map(bodyKeyLabel).join('、') || '平台固定提供'} />
-            </div>
-          </details>
-        )}
       </div>
     </Modal>
   )
 }
 
-function AutoStep({ index, title, text }: { index: string; title: string; text: string }) {
-  return <div className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-700">{index}</div><div className="mt-3 text-xs font-semibold text-slate-800">{title}</div><p className="mt-1 text-[10px] leading-4 text-slate-500">{text}</p></div>
+function ParameterGroup({
+  title,
+  items,
+  selected,
+  emptyText,
+  onToggle,
+  rawBody = false,
+  rawEnabled = false,
+  onToggleRaw,
+}: {
+  title: string
+  items: string[]
+  selected: string[]
+  emptyText: string
+  onToggle: (key: string) => void
+  rawBody?: boolean
+  rawEnabled?: boolean
+  onToggleRaw?: () => void
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2"><span className="text-[11px] font-semibold text-slate-700">{title}</span><span className="text-[9px] text-slate-400">{rawBody ? (rawEnabled ? '已开放' : '固定') : `${selected.length}/${items.length}`}</span></div>
+      {items.length > 0 ? <div className="space-y-1.5">{items.map(key => {
+        const active = selected.some(value => value.toLowerCase() === key.toLowerCase())
+        return <button key={key} type="button" role="checkbox" aria-checked={active} onClick={() => onToggle(key)} className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left font-mono text-[10px] transition-colors ${active ? 'border-emerald-200 bg-white text-emerald-800 shadow-sm' : 'border-transparent text-slate-500 hover:border-slate-200 hover:bg-white'}`}><span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${active ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-slate-300 bg-white'}`}>{active && <Check size={10} strokeWidth={3} />}</span><span className="min-w-0 truncate" title={bodyKeyLabel(key)}>{title === '请求 Body' ? bodyKeyLabel(key) : key}</span></button>
+      })}</div> : rawBody ? <button type="button" role="checkbox" aria-checked={rawEnabled} onClick={onToggleRaw} className={`flex w-full items-start gap-2 rounded-md border px-2.5 py-2 text-left text-[10px] leading-4 transition-colors ${rawEnabled ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600'}`}><span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${rawEnabled ? 'border-amber-500 bg-amber-500 text-white' : 'border-slate-300'}`}>{rawEnabled && <Check size={10} strokeWidth={3} />}</span><span>允许调用方完整替换 Raw Body</span></button> : <div className="rounded-md border border-dashed border-slate-200 bg-white px-2.5 py-4 text-center text-[10px] text-slate-400">{emptyText}</div>}
+    </div>
+  )
 }
 
-function GeneratedField({ title, value }: { title: string; value: string }) {
-  return <div className="rounded-lg bg-white p-3"><div className="font-semibold text-slate-700">{title}</div><div className="mt-1 break-words">{value}</div></div>
+const sensitiveName = /(authorization|authentication|auth(?:[-_]?(?:code|key|token))?(?:$|[-_])|cookie|credential|token|secret|password|passwd|api[-_]?key|private[-_]?key|session|signature|bearer|jwt)/i
+const managedHeaders = new Set(['accept', 'accept-encoding', 'authorization', 'connection', 'content-length', 'content-type', 'cookie', 'host', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'user-agent', 'x-api-hub-key'])
+
+function publicationDraft(item: HubInterface): PublicationDraft {
+  const hasStoredConfiguration = item.http_enabled || Boolean(item.proxy_slug)
+    || item.proxy_query_keys.length > 0 || item.proxy_header_keys.length > 0
+    || item.proxy_body_enabled || item.proxy_body_keys.length > 0
+  return hasStoredConfiguration ? {
+    slug: item.proxy_slug || suggestedSlug(item),
+    queryKeys: [...item.proxy_query_keys],
+    headerKeys: [...item.proxy_header_keys],
+    bodyEnabled: item.proxy_body_enabled,
+    bodyKeys: [...item.proxy_body_keys],
+  } : suggestedPublicationDraft(item)
+}
+
+function suggestedPublicationDraft(item: HubInterface): PublicationDraft {
+  const candidates = recommendedPublicationCandidates(item)
+  return {
+    slug: item.proxy_slug || suggestedSlug(item),
+    queryKeys: [...candidates.query],
+    headerKeys: [...candidates.headers],
+    bodyEnabled: candidates.body.length > 0,
+    bodyKeys: [...candidates.body],
+  }
+}
+
+function publicationCandidates(item: HubInterface | null) {
+  if (!item) return { query: [] as string[], headers: [] as string[], body: [] as string[], rawBody: false }
+  const recommended = recommendedPublicationCandidates(item)
+  return {
+    query: uniqueKeys([...recommended.query, ...item.proxy_query_keys], false, false),
+    headers: uniqueKeys([...recommended.headers, ...item.proxy_header_keys], true, false),
+    body: uniqueKeys([...recommended.body, ...item.proxy_body_keys], false, false),
+    rawBody: recommended.rawBody,
+  }
+}
+
+function recommendedPublicationCandidates(item: HubInterface) {
+  const query = uniqueKeys(item.query_params.map(value => value.key), false, true)
+  const headers = uniqueKeys(
+    item.headers.map(value => value.key).filter(key => !managedHeaders.has(key.trim().toLowerCase())),
+    true,
+    true,
+  )
+  let body: string[] = []
+  if (item.body_type === 'json') {
+    try {
+      const value = JSON.parse(item.body_content)
+      if (value && typeof value === 'object' && !Array.isArray(value)) body = jsonLeafPaths(value)
+    } catch { body = [] }
+  } else if (item.body_type === 'form') {
+    body = item.body_content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).map(line => line.split('=', 1)[0].trim())
+  }
+  body = uniqueKeys(body, false, true)
+  return { query, headers, body, rawBody: item.body_type === 'raw' }
+}
+
+function uniqueKeys(values: string[], lower: boolean, safeOnly: boolean) {
+  const result: string[] = []
+  const seen = new Set<string>()
+  values.forEach(value => {
+    const key = (value || '').trim()
+    const marker = lower ? key.toLowerCase() : key
+    if (!key || seen.has(marker) || (safeOnly && sensitiveName.test(key))) return
+    seen.add(marker)
+    result.push(key)
+  })
+  return result
+}
+
+function jsonLeafPaths(value: Record<string, unknown>, prefix = ''): string[] {
+  return Object.entries(value).flatMap(([key, item]) => {
+    if (sensitiveName.test(key)) return []
+    const path = `${prefix}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`
+    return item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).length
+      ? jsonLeafPaths(item as Record<string, unknown>, path)
+      : [path]
+  })
+}
+
+function suggestedSlug(item: HubInterface) {
+  try {
+    const url = new URL(item.url)
+    const tail = url.pathname.replace(/\/$/, '').split('/').pop() || item.name
+    const slug = tail.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '')
+    return slug.slice(0, 64) || `interface-${item.id || 'new'}`
+  } catch {
+    return `interface-${item.id || 'new'}`
+  }
+}
+
+function toggleValue(values: string[], key: string, lower = false) {
+  const marker = lower ? key.toLowerCase() : key
+  const exists = values.some(value => (lower ? value.toLowerCase() : value) === marker)
+  return exists
+    ? values.filter(value => (lower ? value.toLowerCase() : value) !== marker)
+    : [...values, key]
 }
 
 function editableLabels(value: ForwardingPackage) {

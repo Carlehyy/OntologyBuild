@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { Navigate, useParams } from 'react-router-dom'
 import { apiError, apiHub, type CredentialStatus, type HubInterface } from '@/api/apiHub'
 import InterfaceManager from './InterfaceManager'
@@ -43,7 +43,16 @@ export default function ApiHubPage() {
   if (!['interfaces', 'history', 'authorization'].includes(tab)) return <Navigate to="/api-hub/interfaces" replace />
 
   return (
-    <div className="relative h-full min-h-0 bg-[var(--color-bg-base)]">
+    <div
+      className="relative h-full min-h-0 bg-[var(--color-bg-base)]"
+      style={{
+        '--color-primary': '#0d9488',
+        '--color-primary-hover': '#0f766e',
+        '--color-primary-active': '#115e59',
+        '--color-primary-light': '#ccfbf1',
+        '--color-border-active': '#0d9488',
+      } as CSSProperties}
+    >
       {error && (
         <div role="alert" aria-live="assertive" className="absolute left-1/2 top-[42%] z-50 flex w-[min(560px,calc(100%-32px))] -translate-x-1/2 -translate-y-1/2 items-center justify-between rounded-xl border border-[#f2caca] bg-white/95 px-4 py-3 text-xs text-[var(--color-danger)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] backdrop-blur-xl animate-fade-in">
           <span className="leading-5">{error}</span>

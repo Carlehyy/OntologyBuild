@@ -96,6 +96,11 @@ export interface CredentialConfig {
   source: 'online' | 'environment'
 }
 
+export interface CredentialCookieHeader {
+  cookie: string
+  count: number
+}
+
 export interface CredentialUsageRecord {
   id: number
   interface_id: number | null
@@ -202,6 +207,8 @@ export const apiHub = {
   getInterface: (id: number) => data<HubInterface>(http.get(`/interfaces/${id}`)),
   createInterface: (body: HubInterface) => data<HubInterface>(http.post('/interfaces', body)),
   updateInterface: (id: number, body: HubInterface) => data<HubInterface>(http.put(`/interfaces/${id}`, body)),
+  moveInterface: (id: number, body: { group_name: string; target_index: number }) =>
+    data<{ ok: boolean }>(http.put(`/interfaces/${id}/move`, body)),
   deleteInterface: (id: number) => data<{ ok: boolean }>(http.delete(`/interfaces/${id}`)),
   deleteGroup: (group_name: string) => data<{ ok: boolean; count: number }>(http.post('/interfaces/groups/delete', { group_name })),
   setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
@@ -218,6 +225,7 @@ export const apiHub = {
   getRun: (interfaceId: number, runId: number) => data<RunDetail>(http.get(`/interfaces/${interfaceId}/runs/${runId}`)),
   credentialStatus: () => data<CredentialStatus>(http.get('/credential/status')),
   credentialConfig: () => data<CredentialConfig>(http.get('/credential/config')),
+  credentialCookieHeader: () => data<CredentialCookieHeader>(http.get('/credential/cookie-header')),
   updateCredentialConfig: (body: { username: string; password?: string; login_url: string; clear_password?: boolean }) => data<CredentialConfig>(http.put('/credential/config', body)),
   credentialUsage: (limit = 60) => data<CredentialUsage>(http.get('/credential/usage', { params: { limit } })),
   refreshCredential: () => data<CredentialStatus>(http.post('/credential/refresh')),

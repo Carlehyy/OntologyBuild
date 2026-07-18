@@ -58,6 +58,24 @@ def get_usage(limit: int = 60):
     return db.credential_usage_stats(limit)
 
 
+@router.get("/cookie-header")
+def cookie_header():
+    """Return the current W3 Cookie header for an admin-requested call example.
+
+    The host application protects this router with ``require_admin``.  The
+    endpoint is deliberately read on demand and the UI leaves inclusion
+    unchecked by default so a session is not copied accidentally.
+    """
+    saved = credential.load_saved()
+    cookies = (saved or {}).get("cookies") or []
+    parts = [
+        f'{item["name"]}={item["value"]}'
+        for item in cookies
+        if item.get("name") and item.get("value") is not None
+    ]
+    return {"cookie": "; ".join(parts), "count": len(parts)}
+
+
 @router.get("/schedule")
 def get_schedule():
     return {"cron": scheduler.get_cron(), "next_run": scheduler.next_run()}

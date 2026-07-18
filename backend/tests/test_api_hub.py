@@ -98,6 +98,61 @@ def test_interface_crud_group_and_auth_boundary(hub_client):
         platform_app.dependency_overrides.pop(get_current_user, None)
 
 
+def test_interface_move_reorders_within_and_across_groups(hub_client):
+    first = hub_client.post(
+        "/interfaces", json=_interface(name="A", group_name="一组")
+    ).json()
+    second = hub_client.post(
+        "/interfaces", json=_interface(name="B", group_name="一组")
+    ).json()
+    hub_client.post(
+        "/interfaces", json=_interface(name="C", group_name="二组")
+    ).json()
+
+    response = hub_client.put(
+        f"/interfaces/{second['id']}/move",
+        json={"group_name": "一组", "target_index": 0},
+    )
+    assert response.json() == {"ok": True}
+    assert [
+        item["name"]
+        for item in hub_client.get("/interfaces").json()
+        if item["group_name"] == "一组"
+    ] == ["B", "A"]
+
+    response = hub_client.put(
+        f"/interfaces/{first['id']}/move",
+        json={"group_name": "二组", "target_index": 0},
+    )
+    assert response.json() == {"ok": True}
+    items = hub_client.get("/interfaces").json()
+    assert [item["name"] for item in items if item["group_name"] == "一组"] == ["B"]
+    assert [item["name"] for item in items if item["group_name"] == "二组"] == [
+        "A",
+        "C",
+    ]
+
+
+def test_admin_call_example_can_request_saved_cookie_header(hub_client):
+    config.SESSION_PATH.write_text(
+        json.dumps(
+            {
+                "cookies": [
+                    {"name": "W3_SESSION", "value": "admin-visible-session"},
+                    {"name": "route", "value": "cn"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cookie_header = hub_client.get("/credential/cookie-header")
+    assert cookie_header.status_code == 200
+    assert cookie_header.json() == {
+        "cookie": "W3_SESSION=admin-visible-session; route=cn",
+        "count": 2,
+    }
+
+
 def test_run_history_and_response_capture(hub_client, monkeypatch):
     item = hub_client.post("/interfaces", json=_interface(use_w3=True)).json()
 
@@ -456,4 +511,3 @@ def test_outbound_urls_need_no_allowlist_and_mcp_tokens_fail_closed(
 
     assert "token" not in hub_client.get("/mcp/info").json()
     assert "token" not in hub_client.get("/mcp/system/info").json()
-    assert hub_client.get("/credential/cookie-header").status_code == 404
