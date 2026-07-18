@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, CheckCircle2, Clock3, Copy, Link2, Loader2, ShieldCheck, Trash2, X, XCircle } from 'lucide-react'
-import manualSharingApi, { type ManualChange, type ManualShare, type SharePermission } from '@/api/v2/manual-sharing'
+import {
+  Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Copy, Link2, Loader2,
+  Search, ShieldCheck, Trash2, X, XCircle,
+} from 'lucide-react'
+import manualSharingApi, {
+  type ChangeStatus, type ManualChange, type ManualShare, type SharePermission,
+} from '@/api/v2/manual-sharing'
 import type { DatasetOverviewItem } from '@/api/v2/datasets'
 
 const messageOf = (error: unknown, fallback: string) => {
@@ -12,6 +17,36 @@ const messageOf = (error: unknown, fallback: string) => {
 
 const fmt = (iso?: string | null) => iso ? new Date(iso).toLocaleString('zh-CN') : '长期有效'
 const shareUrl = (token: string) => `${window.location.origin}${window.location.pathname}#/share/manual/${encodeURIComponent(token)}`
+
+/** Clipboard API may be unavailable or denied on HTTP/private-network deployments. */
+const copyText = async (value: string) => {
+  let clipboardError: unknown
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return
+    } catch (error) {
+      clipboardError = error
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.readOnly = true
+  textarea.setAttribute('aria-hidden', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, value.length)
+  try {
+    if (!document.execCommand('copy')) throw clipboardError || new Error('copy command failed')
+  } finally {
+    textarea.remove()
+  }
+}
 
 export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOverviewItem; onClose: () => void }) {
   const [permission, setPermission] = useState<SharePermission>('view')
@@ -43,15 +78,25 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
   }
 
   const copy = async () => {
-    await navigator.clipboard.writeText(link)
-    setCopied(true); window.setTimeout(() => setCopied(false), 1500)
+    try {
+      await copyText(link)
+      setError('')
+      setCopied(true); window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setError('自动复制失败，请选中链接后使用 Ctrl/Cmd + C 复制')
+    }
   }
 
   const copyExisting = async (share: ManualShare) => {
     if (!share.token) return
-    await navigator.clipboard.writeText(shareUrl(share.token))
-    setCopiedShareId(share.id)
-    window.setTimeout(() => setCopiedShareId(current => current === share.id ? '' : current), 1500)
+    try {
+      await copyText(shareUrl(share.token))
+      setError('')
+      setCopiedShareId(share.id)
+      window.setTimeout(() => setCopiedShareId(current => current === share.id ? '' : current), 1500)
+    } catch {
+      setError('自动复制失败，请选中链接后使用 Ctrl/Cmd + C 复制')
+    }
   }
 
   return (
@@ -119,34 +164,136 @@ export function ManualApprovalModal({ onClose, onChanged }: { onClose: () => voi
   const [busy, setBusy] = useState('')
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
-  const load = useCallback(() => manualSharingApi.changes().then(setItems).catch(e => setError(messageOf(e, '审批任务加载失败'))).finally(() => setLoading(false)), [])
+  const [statusFilter, setStatusFilter] = useState<ChangeStatus | 'all'>('pending')
+  const [search, setSearch] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [total, setTotal] = useState(0)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const result = await manualSharingApi.changes({
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        search: searchQuery || undefined,
+        page,
+        page_size: pageSize,
+      })
+      setItems(result.items)
+      setTotal(result.total)
+      if (page > 1 && result.items.length === 0 && result.total > 0) {
+        setPage(current => Math.max(1, current - 1))
+      }
+    } catch (loadError) {
+      setItems([])
+      setTotal(0)
+      setError(messageOf(loadError, '审批任务加载失败'))
+    } finally {
+      setLoading(false)
+    }
+  }, [page, pageSize, searchQuery, statusFilter])
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearchQuery(search.trim())
+      setPage(1)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
 
   const review = async (item: ManualChange, decision: 'approve' | 'reject') => {
     const comment = notes[item.id] || ''
     if (decision === 'reject' && !comment.trim()) { setError('驳回时请填写具体原因，外部维护者会在进度中看到'); return }
     setBusy(item.id); setError('')
-    try { await manualSharingApi.review(item.id, decision, comment); await load(); onChanged() }
+    try {
+      await manualSharingApi.review(item.id, decision, comment)
+      setNotes(current => {
+        const next = { ...current }
+        delete next[item.id]
+        return next
+      })
+      await load()
+      onChanged()
+    }
     catch (e) { setError(messageOf(e, '审批失败')) }
     finally { setBusy('') }
   }
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-    <div className="flex max-h-[88vh] w-[min(96vw,900px)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-      <div className="flex items-center gap-3 border-b px-5 py-4"><ShieldCheck size={18} className="text-emerald-700" /><div className="flex-1"><h3 className="font-semibold">人工数据集审批任务</h3><p className="text-xs text-slate-400">只有批准后，外部维护者提交的修改才会成为正式新版本</p></div><button onClick={onClose}><X size={17} className="text-slate-400" /></button></div>
-      <div className="overflow-y-auto p-5 space-y-3">
-        {error && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
-        {loading ? <p className="p-8 text-center text-sm text-slate-400">加载中...</p> : items.length === 0 ? <p className="rounded-xl border border-dashed p-10 text-center text-sm text-slate-400">暂无审批任务</p> : items.map(item => {
-          const pending = item.status === 'pending'; const s = item.summary || { updated: 0, inserted: 0, deleted: 0, result_rows: 0 }
-          return <div key={item.id} className={`rounded-xl border p-4 ${pending ? 'border-amber-200 bg-amber-50/30' : 'border-slate-200'}`}>
-            <div className="flex items-start gap-3"><span className={`mt-0.5 grid h-8 w-8 place-items-center rounded-lg ${pending ? 'bg-amber-100 text-amber-700' : item.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{pending ? <Clock3 size={15} /> : item.status === 'approved' ? <CheckCircle2 size={15} /> : <XCircle size={15} />}</span>
-              <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><b className="text-sm">{item.dataset_name}</b><span className="text-xs text-slate-400">基于 v{item.base_version_no}</span><span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-slate-500">{item.share_label || '外部维护链接'}</span></div><p className="mt-1 text-xs text-slate-600">修改 {s.updated || 0} 行 · 新增 {s.inserted || 0} 行 · 删除 {s.deleted || 0} 行 · 审批后共 {s.result_rows || 0} 行</p><p className="mt-1 text-[11px] text-slate-400">提交于 {fmt(item.submitted_at)}{item.applied_version_no ? ` · 已生效为 v${item.applied_version_no}` : ''}</p>
-                <details className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2"><summary className="cursor-pointer text-[11px] font-medium text-slate-500">查看逐行修改明细</summary><div className="mt-2 max-h-48 space-y-1.5 overflow-auto font-mono text-[10px] text-slate-600">{(item.edits?.updates || []).map((edit, index) => <p key={`u-${index}`} className="rounded bg-amber-50 px-2 py-1">修改 {JSON.stringify(edit.key)} → {JSON.stringify(edit.values)}</p>)}{(item.edits?.inserts || []).map((edit, index) => <p key={`i-${index}`} className="rounded bg-emerald-50 px-2 py-1">新增 {JSON.stringify(edit.values)}</p>)}{(item.edits?.deletes || []).map((edit, index) => <p key={`d-${index}`} className="rounded bg-red-50 px-2 py-1">删除 {JSON.stringify(edit.key)}</p>)}</div></details>
-                {item.review_comment && <p className="mt-2 rounded-lg bg-white px-3 py-2 text-xs text-slate-600">审批意见：{item.review_comment}</p>}</div>
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const rangeStart = total ? (page - 1) * pageSize + 1 : 0
+  const rangeEnd = Math.min(page * pageSize, total)
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]">
+    <div className="flex h-[min(88vh,820px)] w-[min(96vw,1040px)] flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.22)]" role="dialog" aria-modal="true" aria-labelledby="manual-approval-title">
+      <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><ShieldCheck size={17} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2"><h3 id="manual-approval-title" className="font-semibold text-slate-900">人工数据集审批任务</h3><span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] tabular-nums text-slate-500">{total} 项</span></div>
+          <p className="text-xs text-slate-400">核对逐行明细并批准或驳回；只有批准后修改才会生成正式新版本</p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="关闭审批任务" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><X size={17} /></button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
+        <label className="flex items-center gap-2 text-xs text-slate-500">
+          审批状态
+          <select value={statusFilter} onChange={event => { setStatusFilter(event.target.value as ChangeStatus | 'all'); setPage(1) }} className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none focus:border-emerald-500">
+            <option value="pending">待审批</option>
+            <option value="approved">已批准</option>
+            <option value="rejected">已驳回</option>
+            <option value="all">全部状态</option>
+          </select>
+        </label>
+        <label className="relative min-w-56 flex-1 sm:max-w-sm">
+          <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="按数据集或分享备注筛选" aria-label="筛选审批任务" className="h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10" />
+          {search && <button type="button" onClick={() => setSearch('')} aria-label="清除审批任务筛选" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-700"><X size={12} /></button>}
+        </label>
+        <span className="ml-auto text-[11px] tabular-nums text-slate-400">显示 {rangeStart}–{rangeEnd} / {total}</span>
+      </div>
+
+      {error && <div className="mx-5 mt-3 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"><XCircle size={13} className="shrink-0" /><span className="flex-1">{error}</span><button type="button" onClick={() => setError('')}><X size={12} /></button></div>}
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+        {loading ? <div className="flex h-full min-h-48 items-center justify-center text-sm text-slate-400"><Loader2 size={15} className="mr-2 animate-spin" />正在分页查询审批任务…</div> : items.length === 0 ? <div className="grid min-h-56 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/40 text-center"><div><ShieldCheck size={28} className="mx-auto mb-2 text-slate-300" /><p className="text-sm font-medium text-slate-500">当前筛选条件下暂无审批任务</p><p className="mt-1 text-xs text-slate-400">可切换状态或清除搜索条件查看其他任务</p></div></div> : items.map(item => {
+          const pending = item.status === 'pending'
+          const summary = item.summary || { updated: 0, inserted: 0, deleted: 0, result_rows: 0 }
+          const statusLabel = pending ? '待审批' : item.status === 'approved' ? '已批准' : '已驳回'
+          return <article key={item.id} className={`rounded-xl border p-4 transition ${pending ? 'border-amber-200 bg-amber-50/30' : 'border-slate-200 bg-white'}`}>
+            <div className="flex items-start gap-3">
+              <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${pending ? 'bg-amber-100 text-amber-700' : item.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{pending ? <Clock3 size={15} /> : item.status === 'approved' ? <CheckCircle2 size={15} /> : <XCircle size={15} />}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <b className="text-sm text-slate-900">{item.dataset_name}</b>
+                  <span className="text-xs text-slate-400">基于 v{item.base_version_no}</span>
+                  <span className="rounded-md bg-white px-2 py-0.5 text-[10px] text-slate-500 ring-1 ring-inset ring-slate-200">{item.share_label || '外部维护链接'}</span>
+                  <span className={`ml-auto rounded-md px-2 py-0.5 text-[10px] font-medium ${pending ? 'bg-amber-100 text-amber-700' : item.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{statusLabel}</span>
+                </div>
+                <p className="mt-1.5 text-xs text-slate-600">修改 {summary.updated || 0} 行 · 新增 {summary.inserted || 0} 行 · 删除 {summary.deleted || 0} 行 · 审批后共 {summary.result_rows || 0} 行</p>
+                <p className="mt-1 text-[11px] text-slate-400">提交于 {fmt(item.submitted_at)}{item.applied_version_no ? ` · 已生效为 v${item.applied_version_no}` : ''}</p>
+                <details className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <summary className="cursor-pointer text-[11px] font-medium text-slate-500">查看逐行修改明细</summary>
+                  <div className="mt-2 max-h-48 space-y-1.5 overflow-auto font-mono text-[10px] text-slate-600">
+                    {(item.edits?.updates || []).map((edit, index) => <p key={`u-${index}`} className="rounded bg-amber-50 px-2 py-1">修改 {JSON.stringify(edit.key)} → {JSON.stringify(edit.values)}</p>)}
+                    {(item.edits?.inserts || []).map((edit, index) => <p key={`i-${index}`} className="rounded bg-emerald-50 px-2 py-1">新增 {JSON.stringify(edit.values)}</p>)}
+                    {(item.edits?.deletes || []).map((edit, index) => <p key={`d-${index}`} className="rounded bg-red-50 px-2 py-1">删除 {JSON.stringify(edit.key)}</p>)}
+                  </div>
+                </details>
+                {item.review_comment && <p className="mt-2 rounded-lg bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-inset ring-slate-100">审批意见：{item.review_comment}</p>}
+              </div>
             </div>
-            {pending && <div className="mt-3 flex items-center gap-2 pl-11"><input value={notes[item.id] || ''} onChange={e => setNotes(n => ({ ...n, [item.id]: e.target.value }))} placeholder="审批意见（驳回时必填）" className="min-w-0 flex-1 rounded-lg border bg-white px-3 py-2 text-xs" /><button disabled={busy === item.id} onClick={() => review(item, 'reject')} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs text-red-600 hover:bg-red-50">驳回</button><button disabled={busy === item.id} onClick={() => review(item, 'approve')} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs text-white hover:bg-emerald-700">{busy === item.id && <Loader2 size={12} className="animate-spin" />}批准生效</button></div>}
-          </div>
+            {pending && <div className="mt-3 flex flex-wrap items-center gap-2 pl-0 sm:pl-11"><input value={notes[item.id] || ''} onChange={event => setNotes(current => ({ ...current, [item.id]: event.target.value }))} placeholder="审批意见（驳回时必填）" aria-label={`${item.dataset_name} 的审批意见`} className="h-9 min-w-56 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10" /><button type="button" disabled={busy === item.id} onClick={() => void review(item, 'reject')} className="h-9 rounded-lg border border-red-200 bg-white px-3 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50">驳回</button><button type="button" disabled={busy === item.id} onClick={() => void review(item, 'approve')} className="inline-flex h-9 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-xs font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50">{busy === item.id && <Loader2 size={12} className="animate-spin" />}批准生效</button></div>}
+          </article>
         })}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+        <label className="flex items-center gap-1.5 text-xs text-slate-500">每页<select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }} className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-emerald-500" aria-label="审批任务每页显示条数">{[5, 10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}</select>条</label>
+        <span className="min-w-24 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+        <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || loading} aria-label="审批任务上一页" className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:opacity-35"><ChevronLeft size={13} /></button>
+        <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading} aria-label="审批任务下一页" className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:opacity-35"><ChevronRight size={13} /></button>
       </div>
     </div>
   </div>

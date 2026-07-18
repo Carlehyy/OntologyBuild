@@ -30,6 +30,13 @@ export interface ManualChange {
   applied_version_no: number | null
 }
 
+export interface ManualChangePage {
+  items: ManualChange[]
+  total: number
+  page: number
+  page_size: number
+}
+
 const manualSharingApi = {
   create: (datasetId: string, payload: { permission: SharePermission; label?: string; expires_in_days: number | null }) =>
     apiClientV2.post<{ id: string; token: string; permission: SharePermission; dataset_name: string; expires_at: string | null }>(
@@ -38,8 +45,13 @@ const manualSharingApi = {
     apiClientV2.get<ManualShare[]>(`/manual-dataset-sharing/${datasetId}/shares`),
   revoke: (shareId: string) =>
     apiClientV2.delete(`/manual-dataset-sharing/shares/${shareId}`),
-  changes: (params?: { dataset_id?: string; status?: ChangeStatus }) =>
-    apiClientV2.get<ManualChange[]>('/manual-dataset-sharing/changes', { params }),
+  changes: (params?: {
+    dataset_id?: string
+    status?: ChangeStatus
+    search?: string
+    page?: number
+    page_size?: number
+  }) => apiClientV2.get<ManualChangePage>('/manual-dataset-sharing/changes', { params }),
   review: (changeId: string, decision: 'approve' | 'reject', comment: string) =>
     apiClientV2.post<ManualChange>(`/manual-dataset-sharing/changes/${changeId}/review`, { decision, comment }),
 }

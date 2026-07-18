@@ -71,8 +71,8 @@ export default function RawDatasetsView({
   const [approvalOpen, setApprovalOpen] = useState(false)
   const [pendingApprovals, setPendingApprovals] = useState(0)
 
-  const loadPendingApprovals = () => manualSharingApi.changes({ status: 'pending' })
-    .then(rows => setPendingApprovals(rows.length)).catch(() => setPendingApprovals(0))
+  const loadPendingApprovals = () => manualSharingApi.changes({ status: 'pending', page: 1, page_size: 1 })
+    .then(result => setPendingApprovals(result.total)).catch(() => setPendingApprovals(0))
 
   const load = useCallback(() => {
     setLoading(true)
@@ -330,11 +330,11 @@ export default function RawDatasetsView({
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">名称</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">版本号</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">有效数据</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">创建时间</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">更新时间</th>
-                <th className="text-right px-4 py-2.5 font-medium text-gray-600 text-xs">操作</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">版本号</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">有效数据</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">创建时间</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">更新时间</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -357,7 +357,7 @@ export default function RawDatasetsView({
                         </div>
                         <p className="text-xs text-gray-400 font-mono">{ds.id.slice(0, 8)}</p>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-center">
                         {ds.version_count > 0 ? (
                           <span className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-medium text-teal-700" title={`共 ${ds.version_count} 个版本`}>
                             <Database size={10} /> v{ds.latest_version_no}
@@ -366,14 +366,14 @@ export default function RawDatasetsView({
                           <span className="text-xs text-gray-300">暂无版本</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs font-medium tabular-nums text-slate-700">{ds.rowcount != null ? `${ds.rowcount.toLocaleString('zh-CN')} 行` : '—'}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.created_at)}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{formatTime(ds.updated_at)}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-center text-xs font-medium tabular-nums text-slate-700">{ds.rowcount != null ? `${ds.rowcount.toLocaleString('zh-CN')} 行` : '—'}</td>
+                      <td className="px-4 py-3 text-center text-xs text-gray-500">{formatTime(ds.created_at)}</td>
+                      <td className="px-4 py-3 text-center text-xs text-gray-500">{formatTime(ds.updated_at)}</td>
+                      <td className="px-4 py-3 text-center">
                         {isSync ? (
                           <span className="text-[11px] text-slate-400">由数据连接同步维护</span>
                         ) : (
-                          <div className="flex items-center justify-end gap-0.5" aria-label={`数据集 ${ds.name} 的操作`}>
+                          <div className="flex items-center justify-center gap-0.5" aria-label={`数据集 ${ds.name} 的操作`}>
                             <button
                             type="button"
                             onClick={() => setShareTarget(ds)}

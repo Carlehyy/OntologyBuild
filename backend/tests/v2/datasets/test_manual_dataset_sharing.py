@@ -209,3 +209,69 @@ def test_approval_refuses_to_overwrite_a_newer_dataset_version(api, auth_headers
         json={"decision": "approve", "comment": ""}, headers=auth_headers)
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "manual_share_base_version_conflict"
+
+
+def test_management_changes_support_pagination_status_and_search_filters(api, auth_headers):
+    dataset_id = _dataset(api, auth_headers)
+
+    rejected_token = _share(api, auth_headers, dataset_id)["token"]
+    rejected_change = api.post(f"/api/public/manual-datasets/{rejected_token}/changes", json={
+        "base_version_no": 1,
+        "updates": [{"key": {"编号": "A1"}, "values": {"数量": "11"}}],
+    }).json()
+    rejected = api.post(
+        f"/api/v2/manual-dataset-sharing/changes/{rejected_change['id']}/review",
+        json={"decision": "reject", "comment": "缺少依据"}, headers=auth_headers)
+    assert rejected.status_code == 200
+
+    approved_token = _share(api, auth_headers, dataset_id)["token"]
+    approved_change = api.post(f"/api/public/manual-datasets/{approved_token}/changes", json={
+        "base_version_no": 1,
+        "updates": [{"key": {"编号": "A1"}, "values": {"数量": "12"}}],
+    }).json()
+    approved = api.post(
+        f"/api/v2/manual-dataset-sharing/changes/{approved_change['id']}/review",
+        json={"decision": "approve", "comment": "通过"}, headers=auth_headers)
+    assert approved.status_code == 200
+
+    pending_token = _share(api, auth_headers, dataset_id)["token"]
+    pending = api.post(f"/api/public/manual-datasets/{pending_token}/changes", json={
+        "base_version_no": 2,
+        "updates": [{"key": {"编号": "A2"}, "values": {"数量": "22"}}],
+    })
+    assert pending.status_code == 201
+
+    pending_page = api.get(
+        "/api/v2/manual-dataset-sharing/changes?status=pending&page=1&page_size=1",
+        headers=auth_headers,
+    )
+    assert pending_page.status_code == 200
+    assert pending_page.json()["total"] == 1
+    assert pending_page.json()["page"] == 1
+    assert pending_page.json()["page_size"] == 1
+    assert [item["status"] for item in pending_page.json()["items"]] == ["pending"]
+
+    first_page = api.get(
+        "/api/v2/manual-dataset-sharing/changes?page=1&page_size=2&search=inventory",
+        headers=auth_headers,
+    ).json()
+    second_page = api.get(
+        "/api/v2/manual-dataset-sharing/changes?page=2&page_size=2&search=inventory",
+        headers=auth_headers,
+    ).json()
+    assert first_page["total"] == 3
+    assert len(first_page["items"]) == 2
+    assert len(second_page["items"]) == 1
+
+    no_match = api.get(
+        "/api/v2/manual-dataset-sharing/changes?search=不存在的数据集",
+        headers=auth_headers,
+    ).json()
+    assert no_match["total"] == 0
+    assert no_match["items"] == []
+
+    invalid_status = api.get(
+        "/api/v2/manual-dataset-sharing/changes?status=unknown",
+        headers=auth_headers,
+    )
+    assert invalid_status.status_code == 400

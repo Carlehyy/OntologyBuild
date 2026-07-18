@@ -120,8 +120,15 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   const [pkDraft, setPkDraft] = useState<string[]>([])
   const [declaring, setDeclaring] = useState(false)
 
-  const dirty = inserts.length > 0 || rows.some(row =>
-    row.deleted || columns.some(column => row.cur[column] !== row.orig[column]))
+  const changeSummary = useMemo(() => {
+    const deleted = rows.filter(row => row.deleted).length
+    const updated = rows.filter(row => !row.deleted && columns.some(
+      column => row.cur[column] !== row.orig[column],
+    )).length
+    const inserted = inserts.length
+    return { updated, inserted, deleted, total: updated + inserted + deleted }
+  }, [columns, inserts.length, rows])
+  const dirty = changeSummary.total > 0
 
   const loadPage = async (nextOffset: number, limit = pageSize) => {
     setLoading(true)
@@ -458,7 +465,7 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                       const changed = row.cur[column] !== row.orig[column]
                       const validationError = cellErrors[`row:${rowIndex}:${column}`]
                       return (
-                        <td key={column} className="border-b border-slate-100 p-0 align-top">
+                        <td key={column} className={`border-b border-slate-100 p-0 align-top ${changed && !validationError ? 'bg-amber-100/80' : ''}`}>
                           <input
                             value={row.cur[column]}
                             disabled={!canEditRows || primaryKey || row.deleted}
@@ -466,7 +473,15 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                             title={validationError || (primaryKey ? '主键值不可修改' : row.cur[column])}
                             aria-invalid={Boolean(validationError)}
                             style={{ width: `${columnWidths[column]}ch` }}
-                            className={`min-h-9 bg-transparent px-3 py-2 outline-none transition focus:bg-teal-50/60 ${changed ? 'bg-amber-50 text-amber-900' : 'text-slate-700'} ${primaryKey ? 'cursor-not-allowed bg-slate-50/70 font-medium text-slate-500' : ''} ${validationError ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''} ${row.deleted ? 'line-through' : ''}`}
+                            className={`min-h-9 px-3 py-2 outline-none transition ${
+                              validationError
+                                ? 'bg-red-100 text-red-900 ring-2 ring-inset ring-red-300'
+                                : changed
+                                  ? 'bg-amber-100 font-medium text-amber-950 ring-2 ring-inset ring-amber-300 focus:bg-amber-100'
+                                  : primaryKey
+                                    ? 'cursor-not-allowed bg-slate-50/70 font-medium text-slate-500'
+                                    : 'bg-transparent text-slate-700 focus:bg-teal-50/60'
+                            } ${row.deleted ? 'line-through' : ''}`}
                           />
                           {validationError && <span className="block bg-red-50 px-3 pb-1.5 text-[10px] text-red-600">{validationError}</span>}
                         </td>
@@ -534,7 +549,14 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
             <button type="button" onClick={() => changePage(offset + pageSize)} disabled={pageEnd >= totalRows || loading}
               className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-35"><ChevronRight size={13} /></button>
           </div>
-          {dirty && <span className="text-xs font-medium text-amber-600">有未保存的修改</span>}
+          {dirty && (
+            <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700" role="status">
+              有未保存的修改 · 共改动 {changeSummary.total} 行
+              <span className="ml-1 font-normal text-amber-600">
+                （修改 {changeSummary.updated} · 新增 {changeSummary.inserted} · 删除 {changeSummary.deleted}）
+              </span>
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-2">
             <button type="button" onClick={requestClose} disabled={saving}
               className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-40">关闭</button>

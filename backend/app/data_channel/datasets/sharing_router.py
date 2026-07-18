@@ -5,8 +5,9 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.data_channel.datasets.edit_service import build_edited_snapshot
@@ -168,8 +169,16 @@ def revoke_share(share_id: str, db: Session = Depends(get_db)):
 
 
 @management_router.get("/changes")
-def list_changes(dataset_id: str | None = None, status: str | None = None,
-                 db: Session = Depends(get_db)):
+def list_changes(
+    dataset_id: str | None = None,
+    status: str | None = None,
+    search: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    if status and status not in {"pending", "approved", "rejected"}:
+        raise HTTPException(400, "status 仅支持 pending、approved 或 rejected")
     query = db.query(ManualDatasetChange, Dataset, ManualDatasetShare).join(
         Dataset, Dataset.id == ManualDatasetChange.dataset_id,
     ).join(ManualDatasetShare, ManualDatasetShare.id == ManualDatasetChange.share_id)
@@ -177,14 +186,26 @@ def list_changes(dataset_id: str | None = None, status: str | None = None,
         query = query.filter(ManualDatasetChange.dataset_id == dataset_id)
     if status:
         query = query.filter(ManualDatasetChange.status == status)
-    rows = query.order_by(ManualDatasetChange.submitted_at.desc()).all()
-    return [{
+    keyword = search.strip()
+    if keyword:
+        pattern = f"%{keyword}%"
+        query = query.filter(or_(
+            Dataset.name.ilike(pattern),
+            ManualDatasetShare.label.ilike(pattern),
+        ))
+    total = query.count()
+    rows = query.order_by(
+        ManualDatasetChange.submitted_at.desc(),
+        ManualDatasetChange.id.desc(),
+    ).offset((page - 1) * page_size).limit(page_size).all()
+    items = [{
         **_change_dict(change),
         "dataset_name": dataset.name,
         "share_label": share.label,
         "permission": share.permission,
         "edits": change.edits,
     } for change, dataset, share in rows]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @management_router.post("/changes/{change_id}/review")
