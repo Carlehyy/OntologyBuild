@@ -270,7 +270,7 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
 
         <div className="min-h-0 flex-1 overflow-auto bg-white">
           <table className="w-full min-w-[720px] border-collapse text-left text-xs">
-            <thead className="sticky top-0 z-10 bg-slate-50/95 text-slate-500 backdrop-blur">
+            <thead className="sticky top-0 z-10 bg-slate-50/95 text-slate-500 backdrop-blur [&_th]:align-middle">
               <tr>
                 <th className="w-52 border-b border-slate-200 px-6 py-3 font-medium">调用时间</th>
                 <th className="w-28 border-b border-slate-200 px-4 py-3 font-medium">状态</th>
@@ -278,7 +278,7 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
                 <th className="border-b border-slate-200 px-4 py-3 font-medium">错误摘要</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 [&_td]:align-middle">
               {loading
                 ? Array.from({ length: 8 }).map((_, index) => <LogSkeleton key={index} />)
                 : items.map(item => <LogRow key={item.id} item={item} />)}
