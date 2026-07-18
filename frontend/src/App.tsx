@@ -13,7 +13,6 @@ import ActionDetailPage from '@/pages/ontologies/detail/action/ActionDetailPage'
 import ModelsPage from '@/pages/models/ModelsPage'
 import SettingsPage from '@/pages/settings/SettingsPage'
 import OpenInterfacesPage from '@/pages/settings/OpenInterfacesPage'
-import SkillCenterPage from '@/pages/settings/SkillCenterPage'
 import PipelinesLayout from '@/pages/pipelines/PipelinesLayout'
 import PipelineListPage from '@/pages/pipelines/PipelineListPage'
 import PipelineBuilderPage from '@/pages/pipelines/builder/PipelineBuilderPage'
@@ -99,8 +98,8 @@ export default function App() {
           <Route path="/events" element={<ProtectedRoute><EventRegistryPage /></ProtectedRoute>} />
           <Route path="/rag" element={<Navigate to="/agent" replace />} />
           <Route path="/settings" element={<Navigate to="/settings/extraction" replace />} />
+          <Route path="/settings/skills" element={<Navigate to="/settings/extraction" replace />} />
           <Route path="/settings/open-interfaces" element={<ProtectedRoute><OpenInterfacesPage /></ProtectedRoute>} />
-          <Route path="/settings/skills" element={<ProtectedRoute><SkillCenterPage /></ProtectedRoute>} />
           <Route path="/settings/:tab" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<UnknownRouteRedirect />} />
           </Routes>

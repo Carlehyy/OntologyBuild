@@ -27,13 +27,13 @@ from sqlalchemy.orm import Session
 
 from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.ontologies.agent_runtime import llm_bridge
-from app.capabilities.models import CapSkill
 from app.exploration import canvas as C
 from app.exploration import questions as Q
 from app.exploration import readiness as R
 from app.exploration import officecli as O
 from app.exploration.models import (ExplorationAttachment, ExplorationMessage,
                                     ExplorationSession)
+from app.exploration.skills import ExplorationSkill, exploration_skills
 from app.exploration.toolkit import (OFFICE_TOOL, TOOL_DEFS, USE_SKILL_TOOL,
                                      ExplorationToolRunner)
 from app.exploration.web_search import WEB_SEARCH_TOOL, WebSearchError, search_web
@@ -55,13 +55,12 @@ _COMPACTION_TRIGGER_RATIO = 0.70
 _SUMMARY_CHAR_CAP = 12_000
 
 
-def _load_skills(db: Session) -> dict[str, CapSkill]:
-    """当前作用域（exploration）已启用的技能，name → CapSkill。"""
-    rows = db.query(CapSkill).filter(CapSkill.enabled.is_(True)).all()
-    return {s.name: s for s in rows if "exploration" in (s.scopes or [])}
+def _load_skills() -> dict[str, ExplorationSkill]:
+    """加载业务探索随代码发布的内置技能。"""
+    return exploration_skills()
 
 
-def _skills_block(skills: dict[str, CapSkill]) -> str:
+def _skills_block(skills: dict[str, ExplorationSkill]) -> str:
     if not skills:
         return ""
     lines = "\n".join(f"- {s.name}: {s.description or s.display_name}"
@@ -73,7 +72,7 @@ def _skills_block(skills: dict[str, CapSkill]) -> str:
 {lines}"""
 
 
-def _system_prompt(session: ExplorationSession, skills: dict[str, CapSkill] | None = None,
+def _system_prompt(session: ExplorationSession, skills: dict[str, ExplorationSkill] | None = None,
                    web_search_enabled: bool = False) -> str:
     rd = R.evaluate(session.canvas)
     return f"""你是「业务探索」引导师，运行在 OntoPrompt 平台。你的使命：通过对话把用户的业务**彻底澄清** —— 所有关键口径都被定量（明确数值/枚举/边界），没有任何模棱两可或多种理解 —— 并把已确认的知识实时沉淀为六类结构化模型。这些模型最终转化为需求文档与本体（对象类型/链接/动作/激活函数草稿/哨兵草稿），供图谱编辑器直接使用。
@@ -181,7 +180,7 @@ def _compact_history(db: Session, session: ExplorationSession,
 
 def _prepare_history(db: Session, session: ExplorationSession,
                      call_kwargs: dict, message: str, attachments: str,
-                     skills: dict[str, CapSkill],
+                     skills: dict[str, ExplorationSkill],
                      web_search_enabled: bool = False) -> tuple[str, list[ExplorationMessage]]:
     summarized = max(0, session.summary_message_count or 0)
     rows = (db.query(ExplorationMessage)
@@ -333,7 +332,7 @@ def _run(db: Session, session_id: str, user, message: str,
 
     yield {"type": "meta", "sessionId": session.id, "model": call_kwargs.get("model")}
 
-    skills = _load_skills(db)
+    skills = _load_skills()
     tools = TOOL_DEFS + ([OFFICE_TOOL] if O.available() else []) \
         + ([USE_SKILL_TOOL] if skills else []) \
         + ([WEB_SEARCH_TOOL] if web_search else [])

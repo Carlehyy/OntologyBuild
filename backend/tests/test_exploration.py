@@ -601,11 +601,20 @@ def test_apply_requires_new_ontology_name(client, auth_headers, session, db):
 # ---------------------------------------------------------------- 技能（use_skill 渐进披露）
 
 
+def test_exploration_skills_are_bundled_and_isolated_from_database():
+    from app.exploration.skills import exploration_skills
+
+    first = exploration_skills()
+    second = exploration_skills()
+    assert set(first) == {"er_diagram", "business_flowchart"}
+    assert first is not second
+    assert "erDiagram" in first["er_diagram"].instructions
+    assert "flowchart TD" in first["business_flowchart"].instructions
+
+
 def test_chat_with_skill_catalog_and_use_skill(client, auth_headers, session, db,
                                                admin_user, monkeypatch):
-    """技能目录注入系统提示；use_skill 取全文；无技能时不挂 use_skill 工具。"""
-    from app.capabilities.builtin import seed_builtin_skills
-    seed_builtin_skills(db)
+    """内置技能目录注入系统提示；use_skill 按需取得完整指令。"""
     _fake_model_config(db, admin_user)
     calls = {"n": 0}
 
@@ -613,7 +622,8 @@ def test_chat_with_skill_catalog_and_use_skill(client, auth_headers, session, db
         calls["n"] += 1
         if calls["n"] == 1:
             sysmsg = messages[0]["content"]
-            assert "可用技能" in sysmsg and "er_diagram" in sysmsg
+            assert "可用技能" in sysmsg
+            assert "er_diagram" in sysmsg and "business_flowchart" in sysmsg
             # 目录只有一句话描述，不含全文指令（渐进披露）
             assert "输出契约" not in sysmsg
             assert any(t["name"] == "use_skill" for t in tools)
@@ -636,25 +646,7 @@ def test_chat_with_skill_catalog_and_use_skill(client, auth_headers, session, db
     assert "mermaid" in data["content"]
 
 
-def test_chat_without_skills_has_no_use_skill_tool(client, auth_headers, session, db,
-                                                   admin_user, monkeypatch):
-    _fake_model_config(db, admin_user)
-
-    def fake_chat(call_kwargs, messages, tools):
-        assert not any(t["name"] == "use_skill" for t in tools)
-        assert "可用技能" not in messages[0]["content"]
-        return {"content": "好的。", "tool_calls": [], "usage": None}
-
-    from app.ontologies.agent_runtime import llm_bridge
-    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
-    r = client.post(f"{BASE}/sessions/{session['id']}/chat", headers=auth_headers,
-                    json={"message": "你好", "stream": False})
-    assert r.json()["data"]["error"] is None
-
-
 def test_use_skill_unknown_name(client, auth_headers, session, db, admin_user, monkeypatch):
-    from app.capabilities.builtin import seed_builtin_skills
-    seed_builtin_skills(db)
     _fake_model_config(db, admin_user)
     calls = {"n": 0}
 

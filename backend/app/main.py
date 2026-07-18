@@ -86,8 +86,6 @@ def _seed_db():
             ExplorationSession, ExplorationMessage, ExplorationDocument, ExplorationDraft,
             ExplorationAttachment,
         )
-        # 能力注册中心 (技能包；P2 扩展 MCP server 注册)
-        from app.capabilities.models import CapSkill  # noqa: F401
         from app.models.workflow_config import WorkflowConfig  # noqa: F401
         # 数据管家 (对话式 n8n 数据流水线：治理记录 + 会话)
         from app.data_channel.steward.models import (  # noqa: F401
@@ -264,10 +262,6 @@ def _seed_db():
             db.rollback()
             import logging
             logging.getLogger(__name__).warning("n8n 影子流水线回填失败", exc_info=True)
-
-        # Seed 内置技能（幂等，只补缺失，不覆盖用户编辑）
-        from app.capabilities.builtin import seed_builtin_skills
-        seed_builtin_skills(db)
 
         # 重启时清理遗留的 running 任务 — daemon 线程被杀后 task 会永久卡在 85%
         from app.models.extraction_task import ExtractionTask
@@ -570,9 +564,6 @@ app.include_router(agent_runtime_router.router, prefix="/api/v2/formal/ontologie
 # 业务探索 — 对话式业务建模：六类模型画布 → 需求文档 → 本体草稿（人审落地）
 from app.exploration import router as exploration_router
 app.include_router(exploration_router.router, prefix="/api/v2/exploration", tags=["exploration"])
-# 能力注册中心 — 平台级技能包管理（P2 扩展 MCP）
-from app.capabilities import router as capabilities_router
-app.include_router(capabilities_router.router, prefix="/api/v2/capabilities", tags=["capabilities"])
 # 超级助手 — 与本体、业务探索完全解耦的通用 Agent 运行时
 from app.super_assistant import router as super_assistant_router
 app.include_router(

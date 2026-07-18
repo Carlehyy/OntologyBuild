@@ -121,7 +121,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       { to: '/settings/users', icon: Network, label: '用户管理' },
       { to: '/settings/prompts', icon: Sparkles, label: '提示词模板' },
       { to: '/settings/agents', icon: Bot, label: '智能体配置' },
-      { to: '/settings/skills', icon: Sparkles, label: '技能中心' },
       { to: '/settings/workflows', icon: Workflow, label: '工作流配置' },
       { to: '/settings/domains', icon: Globe, label: '领域设置' },
       { to: '/settings/open-interfaces', icon: PlugZap, label: '开放接口' },

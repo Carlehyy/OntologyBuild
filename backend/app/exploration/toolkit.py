@@ -20,6 +20,7 @@ from app.exploration import questions as Q
 from app.exploration import workspace as W
 from app.exploration import officecli as O
 from app.exploration.models import ExplorationAttachment, ExplorationSession
+from app.exploration.skills import ExplorationSkill
 
 _FIELD_DOC = """元素字段约定（name 用英文 snake_case/PascalCase 标识符，中文放 display_name）：
 - object: {name, display_name, description, key_attribute(业务主键属性名), attributes: [{name, display_name, type_hint(如 文本/数字/金额/日期/是否/枚举), required, enum?, notes?}], relations: [{target(对象名), name?, display_name(如 归属于), cardinality(one-to-one|one-to-many|many-to-one|many-to-many)?, description?}]}
@@ -194,11 +195,12 @@ OFFICE_TOOL = {
 class ExplorationToolRunner:
     """工具执行器：改画布、递增版本。canvas_dirty 供 orchestrator 决定是否推 canvas 事件。
 
-    skills：本回合可用的技能（name → CapSkill），use_skill 按需取全文（渐进披露）。
+    skills：本回合可用的业务探索技能，use_skill 按需取全文（渐进披露）。
     last_diagram：show_diagram 的产物，orchestrator 把它挂到 step 事件上推给前端。
     """
 
-    def __init__(self, db: Session, session: ExplorationSession, skills: dict | None = None):
+    def __init__(self, db: Session, session: ExplorationSession,
+                 skills: dict[str, ExplorationSkill] | None = None):
         self.db = db
         self.session = session
         self.skills = skills or {}

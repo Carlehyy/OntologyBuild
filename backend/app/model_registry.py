@@ -12,7 +12,6 @@ from importlib import import_module
 
 MODEL_MODULES = (
     "app.auth.models",
-    "app.capabilities.models",
     "app.data_channel.connections.models",
     "app.data_channel.curated.models",
     "app.data_channel.datasets.models",

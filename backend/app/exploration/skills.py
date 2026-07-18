@@ -1,13 +1,20 @@
-"""内置技能 seed — 按 name 不存在才插入，绝不覆盖用户的编辑。"""
+"""业务探索内置技能。
+
+这些技能只服务业务探索运行时，随代码发布，不依赖平台级能力注册中心或数据库。
+保留 ``use_skill`` 渐进披露协议，避免把完整指令常驻系统提示。
+"""
 from __future__ import annotations
 
-import logging
+from dataclasses import dataclass
 
-from sqlalchemy.orm import Session
 
-from app.capabilities.models import CapSkill
+@dataclass(frozen=True, slots=True)
+class ExplorationSkill:
+    name: str
+    display_name: str
+    description: str
+    instructions: str
 
-logger = logging.getLogger(__name__)
 
 _ER_INSTRUCTIONS = """# ER 图绘制
 
@@ -69,25 +76,23 @@ flowchart TD
 画完后简述流程要点；场景信息不足时先建议用户补充场景模型。
 """
 
-BUILTIN_SKILLS = [
-    {"name": "er_diagram", "display_name": "ER 图绘制",
-     "description": "用户想看实体关系图/ER 图时使用：从画布对象模型推导，输出 mermaid erDiagram。",
-     "instructions": _ER_INSTRUCTIONS, "scopes": ["exploration"]},
-    {"name": "business_flowchart", "display_name": "业务流程图绘制",
-     "description": "用户想看业务流程图/泳道图时使用：从画布场景与行为模型推导，输出 mermaid flowchart。",
-     "instructions": _FLOW_INSTRUCTIONS, "scopes": ["exploration"]},
-]
+
+_SKILLS = (
+    ExplorationSkill(
+        name="er_diagram",
+        display_name="ER 图绘制",
+        description="用户想看实体关系图/ER 图时使用：从画布对象模型推导，输出 mermaid erDiagram。",
+        instructions=_ER_INSTRUCTIONS,
+    ),
+    ExplorationSkill(
+        name="business_flowchart",
+        display_name="业务流程图绘制",
+        description="用户想看业务流程图/泳道图时使用：从画布场景与行为模型推导，输出 mermaid flowchart。",
+        instructions=_FLOW_INSTRUCTIONS,
+    ),
+)
 
 
-def seed_builtin_skills(db: Session) -> int:
-    """幂等 seed：只补缺失的内置技能，返回新增数。"""
-    created = 0
-    for spec in BUILTIN_SKILLS:
-        if db.query(CapSkill).filter(CapSkill.name == spec["name"]).first():
-            continue
-        db.add(CapSkill(**spec, builtin=True, enabled=True))
-        created += 1
-    if created:
-        db.commit()
-        logger.info("seed 内置技能 %d 个", created)
-    return created
+def exploration_skills() -> dict[str, ExplorationSkill]:
+    """返回业务探索可用技能的新字典，防止回合内修改全局注册表。"""
+    return {skill.name: skill for skill in _SKILLS}
