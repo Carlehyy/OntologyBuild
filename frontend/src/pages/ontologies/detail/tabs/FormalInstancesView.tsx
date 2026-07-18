@@ -73,17 +73,12 @@ interface ObjectRow {
   objectTypeId: string
   properties: Record<string, unknown>
   computed: Record<string, unknown>
-  source?: string | null
-  externalId?: string | null
   createdAt: string
   updatedAt: string
 }
 
 interface EndpointSummary {
-  id: string
-  objectTypeId: string
   label: string
-  externalId?: string | null
 }
 
 interface LinkRow {
@@ -93,9 +88,7 @@ interface LinkRow {
   targetObjectId: string
   sourceObject?: EndpointSummary | null
   targetObject?: EndpointSummary | null
-  sourceRelationId?: string | null
   properties: Record<string, unknown>
-  createdAt: string
 }
 
 interface InstancePage<T> {
@@ -117,14 +110,6 @@ interface DataColumn {
 }
 
 type Selection = { kind: 'object' | 'link'; id: string }
-
-const SOURCE_LABEL: Record<string, string> = {
-  manual: '手工',
-  pipeline: '管道',
-  collector: '采集',
-  action: '动作',
-  import: '导入',
-}
 
 const CARDINALITY_LABEL: Record<string, string> = {
   'one-to-one': '一对一',
@@ -508,6 +493,7 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
               rows={rows}
               columns={columns}
               catalog={catalog}
+              linkType={activeLink}
             />
           ) : null}
         </div>
@@ -725,11 +711,13 @@ function InstanceTable({
   rows,
   columns,
   catalog,
+  linkType,
 }: {
   kind: Selection['kind']
   rows: Array<ObjectRow | LinkRow>
   columns: DataColumn[]
   catalog?: InstanceCatalog
+  linkType?: LinkTypeNode | null
 }) {
   return (
     <table className="w-max min-w-full border-separate border-spacing-0 text-left text-xs">
@@ -737,8 +725,18 @@ function InstanceTable({
         <tr>
           {kind === 'link' && (
             <>
-              <HeaderCell sticky>源对象</HeaderCell>
-              <HeaderCell>目标对象</HeaderCell>
+              <HeaderCell sticky>
+                <EndpointHeader
+                  label={objectTypeName(catalog, linkType?.sourceObjectTypeId || '')}
+                  role="源端对象业务标识"
+                />
+              </HeaderCell>
+              <HeaderCell>
+                <EndpointHeader
+                  label={objectTypeName(catalog, linkType?.targetObjectTypeId || '')}
+                  role="目标端对象业务标识"
+                />
+              </HeaderCell>
             </>
           )}
           {columns.map((column, index) => (
@@ -771,31 +769,33 @@ function InstanceTable({
           ))}
           {kind === 'object' ? (
             <>
-              <HeaderCell>来源</HeaderCell>
-              <HeaderCell>外部 ID</HeaderCell>
               <HeaderCell>创建时间</HeaderCell>
               <HeaderCell>更新时间</HeaderCell>
             </>
-          ) : (
-            <>
-              <HeaderCell>来源关系 ID</HeaderCell>
-              <HeaderCell>创建时间</HeaderCell>
-            </>
-          )}
+          ) : null}
         </tr>
       </thead>
       <tbody>
         {rows.map(row => kind === 'object'
           ? <ObjectDataRow key={row.id} row={row as ObjectRow} columns={columns} />
-          : <LinkDataRow key={row.id} row={row as LinkRow} columns={columns} catalog={catalog} />)}
+          : <LinkDataRow key={row.id} row={row as LinkRow} columns={columns} />)}
       </tbody>
     </table>
   )
 }
 
+function EndpointHeader({ label, role }: { label: string; role: string }) {
+  return (
+    <div className="min-w-48">
+      <div className="font-medium text-slate-700">{label}</div>
+      <div className="mt-1 text-[9px] font-normal text-slate-400">{role}</div>
+    </div>
+  )
+}
+
 function HeaderCell({ children, sticky = false }: { children: React.ReactNode; sticky?: boolean }) {
   return (
-    <th className={`border-b border-r border-slate-200 px-4 py-2.5 align-top font-medium ${
+    <th scope="col" className={`border-b border-r border-slate-200 px-4 py-2.5 align-top font-medium ${
       sticky ? 'sticky left-0 z-30 min-w-60 bg-slate-50/95' : 'min-w-48'
     }`}>
       {children}
@@ -816,12 +816,6 @@ function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[]
             : row.properties?.[column.name]} />
         </DataCell>
       ))}
-      <DataCell>
-        <span className="inline-flex rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-600">
-          {SOURCE_LABEL[row.source || 'manual'] || row.source || '手工'}
-        </span>
-      </DataCell>
-      <DataCell><Identifier value={row.externalId} /></DataCell>
       <DataCell><span className="whitespace-nowrap text-slate-500">{formatDate(row.createdAt)}</span></DataCell>
       <DataCell><span className="whitespace-nowrap text-slate-500">{formatDate(row.updatedAt)}</span></DataCell>
     </tr>
@@ -831,31 +825,21 @@ function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[]
 function LinkDataRow({
   row,
   columns,
-  catalog,
 }: {
   row: LinkRow
   columns: DataColumn[]
-  catalog?: InstanceCatalog
 }) {
   return (
     <tr className="group align-top hover:bg-teal-50/30">
       <DataCell sticky>
-        <EndpointCell
-          endpoint={row.sourceObject}
-          catalog={catalog}
-        />
+        <EndpointCell endpoint={row.sourceObject} />
       </DataCell>
       <DataCell>
-        <EndpointCell
-          endpoint={row.targetObject}
-          catalog={catalog}
-        />
+        <EndpointCell endpoint={row.targetObject} />
       </DataCell>
       {columns.map((column, index) => (
         <DataCell key={`${column.name}:${index}`}><FullValue value={row.properties?.[column.name]} /></DataCell>
       ))}
-      <DataCell><Identifier value={row.sourceRelationId} /></DataCell>
-      <DataCell><span className="whitespace-nowrap text-slate-500">{formatDate(row.createdAt)}</span></DataCell>
     </tr>
   )
 }
@@ -870,25 +854,10 @@ function DataCell({ children, sticky = false }: { children: React.ReactNode; sti
   )
 }
 
-function Identifier({ value }: { value?: string | null }) {
-  return value
-    ? <span className="block max-w-96 break-all font-mono text-[11px] text-slate-600">{value}</span>
-    : <span className="text-slate-300">—</span>
-}
-
-function EndpointCell({
-  endpoint,
-  catalog,
-}: {
-  endpoint?: EndpointSummary | null
-  catalog?: InstanceCatalog
-}) {
+function EndpointCell({ endpoint }: { endpoint?: EndpointSummary | null }) {
   return (
     <div className="min-w-56 max-w-96">
       <div className="font-medium text-slate-800">{endpoint?.label || '端点实例不可用'}</div>
-      {endpoint?.objectTypeId && (
-        <div className="mt-1 text-[10px] text-teal-700">{objectTypeName(catalog, endpoint.objectTypeId)}</div>
-      )}
     </div>
   )
 }
