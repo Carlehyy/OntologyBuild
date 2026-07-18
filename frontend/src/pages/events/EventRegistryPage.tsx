@@ -3,15 +3,15 @@ import ReactECharts from 'echarts-for-react'
 import { useQuery } from '@tanstack/react-query'
 import { eventsApi } from '../../api/events'
 import type { EventItem, EventStats } from '../../api/events'
-import { Search, Plus, RefreshCcw, AlertTriangle, Activity, Database, Code2, Zap, AlertOctagon, ChevronLeft, ChevronRight, Filter, ListTodo, PlusCircle, ArrowUpRight, CircleDot, ExternalLink, Archive } from 'lucide-react'
+import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, CircleDot, ExternalLink, Archive } from 'lucide-react'
 import EventFormModal from './EventFormModal'
 import IngestKeysDrawer from './IngestKeysDrawer'
 
-// ─── 设计 token ──────────────────────────────────────────
-const GLASS = 'backdrop-blur-xl bg-white/70 border border-white/80 shadow-[0_4px_24px_rgba(15,23,42,0.05)] rounded-xl'
+// 与「数据资产湖」一致的基础面板：白底、细边框、轻阴影。
+const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50'
 const PALETTE = {
   blue: '#3B82F6', teal: '#5EEAD4', gold: '#FCD34D', orange: '#FDBA74',
-  red: '#FB7185', purple: '#C4B5FD', slate: '#94A3B8',
+  red: '#FB7185',
 }
 const PAGE_SIZE = 8
 
@@ -135,72 +135,55 @@ export default function EventRegistryPage() {
   }, [stats])
 
   return (
-    <div className="h-full flex flex-col relative overflow-hidden bg-gradient-to-br from-slate-50/80 via-white to-slate-50/60">
-      {/* 四角均匀柔光：对称分布、统一透明度、色彩克制 */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-32 -left-32 w-[480px] h-[480px] rounded-full opacity-[0.12]"
-          style={{ background: 'radial-gradient(circle, rgba(94,234,212,0.7), transparent 70%)' }} />
-        <div className="absolute -top-32 -right-32 w-[480px] h-[480px] rounded-full opacity-[0.12]"
-          style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.65), transparent 70%)' }} />
-        <div className="absolute -bottom-32 -left-32 w-[480px] h-[480px] rounded-full opacity-[0.10]"
-          style={{ background: 'radial-gradient(circle, rgba(196,181,253,0.6), transparent 70%)' }} />
-        <div className="absolute -bottom-32 -right-32 w-[480px] h-[480px] rounded-full opacity-[0.10]"
-          style={{ background: 'radial-gradient(circle, rgba(253,186,116,0.55), transparent 70%)' }} />
-      </div>
-
-      <div className="relative z-10 h-full flex flex-col p-5 gap-4">
-        {/* 页头 */}
-        <div className="flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-400 to-blue-500 flex items-center justify-center text-white shadow-[0_6px_16px_rgba(59,130,246,0.25)]">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-            <div>
-              <h1 className="text-[17px] font-semibold text-slate-800 tracking-tight leading-tight">事件登记</h1>
-              <p className="text-xs text-slate-500 leading-tight mt-0.5">统一接入业务事件 · 支持平台登记与第三方 API 上报</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center bg-white/60 border border-slate-200/70 rounded-lg p-0.5 text-xs">
+    <div className="flex h-full flex-col gap-3 overflow-hidden bg-[var(--color-bg-base)] p-6">
+      {/* 顶部仅保留操作，不重复展示侧边栏已有的页面名称。 */}
+      <div className={`${PANEL} shrink-0 px-4 py-3`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm">
               {[
                 { v: 'active', l: '活跃' },
                 { v: 'archived', l: '已归档' },
                 { v: 'all', l: '全部' },
               ].map(o => (
-                <button key={o.v} onClick={() => setStatus(o.v)}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-all ${status === o.v ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                  {o.v === 'archived' && <Archive className="w-3 h-3 inline -mt-0.5 mr-0.5" />}{o.l}
+                <button key={o.v} type="button" onClick={() => setStatus(o.v)} aria-pressed={status === o.v}
+                  className={`rounded-md px-4 py-2 font-medium transition-colors ${status === o.v ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:text-emerald-700'}`}>
+                  {o.v === 'archived' && <Archive className="mr-1 inline h-3.5 w-3.5 -translate-y-px" />}{o.l}
                 </button>
               ))}
-            </div>
+          </div>
+
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {abnormalCount > 0 && (
-              <button onClick={() => setOnlyAbnormal(!onlyAbnormal)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${onlyAbnormal ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-white/60 text-slate-600 border border-slate-200/70 hover:bg-white'}`}>
-                <AlertOctagon className="w-3.5 h-3.5" />{abnormalCount} 待关注
+              <button type="button" onClick={() => setOnlyAbnormal(!onlyAbnormal)} aria-pressed={onlyAbnormal}
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${onlyAbnormal ? 'border-red-200 bg-red-50 text-red-600' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+                <AlertOctagon className="h-4 w-4" />{abnormalCount} 待关注
               </button>
             )}
-            <button onClick={() => setKeysOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/60 border border-slate-200/70 text-xs font-medium text-slate-600 hover:bg-white transition-all">
-              <Code2 className="w-3.5 h-3.5" />接入管理
-              <span className="ml-0.5 inline-flex items-center px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-medium">API</span>
+            <button type="button" onClick={() => setKeysOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800">
+              <Code2 className="h-4 w-4" />接入管理
+              <span className="ml-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">API</span>
             </button>
-            <button onClick={() => { setEditing(null); setFormOpen(true) }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white text-xs font-medium shadow-[0_4px_12px_rgba(59,130,246,0.3)] hover:shadow-[0_6px_16px_rgba(59,130,246,0.4)] transition-all">
-              <Plus className="w-3.5 h-3.5" />登记事件
+            <button type="button" onClick={() => { setEditing(null); setFormOpen(true) }}
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 active:bg-emerald-800">
+              <Plus className="h-4 w-4" />登记事件
             </button>
           </div>
         </div>
+      </div>
 
-        {/* 第一行：4 个小指标 + 级别分布 + 7日趋势 */}
-        <div className="grid grid-cols-12 gap-3 shrink-0">
-          <MetricCard icon={<Database className="w-3.5 h-3.5" />} label="事件总数" value={stats?.total ?? 0} sub={`活跃 ${stats?.active ?? 0} · 归档 ${stats?.archived ?? 0}`} accent="blue" />
-          <MetricCard icon={<ListTodo className="w-3.5 h-3.5" />} label="平台录入" value={stats?.platform ?? 0} sub="人工登记" accent="teal" />
-          <MetricCard icon={<Activity className="w-3.5 h-3.5" />} label="API 接入" value={stats?.api ?? 0} sub={`${apiCoverage}% 覆盖率`} accent="purple" />
-          <MetricCard icon={<Zap className="w-3.5 h-3.5" />} label="今日新增" value={stats?.today ?? 0} sub="实时" accent="gold" />
+      {/* 总览沿用数据资产湖的白色指标卡，并将图表收纳在同一行。 */}
+      <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-12">
+        <div className="grid grid-cols-2 gap-2 lg:col-span-4">
+          <MetricCard label="事件总数" value={stats?.total ?? 0} sub={`活跃 ${stats?.active ?? 0} · 归档 ${stats?.archived ?? 0}`} />
+          <MetricCard label="平台录入" value={stats?.platform ?? 0} sub="人工登记" />
+          <MetricCard label="API 接入" value={stats?.api ?? 0} sub={`${apiCoverage}% 覆盖率`} />
+          <MetricCard label="今日新增" value={stats?.today ?? 0} sub="实时更新" />
+        </div>
 
-          {/* 级别分布环 */}
-          <div className={`col-span-3 ${GLASS} px-4 py-2.5 flex items-center gap-3 overflow-hidden`}>
-            <div className="relative w-[68px] h-[68px] shrink-0">
+        {/* 级别分布环 */}
+        <div className={`${PANEL} flex min-h-[132px] items-center gap-4 overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-3`}>
+            <div className="relative h-[78px] w-[78px] shrink-0">
               <div className="w-full h-full overflow-hidden rounded-full">
                 <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
               </div>
@@ -225,8 +208,8 @@ export default function EventRegistryPage() {
             </div>
           </div>
 
-          {/* 7日趋势 */}
-          <div className={`col-span-5 ${GLASS} px-4 py-2.5 overflow-hidden min-w-0 flex flex-col`}>
+        {/* 7日趋势 */}
+        <div className={`${PANEL} flex min-h-[132px] min-w-0 flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-5`}>
             <div className="flex items-center justify-between mb-1 shrink-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] font-medium text-slate-700">近 7 日事件趋势</span>
@@ -240,18 +223,18 @@ export default function EventRegistryPage() {
                 <LegendDot color={PALETTE.red} label="严重" />
               </div>
             </div>
-            <div className="flex-1 min-h-0 w-full overflow-hidden" style={{ height: 108 }}>
+            <div className="min-h-0 w-full flex-1 overflow-hidden" style={{ height: 96 }}>
               <ReactECharts option={trendOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
-          </div>
         </div>
+      </div>
 
-        {/* 筛选栏 */}
-        <div className={`${GLASS} px-3 py-2 flex items-center gap-2 shrink-0 flex-wrap`}>
-          <div className="relative flex-1 min-w-[180px] max-w-[280px]">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+      {/* 筛选栏 */}
+      <div className={`${PANEL} flex shrink-0 flex-wrap items-center gap-2 px-4 py-3`}>
+          <div className="relative min-w-[220px] max-w-[340px] flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索事件标题、编号、上报人..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs bg-white/60 border border-slate-200/60 rounded-lg focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100/50 transition-all placeholder:text-slate-400" />
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 placeholder:text-slate-400" />
           </div>
           <Select value={severity} onChange={setSeverity} options={[
             { v: '', l: '全部级别' }, { v: 'critical', l: '严重' }, { v: 'high', l: '高' }, { v: 'medium', l: '中' }, { v: 'low', l: '低' }, { v: 'info', l: '信息' },
@@ -259,33 +242,33 @@ export default function EventRegistryPage() {
           <Select value={sourceType} onChange={setSourceType} options={[
             { v: '', l: '全部来源' }, { v: 'platform', l: '平台录入' }, { v: 'api', l: 'API 上报' }, { v: 'system', l: '系统生成' },
           ]} />
-          <div className="h-5 w-px bg-slate-200/70" />
-          <button onClick={() => setOnlyAbnormal(!onlyAbnormal)}
-            className={`flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-md border transition-all ${onlyAbnormal ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white/50 text-slate-600 border-slate-200/60 hover:bg-white'}`}>
-            <CircleDot className="w-3 h-3" />仅异常
+          <div className="h-5 w-px bg-slate-200" />
+          <button type="button" onClick={() => setOnlyAbnormal(!onlyAbnormal)} aria-pressed={onlyAbnormal}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${onlyAbnormal ? 'border-red-200 bg-red-50 text-red-600' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+            <CircleDot className="h-3.5 w-3.5" />仅异常
           </button>
           <div className="ml-auto flex items-center gap-1">
             <span className="text-[11px] text-slate-400 mr-1">共 <span className="font-semibold text-slate-700 tabular-nums">{listQ.data?.total ?? 0}</span> 条</span>
-            <button onClick={refresh}
-              className="p-1.5 rounded-md text-slate-500 hover:bg-white/80 hover:text-slate-700 transition-all" title="刷新">
-              <RefreshCcw className={`w-3.5 h-3.5 ${statsQ.isFetching || listQ.isFetching ? 'animate-spin' : ''}`} />
+            <button type="button" onClick={refresh}
+              className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800" title="刷新" aria-label="刷新事件列表">
+              <RefreshCcw className={`h-4 w-4 ${statsQ.isFetching || listQ.isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
-        </div>
+      </div>
 
-        {/* 表格区 */}
-        <div className={`${GLASS} flex-1 min-h-0 flex flex-col overflow-hidden`}>
+      {/* 表格区 */}
+      <div className={`${PANEL} flex min-h-0 flex-1 flex-col overflow-hidden`}>
           <div className="flex-1 min-h-0 overflow-auto thin-scroll">
             <table className="w-full text-xs">
               <thead>
-                <tr className="sticky top-0 z-10 bg-white/85 backdrop-blur-sm text-slate-400 uppercase tracking-wider text-[10px]">
-                  <th className="text-left font-medium px-4 py-2 w-[26%]">事件</th>
-                  <th className="text-left font-medium px-3 py-2 w-[16%]">来源</th>
-                  <th className="text-left font-medium px-3 py-2 w-[9%]">级别</th>
-                  <th className="text-left font-medium px-3 py-2 w-[22%]">描述</th>
-                  <th className="text-left font-medium px-3 py-2 w-[8%]">附件</th>
-                  <th className="text-left font-medium px-3 py-2 w-[12%]">发生时间</th>
-                  <th className="text-right font-medium px-4 py-2 w-[7%]">操作</th>
+                <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs text-slate-600">
+                  <th className="w-[26%] px-4 py-2.5 text-left font-medium">事件</th>
+                  <th className="w-[16%] px-3 py-2.5 text-left font-medium">来源</th>
+                  <th className="w-[9%] px-3 py-2.5 text-left font-medium">级别</th>
+                  <th className="w-[22%] px-3 py-2.5 text-left font-medium">描述</th>
+                  <th className="w-[8%] px-3 py-2.5 text-left font-medium">附件</th>
+                  <th className="w-[12%] px-3 py-2.5 text-left font-medium">发生时间</th>
+                  <th className="w-[7%] px-4 py-2.5 text-right font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -293,19 +276,19 @@ export default function EventRegistryPage() {
                   <tr><td colSpan={7} className="text-center py-16 text-slate-400 text-xs">加载中...</td></tr>
                 ) : listQ.data?.items?.length === 0 ? (
                   <tr><td colSpan={7} className="text-center py-16">
-                    <div className="w-12 h-12 mx-auto rounded-2xl bg-gradient-to-br from-slate-100 to-slate-50 flex items-center justify-center mb-3 shadow-inner">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100">
                       <Filter className="w-5 h-5 text-slate-300" />
                     </div>
                     <p className="text-slate-400 text-xs">暂无匹配事件</p>
                     <p className="text-slate-300 text-[11px] mt-1">尝试调整筛选条件，或登记新事件</p>
                     <button onClick={() => { setEditing(null); setFormOpen(true) }}
-                      className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-medium hover:bg-blue-100 transition-all">
+                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100">
                       <PlusCircle className="w-3 h-3" />立即登记
                     </button>
                   </td></tr>
                 ) : (listQ.data?.items ?? []).map((r, i) => (
                   <tr key={r.id}
-                    className={`group border-t border-slate-100/70 hover:bg-blue-50/40 transition-colors ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/15' : ''}`}
+                    className={`group border-t border-slate-100 transition-colors hover:bg-slate-50 ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
                     style={{ animation: `rowIn 0.35s ease-out ${i * 30}ms both` }}>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
@@ -345,7 +328,7 @@ export default function EventRegistryPage() {
                     <td className="px-4 py-2.5 text-right">
                       <div className="inline-flex items-center gap-0.5">
                         <button onClick={() => { setEditing(r); setFormOpen(true) }}
-                          className="p-1 rounded-md hover:bg-white text-slate-400 hover:text-blue-500 transition-colors" title="查看/编辑">
+                          className="rounded-md p-1 text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-700" title="查看/编辑">
                           <ExternalLink className="w-3 h-3" />
                         </button>
                       </div>
@@ -357,13 +340,13 @@ export default function EventRegistryPage() {
           </div>
 
           {/* 分页 */}
-          <div className="flex items-center justify-between px-4 py-2 border-t border-slate-100/70 bg-white/40 shrink-0">
+          <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 py-2">
             <div className="text-[11px] text-slate-400 tabular-nums">
               显示 {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, listQ.data?.total ?? 0)} / {listQ.data?.total ?? 0}
             </div>
             <div className="flex items-center gap-1">
               <button disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200/60 bg-white/60 text-slate-500 disabled:opacity-40 hover:bg-white transition-all">
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40">
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
               {Array.from({ length: Math.min(totalPages, 5) }).map((_, i) => {
@@ -371,25 +354,24 @@ export default function EventRegistryPage() {
                 if (totalPages > 5) { if (page > 3) p = Math.min(totalPages - 4, page - 2) + i }
                 return (
                   <button key={p} onClick={() => setPage(p)}
-                    className={`w-7 h-7 flex items-center justify-center rounded-lg text-[11px] font-medium transition-all ${p === page ? 'bg-blue-500 text-white shadow-[0_2px_6px_rgba(59,130,246,0.3)]' : 'bg-white/60 border border-slate-200/60 text-slate-500 hover:bg-white'}`}>
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg text-[11px] font-medium transition-colors ${p === page ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
                     {p}
                   </button>
                 )
               })}
               <button disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200/60 bg-white/60 text-slate-500 disabled:opacity-40 hover:bg-white transition-all">
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40">
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
-        </div>
-
-        {/* 移动端 FAB */}
-        <button onClick={() => { setEditing(null); setFormOpen(true) }}
-          className="fixed bottom-6 right-6 z-20 w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-[0_8px_24px_rgba(59,130,246,0.35)] hover:shadow-[0_10px_28px_rgba(59,130,246,0.45)] hover:-translate-y-0.5 transition-all flex items-center justify-center md:hidden">
-          <PlusCircle className="w-5 h-5" />
-        </button>
       </div>
+
+      {/* 移动端 FAB */}
+      <button onClick={() => { setEditing(null); setFormOpen(true) }}
+          className="fixed bottom-6 right-6 z-20 flex h-11 w-11 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg transition-colors hover:bg-emerald-700 md:hidden">
+          <PlusCircle className="w-5 h-5" />
+      </button>
 
       <EventFormModal open={formOpen} onClose={() => { setFormOpen(false); setEditing(null) }} editing={editing} />
       <IngestKeysDrawer open={keysOpen} onClose={() => setKeysOpen(false)} />
@@ -409,27 +391,12 @@ export default function EventRegistryPage() {
 }
 
 // ─── 小型指标卡 ──────────────────────────────────────────
-function MetricCard({ icon, label, value, sub, accent }: { icon: React.ReactNode; label: string; value: number; sub?: string; accent: 'blue' | 'teal' | 'gold' | 'purple' }) {
-  const accentMap = {
-    blue: { bg: 'bg-blue-50/80', color: 'text-blue-500', dot: PALETTE.blue },
-    teal: { bg: 'bg-teal-50/80', color: 'text-teal-500', dot: PALETTE.teal },
-    gold: { bg: 'bg-amber-50/80', color: 'text-amber-500', dot: PALETTE.gold },
-    purple: { bg: 'bg-purple-50/80', color: 'text-purple-500', dot: PALETTE.purple },
-  }[accent]
+function MetricCard({ label, value, sub }: { label: string; value: number; sub?: string }) {
   return (
-    <div className={`col-span-1 ${GLASS} px-3 py-2.5 flex items-center gap-2.5 hover:-translate-y-0.5 hover:shadow-[0_6px_20px_rgba(15,23,42,0.07)] transition-all overflow-hidden`}>
-      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${accentMap.bg} ${accentMap.color}`}>
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-lg font-semibold text-slate-800 tabular-nums leading-none tracking-tight">{value.toLocaleString()}</span>
-          {sub && <span className="text-[9px] text-slate-400 leading-none truncate">{sub}</span>}
-        </div>
-        <div className="text-[10px] text-slate-500 mt-1 leading-none flex items-center gap-1">
-          <span className="w-1 h-1 rounded-full" style={{ background: accentMap.dot }} />{label}
-        </div>
-      </div>
+    <div className={`${PANEL} min-w-0 px-3 py-2`}>
+      <p className="text-[11px] font-medium text-slate-500">{label}</p>
+      <p className="mt-0.5 text-xl font-semibold tabular-nums text-slate-900">{value.toLocaleString()}</p>
+      <p className="mt-0.5 truncate text-[10px] text-slate-400" title={sub}>{sub}</p>
     </div>
   )
 }
@@ -438,7 +405,7 @@ function MetricCard({ icon, label, value, sub, accent }: { icon: React.ReactNode
 function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[] }) {
   return (
     <select value={value} onChange={e => onChange(e.target.value)}
-      className="px-2.5 py-1.5 text-xs bg-white/60 border border-slate-200/60 rounded-lg focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100/50 transition-all appearance-none pr-7 cursor-pointer text-slate-600"
+      className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-8 text-xs text-slate-600 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
       style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
       {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
     </select>
@@ -473,7 +440,7 @@ function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; 
   if (sourceType === 'api') {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="w-5 h-5 rounded-md bg-purple-50 flex items-center justify-center text-purple-500 shrink-0">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
           <Code2 className="w-2.5 h-2.5" />
         </span>
         <div className="min-w-0">
@@ -481,7 +448,7 @@ function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; 
             <span className="truncate max-w-[100px]">{name}</span>
             <ArrowUpRight className="w-2.5 h-2.5 text-slate-400 shrink-0" />
           </div>
-          <div className="text-[9px] text-purple-500">API 接入</div>
+          <div className="text-[9px] text-emerald-600">API 接入</div>
         </div>
       </div>
     )
