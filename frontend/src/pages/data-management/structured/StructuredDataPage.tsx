@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle, AlertTriangle, Clock,
   X, Loader2, Trash2, Table2, RefreshCw,
-  Eye, XCircle, Workflow, ListChecks, Database,
+  Eye, Workflow, ListChecks, Database,
   Boxes, Network, ArrowRight, BarChart3, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
@@ -25,28 +25,28 @@ interface Row {
   rowCount: number | null
   quality: number | null
   hasReviewEvidence: boolean
+  updatedAt: string | null
 }
 
 const STATUS_ICON = (status: string) => {
-  if (status === 'approved') return <CheckCircle size={13} className="text-green-500" />
-  if (status === 'rejected') return <AlertTriangle size={13} className="text-red-400" />
+  if (status === 'approved' || status === 'rejected') return <CheckCircle size={13} className="text-green-500" />
   return <Clock size={13} className="text-yellow-400" />
 }
 
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '待审核',
   pending:        '待审核',
-  in_review:      '审核中',
+  in_review:      '待审核',
   approved:       '已审核',
-  rejected:       '已拒绝',
+  rejected:       '已审核',
 }
 
 const STATUS_STYLE: Record<string, string> = {
   pending_review: 'bg-yellow-50 text-yellow-700 border-yellow-200',
   pending:        'bg-yellow-50 text-yellow-700 border-yellow-200',
-  in_review:      'bg-blue-50 text-blue-700 border-blue-200',
+  in_review:      'bg-yellow-50 text-yellow-700 border-yellow-200',
   approved:       'bg-green-50 text-green-700 border-green-200',
-  rejected:       'bg-red-50 text-red-600 border-red-200',
+  rejected:       'bg-green-50 text-green-700 border-green-200',
 }
 
 type LakeTab = 'curated' | 'raw'
@@ -60,6 +60,16 @@ const isPendingReview = (status: string) => status === 'pending_review' || statu
 const ASSET_CHANGED_EVENT = 'ontoprompt:data-assets-changed'
 
 const notifyAssetChanged = () => window.dispatchEvent(new Event(ASSET_CHANGED_EVENT))
+
+function formatUpdatedAt(iso: string | null): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
 
 function errorText(error: unknown, fallback: string): string {
   if (!error || typeof error !== 'object') return fallback
@@ -331,8 +341,6 @@ function CuratedView() {
   const pipelineFilter = searchParams.get('pipeline') || ''
 
   const [panelRow, setPanelRow] = useState<Row | null>(null)
-  const [approvingId, setApprovingId] = useState<string | null>(null)
-  const [rejectingId, setRejectingId] = useState<string | null>(null)
   const [deleteRow, setDeleteRow] = useState<Row | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteErr, setDeleteErr] = useState('')
@@ -389,6 +397,7 @@ function CuratedView() {
       curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
       rowCount: c.row_count ?? null, quality: c.quality_score ?? null,
       hasReviewEvidence: Boolean(c.has_review_evidence),
+      updatedAt: c.updated_at ?? null,
     })
 
     const curatedById = new Map(curated.map(c => [c.id, c]))
@@ -442,7 +451,7 @@ function CuratedView() {
       if (normalizedPipelineFilter && r.pipelineId !== normalizedPipelineFilter) return false
       if (taskPipelineId && r.pipelineId !== taskPipelineId) return false
       if (statusFilter === 'pending_review' && !isPendingReview(r.curatedStatus)) return false
-      if (statusFilter && statusFilter !== 'pending_review' && r.curatedStatus !== statusFilter) return false
+      if (statusFilter === 'reviewed' && isPendingReview(r.curatedStatus)) return false
       return true
     })
   }, [allRows, normalizedPipelineFilter, taskPipelineId, statusFilter])
@@ -469,37 +478,6 @@ function CuratedView() {
     setDeleteRow(null)
     notifyAssetChanged()
     void load()
-  }
-
-  const handleQuickApprove = async (e: MouseEvent, row: Row) => {
-    e.stopPropagation()
-    if (!row.curatedId) return
-    setApprovingId(row.curatedId)
-    setActionError('')
-    try {
-      const result = await curatedApi.approve(row.curatedId) as {
-        mapping_dispatch?: { status?: string; error?: string }
-      }
-      handleStatusChange(row.curatedId, 'approved')
-      if (result?.mapping_dispatch?.status === 'failed') {
-        setActionError(result.mapping_dispatch.error || '数据已批准，但自动灌入本体失败，请检查映射任务。')
-      }
-    } catch (error) {
-      setActionError(`批准失败：${errorText(error, '请稍后重试')}`)
-    } finally { setApprovingId(null) }
-  }
-
-  const handleQuickReject = async (e: MouseEvent, row: Row) => {
-    e.stopPropagation()
-    if (!row.curatedId) return
-    setRejectingId(row.curatedId)
-    setActionError('')
-    try {
-      await curatedApi.reject(row.curatedId)
-      handleStatusChange(row.curatedId, 'rejected')
-    } catch (error) {
-      setActionError(`驳回失败：${errorText(error, '请稍后重试')}`)
-    } finally { setRejectingId(null) }
   }
 
   const handleQuickDelete = async () => {
@@ -556,8 +534,7 @@ function CuratedView() {
         >
           <option value="">全部审核状态</option>
           <option value="pending_review">待审核</option>
-          <option value="approved">已审核</option>
-          <option value="rejected">已拒绝</option>
+          <option value="reviewed">已审核</option>
         </select>
 
         {/* 清除筛选 */}
@@ -614,45 +591,63 @@ function CuratedView() {
       ) : filtered.length === 0 ? (
         <div className="border rounded-xl p-8 text-center text-gray-400 text-sm">没有匹配的数据集</div>
       ) : (
-        <div className="border rounded-xl overflow-hidden bg-white">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-xl border bg-white">
+          <table className="w-full min-w-[1040px] text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">数据集</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">来源流水线</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">领域</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">行数</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">质量分</th>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">审核状态</th>
-                <th className="px-4 py-2.5 text-gray-600 text-xs text-right">操作</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">数据集</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">来源流水线</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">领域</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">行数</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">质量分</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">审核状态</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">最近更新时间</th>
+                <th className="px-4 py-2.5 text-center font-medium text-gray-600 text-xs">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {filtered.map((row, idx) => (
                 <tr
                   key={`${row.pipelineId}-${row.curatedId}-${idx}`}
-                  onClick={() => row.curatedId && setPanelRow(row)}
-                  className={`transition-colors ${row.curatedId ? 'cursor-pointer hover:bg-gray-50' : 'opacity-60'}`}
+                  className={`transition-colors hover:bg-gray-50 ${row.curatedId ? '' : 'opacity-60'}`}
                 >
-                  <td className="px-4 py-3 font-medium text-gray-800 max-w-[240px]">
+                  <td className="max-w-[240px] px-4 py-3 text-center font-medium text-gray-800">
                     <span className="block truncate" title={row.curatedName}>{row.curatedName}</span>
-                    <span className="text-xs text-gray-400 font-mono font-normal">{row.curatedId.slice(0, 8)}</span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-600 max-w-[160px] truncate" title={row.pipelineName}>
-                    {row.pipelineName}
+                  <td className="max-w-[180px] px-4 py-3 text-center text-xs">
+                    {row.pipelineId ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/data/pipelines?search=${encodeURIComponent(row.pipelineId)}`)}
+                        className="inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-1 font-medium text-teal-700 underline decoration-teal-300 underline-offset-2 transition-colors hover:bg-teal-50 hover:text-teal-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                        title={`打开数据流水线并筛选「${row.pipelineName}」`}
+                      >
+                        <Workflow size={12} className="shrink-0" />
+                        <span className="truncate">{row.pipelineName}</span>
+                      </button>
+                    ) : <span className="text-gray-400">—</span>}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{row.domain}</td>
-                  <td className="px-4 py-3 text-xs text-gray-600">
-                    {row.rowCount != null ? `${row.rowCount} 行` : '—'}
+                  <td className="px-4 py-3 text-center text-xs text-gray-500">{row.domain}</td>
+                  <td className="px-4 py-3 text-center text-xs text-gray-600">
+                    {row.rowCount != null ? (
+                      <button
+                        type="button"
+                        onClick={() => setPanelRow(row)}
+                        className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 font-medium text-slate-700 underline decoration-dotted decoration-slate-400 underline-offset-2 transition-colors hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                        title="点击查看分页数据"
+                      >
+                        {row.rowCount.toLocaleString()} 行 <Eye size={11} />
+                      </button>
+                    ) : '—'}
                   </td>
-                  <td className="px-4 py-3 text-xs">
+                  <td className="px-4 py-3 text-center text-xs">
                     {row.quality != null ? (
                       <span className={row.quality >= 0.9 ? 'text-green-600' : row.quality >= 0.7 ? 'text-yellow-600' : 'text-red-500'}>
                         {(row.quality * 100).toFixed(0)}%
                       </span>
                     ) : <span className="text-gray-300">—</span>}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center">
                     {row.curatedStatus ? (
                       <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[row.curatedStatus] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
                         {STATUS_ICON(row.curatedStatus)}
@@ -662,55 +657,29 @@ function CuratedView() {
                       <span className="text-xs text-gray-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
-                    <div className="flex items-center gap-1 justify-end">
-                      {/* 批准 — 仅待审核 */}
-                      {row.curatedId && isPendingReview(row.curatedStatus) && (
-                        <button
-                          onClick={e => handleQuickApprove(e, row)}
-                          disabled={approvingId === row.curatedId}
-                          className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 disabled:opacity-50"
-                          title="批准"
-                        >
-                          {approvingId === row.curatedId
-                            ? <Loader2 size={13} className="animate-spin" />
-                            : <CheckCircle size={13} />}
-                        </button>
-                      )}
-
-                      {/* 驳回 — 仅待审核 */}
-                      {row.curatedId && isPendingReview(row.curatedStatus) && (
-                        <button
-                          onClick={e => handleQuickReject(e, row)}
-                          disabled={rejectingId === row.curatedId}
-                          className="p-1.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-600 disabled:opacity-50"
-                          title="驳回"
-                        >
-                          {rejectingId === row.curatedId
-                            ? <Loader2 size={13} className="animate-spin" />
-                            : <XCircle size={13} />}
-                        </button>
-                      )}
-
-                      {/* 删除 — 待审核 / 已拒绝 */}
-                      {row.curatedId && !row.hasReviewEvidence && (isPendingReview(row.curatedStatus) || row.curatedStatus === 'rejected') && (
-                        <button
-                          onClick={() => setDeleteRow(row)}
-                          className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
-                          title="删除"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-
-                      {/* 查看 — 所有状态 */}
+                  <td className="whitespace-nowrap px-4 py-3 text-center text-xs tabular-nums text-gray-500" title={row.updatedAt || ''}>
+                    {formatUpdatedAt(row.updatedAt)}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-2">
                       {row.curatedId && (
                         <button
                           onClick={() => setPanelRow(row)}
-                          className="p-1.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-600"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
                           title="查看详情"
                         >
-                          <Eye size={13} />
+                          <Eye size={12} /> 查看
+                        </button>
+                      )}
+                      {row.curatedId && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteRow(row)}
+                          disabled={row.hasReviewEvidence}
+                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300 disabled:hover:bg-white"
+                          title={row.hasReviewEvidence ? '已有审核记录，治理证据不可物理删除' : '删除数据集'}
+                        >
+                          <Trash2 size={12} /> 删除
                         </button>
                       )}
                     </div>
@@ -756,7 +725,6 @@ function CuratedView() {
           pipelineName={panelRow.pipelineName}
           onClose={() => setPanelRow(null)}
           onStatusChange={handleStatusChange}
-          onDeleted={handleDeleted}
         />
       )}
 

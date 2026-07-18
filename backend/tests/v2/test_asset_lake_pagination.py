@@ -2,7 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from app.data_channel.curated.router import list_curated
 from app.data_channel.datasets.router import datasets_overview
-from app.models.v2.dataset import Dataset
+from app.models.v2.dataset import Dataset, DatasetVersion
+from app.models.v2.curated import CuratedReview
 
 
 def _dataset(*, name, kind, created_at, updated_at, schema=None):
@@ -43,6 +44,52 @@ def test_curated_page_orders_by_latest_update(db):
     )
     assert isinstance(legacy, list)
     assert [item.name for item in legacy] == ["最近更新成品", "中间更新成品", "较早更新成品"]
+
+
+def test_curated_reviewed_filter_includes_approved_and_rejected_decisions(db):
+    """界面审核状态只表达“当前版本是否仍需人工处理”。"""
+    base = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    approved = _dataset(name="已通过版本", kind="curated", created_at=base, updated_at=base)
+    rejected = _dataset(name="已拒绝版本", kind="curated", created_at=base, updated_at=base)
+    pending = _dataset(name="待审核版本", kind="curated", created_at=base, updated_at=base)
+    db.add_all([approved, rejected, pending])
+    db.flush()
+
+    versions = [
+        DatasetVersion(dataset_id=approved.id, version_no=1, rowcount=3),
+        DatasetVersion(dataset_id=rejected.id, version_no=1, rowcount=2),
+        DatasetVersion(dataset_id=pending.id, version_no=1, rowcount=1),
+    ]
+    db.add_all(versions)
+    db.flush()
+    db.add_all([
+        CuratedReview(
+            curated_dataset_id=approved.id,
+            dataset_version_id=versions[0].id,
+            status="approved",
+        ),
+        CuratedReview(
+            curated_dataset_id=rejected.id,
+            dataset_version_id=versions[1].id,
+            status="rejected",
+        ),
+    ])
+    db.commit()
+
+    reviewed = list_curated(
+        pipeline="", task_id="", status="reviewed", page=1, page_size=20,
+        paginated=True, db=db,
+    )
+    assert reviewed["total"] == 2
+    assert {item.name for item in reviewed["items"]} == {"已通过版本", "已拒绝版本"}
+    assert {item.status for item in reviewed["items"]} == {"approved", "rejected"}
+
+    waiting = list_curated(
+        pipeline="", task_id="", status="pending_review", page=1, page_size=20,
+        paginated=True, db=db,
+    )
+    assert waiting["total"] == 1
+    assert waiting["items"][0].name == "待审核版本"
 
 
 def test_manual_dataset_page_orders_by_creation_and_excludes_sync(db):

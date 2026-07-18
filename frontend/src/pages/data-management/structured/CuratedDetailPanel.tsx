@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useRef, useState, useCallback } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import {
   X, CheckCircle, AlertTriangle, Clock,
-  Save, Trash2, Loader2, Pencil, Lock, Plus, Minus, KeyRound, RefreshCw,
+  Save, Loader2, Pencil, Plus, Minus, KeyRound, RefreshCw, Table2,
 } from 'lucide-react'
 import curatedApi, { type ReviewDiff } from '@/api/v2/curated'
+import datasetsApi, { type DatasetSchemaColumn } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 interface Props {
@@ -13,30 +14,32 @@ interface Props {
   pipelineName: string
   onClose: () => void
   onStatusChange: (id: string, status: string) => void
-  onDeleted: (id: string) => void
 }
 
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '待审核',
   pending:        '待审核',
-  in_review:      '审核中',
+  in_review:      '待审核',
   approved:       '已审核',
-  rejected:       '已拒绝',
+  rejected:       '已审核',
 }
 
 const STATUS_STYLE: Record<string, string> = {
   pending_review: 'bg-yellow-50 text-yellow-700 border-yellow-200',
   pending:        'bg-yellow-50 text-yellow-700 border-yellow-200',
-  in_review:      'bg-blue-50 text-blue-700 border-blue-200',
+  in_review:      'bg-yellow-50 text-yellow-700 border-yellow-200',
   approved:       'bg-green-50 text-green-700 border-green-200',
-  rejected:       'bg-red-50 text-red-600 border-red-200',
+  rejected:       'bg-green-50 text-green-700 border-green-200',
 }
 
 const STATUS_ICON = (status: string) => {
-  if (status === 'approved') return <CheckCircle size={13} className="text-green-500" />
-  if (status === 'rejected') return <AlertTriangle size={13} className="text-red-400" />
+  if (status === 'approved' || status === 'rejected') return <CheckCircle size={13} className="text-green-500" />
   return <Clock size={13} className="text-yellow-400" />
 }
+
+const isPendingReview = (status: string) => (
+  status === 'pending_review' || status === 'pending' || status === 'in_review'
+)
 
 type CellKey = `${number}::${string}`
 type View = 'changes' | 'previous' | 'current'
@@ -84,14 +87,25 @@ function columnsFromRows(rows: DataRow[], preferred: string[] = []): string[] {
   return columns
 }
 
-function ColumnLabel({ name, primaryKeys }: { name: string; primaryKeys: string[] }) {
+function ColumnLabel({
+  name, primaryKeys, schemaColumn,
+}: {
+  name: string
+  primaryKeys: string[]
+  schemaColumn?: DatasetSchemaColumn
+}) {
   const isPrimaryKey = primaryKeys.includes(name)
+  const displayName = schemaColumn?.display_name?.trim()
+  const hasChineseName = Boolean(displayName && displayName !== name)
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <span>{name}</span>
+    <span className="inline-flex items-center gap-1.5" title={hasChineseName ? `字段标识：${name}` : undefined}>
+      <span>{hasChineseName ? `${displayName}（${name}）` : name}</span>
+      {!hasChineseName && (
+        <span className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[9px] font-normal text-slate-400">中文名未配置</span>
+      )}
       {isPrimaryKey && (
-        <span className="inline-flex items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-medium text-amber-700" title="主键列：用于逐行识别新增、更新和删除">
-          <KeyRound size={8} /> 主键
+        <span className="inline-flex items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-medium text-amber-700" title="主键列：已校验全量非空，用于稳定识别数据行">
+          <KeyRound size={8} /> 主键 · 非空
         </span>
       )}
     </span>
@@ -99,14 +113,15 @@ function ColumnLabel({ name, primaryKeys }: { name: string; primaryKeys: string[
 }
 
 /** 只读数据表（列取所有行键的并集，保持稳定表头） */
-function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0 }: {
+function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, schemaColumns = {} }: {
   rows: DataRow[]
   highlight?: 'add' | 'del'
   primaryKeys?: string[]
   startIndex?: number
+  schemaColumns?: Record<string, DatasetSchemaColumn>
 }) {
   if (!rows.length) return <div className="p-6 text-center text-xs text-gray-400">无数据</div>
-  const cols = columnsFromRows(rows, primaryKeys)
+  const cols = columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)])
   const tint = highlight === 'add' ? 'bg-green-50/40' : highlight === 'del' ? 'bg-red-50/40' : ''
   return (
     <div className="max-w-full overflow-x-auto">
@@ -116,7 +131,7 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0 }: {
             <th className="px-4 py-2 text-gray-400 font-normal text-left w-12">#</th>
             {cols.map(c => (
               <th key={c} className="min-w-[130px] px-4 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
-                <ColumnLabel name={c} primaryKeys={primaryKeys} />
+                <ColumnLabel name={c} primaryKeys={primaryKeys} schemaColumn={schemaColumns[c]} />
               </th>
             ))}
           </tr>
@@ -142,14 +157,15 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0 }: {
 
 /** 更新行按「旧行 → 新行」成对展示；每条新行紧跟对应旧行，宽表可水平滚动。 */
 function UpdatedRowsTable({
-  updates, primaryKeys,
+  updates, primaryKeys, schemaColumns,
 }: {
   updates: Array<{ before: DataRow; after: DataRow }>
   primaryKeys: string[]
+  schemaColumns: Record<string, DatasetSchemaColumn>
 }) {
   if (!updates.length) return <div className="p-6 text-center text-xs text-gray-400">无更新行</div>
   const allRows = updates.flatMap(update => [update.before, update.after])
-  const columns = columnsFromRows(allRows, primaryKeys)
+  const columns = columnsFromRows(allRows, [...primaryKeys, ...Object.keys(schemaColumns)])
 
   return (
     <div className="max-w-full overflow-x-auto rounded-lg border border-amber-200 bg-white">
@@ -159,7 +175,7 @@ function UpdatedRowsTable({
             <th className="sticky left-0 z-20 min-w-[92px] border-r bg-slate-50 px-3 py-2 text-left font-medium text-slate-500">对比行</th>
             {columns.map(column => (
               <th key={column} className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium text-slate-600">
-                <ColumnLabel name={column} primaryKeys={primaryKeys} />
+                <ColumnLabel name={column} primaryKeys={primaryKeys} schemaColumn={schemaColumns[column]} />
               </th>
             ))}
           </tr>
@@ -214,12 +230,14 @@ function UpdatedRowsTable({
 
 export default function CuratedDetailPanel({
   datasetId, datasetName, datasetStatus, pipelineName,
-  onClose, onStatusChange, onDeleted,
+  onClose, onStatusChange,
 }: Props) {
   const [status, setStatus] = useState(datasetStatus)
-  const [view, setView] = useState<View>('changes')
+  const [view, setView] = useState<View>(() => isPendingReview(datasetStatus) ? 'changes' : 'current')
 
   const [diff, setDiff] = useState<ReviewDiff | null>(null)
+  const [schemaColumns, setSchemaColumns] = useState<Record<string, DatasetSchemaColumn>>({})
+  const [schemaLoadError, setSchemaLoadError] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>()
@@ -228,7 +246,6 @@ export default function CuratedDetailPanel({
 
   // 「本次全量」可编辑视图的状态
   const [rows, setRows] = useState<DataRow[]>([])
-  const [cols, setCols] = useState<string[]>([])
   const [editingCell, setEditingCell] = useState<CellKey | null>(null)
   const [pendingEdits, setPendingEdits] = useState<Map<CellKey, { old: string; val: string }>>(new Map())
   const [saving, setSaving] = useState(false)
@@ -237,12 +254,9 @@ export default function CuratedDetailPanel({
   const editInputRef = useRef<HTMLInputElement>(null)
 
   const [approving, setApproving] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
-  const [deleteErr, setDeleteErr] = useState('')
 
-  const isApproved = status === 'approved'
+  const reviewPending = isPendingReview(status)
   const hasPending = pendingEdits.size > 0
   const requestClose = useCallback(() => {
     if (editingCell) {
@@ -264,13 +278,24 @@ export default function CuratedDetailPanel({
         setDiff(d)
         const cur: DataRow[] = Array.isArray(d.current?.rows) ? d.current.rows : []
         setRows(cur)
-        setCols(columnsFromRows(cur, Array.isArray(d?.pk) ? d.pk : []))
       })
       .catch((error: unknown) => setLoadError(errorText(error, '数据加载失败，请稍后重试')))
       .finally(() => setLoading(false))
   }, [datasetId, pageOffset, selectedReviewId])
 
   useEffect(() => { void Promise.resolve().then(loadDiff) }, [loadDiff])
+
+  useEffect(() => {
+    setSchemaLoadError('')
+    datasetsApi.schema(datasetId)
+      .then(result => setSchemaColumns(Object.fromEntries(
+        (result.columns ?? []).map(column => [column.name, column]),
+      )))
+      .catch(() => {
+        setSchemaColumns({})
+        setSchemaLoadError('字段中文名加载失败，当前暂以字段标识展示')
+      })
+  }, [datasetId])
 
   useEffect(() => {
     if (editingCell) editInputRef.current?.focus()
@@ -305,8 +330,7 @@ export default function CuratedDetailPanel({
 
   /** 新建审核时再次核对版本，防止“页面加载后恰好入湖新版本”导致批准未看过的数据。 */
   const reviewIdForLoadedVersion = async (): Promise<string> => {
-    // 已决定的 review 是不可变审计记录。撤回批准/改判时必须为同一数据版本
-    // 新建 pending review，不能把已 approved/rejected 的记录拿来重复决定。
+    // 已决定的 review 是不可变审计记录；这里只复用当前版本仍待决定的审核。
     if (diff?.review?.id && diff.review.status === 'pending') return diff.review.id
     const session = await curatedApi.startReview(datasetId)
     const loadedVersionId = diff?.current?.dataset_version_id
@@ -358,6 +382,7 @@ export default function CuratedDetailPanel({
   }
 
   const handleApprove = async () => {
+    if (!reviewPending) return
     if (diff?.review?.stale) {
       setActionError('该审核仅对应旧版本，不能批准最新数据。请先切换并审阅最新版本。')
       return
@@ -370,6 +395,7 @@ export default function CuratedDetailPanel({
         mapping_dispatch?: { status?: string; error?: string }
       }
       setStatus('approved')
+      setView('current')
       setDiff(previous => previous?.review
         ? { ...previous, review: { ...previous.review, status: 'approved' } }
         : previous)
@@ -383,6 +409,7 @@ export default function CuratedDetailPanel({
   }
 
   const handleReject = async () => {
+    if (!reviewPending) return
     if (diff?.review?.stale) {
       setActionError('该审核仅对应旧版本，不能拒绝最新数据。请先切换并审阅最新版本。')
       return
@@ -393,6 +420,7 @@ export default function CuratedDetailPanel({
       const reviewId = await reviewIdForLoadedVersion()
       await curatedApi.rejectReview(reviewId)
       setStatus('rejected')
+      setView('current')
       setDiff(previous => previous?.review
         ? { ...previous, review: { ...previous.review, status: 'rejected' } }
         : previous)
@@ -421,36 +449,16 @@ export default function CuratedDetailPanel({
     }
   }
 
-  const handleDelete = async () => {
-    setDeleting(true)
-    setDeleteErr('')
-    try {
-      await curatedApi.delete(datasetId)
-      onDeleted(datasetId)
-    } catch (error: unknown) {
-      const e = error as { detail?: unknown; data?: { detail?: unknown }; message?: unknown }
-      const detail = e?.detail ?? e?.data?.detail
-      const nestedMessage = detail && typeof detail === 'object' && 'message' in detail
-        ? (detail as { message?: unknown }).message
-        : undefined
-      const raw = typeof detail === 'string'
-        ? detail
-        : typeof nestedMessage === 'string'
-          ? nestedMessage
-          : typeof e?.message === 'string' ? e.message : '删除失败'
-      setDeleteErr(raw === 'Admin required' ? '删除数据集需要管理员权限' : String(raw))
-      setDeleting(false)
-      setShowDeleteConfirm(false)
-    }
-  }
-
   const delta = diff?.delta
   const changeCount = delta ? delta.added_count + delta.updated_count + delta.deleted_count : 0
   const primaryKeys = diff?.pk ?? []
-  const canEditRows = primaryKeys.length > 0
+  const canEditRows = reviewPending && primaryKeys.length > 0
   const reviewIsStale = Boolean(diff?.review?.stale)
-  const hasReviewEvidence = Boolean(diff?.review?.id)
   const pagedView = view === 'current' ? diff?.current : view === 'previous' ? diff?.previous : null
+  const cols = useMemo(
+    () => columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)]),
+    [primaryKeys, rows, schemaColumns],
+  )
   const pageStart = pagedView?.total ? (pagedView.offset ?? pageOffset) + 1 : 0
   const pageEnd = pagedView
     ? Math.min((pagedView.offset ?? pageOffset) + pagedView.rows.length, pagedView.total)
@@ -498,24 +506,22 @@ export default function CuratedDetailPanel({
             </button>
           </div>
 
-          {/* Action bar */}
-          <div className="flex items-center gap-2 px-6 py-3 border-b bg-gray-50 shrink-0 flex-wrap">
-            {status !== 'approved' && (
-              <button onClick={handleApprove} disabled={approving || saving || Boolean(editingCell) || hasPending || reviewIsStale || loading}
-                title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : (editingCell || hasPending) ? '请先结束编辑并保存或放弃本地修改，再作出审核决定' : '批准当前审核版本'}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
-                {approving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                批准
-              </button>
-            )}
-            {status !== 'rejected' && (
-              <button onClick={handleReject} disabled={approving || saving || Boolean(editingCell) || hasPending || reviewIsStale || loading}
-                title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : (editingCell || hasPending) ? '请先结束编辑并保存或放弃本地修改，再作出审核决定' : '拒绝当前审核版本'}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50">
-                {approving ? <Loader2 size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
-                {isApproved ? '撤回审批（拒绝）' : '拒绝'}
-              </button>
-            )}
+          {/* 待审核时才提供决定与编辑；审核一经完成，详情永久只读。 */}
+          {reviewPending ? (
+          <div className="flex items-center gap-2 px-6 py-3 border-b bg-amber-50/40 shrink-0 flex-wrap">
+            <span className="mr-1 text-xs font-medium text-amber-800">发现新数据，请完成审核</span>
+            <button onClick={handleApprove} disabled={approving || saving || Boolean(editingCell) || hasPending || reviewIsStale || loading}
+              title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : (editingCell || hasPending) ? '请先结束编辑并保存或放弃本地修改，再作出审核决定' : '批准当前审核版本'}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
+              {approving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+              通过审核
+            </button>
+            <button onClick={handleReject} disabled={approving || saving || Boolean(editingCell) || hasPending || reviewIsStale || loading}
+              title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : (editingCell || hasPending) ? '请先结束编辑并保存或放弃本地修改，再作出审核决定' : '拒绝当前审核版本'}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 bg-white text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50">
+              {approving ? <Loader2 size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
+              拒绝本次数据
+            </button>
 
             <div className="flex-1" />
 
@@ -529,21 +535,17 @@ export default function CuratedDetailPanel({
             )}
             <button onClick={handleSaveEdits} disabled={!hasPending || saving || Boolean(editingCell) || reviewIsStale || !canEditRows}
               title={reviewIsStale ? '审核版本已过期，不能保存修改' : !canEditRows ? '数据集未声明主键，不能进行行级编辑' : editingCell ? '请先按 Enter 或点击空白处结束当前单元格编辑' : '保存本地行编辑'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-100 disabled:opacity-40">
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-slate-200 bg-white rounded-lg hover:bg-gray-100 disabled:opacity-40">
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               保存编辑
             </button>
-            <button
-              onClick={() => { setDeleteErr(''); setShowDeleteConfirm(true) }}
-              disabled={hasReviewEvidence}
-              title={hasReviewEvidence ? '该资产已有审核记录；治理证据不可物理删除，请保留资产' : '删除整个数据集及其全部历史版本'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 text-red-500 rounded-lg hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed">
-              {hasReviewEvidence ? <Lock size={12} /> : <Trash2 size={12} />} 删除
-            </button>
           </div>
-
-          {deleteErr && (
-            <div className="px-6 py-2 text-xs text-red-600 bg-red-50 border-b border-red-100 shrink-0">{deleteErr}</div>
+          ) : (
+            <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50/55 px-6 py-3 text-xs text-emerald-800">
+              <CheckCircle size={14} className="shrink-0" />
+              <span className="font-medium">当前没有新数据需要审核</span>
+              <span className="text-emerald-700/75">以下展示最近一次已完成审核的数据版本，内容只读。</span>
+            </div>
           )}
 
           {reviewIsStale && (
@@ -576,10 +578,23 @@ export default function CuratedDetailPanel({
             </div>
           )}
 
+          {schemaLoadError && (
+            <div className="flex shrink-0 items-center gap-2 border-b border-amber-100 bg-amber-50 px-6 py-2 text-xs text-amber-700">
+              <AlertTriangle size={13} /> {schemaLoadError}
+            </div>
+          )}
+
+          {!loading && !loadError && diff && primaryKeys.length === 0 && (
+            <div className="flex shrink-0 items-start gap-2 border-b border-amber-100 bg-amber-50 px-6 py-2 text-xs text-amber-800">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span>该成品数据集尚未声明主键，不满足稳定识别数据行的契约。请在来源流水线的字段契约中设置非空主键后重新产出。</span>
+            </div>
+          )}
+
           {/* View switcher */}
           {!loading && !loadError && (
             <div className="flex items-center gap-1 px-6 py-2 border-b bg-white shrink-0">
-              {VIEW_TABS.map(([v, label, count]) => (
+              {reviewPending ? VIEW_TABS.map(([v, label, count]) => (
                 <button key={v} onClick={() => {
                   if ((hasPending || editingCell) && v !== view) {
                     setActionError('请先结束编辑并保存或放弃本页修改，再切换审核视图。')
@@ -592,12 +607,18 @@ export default function CuratedDetailPanel({
                     view === v ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
                   {label}{count !== null && <span className={`ml-1 ${view === v ? 'text-gray-300' : 'text-gray-400'}`}>{count}</span>}
                 </button>
-              ))}
-              <span className="ml-2 text-[11px] text-gray-400">
-                {view === 'changes' && '相对上一版的新增/更新/删除，聚焦本次改动'}
-                {view === 'previous' && '上一版本完整数据（分页查看，对照用）'}
-                {view === 'current' && (canEditRows ? '本次待审完整数据（分页查看）· 双击非主键单元格可编辑' : '本次待审完整数据（分页查看）· 未声明主键，无法可靠进行行级编辑')}
-              </span>
+              )) : (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                  <Table2 size={13} className="text-teal-700" /> 已审核全量数据
+                </span>
+              )}
+              {reviewPending && (
+                <span className="ml-2 text-[11px] text-gray-400">
+                  {view === 'changes' && '相对上一版的新增/更新/删除，聚焦本次改动'}
+                  {view === 'previous' && '上一版本完整数据（分页查看，对照用）'}
+                  {view === 'current' && (canEditRows ? '本次待审完整数据（分页查看）· 双击非主键单元格可编辑' : '本次待审完整数据（分页查看）· 未声明主键，无法可靠进行行级编辑')}
+                </span>
+              )}
               {pagedView && pagedView.total > 0 && (
                 <div className="ml-auto flex items-center gap-2 text-[11px] text-gray-500">
                   <span>第 {pageStart.toLocaleString()}–{pageEnd.toLocaleString()} 行 / 共 {pagedView.total.toLocaleString()} 行</span>
@@ -627,13 +648,20 @@ export default function CuratedDetailPanel({
                   <RefreshCw size={12} /> 重新加载
                 </button>
               </div>
+            ) : !reviewPending ? (
+              <ReadonlyTable
+                rows={diff?.current?.rows ?? []}
+                primaryKeys={primaryKeys}
+                startIndex={diff?.current?.offset ?? pageOffset}
+                schemaColumns={schemaColumns}
+              />
             ) : view === 'changes' ? (
               <ChangesView delta={delta ?? null} prevNo={diff?.previous?.version_no ?? null}
-                curNo={diff?.current?.version_no ?? null} primaryKeys={primaryKeys} />
+                curNo={diff?.current?.version_no ?? null} primaryKeys={primaryKeys} schemaColumns={schemaColumns} />
             ) : view === 'previous' ? (
               diff?.previous?.version_no == null
                 ? <div className="p-8 text-center text-sm text-gray-400">这是首个版本，没有上一版可对照。</div>
-                : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} />
+                : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} schemaColumns={schemaColumns} />
             ) : (
               /* current — editable */
               rows.length === 0 ? (
@@ -646,7 +674,7 @@ export default function CuratedDetailPanel({
                         <th className="px-4 py-2 text-gray-400 font-normal text-left w-12">#</th>
                         {cols.map(col => (
                           <th key={col} className="min-w-[130px] px-4 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
-                            <ColumnLabel name={col} primaryKeys={primaryKeys} />
+                            <ColumnLabel name={col} primaryKeys={primaryKeys} schemaColumn={schemaColumns[col]} />
                           </th>
                         ))}
                       </tr>
@@ -697,15 +725,6 @@ export default function CuratedDetailPanel({
       </div>
 
       <ConfirmDialog
-        open={showDeleteConfirm}
-        title="删除数据集"
-        message={`确认删除「${datasetName}」？将永久删除该数据集及其全部历史版本，不可恢复。若已被流水线或本体映射引用，删除会被拦截。`}
-        confirmLabel={deleting ? '删除中...' : '确认删除'}
-        onConfirm={handleDelete}
-        onCancel={() => setShowDeleteConfirm(false)}
-      />
-
-      <ConfirmDialog
         open={showCloseConfirm}
         title="放弃未保存的修改？"
         message={`当前还有 ${pendingEdits.size} 处行级修改尚未保存。关闭后这些本地修改将丢失，已成功保存到审核会话的修改不会受影响。`}
@@ -718,11 +737,12 @@ export default function CuratedDetailPanel({
 }
 
 /** 变化量视图：相对上一版的新增/更新/删除 */
-function ChangesView({ delta, prevNo, curNo, primaryKeys }: {
+function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
   delta: ReviewDiff['delta']
   prevNo: number | null
   curNo: number | null
   primaryKeys: string[]
+  schemaColumns: Record<string, DatasetSchemaColumn>
 }) {
   if (!delta) return <div className="p-8 text-center text-sm text-gray-400">暂无版本数据</div>
   const { added_count, updated_count, deleted_count, unchanged_count } = delta
@@ -750,21 +770,21 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys }: {
             <h4 className="flex items-center gap-1 text-xs font-medium text-amber-700"><Pencil size={11} />更新的行（{updated_count}）</h4>
             <span className="text-[10px] text-slate-400">每条“更新后”紧跟对应“更新前”；绿色单元格为变更值</span>
           </div>
-          <UpdatedRowsTable updates={delta.updated_sample} primaryKeys={primaryKeys} />
+          <UpdatedRowsTable updates={delta.updated_sample} primaryKeys={primaryKeys} schemaColumns={schemaColumns} />
         </section>
       )}
 
       {added_count > 0 && (
         <section>
           <h4 className="text-xs font-medium text-green-700 mb-1.5 flex items-center gap-1"><Plus size={12} />新增的行（{added_count}）</h4>
-          <div className="overflow-hidden rounded-lg border"><ReadonlyTable rows={delta.added_sample} highlight="add" primaryKeys={primaryKeys} /></div>
+          <div className="overflow-hidden rounded-lg border"><ReadonlyTable rows={delta.added_sample} highlight="add" primaryKeys={primaryKeys} schemaColumns={schemaColumns} /></div>
         </section>
       )}
 
       {deleted_count > 0 && (
         <section>
           <h4 className="text-xs font-medium text-red-600 mb-1.5 flex items-center gap-1"><Minus size={12} />删除的行（{deleted_count}）</h4>
-          <div className="overflow-hidden rounded-lg border"><ReadonlyTable rows={delta.deleted_sample} highlight="del" primaryKeys={primaryKeys} /></div>
+          <div className="overflow-hidden rounded-lg border"><ReadonlyTable rows={delta.deleted_sample} highlight="del" primaryKeys={primaryKeys} schemaColumns={schemaColumns} /></div>
         </section>
       )}
 

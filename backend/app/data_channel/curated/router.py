@@ -143,6 +143,11 @@ def list_curated(
     if status:
         if status == "pending_review":
             result = [item for item in result if item.status in {"pending_review", "pending", "in_review"}]
+        elif status == "reviewed":
+            # 列表中的“审核状态”表达的是是否还有新数据需要人工处理，
+            # 而不是审批决定本身。通过和拒绝都代表当前版本已经完成审核；
+            # 具体决定仍保留在 CuratedReview.status 中作为不可变审计证据。
+            result = [item for item in result if item.status in {"approved", "rejected"}]
         else:
             result = [item for item in result if item.status == status]
         total = len(result)
