@@ -35,6 +35,7 @@ export interface HubInterface {
   proxy_query_keys: string[]
   proxy_header_keys: string[]
   proxy_body_enabled: boolean
+  proxy_body_keys: string[]
   created_at?: string
   updated_at?: string
 }
@@ -179,6 +180,21 @@ export interface ProxyKeyPayload {
   interface_ids: number[]
 }
 
+export interface ForwardingPackage {
+  key_id: number
+  key_name: string
+  secret: string
+  path: string
+  key_header: string
+  method: string
+  query_params: KV[]
+  header_params: KV[]
+  body_type: HubInterface['body_type']
+  body_template: string
+  editable_body_keys: string[]
+  generated_at: string
+}
+
 const data = <T>(promise: Promise<{ data: T }>) => promise.then(response => response.data)
 
 export const apiHub = {
@@ -191,8 +207,9 @@ export const apiHub = {
   setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
   setHttpPublication: (
     id: number,
-    body: { enabled: boolean; slug: string; query_keys: string[]; header_keys: string[]; body_enabled: boolean },
+    body: { enabled: boolean; slug: string; query_keys: string[]; header_keys: string[]; body_enabled: boolean; body_keys?: string[] },
   ) => data<HubInterface>(http.put(`/interfaces/${id}/http-publication`, body)),
+  autoHttpPublication: (id: number) => data<HubInterface>(http.post(`/interfaces/${id}/http-publication/auto`)),
   run: (id: number) => data<RunResult>(http.post(`/interfaces/${id}/run`)),
   runDraft: (body: HubInterface) => data<RunResult>(http.post('/interfaces/preview-run', body)),
   listRuns: (params: Record<string, string | number>) => data<{ items: RunSummary[]; total: number; page: number; size: number }>(http.get('/runs', { params })),
@@ -210,6 +227,7 @@ export const apiHub = {
   proxyInfo: () => data<ProxyInfo>(http.get('/proxy/info')),
   listProxyKeys: () => data<ProxyKey[]>(http.get('/proxy/keys')),
   createProxyKey: (body: ProxyKeyPayload) => data<ProxyKey>(http.post('/proxy/keys', body)),
+  createForwardingPackage: (id: number) => data<ForwardingPackage>(http.post(`/proxy/packages/${id}`)),
   updateProxyKey: (id: number, body: ProxyKeyPayload) => data<ProxyKey>(http.put(`/proxy/keys/${id}`, body)),
   deleteProxyKey: (id: number) => data<{ ok: boolean }>(http.delete(`/proxy/keys/${id}`)),
   importBackup: (payload: unknown) => data<{ imported: number; skipped: number; total: number; name: string }>(http.post('/backup/import', payload)),
@@ -237,6 +255,7 @@ export function emptyHubInterface(): HubInterface {
     proxy_query_keys: [],
     proxy_header_keys: [],
     proxy_body_enabled: false,
+    proxy_body_keys: [],
   }
 }
 

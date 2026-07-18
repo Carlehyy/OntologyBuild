@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS interfaces (
     proxy_query_keys  TEXT NOT NULL DEFAULT '[]',
     proxy_header_keys TEXT NOT NULL DEFAULT '[]',
     proxy_body_enabled INTEGER NOT NULL DEFAULT 0,
+    proxy_body_keys TEXT NOT NULL DEFAULT '[]',
     sort_order    INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL,
     updated_at    TEXT    NOT NULL
@@ -125,6 +126,10 @@ def _migrate(conn) -> None:
     if "proxy_body_enabled" not in cols:
         conn.execute(
             "ALTER TABLE interfaces ADD COLUMN proxy_body_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+    if "proxy_body_keys" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN proxy_body_keys TEXT NOT NULL DEFAULT '[]'"
         )
 
     run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}

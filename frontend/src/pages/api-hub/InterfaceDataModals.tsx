@@ -81,88 +81,6 @@ export function OpenInterfacesModal({ open, onClose, interfaces, reload, onError
   )
 }
 
-export function HttpPublicationModal({
-  open,
-  onClose,
-  item,
-  reload,
-  onError,
-  onManageKeys,
-}: Omit<SharedProps, 'interfaces'> & {
-  open: boolean
-  onClose: () => void
-  item: HubInterface | null
-  onManageKeys: () => void
-}) {
-  const [info, setInfo] = useState<ProxyInfo | null>(null)
-  const [enabled, setEnabled] = useState(false)
-  const [slug, setSlug] = useState('')
-  const [queryKeys, setQueryKeys] = useState('')
-  const [headerKeys, setHeaderKeys] = useState('')
-  const [bodyEnabled, setBodyEnabled] = useState(false)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (!open || !item) return
-    setEnabled(item.http_enabled)
-    setSlug(item.proxy_slug || slugSuggestion(item))
-    setQueryKeys((item.proxy_query_keys.length ? item.proxy_query_keys : item.query_params.map(row => row.key).filter(Boolean)).join(', '))
-    setHeaderKeys((item.proxy_header_keys.length ? item.proxy_header_keys : item.headers.map(row => row.key).filter(Boolean)).join(', '))
-    setBodyEnabled(item.proxy_body_enabled)
-    apiHub.proxyInfo().then(setInfo).catch(error => onError(apiError(error)))
-  }, [item, onError, open])
-
-  if (!item) return null
-  const publicUrl = info ? `${window.location.origin}${info.path}/${slug.trim().toLowerCase()}` : ''
-  const curl = info
-    ? `curl -X ${item.method} '${publicUrl}' \\\n  -H '${info.key_header}: <调用密钥>'`
-    : ''
-  const save = async () => {
-    if (!item.id) return
-    setSaving(true)
-    try {
-      await apiHub.setHttpPublication(item.id, {
-        enabled,
-        slug: slug.trim().toLowerCase(),
-        query_keys: parseKeys(queryKeys),
-        header_keys: parseKeys(headerKeys),
-        body_enabled: bodyEnabled,
-      })
-      await reload()
-      onClose()
-    } catch (error) { onError(apiError(error)) }
-    finally { setSaving(false) }
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title={`发布 HTTP 接口 · ${item.name}`} description="调用方使用平台密钥访问；平台按白名单转发业务参数，并根据接口配置注入 W3 登录态。" size="3xl" footer={<><Button variant="outline" onClick={onManageKeys}><KeyRound size={14} />管理调用密钥</Button><Button loading={saving} onClick={save}>保存发布配置</Button></>}>
-      <div className="space-y-5">
-        <label className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-4 py-3">
-          <div><div className="text-sm font-semibold">启用普通 HTTP 发布</div><div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">与 MCP 开放相互独立；关闭后公开地址立即停止服务。</div></div>
-          <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-teal-600" />
-        </label>
-        <div>
-          <label className="mb-1.5 block text-xs font-medium">公开路径</label>
-          <div className="flex h-10 overflow-hidden rounded-md border border-[var(--color-border)]">
-            <span className="flex items-center bg-[var(--color-bg-base)] px-3 font-mono text-xs text-[var(--color-text-tertiary)]">{info?.path || '/proxy'}/</span>
-            <input value={slug} onChange={event => setSlug(event.target.value.toLowerCase())} className="min-w-0 flex-1 px-3 font-mono text-xs outline-none" placeholder="order-list" />
-          </div>
-          <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">仅允许小写字母、数字、短横线和下划线；发布后建议保持稳定。</p>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className="mb-1.5 block text-xs font-medium">允许覆盖的 Query</label><input value={queryKeys} onChange={event => setQueryKeys(event.target.value)} className="h-10 w-full rounded-md border border-[var(--color-border)] px-3 font-mono text-xs outline-none" placeholder="page, pageSize, cursor" /><p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">未列出的 Query 参数会被拒绝。</p></div>
-          <div><label className="mb-1.5 block text-xs font-medium">允许透传的 Header</label><input value={headerKeys} onChange={event => setHeaderKeys(event.target.value)} className="h-10 w-full rounded-md border border-[var(--color-border)] px-3 font-mono text-xs outline-none" placeholder="Authorization, X-Trace-ID" /><p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">连接级 Header 和平台代理密钥不会转发。</p></div>
-        </div>
-        <label className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] px-4 py-3">
-          <input type="checkbox" checked={bodyEnabled} onChange={event => setBodyEnabled(event.target.checked)} className="mt-0.5 h-4 w-4 accent-teal-600" />
-          <div><div className="text-xs font-medium">允许调用方提供请求 Body</div><div className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">未启用时，始终使用接口管理中保存的默认 Body。</div></div>
-        </label>
-        {enabled && publicUrl && <div className="rounded-lg border border-teal-100 bg-teal-50/60 p-4"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-teal-800">调用地址</span><button onClick={() => navigator.clipboard.writeText(publicUrl)} className="text-[11px] text-teal-700">复制地址</button></div><code className="block break-all text-xs text-teal-900">{publicUrl}</code><div className="mb-2 mt-4 flex items-center justify-between"><span className="text-xs font-semibold text-teal-800">cURL 示例</span><button onClick={() => navigator.clipboard.writeText(curl)} className="text-[11px] text-teal-700">复制</button></div><pre className="overflow-auto whitespace-pre-wrap rounded-md bg-slate-950 p-3 font-mono text-[11px] leading-5 text-slate-100">{curl}</pre>{info && info.key_count === 0 && <div className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-[11px] text-amber-800">接口可以发布，但当前还没有调用密钥；创建并授权后才能实际访问。</div>}</div>}
-      </div>
-    </Modal>
-  )
-}
-
 export function ProxyKeysModal({ open, onClose, interfaces, onError }: Omit<SharedProps, 'reload'> & { open: boolean; onClose: () => void }) {
   const [info, setInfo] = useState<ProxyInfo | null>(null)
   const [keys, setKeys] = useState<ProxyKey[]>([])
@@ -216,7 +134,7 @@ export function ProxyKeysModal({ open, onClose, interfaces, onError }: Omit<Shar
 
   return (
     <>
-      <Modal open={open} onClose={onClose} title="HTTP 代理调用密钥" description={`调用方通过 ${info?.key_header || 'X-API-Hub-Key'} 鉴权；每把密钥可设置有效期和可调用接口。`} size="3xl" footer={<Button variant="outline" onClick={onClose}>关闭</Button>}>
+      <Modal open={open} onClose={onClose} title="调用方管理" description="查看、停用或撤销平台已经生成的调用凭证；日常分享无需在这里手动创建。" size="3xl" footer={<Button variant="outline" onClick={onClose}>关闭</Button>}>
         {revealed ? <SecretView secret={revealed} info={info} onDone={() => setRevealed('')} />
           : editing !== undefined ? <ProxyKeyForm keyValue={editing} interfaces={interfaces} busy={busy} onCancel={() => setEditing(undefined)} onSave={saveKey} />
             : <div className="space-y-4"><div className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-4 py-3"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><ShieldCheck size={17} /></div><div><div className="text-sm font-semibold">{keys.length} 把调用密钥</div><div className="text-[10px] text-[var(--color-text-tertiary)]">{info?.published.length || 0} 个已发布 HTTP 接口</div></div></div><Button size="sm" onClick={() => setEditing(null)}><Plus size={14} />创建密钥</Button></div>{!keys.length ? <div className="rounded-lg border border-dashed border-[var(--color-border)] py-16 text-center text-xs text-[var(--color-text-tertiary)]"><KeyRound size={26} className="mx-auto mb-3 opacity-50" />还没有调用密钥</div> : <div className="max-h-[52vh] space-y-2 overflow-y-auto">{keys.map(key => { const tone = key.status === 'active' ? 'bg-emerald-50 text-emerald-700' : key.status === 'expired' ? 'bg-red-50 text-red-700' : key.status === 'scheduled' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'; return <div key={key.id} className="rounded-lg border border-[var(--color-border)] p-4"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{key.name}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${tone}`}>{statusLabel(key.status)}</span></div><div className="mt-1 font-mono text-[11px] text-[var(--color-text-tertiary)]">{key.masked_key}</div></div><div className="flex gap-1"><Button variant="ghost" size="icon-sm" title="编辑" onClick={() => setEditing(key)}><Pencil size={13} /></Button><Button variant="ghost" size="sm" disabled={busy} onClick={() => toggle(key)}>{key.enabled ? '停用' : '启用'}</Button><Button variant="ghost" size="icon-sm" title="撤销" className="text-red-600" onClick={() => setDeleteKey(key)}><Trash2 size={13} /></Button></div></div><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[10px] text-[var(--color-text-tertiary)]"><span>{key.scope_all ? '全部已发布接口' : `${key.interface_ids.length} 个指定接口`}</span><span>{key.expires_at ? `有效期至 ${formatTime(key.expires_at)}` : '长期有效'}</span><span>{key.last_used_at ? `最后调用 ${formatTime(key.last_used_at)}` : '尚未调用'}</span></div></div> })}</div>}</div>}
@@ -277,8 +195,6 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
 
 function ModeButton({ active, onClick, title, subtitle }: { active: boolean; onClick: () => void; title: string; subtitle: string }) { return <button onClick={onClick} className={`rounded-md border p-3 text-left ${active ? 'border-[var(--color-nav-bg)] bg-[var(--color-nav-light)]' : 'border-[var(--color-border)]'}`}><div className={`text-xs font-medium ${active ? 'text-[var(--color-nav-bg)]' : ''}`}>{title}</div><div className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">{subtitle}</div></button> }
 function defaultBackupName() { const now = new Date(); const pad = (value: number) => String(value).padStart(2, '0'); return `Backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}` }
-function parseKeys(value: string) { return [...new Set(value.split(',').map(item => item.trim()).filter(Boolean))] }
-function slugSuggestion(item: HubInterface) { const slug = item.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, ''); return slug || `interface-${item.id || 'new'}` }
 function statusLabel(status: ProxyKey['status']) { return { active: '有效', disabled: '已停用', scheduled: '待生效', expired: '已过期' }[status] }
 function formatTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false }) }
 function keyPayload(key: ProxyKey): ProxyKeyPayload { return { name: key.name, enabled: key.enabled, valid_from: key.valid_from, expires_at: key.expires_at, scope_all: key.scope_all, interface_ids: key.interface_ids } }

@@ -7,8 +7,9 @@ import { apiError, apiHub, emptyHubInterface, type HubInterface, type KV, type R
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import {
-  HttpPublicationModal, OpenInterfacesModal, ProxyKeysModal, SystemDataModal,
+  OpenInterfacesModal, ProxyKeysModal, SystemDataModal,
 } from './InterfaceDataModals'
+import { HttpPublicationModal } from './HttpPublicationModal'
 
 interface Props {
   interfaces: HubInterface[]
@@ -42,7 +43,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [curl, setCurl] = useState('')
   const [openInterfaces, setOpenInterfaces] = useState(false)
-  const [httpPublication, setHttpPublication] = useState(false)
+  const [publicationTarget, setPublicationTarget] = useState<HubInterface | null>(null)
   const [proxyKeys, setProxyKeys] = useState(false)
   const [systemData, setSystemData] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -171,6 +172,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         proxy_query_keys: refreshed.proxy_query_keys,
         proxy_header_keys: refreshed.proxy_header_keys,
         proxy_body_enabled: refreshed.proxy_body_enabled,
+        proxy_body_keys: refreshed.proxy_body_keys,
       }
       setDraft(current => ({ ...current, ...publication }))
       setBaseline(current => ({ ...current, ...publication }))
@@ -242,13 +244,23 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
               </div>
               <div className="space-y-0.5">
                 {items.map(item => (
-                  <button key={item.id} onClick={() => select(item)} className={`group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left ${selectedId === item.id ? 'bg-[var(--color-nav-light)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
-                    <span className={`w-12 shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-bold ${methodTone[item.method] || methodTone.HEAD}`}>{item.method}</span>
-                    <span className={`min-w-0 flex-1 truncate text-xs ${selectedId === item.id ? 'font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-primary)]'}`}>{item.name}</span>
-                    {item.http_enabled && <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[8px] font-bold text-violet-700" title="已发布普通 HTTP 接口">HTTP</span>}
-                    {item.open_enabled && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="已加入开放清单" />}
-                    <ChevronRight size={12} className="text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100" />
-                  </button>
+                  <div key={item.id} className={`group flex min-h-10 w-full items-center rounded-md pr-1 transition-colors ${selectedId === item.id ? 'bg-[var(--color-nav-light)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+                    <button type="button" onClick={() => select(item)} className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
+                      <span className={`w-12 shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-bold ${methodTone[item.method] || methodTone.HEAD}`}>{item.method}</span>
+                      <span className={`min-w-0 flex-1 truncate text-xs ${selectedId === item.id ? 'font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-primary)]'}`}>{item.name}</span>
+                      {item.open_enabled && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" title="已加入开放清单" />}
+                      <ChevronRight size={12} className="shrink-0 text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPublicationTarget(item)}
+                      aria-label={`${item.name}：${item.http_enabled ? '查看已生成的转发' : '生成转发'}`}
+                      title={item.http_enabled ? '查看转发与调用方式' : '由平台自动生成转发'}
+                      className={`flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${item.http_enabled ? 'bg-violet-100 text-violet-700 hover:bg-violet-200' : 'border border-dashed border-slate-300 bg-white/70 text-slate-500 hover:border-violet-300 hover:text-violet-700'}`}
+                    >
+                      <Share2 size={11} />{item.http_enabled ? '已转发' : '生成转发'}
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -256,7 +268,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         </div>
         <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-[var(--color-border)] bg-white/60 p-3">
           <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />开放接口</Button>
-          <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />HTTP密钥</Button>
+          <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />调用方</Button>
           <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
         </div>
       </aside>
@@ -268,9 +280,9 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-[var(--color-text-tertiary)]" placeholder="接口名称" />
           <input list="api-hub-groups" value={draft.group_name} onChange={event => patchDraft('group_name', event.target.value)} className="h-8 w-36 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 text-xs outline-none" placeholder="默认分组" />
           <datalist id="api-hub-groups">{groupNames.map(group => <option key={group} value={group} />)}</datalist>
-          {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, http_enabled: false, proxy_slug: '' }); setResult(null); setResultFingerprint('') }}><Copy size={14} /></Button>}
+          {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint('') }}><Copy size={14} /></Button>}
           {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
-          {draft.id && <Button variant="outline" size="sm" onClick={() => setHttpPublication(true)}><Share2 size={14} />HTTP发布</Button>}
+          {draft.id && <Button variant="outline" size="sm" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />转发调用</Button>}
           <Button variant="outline" size="sm" onClick={showCurl}><FileCode2 size={14} />cURL</Button>
           <Button variant="outline" size="sm" loading={saving} onClick={save}><Check size={14} />保存</Button>
           {isDirty && <span className="rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
@@ -318,7 +330,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-4 text-xs leading-6 text-slate-100">{curl}</pre>
       </Modal>
       <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reloadOpenState} onError={onError} />
-      <HttpPublicationModal open={httpPublication} onClose={() => setHttpPublication(false)} item={draft.id ? draft : null} reload={reloadPublication} onError={onError} onManageKeys={() => { setHttpPublication(false); setProxyKeys(true) }} />
+      <HttpPublicationModal open={Boolean(publicationTarget)} onClose={() => setPublicationTarget(null)} item={publicationTarget} reload={reloadPublication} onError={onError} />
       <ProxyKeysModal open={proxyKeys} onClose={() => setProxyKeys(false)} interfaces={interfaces} onError={onError} />
       <SystemDataModal open={systemData} onClose={() => setSystemData(false)} interfaces={interfaces} reload={reload} onError={onError} />
     </div>
@@ -376,6 +388,7 @@ function draftFingerprint(item: HubInterface) {
     proxy_query_keys: item.proxy_query_keys,
     proxy_header_keys: item.proxy_header_keys,
     proxy_body_enabled: item.proxy_body_enabled,
+    proxy_body_keys: item.proxy_body_keys,
   })
 }
 

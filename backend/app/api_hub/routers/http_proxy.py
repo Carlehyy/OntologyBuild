@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from .. import config, db, executor
+from .. import config, db, executor, publication
 from .interfaces import _row_to_dict
 
 admin_router = APIRouter(prefix="/proxy", tags=["api-hub-http-proxy-admin"])
@@ -152,6 +152,38 @@ def _key_view(conn, row) -> dict:
     }
 
 
+def _insert_proxy_key(
+    conn,
+    *,
+    name: str,
+    enabled: bool,
+    valid_from: str | None,
+    expires_at: str | None,
+    scope_all: bool,
+    interface_ids: list[int],
+) -> tuple[dict, str]:
+    now = _now().isoformat()
+    secret = "hub_" + secrets.token_urlsafe(32)
+    cur = conn.execute(
+        "INSERT INTO proxy_keys(name, key_prefix, key_hash, enabled, valid_from, "
+        "expires_at, scope_all, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            name,
+            secret[:12],
+            _hash_key(secret),
+            1 if enabled else 0,
+            valid_from,
+            expires_at,
+            1 if scope_all else 0,
+            now,
+            now,
+        ),
+    )
+    _replace_key_scope(conn, int(cur.lastrowid), interface_ids)
+    row = conn.execute("SELECT * FROM proxy_keys WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return _key_view(conn, row), secret
+
+
 @admin_router.get("/info")
 def proxy_info():
     with db.get_conn() as conn:
@@ -178,8 +210,6 @@ def list_proxy_keys():
 
 @admin_router.post("/keys")
 def create_proxy_key(body: ProxyKeyCreate):
-    now = _now().isoformat()
-    secret = "hub_" + secrets.token_urlsafe(32)
     with db.get_conn() as conn:
         name, valid_from, expires_at, ids = _validate_key_input(
             conn,
@@ -189,26 +219,69 @@ def create_proxy_key(body: ProxyKeyCreate):
             body.scope_all,
             body.interface_ids,
         )
-        cur = conn.execute(
-            "INSERT INTO proxy_keys(name, key_prefix, key_hash, enabled, valid_from, "
-            "expires_at, scope_all, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (
-                name,
-                secret[:12],
-                _hash_key(secret),
-                1 if body.enabled else 0,
-                valid_from,
-                expires_at,
-                1 if body.scope_all else 0,
-                now,
-                now,
-            ),
+        result, secret = _insert_proxy_key(
+            conn,
+            name=name,
+            enabled=body.enabled,
+            valid_from=valid_from,
+            expires_at=expires_at,
+            scope_all=body.scope_all,
+            interface_ids=ids,
         )
-        _replace_key_scope(conn, int(cur.lastrowid), ids)
-        row = conn.execute("SELECT * FROM proxy_keys WHERE id = ?", (cur.lastrowid,)).fetchone()
-        result = _key_view(conn, row)
     result["secret"] = secret
     return result
+
+
+@admin_router.post("/packages/{interface_id}")
+def create_proxy_package(interface_id: int):
+    """Create a ready-to-share caller credential scoped to one published interface."""
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM interfaces WHERE id = ?", (interface_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="接口不存在")
+        interface = _row_to_dict(row)
+        if not interface.get("http_enabled"):
+            raise HTTPException(status_code=409, detail="请先自动生成转发配置")
+        generated_at = _now()
+        name = f"{interface['name']} · 调用包 · {generated_at.strftime('%Y%m%d-%H%M')}"
+        key_view, secret = _insert_proxy_key(
+            conn,
+            name=name,
+            enabled=True,
+            valid_from=None,
+            expires_at=None,
+            scope_all=False,
+            interface_ids=[interface_id],
+        )
+
+    query_defaults = {
+        str(item.get("key")): str(item.get("value", ""))
+        for item in interface.get("query_params") or []
+        if isinstance(item, dict) and item.get("key")
+    }
+    return {
+        "key_id": key_view["id"],
+        "key_name": key_view["name"],
+        "secret": secret,
+        "path": f"{config.PROXY_PATH}/{interface['proxy_slug']}",
+        "key_header": config.PROXY_KEY_HEADER,
+        "method": interface["method"],
+        "query_params": [
+            {"key": key, "value": query_defaults.get(key, "")}
+            for key in interface.get("proxy_query_keys") or []
+        ],
+        # Header values remain platform-owned. Only show placeholders to callers.
+        "header_params": [
+            {"key": key, "value": ""}
+            for key in interface.get("proxy_header_keys") or []
+        ],
+        "body_type": interface.get("body_type") or "none",
+        "body_template": publication.body_template(interface),
+        "editable_body_keys": interface.get("proxy_body_keys") or [],
+        "generated_at": generated_at.isoformat(),
+    }
 
 
 @admin_router.put("/keys/{key_id}")
@@ -333,17 +406,28 @@ async def call_published_interface(slug: str, request: Request):
         if key.lower() in allowed_headers
     ]
 
-    has_body = "content-length" in request.headers or "transfer-encoding" in request.headers
-    body = await request.body() if has_body else b""
+    body_announced = "content-length" in request.headers or "transfer-encoding" in request.headers
+    body = await request.body() if body_announced else b""
     if len(body) > config.PROXY_MAX_REQUEST_BYTES:
         raise HTTPException(status_code=413, detail="请求体超过平台代理上限")
+    has_body = bool(body)
     if has_body and not iface.get("proxy_body_enabled"):
         raise HTTPException(status_code=400, detail="该接口未开放请求 Body")
+    if has_body:
+        try:
+            body = publication.merge_caller_body(iface, body)
+        except publication.PublicationBodyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    body_type = (iface.get("body_type") or "none").lower()
+    managed_content_type = {
+        "json": "application/json; charset=utf-8",
+        "form": "application/x-www-form-urlencoded",
+    }.get(body_type)
     override_args = {
         "query_params": query_items,
         "headers": header_items,
-        "content_type": request.headers.get("content-type") if has_body else None,
+        "content_type": managed_content_type if has_body else None,
         "source": "http_proxy",
         "proxy_key_id": key_row["id"],
         "proxy_key_name": key_row["name"],

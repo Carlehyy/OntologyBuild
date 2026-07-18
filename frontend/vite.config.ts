@@ -16,6 +16,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: apiTarget, ws: true },
       '/api-hub': { target: apiTarget, ws: true },
+      '/proxy': { target: apiTarget },
     }
   }
 })

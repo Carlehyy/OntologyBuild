@@ -128,7 +128,7 @@ def test_http_proxy_migrates_existing_api_hub_database(tmp_path, monkeypatch):
         }
     assert {
         "http_enabled", "proxy_slug", "proxy_query_keys",
-        "proxy_header_keys", "proxy_body_enabled",
+        "proxy_header_keys", "proxy_body_enabled", "proxy_body_keys",
     } <= interface_columns
     assert {"source", "proxy_key_id", "proxy_key_name", "source_ip"} <= run_columns
     assert {"proxy_keys", "proxy_key_interfaces"} <= tables
@@ -447,13 +447,104 @@ def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
     )
     assert backup_response.status_code == 200
     payload = backup_response.json()
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert "proxy_keys" not in payload
     assert key["secret"] not in backup_response.text
     exported = next(item for item in payload["interfaces"] if item["name"] == "Echo")
     assert exported["http_enabled"] is True
     assert exported["proxy_slug"] == "echo"
     assert exported["proxy_query_keys"] == ["page", "tag"]
+
+
+def test_auto_publication_and_one_click_package_keep_sensitive_body_defaults(proxy_env):
+    client = proxy_env["client"]
+    iface = _interface(
+        client,
+        proxy_env["upstream_url"],
+        name="订单查询",
+        method="POST",
+        http_enabled=False,
+        proxy_slug="",
+        query_params=[
+            {"key": "page", "value": "1"},
+            {"key": "access_token", "value": "platform-only"},
+        ],
+        headers=[
+            {"key": "X-Tenant-ID", "value": "tenant-default"},
+            {"key": "Authorization", "value": "Bearer platform-only"},
+        ],
+        body_type="json",
+        body_content=json.dumps(
+            {
+                "customer_id": "C-001",
+                "password": "platform-secret",
+                "filters": {"cursor": "first", "status": "active"},
+            }
+        ),
+        proxy_query_keys=[],
+        proxy_header_keys=[],
+        proxy_body_enabled=False,
+    )
+
+    published_response = client.post(
+        f"/interfaces/{iface['id']}/http-publication/auto"
+    )
+    assert published_response.status_code == 200, published_response.text
+    published = published_response.json()
+    assert published["http_enabled"] is True
+    assert published["proxy_slug"] == "echo"
+    assert published["proxy_query_keys"] == ["page"]
+    assert published["proxy_header_keys"] == ["X-Tenant-ID"]
+    assert set(published["proxy_body_keys"]) == {
+        "/customer_id", "/filters/cursor", "/filters/status"
+    }
+    assert "/password" not in published["proxy_body_keys"]
+
+    package_response = client.post(f"/proxy/packages/{iface['id']}")
+    assert package_response.status_code == 200, package_response.text
+    package = package_response.json()
+    assert package["path"] == "/proxy/echo"
+    assert package["secret"].startswith("hub_")
+    assert "password" not in package["body_template"]
+    assert package["editable_body_keys"] == published["proxy_body_keys"]
+
+    forbidden = client.post(
+        "/proxy/echo?page=2",
+        headers={config.PROXY_KEY_HEADER: package["secret"]},
+        json={"password": "caller-must-not-override"},
+    )
+    assert forbidden.status_code == 400
+    assert "未开放" in forbidden.json()["detail"]
+
+    response = client.post(
+        "/proxy/echo?page=2",
+        headers={
+            config.PROXY_KEY_HEADER: package["secret"],
+            "X-Tenant-ID": "tenant-caller",
+            # Body transport details remain platform-managed even if a caller spoofs them.
+            "Content-Type": "text/plain",
+        },
+        content=json.dumps({"customer_id": "C-002", "filters": {"cursor": "next"}}),
+    )
+    assert response.status_code == 200, response.text
+    echoed = response.json()
+    forwarded_body = json.loads(echoed["body"])
+    assert forwarded_body == {
+        "customer_id": "C-002",
+        "password": "platform-secret",
+        "filters": {"cursor": "next", "status": "active"},
+    }
+    forwarded_headers = {
+        key.lower(): value for key, value in echoed["headers"].items()
+    }
+    assert forwarded_headers["x-tenant-id"] == "tenant-caller"
+    assert forwarded_headers["authorization"] == "Bearer platform-only"
+    assert forwarded_headers["content-type"].startswith("application/json")
+
+    listed_keys = client.get("/proxy/keys").json()
+    generated = next(item for item in listed_keys if item["id"] == package["key_id"])
+    assert generated["scope_all"] is False
+    assert generated["interface_ids"] == [iface["id"]]
 
 
 def _free_port() -> int:

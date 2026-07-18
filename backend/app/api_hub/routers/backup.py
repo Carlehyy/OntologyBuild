@@ -27,7 +27,7 @@ router = APIRouter(prefix="/backup", tags=["api-hub-backup"])
 
 # 备份文件的标识，还原时用于校验来源
 BACKUP_APP = "API-Hub"
-BACKUP_VERSION = 3
+BACKUP_VERSION = 4
 _SENSITIVE_NAME_RE = re.compile(
     r"(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)",
     re.IGNORECASE,
@@ -38,7 +38,7 @@ _IFACE_FIELDS = (
     "name", "description", "group_name", "method", "url", "query_params", "headers",
     "body_type", "body_content", "use_w3", "mcp_enabled", "open_enabled",
     "http_enabled", "proxy_slug", "proxy_query_keys", "proxy_header_keys",
-    "proxy_body_enabled",
+    "proxy_body_enabled", "proxy_body_keys",
 )
 
 
@@ -78,7 +78,10 @@ def _row_to_portable(row, *, include_sensitive: bool) -> dict:
     out = {}
     for f in _IFACE_FIELDS:
         v = row[f]
-        if f in ("query_params", "headers", "proxy_query_keys", "proxy_header_keys"):
+        if f in (
+            "query_params", "headers", "proxy_query_keys", "proxy_header_keys",
+            "proxy_body_keys",
+        ):
             try:
                 v = json.loads(v) if v else []
             except (json.JSONDecodeError, TypeError):
@@ -216,15 +219,19 @@ def import_backup(body: ImportIn):
                 continue
 
             _check_group_name(candidate.group_name)
-            proxy_slug, proxy_query_keys, proxy_header_keys = _validate_proxy_publish(
-                conn, candidate
-            )
+            (
+                proxy_slug,
+                proxy_query_keys,
+                proxy_header_keys,
+                proxy_body_keys,
+            ) = _validate_proxy_publish(conn, candidate)
 
             conn.execute(
                 "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
                 "body_type, body_content, use_w3, mcp_enabled, open_enabled, http_enabled, "
                 "proxy_slug, proxy_query_keys, proxy_header_keys, proxy_body_enabled, "
-                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "proxy_body_keys, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name,
                     candidate.description,
@@ -243,6 +250,7 @@ def import_backup(body: ImportIn):
                     json.dumps(proxy_query_keys, ensure_ascii=False),
                     json.dumps(proxy_header_keys, ensure_ascii=False),
                     1 if candidate.proxy_body_enabled else 0,
+                    json.dumps(proxy_body_keys, ensure_ascii=False),
                     now, now,
                 ),
             )
