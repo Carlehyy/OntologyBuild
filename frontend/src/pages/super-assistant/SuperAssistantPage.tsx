@@ -596,10 +596,18 @@ function McpDialog({ server, onClose, onSaved }: {
   const [headers, setHeaders] = useState('')
   const [env, setEnv] = useState('')
   const [clientConfig, setClientConfig] = useState('')
+  const clientConfigRef = useRef<HTMLTextAreaElement>(null)
   const [enabled, setEnabled] = useState(server?.enabled ?? true)
   const [confirmation, setConfirmation] = useState(server?.require_confirmation ?? true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const textarea = clientConfigRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${textarea.scrollHeight}px`
+  }, [clientConfig])
 
   const parseStringMap = (value: string, label: string): Record<string, string> | undefined => {
     if (!value.trim()) return undefined
@@ -686,9 +694,9 @@ function McpDialog({ server, onClose, onSaved }: {
         {!server && <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)]" open>
           <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium text-[var(--color-text-secondary)]">粘贴 MCP 客户端 JSON</summary>
           <div className="space-y-2 border-t border-[var(--color-border)] p-3">
-            <textarea value={clientConfig} onChange={event => setClientConfig(event.target.value)} rows={8}
+            <textarea ref={clientConfigRef} value={clientConfig} onChange={event => setClientConfig(event.target.value)} rows={8}
               placeholder={'{\n  "mcpServers": {\n    "api-hub": {\n      "command": "npx",\n      "args": ["-y", "mcp-remote", "https://example.com/mcp"]\n    }\n  }\n}'}
-              className="w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="w-full resize-none overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
             <button type="button" onClick={applyClientConfig} disabled={!clientConfig.trim()}
               className="min-h-9 rounded-md border border-[var(--color-border)] bg-white px-3 text-xs text-teal-700 hover:bg-teal-50 disabled:opacity-50">解析并填入下方表单</button>
           </div>
@@ -752,6 +760,25 @@ function McpDialog({ server, onClose, onSaved }: {
 }
 
 
+function McpSettingSwitch({ label, ariaLabel, checked, busy, onToggle }: {
+  label: string
+  ariaLabel: string
+  checked: boolean
+  busy: boolean
+  onToggle: () => void
+}) {
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <span className="text-[10px] text-[var(--color-text-secondary)]">{label}</span>
+      <button type="button" role="switch" aria-label={ariaLabel} aria-checked={checked} aria-busy={busy} disabled={busy} onClick={onToggle}
+        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 focus-visible:ring-offset-1 disabled:cursor-wait disabled:opacity-60 ${checked ? 'bg-teal-600' : 'bg-slate-300'}`}>
+        <span aria-hidden="true" className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+      </button>
+    </div>
+  )
+}
+
+
 function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, refreshServers }: {
   open: boolean
   onClose: () => void
@@ -766,6 +793,7 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
   const [editingSkill, setEditingSkill] = useState<SuperSkill | null>(null)
   const [editingMcp, setEditingMcp] = useState<SuperMcpServer | 'new' | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [updatingServerSetting, setUpdatingServerSetting] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
 
   const importZip = async (file?: File) => {
@@ -797,6 +825,24 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
       toast({ tone: result.ok ? 'success' : 'error', title: result.ok ? 'MCP 连接成功' : 'MCP 连接失败', description: result.message })
     } catch (error) { toast({ tone: 'error', title: 'MCP 测试失败', description: errorText(error) }) }
     finally { setTestingId(null) }
+  }
+
+  const updateServerSetting = async (
+    server: SuperMcpServer,
+    setting: 'enabled' | 'require_confirmation',
+    value: boolean,
+  ) => {
+    if (updatingServerSetting) return
+    setUpdatingServerSetting(`${server.id}:${setting}`)
+    try {
+      const patch = setting === 'enabled' ? { enabled: value } : { require_confirmation: value }
+      await superAssistantApi.updateMcpServer(server.id, patch)
+      await refreshServers()
+    } catch (error) {
+      toast({ tone: 'error', title: 'MCP 设置更新失败', description: errorText(error) })
+    } finally {
+      setUpdatingServerSetting(null)
+    }
   }
 
   const removeServer = async (server: SuperMcpServer) => {
@@ -891,10 +937,20 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                       {!server.enabled && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
                     </div>
                     {server.last_test_message && <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]">{server.last_test_message}</p>}
-                    <div className="mt-2 flex justify-end gap-1">
-                      <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
-                      <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>
-                      <button type="button" onClick={() => void removeServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <McpSettingSwitch label="启用" ariaLabel={`${server.enabled ? '停用' : '启用'} MCP ${server.name}`} checked={server.enabled}
+                          busy={updatingServerSetting !== null}
+                          onToggle={() => void updateServerSetting(server, 'enabled', !server.enabled)} />
+                        <McpSettingSwitch label="自动执行" ariaLabel={`${server.require_confirmation ? '开启' : '关闭'} ${server.name} 自动执行`} checked={!server.require_confirmation}
+                          busy={updatingServerSetting !== null}
+                          onToggle={() => void updateServerSetting(server, 'require_confirmation', !server.require_confirmation)} />
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
+                        <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>
+                        <button type="button" onClick={() => void removeServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                      </div>
                     </div>
                   </article>
                 ))}
