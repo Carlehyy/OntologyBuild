@@ -54,7 +54,7 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口' },
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
   { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
-  { key: 'agent', to: '/agent', icon: Bot, label: '智能助手', description: '本体智能体与分析报告' },
+  { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
   { key: 'events', to: '/events', icon: ClipboardList, label: '事件登记', description: '业务事件采集与审计' },
   {
     key: 'data', to: '/data', icon: Database, label: '数据通道', description: '数据接入、加工与治理', subItems: [
