@@ -58,6 +58,8 @@ export interface DatasetVersionItem {
 export interface DatasetSchemaColumn {
   name: string
   display_name: string
+  /** true 表示名称来自已保存的字段契约；名称可以与字段标识相同 */
+  display_name_configured?: boolean
   type: string
   nullable: boolean
   is_primary_key: boolean

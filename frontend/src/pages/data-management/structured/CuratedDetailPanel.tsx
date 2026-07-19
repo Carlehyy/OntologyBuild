@@ -116,15 +116,16 @@ function ColumnLabel({
   const isPrimaryKey = primaryKeys.includes(name)
   const isRequired = isPrimaryKey || schemaColumn?.nullable === false
   const displayName = schemaColumn?.display_name?.trim()
-  const hasChineseName = Boolean(displayName && displayName !== name)
+  const hasDistinctDisplayName = Boolean(displayName && displayName !== name)
+  const isMissingDisplayName = schemaColumn?.display_name_configured === false
   return (
-    <span className="inline-flex items-center gap-1.5" title={hasChineseName ? `字段标识：${name}` : undefined}>
+    <span className="inline-flex items-center gap-1.5" title={hasDistinctDisplayName ? `字段标识：${name}` : undefined}>
       <span>{columnDisplayText(name, schemaColumn)}</span>
-      {!hasChineseName && (
+      {isMissingDisplayName && (
         <span
-          className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[9px] font-normal text-slate-400"
-          title="来源流水线没有提供独立的中文显示名，当前沿用字段标识；这不是字段读取错误"
-        >沿用字段标识</span>
+          className="rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-normal text-amber-700"
+          title="来源字段契约中没有保存字段名称，当前仅显示字段标识"
+        >未设置字段名称</span>
       )}
       {isPrimaryKey && (
         <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700" title="主键列：已校验全量非空，用于稳定识别数据行">

@@ -200,14 +200,16 @@ def test_curated_schema_uses_pipeline_field_display_names(api, auth_headers, db)
     ds_id = _make_curated_with_versions(db, [[{
         "order_id": "SO-1",
         "body": {"status": "new"},
+        "fallback": "legacy",
     }]], pk="order_id")
     dataset = db.query(Dataset).filter(Dataset.id == ds_id).one()
     dataset.schema_json = {
         **dict(dataset.schema_json or {}),
-        "columns": ["order_id", "body"],
+        "columns": ["order_id", "body", "fallback"],
         "columns_typed": [
             {"name": "order_id", "type": "string"},
             {"name": "body", "type": "json"},
+            {"name": "fallback", "type": "string"},
         ],
         "types_source": "published_pipeline_contract",
         "field_names": {
@@ -228,7 +230,11 @@ def test_curated_schema_uses_pipeline_field_display_names(api, auth_headers, db)
         for column in response.json().get("data", response.json())["columns"]
     }
     assert columns["order_id"]["display_name"] == "订单编号"
+    assert columns["order_id"]["display_name_configured"] is True
     assert columns["body"]["display_name"] == "body"
+    assert columns["body"]["display_name_configured"] is True
+    assert columns["fallback"]["display_name"] == "fallback"
+    assert columns["fallback"]["display_name_configured"] is False
 
 
 def test_review_diff_first_version_all_added(api, auth_headers, db):

@@ -161,8 +161,8 @@ async function mockAssetLake(page: Page, fixtures?: {
       return ok({
         dataset_id: 'ds-pending-nopk',
         columns: [
-          { name: 'body', display_name: 'body', type: 'json', nullable: true, is_primary_key: false, sample_values: [] },
-          { name: 'webhookUrl', display_name: 'webhookUrl', type: 'string', nullable: true, is_primary_key: false, sample_values: [] },
+          { name: 'body', display_name: 'body', display_name_configured: true, type: 'json', nullable: true, is_primary_key: false, sample_values: [] },
+          { name: 'webhookUrl', display_name: 'webhookUrl', display_name_configured: false, type: 'string', nullable: true, is_primary_key: false, sample_values: [] },
         ],
       })
     }
@@ -326,7 +326,7 @@ test('待审核详情提供三视角、分页、变更列标识和无主键说�
   await expect(dialog.getByText(/当前流水线采用无主键模式，可以正常审核/)).toBeVisible()
   await expect(dialog.getByText(/不满足稳定识别数据行的契约/)).toHaveCount(0)
   await expect(dialog.getByText('无主键 · 按整行比较，不单独识别更新')).toBeVisible()
-  await expect(dialog.getByText('沿用字段标识')).toHaveCount(4)
-  await expect(dialog.getByText(/中文名未配置/)).toHaveCount(0)
+  await expect(dialog.getByText(/沿用字段标识|中文名未配置/)).toHaveCount(0)
+  await expect(dialog.getByText('未设置字段名称')).toHaveCount(2)
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
 })

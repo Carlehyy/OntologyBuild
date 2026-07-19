@@ -782,6 +782,12 @@ def get_schema(dataset_id: str, db: Session = Depends(get_db)):
     def column_contract(name: str, column: dict | None = None) -> dict:
         column = {**(typed_columns.get(name) or {}), **(column or {})}
         definition = definitions.get(name) or {}
+        display_name_configured = any((
+            bool(str(column.get("display_name") or "").strip()),
+            bool(str(column.get("field_name") or "").strip()),
+            name in field_names and bool(str(field_names.get(name) or "").strip()),
+            bool(str(definition.get("field_name") or "").strip()),
+        ))
         display_name = str(
             column.get("display_name")
             or column.get("field_name")
@@ -794,6 +800,7 @@ def get_schema(dataset_id: str, db: Session = Depends(get_db)):
         return {
             "name": name,
             "display_name": display_name,
+            "display_name_configured": display_name_configured,
             "type": column.get("type") or definition.get("field_type") or "string",
             "nullable": False if name in pk_columns else nullable,
             "is_primary_key": name in pk_columns,
