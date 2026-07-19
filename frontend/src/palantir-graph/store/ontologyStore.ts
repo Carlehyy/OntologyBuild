@@ -24,8 +24,9 @@ import { executeAction, getDefaultParameters } from '../engine/actionEngine';
 import { executeFunction } from '../engine/functionEngine';
 import {
   loadFullOntology, saveFullOntology, isSaveConflict,
-  patchOntologyDelta, instanceToPayload, type DeltaKind,
+  patchOntologyDelta, instanceToPayload, type DeltaKind, type FullOntologyDTO,
 } from '../api/formalApi';
+import type { Sentinel } from '../../api/sentinelApi';
 
 // Apply default layout (hierarchical, left-to-right)
 const defaultLayoutNodes = applyLayout(tradeErpNodes, tradeErpEdges, {
@@ -51,6 +52,10 @@ interface OntologyState {
   workspaceVersionId: string | null;
   // runtime 仅承载当前正式投影；只有 draft 工作区允许修改模式结构。
   workspaceMode: 'runtime' | 'draft' | 'trial' | 'release' | 'archived';
+  // Version-scoped governance/read-model data. Never substitute production
+  // records when a draft/trial/history workspace is open.
+  workspaceTrialRun: FullOntologyDTO['trialRun'];
+  workspaceSentinels: Sentinel[];
   // 加载/保存状态。conflict = 保存被 409 拒绝（其他会话已修改）
   syncStatus: 'idle' | 'loading' | 'saving' | 'saved' | 'error' | 'conflict';
   syncError: string | null;
@@ -266,6 +271,8 @@ export const useOntologyStore = create<OntologyState>()(
       backendId: null,
       workspaceVersionId: null,
       workspaceMode: 'runtime',
+      workspaceTrialRun: null,
+      workspaceSentinels: [],
       syncStatus: 'idle',
       syncError: null,
       lastSavedAt: null,
@@ -300,6 +307,8 @@ export const useOntologyStore = create<OntologyState>()(
           backendId: id,
           workspaceVersionId: versionId,
           workspaceMode: versionId ? 'archived' : 'runtime',
+          workspaceTrialRun: null,
+          workspaceSentinels: [],
           syncStatus: 'loading',
           syncError: null,
         });
@@ -357,6 +366,8 @@ export const useOntologyStore = create<OntologyState>()(
           set({
             ontology, nodes, edges,
             workspaceMode: full.workspaceMode || (versionId ? 'archived' : 'runtime'),
+            workspaceTrialRun: full.trialRun ?? null,
+            workspaceSentinels: full.sentinels || [],
             syncStatus: 'idle', syncError: null, isDirty: false,
             lastSavedAt: now(),
             revision: full.revision ?? null,
@@ -376,6 +387,8 @@ export const useOntologyStore = create<OntologyState>()(
             selectedNodeId: null, selectedEdgeId: null,
             selectedActionId: null, selectedFunctionId: null, selectedInstanceId: null,
             workspaceMode: versionId ? 'archived' : 'runtime',
+            workspaceTrialRun: null,
+            workspaceSentinels: [],
             syncStatus: 'error', syncError: e?.detail || e?.message || '加载失败',
           });
           _resetDelta(true);
@@ -1130,6 +1143,7 @@ export const useOntologyStore = create<OntologyState>()(
           isActionExecutorOpen: false, executingActionId: null, executingTargetInstanceId: null, lastExecutionLog: null,
           isFunctionTesterOpen: false, testingFunctionId: null, lastFunctionResult: null,
           isInstanceBrowserOpen: false, instanceBrowserObjectTypeId: null,
+          workspaceTrialRun: null, workspaceSentinels: [],
         });
       },
 

@@ -238,7 +238,14 @@ export default function OntologyDetailPage() {
       )}
 
       {/* ═══ 历史版本弹窗 ═══ */}
-      <Modal open={showVersionModal} onClose={closeVersionModal} title="本体版本演进" size="3xl">
+      <Modal
+        open={showVersionModal}
+        onClose={closeVersionModal}
+        title="本体版本演进"
+        size="3xl"
+        panelClassName="h-[min(86dvh,820px)]"
+        contentClassName="flex-1 overflow-hidden"
+      >
         <VersionsTab ontologyId={id!} onClose={closeVersionModal} />
       </Modal>
     </div>

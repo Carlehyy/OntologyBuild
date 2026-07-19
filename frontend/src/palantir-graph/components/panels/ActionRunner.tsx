@@ -39,6 +39,8 @@ export default function ActionRunner({ isOpen: _externalIsOpen, onClose, initial
 
   const backendId = useOntologyStore((s) => s.backendId);
   const isDirty = useOntologyStore((s) => s.isDirty);
+  const workspaceMode = useOntologyStore((s) => s.workspaceMode);
+  const executionAllowed = workspaceMode === 'runtime';
   const loadFromBackend = useOntologyStore((s) => s.loadFromBackend);
 
   const [internalActionId, setInternalActionId] = useState<string | null>(null);
@@ -83,7 +85,7 @@ export default function ActionRunner({ isOpen: _externalIsOpen, onClose, initial
   };
 
   const handleRun = (dryRun: boolean) => {
-    if (!action) return;
+    if (!action || !executionAllowed) return;
     setNotice(null);
     // 如果选择了实例，将实例主键写入 source 字段
     const finalParams = { ...params };
@@ -189,6 +191,11 @@ export default function ActionRunner({ isOpen: _externalIsOpen, onClose, initial
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {!executionAllowed && (
+            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              当前版本可查看动作定义、参数与规则，但只有当前发布态可以模拟或真实执行动作。
+            </div>
+          )}
           {/* 选择动作 */}
           {!initialActionId && !executingActionId && (
             <div>
@@ -327,7 +334,7 @@ export default function ActionRunner({ isOpen: _externalIsOpen, onClose, initial
               <div className="flex gap-3">
                 <button
                   onClick={() => handleRun(true)}
-                  disabled={remoteRunning}
+                  disabled={!executionAllowed || remoteRunning}
                   className="flex-1 btn-secondary justify-center disabled:opacity-40"
                 >
                   <ArrowPathIcon className="w-4 h-4" />
@@ -335,13 +342,13 @@ export default function ActionRunner({ isOpen: _externalIsOpen, onClose, initial
                 </button>
                 <button
                   onClick={() => handleRun(false)}
-                  disabled={remoteRunning}
+                  disabled={!executionAllowed || remoteRunning}
                   className="flex-1 btn-primary justify-center disabled:opacity-40"
                 >
                   {remoteRunning
                     ? <ArrowPathIcon className="w-4 h-4 animate-spin" />
                     : <PlayIcon className="w-4 h-4" />}
-                  {remoteRunning ? '后端执行中…' : '执行动作'}
+                  {remoteRunning ? '后端执行中…' : executionAllowed ? '执行动作' : '当前状态不可执行'}
                 </button>
               </div>
 

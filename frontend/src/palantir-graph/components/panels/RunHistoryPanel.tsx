@@ -31,6 +31,9 @@ type Tab = 'approvals' | 'actions' | 'firings' | 'notifications';
 export default function RunHistoryPanel({ isOpen, onClose }: Props) {
   const backendId = useOntologyStore((s) => s.backendId);
   const loadFromBackend = useOntologyStore((s) => s.loadFromBackend);
+  const workspaceMode = useOntologyStore((s) => s.workspaceMode);
+  const trialRun = useOntologyStore((s) => s.workspaceTrialRun);
+  const runtimeAccessible = workspaceMode === 'runtime';
   const [tab, setTab] = useState<Tab>('actions');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +45,10 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!backendId) return;
+    if (!backendId || !runtimeAccessible) {
+      setLogs([]); setPending([]); setFirings([]); setNotifications([]);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -61,7 +67,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [backendId]);
+  }, [backendId, runtimeAccessible]);
 
   useEffect(() => {
     if (isOpen) void refresh();
@@ -82,7 +88,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
   };
 
   const handleDecide = async (log: ActionExecutionLog, decision: 'approved' | 'rejected') => {
-    if (!backendId) return;
+    if (!backendId || !runtimeAccessible) return;
     let reason: string | undefined;
     if (decision === 'rejected') {
       const input = window.prompt('拒绝原因（会记录进决策事实，可留空）：');
@@ -154,7 +160,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => void refresh()} disabled={loading}
+            <button onClick={() => void refresh()} disabled={loading || !runtimeAccessible}
               className="p-2 rounded-lg hover:bg-white/10 disabled:opacity-40" title="刷新">
               <ArrowPathIcon className={`w-5 h-5 text-gray-400 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -194,8 +200,28 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
           </div>
         )}
 
+        {!runtimeAccessible && (
+          <div role="status" className="mx-6 mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            {workspaceMode === 'trial'
+              ? '这里展示本次隔离试跑摘要；正式动作日志、审批、哨兵触发和通知不会混入试跑版本。'
+              : '运行历史功能区保持可见，但该版本不读取当前正式环境的运行记录。'}
+          </div>
+        )}
+
+        {!runtimeAccessible && workspaceMode === 'trial' && trialRun && (
+          <div data-testid="trial-run-summary" className="mx-6 mt-3 rounded-xl border border-amber-500/20 bg-slate-800/60 p-3 text-xs text-gray-300">
+            <div className="flex items-center justify-between"><span className="font-medium text-amber-200">隔离试跑 · {trialRun.status}</span><span className="font-mono text-gray-500">{trialRun.id.slice(0, 8)}</span></div>
+            <div className="mt-2 grid grid-cols-4 gap-2">
+              {Object.entries(trialRun.result?.counts || {}).map(([key, value]) => (
+                <div key={key} className="rounded bg-slate-900/60 px-2 py-1.5"><b className="block text-sm text-white">{String(value ?? 0)}</b>{key}</div>
+              ))}
+            </div>
+            <p className="mt-2 text-emerald-300">外部动作执行数：{trialRun.result?.actionsExecuted ?? 0} · 副作用已阻断</p>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-6 space-y-2">
-          {!backendId && (
+          {!backendId && runtimeAccessible && (
             <p className="text-center text-sm text-gray-500 py-10">本地模式没有后端运行历史</p>
           )}
           {error && (
@@ -236,7 +262,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
               </div>
             </div>
           ))}
-          {tab === 'approvals' && !loading && pending.length === 0 && backendId && (
+          {tab === 'approvals' && !loading && pending.length === 0 && backendId && runtimeAccessible && (
             <div className="text-center py-10 text-gray-500">
               <HandRaisedIcon className="w-10 h-10 mx-auto mb-2 opacity-25" />
               <p className="text-xs">没有等待审批的动作</p>
@@ -277,7 +303,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
               )}
             </div>
           ))}
-          {tab === 'actions' && !loading && logs.length === 0 && backendId && (
+          {tab === 'actions' && !loading && logs.length === 0 && backendId && runtimeAccessible && (
             <p className="text-center text-xs text-gray-500 py-10">还没有 Action 执行记录</p>
           )}
 
@@ -304,7 +330,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
               </div>
             </div>
           ))}
-          {tab === 'firings' && !loading && firings.length === 0 && backendId && (
+          {tab === 'firings' && !loading && firings.length === 0 && backendId && runtimeAccessible && (
             <p className="text-center text-xs text-gray-500 py-10">还没有哨兵触发记录</p>
           )}
 
@@ -321,7 +347,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
               <div className="mt-0.5 pl-6 text-[10px] text-gray-600">→ {n.recipient} · {n.status}</div>
             </div>
           ))}
-          {tab === 'notifications' && !loading && notifications.length === 0 && backendId && (
+          {tab === 'notifications' && !loading && notifications.length === 0 && backendId && runtimeAccessible && (
             <p className="text-center text-xs text-gray-500 py-10">还没有通知</p>
           )}
         </div>

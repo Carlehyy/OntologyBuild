@@ -52,6 +52,9 @@ export const ontologyVersionApi = {
     description?: string
   }) => apiClientV2.post<OntologyVersionNode>(
     `/ontologies/${ontologyId}/versions/${sourceVersionId}/drafts`, body),
+  deleteVersion: (ontologyId: string, versionId: string) =>
+    apiClientV2.delete<{ id: string; version_number: string }>(
+      `/ontologies/${ontologyId}/versions/${versionId}`),
   runTrial: (ontologyId: string, versionId: string) =>
     apiClientV2.post<OntologyTrialRun>(
       `/ontologies/${ontologyId}/versions/${versionId}/trial-runs`, {}),

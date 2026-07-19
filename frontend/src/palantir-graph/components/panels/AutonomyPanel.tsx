@@ -31,13 +31,16 @@ const LEVEL_META: Record<string, { label: string; desc: string; icon: React.Elem
  */
 export default function AutonomyPanel({ isOpen, onClose }: Props) {
   const backendId = useOntologyStore((s) => s.backendId);
+  const workspaceMode = useOntologyStore((s) => s.workspaceMode);
+  const actions = useOntologyStore((s) => s.ontology?.actions || []);
+  const runtimeAccessible = workspaceMode === 'runtime';
   const [stats, setStats] = useState<AutonomyActionStat[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!backendId) return;
+    if (!backendId || !runtimeAccessible) { setStats([]); return; }
     setLoading(true);
     setError(null);
     try {
@@ -47,7 +50,7 @@ export default function AutonomyPanel({ isOpen, onClose }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [backendId]);
+  }, [backendId, runtimeAccessible]);
 
   useEffect(() => {
     if (isOpen) void refresh();
@@ -56,7 +59,7 @@ export default function AutonomyPanel({ isOpen, onClose }: Props) {
   if (!isOpen) return null;
 
   const toggleGate = async (s: AutonomyActionStat, requiresApproval: boolean) => {
-    if (!backendId) return;
+    if (!backendId || !runtimeAccessible) return;
     const verb = requiresApproval ? '降级到 L1（加回人工审批闸门）' : '晋升到 L2（关闭人工审批，命中即自动执行）';
     if (!window.confirm(`确定把「${s.actionName}」${verb}？\n变更立即生效于后端权威配置。`)) return;
     setBusy(s.actionId);
@@ -97,7 +100,7 @@ export default function AutonomyPanel({ isOpen, onClose }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => void refresh()} disabled={loading}
+            <button onClick={() => void refresh()} disabled={loading || !runtimeAccessible}
               className="p-2 rounded-lg hover:bg-white/10 disabled:opacity-40" title="刷新">
               <ArrowPathIcon className={`w-5 h-5 text-gray-400 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -108,7 +111,24 @@ export default function AutonomyPanel({ isOpen, onClose }: Props) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-3">
-          {!backendId && (
+          {!runtimeAccessible && (
+            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+              自治等级功能区保持可见；当前版本可查看动作的审批配置，但运行统计与晋升、降级只对当前发布态开放。
+            </div>
+          )}
+          {!runtimeAccessible && actions.map((action) => (
+            <div key={action.id} className="rounded-xl border border-slate-700/70 bg-slate-800/40 px-4 py-3.5">
+              <div className="flex items-center gap-2.5">
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${action.requiresApproval ? LEVEL_META.L1.cls : LEVEL_META.L2.cls}`}>
+                  {action.requiresApproval ? LEVEL_META.L1.label : LEVEL_META.L2.label}
+                </span>
+                <span className="text-sm font-medium text-gray-100">{action.displayName}</span>
+                <span className="ml-auto text-[11px] text-gray-500">只读定义</span>
+              </div>
+              {action.description && <p className="mt-2 text-xs text-gray-500">{action.description}</p>}
+            </div>
+          ))}
+          {!backendId && runtimeAccessible && (
             <p className="text-center text-sm text-gray-500 py-10">本地模式没有后端执行统计</p>
           )}
           {error && <p className="text-center text-xs text-red-400 py-2">{error}</p>}
@@ -204,7 +224,7 @@ export default function AutonomyPanel({ isOpen, onClose }: Props) {
             );
           })}
 
-          {!loading && stats.length === 0 && backendId && (
+          {!loading && stats.length === 0 && backendId && runtimeAccessible && (
             <div className="text-center py-12 text-gray-500">
               <RocketLaunchIcon className="w-10 h-10 mx-auto mb-2 opacity-25" />
               <p className="text-xs">还没有动作。在画布上创建动作并绑定哨兵后，这里会展示每个动作的自治等级。</p>

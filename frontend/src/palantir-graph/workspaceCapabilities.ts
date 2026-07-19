@@ -34,10 +34,10 @@ const SCHEMA_DISABLED_REASON: Record<Exclude<OntologyWorkspaceMode, 'draft'>, st
 };
 
 const RUNTIME_DISABLED_REASON: Record<Exclude<OntologyWorkspaceMode, 'runtime'>, string> = {
-  draft: '草稿不承载运行数据，完成试跑和发布后可用',
-  trial: '当前运行面板尚未接入试跑隔离数据，为避免访问正式数据已禁用',
-  release: '历史发布快照不承载当前运行数据',
-  archived: '归档分支不承载运行数据',
+  draft: '草稿可查看完整定义，但不承载实例或执行数据',
+  trial: '可查看隔离试跑数据；正式动作、函数和治理操作不可执行',
+  release: '可查看完整历史定义，但不读取当前正式运行数据',
+  archived: '可查看完整归档定义，但不读取当前正式运行数据',
 };
 
 export function getGraphWorkspaceCapabilities(mode: OntologyWorkspaceMode): GraphWorkspaceCapabilities {
@@ -59,8 +59,8 @@ export function getGraphWorkspaceCapabilities(mode: OntologyWorkspaceMode): Grap
     canSearch: true,
     canExport: true,
     canImport: canEditSchema,
-    canBrowseInstances: hasRuntimeData,
-    canViewRunHistory: hasRuntimeData,
+    canBrowseInstances: hasRuntimeData || mode === 'trial',
+    canViewRunHistory: hasRuntimeData || mode === 'trial',
     canManageAutonomy: hasRuntimeData,
     canManageSentinels: hasRuntimeData,
     canRunActions: hasRuntimeData,

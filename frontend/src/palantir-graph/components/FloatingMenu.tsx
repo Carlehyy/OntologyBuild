@@ -165,15 +165,15 @@ export const FloatingMenu = ({
             data-testid={`graph-runtime-tool-${item.id}`}
             tabIndex={isOpen ? 0 : -1}
             onClick={item.onClick}
-            disabled={!!item.disabledReason}
             title={item.disabledReason ? `${item.label}：${item.disabledReason}` : item.label}
             aria-label={item.label}
+            data-read-only={item.disabledReason ? 'true' : 'false'}
             className={`
               flex items-center gap-3 px-4 py-2.5 rounded-xl text-left
               bg-slate-800/95 backdrop-blur-sm border border-slate-700/50
               shadow-lg shadow-black/30 hover:shadow-xl
               transition-all duration-200 hover:scale-[1.02]
-              disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:scale-100 disabled:hover:shadow-lg
+              ${item.disabledReason ? 'border-slate-600/70 bg-slate-800/80' : ''}
               ${isOpen ? 'translate-y-0' : 'translate-y-4'}
             `}
             style={{
@@ -187,7 +187,7 @@ export const FloatingMenu = ({
               <span className="block text-sm font-medium text-white">{item.label}</span>
               {item.disabledReason && (
                 <span className="block max-w-60 truncate text-[10px] text-slate-400">
-                  {item.disabledReason}
+                  仅查看 · {item.disabledReason}
                 </span>
               )}
             </span>

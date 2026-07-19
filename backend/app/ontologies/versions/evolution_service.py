@@ -272,12 +272,12 @@ def _object_type_for_mapping(mapping: dict, object_types: dict[str, dict]) -> di
 
 
 def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
-    """Validate configured mappings without making them a publication prerequisite.
+    """Require a complete lake mapping before a draft may enter trial.
 
-    A structure-only or partially mapped release is valid and simply materializes
-    no data for its unmapped types.  Once a mapping is present, its identity,
-    required fields and endpoint contract remain fail-closed.  This gate is
-    snapshot-only so trial entry and promotion enforce the same definition.
+    Every object/link type needs a mapping and every persisted property must be
+    covered. Computed properties are deliberately excluded because their value
+    comes from ontology logic rather than a lake column. This gate is
+    snapshot-only so trial entry and promotion enforce the exact same contract.
     """
     snap = complete_snapshot(snapshot)
     errors: list[dict] = []
@@ -291,12 +291,11 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
     def label(item: dict) -> str:
         return str(item.get("displayName") or item.get("name") or item.get("id") or "")
 
-    def stored_required_properties(item: dict) -> list[dict]:
+    def stored_properties(item: dict) -> list[dict]:
         return [
             prop for prop in (item.get("properties") or [])
             if isinstance(prop, dict)
             and prop.get("name")
-            and prop.get("required")
             and prop.get("source") != "computed"
             and not prop.get("computed")
         ]
@@ -339,7 +338,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             if not str(source_name).startswith("__")
             and isinstance(target_name, str) and target_name
         }
-        required = {str(prop["name"]) for prop in stored_required_properties(target)}
+        required = {str(prop["name"]) for prop in stored_properties(target)}
         primary_key = target.get("primaryKey")
         primary_property = next((
             prop for prop in (target.get("properties") or [])
@@ -351,16 +350,26 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             required.add(str(primary_property["name"]))
         for property_name in sorted(required - mapped_properties):
             errors.append({
-                "code": "mapping_required_property_missing", "kind": "mapping",
+                "code": "mapping_property_missing", "kind": "mapping",
                 "id": mapping_id, "name": mapping_name,
                 "message": (
                     f"Mapping「{mapping_name}」未覆盖 ObjectType「{label(target)}」"
-                    f"的必需属性「{property_name}」"
+                    f"的存储属性「{property_name}」"
                 ),
                 "field": property_name,
             })
 
     for object_type_id, object_type in object_types.items():
+        if not mappings_by_type.get(object_type_id):
+            errors.append({
+                "code": "object_type_mapping_required", "kind": "objectType",
+                "id": object_type_id, "name": label(object_type),
+                "message": (
+                    f"ObjectType「{label(object_type)}」尚未与数据资产湖建立映射，"
+                    "不能进入试跑态"
+                ),
+                "field": "mapping",
+            })
         if not object_type.get("primaryKey"):
             errors.append({
                 "code": "object_type_primary_key_required", "kind": "objectType",
@@ -374,6 +383,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
         for item in snap["linkTypes"]
         if item.get("id")
     }
+    mapped_link_type_ids: set[str] = set()
     for mapping in snap["linkMappings"]:
         mapping_id = str(mapping.get("id") or "")
         mapping_name = str(mapping.get("relationType") or mapping_id)
@@ -387,6 +397,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
                 "field": "linkTypeId",
             })
             continue
+        mapped_link_type_ids.add(link_type_id)
         for field, text in (("srcDatasetId", "源端"), ("tgtDatasetId", "目标端"),
                             ("srcKey", "源端外键"), ("tgtKey", "目标端外键")):
             if not mapping.get(field):
@@ -437,18 +448,28 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             if not str(property_name).startswith("__")
             and isinstance(source_name, str) and source_name
         }
-        required = {
-            str(prop["name"]) for prop in stored_required_properties(link_type)
-        }
+        required = {str(prop["name"]) for prop in stored_properties(link_type)}
         for property_name in sorted(required - mapped_properties):
             errors.append({
-                "code": "link_mapping_required_property_missing",
+                "code": "link_mapping_property_missing",
                 "kind": "linkMapping", "id": mapping_id, "name": mapping_name,
                 "message": (
                     f"LinkMapping「{mapping_name}」未覆盖 LinkType「{label(link_type)}」"
-                    f"的必需属性「{property_name}」"
+                    f"的存储属性「{property_name}」"
                 ),
                 "field": property_name,
+            })
+
+    for link_type_id, link_type in link_types.items():
+        if link_type_id not in mapped_link_type_ids:
+            errors.append({
+                "code": "link_type_mapping_required", "kind": "linkType",
+                "id": link_type_id, "name": label(link_type),
+                "message": (
+                    f"LinkType「{label(link_type)}」尚未与数据资产湖建立映射，"
+                    "不能进入试跑态"
+                ),
+                "field": "mapping",
             })
 
     return errors

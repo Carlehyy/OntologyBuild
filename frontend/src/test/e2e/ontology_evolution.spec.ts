@@ -180,6 +180,21 @@ test('complete branch → real-data trial → reviewed release works in the brow
     }],
     sentinels: [],
   })
+  const incompleteDraft = await api<any>(request, token, 'post', `/api/v2/ontologies/${ontology.id}/versions/${root.id}/drafts`, {
+    versionLabel: '缺少映射分支', description: '用于验证草稿转试跑硬门禁',
+  })
+  await api<any>(request, token, 'put', `/api/v2/ontologies/${ontology.id}/versions/${incompleteDraft.id}/workspace`, {
+    baseRevision: `${incompleteDraft.revision}:${incompleteDraft.snapshot_hash}`,
+    version: incompleteDraft.version_number,
+    objectTypes: [{
+      id: `ot-unmapped-${suffix}`, name: 'UnmappedOrder', displayName: '未映射订单',
+      primaryKey: 'p-unmapped-id', properties: [
+        { id: 'p-unmapped-id', name: 'id', displayName: '订单号', type: 'string', required: true },
+        { id: 'p-unmapped-note', name: 'note', displayName: '备注', type: 'string', required: false },
+      ],
+    }],
+    linkTypes: [], actions: [], functions: [], instances: [], linkInstances: [],
+  })
 
   // 日常入口不再要求用户选择版本：列表“查看”先进入本体总览。
   await page.goto('/#/ontologies')
@@ -201,8 +216,24 @@ test('complete branch → real-data trial → reviewed release works in the brow
   const draftRow = page.getByTestId('version-node-v0.1')
   await expect(draftRow).toContainText('草稿态')
   await expect(draftRow).not.toContainText('真实湖数据隔离试跑')
-  await expect(draftRow.getByRole('button', { name: '编辑模型' })).toBeVisible()
+  await expect(draftRow.getByRole('button', { name: '打开编辑器' })).toBeVisible()
   await expect(draftRow.getByRole('button', { name: 'v0.1 更多操作' })).toBeVisible()
+
+  // 草稿 → 试跑是后端硬门禁：任意实体或存储属性未映射时必须失败，
+  // 并在弹窗内给出可执行的修复入口，不能只靠按钮状态假装受控。
+  const incompleteRow = page.getByTestId('version-node-v0.2')
+  await incompleteRow.getByRole('button', { name: '转为试跑态' }).click()
+  await expect(page.getByRole('alert')).toContainText('草稿尚未满足转为试跑态的硬性条件')
+  await expect(page.getByRole('alert')).toContainText('尚未与数据资产湖建立映射')
+  await expect(incompleteRow).toContainText('草稿态')
+
+  // 未发布叶子分支可以安全删除；确认弹窗必须说明连同隔离数据删除且编号不复用。
+  await incompleteRow.getByRole('button', { name: 'v0.2 更多操作' }).click()
+  await incompleteRow.getByRole('button', { name: '删除此分支' }).click()
+  const deleteDialog = page.getByRole('dialog', { name: '删除叶子分支 v0.2' })
+  await expect(deleteDialog).toContainText('版本编号不会复用')
+  await deleteDialog.getByRole('button', { name: '删除此分支' }).click()
+  await expect(page.getByTestId('version-node-v0.2')).toHaveCount(0)
 
   // 草稿映射快照使用 camelCase DTO；工作台必须完整回显，不能误判为空后覆盖。
   await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
@@ -215,7 +246,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '返回数据映射' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()
 
-  await page.getByTestId('version-node-v0.1').getByRole('button', { name: '进入试跑' }).click()
+  await page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为试跑态' }).click()
   const trialDialog = page.getByRole('dialog', { name: '隔离试跑结果' })
   await expect(trialDialog).toBeVisible({ timeout: 20_000 })
   await expect(trialDialog.getByText('外部动作执行数：0')).toBeVisible()
@@ -235,11 +266,34 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByPlaceholder('搜索对象 / 关系 / 动作 / 函数 / 属性名…')).toBeVisible()
   await page.keyboard.press('Escape')
   await page.getByTitle('打开菜单').click()
-  await expect(page.getByTestId('graph-runtime-tool-instances')).toBeDisabled()
-  await expect(page.getByTestId('graph-runtime-tool-runaction')).toBeDisabled()
+  await expect(page.getByTestId('graph-runtime-tool-instances')).toBeEnabled()
+  await expect(page.getByTestId('graph-runtime-tool-runaction')).toBeEnabled()
   await expect(page.getByTestId('graph-runtime-tool-graphdb')).toBeEnabled()
   await expect(page.getByTestId('graph-runtime-tool-help')).toBeEnabled()
-  await page.getByTitle('关闭菜单').click()
+
+  // 功能区不因状态而消失：试跑实例来自隔离表，内容可见但写操作禁用。
+  await page.getByTestId('graph-runtime-tool-instances').click()
+  await expect(page.getByRole('heading', { name: '对象实例浏览器' })).toBeVisible()
+  await expect(page.getByText('正在查看试跑隔离空间的数据')).toBeVisible()
+  await page.locator('select').filter({ has: page.locator(`option[value="${objectTypeId}"]`) }).selectOption(objectTypeId)
+  await expect(page.getByText('真机一号')).toBeVisible()
+  await expect(page.getByText('真机二号')).toBeVisible()
+  await expect(page.getByRole('button', { name: '新建实例' })).toBeDisabled()
+  await page.getByRole('button', { name: '关闭对象实例浏览器' }).click()
+
+  await page.getByTitle('打开菜单').click()
+  await page.getByTestId('graph-runtime-tool-runaction').click()
+  await expect(page.getByRole('heading', { name: '动作执行器' })).toBeVisible()
+  await expect(page.getByText('当前版本可查看动作定义、参数与规则')).toBeVisible()
+  await page.locator('select').first().selectOption(`act-browser-order-${suffix}`)
+  await expect(page.getByRole('button', { name: '模拟执行（本地，不修改数据）' })).toBeDisabled()
+  await page.getByRole('button', { name: '关闭动作执行器' }).click()
+
+  await page.getByTitle('打开菜单').click()
+  await page.getByTestId('graph-runtime-tool-runhistory').click()
+  await expect(page.getByTestId('trial-run-summary')).toContainText('隔离试跑')
+  await expect(page.getByTestId('trial-run-summary')).toContainText('2')
+  await page.getByRole('button', { name: '关闭运行历史' }).click()
   await verifyReadonlyGraphInspection(page, objectTypeId)
   const movedTrial = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace`)
   const trialObject = movedTrial.objectTypes.find((item: any) => item.id === objectTypeId)
@@ -249,14 +303,14 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '查看历史版本' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()
 
-  await page.getByTestId('version-node-v0.1').getByRole('button', { name: '审核发布' }).click()
+  await page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为发布态' }).click()
   await expect(page.getByText('审核 v0.1 的发布影响')).toBeVisible()
   await page.getByRole('button', { name: '确认发布' }).click()
   await expect(page.getByTestId('version-node-v1')).toContainText('当前发布', { timeout: 20_000 })
   await expect(draftRow).toContainText('已晋级')
 
   // 只有版本演进里可以打开历史快照，且历史发布版严格只读。
-  await page.getByTestId('version-node-v0').getByRole('button', { name: '查看快照' }).click()
+  await page.getByTestId('version-node-v0').getByRole('button', { name: '打开编辑器' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
   await expect(page.getByText(/历史发布 v0 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
 

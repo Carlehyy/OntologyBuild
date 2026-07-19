@@ -272,25 +272,23 @@ export default function OntologyGraphPage() {
           <Canvas
             schemaReadOnly={schemaReadOnly}
             layoutScope={`${ontologyId || 'ontology'}:${versionId || 'runtime'}`}
-            onBrowseInstances={capabilities.canBrowseInstances
-              ? (objectTypeId) => {
-                  setInstanceBrowserTypeId(objectTypeId);
-                  setShowInstanceBrowser(true);
-                }
-              : undefined}
+            onBrowseInstances={(objectTypeId) => {
+              setInstanceBrowserTypeId(objectTypeId);
+              setShowInstanceBrowser(true);
+            }}
           />
         </main>
         <Toolbar capabilities={capabilities} onOpenSearch={() => setShowSearch(true)} />
         <Panel readOnly={schemaReadOnly} />
         <ActionList
           readOnly={schemaReadOnly}
-          onRunAction={capabilities.canRunActions ? openActionRun : undefined}
+          onRunAction={openActionRun}
           isOpen={showActionPanel}
           onClose={() => setShowActionPanel(false)}
         />
         <FunctionList
           readOnly={schemaReadOnly}
-          onTestFunction={capabilities.canTestFunctions ? openFunctionTest : undefined}
+          onTestFunction={openFunctionTest}
           isOpen={showFunctionPanel}
           onClose={() => setShowFunctionPanel(false)}
         />
@@ -321,14 +319,14 @@ export default function OntologyGraphPage() {
         <Suspense fallback={<PanelLoader />}>
           {showHelp && <HelpGuide isOpen={showHelp} onClose={() => setShowHelp(false)} />}
           {showGraphDB && <GraphDatabaseView isOpen={showGraphDB} onClose={() => setShowGraphDB(false)} />}
-          {capabilities.canTestFunctions && showFunctionTester && (
+          {showFunctionTester && (
             <FunctionTester
               isOpen={showFunctionTester}
               initialFunctionId={testFunctionId}
               onClose={() => setShowFunctionTester(false)}
             />
           )}
-          {capabilities.canRunActions && showActionRunner && (
+          {showActionRunner && (
             <ActionRunner
               isOpen={showActionRunner}
               initialActionId={runActionId}
@@ -336,7 +334,7 @@ export default function OntologyGraphPage() {
               onClose={() => setShowActionRunner(false)}
             />
           )}
-          {capabilities.canBrowseInstances && showInstanceBrowser && (
+          {showInstanceBrowser && (
             <InstanceBrowser
               isOpen={showInstanceBrowser}
               initialObjectTypeId={instanceBrowserTypeId || undefined}
@@ -344,8 +342,8 @@ export default function OntologyGraphPage() {
               onRunAction={openActionRun}
             />
           )}
-          {capabilities.canViewRunHistory && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
-          {capabilities.canManageAutonomy && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
+          {showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
+          {showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
         </Suspense>
       </div>
     </ReactFlowProvider>

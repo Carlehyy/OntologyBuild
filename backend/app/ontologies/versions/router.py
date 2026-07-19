@@ -880,7 +880,10 @@ def _workspace_mode(version: OntologyVersion) -> str:
 
 def _workspace_payload(
         project: OntologyProject, version: OntologyVersion, *,
-        is_current_release: bool = False) -> dict:
+        is_current_release: bool = False,
+        trial_run: OntologyTrialRun | None = None,
+        trial_objects: list[OntologyTrialObject] | None = None,
+        trial_links: list[OntologyTrialLink] | None = None) -> dict:
     """Serialize one immutable/versioned structure workspace.
 
     The management detail page must never infer a release from mutable Formal
@@ -889,6 +892,27 @@ def _workspace_payload(
     """
     snap = _with_canvas_layout(version.snapshot_formal, version.canvas_layout)
     workspace_mode = _workspace_mode(version)
+    trial_created_at = (
+        trial_run.created_at.isoformat()
+        if trial_run is not None and trial_run.created_at else None)
+    isolated_objects = [{
+        "id": item.object_id,
+        "objectTypeId": item.object_type_id,
+        "properties": _json_safe(item.properties or {}),
+        "computed": {},
+        "source": "trial",
+        "externalId": item.external_id,
+        "createdAt": trial_created_at,
+        "updatedAt": trial_created_at,
+    } for item in (trial_objects or [])]
+    isolated_links = [{
+        "id": item.link_id,
+        "linkTypeId": item.link_type_id,
+        "sourceObjectId": item.source_object_id,
+        "targetObjectId": item.target_object_id,
+        "properties": _json_safe(item.properties or {}),
+        "createdAt": trial_created_at,
+    } for item in (trial_links or [])]
     return {
         "id": project.id, "name": project.name,
         "description": project.description, "version": version.version_number,
@@ -899,9 +923,12 @@ def _workspace_payload(
         "linkMappings": snap["linkMappings"],
         "sentinels": snap["sentinels"],
         "canvasLayout": _json_safe(version.canvas_layout or {}),
-        # Version nodes carry definitions only. Runtime instances/facts remain
-        # separate projections and are never allowed to redefine the schema.
-        "instances": [], "linkInstances": [], "executionLogs": [],
+        # Trial data is read from its isolated tables only. Other version nodes
+        # carry definitions without leaking the current production projection.
+        "instances": isolated_objects,
+        "linkInstances": isolated_links,
+        "executionLogs": [],
+        "trialRun": _trial_payload(trial_run) if trial_run else None,
         "workspaceMode": workspace_mode,
         "editable": workspace_mode == "draft",
         "versionId": version.id,
@@ -1006,11 +1033,24 @@ def create_draft_version(
             "code": "legacy_snapshot_incomplete",
             "message": "该历史版本缺少完整结构快照，不能安全创建分支",
         })
-    siblings = [item.version_number for item in db.query(OntologyVersion).filter(
+    sibling_numbers = [item.version_number for item in db.query(OntologyVersion).filter(
         OntologyVersion.ontology_id == ontology_id,
         OntologyVersion.parent_version_id == source.id,
     ).all()]
-    number = next_draft_number(source.version_number, siblings)
+    # Version numbers are part of audit/provenance and must not be reused after
+    # a branch is deleted.  Keep the deleted row out of the visible tree while
+    # reserving its former number from the durable audit log.
+    deleted_numbers = []
+    for log in db.query(AuditLog).filter(
+            AuditLog.ontology_id == ontology_id,
+            AuditLog.event_subtype == "version_branch_deleted",
+    ).all():
+        before = log.before_state if isinstance(log.before_state, dict) else {}
+        deleted_number = before.get("versionNumber")
+        if isinstance(deleted_number, str):
+            deleted_numbers.append(deleted_number)
+    number = next_draft_number(
+        source.version_number, [*sibling_numbers, *deleted_numbers])
     # 从任何状态分支时继承视觉布局，但仍与新草稿的模型快照分开保存，
     # 避免仅调整过位置就被版本差异误报为对象定义变更。
     snap = complete_snapshot(source.snapshot_formal)
@@ -1035,6 +1075,86 @@ def create_draft_version(
     db.add(draft)
     db.commit()
     return {"data": _version_payload(draft)}
+
+
+@router.delete("/{ontology_id}/versions/{version_id}")
+def delete_draft_version(
+    ontology_id: str, version_id: str,
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
+):
+    """Delete only an unpublished leaf branch.
+
+    A version with descendants is part of the evolution tree's provenance and
+    cannot be removed. Published and superseded nodes are immutable audit facts.
+    """
+    version = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).with_for_update().first()
+    if version is None:
+        raise HTTPException(404, "Version not found")
+    if (version.node_kind != "draft"
+            or version.lifecycle_status not in {"editing", "trial_ready"}):
+        raise HTTPException(409, detail={
+            "code": "version_delete_forbidden",
+            "message": "只有未发布的草稿态或试跑态分支可以删除",
+        })
+    child = db.query(OntologyVersion).filter(
+        OntologyVersion.ontology_id == ontology_id,
+        OntologyVersion.parent_version_id == version.id,
+    ).first()
+    if child is not None:
+        raise HTTPException(409, detail={
+            "code": "version_not_leaf",
+            "message": "该版本下仍有分支，只有叶子节点可以删除",
+            "childVersionId": child.id,
+            "childVersionNumber": child.version_number,
+        })
+    running_trial = db.query(OntologyTrialRun).filter(
+        OntologyTrialRun.version_id == version.id,
+        OntologyTrialRun.status == "running",
+    ).first()
+    if running_trial is not None:
+        raise HTTPException(409, detail={
+            "code": "trial_running",
+            "message": "该版本仍在试跑中，暂时不能删除",
+            "trialRunId": running_trial.id,
+        })
+
+    number = version.version_number
+    trial_ids = [item.id for item in db.query(OntologyTrialRun.id).filter(
+        OntologyTrialRun.version_id == version.id,
+    ).all()]
+    if trial_ids:
+        # Delete explicitly as well as relying on ON DELETE CASCADE. This keeps
+        # SQLite/dev environments (where FK cascades may be disabled) aligned
+        # with PostgreSQL production semantics.
+        db.query(OntologyTrialLink).filter(
+            OntologyTrialLink.trial_run_id.in_(trial_ids),
+        ).delete(synchronize_session=False)
+        db.query(OntologyTrialObject).filter(
+            OntologyTrialObject.trial_run_id.in_(trial_ids),
+        ).delete(synchronize_session=False)
+        db.query(OntologyTrialRun).filter(
+            OntologyTrialRun.id.in_(trial_ids),
+        ).delete(synchronize_session=False)
+    # Change logs are historical records and remain queryable after branch
+    # deletion, but their optional FK must no longer point at the removed node.
+    db.query(OntologyChangeLog).filter(
+        OntologyChangeLog.version_id == version.id,
+    ).update({OntologyChangeLog.version_id: None}, synchronize_session=False)
+    db.delete(version)
+    db.add(AuditLog(
+        id=str(uuid.uuid4()), ontology_id=ontology_id,
+        event_type="edit", event_subtype="version_branch_deleted",
+        user_id=current_user.id, user_name=current_user.username,
+        description=f"删除叶子分支 {number}",
+        object_type="ontology_version", object_id=version_id,
+        before_state={"versionNumber": number}, after_state=None,
+        meta={"lifecycleStatus": version.lifecycle_status},
+    ))
+    db.commit()
+    return {"data": {"id": version_id, "version_number": number}}
 
 
 def _draft_or_404(db: Session, ontology_id: str, version_id: str) -> OntologyVersion:
@@ -1086,8 +1206,29 @@ def get_version_workspace(
         OntologyProject.id == ontology_id).first()
     if project is None:
         raise HTTPException(404, "Ontology not found")
+    trial_run = None
+    trial_objects: list[OntologyTrialObject] = []
+    trial_links: list[OntologyTrialLink] = []
+    if _workspace_mode(version) == "trial":
+        trial_run = db.query(OntologyTrialRun).filter(
+            OntologyTrialRun.ontology_id == ontology_id,
+            OntologyTrialRun.version_id == version.id,
+            OntologyTrialRun.status == "passed",
+        ).order_by(desc(OntologyTrialRun.created_at)).first()
+        if trial_run is not None:
+            trial_objects = db.query(OntologyTrialObject).filter(
+                OntologyTrialObject.trial_run_id == trial_run.id,
+            ).order_by(OntologyTrialObject.object_type_id,
+                       OntologyTrialObject.object_id).all()
+            trial_links = db.query(OntologyTrialLink).filter(
+                OntologyTrialLink.trial_run_id == trial_run.id,
+            ).order_by(OntologyTrialLink.link_type_id,
+                       OntologyTrialLink.link_id).all()
     return {"data": _workspace_payload(
-        project, version, is_current_release=project.current_release_id == version.id)}
+        project, version,
+        is_current_release=project.current_release_id == version.id,
+        trial_run=trial_run, trial_objects=trial_objects,
+        trial_links=trial_links)}
 
 
 @router.put("/{ontology_id}/layout")
@@ -1431,6 +1572,11 @@ def promote_draft(
     if draft.node_kind != "draft":
         raise HTTPException(409, detail={
             "code": "promotion_requires_draft", "message": "只能晋级草稿分支",
+        })
+    if draft.lifecycle_status != "trial_ready":
+        raise HTTPException(409, detail={
+            "code": "trial_ready_required",
+            "message": "只有已通过并冻结的试跑态版本可以转为发布态",
         })
     if draft.base_release_id != current.id:
         raise HTTPException(409, detail={

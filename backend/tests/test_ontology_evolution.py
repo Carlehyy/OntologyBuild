@@ -246,14 +246,18 @@ def _paired_dataset(db, monkeypatch) -> None:
     )
 
 
-def test_release_mapping_contract_allows_unmapped_types_but_validates_definitions():
+def test_release_mapping_contract_requires_every_type_and_stored_property():
     snapshot = {
         "objectTypes": [
             {
                 "id": "ot-order", "name": "Order", "displayName": "订单",
                 "primaryKey": "order-id", "properties": [
                     {"id": "order-id", "name": "id", "required": True},
-                    {"id": "order-name", "name": "name", "required": True},
+                    # Optional still means persisted; it must be mapped. Only
+                    # computed properties are exempt from the lake contract.
+                    {"id": "order-name", "name": "name", "required": False},
+                    {"id": "order-label", "name": "label", "required": False,
+                     "source": "computed", "computed": True},
                 ],
             },
             {
@@ -278,14 +282,19 @@ def test_release_mapping_contract_allows_unmapped_types_but_validates_definition
     }
 
     codes = {item["code"] for item in validate_release_mapping_contract(snapshot)}
-    assert "mapping_required_property_missing" in codes
-    assert "object_type_mapping_required" not in codes
-    assert "link_type_mapping_required" not in codes
+    assert "mapping_property_missing" in codes
+    assert "object_type_mapping_required" in codes
+    assert "link_type_mapping_required" in codes
 
     structure_only = dict(snapshot)
     structure_only["mappings"] = []
     structure_only["linkMappings"] = []
-    assert validate_release_mapping_contract(structure_only) == []
+    structure_codes = {
+        item["code"] for item in validate_release_mapping_contract(structure_only)
+    }
+    assert structure_codes == {
+        "object_type_mapping_required", "link_type_mapping_required",
+    }
 
     snapshot["mappings"][0]["fieldMapping"]["name"] = "name"
     snapshot["mappings"].append({
@@ -302,8 +311,8 @@ def test_release_mapping_contract_allows_unmapped_types_but_validates_definition
     assert validate_release_mapping_contract(snapshot) == []
 
 
-def test_structure_only_trial_and_promotion_publish_zero_instances(
-        client, auth_headers, ontology, db):
+def test_structure_only_draft_cannot_enter_trial(
+        client, auth_headers, ontology):
     oid = ontology["id"]
     root = _root(client, auth_headers, oid)
     draft = _draft(client, auth_headers, oid, root["id"])
@@ -317,35 +326,12 @@ def test_structure_only_trial_and_promotion_publish_zero_instances(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
         headers=auth_headers, json={},
     )
-    assert trial.status_code == 201, trial.text
-    run = trial.json()["data"]
-    assert run["status"] == "passed"
-    assert run["result"]["counts"] == {
-        "objects": 0, "links": 0, "facts": 0, "datasets": 0,
+    assert trial.status_code == 422, trial.text
+    detail = trial.json()["detail"]
+    assert detail["code"] == "publish_validation_failed"
+    assert {item["code"] for item in detail["errors"]} == {
+        "object_type_mapping_required",
     }
-    assert {item["code"] for item in run["result"]["warnings"]} == {
-        "object_type_unmapped",
-    }
-    impact = client.get(
-        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
-        headers=auth_headers).json()["data"]
-
-    promoted = client.post(
-        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
-        headers=auth_headers,
-        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
-    )
-    assert promoted.status_code == 201, promoted.text
-    release = promoted.json()["data"]
-    db.expire_all()
-    assert db.query(OntologyProject).filter_by(
-        id=oid).one().current_release_id == release["id"]
-    assert db.query(ObjectInstance).filter_by(ontology_id=oid).count() == 0
-    official = client.get(
-        f"/api/v2/formal/ontologies/{oid}/instances",
-        headers=auth_headers)
-    assert official.status_code == 200, official.text
-    assert official.json()["data"] == []
 
 
 def test_version_tree_uses_complete_snapshots_and_dependency_numbering(
@@ -388,6 +374,62 @@ def test_version_tree_uses_complete_snapshots_and_dependency_numbering(
     assert formal["objectTypes"][0]["id"] == "ot-order"
     assert formal["mappings"][0]["id"] == "mapping-order"
     assert db.query(ObjectInstance).filter_by(ontology_id=oid).count() == 0
+
+
+def test_only_unpublished_leaf_branches_can_be_deleted(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+    parent = _draft(client, auth_headers, oid, root["id"])
+    child = _draft(client, auth_headers, oid, parent["id"])
+
+    non_leaf = client.delete(
+        f"/api/v2/ontologies/{oid}/versions/{parent['id']}",
+        headers=auth_headers,
+    )
+    assert non_leaf.status_code == 409, non_leaf.text
+    assert non_leaf.json()["detail"]["code"] == "version_not_leaf"
+
+    deleted_child = client.delete(
+        f"/api/v2/ontologies/{oid}/versions/{child['id']}",
+        headers=auth_headers,
+    )
+    assert deleted_child.status_code == 200, deleted_child.text
+    assert deleted_child.json()["data"]["id"] == child["id"]
+
+    # Deleted version numbers remain reserved in the audit trail. Recreating a
+    # child under the same parent must advance instead of reusing v0.1.1.
+    replacement = _draft(client, auth_headers, oid, parent["id"])
+    assert replacement["version_number"] == "v0.1.2"
+    assert client.delete(
+        f"/api/v2/ontologies/{oid}/versions/{replacement['id']}",
+        headers=auth_headers,
+    ).status_code == 200
+
+    # A trial-ready branch is still unpublished and may be deleted when it is
+    # a leaf; isolated objects/runs are removed by the FK cascade.
+    _dataset(db, monkeypatch)
+    configured = _configure_draft(client, auth_headers, oid, parent)
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{parent['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert run.status_code == 201, run.text
+    assert run.json()["data"]["status"] == "passed"
+    deleted_trial = client.delete(
+        f"/api/v2/ontologies/{oid}/versions/{configured['id']}",
+        headers=auth_headers,
+    )
+    assert deleted_trial.status_code == 200, deleted_trial.text
+    db.expire_all()
+    assert db.query(OntologyTrialRun).filter_by(version_id=parent["id"]).count() == 0
+
+    immutable_release = client.delete(
+        f"/api/v2/ontologies/{oid}/versions/{root['id']}",
+        headers=auth_headers,
+    )
+    assert immutable_release.status_code == 409, immutable_release.text
+    assert immutable_release.json()["detail"]["code"] == "version_delete_forbidden"
 
 
 def test_legacy_current_version_is_frozen_as_complete_migration_baseline(
@@ -518,6 +560,13 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
         headers=auth_headers).json()["data"]
     assert workspace["workspaceMode"] == "trial"
     assert workspace["editable"] is False
+    assert workspace["trialRun"]["id"] == run["id"]
+    assert workspace["trialRun"]["status"] == "passed"
+    assert len(workspace["instances"]) == 2
+    assert {item["properties"]["id"] for item in workspace["instances"]} == {
+        "O-1", "O-2",
+    }
+    assert workspace["linkInstances"] == []
     workspace["baseRevision"] = workspace["revision"]
     workspace["objectTypes"][0]["displayName"] = "订单（已修改）"
     frozen = client.put(
@@ -637,6 +686,23 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     impact = client.get(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
         headers=auth_headers).json()["data"]
+
+    # Promotion checks the lifecycle state itself, not merely the existence of
+    # a passed run. This protects the transition if persisted state is ever
+    # repaired or imported independently of trial records.
+    draft_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
+    draft_row.lifecycle_status = "editing"
+    db.commit()
+    invalid_transition = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert invalid_transition.status_code == 409, invalid_transition.text
+    assert invalid_transition.json()["detail"]["code"] == "trial_ready_required"
+    draft_row.lifecycle_status = "trial_ready"
+    db.commit()
+
     unsafe_pointer_flushes: list[str] = []
 
     def capture_release_pointer_order(session, _flush_context, _instances):

@@ -21,6 +21,7 @@ import type {
   ActionExecutionLog,
   FunctionExecutionResult,
 } from '../types/ontology';
+import type { Sentinel } from '../../api/sentinelApi';
 
 // ============ 后端 /full 返回的对象类型带画布坐标 ============
 type BackendObjectType = ObjectType & { positionX?: number; positionY?: number };
@@ -47,6 +48,29 @@ export interface FullOntologyDTO {
   instances: ObjectInstance[];
   linkInstances: LinkInstance[];
   executionLogs: ActionExecutionLog[];
+  sentinels?: Sentinel[];
+  trialRun?: {
+    id: string;
+    status: 'running' | 'passed' | 'failed' | 'stale';
+    dataset_versions?: Array<Record<string, unknown>>;
+    result?: {
+      counts?: { objects?: number; links?: number; facts?: number; datasets?: number };
+      errors?: Array<{ message: string }>;
+      warnings?: Array<{ message: string }>;
+      sentinels?: Array<{
+        id?: string;
+        name?: string;
+        matched?: number;
+        plannedActions?: number;
+        errors?: string[];
+        skipped?: boolean;
+      }>;
+      actionsExecuted?: number;
+      sideEffects?: string;
+    };
+    created_at?: string;
+    completed_at?: string;
+  } | null;
 }
 
 const base = (id: string) => `formal/ontologies/${id}`;

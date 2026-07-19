@@ -2,14 +2,14 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, Database, Eye,
-  GitBranch, GitCommitHorizontal, MoreHorizontal, Plus, Rocket, ShieldCheck,
+  AlertTriangle, ArrowRight, Check, Database,
+  GitBranch, GitCommitHorizontal, MoreHorizontal, Plus, Rocket, ShieldCheck, Trash2,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { Modal } from '@/components/ui/Modal'
+import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import {
   ontologyVersionApi,
   type OntologyImpactReport,
@@ -30,6 +30,11 @@ function errorText(error: any) {
   }
   if (detail?.message) return detail.message
   return error?.message || '操作失败'
+}
+
+function errorIssues(error: any): Array<{ message: string; kind?: string; field?: string }> {
+  const detail = error?.response?.data?.detail ?? error?.detail
+  return Array.isArray(detail?.errors) ? detail.errors.filter((item: any) => item?.message) : []
 }
 
 function stageOf(node: VersionNode, currentReleaseId?: string): VersionStage {
@@ -76,6 +81,9 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
   const [description, setDescription] = useState('')
   const [trialDetail, setTrialDetail] = useState<Trial | null>(null)
   const [promotion, setPromotion] = useState<{ node: VersionNode; impact: OntologyImpactReport } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<VersionNode | null>(null)
+  const [gateIssues, setGateIssues] = useState<Array<{ message: string; kind?: string; field?: string }>>([])
+  const [gateVersionId, setGateVersionId] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
 
   const treeQuery = useQuery({
@@ -150,16 +158,42 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     },
   })
 
+  const deleteVersion = useMutation({
+    mutationFn: (node: VersionNode) => ontologyVersionApi.deleteVersion(ontologyId, node.id),
+    onSuccess: async (result, node) => {
+      setDeleteTarget(null)
+      if (gateVersionId === node.id) {
+        setGateIssues([])
+        setGateVersionId(null)
+      }
+      await refresh()
+      setNotice({ tone: 'good', text: `${result.version_number} 已删除。版本编号不会被复用。` })
+    },
+    onError: error => setNotice({ tone: 'bad', text: errorText(error) }),
+  })
+
   const runTrial = useMutation({
     mutationFn: (node: VersionNode) => ontologyVersionApi.runTrial(ontologyId, node.id),
     onSuccess: async run => {
       await refresh()
+      setGateIssues([])
+      setGateVersionId(null)
       setTrialDetail(run)
       setNotice(run.status === 'passed'
         ? { tone: 'good', text: '草稿已进入试跑态：快照冻结，真实数据仅写入隔离空间。' }
         : { tone: 'bad', text: '试跑未通过，请根据错误修正结构或映射。' })
     },
-    onError: error => setNotice({ tone: 'bad', text: errorText(error) }),
+    onError: (error, node) => {
+      const issues = errorIssues(error)
+      setGateIssues(issues)
+      setGateVersionId(node.id)
+      setNotice({
+        tone: 'bad',
+        text: issues.length > 0
+          ? `暂时不能进入试跑态：仍有 ${issues.length} 项发布就绪条件未满足。`
+          : errorText(error),
+      })
+    },
   })
 
   const inspectImpact = useMutation({
@@ -204,8 +238,10 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const children = roots.children.get(node.id) || []
     const editing = stage === 'draft'
     const trial = stage === 'trial'
+    const deletableStage = editing || trial
+    const isLeaf = children.length === 0
     const promotedFromVersion = node.promoted_from_id ? promotedFrom.get(node.promoted_from_id) : null
-    const menuItemClass = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500'
+    const menuItemClass = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent'
 
     return (
       <div key={node.id} role="treeitem" aria-level={depth + 1} aria-current={stage === 'current' ? 'true' : undefined}>
@@ -235,19 +271,19 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
             <div className="flex shrink-0 items-center gap-1.5">
               {editing ? (
                 <>
-                  <Button size="sm" onClick={() => openVersion(node)}>编辑模型</Button>
+                  <Button size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
                   <Button variant="outline" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
-                    进入试跑
+                    转为试跑态
                   </Button>
                 </>
               ) : trial ? (
                 <>
-                  <Button variant="ghost" size="sm" onClick={() => setTrialDetail(node.latest_trial!)}>查看结果</Button>
-                  <Button size="sm" onClick={() => inspectImpact.mutate(node)}>审核发布</Button>
+                  <Button variant="outline" size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
+                  <Button size="sm" onClick={() => inspectImpact.mutate(node)}>转为发布态</Button>
                 </>
               ) : (
                 <Button variant="outline" size="sm" onClick={() => openVersion(node)}>
-                  {stage === 'current' ? '查看当前' : '查看快照'}
+                  打开编辑器
                 </Button>
               )}
 
@@ -266,14 +302,20 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                       <Database size={13} /> 配置映射
                     </button>
                   )}
-                  {trial && (
-                    <button type="button" className={menuItemClass} onClick={() => openVersion(node)}>
-                      <Eye size={13} /> 查看快照
+                  <button type="button" className={menuItemClass} onClick={() => setSource(node)}>
+                    <Plus size={13} /> 创建新版本
+                  </button>
+                  {deletableStage && (
+                    <button
+                      type="button"
+                      className={menuItemClass}
+                      disabled={!isLeaf}
+                      title={!isLeaf ? '该版本下仍有分支，只有叶子节点可以删除' : undefined}
+                      onClick={() => setDeleteTarget(node)}
+                    >
+                      <Trash2 size={13} /> {isLeaf ? '删除此分支' : '删除此分支（非叶子）'}
                     </button>
                   )}
-                  <button type="button" className={menuItemClass} onClick={() => setSource(node)}>
-                    <Plus size={13} /> 从此创建分支
-                  </button>
                 </div>
               </details>
             </div>
@@ -290,37 +332,66 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
   }
 
   return (
-    <div className="space-y-4 pb-2">
-      <Card className="p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 pb-1">
+      <Card className="shrink-0 overflow-hidden p-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
           <div>
-            <h3 className="flex items-center gap-2 font-medium text-[var(--color-text-primary)]">
-              <GitCommitHorizontal size={17} /> 在秩序中演化
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <GitCommitHorizontal size={16} /> 从草稿到正式运行
             </h3>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--color-text-secondary)]">
-              主干是发布版本，侧枝是从任意完整快照创建的工作分支。点击任意节点即可按其阶段边界打开。
-            </p>
+            <p className="mt-0.5 text-xs text-slate-500">在秩序中演化：每次创建新版本都会生成独立、完整的草稿快照。</p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <ShieldCheck size={15} className="text-teal-600" /> 当前运行始终只指向一个发布版本
+          <div className="flex items-center gap-2 rounded-full bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700">
+            <ShieldCheck size={14} /> 当前正式运行：{treeQuery.data?.current_release_version}
           </div>
         </div>
-        <div className="mt-4 grid gap-2 md:grid-cols-3" aria-label="版本阶段边界">
-          <div className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800"><b>草稿态</b><span className="ml-2 text-sky-600">可编辑；不产生 Fact；不执行</span></div>
-          <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800"><b>试跑态</b><span className="ml-2 text-amber-600">快照冻结；真实数据隔离执行</span></div>
-          <div className="rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800"><b>发布态</b><span className="ml-2 text-teal-600">结构不可修改；承载正式运行</span></div>
+
+        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch px-4 py-3" aria-label="版本状态递进关系">
+          <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-sky-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-600 text-[11px] text-white">1</span>草稿态</div>
+            <p className="mt-1.5 text-xs leading-5 text-sky-700">完整定义与映射可编辑；新版本始终从此状态开始，不产生运行数据或执行动作。</p>
+          </div>
+          <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
+          <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[11px] text-white">2</span>试跑态</div>
+            <p className="mt-1.5 text-xs leading-5 text-amber-700">门禁：基线仍为当前发布版、结构与哨兵有效，全部对象、关系及存储属性完成映射；通过后冻结并隔离试跑。</p>
+          </div>
+          <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
+          <div className="rounded-xl border border-teal-100 bg-teal-50/70 p-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-teal-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-600 text-[11px] text-white"><Check size={12} /></span>发布态</div>
+            <p className="mt-1.5 text-xs leading-5 text-teal-700">门禁：精确试跑已通过且未失效、数据版本未变化、影响已确认；发布后结构只读，仅当前版本正式执行。</p>
+          </div>
         </div>
       </Card>
 
       {notice && (
-        <div role="status" className={`rounded-lg border px-3 py-2 text-sm ${notice.tone === 'good'
+        <div role="status" aria-live="polite" className={`shrink-0 rounded-lg border px-3 py-2 text-sm ${notice.tone === 'good'
           ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
           : 'border-red-200 bg-red-50 text-red-800'}`}>
           {notice.text}
         </div>
       )}
 
-      <section className="max-h-[52vh] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
+      {gateIssues.length > 0 && (
+        <div role="alert" className="shrink-0 rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-900">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-semibold">草稿尚未满足转为试跑态的硬性条件</p>
+              <div className="mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-red-800">
+                {gateIssues.map((item, index) => <p key={`${item.kind || ''}-${item.field || ''}-${index}`}>• {item.message}</p>)}
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => {
+              const node = nodes.find(item => item.id === gateVersionId)
+              if (node) openMapping(node)
+            }}>
+              <Database size={14} /> 完善映射
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-slate-700">版本演化树</p>
@@ -346,7 +417,9 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
             <Button loading={createDraft.isPending} onClick={() => createDraft.mutate()}>创建分支</Button>
           </>}>
           <div className="space-y-3">
-            <p className="text-sm text-gray-600">系统会复制该节点的全部对象、关系、动作、函数、哨兵和映射，不依赖祖先拼装。</p>
+            <p className="text-sm leading-6 text-gray-600">
+              新版本固定为草稿态，并一次性复制对象实体、实体关系、执行动作、激活函数、哨兵、对象映射、关系映射及画布布局，不依赖祖先拼装。
+            </p>
             <input value={label} onChange={event => setLabel(event.target.value)} placeholder="分支标签（可选）" className="w-full rounded-lg border px-3 py-2 text-sm" />
             <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder="本次变化目标（可选）" className="h-20 w-full resize-none rounded-lg border px-3 py-2 text-sm" />
             {createDraft.isError && <p className="text-sm text-red-600">{errorText(createDraft.error)}</p>}
@@ -356,7 +429,15 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
       {trialDetail && (
         <Modal open onClose={() => setTrialDetail(null)} title="隔离试跑结果" size="lg"
-          footer={<Button onClick={() => setTrialDetail(null)}>关闭</Button>}>
+          footer={<>
+            <Button variant="ghost" onClick={() => setTrialDetail(null)}>关闭</Button>
+            {trialDetail.status === 'passed' && (
+              <Button onClick={() => {
+                const node = nodes.find(item => item.latest_trial?.id === trialDetail.id)
+                if (node) openVersion(node)
+              }}>打开试跑图谱</Button>
+            )}
+          </>}>
           <div className="space-y-4 text-sm">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {Object.entries(trialDetail.result?.counts || {}).map(([key, value]) => (
@@ -400,6 +481,17 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
           </div>
         </Modal>
       )}
+
+      <ConfirmModal
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteVersion.mutate(deleteTarget)}
+        title={`删除叶子分支 ${deleteTarget?.version_number || ''}`}
+        description="该草稿或试跑快照及其隔离试跑数据将被永久删除，版本编号不会复用。发布版本、已晋级版本及包含下级分支的节点始终不可删除。"
+        confirmText="删除此分支"
+        variant="danger"
+        loading={deleteVersion.isPending}
+      />
     </div>
   )
 }

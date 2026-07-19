@@ -5,6 +5,7 @@ import {
 } from '@heroicons/react/24/outline'
 import { useOntologyStore } from '../../store/ontologyStore'
 import { sentinelApi, type Sentinel, type SentinelFiring } from '../../../api/sentinelApi'
+import { apiClientV2 } from '../../../api/client'
 
 interface Props {
   isOpen: boolean
@@ -107,6 +108,13 @@ function compileCondition(rows: CondRow[], logic: 'and' | 'or'): string {
 export default function SentinelPanel({ isOpen, onClose }: Props) {
   const { id: ontologyId } = useParams<{ id: string }>()
   const { ontology } = useOntologyStore()
+  const workspaceMode = useOntologyStore(s => s.workspaceMode)
+  const workspaceVersionId = useOntologyStore(s => s.workspaceVersionId)
+  const workspaceSentinels = useOntologyStore(s => s.workspaceSentinels)
+  const workspaceTrialRun = useOntologyStore(s => s.workspaceTrialRun)
+  const revision = useOntologyStore(s => s.revision)
+  const runtimeAccessible = workspaceMode === 'runtime'
+  const definitionEditable = runtimeAccessible || workspaceMode === 'draft'
   const [list, setList] = useState<Sentinel[]>([])
   const [firings, setFirings] = useState<SentinelFiring[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -140,6 +148,26 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
 
   const refresh = async () => {
     if (!ontologyId) return
+    if (!runtimeAccessible) {
+      setList(workspaceSentinels)
+      const results = workspaceMode === 'trial'
+        ? (workspaceTrialRun?.result?.sentinels || [])
+        : []
+      setFirings(results.map((item, index): SentinelFiring => ({
+        id: `trial-${item.id || index}`,
+        sentinelId: item.id || `trial-${index}`,
+        sentinelName: item.name || '未命名哨兵',
+        triggerSource: 'trial',
+        status: (item.errors || []).length > 0 ? 'error' : item.skipped ? 'skipped' : 'evaluated',
+        matchCount: item.matched || 0,
+        matches: [],
+        actionResults: [],
+        error: (item.errors || []).join('；') || undefined,
+        durationMs: 0,
+      })))
+      setError(null)
+      return
+    }
     // 失败必须可见：静默吞错会把"后端挂了"伪装成"没有哨兵"
     try {
       const [s, f] = await Promise.all([
@@ -153,7 +181,7 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     }
   }
 
-  useEffect(() => { if (isOpen) void refresh() }, [isOpen, ontologyId])
+  useEffect(() => { if (isOpen) void refresh() }, [isOpen, ontologyId, runtimeAccessible, workspaceSentinels, workspaceTrialRun])
 
   // 自动推断关系约束:依据 bindings 两两之间唯一的实体关系
   const inferLinks = (bindings: Draft['bindings']) => {
@@ -215,7 +243,7 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
   })
 
   const save = async () => {
-    if (!ontologyId || !draft) return
+    if (!ontologyId || !draft || !definitionEditable) return
     setBusy(true)
     try {
       const condition = draft.advanced ? draft.conditionRaw : compileCondition(draft.condRows, draft.condLogic)
@@ -234,8 +262,31 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
         enabled: draft.enabled,
         status: 'published',
       }
-      if (draft.id) await sentinelApi.update(ontologyId, draft.id, body)
-      else await sentinelApi.create(ontologyId, body)
+      if (runtimeAccessible) {
+        if (draft.id) await sentinelApi.update(ontologyId, draft.id, body)
+        else await sentinelApi.create(ontologyId, body)
+      } else {
+        if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
+        const id = draft.id || crypto.randomUUID()
+        const previous = list.find(item => item.id === id)
+        const nextSentinel: Sentinel = {
+          ...(previous || {} as Sentinel),
+          ...body,
+          id,
+          ontologyId,
+          name: previous?.name || draft.displayName,
+          status: 'draft',
+        }
+        const nextList = previous
+          ? list.map(item => item.id === id ? nextSentinel : item)
+          : [...list, nextSentinel]
+        const result = await apiClientV2.put<{ revision: string }>(
+          `/ontologies/${ontologyId}/versions/${workspaceVersionId}/workspace/mappings`,
+          { baseRevision: revision, sentinels: nextList },
+        )
+        setList(nextList)
+        useOntologyStore.setState({ workspaceSentinels: nextList, revision: result.revision })
+      }
       setDraft(null)
       setError(null)
       await refresh()
@@ -245,7 +296,7 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
   }
 
   const runNow = async () => {
-    if (!ontologyId) return
+    if (!ontologyId || !runtimeAccessible) return
     setBusy(true)
     try {
       await sentinelApi.run(ontologyId)
@@ -255,6 +306,46 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     } catch (e: any) {
       setError(`手动触发失败：${errText(e)}`)
     } finally { setBusy(false) }
+  }
+
+  const toggleSentinel = async (sentinel: Sentinel) => {
+    if (!ontologyId || !definitionEditable) return
+    try {
+      if (runtimeAccessible) {
+        await sentinelApi.toggle(ontologyId, sentinel.id)
+        await refresh()
+        return
+      }
+      if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
+      const nextList = list.map(item => item.id === sentinel.id ? { ...item, enabled: !item.enabled } : item)
+      const result = await apiClientV2.put<{ revision: string }>(
+        `/ontologies/${ontologyId}/versions/${workspaceVersionId}/workspace/mappings`,
+        { baseRevision: revision, sentinels: nextList },
+      )
+      setList(nextList)
+      useOntologyStore.setState({ workspaceSentinels: nextList, revision: result.revision })
+      setError(null)
+    } catch (e: any) { setError(`切换启停失败：${errText(e)}`) }
+  }
+
+  const removeSentinel = async (sentinel: Sentinel) => {
+    if (!ontologyId || !definitionEditable || !confirm('删除该哨兵？触发历史会保留。')) return
+    try {
+      if (runtimeAccessible) {
+        await sentinelApi.remove(ontologyId, sentinel.id)
+        await refresh()
+        return
+      }
+      if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
+      const nextList = list.filter(item => item.id !== sentinel.id)
+      const result = await apiClientV2.put<{ revision: string }>(
+        `/ontologies/${ontologyId}/versions/${workspaceVersionId}/workspace/mappings`,
+        { baseRevision: revision, sentinels: nextList },
+      )
+      setList(nextList)
+      useOntologyStore.setState({ workspaceSentinels: nextList, revision: result.revision })
+      setError(null)
+    } catch (e: any) { setError(`删除失败：${errText(e)}`) }
   }
 
   const setBinding = (i: number, patch: Partial<Draft['bindings'][0]>) => {
@@ -284,7 +375,8 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={runNow} disabled={busy}
+            <button onClick={runNow} disabled={busy || !runtimeAccessible}
+              title={!runtimeAccessible ? '只有当前发布态可以手动触发哨兵' : undefined}
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/90 hover:bg-rose-500 text-white text-xs disabled:opacity-50">
               <BoltIcon className="w-4 h-4" /> 手动触发
             </button>
@@ -306,6 +398,15 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
 
         {/* 唯一滚动容器 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {!runtimeAccessible && (
+            <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+              {workspaceMode === 'draft'
+                ? '草稿态可编辑哨兵定义，但不会评估条件或执行动作。'
+                : workspaceMode === 'trial'
+                  ? '正在查看冻结的哨兵定义和隔离试跑评估；触发与修改均不可操作。'
+                  : '哨兵定义完整可见；历史或归档版本不读取当前正式触发记录，也不可修改。'}
+            </div>
+          )}
           {error && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
               {error}
@@ -313,8 +414,9 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
           )}
           {tab === 'list' && !draft && (
             <>
-              <button onClick={() => setDraft(emptyDraft())}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-surface-600 text-surface-300 hover:border-rose-400 hover:text-rose-400 text-sm">
+              <button onClick={() => setDraft(emptyDraft())} disabled={!definitionEditable}
+                title={!definitionEditable ? '当前状态不可新建哨兵' : undefined}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-surface-600 text-surface-300 hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-40 text-sm">
                 <PlusIcon className="w-4 h-4" /> 新建哨兵
               </button>
               {list.map(s => (
@@ -325,20 +427,11 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
                       <span className="text-sm text-surface-100">{s.displayName}</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setDraft(toDraft(s))} className="text-[11px] text-surface-400 hover:text-rose-400 px-1">编辑</button>
-                      <button onClick={async () => {
-                        try { await sentinelApi.toggle(ontologyId!, s.id); setError(null) }
-                        catch (e: any) { setError(`切换启停失败：${errText(e)}`) }
-                        void refresh()
-                      }}
-                        className="text-[11px] text-surface-400 hover:text-emerald-400 px-1">{s.enabled ? '停用' : '启用'}</button>
-                      <button onClick={async () => {
-                        if (!confirm('删除该哨兵？触发历史会保留。')) return
-                        try { await sentinelApi.remove(ontologyId!, s.id); setError(null) }
-                        catch (e: any) { setError(`删除失败：${errText(e)}`) }
-                        void refresh()
-                      }}
-                        className="p-1 text-surface-400 hover:text-red-400"><TrashIcon className="w-3.5 h-3.5" /></button>
+                      <button disabled={!definitionEditable} onClick={() => setDraft(toDraft(s))} className="text-[11px] text-surface-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-35 px-1">编辑</button>
+                      <button disabled={!definitionEditable} onClick={() => void toggleSentinel(s)}
+                        className="text-[11px] text-surface-400 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-35 px-1">{s.enabled ? '停用' : '启用'}</button>
+                      <button disabled={!definitionEditable} onClick={() => void removeSentinel(s)}
+                        className="p-1 text-surface-400 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-35"><TrashIcon className="w-3.5 h-3.5" /></button>
                     </div>
                   </div>
                   <div className="mt-2 text-[11px] text-surface-400 space-y-0.5">

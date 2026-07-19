@@ -25,6 +25,8 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
   const testFunction = useOntologyStore((s) => s.testFunction);
   const backendId = useOntologyStore((s) => s.backendId);
   const isDirty = useOntologyStore((s) => s.isDirty);
+  const workspaceMode = useOntologyStore((s) => s.workspaceMode);
+  const executionAllowed = workspaceMode === 'runtime';
 
   const [functionId, setFunctionId] = useState<string>(initialFunctionId || (functions[0]?.id ?? ''));
   const [params, setParams] = useState<Record<string, unknown>>({});
@@ -44,8 +46,8 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
   const primaryKeyProp = targetObjectType?.properties.find((p) => p.id === targetObjectType.primaryKey || p.name === targetObjectType.primaryKey);
 
   useEffect(() => {
-    setUseRemote(!!backendId && !isDirty && fn?.language === 'expression');
-  }, [backendId, isDirty, fn?.language]);
+    setUseRemote(executionAllowed && !!backendId && !isDirty && fn?.language === 'expression');
+  }, [backendId, executionAllowed, isDirty, fn?.language]);
 
   const eligibleInstances = useMemo<ObjectInstance[]>(() => {
     if (!fn?.targetObjectTypeId) return [];
@@ -61,7 +63,7 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
   const targetInstance = eligibleInstances.find((i) => i.id === selectedInstanceId);
 
   const handleRun = () => {
-    if (!fn) return;
+    if (!fn || !executionAllowed) return;
     setLoading(true);
     setResult(null);
     setLog([]);
@@ -178,13 +180,18 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
               <p className="text-sm text-cyan-300/70">Function Tester - 输入参数，模拟执行，查看结果</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/10 transition-colors" aria-label="关闭函数测试器" title="关闭函数测试器">
             <XMarkIcon className="w-6 h-6 text-gray-400" />
           </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {!executionAllowed && (
+            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              当前版本可查看函数定义、参数和可用实例，但只有当前发布态可以执行函数。
+            </div>
+          )}
           {!fn ? (
             <div className="text-center py-12">
               <BeakerIcon className="w-16 h-16 text-surface-600 mx-auto mb-4" />
@@ -300,7 +307,7 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
                     type="checkbox"
                     checked={useRemote}
                     onChange={(e) => setUseRemote(e.target.checked)}
-                    disabled={isDirty || fn.language !== 'expression'}
+                    disabled={!executionAllowed || isDirty || fn.language !== 'expression'}
                     className="accent-cyan-500"
                   />
                   使用后端权威引擎执行（与生产运行时语义一致）
@@ -312,7 +319,7 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
               {/* 执行按钮 */}
               <button
                 onClick={handleRun}
-                disabled={loading || ((fn.functionType === 'object' || fn.functionType === 'action_validation') && !targetInstance)}
+                disabled={!executionAllowed || loading || ((fn.functionType === 'object' || fn.functionType === 'action_validation') && !targetInstance)}
                 className="w-full py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-all flex items-center justify-center gap-2"
               >
                 {loading ? (
@@ -320,7 +327,7 @@ export default function FunctionTester({ isOpen, initialFunctionId, onClose }: F
                 ) : (
                   <PlayIcon className="w-5 h-5" />
                 )}
-                {loading ? '执行中...' : '执行函数'}
+                {loading ? '执行中...' : executionAllowed ? '执行函数' : '当前状态不可执行'}
               </button>
 
               {/* 结果 */}

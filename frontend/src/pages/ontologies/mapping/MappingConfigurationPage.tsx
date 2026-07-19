@@ -66,7 +66,7 @@ function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
 
 function ObjectCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
   const object = data.object!
-  const properties = object.properties.filter(property => property.source !== 'computed')
+  const properties = object.properties.filter(property => property.source !== 'computed' && !property.computed)
   return (
     <div className="dmc-node dmc-node--object">
       <div className="dmc-node__stripe" />
@@ -84,7 +84,7 @@ function ObjectCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
 
 function RelationCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
   const relation = data.relation!
-  const properties = (relation.properties || []).filter(property => property.source !== 'computed')
+  const properties = (relation.properties || []).filter(property => property.source !== 'computed' && !property.computed)
   return (
     <div className="dmc-node dmc-node--relation">
       <div className="dmc-node__stripe" />
@@ -514,7 +514,9 @@ export default function MappingConfigurationPage() {
             {filteredTargets.map(target => {
               const nodeId = `${rightKind}:${target.id}`
               const added = nodes.some(node => node.id === nodeId)
-              const properties = rightKind === 'object' ? (target as MappingObjectType).properties.filter(item => item.source !== 'computed') : (target as MappingLinkType).properties || []
+              const properties = rightKind === 'object'
+                ? (target as MappingObjectType).properties.filter(item => item.source !== 'computed' && !item.computed)
+                : ((target as MappingLinkType).properties || []).filter(item => item.source !== 'computed' && !item.computed)
               const total = properties.length + (rightKind === 'relation' ? 2 : 0)
               const mapped = [...mappedTargetHandles].filter(key => key.startsWith(`${nodeId}:`)).length
               return <div className="dmc-target-item" key={target.id}><span className={`dmc-target-icon dmc-target-icon--${rightKind}`}>{rightKind === 'object' ? <Boxes size={14} /> : <GitBranch size={14} />}</span><span><b>{target.displayName || target.name}</b><small>{rightKind === 'object' ? '对象实体' : '实体关系'} · {mapped}/{total} 已映射</small></span><em data-complete={total > 0 && mapped === total} data-partial={mapped > 0 && mapped < total}>{mapped === 0 ? '未配置' : mapped === total ? '已完成' : '配置中'}</em><button disabled={added} onClick={() => addTargetNode(rightKind, target.id)}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>

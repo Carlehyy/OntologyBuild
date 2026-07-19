@@ -11,6 +11,7 @@ export interface MappingProperty {
   type?: string
   required?: boolean
   source?: string
+  computed?: boolean
 }
 
 export interface MappingObjectType {

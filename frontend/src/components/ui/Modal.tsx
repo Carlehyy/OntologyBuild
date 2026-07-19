@@ -12,6 +12,8 @@ interface ModalProps {
   footer?: React.ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
   headerIcon?: React.ReactNode
+  panelClassName?: string
+  contentClassName?: string
 }
 
 const sizeMap = {
@@ -32,6 +34,8 @@ export function Modal({
   footer,
   size = 'md',
   headerIcon,
+  panelClassName,
+  contentClassName,
 }: ModalProps) {
   const titleId = React.useId()
   const descriptionId = React.useId()
@@ -60,8 +64,9 @@ export function Modal({
         aria-labelledby={title ? titleId : undefined}
         aria-describedby={description ? descriptionId : undefined}
         className={cn(
-          'relative w-full overflow-hidden rounded-2xl border border-white/80 bg-white/95 shadow-[0_24px_72px_rgba(15,23,42,0.18)] backdrop-blur-xl animate-slide-up',
+          'relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-2xl border border-white/80 bg-white/95 shadow-[0_24px_72px_rgba(15,23,42,0.18)] backdrop-blur-xl animate-slide-up',
           sizeMap[size],
+          panelClassName,
         )}
       >
         <button
@@ -95,7 +100,11 @@ export function Modal({
           </header>
         )}
 
-        <div className={cn('px-6 py-4', !(title || description) && 'pt-6')}>{children}</div>
+        <div className={cn(
+          'min-h-0 overflow-y-auto px-6 py-4',
+          !(title || description) && 'pt-6',
+          contentClassName,
+        )}>{children}</div>
         {footer && (
           <footer className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-6 py-4">
             {footer}

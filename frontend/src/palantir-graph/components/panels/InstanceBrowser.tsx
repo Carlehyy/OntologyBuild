@@ -39,6 +39,8 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
   const isDirty = useOntologyStore((s) => s.isDirty);
   const syncStatus = useOntologyStore((s) => s.syncStatus);
   const syncError = useOntologyStore((s) => s.syncError);
+  const workspaceMode = useOntologyStore((s) => s.workspaceMode);
+  const canMutateInstances = workspaceMode === 'runtime';
 
   const [selectedTypeId, setSelectedTypeId] = useState<string>(initialObjectTypeId || '');
   const [editingInstance, setEditingInstance] = useState<ObjectInstance | null>(null);
@@ -57,6 +59,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
     let cancelled = false;
     (async () => {
       const st = useOntologyStore.getState();
+      if (st.workspaceMode !== 'runtime') { setAggregates([]); return; }
       const type = st.ontology?.objectTypes.find((o) => o.id === selectedTypeId);
       if (!type || !st.ontology) { setAggregates([]); return; }
       const objectSetFns = st.ontology.functions.filter(
@@ -91,7 +94,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedTypeId, backendId, aggRefresh]);
+  }, [selectedTypeId, backendId, aggRefresh, workspaceMode]);
 
   const objectTypes = ontology?.objectTypes || [];
   const selectedType = objectTypes.find((ot) => ot.id === selectedTypeId);
@@ -106,7 +109,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
   }, [selectedType]);
 
   const confirmDelete = () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || !canMutateInstances) return;
     deleteInstance(deleteTarget.id);
     setDeleteTarget(null);
   };
@@ -120,7 +123,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
   const propertyLabel = (p: Property): string => p.displayName || p.name;
 
   const openCreate = () => {
-    if (!selectedType) return;
+    if (!selectedType || !canMutateInstances) return;
     setIsCreating(true);
     const initialProps: Record<string, unknown> = {};
     selectedType.properties.forEach((p) => {
@@ -137,7 +140,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
   };
 
   const saveInstance = () => {
-    if (!editingInstance || !selectedTypeId) return;
+    if (!editingInstance || !selectedTypeId || !canMutateInstances) return;
     if (isCreating) {
       addInstance({
         id: `inst_${Date.now()}`,
@@ -218,6 +221,14 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
           </button>
         </div>
 
+        {!canMutateInstances && (
+          <div role="status" className="border-b border-amber-500/20 bg-amber-500/10 px-6 py-2.5 text-xs text-amber-200">
+            {workspaceMode === 'trial'
+              ? '正在查看试跑隔离空间的数据。内容完整可见，但新增、编辑、删除和正式事实溯源均不可操作。'
+              : '当前版本不承载运行实例。对象类型与实例功能区仍可查看，数据操作仅对当前发布态开放。'}
+          </div>
+        )}
+
         {/* Toolbar */}
         <div className="px-6 py-3 border-b border-slate-700/50 flex items-center gap-3 bg-slate-900/50">
           <select
@@ -234,7 +245,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
           </select>
           {selectedType && (
             <>
-              <button onClick={openCreate} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm flex items-center gap-1.5">
+              <button onClick={openCreate} disabled={!canMutateInstances} title={!canMutateInstances ? '只有当前发布态可以新建实例' : undefined} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-40 text-white rounded-lg text-sm flex items-center gap-1.5">
                 <PlusIcon className="w-4 h-4" /> 新建实例
               </button>
               <label className="flex items-center gap-2 text-sm text-gray-400 ml-2">
@@ -249,7 +260,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
                 {syncError}
               </span>
             )}
-            {isDirty && (
+            {isDirty && canMutateInstances && (
               <button
                 onClick={() => void saveToBackend()}
                 disabled={syncStatus === 'saving'}
@@ -307,7 +318,7 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
             <div className="flex flex-col items-center justify-center h-full text-gray-500">
               <TableCellsIcon className="w-16 h-16 mb-4 opacity-30" />
               <p>暂无实例数据</p>
-              <button onClick={openCreate} className="mt-4 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm">
+              <button onClick={openCreate} disabled={!canMutateInstances} className="mt-4 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-40 text-white rounded-lg text-sm">
                 创建第一个实例
               </button>
             </div>
@@ -357,16 +368,17 @@ export default function InstanceBrowser({ isOpen: externalIsOpen, onClose, initi
                                 const pk = primaryKeyProp ? String(inst.properties[primaryKeyProp.name] ?? inst.id) : inst.id;
                                 setFactsTarget({ id: inst.id, label: `${selectedType.displayName} · ${pk}` });
                               }}
-                              className="p-1.5 text-gray-500 hover:text-violet-400 hover:bg-violet-500/10 rounded"
-                              title="属性溯源（变更历史）"
+                              disabled={!canMutateInstances}
+                              className="p-1.5 text-gray-500 hover:text-violet-400 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-35 rounded"
+                              title={canMutateInstances ? '属性溯源（变更历史）' : '隔离或历史版本不读取当前正式事实'}
                             >
                               <ClockIcon className="w-4 h-4" />
                             </button>
                           )}
-                          <button onClick={() => setEditingInstance(inst)} className="p-1.5 text-gray-500 hover:text-cyan-400 hover:bg-cyan-500/10 rounded" title="编辑">
+                          <button disabled={!canMutateInstances} onClick={() => setEditingInstance(inst)} className="p-1.5 text-gray-500 hover:text-cyan-400 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-35 rounded" title={canMutateInstances ? '编辑' : '当前状态不可编辑实例'}>
                             <PencilSquareIcon className="w-4 h-4" />
                           </button>
-                          <button onClick={() => setDeleteTarget(inst)} className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded" title="删除">
+                          <button disabled={!canMutateInstances} onClick={() => setDeleteTarget(inst)} className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-35 rounded" title={canMutateInstances ? '删除' : '当前状态不可删除实例'}>
                             <TrashIcon className="w-4 h-4" />
                           </button>
                         </div>
