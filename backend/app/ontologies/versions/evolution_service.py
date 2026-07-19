@@ -352,6 +352,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             errors.append({
                 "code": "mapping_property_missing", "kind": "mapping",
                 "id": mapping_id, "name": mapping_name,
+                "targetId": target_id, "targetName": label(target),
                 "message": (
                     f"Mapping「{mapping_name}」未覆盖 ObjectType「{label(target)}」"
                     f"的存储属性「{property_name}」"
@@ -453,6 +454,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             errors.append({
                 "code": "link_mapping_property_missing",
                 "kind": "linkMapping", "id": mapping_id, "name": mapping_name,
+                "targetId": link_type_id, "targetName": label(link_type),
                 "message": (
                     f"LinkMapping「{mapping_name}」未覆盖 LinkType「{label(link_type)}」"
                     f"的存储属性「{property_name}」"

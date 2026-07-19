@@ -42,6 +42,25 @@ export interface OntologyImpactReport {
   breakingCount: number
   breaking: Array<{ message: string }>
   total: { added: number; modified: number; deleted: number }
+  releaseReadiness?: {
+    ready: boolean
+    blockingCount: number
+    errors: OntologyReleaseGateIssue[]
+    trialRunId?: string | null
+    repairStrategy?: 'create_draft' | 'rebase' | null
+    repairSourceVersionId?: string | null
+  }
+}
+
+export interface OntologyReleaseGateIssue {
+  code: string
+  kind: string
+  id?: string
+  name?: string
+  message: string
+  field?: string
+  targetId?: string
+  targetName?: string
 }
 
 export const ontologyVersionApi = {

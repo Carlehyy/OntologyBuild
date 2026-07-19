@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import io
 
 from sqlalchemy import event
@@ -14,7 +15,7 @@ from app.models.ontology_version import (
 )
 from app.models.v2.mapping import OntologyMapping
 from app.ontologies.versions.evolution_service import (
-    impact_report, validate_release_mapping_contract,
+    impact_report, snapshot_hash, validate_release_mapping_contract,
 )
 
 
@@ -686,6 +687,14 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     impact = client.get(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
         headers=auth_headers).json()["data"]
+    assert impact["releaseReadiness"] == {
+        "ready": True,
+        "blockingCount": 0,
+        "errors": [],
+        "trialRunId": run["id"],
+        "repairStrategy": None,
+        "repairSourceVersionId": draft["id"],
+    }
 
     # Promotion checks the lifecycle state itself, not merely the existence of
     # a passed run. This protects the transition if persisted state is ever
@@ -795,6 +804,63 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
         for item in db.query(ObjectInstance).filter_by(ontology_id=oid).all()
     } == {release_v2["id"]}
     assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 4
+
+
+def test_release_readiness_groups_legacy_missing_property_mappings(
+        client, auth_headers, ontology, db, monkeypatch):
+    """Legacy passed trials still receive a friendly, fail-closed preflight.
+
+    Older deployments could freeze a trial while one or more persisted fields
+    were not mapped. The impact endpoint exposes structured target/field
+    metadata so the UI can group blockers instead of dumping messages.
+    """
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    draft = _configure_draft(
+        client, auth_headers, oid,
+        _draft(client, auth_headers, oid, root["id"]),
+    )
+    run_payload = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+
+    current_row = db.query(OntologyVersion).filter_by(id=root["id"]).one()
+    draft_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
+    run_row = db.query(OntologyTrialRun).filter_by(id=run_payload["id"]).one()
+    legacy_snapshot = copy.deepcopy(draft_row.snapshot_formal)
+    legacy_snapshot["mappings"][0]["fieldMapping"].pop("name")
+    legacy_hash = snapshot_hash(legacy_snapshot)
+    draft_row.snapshot_formal = legacy_snapshot
+    draft_row.snapshot_hash = legacy_hash
+    draft_row.lifecycle_status = "trial_ready"
+    run_row.snapshot_hash = legacy_hash
+    run_row.impact_hash = impact_report(
+        current_row.snapshot_formal, legacy_snapshot)["impactHash"]
+    db.commit()
+
+    response = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    readiness = response.json()["data"]["releaseReadiness"]
+    assert readiness["ready"] is False
+    assert readiness["blockingCount"] == 1
+    assert readiness["trialRunId"] == run_payload["id"]
+    assert readiness["repairStrategy"] == "create_draft"
+    assert readiness["repairSourceVersionId"] == draft["id"]
+    assert readiness["errors"] == [{
+        "code": "mapping_property_missing",
+        "kind": "mapping",
+        "id": "mapping-order",
+        "name": "Order",
+        "targetId": "ot-order",
+        "targetName": "订单",
+        "message": "Mapping「Order」未覆盖 ObjectType「订单」的存储属性「name」",
+        "field": "name",
+    }]
 
 
 def test_new_lake_version_after_trial_requires_rerun(

@@ -2,8 +2,9 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowRight, Check, Database,
-  GitBranch, GitCommitHorizontal, MoreHorizontal, Plus, Rocket, ShieldCheck, Trash2,
+  AlertTriangle, ArrowRight, Check, ChevronDown, CircleAlert, Database,
+  GitBranch, GitCommitHorizontal, LockKeyhole, MoreHorizontal, Plus, Rocket,
+  ShieldCheck, Trash2, Wrench,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -13,6 +14,7 @@ import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import {
   ontologyVersionApi,
   type OntologyImpactReport,
+  type OntologyReleaseGateIssue,
   type OntologyTrialRun as Trial,
   type OntologyVersionNode as VersionNode,
 } from '@/api/v2/ontology-versions'
@@ -71,6 +73,75 @@ const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warn
 function StageBadge({ stage }: { stage: VersionStage }) {
   const meta = STAGE_META[stage]
   return <Badge variant={meta.badge}>{meta.label}</Badge>
+}
+
+const PROPERTY_MAPPING_CODES = new Set([
+  'mapping_property_missing',
+  'link_mapping_property_missing',
+])
+
+const MAPPING_CODES = new Set([
+  ...PROPERTY_MAPPING_CODES,
+  'object_type_mapping_required',
+  'link_type_mapping_required',
+  'mapping_dataset_missing',
+  'mapping_field_mapping_invalid',
+  'mapping_object_type_not_found',
+  'link_mapping_endpoint_missing',
+  'link_mapping_field_mapping_invalid',
+  'link_mapping_type_not_found',
+  'link_mapping_source_object_mapping_missing',
+  'link_mapping_target_object_mapping_missing',
+])
+
+interface ReleaseIssueGroup {
+  key: string
+  title: string
+  subtitle: string
+  issues: OntologyReleaseGateIssue[]
+  fields: string[]
+}
+
+function groupReleaseIssues(issues: OntologyReleaseGateIssue[]): ReleaseIssueGroup[] {
+  const groups = new Map<string, ReleaseIssueGroup>()
+  issues.forEach((issue, index) => {
+    const key = issue.targetId || `${issue.kind}:${issue.id || issue.name || issue.code}:${index}`
+    const existing = groups.get(key)
+    const title = issue.targetName || issue.name || (
+      issue.kind === 'trialRun' ? '隔离试跑' : issue.kind === 'version' ? '版本基线' : '发布条件'
+    )
+    const kindLabel = issue.kind === 'linkMapping' || issue.kind === 'linkType'
+      ? '实体关系'
+      : issue.kind === 'mapping' || issue.kind === 'objectType'
+        ? '对象实体'
+        : '发布门禁'
+    const subtitle = issue.name && issue.name !== title && MAPPING_CODES.has(issue.code)
+      ? `${kindLabel} · 映射 ${issue.name}`
+      : kindLabel
+    if (existing) {
+      existing.issues.push(issue)
+      if (issue.field && PROPERTY_MAPPING_CODES.has(issue.code) && !existing.fields.includes(issue.field)) {
+        existing.fields.push(issue.field)
+      }
+      return
+    }
+    groups.set(key, {
+      key,
+      title,
+      subtitle,
+      issues: [issue],
+      fields: issue.field && PROPERTY_MAPPING_CODES.has(issue.code) ? [issue.field] : [],
+    })
+  })
+  return [...groups.values()]
+}
+
+function concisePromotionError(error: any) {
+  const detail = error?.response?.data?.detail ?? error?.detail
+  if (Array.isArray(detail?.errors)) {
+    return `发布条件在确认过程中发生变化，当前仍有 ${detail.errors.length} 项未满足，请关闭后重新检查。`
+  }
+  return typeof detail === 'string' ? detail : detail?.message || error?.message || '发布失败，请重新检查后再试。'
 }
 
 export default function VersionsTab({ ontologyId, onClose }: { ontologyId: string; onClose?: () => void }) {
@@ -221,7 +292,23 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       await refreshReleasedProjection()
       setNotice({ tone: 'good', text: `${release.version_number} 已发布并成为唯一运行版本。` })
     },
-    onError: error => setNotice({ tone: 'bad', text: errorText(error) }),
+    onError: error => setNotice({ tone: 'bad', text: concisePromotionError(error) }),
+  })
+
+  const createRepairDraft = useMutation({
+    mutationFn: () => ontologyVersionApi.createDraft(
+      ontologyId,
+      promotion!.impact.releaseReadiness!.repairSourceVersionId || promotion!.node.id,
+      {
+        versionLabel: '发布修复',
+        description: `修复 ${promotion!.node.version_number} 的发布前检查问题`,
+      },
+    ),
+    onSuccess: async node => {
+      setPromotion(null)
+      await refresh()
+      openMapping(node)
+    },
   })
 
   if (treeQuery.isLoading) return <LoadingState />
@@ -279,7 +366,11 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
               ) : trial ? (
                 <>
                   <Button variant="outline" size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
-                  <Button size="sm" onClick={() => inspectImpact.mutate(node)}>转为发布态</Button>
+                  <Button size="sm" onClick={() => {
+                    promote.reset()
+                    createRepairDraft.reset()
+                    inspectImpact.mutate(node)
+                  }}>转为发布态</Button>
                 </>
               ) : (
                 <Button variant="outline" size="sm" onClick={() => openVersion(node)}>
@@ -456,30 +547,125 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       )}
 
       {promotion && (
-        <Modal open onClose={() => setPromotion(null)} title={`审核 ${promotion.node.version_number} 的发布影响`} size="lg"
-          footer={<>
-            <Button variant="ghost" onClick={() => setPromotion(null)}>取消</Button>
-            <Button disabled={promotion.impact.baseOutdated} loading={promote.isPending} onClick={() => promote.mutate()}><Rocket size={14} /> 确认发布</Button>
-          </>}>
-          <div className="space-y-4 text-sm">
-            {promotion.impact.baseOutdated && <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-800"><AlertTriangle size={17} /> 草稿基线已过期，不能发布。</div>}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-lg border p-3"><b className="text-emerald-700">+{promotion.impact.total.added}</b><p className="text-xs text-gray-500">新增</p></div>
-              <div className="rounded-lg border p-3"><b className="text-amber-700">~{promotion.impact.total.modified}</b><p className="text-xs text-gray-500">修改</p></div>
-              <div className="rounded-lg border p-3"><b className="text-red-700">-{promotion.impact.total.deleted}</b><p className="text-xs text-gray-500">删除</p></div>
-            </div>
-            <div>
-              <h4 className="mb-2 font-medium">破坏性影响（{promotion.impact.breakingCount}）</h4>
-              {promotion.impact.breakingCount === 0
-                ? <p className="rounded-lg bg-emerald-50 p-3 text-emerald-800">未发现结构性破坏。</p>
-                : <div className="max-h-56 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
-                  <div key={index} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">{item.message}</div>
-                ))}</div>}
-            </div>
-            <p className="text-xs text-gray-500">确认后，仅本次试跑验证过的精确结构哈希和数据版本可晋级；任何变化都会自动拒绝。</p>
-            {promote.isError && <p className="text-sm text-red-600">{errorText(promote.error)}</p>}
-          </div>
-        </Modal>
+        (() => {
+          const readiness = promotion.impact.releaseReadiness
+          const blocked = promotion.impact.baseOutdated || readiness?.ready === false
+          const issues = readiness?.errors || []
+          const groups = groupReleaseIssues(issues)
+          const mappingIssues = issues.filter(item => MAPPING_CODES.has(item.code))
+          const propertyIssues = issues.filter(item => PROPERTY_MAPPING_CODES.has(item.code))
+          const repairable = readiness?.repairStrategy === 'create_draft'
+
+          return (
+            <Modal
+              open
+              onClose={() => setPromotion(null)}
+              title={`发布前检查 · ${promotion.node.version_number}`}
+              size="xl"
+              headerIcon={blocked
+                ? <CircleAlert size={20} className="text-red-600" />
+                : <ShieldCheck size={20} className="text-emerald-600" />}
+              footer={<>
+                <Button variant="ghost" onClick={() => setPromotion(null)}>取消</Button>
+                {blocked ? (
+                  <>
+                    <Button variant="outline" disabled><LockKeyhole size={14} /> 暂不可发布</Button>
+                    {repairable && (
+                      <Button loading={createRepairDraft.isPending} onClick={() => createRepairDraft.mutate()}>
+                        <Wrench size={14} /> 创建修复分支并完善映射
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <Button loading={promote.isPending} onClick={() => promote.mutate()}>
+                    <Rocket size={14} /> 确认发布
+                  </Button>
+                )}
+              </>}
+            >
+              <div className="space-y-5 text-sm">
+                {blocked ? (
+                  <div data-testid="release-readiness-blocked" role="alert" className="rounded-xl border border-red-200 bg-red-50/80 p-4 text-red-950">
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-700">
+                        <LockKeyhole size={17} />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold">当前版本暂时不能发布</h3>
+                        <p className="mt-1 leading-6 text-red-800">
+                          {mappingIssues.length > 0
+                            ? `发现 ${groups.filter(group => group.issues.some(issue => MAPPING_CODES.has(issue.code))).length} 个本体元素存在 ${mappingIssues.length} 项映射问题${propertyIssues.length > 0 ? `，其中 ${propertyIssues.length} 个存储属性尚未映射` : ''}。`
+                            : `仍有 ${readiness?.blockingCount || issues.length || 1} 项发布条件未满足。`}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-red-700">
+                          {repairable
+                            ? `${promotion.node.version_number} 已完成试跑并被冻结，系统会从它创建一个完整草稿分支；补齐后需重新试跑。`
+                            : '当前发布基线已经变化，请先基于最新发布版合并本分支改动，再重新试跑。'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div data-testid="release-readiness-ready" role="status" className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-emerald-900">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"><Check size={17} /></span>
+                    <div><h3 className="font-semibold">发布条件已满足</h3><p className="mt-1 text-xs leading-5 text-emerald-700">精确试跑、数据版本和映射完整性均已通过检查，可以确认发布。</p></div>
+                  </div>
+                )}
+
+                {blocked && groups.length > 0 && (
+                  <section aria-labelledby="release-blockers-heading">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h3 id="release-blockers-heading" className="font-semibold text-slate-800">需要处理的问题</h3>
+                      <span className="text-xs text-slate-500">{issues.length} 项 · 按本体元素归组</span>
+                    </div>
+                    <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                      {groups.map(group => (
+                        <details key={group.key} data-testid="release-readiness-group" className="group rounded-lg border border-slate-200 bg-white open:border-red-200 open:bg-red-50/30">
+                          <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden">
+                            <CircleAlert size={16} className="shrink-0 text-red-500" />
+                            <span className="min-w-0 flex-1"><b className="block truncate text-slate-800">{group.title}</b><span className="text-xs text-slate-500">{group.subtitle}</span></span>
+                            <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">{group.issues.length} 项</span>
+                            <ChevronDown size={16} className="text-slate-400 transition-transform group-open:rotate-180" />
+                          </summary>
+                          <div className="border-t border-slate-100 px-3 py-3">
+                            {group.fields.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5" aria-label={`${group.title} 未映射属性`}>
+                                {group.fields.map(field => <code key={field} className="rounded-md border border-red-100 bg-white px-2 py-1 text-xs text-red-700">{field}</code>)}
+                              </div>
+                            )}
+                            {group.issues.filter(issue => !PROPERTY_MAPPING_CODES.has(issue.code)).map((issue, index) => (
+                              <p key={`${issue.code}-${index}`} className="text-xs leading-5 text-slate-700">{issue.message}</p>
+                            ))}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                <section aria-labelledby="release-impact-heading">
+                  <h3 id="release-impact-heading" className="mb-2 font-semibold text-slate-800">结构影响</h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3"><b className="text-lg text-emerald-700">+{promotion.impact.total.added}</b><p className="text-xs text-slate-500">新增</p></div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3"><b className="text-lg text-amber-700">~{promotion.impact.total.modified}</b><p className="text-xs text-slate-500">修改</p></div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3"><b className="text-lg text-red-700">-{promotion.impact.total.deleted}</b><p className="text-xs text-slate-500">删除</p></div>
+                  </div>
+                  <div className="mt-3">
+                    {promotion.impact.breakingCount === 0
+                      ? <p className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-800">未发现结构性破坏。</p>
+                      : <div className="max-h-40 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
+                        <div key={index} className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900"><AlertTriangle size={16} className="mt-0.5 shrink-0" />{item.message}</div>
+                      ))}</div>}
+                  </div>
+                </section>
+
+                {!blocked && <p className="text-xs text-slate-500">确认后，仅本次试跑验证过的精确结构哈希和数据版本可晋级；任何变化都会自动拒绝。</p>}
+                {createRepairDraft.isError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">创建修复分支失败：{errorText(createRepairDraft.error)}</p>}
+                {promote.isError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{concisePromotionError(promote.error)}</p>}
+              </div>
+            </Modal>
+          )
+        })()
       )}
 
       <ConfirmModal
