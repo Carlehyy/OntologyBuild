@@ -26,10 +26,6 @@ class Settings(BaseSettings):
     super_assistant_max_tool_rounds: int = 8
     super_assistant_tool_result_chars: int = 30000
     super_assistant_approval_timeout_seconds: int = 180
-    # Comma-separated exact hosts, wildcard suffixes (*.example.com), or CIDRs.
-    # Development permits loopback MCP servers; production requires an explicit
-    # allowlist and never inherits the API-Hub proxy policy implicitly.
-    super_assistant_mcp_allowed_hosts: str = "localhost,127.0.0.1,::1"
     # stdio launches a process inside the backend container. Keep it opt-in and
     # require an explicit executable allowlist because this is equivalent to
     # granting server-side code execution to assistant configurators.

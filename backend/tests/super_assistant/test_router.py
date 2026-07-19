@@ -22,7 +22,7 @@ from app.super_assistant.models import (
 
 def test_user_can_manage_conversations_folder_skills_and_mcp(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "super_assistant_skill_root", str(tmp_path / "skills"))
-    monkeypatch.setattr(settings, "super_assistant_mcp_allowed_hosts", "localhost")
+    monkeypatch.setattr(settings, "environment", "development")
     engine = create_engine(
         f"sqlite:///{tmp_path / 'router.db'}",
         connect_args={"check_same_thread": False},

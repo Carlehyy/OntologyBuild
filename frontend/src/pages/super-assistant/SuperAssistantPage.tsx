@@ -364,10 +364,10 @@ function ConfirmationCard({ pending, busy, onDecision }: {
 }
 
 
-function DialogShell({ title, description, wide = false, onClose, children }: {
+function DialogShell({ title, description, size = 'default', onClose, children }: {
   title: string
   description?: string
-  wide?: boolean
+  size?: 'default' | 'large' | 'wide'
   onClose: () => void
   children: React.ReactNode
 }) {
@@ -402,12 +402,18 @@ function DialogShell({ title, description, wide = false, onClose, children }: {
     }
   }, [onClose])
 
+  const sizeClass = {
+    default: 'max-h-[90dvh] max-w-xl',
+    large: 'max-h-[85dvh] max-w-3xl',
+    wide: 'max-h-[90dvh] max-w-5xl',
+  }[size]
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={onClose}>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}
         onMouseDown={event => event.stopPropagation()}
-        className={`flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl ${wide ? 'max-w-5xl' : 'max-w-xl'}`}>
-        <header className="flex items-start justify-between border-b border-[var(--color-border)] px-5 py-4">
+        className={`flex w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl ${sizeClass}`}>
+        <header className="flex shrink-0 items-start justify-between border-b border-[var(--color-border)] px-5 py-4">
           <div>
             <h2 id={titleId} className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h2>
             {description && <p id={descriptionId} className="mt-1 text-xs text-[var(--color-text-tertiary)]">{description}</p>}
@@ -528,7 +534,7 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
   }
 
   return (
-    <DialogShell wide title={`编辑 Skill：${skill.name}`} description={`revision ${revision} · ${files.length} 个文件`} onClose={onClose}>
+    <DialogShell size="wide" title={`编辑 Skill：${skill.name}`} description={`revision ${revision} · ${files.length} 个文件`} onClose={onClose}>
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="flex min-h-40 flex-col border-b border-[var(--color-border)] bg-[var(--color-bg-base)] md:border-b-0 md:border-r">
           <div className="border-b border-[var(--color-border)] p-3">
@@ -675,8 +681,8 @@ function McpDialog({ server, onClose, onSaved }: {
   }
 
   return (
-    <DialogShell title={server ? `编辑 MCP：${server.name}` : '添加 MCP Server'} description="支持粘贴客户端 JSON，也可直接配置 stdio、SSE 或 Streamable HTTP。" onClose={onClose}>
-      <div className="flex-1 space-y-4 overflow-y-auto p-5">
+    <DialogShell size="large" title={server ? `编辑 MCP：${server.name}` : '添加 MCP Server'} description="支持粘贴客户端 JSON，也可直接配置 stdio、SSE 或 Streamable HTTP。" onClose={onClose}>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable] sm:p-6">
         {!server && <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)]" open>
           <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium text-[var(--color-text-secondary)]">粘贴 MCP 客户端 JSON</summary>
           <div className="space-y-2 border-t border-[var(--color-border)] p-3">
@@ -717,7 +723,7 @@ function McpDialog({ server, onClose, onSaved }: {
           <label className="block text-xs text-[var(--color-text-secondary)]">MCP URL <span className="text-red-500">*</span>
             <input type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://mcp.example.com/mcp"
               className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
-            <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">服务域名需由部署方加入 SUPER_ASSISTANT_MCP_ALLOWED_HOSTS。</span>
+            <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">公网地址可直接连接；生产环境会拒绝环回、内网和链路本地地址。</span>
           </label>
           <label className="block text-xs text-[var(--color-text-secondary)]">请求头 JSON
             <textarea value={headers} onChange={event => setHeaders(event.target.value)} rows={4} placeholder={server ? `留空保持现有请求头（${server.header_names.join(', ') || '无'}）` : '{\n  "Authorization": "Bearer …"\n}'}
@@ -735,9 +741,9 @@ function McpDialog({ server, onClose, onSaved }: {
         {!confirmation && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">关闭确认会允许模型直接执行该 Server 的所有工具，请仅对完全可信、只读的服务使用。</p>}
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
       </div>
-      <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
-        <button onClick={onClose} className="min-h-10 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
-        <button onClick={save} disabled={busy || !name || (transport === 'stdio' ? !command : !url)} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
+      <footer className="flex shrink-0 justify-center gap-3 border-t border-[var(--color-border)] px-5 py-4">
+        <button onClick={onClose} className="min-h-10 min-w-24 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
+        <button onClick={save} disabled={busy || !name || (transport === 'stdio' ? !command : !url)} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
           {busy && <Loader2 size={13} className="animate-spin" />} 保存
         </button>
       </footer>

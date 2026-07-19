@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import ipaddress
 import json
 import re
+import socket
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -25,8 +26,24 @@ def _error_message(exc: BaseException) -> str:
     return str(exc).strip() or exc.__class__.__name__
 
 
-def _allowed_entries() -> list[str]:
-    return [item.strip().lower().rstrip(".") for item in settings.super_assistant_mcp_allowed_hosts.split(",") if item.strip()]
+def _resolved_addresses(hostname: str, port: int) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        return {ipaddress.ip_address(hostname)}
+    except ValueError:
+        pass
+    try:
+        records = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise McpClientError(f"MCP 目标 {hostname} 无法解析") from exc
+    addresses: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    for record in records:
+        try:
+            addresses.add(ipaddress.ip_address(record[4][0].split("%", 1)[0]))
+        except ValueError:
+            continue
+    if not addresses:
+        raise McpClientError(f"MCP 目标 {hostname} 没有可用的 IP 地址")
+    return addresses
 
 
 def validate_mcp_url(url: str) -> str:
@@ -37,26 +54,18 @@ def validate_mcp_url(url: str) -> str:
     if parsed.username or parsed.password:
         raise McpClientError("MCP URL 不能内嵌账号或密码")
     try:
-        parsed.port
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
     except ValueError as exc:
         raise McpClientError("MCP URL 端口无效") from exc
     hostname = parsed.hostname.lower().rstrip(".")
-    for allowed in _allowed_entries():
-        if allowed.startswith("*.") and hostname.endswith(allowed[1:]) and hostname != allowed[2:]:
-            return value
-        try:
-            network = ipaddress.ip_network(allowed, strict=False)
-            try:
-                if ipaddress.ip_address(hostname) in network:
-                    return value
-            except ValueError:
-                pass
-        except ValueError:
-            if hostname == allowed:
-                return value
-    raise McpClientError(
-        f"MCP 目标 {hostname} 未进入 SUPER_ASSISTANT_MCP_ALLOWED_HOSTS"
-    )
+    addresses = _resolved_addresses(hostname, port)
+    if settings.environment.strip().lower() not in {"development", "dev", "test", "local"}:
+        blocked = sorted(str(address) for address in addresses if not address.is_global)
+        if blocked:
+            raise McpClientError(
+                f"MCP 目标 {hostname} 解析到非公网地址 {', '.join(blocked)}，已拒绝连接"
+            )
+    return value
 
 
 def _encrypt_mapping(values: dict[str, str]) -> tuple[str | None, list[str]]:
