@@ -9,7 +9,9 @@ import {
   TableCellsIcon,
   ClockIcon,
   RocketLaunchIcon,
+  CircleStackIcon,
 } from '@heroicons/react/24/outline';
+import type { GraphWorkspaceCapabilities } from '../workspaceCapabilities';
 
 interface MenuItem {
   id: string;
@@ -18,6 +20,7 @@ interface MenuItem {
   color: string;
   bgColor: string;
   onClick: () => void;
+  disabledReason?: string;
 }
 
 interface FloatingMenuProps {
@@ -25,9 +28,11 @@ interface FloatingMenuProps {
   onOpenFunctionTest: () => void;
   onOpenActionRun: () => void;
   onOpenSentinel: () => void;
-  onOpenInstances?: () => void;
-  onOpenRunHistory?: () => void;
-  onOpenAutonomy?: () => void;
+  onOpenInstances: () => void;
+  onOpenRunHistory: () => void;
+  onOpenAutonomy: () => void;
+  onOpenGraphDatabase: () => void;
+  capabilities: GraphWorkspaceCapabilities;
 }
 
 export const FloatingMenu = ({
@@ -38,11 +43,14 @@ export const FloatingMenu = ({
   onOpenInstances,
   onOpenRunHistory,
   onOpenAutonomy,
+  onOpenGraphDatabase,
+  capabilities,
 }: FloatingMenuProps) => {
   const [isOpen, setIsOpen] = useState(false);
+  const runtimeDisabledReason = capabilities.runtimeDisabledReason;
 
   const menuItems: MenuItem[] = [
-    ...(onOpenInstances ? [{
+    {
       id: 'instances',
       label: '实例数据',
       icon: TableCellsIcon,
@@ -52,8 +60,20 @@ export const FloatingMenu = ({
         onOpenInstances();
         setIsOpen(false);
       },
-    }] : []),
-    ...(onOpenRunHistory ? [{
+      disabledReason: capabilities.canBrowseInstances ? undefined : runtimeDisabledReason,
+    },
+    {
+      id: 'graphdb',
+      label: '图数据库视图',
+      icon: CircleStackIcon,
+      color: 'text-cyan-400',
+      bgColor: 'bg-cyan-500/20 hover:bg-cyan-500/30',
+      onClick: () => {
+        onOpenGraphDatabase();
+        setIsOpen(false);
+      },
+    },
+    {
       id: 'runhistory',
       label: '运行历史',
       icon: ClockIcon,
@@ -63,8 +83,9 @@ export const FloatingMenu = ({
         onOpenRunHistory();
         setIsOpen(false);
       },
-    }] : []),
-    ...(onOpenAutonomy ? [{
+      disabledReason: capabilities.canViewRunHistory ? undefined : runtimeDisabledReason,
+    },
+    {
       id: 'autonomy',
       label: '自治等级',
       icon: RocketLaunchIcon,
@@ -74,7 +95,8 @@ export const FloatingMenu = ({
         onOpenAutonomy();
         setIsOpen(false);
       },
-    }] : []),
+      disabledReason: capabilities.canManageAutonomy ? undefined : runtimeDisabledReason,
+    },
     {
       id: 'sentinel',
       label: '哨兵引擎',
@@ -85,6 +107,7 @@ export const FloatingMenu = ({
         onOpenSentinel();
         setIsOpen(false);
       },
+      disabledReason: capabilities.canManageSentinels ? undefined : runtimeDisabledReason,
     },
     {
       id: 'help',
@@ -107,6 +130,7 @@ export const FloatingMenu = ({
         onOpenActionRun();
         setIsOpen(false);
       },
+      disabledReason: capabilities.canRunActions ? undefined : runtimeDisabledReason,
     },
     {
       id: 'testfn',
@@ -118,12 +142,14 @@ export const FloatingMenu = ({
         onOpenFunctionTest();
         setIsOpen(false);
       },
+      disabledReason: capabilities.canTestFunctions ? undefined : runtimeDisabledReason,
     },
   ];
 
   return (
     <div className="fixed bottom-6 right-6 z-40">
       <div
+        aria-hidden={!isOpen}
         className={`
           absolute bottom-16 right-0 flex flex-col gap-2
           transition-all duration-300 origin-bottom-right
@@ -136,12 +162,18 @@ export const FloatingMenu = ({
         {menuItems.map((item, index) => (
           <button
             key={item.id}
+            data-testid={`graph-runtime-tool-${item.id}`}
+            tabIndex={isOpen ? 0 : -1}
             onClick={item.onClick}
+            disabled={!!item.disabledReason}
+            title={item.disabledReason ? `${item.label}：${item.disabledReason}` : item.label}
+            aria-label={item.label}
             className={`
-              flex items-center gap-3 px-4 py-3 rounded-xl
+              flex items-center gap-3 px-4 py-2.5 rounded-xl text-left
               bg-slate-800/95 backdrop-blur-sm border border-slate-700/50
               shadow-lg shadow-black/30 hover:shadow-xl
-              transition-all duration-200 hover:scale-105
+              transition-all duration-200 hover:scale-[1.02]
+              disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:scale-100 disabled:hover:shadow-lg
               ${isOpen ? 'translate-y-0' : 'translate-y-4'}
             `}
             style={{
@@ -151,8 +183,13 @@ export const FloatingMenu = ({
             <div className={`p-2 rounded-lg ${item.bgColor}`}>
               <item.icon className={`w-5 h-5 ${item.color}`} />
             </div>
-            <span className="text-sm font-medium text-white whitespace-nowrap">
-              {item.label}
+            <span className="max-w-64 whitespace-nowrap">
+              <span className="block text-sm font-medium text-white">{item.label}</span>
+              {item.disabledReason && (
+                <span className="block max-w-60 truncate text-[10px] text-slate-400">
+                  {item.disabledReason}
+                </span>
+              )}
             </span>
           </button>
         ))}

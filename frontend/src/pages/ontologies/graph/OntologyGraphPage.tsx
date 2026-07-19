@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense, useEffect } from 'react';
+import { useState, lazy, Suspense, useEffect, useMemo } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ontologyVersionApi } from '@/api/v2/ontology-versions';
@@ -18,6 +18,7 @@ import LinkList from '../../../palantir-graph/components/panels/LinkList';
 import ObjectList from '../../../palantir-graph/components/panels/ObjectList';
 import SentinelPanel from '../../../palantir-graph/components/panels/SentinelPanel';
 import { FloatingMenu } from '../../../palantir-graph/components/FloatingMenu';
+import { getGraphWorkspaceCapabilities } from '../../../palantir-graph/workspaceCapabilities';
 
 const HelpGuide = lazy(() => import('../../../palantir-graph/components/panels/HelpGuide'));
 const GraphDatabaseView = lazy(() => import('../../../palantir-graph/components/panels/GraphDatabaseView'));
@@ -68,20 +69,21 @@ export default function OntologyGraphPage() {
   const isDirty = useOntologyStore((s) => s.isDirty);
   const workspaceMode = useOntologyStore((s) => s.workspaceMode);
   const ontology = useOntologyStore((s) => s.ontology);
-  const readOnly = workspaceMode !== 'draft';
+  const capabilities = useMemo(() => getGraphWorkspaceCapabilities(workspaceMode), [workspaceMode]);
+  const schemaReadOnly = !capabilities.canEditSchema;
   const [creatingDraft, setCreatingDraft] = useState(false);
   const [draftError, setDraftError] = useState('');
 
   // 有未保存改动时，拦截关闭/刷新页面（浏览器原生确认框）
   useEffect(() => {
-    if (readOnly || !isDirty) return;
+    if (schemaReadOnly || !isDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [isDirty, readOnly]);
+  }, [isDirty, schemaReadOnly]);
 
   // 加载后端本体后再绑定脏标记监听，避免把后端加载结果误判为用户编辑
   useEffect(() => {
@@ -120,24 +122,24 @@ export default function OntologyGraphPage() {
         setShowSearch((v) => !v);
         return;
       }
-      if (mod && e.key.toLowerCase() === 's' && !readOnly) {
+      if (mod && e.key.toLowerCase() === 's' && capabilities.canEditSchema) {
         e.preventDefault();
         void useOntologyStore.getState().saveToBackend();
         return;
       }
       if (inEditable) return;
 
-      if (!readOnly && mod && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      if (capabilities.canEditSchema && mod && !e.shiftKey && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         useOntologyStore.getState().undo();
         return;
       }
-      if (!readOnly && ((mod && e.shiftKey && e.key.toLowerCase() === 'z') || (mod && e.key.toLowerCase() === 'y'))) {
+      if (capabilities.canEditSchema && ((mod && e.shiftKey && e.key.toLowerCase() === 'z') || (mod && e.key.toLowerCase() === 'y'))) {
         e.preventDefault();
         useOntologyStore.getState().redo();
         return;
       }
-      if (!readOnly && (e.key === 'Delete' || e.key === 'Backspace')) {
+      if (capabilities.canEditSchema && (e.key === 'Delete' || e.key === 'Backspace')) {
         const s = useOntologyStore.getState();
         if (s.selectedNodeId) {
           e.preventDefault();
@@ -155,7 +157,7 @@ export default function OntologyGraphPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [readOnly]);
+  }, [capabilities.canEditSchema]);
 
   // 为 body 添加作用域类，确保 Palantir 样式只在本页面生效
   useEffect(() => {
@@ -222,7 +224,10 @@ export default function OntologyGraphPage() {
   return (
     <ReactFlowProvider>
       <div className="fixed inset-0 z-[9999] h-screen w-screen overflow-hidden bg-surface-950">
-        <div className={`fixed left-1/2 top-[4.4rem] z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs shadow-lg ${stageClass}`}>
+        <div
+          data-testid="graph-workspace-stage"
+          className={`fixed bottom-6 left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs shadow-lg backdrop-blur ${stageClass}`}
+        >
           <span className="truncate">{stage.text}</span>
           {workspaceMode === 'runtime' ? (
             <button
@@ -252,7 +257,7 @@ export default function OntologyGraphPage() {
         )}
 
         <Header
-          readOnly={readOnly}
+          readOnly={schemaReadOnly}
           stageLabel={workspaceMode === 'runtime' ? '当前发布' : workspaceMode === 'draft' ? '草稿编辑' : workspaceMode === 'trial' ? '试跑快照' : '历史快照'}
           onToggleActions={() => setShowActionPanel(v => !v)}
           onToggleFunctions={() => setShowFunctionPanel(v => !v)}
@@ -265,38 +270,41 @@ export default function OntologyGraphPage() {
         />
         <main className="h-full pt-16">
           <Canvas
-            readOnly={readOnly}
+            schemaReadOnly={schemaReadOnly}
             layoutScope={`${ontologyId || 'ontology'}:${versionId || 'runtime'}`}
-            onBrowseInstances={(objectTypeId) => {
-              setInstanceBrowserTypeId(objectTypeId);
-              setShowInstanceBrowser(true);
-            }}
+            onBrowseInstances={capabilities.canBrowseInstances
+              ? (objectTypeId) => {
+                  setInstanceBrowserTypeId(objectTypeId);
+                  setShowInstanceBrowser(true);
+                }
+              : undefined}
           />
         </main>
-        {!readOnly && <Toolbar />}
-        <Panel readOnly={readOnly} />
+        <Toolbar capabilities={capabilities} onOpenSearch={() => setShowSearch(true)} />
+        <Panel readOnly={schemaReadOnly} />
         <ActionList
-          readOnly={readOnly}
-          onRunAction={workspaceMode === 'runtime' ? openActionRun : undefined}
+          readOnly={schemaReadOnly}
+          onRunAction={capabilities.canRunActions ? openActionRun : undefined}
           isOpen={showActionPanel}
           onClose={() => setShowActionPanel(false)}
         />
         <FunctionList
-          readOnly={readOnly}
-          onTestFunction={workspaceMode === 'runtime' ? openFunctionTest : undefined}
+          readOnly={schemaReadOnly}
+          onTestFunction={capabilities.canTestFunctions ? openFunctionTest : undefined}
           isOpen={showFunctionPanel}
           onClose={() => setShowFunctionPanel(false)}
         />
-        <LinkList readOnly={readOnly} isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
-        <ObjectList readOnly={readOnly} isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />
+        <LinkList readOnly={schemaReadOnly} isOpen={showLinkPanel} onClose={() => setShowLinkPanel(false)} />
+        <ObjectList readOnly={schemaReadOnly} isOpen={showObjectPanel} onClose={() => setShowObjectPanel(false)} />
         <SentinelPanel isOpen={showSentinel} onClose={() => setShowSentinel(false)} />
 
-        {!readOnly && showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
-        {!readOnly && deleteTarget && (
+        {showSearch && <SearchPalette onClose={() => setShowSearch(false)} />}
+        {capabilities.canEditSchema && deleteTarget && (
           <DeleteSelectedDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} />
         )}
 
-        {workspaceMode === 'runtime' && <FloatingMenu
+        <FloatingMenu
+          capabilities={capabilities}
           onOpenHelp={() => setShowHelp(true)}
           onOpenFunctionTest={() => openFunctionTest()}
           onOpenActionRun={() => openActionRun()}
@@ -307,19 +315,20 @@ export default function OntologyGraphPage() {
           }}
           onOpenRunHistory={() => setShowRunHistory(true)}
           onOpenAutonomy={() => setShowAutonomy(true)}
-        />}
+          onOpenGraphDatabase={() => setShowGraphDB(true)}
+        />
 
         <Suspense fallback={<PanelLoader />}>
           {showHelp && <HelpGuide isOpen={showHelp} onClose={() => setShowHelp(false)} />}
           {showGraphDB && <GraphDatabaseView isOpen={showGraphDB} onClose={() => setShowGraphDB(false)} />}
-          {workspaceMode === 'runtime' && showFunctionTester && (
+          {capabilities.canTestFunctions && showFunctionTester && (
             <FunctionTester
               isOpen={showFunctionTester}
               initialFunctionId={testFunctionId}
               onClose={() => setShowFunctionTester(false)}
             />
           )}
-          {workspaceMode === 'runtime' && showActionRunner && (
+          {capabilities.canRunActions && showActionRunner && (
             <ActionRunner
               isOpen={showActionRunner}
               initialActionId={runActionId}
@@ -327,7 +336,7 @@ export default function OntologyGraphPage() {
               onClose={() => setShowActionRunner(false)}
             />
           )}
-          {workspaceMode === 'runtime' && showInstanceBrowser && (
+          {capabilities.canBrowseInstances && showInstanceBrowser && (
             <InstanceBrowser
               isOpen={showInstanceBrowser}
               initialObjectTypeId={instanceBrowserTypeId || undefined}
@@ -335,8 +344,8 @@ export default function OntologyGraphPage() {
               onRunAction={openActionRun}
             />
           )}
-          {workspaceMode === 'runtime' && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
-          {workspaceMode === 'runtime' && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
+          {capabilities.canViewRunHistory && showRunHistory && <RunHistoryPanel isOpen={showRunHistory} onClose={() => setShowRunHistory(false)} />}
+          {capabilities.canManageAutonomy && showAutonomy && <AutonomyPanel isOpen={showAutonomy} onClose={() => setShowAutonomy(false)} />}
         </Suspense>
       </div>
     </ReactFlowProvider>

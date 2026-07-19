@@ -22,6 +22,19 @@ async function api<T>(request: APIRequestContext, token: string, method: 'get' |
   return body.data ?? body
 }
 
+async function verifyWorkspaceStagePosition(page: Page) {
+  const stage = page.getByTestId('graph-workspace-stage')
+  await expect(stage).toBeVisible()
+  const box = await stage.boundingBox()
+  const viewport = page.viewportSize()
+  expect(box).toBeTruthy()
+  expect(viewport).toBeTruthy()
+  expect(Math.abs(box!.x + box!.width / 2 - viewport!.width / 2)).toBeLessThan(2)
+  const bottomGap = viewport!.height - box!.y - box!.height
+  expect(bottomGap).toBeGreaterThanOrEqual(20)
+  expect(bottomGap).toBeLessThanOrEqual(32)
+}
+
 async function verifyReadonlyGraphInspection(page: Page, objectTypeId: string) {
   const objectButton = page.getByRole('button', { name: /查看对象实体，共 1 个/ })
   const linkButton = page.getByRole('button', { name: /查看实体关系，共 1 个/ })
@@ -213,6 +226,20 @@ test('complete branch → real-data trial → reviewed release works in the brow
   // 试跑态虽然冻结结构，但模型定义必须可查看，画布仍可移动。
   await page.goto(`/#/ontologies/${ontology.id}/graph?versionId=${draft.id}`)
   await expect(page.getByText(/试跑态 v0\.1 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
+  // 功能入口在所有状态保持稳定：安全查看/布局能力可用，结构和正式运行操作明确禁用。
+  await expect(page.getByRole('button', { name: '对象实体', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '导入', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '搜索定义' })).toBeEnabled()
+  await expect(page.getByTitle('自动布局')).toBeEnabled()
+  await page.getByRole('button', { name: '搜索定义' }).click()
+  await expect(page.getByPlaceholder('搜索对象 / 关系 / 动作 / 函数 / 属性名…')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.getByTitle('打开菜单').click()
+  await expect(page.getByTestId('graph-runtime-tool-instances')).toBeDisabled()
+  await expect(page.getByTestId('graph-runtime-tool-runaction')).toBeDisabled()
+  await expect(page.getByTestId('graph-runtime-tool-graphdb')).toBeEnabled()
+  await expect(page.getByTestId('graph-runtime-tool-help')).toBeEnabled()
+  await page.getByTitle('关闭菜单').click()
   await verifyReadonlyGraphInspection(page, objectTypeId)
   const movedTrial = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace`)
   const trialObject = movedTrial.objectTypes.find((item: any) => item.id === objectTypeId)
@@ -263,6 +290,8 @@ test('complete branch → real-data trial → reviewed release works in the brow
   // L2 节点同样只保存独立画布布局，并采用 3 秒尾随保存。
   await page.getByLabel('查看激活函数使用关系').selectOption('')
   const propertyNode = page.locator(`.react-flow__node[data-id="property:${objectTypeId}:p-name"]`)
+  await expect(propertyNode).toBeVisible()
+  await propertyNode.hover()
   const propertyBefore = await propertyNode.boundingBox()
   expect(propertyBefore).toBeTruthy()
   const l2LayoutSaved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/layout'))
@@ -280,6 +309,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.goto(`/#/ontologies/${ontology.id}/graph`)
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph$`))
   await expect(page.getByText(/当前发布 v1 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
+  await verifyWorkspaceStagePosition(page)
   const inheritedRelease = await api<any>(request, token, 'get', `/api/v2/formal/ontologies/${ontology.id}/full`)
   const inheritedReleaseObject = inheritedRelease.objectTypes.find((item: any) => item.id === objectTypeId)
   expect({ x: inheritedReleaseObject.positionX, y: inheritedReleaseObject.positionY }).toEqual(trialPosition)
@@ -288,7 +318,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   const releaseObject = movedRelease.objectTypes.find((item: any) => item.id === objectTypeId)
   expect({ x: releaseObject.positionX, y: releaseObject.positionY }).not.toEqual(trialPosition)
 
-  // 哨兵入口只出现在当前发布态；只读模型不应阻止运行态面板挂载。
+  // 运行入口在所有状态可见，但只有当前发布态连接正式运行数据并允许操作。
   await page.getByTitle('打开菜单').click()
   await expect(page.getByRole('button', { name: 'API 文档' })).toHaveCount(0)
   await page.getByRole('button', { name: '哨兵引擎' }).click()
@@ -298,6 +328,33 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '基于此版本开始修改' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
   await expect(page.getByText(/草稿 v1\.1 · 可编辑并查看全部模型定义/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('button', { name: '对象实体', exact: true })).toBeEnabled()
+
+  // 草稿态拖动也只走独立布局接口：自动保存、不点亮模型保存、不推进 revision。
+  const draftTreeAfterCreate = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
+  const nextDraft = draftTreeAfterCreate.versions.find((item: any) => item.version_number === 'v1.1')
+  const draftWorkspaceBeforeLayout = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${nextDraft.id}/workspace`)
+  const draftNode = page.locator(`.react-flow__node[data-id="${objectTypeId}"]`)
+  const draftNodeBefore = await draftNode.boundingBox()
+  expect(draftNodeBefore).toBeTruthy()
+  const draftLayoutSaved = page.waitForResponse(response =>
+    response.request().method() === 'PUT' && response.url().endsWith('/layout'))
+  await page.mouse.move(draftNodeBefore!.x + draftNodeBefore!.width / 2, draftNodeBefore!.y + draftNodeBefore!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(draftNodeBefore!.x + draftNodeBefore!.width / 2 + 84, draftNodeBefore!.y + draftNodeBefore!.height / 2 + 48, { steps: 8 })
+  await page.mouse.up()
+  expect((await draftLayoutSaved).ok()).toBeTruthy()
+  await expect(page.getByTestId('layout-save-status')).toContainText('布局已自动保存')
+  await expect(page.getByText('保存全部更改')).toHaveCount(0)
+  const draftWorkspaceAfterLayout = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${nextDraft.id}/workspace`)
+  expect(draftWorkspaceAfterLayout.revision).toBe(draftWorkspaceBeforeLayout.revision)
+  expect({
+    x: draftWorkspaceAfterLayout.objectTypes[0].positionX,
+    y: draftWorkspaceAfterLayout.objectTypes[0].positionY,
+  }).not.toEqual({
+    x: draftWorkspaceBeforeLayout.objectTypes[0].positionX,
+    y: draftWorkspaceBeforeLayout.objectTypes[0].positionY,
+  })
 
   const finalTree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
   expect(finalTree.current_release_number).toBe('v1')

@@ -1035,8 +1035,8 @@ export const useOntologyStore = create<OntologyState>()(
       setNodes: (nodes) => set({ nodes }),
       setEdges: (edges) => set({ edges }),
       updateNodePosition: (id, position) => {
-        // 画布坐标持久化在对象类型行上（positionX/Y），拖动即视为该类型有变更
-        _markChanged('objectTypes', id);
+        // 画布坐标是独立展示元数据，由 Canvas 的布局接口自动保存；
+        // 不计入模型 delta，也不触发本体结构的未保存状态。
         set((state) => ({
           nodes: state.nodes.map((node) => node.id === id ? { ...node, position } : node),
         }));
@@ -1213,7 +1213,8 @@ export function attachHistory(): () => void {
 }
 
 /**
- * 绑定脏标记：监听 ontology / nodes 引用变化，标记 isDirty=true（右上角保存按钮高亮）。
+ * 绑定模型脏标记：只监听 ontology 引用变化，标记 isDirty=true（右上角保存按钮高亮）。
+ * nodes 中的画布坐标属于独立展示元数据，由布局接口自动保存，不应污染模型脏状态。
  * 注意：自手动保存改造后，此函数不再自动触发保存，仅用于追踪"有未保存改动"。
  * 仅在 backendId 存在时生效。返回取消订阅函数。
  *
@@ -1221,19 +1222,16 @@ export function attachHistory(): () => void {
  */
 export function attachAutoSave(): () => void {
   let prevOntology = useOntologyStore.getState().ontology;
-  let prevNodes = useOntologyStore.getState().nodes;
   const unsub = useOntologyStore.subscribe((state) => {
-    const { ontology, nodes, backendId, syncStatus } = state;
+    const { ontology, backendId, syncStatus } = state;
     if (!backendId) return;
     if (syncStatus === 'loading' || _histSuspended || _syncApplying) {
       // 加载 / 保存回填 computed 过程中刷新基准，避免把它们当成用户改动
       prevOntology = ontology;
-      prevNodes = nodes;
       return;
     }
-    if (ontology !== prevOntology || nodes !== prevNodes) {
+    if (ontology !== prevOntology) {
       prevOntology = ontology;
-      prevNodes = nodes;
       // 手动保存模式：只标记 dirty，由用户点击右上角"保存"按钮触发 saveToBackend
       useOntologyStore.setState({ isDirty: true });
     }

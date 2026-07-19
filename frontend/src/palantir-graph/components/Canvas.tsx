@@ -48,8 +48,8 @@ const defaultEdgeOptions = {
 interface CanvasProps {
   /** 右键菜单"浏览实例"入口（由页面渲染 InstanceBrowser） */
   onBrowseInstances?: (objectTypeId: string) => void;
-  /** 只读版本禁止结构写入，但仍允许查看、选择、移动节点与缩放画布 */
-  readOnly?: boolean;
+  /** 仅控制模型结构写入；节点布局在所有本体状态下都可编辑 */
+  schemaReadOnly?: boolean;
   /** 切换版本时重载该版本的布局，避免不同快照之间串位 */
   layoutScope?: string;
 }
@@ -91,7 +91,7 @@ function offsetParallelEdges(edges: Edge[]): Edge[] {
   return out;
 }
 
-export default function Canvas({ onBrowseInstances, readOnly = false, layoutScope = 'default' }: CanvasProps = {}) {
+export default function Canvas({ onBrowseInstances, schemaReadOnly = false, layoutScope = 'default' }: CanvasProps = {}) {
   const {
     ontology,
     nodes: storeNodes,
@@ -106,6 +106,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
     autoLayout,
     backendId,
     workspaceVersionId,
+    syncStatus,
   } = useOntologyStore();
   const { screenToFlowPosition, fitView } = useReactFlow();
 
@@ -135,15 +136,30 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
     }))),
     [sourceStoreEdges, selectedEdgeId]
   );
+  const topologyKey = useMemo(() => {
+    const nodeIds = storeNodes.map((node) => node.id).sort().join(',');
+    const edgeIds = sourceStoreEdges.map((edge) => edge.id).sort().join(',');
+    return `${layoutScope}|${nodeIds}|${edgeIds}`;
+  }, [layoutScope, sourceStoreEdges, storeNodes]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(selectedStoreNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(selectedStoreEdges);
+  const [layoutSaveStatus, setLayoutSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [layoutSaveError, setLayoutSaveError] = useState('');
-
-  useEffect(() => setLayoutSaveError(''), [layoutScope]);
+  const [layoutRetryNonce, setLayoutRetryNonce] = useState(0);
+  const layoutSaveTimer = useRef<number | null>(null);
+  const layoutSavedResetTimer = useRef<number | null>(null);
+  const layoutSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const initializedLayoutScope = useRef<string | null>(null);
+  const wasLoading = useRef(false);
+  const previousSyncStatus = useRef(syncStatus);
+  const persistedNodeIds = useRef<Set<string>>(new Set());
+  const lastPersistedLayout = useRef('');
+  const latestLayout = useRef('');
+  const currentLayoutScope = useRef(layoutScope);
 
   const renderNodes = useMemo(
-    () => readOnly
+    () => schemaReadOnly
       ? nodes.map((node) => ({
           ...node,
           width: node.width ?? 280,
@@ -153,38 +169,123 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
           data: { ...(node.data as Record<string, unknown>), __readOnly: true },
         }))
       : nodes,
-    [nodes, readOnly]
+    [nodes, schemaReadOnly]
   );
-  const renderEdges = readOnly ? selectedStoreEdges : edges;
+  const renderEdges = schemaReadOnly ? selectedStoreEdges : edges;
 
-  const previousLayoutScope = useRef(layoutScope);
-
-  // 草稿直接跟随可保存结构；冻结状态在布局 API 回写期间保留当前拖动位置，
-  // 且永远不把视觉坐标写回版本快照。
+  // Store 中的坐标只代表客户端视图，不再等同于模型结构变更。
   useEffect(() => {
-    const scopeChanged = previousLayoutScope.current !== layoutScope;
-    previousLayoutScope.current = layoutScope;
-    if (!readOnly || scopeChanged) {
-      setNodes(selectedStoreNodes);
-      return;
-    }
-    setNodes((currentNodes) => selectedStoreNodes.map((storeNode) => {
-      const localNode = currentNodes.find((candidate) => candidate.id === storeNode.id);
-      return localNode ? { ...storeNode, position: localNode.position } : storeNode;
-    }));
-  }, [layoutScope, readOnly, selectedStoreNodes, setNodes]);
+    setNodes(selectedStoreNodes);
+  }, [selectedStoreNodes, setNodes]);
 
   useEffect(() => {
     setEdges(selectedStoreEdges);
   }, [selectedStoreEdges, setEdges]);
 
   useEffect(() => {
-    if (selectedStoreNodes.length === 0) return;
+    if (storeNodes.length === 0) return;
     const timer = window.setTimeout(() => {
-      void fitView({ padding: 0.25, maxZoom: readOnly ? 0.72 : 0.8, duration: 220 });
+      void fitView({ padding: 0.25, maxZoom: schemaReadOnly ? 0.72 : 0.8, duration: 220 });
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [fitView, readOnly, selectedStoreEdges, selectedStoreNodes]);
+  }, [fitView, schemaReadOnly, storeNodes.length, topologyKey]);
+
+  useEffect(() => {
+    currentLayoutScope.current = layoutScope;
+    setLayoutSaveError('');
+    setLayoutSaveStatus('idle');
+    initializedLayoutScope.current = null;
+    if (layoutSaveTimer.current !== null) window.clearTimeout(layoutSaveTimer.current);
+    if (layoutSavedResetTimer.current !== null) window.clearTimeout(layoutSavedResetTimer.current);
+  }, [layoutScope]);
+
+  useEffect(() => () => {
+    if (layoutSaveTimer.current !== null) window.clearTimeout(layoutSaveTimer.current);
+    if (layoutSavedResetTimer.current !== null) window.clearTimeout(layoutSavedResetTimer.current);
+  }, []);
+
+  // 后端加载完成后建立已持久化节点基线；新建但尚未保存的对象类型不提前写布局接口。
+  useEffect(() => {
+    const enteredSaved = syncStatus === 'saved' && previousSyncStatus.current !== 'saved';
+    previousSyncStatus.current = syncStatus;
+    if (!enteredSaved) return;
+    persistedNodeIds.current = new Set(ontology?.objectTypes.map((item) => item.id) || []);
+    const positions = storeNodes
+      .filter((node) => node.type === 'objectType' && persistedNodeIds.current.has(node.id))
+      .map((node) => [node.id, node.position.x, node.position.y] as const)
+      .sort(([left], [right]) => left.localeCompare(right));
+    const signature = JSON.stringify(positions);
+    lastPersistedLayout.current = signature;
+    latestLayout.current = signature;
+  }, [ontology?.objectTypes, storeNodes, syncStatus]);
+
+  // 所有状态共用独立布局自动保存：停止变化 650ms 后提交，串行排队避免旧请求覆盖新位置。
+  useEffect(() => {
+    if (syncStatus === 'loading') {
+      wasLoading.current = true;
+      if (layoutSaveTimer.current !== null) window.clearTimeout(layoutSaveTimer.current);
+      return;
+    }
+    if (!backendId) return;
+
+    if (initializedLayoutScope.current !== layoutScope || wasLoading.current) {
+      initializedLayoutScope.current = layoutScope;
+      wasLoading.current = false;
+      persistedNodeIds.current = new Set(ontology?.objectTypes.map((item) => item.id) || []);
+      const baseline = storeNodes
+        .filter((node) => node.type === 'objectType' && persistedNodeIds.current.has(node.id))
+        .map((node) => [node.id, node.position.x, node.position.y] as const)
+        .sort(([left], [right]) => left.localeCompare(right));
+      const signature = JSON.stringify(baseline);
+      lastPersistedLayout.current = signature;
+      latestLayout.current = signature;
+      return;
+    }
+
+    const entries = storeNodes
+      .filter((node) => node.type === 'objectType' && persistedNodeIds.current.has(node.id))
+      .map((node) => [node.id, node.position] as const)
+      .sort(([left], [right]) => left.localeCompare(right));
+    const positions = Object.fromEntries(entries);
+    const signature = JSON.stringify(entries.map(([id, position]) => [id, position.x, position.y]));
+    latestLayout.current = signature;
+    if (!entries.length || signature === lastPersistedLayout.current) return;
+
+    if (layoutSaveTimer.current !== null) window.clearTimeout(layoutSaveTimer.current);
+    setLayoutSaveError('');
+    layoutSaveTimer.current = window.setTimeout(() => {
+      const requestedScope = layoutScope;
+      const requestedSignature = signature;
+      setLayoutSaveStatus('saving');
+      layoutSaveQueue.current = layoutSaveQueue.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await saveCanvasLayout(backendId, positions, workspaceVersionId);
+            lastPersistedLayout.current = requestedSignature;
+            if (currentLayoutScope.current !== requestedScope) return;
+            if (latestLayout.current === requestedSignature) {
+              setLayoutSaveStatus('saved');
+              if (layoutSavedResetTimer.current !== null) window.clearTimeout(layoutSavedResetTimer.current);
+              layoutSavedResetTimer.current = window.setTimeout(() => setLayoutSaveStatus('idle'), 1800);
+            }
+          } catch (error: any) {
+            if (currentLayoutScope.current !== requestedScope || latestLayout.current !== requestedSignature) return;
+            const detail = error?.response?.data?.detail ?? error?.detail;
+            setLayoutSaveStatus('error');
+            setLayoutSaveError(
+              typeof detail === 'string'
+                ? detail
+                : detail?.message || error?.message || '节点位置保存失败',
+            );
+          }
+        });
+    }, 650);
+
+    return () => {
+      if (layoutSaveTimer.current !== null) window.clearTimeout(layoutSaveTimer.current);
+    };
+  }, [backendId, layoutRetryNonce, layoutScope, ontology?.objectTypes, storeNodes, syncStatus, workspaceVersionId]);
 
   // 右键上下文菜单
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; kind: 'node' | 'edge' | 'pane'; id?: string } | null>(null);
@@ -196,7 +297,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (readOnly) return;
+      if (schemaReadOnly) return;
       if (!connection.source || !connection.target) return;
       const sourceNode = storeNodes.find((n) => n.id === connection.source);
       const targetNode = storeNodes.find((n) => n.id === connection.target);
@@ -204,33 +305,14 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
         setPendingConn({ sourceId: connection.source, targetId: connection.target });
       }
     },
-    [storeNodes, readOnly]
+    [storeNodes, schemaReadOnly]
   );
 
   const onNodeDragStop = useCallback(
     (_event: unknown, node: Node) => {
-      if (readOnly) {
-        // 冻结状态只持久化独立布局元数据；不改模型快照，也不产生脏数据。
-        if (backendId) {
-          setLayoutSaveError('');
-          void saveCanvasLayout(
-            backendId,
-            { [node.id]: node.position },
-            workspaceVersionId,
-          ).catch((error: any) => {
-            const detail = error?.response?.data?.detail ?? error?.detail;
-            setLayoutSaveError(
-              typeof detail === 'string'
-                ? detail
-                : detail?.message || error?.message || '节点位置保存失败',
-            );
-          });
-        }
-        return;
-      }
       updateNodePosition(node.id, node.position);
     },
-    [backendId, readOnly, updateNodePosition, workspaceVersionId]
+    [updateNodePosition]
   );
 
   const onNodeClick = useCallback(
@@ -252,7 +334,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
       setSelectedEdge(edge.id);
       openPanel('edit', 'linkType');
     },
-    [setSelectedEdge, openPanel, readOnly]
+    [setSelectedEdge, openPanel]
   );
 
   const onPaneClick = useCallback(() => {
@@ -264,36 +346,36 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
   const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
     e.preventDefault();
     setSelectedNode(node.id);
-    if (readOnly) return;
+    if (schemaReadOnly) return;
     setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'node', id: node.id });
-  }, [setSelectedNode, readOnly]);
+  }, [setSelectedNode, schemaReadOnly]);
 
   const onEdgeContextMenu = useCallback((e: React.MouseEvent, edge: Edge) => {
     e.preventDefault();
     setSelectedEdge(edge.id);
-    if (readOnly) return;
+    if (schemaReadOnly) return;
     setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'edge', id: edge.id });
-  }, [setSelectedEdge, readOnly]);
+  }, [setSelectedEdge, schemaReadOnly]);
 
   const onPaneContextMenu = useCallback((e: React.MouseEvent | MouseEvent) => {
     e.preventDefault();
-    if (readOnly) return;
+    if (schemaReadOnly) return;
     setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'pane' });
-  }, [readOnly]);
+  }, [schemaReadOnly]);
 
   const handleNodesChange = useCallback((changes: NodeChange<Node>[]) => {
-    onNodesChange(readOnly
+    onNodesChange(schemaReadOnly
       ? changes.filter((change) => change.type === 'select' || change.type === 'position' || change.type === 'dimensions')
       : changes);
-  }, [onNodesChange, readOnly]);
+  }, [onNodesChange, schemaReadOnly]);
 
   const handleEdgesChange = useCallback((changes: EdgeChange<Edge>[]) => {
-    onEdgesChange(readOnly ? changes.filter((change) => change.type === 'select') : changes);
-  }, [onEdgesChange, readOnly]);
+    onEdgesChange(schemaReadOnly ? changes.filter((change) => change.type === 'select') : changes);
+  }, [onEdgesChange, schemaReadOnly]);
 
   // 右键菜单条目
   const menuItems = useMemo(() => {
-    if (readOnly) return [];
+    if (schemaReadOnly) return [];
     if (!ctxMenu) return [];
     const close = () => setCtxMenu(null);
     if (ctxMenu.kind === 'node' && ctxMenu.id) {
@@ -303,10 +385,10 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
           icon: PencilSquareIcon, label: '编辑对象实体',
           onClick: () => { setSelectedNode(id); openPanel('edit', 'objectType'); close(); },
         },
-        {
+        ...(onBrowseInstances ? [{
           icon: TableCellsIcon, label: '浏览实例数据',
-          onClick: () => { onBrowseInstances?.(id); close(); },
-        },
+          onClick: () => { onBrowseInstances(id); close(); },
+        }] : []),
         {
           icon: TrashIcon, label: '删除…', danger: true,
           onClick: () => { setDeleteTarget({ kind: 'objectType', id }); close(); },
@@ -341,7 +423,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
         onClick: () => { autoLayout('dagre', 'LR'); close(); },
       },
     ];
-  }, [ctxMenu, readOnly, setSelectedNode, setSelectedEdge, openPanel, onBrowseInstances, screenToFlowPosition, setPendingNodePosition, autoLayout]);
+  }, [ctxMenu, schemaReadOnly, setSelectedNode, setSelectedEdge, openPanel, onBrowseInstances, screenToFlowPosition, setPendingNodePosition, autoLayout]);
 
   return (
     <div className="w-full h-full canvas-bg">
@@ -364,7 +446,7 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
         defaultEdgeOptions={defaultEdgeOptions}
         connectionMode={ConnectionMode.Loose}
         nodesDraggable
-        nodesConnectable={!readOnly}
+        nodesConnectable={!schemaReadOnly}
         deleteKeyCode={null}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 0.8 }}
@@ -390,12 +472,35 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
         />
       </ReactFlow>
 
-      {layoutSaveError && (
+      {layoutSaveStatus !== 'idle' && (
         <div
-          role="alert"
-          className="absolute bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-red-500/40 bg-red-950/95 px-3 py-2 text-xs text-red-200 shadow-lg"
+          role={layoutSaveStatus === 'error' ? 'alert' : 'status'}
+          data-testid="layout-save-status"
+          className={`absolute bottom-20 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur ${
+            layoutSaveStatus === 'error'
+              ? 'border-red-500/40 bg-red-950/95 text-red-200'
+              : 'border-emerald-500/30 bg-surface-900/90 text-emerald-300'
+          }`}
         >
-          {layoutSaveError}
+          {layoutSaveStatus === 'saving' && (
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+          )}
+          <span>
+            {layoutSaveStatus === 'saving'
+              ? '正在自动保存布局…'
+              : layoutSaveStatus === 'saved'
+                ? '布局已自动保存'
+                : layoutSaveError}
+          </span>
+          {layoutSaveStatus === 'error' && (
+            <button
+              type="button"
+              className="font-medium underline underline-offset-2 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+              onClick={() => setLayoutRetryNonce((value) => value + 1)}
+            >
+              重试
+            </button>
+          )}
         </div>
       )}
 
@@ -405,14 +510,14 @@ export default function Canvas({ onBrowseInstances, readOnly = false, layoutScop
           <div className="pointer-events-auto text-center max-w-sm px-8 py-10 rounded-2xl bg-surface-900/70 border border-surface-700 backdrop-blur">
             <CubeIcon className="w-10 h-10 text-indigo-400/70 mx-auto mb-3" />
             <h3 className="text-surface-100 font-medium mb-1.5">
-              {readOnly ? '暂无模型结构可展示' : '从第一个对象实体开始'}
+              {schemaReadOnly ? '暂无模型结构可展示' : '从第一个对象实体开始'}
             </h3>
             <p className="text-xs text-surface-400 leading-relaxed mb-4">
-              {readOnly
+              {schemaReadOnly
                 ? '选择一个已经建模的本体后，这里会展示对象实体、关系与运行能力的结构视图。'
                 : '对象实体是本体的骨架。先声明业务里"有什么"（如 订单、客户），再拖线建立它们之间的关系。'}
             </p>
-            {!readOnly && (
+            {!schemaReadOnly && (
               <>
                 <button
                   onClick={() => openPanel('create', 'objectType')}

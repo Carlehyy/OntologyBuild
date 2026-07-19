@@ -13,11 +13,18 @@ import {
   ChevronRightIcon,
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
+  MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { useOntologyStore } from '../store/ontologyStore';
 import { LAYOUT_ALGORITHMS, LAYOUT_DIRECTIONS, type LayoutAlgorithm, type LayoutDirection } from '../utils/layoutAlgorithms';
+import type { GraphWorkspaceCapabilities } from '../workspaceCapabilities';
 
-export default function Toolbar() {
+interface ToolbarProps {
+  capabilities: GraphWorkspaceCapabilities;
+  onOpenSearch: () => void;
+}
+
+export default function Toolbar({ capabilities, onOpenSearch }: ToolbarProps) {
   const navigate = useNavigate();
   const {
     ontology, openPanel, exportOntology, importOntology, reset, autoLayout,
@@ -29,6 +36,7 @@ export default function Toolbar() {
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [selectedAlgorithm, setSelectedAlgorithm] = useState<LayoutAlgorithm>('dagre');
   const [selectedDirection, setSelectedDirection] = useState<LayoutDirection>('TB');
+  const schemaDisabledReason = capabilities.schemaDisabledReason || '当前状态不可修改模型结构';
 
   const handleAutoLayout = () => {
     autoLayout(selectedAlgorithm, selectedDirection);
@@ -107,9 +115,9 @@ export default function Toolbar() {
   return (
     <>
       <div className="fixed left-6 top-1/2 -translate-y-1/2 z-50">
-        <div className="glass border border-surface-700 rounded-2xl p-2 space-y-2 shadow-2xl">
+        <div className="glass space-y-1 rounded-2xl border border-surface-700 p-1.5 shadow-2xl">
           {/* Logo */}
-          <div className="flex items-center justify-center w-12 h-12 mb-2">
+          <div className="mb-1 flex h-11 w-11 items-center justify-center">
             <SparklesIcon className="w-7 h-7 text-onto-400" />
           </div>
 
@@ -120,16 +128,19 @@ export default function Toolbar() {
             <button
               key={index}
               onClick={tool.onClick}
+              disabled={!capabilities.canEditSchema}
               className={`
-                w-12 h-12 flex items-center justify-center rounded-xl
+                w-11 h-11 flex items-center justify-center rounded-xl
                 ${tool.bgColor} ${tool.color}
                 transition-all duration-200 group relative
+                disabled:cursor-not-allowed disabled:bg-surface-800/40 disabled:text-surface-600 disabled:opacity-70
               `}
-              title={tool.label}
+              title={capabilities.canEditSchema ? tool.label : `${tool.label}：${schemaDisabledReason}`}
+              aria-label={tool.label}
             >
               <tool.icon className="w-6 h-6" />
               <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-                {tool.label}
+                {capabilities.canEditSchema ? tool.label : `${tool.label} · ${schemaDisabledReason}`}
               </span>
             </button>
           ))}
@@ -139,9 +150,10 @@ export default function Toolbar() {
           {/* Undo / Redo */}
           <button
             onClick={undo}
-            disabled={!canUndo}
-            className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 group relative"
-            title="撤销 (Ctrl+Z)"
+            disabled={!capabilities.canEditSchema || !canUndo}
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 group relative"
+            title={capabilities.canEditSchema ? '撤销 (Ctrl+Z)' : `撤销：${schemaDisabledReason}`}
+            aria-label="撤销"
           >
             <ArrowUturnLeftIcon className="w-5 h-5" />
             <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
@@ -150,9 +162,10 @@ export default function Toolbar() {
           </button>
           <button
             onClick={redo}
-            disabled={!canRedo}
-            className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 group relative"
-            title="重做 (Ctrl+Shift+Z)"
+            disabled={!capabilities.canEditSchema || !canRedo}
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 group relative"
+            title={capabilities.canEditSchema ? '重做 (Ctrl+Shift+Z)' : `重做：${schemaDisabledReason}`}
+            aria-label="重做"
           >
             <ArrowUturnRightIcon className="w-5 h-5" />
             <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
@@ -162,11 +175,25 @@ export default function Toolbar() {
 
           <div className="h-px bg-surface-700 mx-1" />
 
+          <button
+            onClick={onOpenSearch}
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-onto-400"
+            title="搜索定义 (Ctrl+K)"
+            aria-label="搜索定义"
+          >
+            <MagnifyingGlassIcon className="w-5 h-5" />
+            <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              搜索定义 Ctrl+K
+            </span>
+          </button>
+
+          <div className="h-px bg-surface-700 mx-1" />
+
           {/* Auto Layout */}
           <div className="relative">
             <button
               onClick={() => setShowLayoutMenu(!showLayoutMenu)}
-              className="w-12 h-12 flex items-center justify-center rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition-all duration-200 group relative"
+              className="w-11 h-11 flex items-center justify-center rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition-all duration-200 group relative"
               title="自动布局"
             >
               <ArrowsPointingOutIcon className="w-5 h-5" />
@@ -254,7 +281,7 @@ export default function Toolbar() {
           {/* Actions */}
           <button
             onClick={handleExport}
-            className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
             title="导出"
           >
             <ArrowDownTrayIcon className="w-5 h-5" />
@@ -265,12 +292,14 @@ export default function Toolbar() {
 
           <button
             onClick={() => setShowImportModal(true)}
-            className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
-            title="导入"
+            disabled={!capabilities.canImport}
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-surface-200 disabled:cursor-not-allowed disabled:opacity-35 transition-all duration-200 group relative"
+            title={capabilities.canImport ? '导入' : `导入：${schemaDisabledReason}`}
+            aria-label="导入"
           >
             <ArrowUpTrayIcon className="w-5 h-5" />
             <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-              导入
+              {capabilities.canImport ? '导入' : `导入 · ${schemaDisabledReason}`}
             </span>
           </button>
 
@@ -278,7 +307,7 @@ export default function Toolbar() {
 
           <button
             onClick={handleReset}
-            className="w-12 h-12 flex items-center justify-center rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-all duration-200 group relative"
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-all duration-200 group relative"
             title={backendId ? '重新加载' : '重置为演示数据'}
           >
             <ArrowPathIcon className="w-5 h-5" />
@@ -289,7 +318,7 @@ export default function Toolbar() {
 
           <button
             onClick={handleBack}
-            className="w-12 h-12 flex items-center justify-center rounded-xl bg-surface-700/50 hover:bg-surface-600/50 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
+            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-700/50 hover:bg-surface-600/50 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
             title="返回"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
