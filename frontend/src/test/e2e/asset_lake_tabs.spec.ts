@@ -304,6 +304,27 @@ test('待审核详情提供三视角、分页、变更列标识和无主键说�
   await expect(dialog.getByRole('button', { name: /变化量/ })).toBeVisible()
   await expect(dialog.getByRole('button', { name: /上一版本全量/ })).toBeVisible()
   await expect(dialog.getByRole('button', { name: /本次接受后全量/ })).toBeVisible()
+  await expect(dialog.getByText('发现新数据，请完成审核')).toBeVisible()
+  await expect(dialog.getByText('审核快照只读')).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '保存编辑' })).toHaveCount(0)
+
+  const actionBar = dialog.getByTestId('curated-review-actions')
+  const rejectButton = dialog.getByRole('button', { name: '拒绝本次数据' })
+  const approveButton = dialog.getByRole('button', { name: '通过审核' })
+  await expect(actionBar).toBeVisible()
+  await expect(rejectButton).toBeVisible()
+  await expect(approveButton).toBeVisible()
+  await expect.poll(async () => {
+    const [dialogBox, actionBarBox, rejectBox, approveBox] = await Promise.all([
+      dialog.boundingBox(), actionBar.boundingBox(), rejectButton.boundingBox(), approveButton.boundingBox(),
+    ])
+    if (!dialogBox || !actionBarBox || !rejectBox || !approveBox) return false
+    return actionBarBox.y > dialogBox.y + dialogBox.height * 0.7
+      && rejectBox.x > dialogBox.x + dialogBox.width * 0.6
+      && approveBox.x > rejectBox.x
+      && approveBox.y >= actionBarBox.y
+  }).toBe(true)
+
   await expect(dialog.getByText('变更列：订单金额（amount）')).toBeVisible()
   await expect(dialog.getByText('绿色为新值')).toBeVisible()
   await expect(dialog.getByRole('cell', { name: /1280.*已变更/ })).toHaveClass(/bg-emerald-100/)
@@ -318,6 +339,9 @@ test('待审核详情提供三视角、分页、变更列标识和无主键说�
 
   await dialog.getByRole('button', { name: /本次接受后全量/ }).click()
   await expect(dialog.getByText(/如果接受本次变化/)).toBeVisible()
+  await expect(dialog.getByText('只读预览')).toBeVisible()
+  await dialog.getByRole('cell', { name: '1280' }).dblclick()
+  await expect(dialog.locator('tbody input')).toHaveCount(0)
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
 
   const noPkRow = page.getByRole('row').filter({ hasText: '无主键回调数据' })
