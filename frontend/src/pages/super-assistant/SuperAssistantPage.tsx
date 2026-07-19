@@ -474,7 +474,7 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
         </label>
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
       </div>
-      <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
+      <footer className="flex justify-center gap-2 border-t border-[var(--color-border)] px-5 py-4">
         <button onClick={onClose} className="min-h-10 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
         <button onClick={save} disabled={busy} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
           {busy && <Loader2 size={13} className="animate-spin" />} 创建
