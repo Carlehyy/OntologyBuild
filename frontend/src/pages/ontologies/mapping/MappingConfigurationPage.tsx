@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Background, Controls, Handle, MiniMap, Position, ReactFlow,
+  Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow,
   useEdgesState, useNodesState,
   type Connection, type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
@@ -44,6 +44,10 @@ function typeLabel(type?: string) {
 
 function targetLaneX() {
   return window.innerWidth < 1400 ? 410 : 650
+}
+
+function relationLaneX() {
+  return targetLaneX() + (window.innerWidth < 1400 ? 360 : 430)
 }
 
 function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
@@ -131,9 +135,9 @@ function estimatedNodeHeight(node: MappingNode) {
   return 68 + (node.data.object?.properties.length || 0) * 33
 }
 
-function nextLaneY(nodes: MappingNode[], lane: 'dataset' | 'target') {
+function nextLaneY(nodes: MappingNode[], lane: MappingNode['data']['kind']) {
   return nodes
-    .filter(node => lane === 'dataset' ? node.data.kind === 'dataset' : node.data.kind !== 'dataset')
+    .filter(node => node.data.kind === lane)
     .reduce((bottom, node) => Math.max(bottom, node.position.y + estimatedNodeHeight(node) + 36), 55)
 }
 
@@ -156,8 +160,9 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const [saveIssues, setSaveIssues] = useState<SaveIssue[]>([])
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null)
   const [tutorialStep, setTutorialStep] = useState<number | null>(() => localStorage.getItem(`mapping-tutorial:${ontologyId}`) ? null : 0)
-  const [tutorialBounds, setTutorialBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
-  const pageRef = useRef<HTMLDivElement>(null)
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
+  const [focusedEdgeId, setFocusedEdgeId] = useState<string | null>(null)
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
   const initialized = useRef(false)
   const editable = data.workspaceEditable === true
 
@@ -196,14 +201,14 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     if (kind === 'object') {
       const object = objectById.get(id)
       if (!object) return
-      setNodes(current => [...current, { id: nodeId, type: 'object', position: position || { x: targetLaneX(), y: nextLaneY(current, 'target') }, data: { kind: 'object', object } }])
+      setNodes(current => [...current, { id: nodeId, type: 'object', position: position || { x: targetLaneX(), y: nextLaneY(current, 'object') }, data: { kind: 'object', object } }])
     } else {
       const relation = data.linkTypes.find(item => item.id === id)
       if (!relation) return
       const sourceObject = objectById.get(relation.sourceObjectTypeId)
       const targetObject = objectById.get(relation.targetObjectTypeId)
       setNodes(current => [...current, {
-        id: nodeId, type: 'relation', position: position || { x: targetLaneX(), y: nextLaneY(current, 'target') },
+        id: nodeId, type: 'relation', position: position || { x: relationLaneX(), y: nextLaneY(current, 'relation') },
         data: {
           kind: 'relation', relation,
           sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0],
@@ -220,6 +225,9 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     setEdges([])
     setDirty(false)
     setSelectedDatasetId(null)
+    setFocusedNodeId(null)
+    setFocusedEdgeId(null)
+    setHoveredEdgeId(null)
   }, [ontologyId, setEdges, setNodes, versionId])
 
   useEffect(() => {
@@ -239,7 +247,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       if (!dataset || !object) continue
       usedDatasets.add(dataset.id); usedObjects.add(object.id)
       for (const [source, target] of Object.entries(userFieldMapping(mapping))) {
-        nextEdges.push({ id: `object:${mapping.id}:${source}:${target}`, source: `dataset:${dataset.id}`, target: `object:${object.id}`, sourceHandle: source, targetHandle: target, type: 'smoothstep', animated: false })
+        nextEdges.push({ id: `object:${mapping.id}:${source}:${target}`, source: `dataset:${dataset.id}`, target: `object:${object.id}`, sourceHandle: source, targetHandle: target, type: 'default', animated: false })
       }
     }
     for (const relation of data.linkTypes) {
@@ -250,18 +258,20 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const targetDatasetId = mapping.edge_dataset_id || mapping.tgt_dataset_id
       if (sourceDatasetId) usedDatasets.add(sourceDatasetId)
       if (targetDatasetId) usedDatasets.add(targetDatasetId)
-      if (sourceDatasetId) nextEdges.push({ id: `relation:${mapping.id}:source`, source: `dataset:${sourceDatasetId}`, target: `relation:${relation.id}`, sourceHandle: mapping.src_key, targetHandle: REL_SOURCE, type: 'smoothstep' })
-      if (targetDatasetId) nextEdges.push({ id: `relation:${mapping.id}:target`, source: `dataset:${targetDatasetId}`, target: `relation:${relation.id}`, sourceHandle: mapping.tgt_key, targetHandle: REL_TARGET, type: 'smoothstep' })
+      if (sourceDatasetId) nextEdges.push({ id: `relation:${mapping.id}:source`, source: `dataset:${sourceDatasetId}`, target: `relation:${relation.id}`, sourceHandle: mapping.src_key, targetHandle: REL_SOURCE, type: 'default' })
+      if (targetDatasetId) nextEdges.push({ id: `relation:${mapping.id}:target`, source: `dataset:${targetDatasetId}`, target: `relation:${relation.id}`, sourceHandle: mapping.tgt_key, targetHandle: REL_TARGET, type: 'default' })
       if (mapping.edge_dataset_id) for (const [property, column] of Object.entries(mapping.field_mapping || {})) {
-        nextEdges.push({ id: `relation:${mapping.id}:${property}`, source: `dataset:${mapping.edge_dataset_id}`, target: `relation:${relation.id}`, sourceHandle: column, targetHandle: property, type: 'smoothstep' })
+        nextEdges.push({ id: `relation:${mapping.id}:${property}`, source: `dataset:${mapping.edge_dataset_id}`, target: `relation:${relation.id}`, sourceHandle: column, targetHandle: property, type: 'default' })
       }
     }
 
     let datasetY = 55
+    const datasetPositions = new Map<string, { x: number; y: number }>()
     ;[...usedDatasets].forEach(datasetId => {
       const dataset = datasetById.get(datasetId)
       if (dataset) {
         const node: MappingNode = { id: `dataset:${dataset.id}`, type: 'dataset', position: { x: 60, y: datasetY }, data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId } }
+        datasetPositions.set(dataset.id, node.position)
         nextNodes.push(node); datasetY += estimatedNodeHeight(node) + 36
       }
     })
@@ -269,17 +279,30 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     ;[...usedObjects].forEach(objectId => {
       const object = objectById.get(objectId)
       if (object) {
+        const mappedDatasetId = data.mappings.find(mapping => mappingTargetId(mapping) === object.id)?.curated_dataset_id
+        const desiredY = mappedDatasetId ? datasetPositions.get(mappedDatasetId)?.y : undefined
+        targetY = Math.max(targetY, desiredY ?? targetY)
         const node: MappingNode = { id: `object:${object.id}`, type: 'object', position: { x: targetLaneX(), y: targetY }, data: { kind: 'object', object } }
         nextNodes.push(node); targetY += estimatedNodeHeight(node) + 36
       }
     })
+    let relationY = 55
     ;[...usedRelations].forEach(relationId => {
       const relation = data.linkTypes.find(item => item.id === relationId)
       if (!relation) return
+      const mapping = linkMappingForType(relation, data.linkMappings)
       const sourceObject = objectById.get(relation.sourceObjectTypeId)
       const targetObject = objectById.get(relation.targetObjectTypeId)
-      const node: MappingNode = { id: `relation:${relation.id}`, type: 'relation', position: { x: targetLaneX(), y: targetY }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } }
-      nextNodes.push(node); targetY += estimatedNodeHeight(node) + 36
+      const anchorDatasetIds = mapping?.edge_dataset_id
+        ? [mapping.edge_dataset_id]
+        : [mapping?.src_dataset_id, mapping?.tgt_dataset_id].filter((id): id is string => Boolean(id))
+      const anchorPositions = anchorDatasetIds.map(id => datasetPositions.get(id)).filter((position): position is { x: number; y: number } => Boolean(position))
+      const desiredY = anchorPositions.length
+        ? anchorPositions.reduce((sum, position) => sum + position.y, 0) / anchorPositions.length
+        : relationY
+      relationY = Math.max(relationY, desiredY)
+      const node: MappingNode = { id: `relation:${relation.id}`, type: 'relation', position: { x: relationLaneX(), y: relationY }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } }
+      nextNodes.push(node); relationY += estimatedNodeHeight(node) + 36
     })
     setNodes(nextNodes); setEdges(nextEdges)
   }, [data, datasetById, objectById, ontologyId, setEdges, setNodes])
@@ -293,20 +316,6 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
   }, [dirty, editable])
-
-  useEffect(() => {
-    if (tutorialStep === null || !pageRef.current) { setTutorialBounds(null); return }
-    const page = pageRef.current
-    const updateBounds = () => {
-      const rect = page.getBoundingClientRect()
-      setTutorialBounds({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
-    }
-    updateBounds()
-    const observer = new ResizeObserver(updateBounds)
-    observer.observe(page)
-    window.addEventListener('resize', updateBounds)
-    return () => { observer.disconnect(); window.removeEventListener('resize', updateBounds) }
-  }, [tutorialStep])
 
   const onConnect = useCallback((connection: Connection) => {
     if (!editable) return
@@ -326,17 +335,107 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     if (duplicateTarget || duplicateSourceInTarget) {
       setNotice({ tone: 'warn', text: duplicateTarget ? '该本体属性已经建立映射，请先删除原连线。' : '同一数据字段不能重复映射到同一个本体元素。' }); return
     }
-    setEdges(current => [...current, { ...connection, id: `draft:${Date.now()}:${Math.random().toString(36).slice(2)}`, type: 'smoothstep' } as Edge])
+    setEdges(current => [...current, { ...connection, id: `draft:${Date.now()}:${Math.random().toString(36).slice(2)}`, type: 'default' } as Edge])
     setDirty(true); setNotice(null)
   }, [editable, edges, nodes, setEdges, targetProperty])
 
-  const invalidEdges = useMemo(() => edges.filter(edge => {
+  const edgeIssues = useMemo(() => {
+    const issues = new Map<string, string>()
+    for (const edge of edges) {
+      const sourceNode = nodes.find(node => node.id === edge.source)
+      const targetNode = nodes.find(node => node.id === edge.target)
+      if (!sourceNode || !targetNode || sourceNode.data.kind !== 'dataset' || targetNode.data.kind === 'dataset') {
+        issues.set(edge.id, '映射端点已不存在')
+        continue
+      }
+      const sourceColumn = sourceNode.data.dataset.columns.find(column => column.name === edge.sourceHandle)
+      const property = targetProperty(targetNode, edge.targetHandle)
+      if (!sourceColumn) issues.set(edge.id, '数据资产字段已不存在或结构暂不可用')
+      else if (!property) issues.set(edge.id, '本体目标属性已不存在')
+      else if (!typesCompatible(sourceColumn.type, property.type)) issues.set(edge.id, '源字段与目标属性类型不兼容')
+    }
+    return issues
+  }, [edges, nodes, targetProperty])
+
+  const invalidEdges = useMemo(() => edges.filter(edge => edgeIssues.has(edge.id)), [edgeIssues, edges])
+
+  const edgeDetails = useMemo(() => new Map(edges.map(edge => {
     const sourceNode = nodes.find(node => node.id === edge.source)
     const targetNode = nodes.find(node => node.id === edge.target)
-    if (!sourceNode || !targetNode || sourceNode.data.kind !== 'dataset' || targetNode.data.kind === 'dataset') return true
-    const sourceColumn = sourceNode.data.dataset.columns.find(column => column.name === edge.sourceHandle)
-    return !sourceColumn || !typesCompatible(sourceColumn.type, targetProperty(targetNode, edge.targetHandle)?.type)
-  }), [edges, nodes, targetProperty])
+    const sourceName = sourceNode?.data.kind === 'dataset' ? sourceNode.data.dataset.name : '未知数据资产'
+    const targetName = targetNode?.data.kind === 'object'
+      ? targetNode.data.object?.displayName || targetNode.data.object?.name
+      : targetNode?.data.kind === 'relation'
+        ? targetNode.data.relation?.displayName || targetNode.data.relation?.name
+        : '未知本体元素'
+    const property = targetNode ? targetProperty(targetNode, edge.targetHandle) : undefined
+    return [edge.id, {
+      sourceName,
+      sourceField: edge.sourceHandle || '未知字段',
+      targetName: targetName || '未知本体元素',
+      targetField: property?.displayName || property?.name || edge.targetHandle || '未知属性',
+      relation: edge.target.startsWith('relation:'),
+      issue: edgeIssues.get(edge.id),
+    }] as const
+  })), [edgeIssues, edges, nodes, targetProperty])
+
+  const activeEdgeId = hoveredEdgeId || focusedEdgeId
+  const hasConnectionFocus = Boolean(activeEdgeId || focusedNodeId)
+  const renderedEdges = useMemo(() => edges.map(edge => {
+    const detail = edgeDetails.get(edge.id)
+    const exactActive = edge.id === activeEdgeId
+    const nodeActive = !activeEdgeId && Boolean(focusedNodeId) && (edge.source === focusedNodeId || edge.target === focusedNodeId)
+    const active = exactActive || nodeActive
+    const color = detail?.issue ? '#c65a55' : detail?.relation ? '#cf8b2e' : '#6674c8'
+    return {
+      ...edge,
+      type: 'default',
+      animated: false,
+      className: `${edge.className || ''}${detail?.issue ? ' dmc-edge--invalid' : ''}`.trim(),
+      label: exactActive ? `${detail?.sourceField || '字段'} → ${detail?.targetField || '属性'}` : undefined,
+      labelShowBg: true,
+      labelBgPadding: [7, 4] as [number, number],
+      labelBgBorderRadius: 6,
+      labelBgStyle: { fill: detail?.issue ? '#fff1f0' : '#ffffff', fillOpacity: .96 },
+      labelStyle: { fill: detail?.issue ? '#a74642' : '#43515d', fontSize: 11, fontWeight: 700 },
+      markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
+      style: {
+        ...edge.style,
+        stroke: color,
+        strokeWidth: active ? 3 : 1.7,
+        opacity: hasConnectionFocus ? active ? 1 : .1 : detail?.issue ? .9 : .52,
+      },
+    }
+  }), [activeEdgeId, edgeDetails, edges, focusedNodeId, hasConnectionFocus])
+
+  const renderedNodes = useMemo(() => nodes.map(node => {
+    const exactEdge = activeEdgeId ? edges.find(edge => edge.id === activeEdgeId) : undefined
+    const connectedToFocusedNode = focusedNodeId
+      ? edges.some(edge => (
+          edge.source === focusedNodeId && edge.target === node.id
+        ) || (
+          edge.target === focusedNodeId && edge.source === node.id
+        ))
+      : false
+    const active = exactEdge
+      ? exactEdge.source === node.id || exactEdge.target === node.id
+      : focusedNodeId ? focusedNodeId === node.id || connectedToFocusedNode : true
+    return {
+      ...node,
+      className: `${node.className || ''}${hasConnectionFocus && !active ? ' dmc-node-shell--dimmed' : ''}`.trim(),
+    }
+  }), [activeEdgeId, edges, focusedNodeId, hasConnectionFocus, nodes])
+
+  const focusedEdgeDetail = activeEdgeId ? edgeDetails.get(activeEdgeId) : undefined
+  const focusedNode = focusedNodeId ? nodes.find(node => node.id === focusedNodeId) : undefined
+  const focusedNodeName = focusedNode?.data.kind === 'dataset'
+    ? focusedNode.data.dataset.name
+    : focusedNode?.data.kind === 'object'
+      ? focusedNode.data.object?.displayName || focusedNode.data.object?.name
+      : focusedNode?.data.relation?.displayName || focusedNode?.data.relation?.name
+  const focusedNodeEdgeCount = focusedNodeId
+    ? edges.filter(edge => edge.source === focusedNodeId || edge.target === focusedNodeId).length
+    : 0
 
   const desiredObjectMappings = useMemo<DesiredObjectMapping[]>(() => {
     const groups = new Map<string, DesiredObjectMapping>()
@@ -434,17 +533,36 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
 
   const autoLayout = () => {
     setNodes(current => {
-      let leftY = 55; let rightY = 55
-      return current.map(node => {
-        const datasetLane = node.data.kind === 'dataset'
-        const y = datasetLane ? leftY : rightY
-        if (datasetLane) leftY += estimatedNodeHeight(node) + 36
-        else rightY += estimatedNodeHeight(node) + 36
-        return { ...node, position: { x: datasetLane ? 60 : targetLaneX(), y } }
-      })
+      const positions = new Map<string, { x: number; y: number }>()
+      let datasetY = 55
+      for (const node of current.filter(item => item.data.kind === 'dataset')) {
+        positions.set(node.id, { x: 60, y: datasetY })
+        datasetY += estimatedNodeHeight(node) + 36
+      }
+      let objectY = 55
+      for (const node of current.filter(item => item.data.kind === 'object')) {
+        const sourceEdge = edges.find(edge => edge.target === node.id)
+        const desiredY = sourceEdge ? positions.get(sourceEdge.source)?.y : undefined
+        objectY = Math.max(objectY, desiredY ?? objectY)
+        positions.set(node.id, { x: targetLaneX(), y: objectY })
+        objectY += estimatedNodeHeight(node) + 36
+      }
+      let relationY = 55
+      for (const node of current.filter(item => item.data.kind === 'relation')) {
+        const anchors = edges
+          .filter(edge => edge.target === node.id)
+          .map(edge => positions.get(edge.source)?.y)
+          .filter((y): y is number => y !== undefined)
+        const desiredY = anchors.length ? anchors.reduce((sum, y) => sum + y, 0) / anchors.length : relationY
+        relationY = Math.max(relationY, desiredY)
+        positions.set(node.id, { x: relationLaneX(), y: relationY })
+        relationY += estimatedNodeHeight(node) + 36
+      }
+      return current.map(node => ({ ...node, position: positions.get(node.id) || node.position }))
     })
   }
-  const clearCanvas = () => { if (editable && nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null) } }
+  const clearConnectionFocus = () => { setFocusedNodeId(null); setFocusedEdgeId(null); setHoveredEdgeId(null) }
+  const clearCanvas = () => { if (editable && nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null); clearConnectionFocus() } }
   const leaveWorkspace = () => {
     if (dirty && !window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')) return
     if (graphWorkspace) {
@@ -461,7 +579,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const tutorial = [
     { icon: Database, title: '从左侧选择数据资产', text: '这里仅展示数据资产湖中已启用的成品数据集与人工数据集。点击“+”把需要配置的数据集放到画布。' },
     { icon: Boxes, title: '从右侧选择本体元素', text: '对象实体与实体关系会分别标识配置进度。把需要维护的元素加入画布即可查看全部属性。' },
-    { icon: Link2, title: '拖动端点建立字段连线', text: '从数据字段右侧圆点拖到本体属性左侧圆点。文本、数字、时间、布尔、数组等类型必须兼容。' },
+    { icon: Link2, title: '拖动端点建立字段连线', text: '从数据字段右侧圆点拖到本体属性左侧圆点。点击节点可聚焦相关映射，悬停或点击连线可查看字段去向。' },
     { icon: Eye, title: '预览数据，最后统一保存', text: '点击数据集的眼睛可在底部核对实例。所有操作先保存在当前前端草稿，只有右上角“保存配置”才会写入数据库。' },
   ]
 
@@ -473,7 +591,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const mappedTargetHandles = new Set(edges.map(edge => `${edge.target}:${edge.targetHandle}`))
 
   return (
-    <div className={`dmc-page ${editable ? '' : 'dmc-page--readonly'}`} ref={pageRef} data-testid="mapping-workspace" data-workspace-mode={data.workspaceMode || 'release'}>
+    <div className={`dmc-page ${editable ? '' : 'dmc-page--readonly'}`} data-testid="mapping-workspace" data-workspace-mode={data.workspaceMode || 'release'}>
       <header className="dmc-header">
         <div className="dmc-brand"><button onClick={leaveWorkspace} aria-label={graphWorkspace ? '返回模型结构' : '返回数据映射'}><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
         <label className="dmc-global-search"><Search size={14} /><input placeholder="搜索画布节点、数据集或本体属性…" onChange={event => { setLeftSearch(event.target.value); setRightSearch(event.target.value) }} /></label>
@@ -499,14 +617,37 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
 
         <main className="dmc-canvas-wrap">
           <ReactFlow<MappingNode, Edge>
-            nodes={nodes} edges={edges} nodeTypes={nodeTypes}
+            nodes={renderedNodes} edges={renderedEdges} nodeTypes={nodeTypes}
             onNodesChange={onNodesChange} onEdgesChange={editable ? onEdgesChange : undefined} onConnect={editable ? onConnect : undefined}
-            onEdgesDelete={editable ? () => setDirty(true) : undefined} onNodesDelete={editable ? () => setDirty(true) : undefined}
+            onEdgesDelete={editable ? () => { setDirty(true); clearConnectionFocus() } : undefined}
+            onNodesDelete={editable ? () => { setDirty(true); clearConnectionFocus() } : undefined}
+            onNodeClick={(_, node) => { setFocusedNodeId(node.id); setFocusedEdgeId(null) }}
+            onEdgeClick={(_, edge) => { setFocusedEdgeId(edge.id); setFocusedNodeId(null) }}
+            onEdgeMouseEnter={(_, edge) => setHoveredEdgeId(edge.id)}
+            onEdgeMouseLeave={() => setHoveredEdgeId(null)}
+            onPaneClick={clearConnectionFocus}
             nodesConnectable={editable} nodesDraggable
             fitView fitViewOptions={{ padding: .18 }} minZoom={.3} maxZoom={1.5}
             deleteKeyCode={editable ? ['Backspace', 'Delete'] : null} connectionLineStyle={{ stroke: '#109486', strokeWidth: 2 }}
           >
             <Background gap={18} size={1} color="#dce3e7" />
+            <div className={`dmc-connection-guide nodrag nopan ${focusedEdgeDetail?.issue ? 'dmc-connection-guide--issue' : ''}`} data-testid="mapping-focus-guide" aria-live="polite">
+              {focusedEdgeDetail ? <>
+                <span className={`dmc-connection-guide__icon ${focusedEdgeDetail.relation ? 'is-relation' : ''}`}><Link2 size={14} /></span>
+                <div className="dmc-connection-guide__content">
+                  <b>{focusedEdgeDetail.issue || (focusedEdgeDetail.relation ? '关系字段映射' : '对象字段映射')}</b>
+                  <span><strong>{focusedEdgeDetail.sourceName}</strong><code>{focusedEdgeDetail.sourceField}</code><ArrowRight size={12} /><strong>{focusedEdgeDetail.targetName}</strong><code>{focusedEdgeDetail.targetField}</code></span>
+                </div>
+              </> : focusedNode ? <>
+                <span className="dmc-connection-guide__icon"><Eye size={14} /></span>
+                <div className="dmc-connection-guide__content"><b>已聚焦「{focusedNodeName}」</b><small>{focusedNodeEdgeCount} 条相关连线已突出显示，点击空白区域可恢复全图。</small></div>
+              </> : <>
+                <span className="dmc-connection-guide__icon"><Link2 size={14} /></span>
+                <div className="dmc-connection-guide__content"><b>连线追踪</b><small>点击节点聚焦链路；悬停或点击连线查看“数据字段 → 本体属性”。</small></div>
+                <div className="dmc-connection-legend"><span><i className="is-object" />对象映射</span><span><i className="is-relation" />关系映射</span><span><i className="is-issue" />异常</span></div>
+              </>}
+              {(focusedEdgeId || focusedNodeId) && <button type="button" onClick={clearConnectionFocus} aria-label="清除连线聚焦"><X size={13} /></button>}
+            </div>
             <Controls position="bottom-left" showInteractive={false} />
             <MiniMap position="bottom-right" nodeColor={node => node.type === 'dataset' ? '#19a393' : node.type === 'relation' ? '#d99a32' : '#6570c8'} maskColor="rgba(248,250,251,.75)" />
             <div className="dmc-canvas-stats">节点 <b>{nodes.length}</b><span />字段映射 <b>{edges.length}</b><span />{dirty ? <em>有未保存更改</em> : <i>已与数据库同步</i>}</div>
@@ -535,7 +676,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
         </aside>
       </div>
 
-      {tutorialStep !== null && <div className="dmc-tutorial" style={tutorialBounds || undefined} role="dialog" aria-modal="true"><div className="dmc-tutorial-card"><header><div><span><BookOpen size={15} /></span><div><b>数据映射快速入门</b><small>第 {tutorialStep + 1} 步，共 {tutorial.length} 步</small></div></div><button onClick={closeTutorial}><X size={15} /></button></header><main>{(() => { const StepIcon = tutorial[tutorialStep].icon; return <><span><StepIcon size={27} /></span><h3>{tutorial[tutorialStep].title}</h3><p>{tutorial[tutorialStep].text}</p></> })()}</main><footer><div>{tutorial.map((_, index) => <button key={index} data-active={index === tutorialStep} onClick={() => setTutorialStep(index)} />)}</div><span>{tutorialStep > 0 && <button onClick={() => setTutorialStep(step => (step || 1) - 1)}>上一步</button>}<button className="dmc-tutorial-next" onClick={() => tutorialStep === tutorial.length - 1 ? closeTutorial() : setTutorialStep(step => (step || 0) + 1)}>{tutorialStep === tutorial.length - 1 ? '开始配置' : '下一步'}<ArrowRight size={13} /></button></span></footer></div></div>}
+      {tutorialStep !== null && <div className="dmc-tutorial" role="dialog" aria-modal="true"><div className="dmc-tutorial-card"><header><div><span><BookOpen size={15} /></span><div><b>数据映射快速入门</b><small>第 {tutorialStep + 1} 步，共 {tutorial.length} 步</small></div></div><button onClick={closeTutorial}><X size={15} /></button></header><main>{(() => { const StepIcon = tutorial[tutorialStep].icon; return <><span><StepIcon size={27} /></span><h3>{tutorial[tutorialStep].title}</h3><p>{tutorial[tutorialStep].text}</p></> })()}</main><footer><div>{tutorial.map((_, index) => <button key={index} data-active={index === tutorialStep} onClick={() => setTutorialStep(index)} />)}</div><span>{tutorialStep > 0 && <button onClick={() => setTutorialStep(step => (step || 1) - 1)}>上一步</button>}<button className="dmc-tutorial-next" onClick={() => tutorialStep === tutorial.length - 1 ? closeTutorial() : setTutorialStep(step => (step || 0) + 1)}>{tutorialStep === tutorial.length - 1 ? '开始配置' : '下一步'}<ArrowRight size={13} /></button></span></footer></div></div>}
     </div>
   )
 }
