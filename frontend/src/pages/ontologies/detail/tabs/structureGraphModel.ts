@@ -155,6 +155,19 @@ interface StructureLayoutOptions {
   ignoreSaved?: boolean
 }
 
+interface ClusterGeometry {
+  childOffsets: Map<string, Point>
+  extent: Point
+}
+
+const CHILDREN_PER_COLUMN = 6
+const CHILD_ROW_GAP = 94
+const CHILD_SIDE_GAP = 330
+const CHILD_COLUMN_GAP = 244
+const ACTIONS_PER_ROW = 4
+const ACTION_COLUMN_GAP = 224
+const ACTION_ROW_GAP = 92
+
 const stableHash = (value: string) => {
   let hash = 2166136261
   for (let index = 0; index < value.length; index += 1) {
@@ -164,18 +177,59 @@ const stableHash = (value: string) => {
   return hash >>> 0
 }
 
-function childOrbitRadius(childCount: number) {
-  if (childCount <= 0) return 128
-  let remaining = childCount
-  let ring = 0
-  let radius = 270
-  while (remaining > 0) {
-    const capacity = 8 + ring * 4
-    remaining -= capacity
-    radius = 270 + ring * 210
-    ring += 1
+function clusterGeometry(propertyIds: string[], actionIds: string[]): ClusterGeometry {
+  const childOffsets = new Map<string, Point>()
+  const sides = {
+    left: propertyIds.filter((_id, index) => index % 2 === 0),
+    right: propertyIds.filter((_id, index) => index % 2 === 1),
   }
-  return radius
+
+  ;(['left', 'right'] as const).forEach(side => {
+    const ids = sides[side]
+    const direction = side === 'left' ? -1 : 1
+    for (let cursor = 0; cursor < ids.length; cursor += CHILDREN_PER_COLUMN) {
+      const column = ids.slice(cursor, cursor + CHILDREN_PER_COLUMN)
+      const depth = Math.floor(cursor / CHILDREN_PER_COLUMN)
+      column.forEach((id, row) => {
+        childOffsets.set(id, {
+          x: direction * (CHILD_SIDE_GAP + depth * CHILD_COLUMN_GAP),
+          y: (row - (column.length - 1) / 2) * CHILD_ROW_GAP,
+        })
+      })
+    }
+  })
+
+  const propertyHalfHeight = Math.max(
+    0,
+    ...Object.values(sides).map(ids => {
+      if (!ids.length) return 0
+      const fullestColumn = Math.min(CHILDREN_PER_COLUMN, ids.length)
+      return ((fullestColumn - 1) * CHILD_ROW_GAP) / 2 + NODE_SIZE.property.height / 2
+    }),
+  )
+  const actionStartY = Math.max(190, propertyHalfHeight + 156)
+  for (let cursor = 0; cursor < actionIds.length; cursor += ACTIONS_PER_ROW) {
+    const row = actionIds.slice(cursor, cursor + ACTIONS_PER_ROW)
+    const rowIndex = Math.floor(cursor / ACTIONS_PER_ROW)
+    row.forEach((id, column) => {
+      childOffsets.set(id, {
+        x: (column - (row.length - 1) / 2) * ACTION_COLUMN_GAP,
+        y: actionStartY + rowIndex * ACTION_ROW_GAP,
+      })
+    })
+  }
+
+  let halfWidth = NODE_SIZE.object.width / 2
+  let halfHeight = NODE_SIZE.object.height / 2
+  childOffsets.forEach((offset, id) => {
+    const size = id.startsWith('action:') ? NODE_SIZE.action : NODE_SIZE.property
+    halfWidth = Math.max(halfWidth, Math.abs(offset.x) + size.width / 2)
+    halfHeight = Math.max(halfHeight, Math.abs(offset.y) + size.height / 2)
+  })
+  return {
+    childOffsets,
+    extent: { x: halfWidth + 72, y: halfHeight + 72 },
+  }
 }
 
 function objectComponents(objectIds: string[], links: StructureLink[]) {
@@ -211,22 +265,21 @@ function objectComponents(objectIds: string[], links: StructureLink[]) {
 /**
  * Deterministic force-directed layout for the object backbone.
  *
- * Relations act as springs, every object pair repels and a collision radius
- * reserves room for the L2 property/action orbit. Disconnected components are
+ * Relations act as springs, every object pair repels and rectangular collision
+ * bounds reserve room for the L2 property/action cluster. Disconnected components are
  * packed afterwards, so they remain nearby without pretending to be linked.
  */
-function forceObjectLayout(workspace: PublishedWorkspace, level: StructureLevel) {
+function forceObjectLayout(
+  workspace: PublishedWorkspace,
+  level: StructureLevel,
+  clusterGeometries: Map<string, ClusterGeometry>,
+) {
   const objectIds = workspace.objectTypes.map(item => item.id)
-  const childCounts = new Map(objectIds.map(id => [id, 0]))
-  if (level === 2) {
-    workspace.objectTypes.forEach(item => childCounts.set(item.id, item.properties.length))
-    workspace.actions.forEach(action => childCounts.set(action.objectTypeId, (childCounts.get(action.objectTypeId) || 0) + 1))
-  }
-  const reserveRadius = new Map(objectIds.map(id => [
+  const reserveExtent = new Map(objectIds.map(id => [
     id,
-    level === 2 && (childCounts.get(id) || 0) > 0
-      ? childOrbitRadius(childCounts.get(id) || 0) + 112
-      : 128,
+    level === 2
+      ? clusterGeometries.get(id)?.extent || { x: 152, y: 112 }
+      : { x: NODE_SIZE.object.width / 2 + 40, y: NODE_SIZE.object.height / 2 + 40 },
   ]))
   const components = objectComponents(objectIds, workspace.linkTypes)
   const componentLayouts: Array<{ points: Map<string, Point>; minX: number; minY: number; width: number; height: number }> = []
@@ -269,9 +322,16 @@ function forceObjectLayout(workspace: PublishedWorkspace, level: StructureLevel)
           }
           const ux = dx / distance
           const uy = dy / distance
+          const leftExtent = reserveExtent.get(leftId) || { x: 152, y: 112 }
+          const rightExtent = reserveExtent.get(rightId) || { x: 152, y: 112 }
           const collisionDistance = level === 1
             ? 270
-            : Math.min(1080, (reserveRadius.get(leftId) || 128) + (reserveRadius.get(rightId) || 128) + 56)
+            : Math.min(
+              1320,
+              (leftExtent.x + rightExtent.x) * Math.abs(ux)
+                + (leftExtent.y + rightExtent.y) * Math.abs(uy)
+                + 72,
+            )
           const repulsion = (baseDistance * baseDistance * 1.15) / Math.max(900, distance * distance)
             + (distance < collisionDistance ? (collisionDistance - distance) * 0.11 : 0)
           const leftForce = forces.get(leftId)!
@@ -288,9 +348,14 @@ function forceObjectLayout(workspace: PublishedWorkspace, level: StructureLevel)
         const dx = target.x - source.x
         const dy = target.y - source.y
         const distance = Math.hypot(dx, dy) || 1
+        const sourceExtent = reserveExtent.get(sourceId) || { x: 152, y: 112 }
+        const targetExtent = reserveExtent.get(targetId) || { x: 152, y: 112 }
         const desired = level === 1
           ? baseDistance
-          : Math.min(1080, Math.max(baseDistance, (reserveRadius.get(sourceId) || 128) + (reserveRadius.get(targetId) || 128) + 56))
+          : Math.min(1320, Math.max(
+            baseDistance,
+            Math.hypot(sourceExtent.x + targetExtent.x, sourceExtent.y + targetExtent.y) * 0.82 + 72,
+          ))
         const spring = (distance - desired) * 0.025
         const sx = (dx / distance) * spring
         const sy = (dy / distance) * spring
@@ -331,22 +396,27 @@ function forceObjectLayout(workspace: PublishedWorkspace, level: StructureLevel)
           const right = points.get(rightId)!
           let dx = right.x - left.x
           let dy = right.y - left.y
-          let distance = Math.hypot(dx, dy)
-          if (distance < 0.01) {
+          if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) {
             const angle = ((stableHash(`${leftId}:${rightId}:collision`) % 360) / 180) * Math.PI
             dx = Math.cos(angle)
             dy = Math.sin(angle)
-            distance = 1
           }
-          const minimum = level === 1
-            ? 270
-            : Math.min(1080, (reserveRadius.get(leftId) || 128) + (reserveRadius.get(rightId) || 128) + 56)
-          if (distance >= minimum) continue
-          const shift = (minimum - distance) / 2 + 0.5
-          const sx = (dx / distance) * shift
-          const sy = (dy / distance) * shift
-          points.set(leftId, { x: left.x - sx, y: left.y - sy })
-          points.set(rightId, { x: right.x + sx, y: right.y + sy })
+          const leftExtent = reserveExtent.get(leftId) || { x: 152, y: 112 }
+          const rightExtent = reserveExtent.get(rightId) || { x: 152, y: 112 }
+          const overlapX = leftExtent.x + rightExtent.x + 72 - Math.abs(dx)
+          const overlapY = leftExtent.y + rightExtent.y + 72 - Math.abs(dy)
+          if (overlapX <= 0 || overlapY <= 0) continue
+          if (overlapX < overlapY) {
+            const shift = overlapX / 2 + 0.5
+            const sign = dx >= 0 ? 1 : -1
+            points.set(leftId, { x: left.x - sign * shift, y: left.y })
+            points.set(rightId, { x: right.x + sign * shift, y: right.y })
+          } else {
+            const shift = overlapY / 2 + 0.5
+            const sign = dy >= 0 ? 1 : -1
+            points.set(leftId, { x: left.x, y: left.y - sign * shift })
+            points.set(rightId, { x: right.x, y: right.y + sign * shift })
+          }
           moved = true
         }
       }
@@ -359,13 +429,11 @@ function forceObjectLayout(workspace: PublishedWorkspace, level: StructureLevel)
     let maxY = Number.NEGATIVE_INFINITY
     component.forEach(id => {
       const point = points.get(id)!
-      const radius = reserveRadius.get(id) || 128
-      const horizontal = level === 1 ? NODE_SIZE.object.width / 2 : radius
-      const vertical = level === 1 ? NODE_SIZE.object.height / 2 : radius
-      minX = Math.min(minX, point.x - horizontal)
-      maxX = Math.max(maxX, point.x + horizontal)
-      minY = Math.min(minY, point.y - vertical)
-      maxY = Math.max(maxY, point.y + vertical)
+      const extent = reserveExtent.get(id) || { x: 152, y: 112 }
+      minX = Math.min(minX, point.x - extent.x)
+      maxX = Math.max(maxX, point.x + extent.x)
+      minY = Math.min(minY, point.y - extent.y)
+      maxY = Math.max(maxY, point.y + extent.y)
     })
     componentLayouts.push({ points, minX, minY, width: maxX - minX, height: maxY - minY })
   })
@@ -394,26 +462,38 @@ function forceObjectLayout(workspace: PublishedWorkspace, level: StructureLevel)
   return packed
 }
 
-function orbitPositions(parentId: string, childIds: string[], parentCenter: Point) {
-  const positions = new Map<string, Point>()
-  let cursor = 0
-  let ring = 0
-  while (cursor < childIds.length) {
-    const capacity = 8 + ring * 4
-    const items = childIds.slice(cursor, cursor + capacity)
-    const radius = 270 + ring * 210
-    const offset = ((stableHash(`${parentId}:${ring}`) % 360) / 180) * Math.PI
-    items.forEach((id, index) => {
-      const angle = offset + (index / Math.max(1, items.length)) * Math.PI * 2
-      positions.set(id, {
-        x: parentCenter.x + Math.cos(angle) * radius,
-        y: parentCenter.y + Math.sin(angle) * radius,
-      })
-    })
-    cursor += items.length
-    ring += 1
+type HandleSide = 'top' | 'right' | 'bottom' | 'left'
+
+function nodeCenter(node: StructureNode): Point {
+  const size = NODE_SIZE[node.data.kind]
+  return { x: node.position.x + size.width / 2, y: node.position.y + size.height / 2 }
+}
+
+function edgeHandleSides(source: StructureNode, target: StructureNode): [HandleSide, HandleSide] {
+  if (source.id === target.id) return ['right', 'top']
+  const sourceCenter = nodeCenter(source)
+  const targetCenter = nodeCenter(target)
+  const dx = targetCenter.x - sourceCenter.x
+  const dy = targetCenter.y - sourceCenter.y
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? ['right', 'left'] : ['left', 'right']
   }
-  return positions
+  return dy >= 0 ? ['bottom', 'top'] : ['top', 'bottom']
+}
+
+export function routeStructureEdges(edges: StructureEdge[], nodes: StructureNode[]): StructureEdge[] {
+  const nodeById = new Map(nodes.map(node => [node.id, node]))
+  return edges.map(edge => {
+    const source = nodeById.get(edge.source)
+    const target = nodeById.get(edge.target)
+    if (!source || !target) return edge
+    const [sourceSide, targetSide] = edgeHandleSides(source, target)
+    return {
+      ...edge,
+      sourceHandle: `source-${sourceSide}`,
+      targetHandle: `target-${targetSide}`,
+    }
+  })
 }
 
 function offsetParallelRelations(edges: StructureEdge[]): StructureEdge[] {
@@ -497,9 +577,16 @@ export function buildStructureGraph(
     })
   })
 
-  const objectCenters = forceObjectLayout(workspace, level)
-  const generated = new Map<string, Point>()
   const nodeById = new Map(nodes.map(node => [node.id, node]))
+  const clusterGeometries = new Map<string, ClusterGeometry>()
+  workspace.objectTypes.forEach(objectType => {
+    clusterGeometries.set(objectType.id, clusterGeometry(
+      objectType.properties.map(property => propertyNodeId(objectType.id, property)),
+      workspace.actions.filter(action => action.objectTypeId === objectType.id).map(action => actionNodeId(action.id)),
+    ))
+  })
+  const objectCenters = forceObjectLayout(workspace, level, clusterGeometries)
+  const generated = new Map<string, Point>()
   workspace.objectTypes.forEach(objectType => {
     const center = objectCenters.get(objectType.id) || { x: 184, y: 112 }
     generated.set(objectType.id, {
@@ -507,15 +594,14 @@ export function buildStructureGraph(
       y: center.y - NODE_SIZE.object.height / 2,
     })
     if (level !== 2) return
-    const childIds = [
-      ...objectType.properties.map(property => propertyNodeId(objectType.id, property)),
-      ...workspace.actions.filter(action => action.objectTypeId === objectType.id).map(action => actionNodeId(action.id)),
-    ]
-    orbitPositions(objectType.id, childIds, center).forEach((childCenter, id) => {
+    clusterGeometries.get(objectType.id)?.childOffsets.forEach((offset, id) => {
       const node = nodeById.get(id)
       if (!node) return
       const size = NODE_SIZE[node.data.kind]
-      generated.set(id, { x: childCenter.x - size.width / 2, y: childCenter.y - size.height / 2 })
+      generated.set(id, {
+        x: center.x + offset.x - size.width / 2,
+        y: center.y + offset.y - size.height / 2,
+      })
     })
   })
   const layout = workspace.canvasLayout || {}
@@ -528,7 +614,7 @@ export function buildStructureGraph(
         : generated.get(node.id) || { x: 72, y: 72 },
     }
   })
-  return { nodes: positioned, edges: offsetParallelRelations(edges) }
+  return { nodes: positioned, edges: routeStructureEdges(offsetParallelRelations(edges), positioned) }
 }
 
 export function findPaths(

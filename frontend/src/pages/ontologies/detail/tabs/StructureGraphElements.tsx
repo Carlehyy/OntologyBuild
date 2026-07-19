@@ -24,6 +24,22 @@ const kindStyle = {
   },
 }
 
+const HANDLE_SIDES = [
+  ['top', Position.Top],
+  ['right', Position.Right],
+  ['bottom', Position.Bottom],
+  ['left', Position.Left],
+] as const
+
+function DirectionalHandles() {
+  return HANDLE_SIDES.map(([side, position]) => (
+    <span key={side}>
+      <Handle id={`target-${side}`} type="target" position={position} className="!h-2 !w-2 !border-0 !bg-transparent !opacity-0" />
+      <Handle id={`source-${side}`} type="source" position={position} className="!h-2 !w-2 !border-0 !bg-transparent !opacity-0" />
+    </span>
+  ))
+}
+
 export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureNode>) => {
   const style = kindStyle[data.kind]
   const Icon = style.icon
@@ -47,7 +63,7 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
       data-testid={`structure-node-${data.kind}`}
       className={`${widthClass} rounded-xl border bg-white px-3.5 py-3 transition-[opacity,border-color,box-shadow,transform] duration-200 ${emphasisClass} ${data.dimmed ? 'opacity-20 grayscale' : 'opacity-100'} hover:-translate-y-0.5 hover:shadow-lg`}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-2 !border-white !bg-slate-400 !opacity-0" />
+      <DirectionalHandles />
       <div className="flex min-w-0 items-center gap-3">
         <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${style.iconClass}`}>
           <Icon size={17} strokeWidth={1.8} />
@@ -61,7 +77,6 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
           <p className="mt-0.5 truncate text-[10px] text-slate-500">{data.subtitle}</p>
         </div>
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-2 !border-white !bg-slate-400 !opacity-0" />
     </div>
   )
 })

@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider,
-  applyNodeChanges, useReactFlow, type NodeChange,
+  applyNodeChanges, useReactFlow, type NodeChange, type OnNodeDrag,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, ChevronRight,
+  AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, Check, ChevronDown, ChevronRight,
   Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
   Maximize2, Route, Search, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
   Bolt, Clock3, Database,
@@ -16,7 +17,7 @@ import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
 import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
 import {
   actionNodeId, buildStructureGraph, findPaths, functionUsage, propertyNodeId,
-  relationEdgeId, sentinelUsage,
+  relationEdgeId, routeStructureEdges, sentinelUsage,
   type GraphPath, type HighlightSet, type PublishedWorkspace, type StructureEdge,
   type StructureNode,
 } from './structureGraphModel'
@@ -74,6 +75,207 @@ function Pill({ children, tone = 'slate' }: { children: React.ReactNode; tone?: 
     violet: 'border-violet-200 bg-violet-50 text-violet-700',
   }
   return <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] ${styles[tone]}`}>{children}</span>
+}
+
+interface SegmentItem<T extends string | number> {
+  value: T
+  label: string
+  icon?: React.ElementType
+}
+
+function AnimatedSegmentedControl<T extends string | number>({
+  value, items, label, onChange,
+}: {
+  value: T
+  items: SegmentItem<T>[]
+  label: string
+  onChange: (value: T) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 })
+
+  const measure = useCallback(() => {
+    const container = containerRef.current
+    if (!container) return
+    const active = container.querySelector(`[data-segment-value="${String(value)}"]`) as HTMLElement | null
+    if (!active) return
+    const containerRect = container.getBoundingClientRect()
+    const activeRect = active.getBoundingClientRect()
+    setIndicator({ left: activeRect.left - containerRect.left, width: activeRect.width })
+  }, [value])
+
+  useLayoutEffect(() => {
+    measure()
+    const container = containerRef.current
+    if (!container || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [items.length, measure])
+
+  return (
+    <div ref={containerRef} className="relative flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5" aria-label={label}>
+      <span
+        aria-hidden="true"
+        className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out motion-reduce:transition-none"
+        style={{ left: indicator.left, width: indicator.width }}
+      />
+      {items.map(item => {
+        const active = item.value === value
+        const Icon = item.icon
+        return (
+          <button
+            key={item.value}
+            type="button"
+            data-segment-value={item.value}
+            aria-pressed={active}
+            onClick={() => onChange(item.value)}
+            className={`relative z-10 inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors duration-200 ${active ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            {Icon && <Icon size={13} />}{item.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+interface DependencyOption {
+  id: string
+  label: string
+  technicalName: string
+  description?: string
+  meta?: string
+}
+
+function DependencyPicker({
+  kind, items, value, open, onOpenChange, onChange,
+}: {
+  kind: 'function' | 'sentinel'
+  items: DependencyOption[]
+  value: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onChange: (id: string) => void
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const [position, setPosition] = useState({ left: 0, top: 0 })
+  const selected = items.find(item => item.id === value)
+  const isFunction = kind === 'function'
+  const Icon = isFunction ? FunctionSquare : ShieldCheck
+  const title = isFunction ? '激活函数' : '哨兵规则'
+  const helper = isFunction ? '选择后高亮直接使用该函数的对象、属性和动作' : '选择后查看规则绑定、条件属性与动作覆盖范围'
+  const tone = isFunction
+    ? {
+      icon: 'bg-violet-50 text-violet-600 ring-violet-100',
+      active: 'border-violet-300 bg-violet-50 text-violet-700',
+      dot: 'bg-violet-500',
+      selected: 'bg-violet-50/70 text-violet-900',
+      selectedIcon: 'bg-violet-100 text-violet-700',
+    }
+    : {
+      icon: 'bg-fuchsia-50 text-fuchsia-600 ring-fuchsia-100',
+      active: 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700',
+      dot: 'bg-fuchsia-500',
+      selected: 'bg-fuchsia-50/70 text-fuchsia-900',
+      selectedIcon: 'bg-fuchsia-100 text-fuchsia-700',
+    }
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current
+    if (!trigger) return
+    const rect = trigger.getBoundingClientRect()
+    const width = 360
+    setPosition({
+      left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)),
+      top: rect.bottom + 10,
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open, updatePosition])
+
+  return (
+    <div className="shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={isFunction ? '查看激活函数使用关系' : '查看哨兵覆盖范围'}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => onOpenChange(!open)}
+        onKeyDown={event => {
+          if (event.key === 'Escape') onOpenChange(false)
+          if (event.key === 'ArrowDown') onOpenChange(true)
+        }}
+        className={`inline-flex h-9 w-[196px] items-center gap-2 rounded-lg border px-2.5 text-left text-xs outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-offset-1 ${open || selected ? tone.active : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 focus-visible:ring-teal-300'}`}
+      >
+        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ring-1 ${tone.icon}`}><Icon size={13} /></span>
+        <span className="min-w-0 flex-1 truncate">{selected?.label || (isFunction ? '激活函数 · 查看使用关系' : '哨兵 · 查看覆盖范围')}</span>
+        <ChevronDown size={13} className={`shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && createPortal(
+        <>
+          <button type="button" aria-label={`关闭${title}选择`} className="fixed inset-0 z-[70] cursor-default" onClick={() => onOpenChange(false)} />
+          <section
+            role="dialog"
+            aria-label={`选择${title}`}
+            className="fixed z-[80] w-[360px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up"
+            style={{ left: position.left, top: position.top }}
+          >
+            <header className="flex items-start gap-3 border-b border-slate-100 px-4 py-3">
+              <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${tone.icon}`}><Icon size={16} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">{title}<span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} /><span className="text-xs font-medium tabular-nums text-slate-400">{items.length}</span></span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-slate-400">{helper}</span>
+              </span>
+              {selected && <button type="button" data-testid={`${kind}-dependency-clear`} onClick={() => { onChange(''); onOpenChange(false) }} className="mt-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700">清除</button>}
+            </header>
+            <div className="scrollbar-thin max-h-[360px] overflow-y-auto py-1.5">
+              {items.length ? items.map(item => {
+                const active = item.id === value
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="option"
+                    data-testid={`${kind}-dependency-option-${item.id}`}
+                    aria-selected={active}
+                    onClick={() => { onChange(item.id); onOpenChange(false) }}
+                    className={`group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${active ? tone.selected : 'hover:bg-slate-50'}`}
+                  >
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? tone.selectedIcon : 'bg-slate-100 text-slate-500 group-hover:bg-white'}`}><Icon size={14} /></span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-slate-700">{item.label}</span>
+                      <span className="mt-0.5 block truncate font-mono text-[10px] text-slate-400">{item.technicalName}{item.meta ? ` · ${item.meta}` : ''}</span>
+                      {item.description && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.description}</span>}
+                    </span>
+                    {active && <Check size={15} className="shrink-0" />}
+                  </button>
+                )
+              }) : (
+                <div className="flex flex-col items-center px-6 py-10 text-center">
+                  <span className={`mb-3 flex h-11 w-11 items-center justify-center rounded-full ${tone.icon}`}><Icon size={18} /></span>
+                  <p className="text-sm font-medium text-slate-600">当前发布版暂无{title}</p>
+                  <p className="mt-1 text-xs text-slate-400">发布包含{title}的版本后，可在这里查看依赖关系。</p>
+                </div>
+              )}
+            </div>
+          </section>
+        </>,
+        document.body,
+      )}
+    </div>
+  )
 }
 
 function DetailPanel({ workspace, selection, onClose }: {
@@ -187,17 +389,23 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const [pathAttempted, setPathAttempted] = useState(false)
   const [functionId, setFunctionId] = useState('')
   const [sentinelId, setSentinelId] = useState('')
+  const [openDependency, setOpenDependency] = useState<'function' | 'sentinel' | null>(null)
   const [saveState, setSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState('')
+  const groupDrag = useRef<{
+    objectId: string
+    parentStart: { x: number; y: number }
+    childStarts: Record<string, { x: number; y: number }>
+  } | null>(null)
   const pendingPositions = useRef<Record<string, { x: number; y: number }>>({})
   const saveTimer = useRef<number | null>(null)
   const saveInFlight = useRef(false)
 
   useEffect(() => {
     setAllNodes(builtGraph.nodes)
-    const timer = window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.9, duration: 260 }), 80)
+    const timer = window.setTimeout(() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.9, duration: 260 }), 80)
     return () => window.clearTimeout(timer)
-  }, [builtGraph, fitView])
+  }, [builtGraph, fitView, level])
 
   useEffect(() => {
     setDetail(null)
@@ -206,6 +414,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     setPaths([])
     setFunctionId('')
     setSentinelId('')
+    setOpenDependency(null)
   }, [workspace.versionId])
 
   const flushLayout = useCallback(async () => {
@@ -260,6 +469,55 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     setAllNodes(nodes => applyNodeChanges(changes, nodes))
   }, [])
 
+  const startNodeDrag = useCallback<OnNodeDrag<StructureNode>>((_event, node) => {
+    if (level !== 2 || node.data.kind !== 'object') {
+      groupDrag.current = null
+      return
+    }
+    groupDrag.current = {
+      objectId: node.id,
+      parentStart: { ...node.position },
+      childStarts: Object.fromEntries(
+        allNodes
+          .filter(candidate => candidate.data.parentObjectId === node.id)
+          .map(candidate => [candidate.id, { ...candidate.position }]),
+      ),
+    }
+  }, [allNodes, level])
+
+  const dragNodeGroup = useCallback<OnNodeDrag<StructureNode>>((_event, node) => {
+    const drag = groupDrag.current
+    if (!drag || drag.objectId !== node.id) return
+    const dx = node.position.x - drag.parentStart.x
+    const dy = node.position.y - drag.parentStart.y
+    setAllNodes(nodes => nodes.map(candidate => {
+      const start = drag.childStarts[candidate.id]
+      return start
+        ? { ...candidate, position: { x: start.x + dx, y: start.y + dy } }
+        : candidate
+    }))
+  }, [])
+
+  const stopNodeDrag = useCallback<OnNodeDrag<StructureNode>>((_event, node) => {
+    const drag = groupDrag.current
+    if (!drag || drag.objectId !== node.id) {
+      scheduleLayoutSave(node)
+      groupDrag.current = null
+      return
+    }
+    const dx = node.position.x - drag.parentStart.x
+    const dy = node.position.y - drag.parentStart.y
+    const positions: Record<string, { x: number; y: number }> = { [node.id]: { ...node.position } }
+    Object.entries(drag.childStarts).forEach(([id, start]) => {
+      positions[id] = { x: start.x + dx, y: start.y + dy }
+    })
+    setAllNodes(nodes => nodes.map(candidate => positions[candidate.id]
+      ? { ...candidate, position: positions[candidate.id] }
+      : candidate))
+    schedulePositionSave(positions)
+    groupDrag.current = null
+  }, [scheduleLayoutSave, schedulePositionSave])
+
   const searchIndex = useMemo<SearchResult[]>(() => {
     const objectResults = workspace.objectTypes.map(item => ({ id: item.id, kind: 'object' as const, label: item.displayName || item.name, technicalName: item.name }))
     const relationResults = workspace.linkTypes.map(item => ({ id: relationEdgeId(item.id), kind: 'relation' as const, label: item.displayName || item.name, technicalName: item.name, context: `${objectName(workspace, item.sourceObjectTypeId)} → ${objectName(workspace, item.targetObjectTypeId)}` }))
@@ -274,6 +532,22 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     if (!query) return []
     return searchIndex.filter(item => `${item.label} ${item.technicalName} ${item.context || ''}`.toLocaleLowerCase().includes(query)).slice(0, 8)
   }, [searchIndex, searchText])
+
+  const functionOptions = useMemo<DependencyOption[]>(() => workspace.functions.map(item => ({
+    id: item.id,
+    label: item.displayName || item.name,
+    technicalName: item.name,
+    description: item.description,
+    meta: `${item.functionType || 'function'} · ${item.language || 'unknown'}`,
+  })), [workspace.functions])
+
+  const sentinelOptions = useMemo<DependencyOption[]>(() => workspace.sentinels.map(item => ({
+    id: item.id,
+    label: item.displayName || item.name,
+    technicalName: item.name,
+    description: item.description,
+    meta: item.enabled === false ? '已停用' : item.onSchedule ? '定时扫描' : item.onChange ? '变更触发' : '规则触发',
+  })), [workspace.sentinels])
 
   const chooseSearchResult = useCallback((result: SearchResult) => {
     setSearchText(result.label)
@@ -330,7 +604,8 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
       return { ...node, data: { ...node.data, emphasis, dimmed: hasHighlight && !emphasis } }
     }), [activePath, allNodes, dependencyHighlight, hasDependency, hasHighlight, level, searchFocus])
 
-  const visibleEdges = useMemo(() => builtGraph.edges
+  const routedEdges = useMemo(() => routeStructureEdges(builtGraph.edges, allNodes), [allNodes, builtGraph.edges])
+  const visibleEdges = useMemo(() => routedEdges
     .filter(edge => level === 2 || edge.data?.kind === 'relation')
     .map((edge): StructureEdge => {
       let emphasis = null as NonNullable<StructureEdge['data']>['emphasis']
@@ -339,7 +614,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
       else if (!hasDependency && searchFocus?.type === 'edge' && searchFocus.id === edge.id) emphasis = 'search'
       const contextualRelation = searchFocus?.type === 'node' && searchFocus.context.length === 0 && (edge.source === searchFocus.id || edge.target === searchFocus.id)
       return { ...edge, data: { ...edge.data!, emphasis, dimmed: hasHighlight && !emphasis && !contextualRelation } }
-    }), [activePath, builtGraph.edges, dependencyHighlight.edges, hasDependency, hasHighlight, level, searchFocus])
+    }), [activePath, dependencyHighlight.edges, hasDependency, hasHighlight, level, routedEdges, searchFocus])
 
   const selectNode = useCallback((node: StructureNode) => {
     if (node.data.kind === 'property') setDetail({ kind: 'property', id: node.data.entityId, parentObjectId: node.data.parentObjectId })
@@ -347,7 +622,34 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     else setDetail({ kind: 'object', id: node.data.entityId })
   }, [])
 
+  const changeLevel = useCallback((nextLevel: Level) => {
+    setLevel(nextLevel)
+    setSearchText('')
+    setSearchFocus(null)
+    setFunctionId('')
+    setSentinelId('')
+    setOpenDependency(null)
+    setPaths([])
+    setDetail(null)
+  }, [])
+
+  const changeMode = useCallback((nextMode: 'browse' | 'path') => {
+    setMode(nextMode)
+    setOpenDependency(null)
+    if (nextMode === 'path') {
+      setSearchFocus(null)
+      setFunctionId('')
+      setSentinelId('')
+    }
+  }, [])
+
   const chooseDependency = useCallback((kind: 'function' | 'sentinel', id: string) => {
+    setOpenDependency(null)
+    if (!id) {
+      if (kind === 'function') setFunctionId('')
+      else setSentinelId('')
+      return
+    }
     setLevel(2)
     setMode('browse')
     setSearchText('')
@@ -363,8 +665,9 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     const organized = buildStructureGraph(workspace, level, { ignoreSaved: true })
     setAllNodes(organized.nodes)
     schedulePositionSave(Object.fromEntries(organized.nodes.map(node => [node.id, node.position])))
+    groupDrag.current = null
     setDetail(null)
-    window.setTimeout(() => void fitView({ padding: level === 1 ? 0.26 : 0.16, maxZoom: level === 1 ? 1.05 : 0.86, duration: 420 }), 40)
+    window.setTimeout(() => void fitView({ padding: level === 1 ? 0.26 : 0.14, minZoom: level === 1 ? 0.24 : 0.34, maxZoom: level === 1 ? 1.05 : 0.86, duration: 420 }), 40)
   }, [fitView, level, schedulePositionSave, workspace])
 
   const saveLabel = saveState === 'pending' ? '3 秒后自动保存' : saveState === 'saving' ? '正在保存布局' : saveState === 'saved' ? '布局已保存' : saveState === 'error' ? '保存失败' : '拖动后自动保存布局'
@@ -372,13 +675,18 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-50/70" data-testid="ontology-structure-graph">
       <div className="z-40 flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2.5" style={{ scrollbarWidth: 'none' }}>
-        <div className="flex shrink-0 rounded-lg bg-slate-100 p-1" aria-label="图谱视角">
-          {([1, 2] as Level[]).map(item => <button key={item} type="button" onClick={() => { setLevel(item); setSearchText(''); setSearchFocus(null); setFunctionId(''); setSentinelId(''); setPaths([]); setDetail(null) }} className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${level === item ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>L{item}</button>)}
-        </div>
-        <div className="flex shrink-0 rounded-lg border border-slate-200 bg-white p-1">
-          <button type="button" onClick={() => setMode('browse')} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${mode === 'browse' ? 'bg-teal-50 font-semibold text-teal-700' : 'text-slate-500'}`}><Focus size={13} />浏览</button>
-          <button type="button" onClick={() => { setMode('path'); setSearchFocus(null); setFunctionId(''); setSentinelId('') }} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${mode === 'path' ? 'bg-cyan-50 font-semibold text-cyan-700' : 'text-slate-500'}`}><Route size={13} />路径</button>
-        </div>
+        <AnimatedSegmentedControl<Level>
+          value={level}
+          label="图谱视角"
+          items={[{ value: 1, label: 'L1' }, { value: 2, label: 'L2' }]}
+          onChange={changeLevel}
+        />
+        <AnimatedSegmentedControl<'browse' | 'path'>
+          value={mode}
+          label="图谱模式"
+          items={[{ value: 'browse', label: '浏览', icon: Focus }, { value: 'path', label: '路径', icon: Route }]}
+          onChange={changeMode}
+        />
         <div className="relative w-[260px] shrink-0">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100" />
@@ -390,26 +698,30 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           )}
         </div>
         <div className="h-6 w-px shrink-0 bg-slate-200" />
-        <div className="relative shrink-0">
-          <FunctionSquare size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-violet-500" />
-          <select value={functionId} onChange={event => chooseDependency('function', event.target.value)} aria-label="查看激活函数使用关系" className="h-9 w-[190px] appearance-none rounded-lg border border-slate-200 bg-white pl-8 pr-7 text-xs text-slate-600 outline-none focus:border-violet-400">
-            <option value="">激活函数：查看使用关系</option>{workspace.functions.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}
-          </select>
-        </div>
-        <div className="relative shrink-0">
-          <ShieldCheck size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fuchsia-500" />
-          <select value={sentinelId} onChange={event => chooseDependency('sentinel', event.target.value)} aria-label="查看哨兵覆盖范围" className="h-9 w-[180px] appearance-none rounded-lg border border-slate-200 bg-white pl-8 pr-7 text-xs text-slate-600 outline-none focus:border-fuchsia-400">
-            <option value="">哨兵：查看覆盖范围</option>{workspace.sentinels.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}
-          </select>
-        </div>
+        <DependencyPicker
+          kind="function"
+          items={functionOptions}
+          value={functionId}
+          open={openDependency === 'function'}
+          onOpenChange={open => setOpenDependency(open ? 'function' : null)}
+          onChange={id => chooseDependency('function', id)}
+        />
+        <DependencyPicker
+          kind="sentinel"
+          items={sentinelOptions}
+          value={sentinelId}
+          open={openDependency === 'sentinel'}
+          onOpenChange={open => setOpenDependency(open ? 'sentinel' : null)}
+          onChange={id => chooseDependency('sentinel', id)}
+        />
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <span data-testid="published-structure-readonly" title="当前页面只允许调整并保存画布布局，不允许修改本体模型结构" className="mr-1 inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-medium text-slate-600">
             <ShieldCheck size={13} className="text-teal-700" />发布快照 · 结构只读
           </span>
-          <button type="button" onClick={organizeGraph} aria-label="智能整理图谱" title="按关系重新计算紧凑布局" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
+          <button type="button" onClick={organizeGraph} aria-label="智能整理图谱" title="按实体关系力导向展开，并将属性与动作分层排列" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
           <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
           <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
-          <button type="button" onClick={() => void fitView({ padding: 0.2, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
+          <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
         </div>
       </div>
 
@@ -432,7 +744,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <ReactFlow<StructureNode, StructureEdge>
           nodes={visibleNodes} edges={visibleEdges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES}
-          onNodesChange={onNodesChange} onNodeDragStop={(_event, node) => scheduleLayoutSave(node)}
+          onNodesChange={onNodesChange} onNodeDragStart={startNodeDrag} onNodeDrag={dragNodeGroup} onNodeDragStop={stopNodeDrag}
           onNodeClick={(_event, node) => selectNode(node)}
           onEdgeClick={(_event, edge) => { if (edge.data?.kind === 'relation' && edge.data.entityId) setDetail({ kind: 'relation', id: edge.data.entityId }) }}
           onPaneClick={() => { setDetail(null); setSearchOpen(false) }}

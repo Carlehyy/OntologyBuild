@@ -130,8 +130,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
   const isGroupActive = (item: NavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
   const isMappingWorkspace = /^\/ontologies\/[^/]+\/mapping-config$/.test(location.pathname)
-  const isOntologyStructurePage = /^\/ontologies\/[^/]+$/.test(location.pathname)
-    && new URLSearchParams(location.search).get('tab') === 'design'
+  // 本体详情的顶部导航必须拥有稳定的布局上下文。若只在“本体结构”
+  // 切换 overflow，页面滚动条的出现/消失会改变可用宽度，造成导航横移。
+  const isOntologyDetailPage = /^\/ontologies\/[^/]+$/.test(location.pathname)
   const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/api-hub') || isMappingWorkspace
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
@@ -462,7 +463,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         )}
-        <div className={`flex-1 ${isEdgeToEdgePage || isStewardPage || isOntologyStructurePage ? 'h-full min-h-0 overflow-hidden' : 'overflow-auto p-6'} ${isOntologyStructurePage ? 'p-4' : ''}`}>
+        <div className={`flex-1 ${isEdgeToEdgePage || isStewardPage || isOntologyDetailPage ? 'h-full min-h-0 overflow-hidden' : 'overflow-auto p-6'} ${isOntologyDetailPage ? 'p-6' : ''}`}>
           {children}
         </div>
       </main>

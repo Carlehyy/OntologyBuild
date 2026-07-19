@@ -120,13 +120,11 @@ export default function OntologyDetailPage() {
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
   return (
-    <div className={`onto-glass-root ${
-      activeGroup === 'data' || activeGroup === 'design'
-        ? 'onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 overflow-hidden'
-        : 'space-y-4'
+    <div className={`onto-glass-root flex h-full min-h-0 flex-col gap-4 overflow-hidden ${
+      activeGroup === 'data' || activeGroup === 'design' ? 'onto-glass-root--flat' : ''
     }`}>
       {/* ═══ 功能导航与低频操作 ═══ */}
-      <div className="onto-glass-header flex items-center justify-between gap-3 px-5 py-4">
+      <div data-testid="ontology-detail-header" className="onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4">
         <div className="min-w-0 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
           <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
             <div
@@ -162,7 +160,7 @@ export default function OntologyDetailPage() {
           >
             {ontology.current_release_version || ontology.version || 'v0'}
           </span>
-          {activeGroup !== 'design' && (
+          {activeGroup !== 'design' ? (
             <button
               type="button"
               onClick={() => navigate(`/ontologies/${id}/graph`)}
@@ -172,6 +170,8 @@ export default function OntologyDetailPage() {
             >
               <Network size={18} />
             </button>
+          ) : (
+            <span aria-hidden="true" className="h-10 w-10 shrink-0" />
           )}
           <button
             type="button"
@@ -212,7 +212,7 @@ export default function OntologyDetailPage() {
 
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (
-        <div className="onto-glass-in">
+        <div className="onto-glass-in min-h-0 flex-1 overflow-auto">
           <OverviewDashboard ontologyId={id!} ontology={ontology} onGoGroup={selectGroup} />
         </div>
       ) : activeGroup === 'design' ? (
@@ -220,7 +220,7 @@ export default function OntologyDetailPage() {
           <ModelStructureView ontologyId={id!} />
         </div>
       ) : activeGroup === 'data-mapping' ? (
-        <div className="onto-glass-in">
+        <div className="onto-glass-in min-h-0 flex-1 overflow-auto">
           <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
@@ -228,7 +228,7 @@ export default function OntologyDetailPage() {
           <FormalInstancesView ontologyId={id!} />
         </div>
       ) : (
-        <div className="onto-glass-card onto-glass-in p-4">
+        <div className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto p-4">
           <GovernanceTab
             ontologyId={id!}
             currentReleaseId={ontology.current_release_id}
