@@ -97,6 +97,21 @@ export interface IngestKey {
   plaintextKey?: string     // 仅创建响应带
 }
 
+export interface IngestKeyListParams {
+  q?: string
+  status?: 'all' | 'active' | 'revoked'
+  sourceSystem?: string
+  page?: number
+  pageSize?: number
+}
+
+export interface IngestKeyListResp {
+  items: IngestKey[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface EventCreateBody {
   title: string
   description?: string
@@ -173,8 +188,16 @@ export const eventsApi = {
       .then((blob: Blob) => saveBlob(blob, att.filename)),
 
   // 密钥（admin）
-  listKeys: (): Promise<IngestKey[]> =>
-    apiClientV2.get('/events/ingest-keys'),
+  listKeys: (params: IngestKeyListParams = {}): Promise<IngestKeyListResp> =>
+    apiClientV2.get('/events/ingest-keys', {
+      params: {
+        q: params.q,
+        status: params.status,
+        source_system: params.sourceSystem,
+        page: params.page,
+        page_size: params.pageSize,
+      },
+    }),
 
   createKey: (name: string, allowedSourceSystem?: string): Promise<IngestKey> =>
     apiClientV2.post('/events/ingest-keys', { name, allowedSourceSystem }),

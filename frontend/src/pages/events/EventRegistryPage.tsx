@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { eventsApi } from '../../api/events'
@@ -17,6 +17,11 @@ const PALETTE = {
   red: '#FB7185',
 }
 const PAGE_SIZE = 8
+const STATUS_TABS = [
+  { value: 'active', label: '活跃' },
+  { value: 'archived', label: '已归档' },
+  { value: 'all', label: '全部' },
+] as const
 
 function fmt(iso: string | null | undefined): string {
   if (!iso) return '—'
@@ -45,6 +50,8 @@ export default function EventRegistryPage() {
   const [editing, setEditing] = useState<EventItem | null>(null)
   const [attachmentEventId, setAttachmentEventId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<EventItem | null>(null)
+  const statusTabsRef = useRef<HTMLDivElement>(null)
+  const [statusIndicator, setStatusIndicator] = useState({ left: 0, width: 0 })
 
   const statsQ = useStats()
   const stats: EventStats | undefined = statsQ.data
@@ -57,6 +64,24 @@ export default function EventRegistryPage() {
   })
 
   useEffect(() => { setPage(1) }, [search, sourceType, severity, status])
+  useEffect(() => {
+    const container = statusTabsRef.current
+    if (!container) return
+    const updateIndicator = () => {
+      const activeButton = container.querySelector(`[data-status-value="${status}"]`) as HTMLElement | null
+      if (!activeButton) return
+      const containerRect = container.getBoundingClientRect()
+      const buttonRect = activeButton.getBoundingClientRect()
+      setStatusIndicator({
+        left: buttonRect.left - containerRect.left,
+        width: buttonRect.width,
+      })
+    }
+    updateIndicator()
+    const resizeObserver = new ResizeObserver(updateIndicator)
+    resizeObserver.observe(container)
+    return () => resizeObserver.disconnect()
+  }, [status])
 
   const totalPages = Math.max(1, Math.ceil((listQ.data?.total ?? 0) / PAGE_SIZE))
   const refresh = () => { statsQ.refetch(); listQ.refetch() }
@@ -193,15 +218,23 @@ export default function EventRegistryPage() {
       {/* 顶部仅保留操作，不重复展示侧边栏已有的页面名称。 */}
       <div className={`${PANEL} shrink-0 px-4 py-3`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm">
-              {[
-                { v: 'active', l: '活跃' },
-                { v: 'archived', l: '已归档' },
-                { v: 'all', l: '全部' },
-              ].map(o => (
-                <button key={o.v} type="button" onClick={() => setStatus(o.v)} aria-pressed={status === o.v}
-                  className={`rounded-md px-4 py-2 font-medium transition-colors ${status === o.v ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:text-emerald-700'}`}>
-                  {o.v === 'archived' && <Archive className="mr-1 inline h-3.5 w-3.5 -translate-y-px" />}{o.l}
+          <div ref={statusTabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm">
+              <div
+                aria-hidden="true"
+                data-status-indicator
+                className="pointer-events-none absolute top-1 h-[calc(100%-8px)] rounded-md bg-emerald-600 shadow-sm transition-all duration-300 ease-out"
+                style={{ left: `${statusIndicator.left}px`, width: `${statusIndicator.width}px` }}
+              />
+              {STATUS_TABS.map(tab => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  data-status-value={tab.value}
+                  onClick={() => setStatus(tab.value)}
+                  aria-pressed={status === tab.value}
+                  className={`relative z-10 rounded-md px-4 py-2 font-medium transition-colors duration-200 ${status === tab.value ? 'text-white' : 'text-slate-500 hover:text-emerald-700'}`}
+                >
+                  {tab.value === 'archived' && <Archive className="mr-1 inline h-3.5 w-3.5 -translate-y-px" />}{tab.label}
                 </button>
               ))}
           </div>

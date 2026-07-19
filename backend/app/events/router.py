@@ -33,13 +33,13 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, get_current_user, require_admin
 from app.events import models as m, service
 from app.events.deps import get_ingest_key, IngestContext
-from app.events.models import RegisteredEvent, EventAttachment, EventAuditLog
+from app.events.models import RegisteredEvent, EventAttachment, EventAuditLog, EventIngestKey
 from app.events.schemas import (
     EventCreate, EventUpdate, StatusChange, IngestEvent, IngestKeyCreate,
 )
@@ -210,11 +210,46 @@ def stats_summary(db: Session = Depends(get_db), _=Depends(get_current_user)):
 # —— 密钥管理（admin）——
 
 @router.get("/ingest-keys")
-def list_keys(db: Session = Depends(get_db), _=Depends(require_admin)):
-    from app.events.models import EventIngestKey
-    rows = (db.query(EventIngestKey)
-            .order_by(EventIngestKey.created_at.desc()).all())
-    return _ok([service.key_out(k) for k in rows])
+def list_keys(
+    q: Optional[str] = Query(None, description="名称、密钥前缀或来源系统模糊搜索"),
+    status: str = Query("all", pattern="^(all|active|revoked)$"),
+    source_system: Optional[str] = Query(None, description="限定来源系统模糊筛选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(5, ge=1, le=100),
+    db: Session = Depends(get_db), _=Depends(require_admin),
+):
+    query = db.query(EventIngestKey)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(
+            EventIngestKey.name.ilike(like),
+            EventIngestKey.key_prefix.ilike(like),
+            EventIngestKey.allowed_source_system.ilike(like),
+        ))
+    if source_system and source_system.strip():
+        query = query.filter(
+            EventIngestKey.allowed_source_system.ilike(f"%{source_system.strip()}%")
+        )
+    if status == "active":
+        query = query.filter(
+            EventIngestKey.enabled.is_(True),
+            EventIngestKey.revoked_at.is_(None),
+        )
+    elif status == "revoked":
+        query = query.filter(or_(
+            EventIngestKey.enabled.is_(False),
+            EventIngestKey.revoked_at.is_not(None),
+        ))
+
+    total = query.count()
+    rows = (query.order_by(EventIngestKey.created_at.desc(), EventIngestKey.id.desc())
+            .offset((page - 1) * page_size).limit(page_size).all())
+    return _ok({
+        "items": [service.key_out(k) for k in rows],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+    })
 
 
 @router.post("/ingest-keys", status_code=201)
@@ -226,7 +261,6 @@ def create_key(body: IngestKeyCreate, db: Session = Depends(get_db),
 
 @router.delete("/ingest-keys/{key_id}")
 def revoke_key(key_id: str, db: Session = Depends(get_db), _=Depends(require_admin)):
-    from app.events.models import EventIngestKey
     row = db.query(EventIngestKey).filter(EventIngestKey.id == key_id).first()
     if not row:
         raise HTTPException(404, "密钥不存在")
@@ -283,9 +317,7 @@ def delete_event(event_id: str, hard: bool = Query(False),
 async def upload_attachment(event_id: str, file: UploadFile = File(...),
                             db: Session = Depends(get_db), user=Depends(get_current_user)):
     ev = _require_event(db, event_id)
-    content = await file.read()
-    att = service.add_attachment(db, ev, filename=file.filename,
-                                 content=content, mime=file.content_type, user=user)
+    att = await service.add_attachment(db, ev, upload=file, user=user)
     return _ok(service.attachment_out(att))
 
 
@@ -388,10 +420,8 @@ async def ingest_attachment(event_id: str, file: UploadFile = File(...),
     # 边界：密钥只能给「自己上传的」事件补附件
     if ev.ingest_key_id != ctx.key.id:
         raise HTTPException(403, "无权给该事件添加附件")
-    content = await file.read()
     # 以密钥身份记 uploaded_by / 审计 actor
     actor = type("KeyActor", (), {"id": ctx.key.id, "username": ctx.key.name,
                                   "_actor_type": "service"})()
-    att = service.add_attachment(db, ev, filename=file.filename,
-                                 content=content, mime=file.content_type, user=actor)
+    att = await service.add_attachment(db, ev, upload=file, user=actor)
     return _ok(service.attachment_out(att))

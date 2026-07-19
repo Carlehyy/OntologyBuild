@@ -13,7 +13,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import HTTPException
+import aiofiles
+from fastapi import HTTPException, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -157,37 +158,54 @@ def hard_delete_event(db: Session, ev: RegisteredEvent) -> None:
 
 # ── 附件 ────────────────────────────────────────────────────────
 
-def add_attachment(db: Session, ev: RegisteredEvent, *, filename: str,
-                   content: bytes, mime: Optional[str], user) -> EventAttachment:
+async def add_attachment(db: Session, ev: RegisteredEvent, *, upload: UploadFile,
+                         user) -> EventAttachment:
+    filename = upload.filename or ""
+    mime = upload.content_type
     ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
     allowed = {e.strip().lower() for e in settings.allowed_upload_extensions.split(",") if e.strip()}
     if ext and allowed and ext not in allowed:
         raise HTTPException(400, f"不支持的文件类型: .{ext}（允许: {settings.allowed_upload_extensions}）")
-    if len(content) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(413, f"文件超过大小限制 {settings.max_upload_mb}MB")
 
     att_id = str(uuid.uuid4())
     upload_dir = os.path.join(settings.uploads_dir, "events", ev.id)
     os.makedirs(upload_dir, exist_ok=True)
     ext_suffix = os.path.splitext(filename or "")[1]
     save_path = os.path.join(upload_dir, f"{att_id}{ext_suffix}")
-    with open(save_path, "wb") as f:
-        f.write(content)
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    file_size = 0
+    digest = hashlib.sha256()
+    try:
+        async with aiofiles.open(save_path, "wb") as destination:
+            while chunk := await upload.read(1024 * 1024):
+                file_size += len(chunk)
+                if file_size > max_bytes:
+                    raise HTTPException(413, f"文件超过大小限制 {settings.max_upload_mb}MB")
+                digest.update(chunk)
+                await destination.write(chunk)
+    except Exception:
+        _remove_file(save_path)
+        raise
 
     att = EventAttachment(
         id=att_id, event_id=ev.id, filename=filename or att_id,
-        file_path=save_path, file_size=len(content), mime_type=mime,
-        sha256=hashlib.sha256(content).hexdigest(),
+        file_path=save_path, file_size=file_size, mime_type=mime,
+        sha256=digest.hexdigest(),
         uploaded_by=getattr(user, "id", None),
     )
-    db.add(att)
-    record_audit(db, event=ev, action=m.ACTION_ATTACHMENT_ADDED,
-                 actor_type=getattr(user, "_actor_type", "user"),
-                 actor_id=getattr(user, "id", None),
-                 actor_name=getattr(user, "username", None),
-                 note=f"添加附件 {filename}")
-    db.commit()
-    db.refresh(att)
+    try:
+        db.add(att)
+        record_audit(db, event=ev, action=m.ACTION_ATTACHMENT_ADDED,
+                     actor_type=getattr(user, "_actor_type", "user"),
+                     actor_id=getattr(user, "id", None),
+                     actor_name=getattr(user, "username", None),
+                     note=f"添加附件 {filename}")
+        db.commit()
+        db.refresh(att)
+    except Exception:
+        db.rollback()
+        _remove_file(save_path)
+        raise
     return att
 
 

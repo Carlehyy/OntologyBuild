@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, FilePlus2, Paperclip, Trash2, Upload } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FilePlus2, Paperclip, Trash2, Upload } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 import { ontologyApi } from '@/api/ontologies'
 import { eventsApi, formatBytes, type EventCreateBody, type EventItem } from '@/api/events'
@@ -17,6 +17,19 @@ const EVENT_TYPE_SUGGESTIONS = [
   '设备异常', '系统告警', '业务异常', '业务变更', '客户反馈', '客户投诉',
   '数据质量', '流程事件', '交付事件', '供应链事件', '安全事件', '合规事件', '观察记录', '其它',
 ]
+
+const MAX_ATTACHMENT_MB = 200
+const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024
+const ATTACHMENT_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt'
+
+function fileIdentity(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
+function errorDetail(cause: any): string {
+  if (typeof cause === 'string') return cause
+  return cause?.detail || cause?.message || '请稍后重试'
+}
 
 function isoToLocalInput(iso: string | null): string {
   if (!iso) return ''
@@ -44,6 +57,8 @@ export default function EventFormModal({
   const [ontologyId, setOntologyId] = useState('')
   const [description, setDescription] = useState('')
   const [files, setFiles] = useState<File[]>([])
+  const [createdEventId, setCreatedEventId] = useState<string | null>(null)
+  const [uploadedFileKeys, setUploadedFileKeys] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
 
   const { data: ontologyList } = useQuery({
@@ -60,6 +75,8 @@ export default function EventFormModal({
     if (!open) return
     setError('')
     setFiles([])
+    setCreatedEventId(null)
+    setUploadedFileKeys(new Set())
     if (editing) {
       setTitle(editing.title)
       setEventType(editing.eventType || '')
@@ -80,6 +97,8 @@ export default function EventFormModal({
   const mutation = useMutation({
     mutationFn: async () => {
       if (!title.trim()) throw new Error('请填写事件标题')
+      const oversized = files.find(file => file.size > MAX_ATTACHMENT_BYTES)
+      if (oversized) throw new Error(`附件“${oversized.name}”超过单文件 ${MAX_ATTACHMENT_MB}MB 限制`)
       const body: EventCreateBody = {
         title: title.trim(),
         eventType: eventType.trim(),
@@ -88,10 +107,28 @@ export default function EventFormModal({
         occurredAt: occurredAt ? new Date(occurredAt).toISOString() : null,
         ontologyId: ontologyId || null,
       }
-      const event = isEdit
-        ? await eventsApi.update(editing!.id, body)
-        : await eventsApi.create(body)
-      for (const file of files) await eventsApi.uploadAttachment(event.id, file)
+      let event: EventItem
+      if (isEdit) {
+        event = await eventsApi.update(editing!.id, body)
+      } else if (createdEventId) {
+        event = await eventsApi.update(createdEventId, body)
+      } else {
+        event = await eventsApi.create(body)
+        setCreatedEventId(event.id)
+      }
+      for (const file of files) {
+        const key = fileIdentity(file)
+        if (uploadedFileKeys.has(key)) continue
+        try {
+          await eventsApi.uploadAttachment(event.id, file)
+          setUploadedFileKeys(current => new Set(current).add(key))
+        } catch (cause) {
+          throw new Error(
+            `事件信息已保存，但附件“${file.name}”上传失败：${errorDetail(cause)}。可移除该文件后重试。`,
+            { cause },
+          )
+        }
+      }
       return event
     },
     onSuccess: () => {
@@ -102,9 +139,14 @@ export default function EventFormModal({
   })
 
   const addFiles = (incoming: File[]) => {
+    const oversized = incoming.filter(file => file.size > MAX_ATTACHMENT_BYTES)
+    const accepted = incoming.filter(file => file.size <= MAX_ATTACHMENT_BYTES)
+    setError(oversized.length
+      ? `已忽略 ${oversized.length} 个超过单文件 ${MAX_ATTACHMENT_MB}MB 限制的附件：${oversized.map(file => file.name).join('、')}`
+      : '')
     setFiles(current => {
-      const known = new Set(current.map(file => `${file.name}:${file.size}:${file.lastModified}`))
-      return [...current, ...incoming.filter(file => !known.has(`${file.name}:${file.size}:${file.lastModified}`))]
+      const known = new Set(current.map(fileIdentity))
+      return [...current, ...accepted.filter(file => !known.has(fileIdentity(file)))]
     })
   }
 
@@ -201,14 +243,22 @@ export default function EventFormModal({
 
         <div>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <label className="text-sm font-medium text-slate-700">附件（可选，可多选）</label>
-            {files.length > 0 && <span className="text-xs font-medium text-emerald-700">已选择 {files.length} 个</span>}
+            <div>
+              <label className="text-sm font-medium text-slate-700">附件（可选，可多选）</label>
+              <p className="mt-0.5 text-xs text-slate-400">单文件不超过 {MAX_ATTACHMENT_MB}MB</p>
+            </div>
+            {files.length > 0 && (
+              <span className="text-xs font-medium text-emerald-700">
+                已选择 {files.length} 个{uploadedFileKeys.size ? ` · 已上传 ${uploadedFileKeys.size} 个` : ''}
+              </span>
+            )}
           </div>
           <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-emerald-200 bg-emerald-50/40 px-4 py-4 text-sm font-medium text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-50 focus-within:ring-2 focus-within:ring-emerald-500/20">
             <Upload size={16} /> 选择多个附件
             <input
               type="file"
               multiple
+              accept={ATTACHMENT_ACCEPT}
               className="sr-only"
               onChange={event => {
                 addFiles(Array.from(event.target.files || []))
@@ -218,24 +268,33 @@ export default function EventFormModal({
           </label>
           {files.length > 0 && (
             <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
-              {files.map((file, index) => (
-                <div key={`${file.name}:${file.size}:${file.lastModified}`} className="group flex items-center gap-3 border-t border-slate-100 px-3 py-2.5 first:border-t-0">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><Paperclip size={15} /></span>
+              {files.map((file, index) => {
+                const uploaded = uploadedFileKeys.has(fileIdentity(file))
+                return (
+                <div key={fileIdentity(file)} className="group flex items-center gap-3 border-t border-slate-100 px-3 py-2.5 first:border-t-0">
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${uploaded ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                    {uploaded ? <CheckCircle2 size={16} /> : <Paperclip size={15} />}
+                  </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-700" title={file.name}>{file.name}</p>
-                    <p className="mt-0.5 text-xs text-slate-400">{formatBytes(file.size)}</p>
+                    <p className={`mt-0.5 text-xs ${uploaded ? 'text-emerald-600' : 'text-slate-400'}`}>
+                      {formatBytes(file.size)}{uploaded ? ' · 已上传，重试时将自动跳过' : ''}
+                    </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setFiles(current => current.filter((_, currentIndex) => currentIndex !== index))}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                    title={`移除 ${file.name}`}
-                    aria-label={`移除 ${file.name}`}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  {!uploaded && (
+                    <button
+                      type="button"
+                      onClick={() => setFiles(current => current.filter((_, currentIndex) => currentIndex !== index))}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                      title={`移除 ${file.name}`}
+                      aria-label={`移除 ${file.name}`}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
