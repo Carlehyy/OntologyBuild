@@ -1,6 +1,9 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
+
+
+UserRole = Literal["admin", "editor", "viewer"]
 
 class UserOut(BaseModel):
     id: str
@@ -9,16 +12,23 @@ class UserOut(BaseModel):
     role: str
     is_active: bool
     created_at: datetime
+    menu_permissions: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
 class UserCreate(BaseModel):
-    username: str
+    username: str = Field(min_length=2, max_length=50)
     email: EmailStr
-    password: str
-    role: str = "viewer"
+    password: str = Field(min_length=6, max_length=128)
+    role: UserRole = "viewer"
 
 class UserUpdate(BaseModel):
+    username: Optional[str] = Field(default=None, min_length=2, max_length=50)
     email: Optional[EmailStr] = None
-    role: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=6, max_length=128)
+    role: Optional[UserRole] = None
     is_active: Optional[bool] = None
+
+
+class RoleMenuPermissionUpdate(BaseModel):
+    menu_keys: list[str] = Field(default_factory=list)

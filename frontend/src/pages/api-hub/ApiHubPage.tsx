@@ -4,10 +4,8 @@ import { apiError, apiHub, type CredentialStatus, type HubInterface } from '@/ap
 import InterfaceManager from './InterfaceManager'
 import RunHistory from './RunHistory'
 import HubOperations from './HubOperations'
-import { useAuthStore } from '@/stores/authStore'
 
 export default function ApiHubPage() {
-  const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const { tab = 'interfaces' } = useParams()
   const [interfaces, setInterfaces] = useState<HubInterface[]>([])
   const [credential, setCredential] = useState<CredentialStatus | null>(null)
@@ -26,11 +24,14 @@ export default function ApiHubPage() {
   }, [])
 
   useEffect(() => {
-    if (!isAdmin) return
-    Promise.all([reloadInterfaces(), reloadCredential()])
-      .catch(error => setError(apiError(error)))
-      .finally(() => setLoading(false))
-  }, [isAdmin, reloadCredential, reloadInterfaces])
+    setLoading(true)
+    const request = tab === 'interfaces'
+      ? reloadInterfaces()
+      : tab === 'authorization'
+        ? reloadCredential()
+        : Promise.resolve()
+    request.catch(error => setError(apiError(error))).finally(() => setLoading(false))
+  }, [reloadCredential, reloadInterfaces, tab])
 
   useEffect(() => {
     if (!error) return undefined
@@ -38,7 +39,6 @@ export default function ApiHubPage() {
     return () => window.clearTimeout(timer)
   }, [error])
 
-  if (!isAdmin) return <Navigate to="/overview" replace />
   if (tab === 'operations') return <Navigate to="/api-hub/authorization" replace />
   if (!['interfaces', 'history', 'authorization'].includes(tab)) return <Navigate to="/api-hub/interfaces" replace />
 

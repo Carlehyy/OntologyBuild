@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from app.deps import get_db, get_current_user
+from app.deps import get_db, get_current_user, require_admin
 from app.models.user import User
 from app.settings.domains.models import Domain
 from app.settings.domains.schemas import DomainCreate, DomainUpdate, DomainOut
@@ -32,7 +32,7 @@ def list_domains(
 def create_domain(
     body: DomainCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     if db.query(Domain).filter(Domain.name == body.name).first():
         raise HTTPException(409, f"领域「{body.name}」已存在")
@@ -48,7 +48,7 @@ def update_domain(
     domain_id: str,
     body: DomainUpdate,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    _=Depends(require_admin),
 ):
     d = db.query(Domain).filter(Domain.id == domain_id).first()
     if not d:
@@ -69,7 +69,7 @@ def update_domain(
 def delete_domain(
     domain_id: str,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    _=Depends(require_admin),
 ):
     d = db.query(Domain).filter(Domain.id == domain_id).first()
     if not d:

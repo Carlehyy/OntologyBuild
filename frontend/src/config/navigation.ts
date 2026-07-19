@@ -1,0 +1,149 @@
+import type { ElementType } from 'react'
+import {
+  Bot,
+  BrainCircuit,
+  ClipboardList,
+  Compass,
+  Cpu,
+  Database,
+  GitBranch,
+  Globe,
+  History,
+  KeyRound,
+  LayoutDashboard,
+  Network,
+  PlugZap,
+  Repeat,
+  Settings,
+  Sparkles,
+  Table2,
+  Waypoints,
+  Workflow,
+} from 'lucide-react'
+import type { User } from '@/types/auth'
+
+
+export interface PlatformNavItem {
+  key: string
+  to: string
+  icon: ElementType
+  label: string
+  description?: string
+  adminOnly?: boolean
+  subItems?: PlatformNavItem[]
+}
+
+export const DEFAULT_NON_ADMIN_MENU_KEYS = [
+  'overview',
+  'super_assistant',
+  'explore',
+  'ontologies',
+  'agent',
+  'events',
+  'data',
+  'data.pipelines',
+  'data.sync_tasks',
+  'data.structured',
+  'models',
+]
+
+export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
+  { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览' },
+  { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口' },
+  { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
+  { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
+  { key: 'agent', to: '/agent', icon: Bot, label: '智能助手', description: '本体智能体与分析报告' },
+  { key: 'events', to: '/events', icon: ClipboardList, label: '事件登记', description: '业务事件采集与审计' },
+  {
+    key: 'data', to: '/data', icon: Database, label: '数据通道', description: '数据接入、加工与治理', subItems: [
+      { key: 'data.pipelines', to: '/data/pipelines', icon: GitBranch, label: '数据流水线', description: '连接、转换与编排' },
+      { key: 'data.sync_tasks', to: '/data/pipelines/sync-tasks', icon: Repeat, label: '数据任务池', description: '同步任务与运行历史' },
+      { key: 'data.structured', to: '/data/structured', icon: Table2, label: '数据资产湖', description: '结构化数据资产' },
+    ],
+  },
+  {
+    key: 'api_hub', to: '/api-hub', icon: Waypoints, label: '接口代理', description: '接口接入、调用与授权', subItems: [
+      { key: 'api_hub.interfaces', to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理', description: '接口定义与代理配置' },
+      { key: 'api_hub.history', to: '/api-hub/history', icon: History, label: '调用历史', description: '接口调用记录' },
+      { key: 'api_hub.authorization', to: '/api-hub/authorization', icon: KeyRound, label: '授权配置', description: '凭据与授权策略' },
+    ],
+  },
+  { key: 'models', to: '/models', icon: Cpu, label: '模型配置', description: '模型提供商与运行配置' },
+  {
+    key: 'system_settings', to: '/settings', icon: Settings, label: '系统设置', adminOnly: true, subItems: [
+      { key: 'settings.extraction', to: '/settings/extraction', icon: Sparkles, label: '规则设置', adminOnly: true },
+      { key: 'settings.users', to: '/settings/users', icon: Network, label: '用户管理', adminOnly: true },
+      { key: 'settings.prompts', to: '/settings/prompts', icon: Sparkles, label: '提示词模板', adminOnly: true },
+      { key: 'settings.agents', to: '/settings/agents', icon: Bot, label: '智能体配置', adminOnly: true },
+      { key: 'settings.workflows', to: '/settings/workflows', icon: Workflow, label: '工作流配置', adminOnly: true },
+      { key: 'settings.domains', to: '/settings/domains', icon: Globe, label: '领域设置', adminOnly: true },
+      { key: 'settings.open_interfaces', to: '/settings/open-interfaces', icon: PlugZap, label: '开放接口', adminOnly: true },
+    ],
+  },
+]
+
+export function grantedMenuKeys(user: User | null): Set<string> {
+  if (!user) return new Set()
+  if (user.role === 'admin') {
+    return new Set(PLATFORM_NAV_ITEMS.flatMap(item => [
+      item.key,
+      ...(item.subItems?.map(child => child.key) ?? []),
+    ]))
+  }
+  // Persisted sessions created before RBAC did not contain this field. Preserve
+  // their former menu set until the next profile refresh; an explicit [] means
+  // the administrator deliberately granted no pages.
+  return new Set(user.menu_permissions ?? DEFAULT_NON_ADMIN_MENU_KEYS)
+}
+
+export function hasMenuAccess(user: User | null, key: string): boolean {
+  if (!user) return false
+  if (user.role === 'admin') return true
+  if (key === 'system_settings' || key.startsWith('settings.')) return false
+  return grantedMenuKeys(user).has(key)
+}
+
+export function visibleNavigation(user: User | null): PlatformNavItem[] {
+  if (!user) return []
+  return PLATFORM_NAV_ITEMS.flatMap(item => {
+    if (item.adminOnly && user.role !== 'admin') return []
+    const subItems = item.subItems?.filter(child => hasMenuAccess(user, child.key))
+    if (item.subItems && !subItems?.length && !hasMenuAccess(user, item.key)) return []
+    if (!item.subItems && !hasMenuAccess(user, item.key)) return []
+    return [{ ...item, subItems }]
+  })
+}
+
+export function menuKeyForPath(pathname: string): string | null {
+  if (pathname === '/settings' || pathname.startsWith('/settings/')) return 'system_settings'
+  if (pathname === '/data/pipelines/sync-tasks' || pathname.startsWith('/data/pipelines/sync-tasks/')) return 'data.sync_tasks'
+  if (pathname === '/data/structured' || pathname.startsWith('/data/structured/')) return 'data.structured'
+  if (pathname === '/data' || pathname === '/data/') return 'data'
+  if (pathname.startsWith('/data/pipelines')) return 'data.pipelines'
+  if (pathname === '/api-hub' || pathname === '/api-hub/') return 'api_hub'
+  if (pathname.startsWith('/api-hub/history')) return 'api_hub.history'
+  if (pathname.startsWith('/api-hub/authorization') || pathname.startsWith('/api-hub/operations')) return 'api_hub.authorization'
+  if (pathname.startsWith('/api-hub/interfaces')) return 'api_hub.interfaces'
+  if (pathname.startsWith('/ontologies')) return 'ontologies'
+  if (pathname.startsWith('/agent')) return 'agent'
+  if (pathname.startsWith('/overview')) return 'overview'
+  if (pathname.startsWith('/super-assistant')) return 'super_assistant'
+  if (pathname.startsWith('/explore')) return 'explore'
+  if (pathname.startsWith('/events')) return 'events'
+  if (pathname.startsWith('/models')) return 'models'
+  return null
+}
+
+export function canAccessPath(user: User | null, pathname: string): boolean {
+  const key = menuKeyForPath(pathname)
+  return key === null || hasMenuAccess(user, key)
+}
+
+export function firstAccessiblePath(user: User | null): string {
+  const items = visibleNavigation(user)
+  const first = items[0]
+  if (!first) return '/no-access'
+  return first.subItems?.[0]?.to ?? first.to
+}
+
+export const CONFIGURABLE_NAV_ITEMS = PLATFORM_NAV_ITEMS.filter(item => !item.adminOnly)

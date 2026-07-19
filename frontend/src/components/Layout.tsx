@@ -2,21 +2,12 @@ import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import {
-  LayoutDashboard, Network, Cpu, Settings, LogOut,
-  Database, ChevronLeft, ChevronRight, GitBranch, Table2,
-  Sparkles, ChevronDown, Repeat, Bot, PlugZap, Workflow, Compass,
-  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2, ClipboardList, Globe, Waypoints, History, KeyRound,
-  BrainCircuit,
+  Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
+  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2,
   Menu, X,
 } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
-
-interface NavItem {
-  to: string
-  icon: React.ElementType
-  label: string
-  subItems?: { to: string; icon: React.ElementType; label: string }[]
-}
+import { visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const logout = useAuthStore(s => s.logout)
@@ -98,37 +89,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [inboxOpen, userMenuOpen])
 
-  const navItems: NavItem[] = [
-    { to: '/overview', icon: LayoutDashboard, label: '平台概览' },
-    { to: '/super-assistant', icon: BrainCircuit, label: '超级助手' },
-    { to: '/explore', icon: Compass, label: '业务探索' },
-    { to: '/ontologies', icon: Network, label: '本体管理' },
-    { to: '/agent', icon: Bot, label: '智能助手' },
-    { to: '/events', icon: ClipboardList, label: '事件登记' },
-    { to: '/data', icon: Database, label: '数据通道', subItems: [
-      { to: '/data/pipelines', icon: GitBranch, label: '数据流水线' },
-      { to: '/data/pipelines/sync-tasks', icon: Repeat, label: '数据任务池' },
-      { to: '/data/structured', icon: Table2, label: '数据资产湖' },
-    ]},
-    { to: '/api-hub', icon: Waypoints, label: '接口代理', subItems: [
-      { to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理' },
-      { to: '/api-hub/history', icon: History, label: '调用历史' },
-      { to: '/api-hub/authorization', icon: KeyRound, label: '授权配置' },
-    ]},
-    { to: '/models', icon: Cpu, label: '模型配置' },
-    { to: '/settings', icon: Settings, label: '系统设置', subItems: [
-      { to: '/settings/extraction', icon: Sparkles, label: '规则设置' },
-      { to: '/settings/users', icon: Network, label: '用户管理' },
-      { to: '/settings/prompts', icon: Sparkles, label: '提示词模板' },
-      { to: '/settings/agents', icon: Bot, label: '智能体配置' },
-      { to: '/settings/workflows', icon: Workflow, label: '工作流配置' },
-      { to: '/settings/domains', icon: Globe, label: '领域设置' },
-      { to: '/settings/open-interfaces', icon: PlugZap, label: '开放接口' },
-    ]},
-  ].filter(item => item.to !== '/api-hub' || user?.role === 'admin')
+  const navItems = visibleNavigation(user)
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
-  const isGroupActive = (item: NavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
+  const isGroupActive = (item: PlatformNavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
   const isMappingWorkspace = /^\/ontologies\/[^/]+\/mapping-config$/.test(location.pathname)
   // 本体详情的顶部导航必须拥有稳定的布局上下文。若只在“本体结构”
   // 切换 overflow，页面滚动条的出现/消失会改变可用宽度，造成导航横移。
@@ -412,12 +376,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <div className="absolute right-0 mt-3 w-64 bg-[var(--color-bg-elevated)] rounded-lg shadow-lg border border-[var(--color-border)] z-50 overflow-hidden anim-fade-in-down origin-top">
                     {/* 用户信息 */}
                     <div className="px-4 py-4 border-b border-[var(--color-border)] flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center text-white font-semibold shrink-0">
-                        A
+                      <div className="w-10 h-10 rounded-lg bg-teal-600 flex items-center justify-center text-white font-semibold shrink-0">
+                        {(user?.username || 'U').slice(0, 1).toUpperCase()}
                       </div>
                       <div className="min-w-0">
-                        <p className="font-medium text-[var(--color-text-primary)] text-sm">admin</p>
-                        <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">管理员</p>
+                        <p className="truncate font-medium text-[var(--color-text-primary)] text-sm">{user?.username || '未知用户'}</p>
+                        <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
+                          {user?.role === 'admin' ? '管理员' : user?.role === 'editor' ? '编辑者' : '查看者'}
+                        </p>
                       </div>
                     </div>
 

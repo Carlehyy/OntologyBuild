@@ -173,10 +173,13 @@ export const domainApi = {
 }
 
 export const usersApi = {
-  list: () => apiClient.get<{ id: string; username: string; email: string; role: string; created_at: string }[]>('/users'),
-  create: (body: { username: string; email: string; password: string; role: string }) =>
+  list: () => apiClient.get<import('@/types/auth').User[]>('/users'),
+  create: (body: { username: string; email: string; password: string; role: 'admin' | 'editor' | 'viewer' }) =>
     apiClient.post('/users', body),
-  update: (id: string, body: { username?: string; email?: string; password?: string; role?: string }) =>
+  update: (id: string, body: { username?: string; email?: string; password?: string; role?: 'admin' | 'editor' | 'viewer'; is_active?: boolean }) =>
     apiClient.put(`/users/${id}`, body),
   delete: (id: string) => apiClient.delete(`/users/${id}`),
+  listRoleMenuPermissions: () => apiClient.get<{ role: 'editor' | 'viewer'; menu_keys: string[] }[]>('/users/roles/menu-permissions'),
+  updateRoleMenuPermissions: (role: 'editor' | 'viewer', menu_keys: string[]) =>
+    apiClient.put<{ role: 'editor' | 'viewer'; menu_keys: string[] }>(`/users/roles/${role}/menu-permissions`, { menu_keys }),
 }

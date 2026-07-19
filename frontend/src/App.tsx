@@ -1,4 +1,4 @@
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/authStore'
 import Layout from '@/components/Layout'
@@ -32,19 +32,40 @@ import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
 import { ToastProvider } from '@/components/ui/Toast'
+import { AccessDeniedPage, NoAssignedPagesPage } from '@/pages/errors/AccessDeniedPage'
+import { canAccessPath, firstAccessiblePath } from '@/config/navigation'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1 } }
 })
 
+let lastAuthorizedPath: string | null = null
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.token)
-  return token ? <Layout>{children}</Layout> : <Navigate to="/login" replace />
+  const user = useAuthStore(s => s.user)
+  const location = useLocation()
+  if (!token || !user) return <Navigate to="/login" replace />
+  if (!canAccessPath(user, location.pathname)) {
+    const returnTo = lastAuthorizedPath && canAccessPath(user, lastAuthorizedPath)
+      ? lastAuthorizedPath
+      : firstAccessiblePath(user)
+    return <Layout><AccessDeniedPage returnTo={returnTo} /></Layout>
+  }
+  lastAuthorizedPath = location.pathname
+  return <Layout>{children}</Layout>
+}
+
+function HomeRedirect() {
+  const token = useAuthStore(s => s.token)
+  const user = useAuthStore(s => s.user)
+  return <Navigate to={token && user ? firstAccessiblePath(user) : '/login'} replace />
 }
 
 function UnknownRouteRedirect() {
   const token = useAuthStore(s => s.token)
-  return <Navigate to={token ? '/overview' : '/login'} replace />
+  const user = useAuthStore(s => s.user)
+  return <Navigate to={token && user ? firstAccessiblePath(user) : '/login'} replace />
 }
 
 export default function App() {
@@ -55,7 +76,8 @@ export default function App() {
           <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/share/manual/:token" element={<PublicManualDatasetPage />} />
-          <Route path="/" element={<Navigate to="/overview" replace />} />
+          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/no-access" element={<ProtectedRoute><NoAssignedPagesPage /></ProtectedRoute>} />
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
 
           {/* ── 数据管理 ── */}

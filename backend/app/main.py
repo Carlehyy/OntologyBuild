@@ -487,23 +487,57 @@ class McpMiddleware:
 
 app.add_middleware(McpMiddleware)
 
+from app.deps import require_admin, require_menu_permission
+
+
+def menu_guard(menu_key: str, *, read_menu_keys: tuple[str, ...] = ()):
+    return [Depends(require_menu_permission(menu_key, read_menu_keys=read_menu_keys))]
+
+
+overview_guard = menu_guard("overview")
+ontology_guard = menu_guard(
+    "ontologies",
+    read_menu_keys=("agent", "explore", "events"),
+)
+models_guard = menu_guard(
+    "models",
+    read_menu_keys=(
+        "super_assistant",
+        "explore",
+        "ontologies",
+        "agent",
+        "data.pipelines",
+    ),
+)
+data_guard = menu_guard("data")
+pipeline_guard = menu_guard(
+    "data.pipelines",
+    read_menu_keys=("data.structured", "data.sync_tasks"),
+)
+agent_guard = menu_guard("agent")
+explore_guard = menu_guard("explore")
+assistant_guard = menu_guard("super_assistant")
+events_guard = menu_guard("events")
+admin_guard = [Depends(require_admin)]
+
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-app.include_router(overview.router, prefix="/api/v1/overview", tags=["overview"])
-app.include_router(ontologies.router, prefix="/api/v1/ontologies", tags=["ontologies"])
+app.include_router(overview.router, prefix="/api/v1/overview", tags=["overview"], dependencies=overview_guard)
+app.include_router(ontologies.router, prefix="/api/v1/ontologies", tags=["ontologies"], dependencies=ontology_guard)
 legacy_write_guard = [Depends(legacy_ontology_write_guard)]
-app.include_router(files.router, prefix="/api/v1/ontologies/{ontology_id}/files", tags=["files"], dependencies=legacy_write_guard)
-app.include_router(entities.router, prefix="/api/v1/ontologies/{ontology_id}/entities", tags=["entities"], dependencies=legacy_write_guard)
-app.include_router(logic.router, prefix="/api/v1/ontologies/{ontology_id}/logic", tags=["logic"], dependencies=legacy_write_guard)
-app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/actions", tags=["actions"], dependencies=legacy_write_guard)
-app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/execute", tags=["extraction"], dependencies=legacy_write_guard)
-app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"])
-app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"])
-app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"])
+legacy_ontology_guard = [*legacy_write_guard, *ontology_guard]
+app.include_router(files.router, prefix="/api/v1/ontologies/{ontology_id}/files", tags=["files"], dependencies=legacy_ontology_guard)
+app.include_router(entities.router, prefix="/api/v1/ontologies/{ontology_id}/entities", tags=["entities"], dependencies=legacy_ontology_guard)
+app.include_router(logic.router, prefix="/api/v1/ontologies/{ontology_id}/logic", tags=["logic"], dependencies=legacy_ontology_guard)
+app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/actions", tags=["actions"], dependencies=legacy_ontology_guard)
+app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/execute", tags=["extraction"], dependencies=legacy_ontology_guard)
+app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"], dependencies=ontology_guard)
+app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"], dependencies=ontology_guard)
+app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"], dependencies=ontology_guard)
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
-app.include_router(models.router, prefix="/api/v1/models", tags=["models"])
-app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"])
+app.include_router(models.router, prefix="/api/v1/models", tags=["models"], dependencies=models_guard)
+app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"], dependencies=admin_guard)
 app.include_router(mcp_router.router, prefix="/api/v1/mcp", tags=["mcp"])
 
 # 接口代理（API-Hub）管理面统一沿用平台 JWT；对 Agent 的 MCP 端点在
@@ -514,42 +548,43 @@ from app.api_hub.routers import interfaces as api_hub_interfaces
 from app.api_hub.routers import mcp as api_hub_mcp_router
 from app.api_hub.routers import proxy as api_hub_proxy
 from app.api_hub.routers import http_proxy as api_hub_http_proxy
-from app.deps import require_admin
-api_hub_auth = [Depends(require_admin)]
-app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_auth)
-app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencies=api_hub_auth)
-app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_auth)
-app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_auth)
-app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_auth)
+api_hub_interfaces_guard = menu_guard("api_hub.interfaces")
+api_hub_history_guard = menu_guard("api_hub.history")
+api_hub_authorization_guard = menu_guard("api_hub.authorization")
+app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_authorization_guard)
+app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
+app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_history_guard)
+app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_authorization_guard)
+app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
 app.include_router(
     api_hub_http_proxy.admin_router,
     prefix="/api/api-hub",
-    dependencies=api_hub_auth,
+    dependencies=api_hub_interfaces_guard,
 )
 # n8n service-to-service calls use API_HUB_SYSTEM_MCP_TOKEN and only reach
 # interfaces explicitly added to the open list.
 app.include_router(api_hub_proxy.router)
 # Ordinary HTTP consumers use per-caller proxy keys and stable /proxy/<slug> URLs.
 app.include_router(api_hub_http_proxy.public_router)
-asset_lake_guard = [Depends(asset_lake_access_guard)]
+asset_lake_guard = [Depends(asset_lake_access_guard), *data_guard]
 app.include_router(connections_v2.router, prefix="/api/v2/connections", tags=["v2-connections"], dependencies=asset_lake_guard)
 app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-datasets"], dependencies=asset_lake_guard)
 app.include_router(manual_sharing_router, prefix="/api/v2/manual-dataset-sharing", tags=["manual-dataset-sharing"], dependencies=asset_lake_guard)
 app.include_router(public_manual_sharing_router, prefix="/api/public/manual-datasets", tags=["public-manual-datasets"])
-app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"])
-app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph"])
-app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"])
+app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"], dependencies=pipeline_guard)
+app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph"], dependencies=ontology_guard)
+app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"], dependencies=ontology_guard)
 app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"], dependencies=asset_lake_guard)
-app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-mappings"])
+app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-mappings"], dependencies=ontology_guard)
 app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"], dependencies=asset_lake_guard)
-app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"], dependencies=legacy_write_guard)
-app.include_router(versions_v2.router, prefix="/api/v2/ontologies", tags=["v2-versions"])
-app.include_router(attr_schemas_v2.router, prefix="/api/v2/ontologies", tags=["v2-attributes"])
-app.include_router(inference_v2.router, prefix="/api/v2/ontologies", tags=["v2-inference"])
-app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-extraction"], dependencies=legacy_write_guard)
+app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"], dependencies=legacy_ontology_guard)
+app.include_router(versions_v2.router, prefix="/api/v2/ontologies", tags=["v2-versions"], dependencies=ontology_guard)
+app.include_router(attr_schemas_v2.router, prefix="/api/v2/ontologies", tags=["v2-attributes"], dependencies=ontology_guard)
+app.include_router(inference_v2.router, prefix="/api/v2/ontologies", tags=["v2-inference"], dependencies=ontology_guard)
+app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-extraction"], dependencies=legacy_ontology_guard)
 app.include_router(sync_tasks_v2.router, prefix="/api/v2/sync-tasks", tags=["v2-sync-tasks"], dependencies=asset_lake_guard)
 app.include_router(pipeline_tasks_v2.router, prefix="/api/v2/pipeline-tasks", tags=["v2-pipeline-tasks"], dependencies=asset_lake_guard)
-app.include_router(steward_v2.router, prefix="/api/v2/steward", tags=["v2-steward"], dependencies=asset_lake_guard)
+app.include_router(steward_v2.router, prefix="/api/v2/steward", tags=["v2-steward"], dependencies=[*asset_lake_guard, *pipeline_guard])
 # WebSocket uses a one-time, user-bound ticket issued by the authenticated
 # steward router.  It intentionally sits outside HTTPBearer dependencies because
 # browsers cannot attach that header to a native WebSocket handshake.
@@ -557,26 +592,27 @@ app.include_router(steward_browser_ws.router, prefix="/api/v2/steward", tags=["v
 app.include_router(test_data_v2.router, prefix="/api/v2/test-data", tags=["v2-test-data"], dependencies=asset_lake_guard)
 
 # 正规本体模型 (Palantir 风格) — 平台核心建模 API
-app.include_router(formal_router.router, prefix="/api/v2/formal/ontologies", tags=["formal-ontology"])
+app.include_router(formal_router.router, prefix="/api/v2/formal/ontologies", tags=["formal-ontology"], dependencies=ontology_guard)
 # 本体智能体 — 授权边界内的 LLM agent（对象/链接/事实/动作是它的全部世界）
 from app.ontologies.agent_runtime import router as agent_runtime_router
-app.include_router(agent_runtime_router.router, prefix="/api/v2/formal/ontologies", tags=["ontology-agent"])
+app.include_router(agent_runtime_router.router, prefix="/api/v2/formal/ontologies", tags=["ontology-agent"], dependencies=agent_guard)
 # 业务探索 — 对话式业务建模：六类模型画布 → 需求文档 → 本体草稿（人审落地）
 from app.exploration import router as exploration_router
-app.include_router(exploration_router.router, prefix="/api/v2/exploration", tags=["exploration"])
+app.include_router(exploration_router.router, prefix="/api/v2/exploration", tags=["exploration"], dependencies=explore_guard)
 # 超级助手 — 与本体、业务探索完全解耦的通用 Agent 运行时
 from app.super_assistant import router as super_assistant_router
 app.include_router(
     super_assistant_router.router,
     prefix="/api/v2/super-assistant",
     tags=["super-assistant"],
+    dependencies=assistant_guard,
 )
-app.include_router(sentinel_router.router, prefix="/api/v1/ontologies/{ontology_id}/sentinels", tags=["sentinel"])
+app.include_router(sentinel_router.router, prefix="/api/v1/ontologies/{ontology_id}/sentinels", tags=["sentinel"], dependencies=ontology_guard)
 # 数据采集器 — AI HOT 等真实数据源接入
 app.include_router(collectors_router.router, prefix="/api/v2/collectors", tags=["collectors"])
 # 事件登记 — 智能助手↔数据通道之间的事件采集入口（平台录入 + 第三方 API Key 上传）
 from app.events import router as events_router
-app.include_router(events_router.router, prefix="/api/v2/events", tags=["events"])
+app.include_router(events_router.router, prefix="/api/v2/events", tags=["events"], dependencies=events_guard)
 app.include_router(events_router.ingest_router, prefix="/api/v2/ingest", tags=["events-ingest"])
 
 def get_db():

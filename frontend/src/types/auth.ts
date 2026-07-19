@@ -5,6 +5,7 @@ export interface User {
   role: 'admin' | 'editor' | 'viewer'
   is_active: boolean
   created_at: string
+  menu_permissions?: string[]
 }
 
 export interface TokenResponse {

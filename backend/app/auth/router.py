@@ -7,6 +7,7 @@ from app.auth.schemas import LoginRequest, TokenResponse, RegisterRequest, Passw
 from app.settings.users.schemas import UserOut
 from app.auth.service import authenticate_user, create_access_token, hash_password, verify_password
 from app.auth.models import User
+from app.auth.permissions import get_role_menu_keys
 import uuid
 
 router = APIRouter()
@@ -44,8 +45,13 @@ def register(
     return {"data": UserOut.model_validate(user).model_dump(), "message": "ok"}
 
 @router.get("/profile")
-def profile(current_user: User = Depends(get_current_user)):
-    return {"data": UserOut.model_validate(current_user).model_dump(), "message": "ok"}
+def profile(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    data = UserOut.model_validate(current_user).model_dump()
+    data["menu_permissions"] = get_role_menu_keys(db, current_user.role)
+    return {"data": data, "message": "ok"}
 
 @router.put("/password")
 def change_password(body: PasswordChangeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
