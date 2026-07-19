@@ -1,8 +1,10 @@
 """Production guardrails for formal actions, sentinels, and Celery workers."""
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import requests
 import yaml
 from sqlalchemy.exc import IntegrityError
 
@@ -253,23 +255,16 @@ def test_action_rejects_bad_target_missing_validation_and_unknown_rule(db):
                for item in unknown_rule["validationErrors"])
 
 
-@pytest.mark.parametrize("rule", [
-    {
+def test_external_notification_never_reports_fake_success(db):
+    rule = {
         "id": "email", "type": "notification", "name": "email",
         "enabled": True, "order": 0,
         "config": {
             "channel": "email", "recipientSource": "constant",
             "recipient": "ops@example.com", "messageTemplate": "hello",
         },
-    },
-    {
-        "id": "webhook", "type": "webhook", "name": "webhook",
-        "enabled": True, "order": 0,
-        "config": {"url": "https://example.invalid/hook", "method": "POST"},
-    },
-])
-def test_external_delivery_never_reports_fake_success(db, rule):
-    ontology_id = f"delivery-{rule['id']}"
+    }
+    ontology_id = "delivery-email"
     object_type, instance = _seed_object(db, ontology_id)
     action = ActionType(
         id=f"action-{rule['id']}", ontology_id=ontology_id,
@@ -283,6 +278,110 @@ def test_external_delivery_never_reports_fake_success(db, rule):
     assert result["status"] == "failed"
     assert "可靠投递器" in result["errorMessage"]
     assert db.query(Notification).filter_by(ontology_id=ontology_id).count() == 0
+
+
+def test_webhook_dispatches_rendered_json_with_retry_identity(db, monkeypatch):
+    ontology_id = "delivery-webhook"
+    object_type, instance = _seed_object(db, ontology_id)
+    action = ActionType(
+        id="action-webhook", ontology_id=ontology_id,
+        name="notify_partner", display_name="Notify partner",
+        object_type_id=object_type.id,
+        parameters=[
+            {"name": "request_id", "type": "string", "required": True},
+            {"name": "count", "type": "number", "required": True},
+            {"name": "labels", "type": "array", "required": True},
+        ],
+        rules=[{
+            "id": "webhook", "type": "webhook", "name": "notify partner",
+            "enabled": True, "order": 0,
+            "config": {
+                "url": "https://partner.example/hooks/ontology",
+                "method": "POST",
+                "headers": {"X-Partner-Token": "test-token"},
+                "bodyTemplate": (
+                    '{"requestId":"{{params.request_id}}",'
+                    '"count":{{params.count}},"labels":{{params.labels}},'
+                    '"state":"{{object.status}}"}'
+                ),
+            },
+        }],
+    )
+    db.add(action)
+    db.commit()
+    observed = {}
+
+    def fake_request(session, method, url, **kwargs):
+        observed["method"] = method
+        observed["url"] = url
+        observed["headers"] = kwargs["headers"]
+        observed["body"] = json.loads(kwargs["data"].decode("utf-8"))
+        response = requests.Response()
+        response.status_code = 202
+        response.url = url
+        response._content = b"accepted"
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    result = execute_action(
+        db, ontology_id,
+        _body(action, instance, {
+            "request_id": "req-42", "count": 3, "labels": ["urgent", "governance"],
+        }, idempotency_key="manual-request-42"),
+    )
+
+    assert result["status"] == "success"
+    assert observed["method"] == "POST"
+    assert observed["url"] == "https://partner.example/hooks/ontology"
+    assert observed["body"] == {
+        "requestId": "req-42", "count": 3,
+        "labels": ["urgent", "governance"], "state": "new",
+    }
+    assert observed["headers"]["X-Partner-Token"] == "test-token"
+    assert observed["headers"]["Content-Type"] == "application/json; charset=utf-8"
+    assert observed["headers"]["Idempotency-Key"].endswith(":manual-request-42")
+    assert result["effects"][0]["type"] == "webhook"
+    assert result["effects"][0]["statusCode"] == 202
+
+
+def test_webhook_failure_rolls_back_preceding_local_rules(db, monkeypatch):
+    ontology_id = "delivery-webhook-rollback"
+    object_type, instance = _seed_object(db, ontology_id)
+    action = ActionType(
+        id="action-webhook-rollback", ontology_id=ontology_id,
+        name="update_then_notify", display_name="Update then notify",
+        object_type_id=object_type.id, parameters=[],
+        rules=[
+            _update_rule("status", value='"queued"'),
+            {
+                "id": "webhook", "type": "webhook", "name": "notify partner",
+                "enabled": True, "order": 1,
+                "config": {"url": "https://partner.example/hooks/fail", "method": "POST"},
+            },
+        ],
+    )
+    db.add(action)
+    db.commit()
+    calls = []
+
+    def fake_request(session, method, url, **kwargs):
+        calls.append((method, url, kwargs["headers"]["Idempotency-Key"]))
+        response = requests.Response()
+        response.status_code = 503
+        response.url = url
+        response._content = b"temporarily unavailable"
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    result = execute_action(db, ontology_id, _body(action, instance))
+    db.refresh(instance)
+
+    assert result["status"] == "failed"
+    assert "Webhook 投递失败" in result["errorMessage"]
+    # Settings defaults retry transient 5xx once; every try carries one key.
+    assert len(calls) == 2
+    assert calls[0][2] == calls[1][2]
+    assert instance.properties["status"] == "new"
 
 
 def test_internal_notification_has_a_real_queryable_sink(db):

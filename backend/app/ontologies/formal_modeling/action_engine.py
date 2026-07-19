@@ -3,8 +3,8 @@
 
 执行动作 (ActionType)：参数校验 → 校验函数 → 事务性规则执行 → 审计日志。
 支持规则类型：validation / create_object / update_property / create_link /
-delete_link / notification。webhook 与外部通知在可靠投递器接入前明确失败，
-绝不把“仅记录”伪装成已投递。
+delete_link / notification / webhook。webhook 经受限的 HTTP 投递器真实调用；
+外部通知在可靠投递器接入前仍明确失败，绝不把“仅记录”伪装成已投递。
 
 治理语义：
   - requires_approval 的动作真实执行先落 status=pending 日志，等待人工批准/拒绝
@@ -29,6 +29,11 @@ from app.models.ontology_formal import (
 )
 from app.services.formal.function_engine import execute_function
 from app.services.formal.safe_eval import safe_eval, SafeEvalError
+from app.ontologies.formal_modeling.webhook_dispatcher import (
+    WebhookDispatchError,
+    dispatch_webhook,
+    preview_webhook,
+)
 
 
 def _now():
@@ -840,9 +845,40 @@ def execute_action(db: Session, ontology_id: str, body,
                                 "description": f"通知已投递 → {channel}:{recipient}"})
 
             elif rtype == "webhook":
-                raise RuleExecutionError(
-                    rname,
-                    "webhook 尚未接入带超时、重试与幂等键的可靠投递器，已拒绝假执行")
+                if body.dry_run:
+                    try:
+                        preview = preview_webhook(
+                            cfg, params=params, object_props=target_props or {})
+                    except WebhookDispatchError as exc:
+                        raise RuleExecutionError(rname, str(exc)) from exc
+                    effects.append({
+                        "type": "webhook",
+                        "description": "调用 Webhook（模拟，未发出网络请求）",
+                        **preview,
+                    })
+                    continue
+                try:
+                    delivery = dispatch_webhook(
+                        cfg,
+                        params=params,
+                        object_props=target_props or {},
+                        # A caller/sentinel supplied key remains stable across
+                        # retries of the same logical action.  For a standalone
+                        # execution the dispatcher generates a fresh key.
+                        idempotency_key=(
+                            f"formal-action:{ontology_id}:{action.id}:{idem_key}"
+                            if idem_key else None
+                        ),
+                    )
+                except WebhookDispatchError as exc:
+                    raise RuleExecutionError(rname, str(exc)) from exc
+                effects.append({
+                    "type": "webhook",
+                    "description": (
+                        f"Webhook 已调用 → {delivery['method']} {delivery['url']} "
+                        f"(HTTP {delivery['statusCode']}，{delivery['attempts']} 次尝试)"),
+                    **delivery,
+                })
 
             else:
                 raise RuleExecutionError(rname or "unknown", f"不支持的动作规则类型: {rtype}")

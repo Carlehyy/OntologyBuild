@@ -299,7 +299,7 @@ export interface ValidationConfig {
 export interface WebhookConfig {
   type: 'webhook';
   url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   headers?: Record<string, string>;
   bodyTemplate?: string;
 }

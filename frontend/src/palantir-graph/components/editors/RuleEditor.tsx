@@ -565,20 +565,35 @@ function RuleConfigEditor({
       );
 
     case 'webhook':
-      return (
-        <div className="space-y-3 p-3 bg-surface-900/50 rounded-lg">
-          <h5 className="text-xs font-medium text-purple-400 uppercase tracking-wider">Webhook 配置</h5>
+      {
+        const webhookConfig = config as WebhookConfig;
+        const headers = webhookConfig.headers || {};
+        const setHeaders = (next: Record<string, string>) => onChange({
+          ...webhookConfig,
+          headers: next,
+        });
+        const renameHeader = (oldName: string, nextName: string) => {
+          const next = { ...headers };
+          const value = next[oldName];
+          delete next[oldName];
+          next[nextName] = value;
+          setHeaders(next);
+        };
+        return (
+          <div className="space-y-3 p-3 bg-surface-900/50 rounded-lg">
+          <h5 className="text-xs font-medium text-purple-400 uppercase tracking-wider">接口调用配置</h5>
           <div className="grid grid-cols-4 gap-2">
             <div className="col-span-1">
               <label className="input-label">方法</label>
               <select
-                value={(config as WebhookConfig).method}
-                onChange={(e) => onChange({ ...config, method: e.target.value as 'GET' | 'POST' | 'PUT' | 'DELETE' } as WebhookConfig)}
+                value={webhookConfig.method}
+                onChange={(e) => onChange({ ...webhookConfig, method: e.target.value as WebhookConfig['method'] })}
                 className="select-field text-sm"
               >
                 <option value="GET">GET</option>
                 <option value="POST">POST</option>
                 <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
                 <option value="DELETE">DELETE</option>
               </select>
             </div>
@@ -586,8 +601,8 @@ function RuleConfigEditor({
               <label className="input-label">URL</label>
               <input
                 type="text"
-                value={(config as WebhookConfig).url}
-                onChange={(e) => onChange({ ...config, url: e.target.value } as WebhookConfig)}
+                value={webhookConfig.url}
+                onChange={(e) => onChange({ ...webhookConfig, url: e.target.value })}
                 className="input-field text-sm font-mono"
                 placeholder="https://api.example.com/endpoint"
               />
@@ -596,14 +611,59 @@ function RuleConfigEditor({
           <div>
             <label className="input-label">请求体模板 (JSON)</label>
             <textarea
-              value={(config as WebhookConfig).bodyTemplate || ''}
-              onChange={(e) => onChange({ ...config, bodyTemplate: e.target.value } as WebhookConfig)}
+              value={webhookConfig.bodyTemplate || ''}
+              onChange={(e) => onChange({ ...webhookConfig, bodyTemplate: e.target.value })}
               className="input-field text-sm font-mono resize-none h-20"
-              placeholder='{"orderId": "{{params.order_id}}"}'
+              placeholder='{"orderId": "{{params.order_id}}", "items": {{params.items}}}'
             />
+            <p className="mt-1 text-[10px] text-surface-500">请求体必须是合法 JSON；支持 {'{{params.x}}'} 和 {'{{object.x}}'}，运行时会校验并真实发送。</p>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="input-label mb-0">请求头</label>
+              <button
+                type="button"
+                onClick={() => setHeaders({ ...headers, [`X-Header-${Object.keys(headers).length + 1}`]: '' })}
+                className="text-xs text-purple-300 hover:text-purple-200"
+              >
+                + 添加请求头
+              </button>
+            </div>
+            {Object.entries(headers).map(([name, value]) => (
+              <div key={name} className="flex gap-2">
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => renameHeader(name, e.target.value)}
+                  className="input-field text-xs font-mono w-2/5"
+                  placeholder="Header 名"
+                />
+                <input
+                  type="text"
+                  value={value}
+                  onChange={(e) => setHeaders({ ...headers, [name]: e.target.value })}
+                  className="input-field text-xs font-mono flex-1"
+                  placeholder="Header 值"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = { ...headers };
+                    delete next[name];
+                    setHeaders(next);
+                  }}
+                  className="p-1 text-surface-500 hover:text-red-400"
+                  title="删除请求头"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+            <p className="text-[10px] text-amber-300/80">请求头会随动作定义保存；不要填写长期密钥，密钥管理后续应改为凭据引用。</p>
           </div>
         </div>
-      );
+        );
+      }
 
     case 'notification':
       return (

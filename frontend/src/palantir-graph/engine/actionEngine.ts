@@ -290,7 +290,7 @@ function executeRule(
     }
 
     case 'webhook': {
-      // 浏览器环境下只做 mock 模拟，实际 webhook 需后端支持
+      // 浏览器的 dry-run 只预览效果；真实执行会由后端安全投递器完成。
       const whCfg = cfg as WebhookConfig;
       return {
         effect: {

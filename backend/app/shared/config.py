@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     uploads_dir: str = "./uploads"
     access_token_expire_minutes: int = 1440
 
+    # Formal-ontology actions can call an external webhook.  Keep the request
+    # budget small because actions execute on the API request/worker thread;
+    # the dispatcher retries only transient failures and sends an idempotency
+    # key with every attempt.
+    formal_action_webhook_timeout_seconds: int = 15
+    formal_action_webhook_max_attempts: int = 2
+    formal_action_webhook_max_body_bytes: int = 1_000_000
+
     # Super Assistant is intentionally isolated from ontology/exploration
     # runtimes. Skills are real directories rooted below this path; an empty
     # value resolves to <uploads_dir>/super-assistant/skills.
