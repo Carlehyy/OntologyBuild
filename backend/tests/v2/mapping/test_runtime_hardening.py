@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.ontology import OntologyProject
+from app.models.ontology_version import OntologyVersion
 from app.models.v2.dataset import Dataset
 from app.models.v2.mapping import OntologyMapping
 from app.ontologies.mappings.router import (
@@ -813,21 +814,77 @@ def test_published_ontology_freezes_mapping_structure(
         assert "draft" in str(blocked.value.detail)
 
 
-def test_published_ontology_still_allows_apply_from_dataset(
+def test_published_ontology_rejects_mapping_outside_current_release(
         db, admin_user, lake_storage):
     ontology, _, mapping = _source_graph(
         db, admin_user, rows=[{"id": "1"}])
+    release = OntologyVersion(
+        id=str(uuid.uuid4()), ontology_id=ontology.id,
+        version_number="v0", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [], "linkTypes": [], "actions": [],
+            "functions": [], "sentinels": [], "mappings": [],
+            "linkMappings": [],
+        },
+        created_by=admin_user.id,
+    )
+    db.add(release)
+    db.flush()
     ontology.status = "published"
+    ontology.current_release_id = release.id
     db.commit()
 
-    def _capture(_self, ontology_id, **kwargs):
-        return {"ontology_id": ontology_id, **kwargs}
+    with pytest.raises(HTTPException) as blocked:
+        apply_mapping_from_dataset(ontology.id, mapping.id, db)
 
-    with patch.object(MappingService, "build_all", _capture):
-        result = apply_mapping_from_dataset(ontology.id, mapping.id, db)
+    assert blocked.value.status_code == 409
+    assert blocked.value.detail["code"] == "mapping_not_in_current_release"
+    assert "晋级发布" in blocked.value.detail["message"]
+    db.expire_all()
+    assert db.query(OntologyMapping).filter_by(id=mapping.id).one().status == "draft"
 
-    assert result["ontology_id"] == ontology.id
-    assert result["require_approved"] is True
+
+def test_current_release_mapping_can_rebuild_with_immutable_owner(
+        db, admin_user, lake_storage):
+    ontology, _, mapping = _source_graph(
+        db, admin_user, rows=[{"id": "1"}])
+    release = OntologyVersion(
+        id=str(uuid.uuid4()), ontology_id=ontology.id,
+        version_number="v1", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [], "linkTypes": [], "actions": [],
+            "functions": [], "sentinels": [],
+            "mappings": [{
+                "id": mapping.id,
+                "curatedDatasetId": mapping.curated_dataset_id,
+                "entityClass": mapping.entity_class,
+                "fieldMapping": dict(mapping.field_mapping or {}),
+                "targetObjectTypeId": None,
+                "status": "draft",
+                "confidence": None,
+            }],
+            "linkMappings": [],
+        },
+        created_by=admin_user.id,
+    )
+    db.add(release)
+    db.flush()
+    ontology.status = "published"
+    ontology.current_release_id = release.id
+    db.commit()
+
+    expected = {"ontology_id": ontology.id, "release_id": release.id}
+    with patch.object(
+            MappingService, "_build_all_transaction", return_value=expected,
+    ) as build:
+        result = MappingService(db).build_all(
+            ontology.id, require_approved=True)
+
+    assert result == expected
+    assert build.call_args.kwargs["ontology_release_id"] == release.id
+    assert build.call_args.kwargs["require_approved"] is True
 
 
 def test_mapping_task_reconciles_complete_ontology(

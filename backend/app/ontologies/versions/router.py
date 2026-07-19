@@ -1568,6 +1568,7 @@ def promote_draft(
                 ontology_release_id=release_id)
             db.add(FoObjectInstance(
                 id=item.object_id, ontology_id=ontology_id,
+                ontology_release_id=release_id,
                 object_type_id=item.object_type_id,
                 properties=dict(item.properties or {}), computed={},
                 source="pipeline", external_id=item.external_id,
@@ -1575,6 +1576,7 @@ def promote_draft(
         for item in trial_links:
             db.add(FoLinkInstance(
                 id=item.link_id, ontology_id=ontology_id,
+                ontology_release_id=release_id,
                 link_type_id=item.link_type_id,
                 source_object_id=item.source_object_id,
                 target_object_id=item.target_object_id,

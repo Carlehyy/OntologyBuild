@@ -87,6 +87,13 @@ def test_current_release_read_model_ignores_mutable_runtime_drift(
             target_object_type_id="runtime-only-type",
             field_mapping={"source": "target"}, status="draft",
         ),
+        ObjectInstance(
+            id="runtime-only-instance", ontology_id=ontology_id,
+            object_type_id="runtime-only-type",
+            properties={"source": "draft data"}, source="pipeline",
+            # No immutable release owner: this simulates the historical leak.
+            ontology_release_id=None,
+        ),
     ])
     db.commit()
 
@@ -97,6 +104,19 @@ def test_current_release_read_model_ignores_mutable_runtime_drift(
     assert [item["id"] for item in live_types] == ["runtime-only-type"]
     assert db.query(OntologyMapping).filter_by(
         ontology_id=ontology_id).one().id == "runtime-only-mapping"
+
+    official_instances = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instances"
+        f"?expected_release_id={root['id']}",
+        headers=auth_headers)
+    assert official_instances.status_code == 200, official_instances.text
+    assert official_instances.json()["data"] == []
+    stale_instances = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instances"
+        "?expected_release_id=stale-release",
+        headers=auth_headers)
+    assert stale_instances.status_code == 409, stale_instances.text
+    assert stale_instances.json()["detail"]["code"] == "release_context_changed"
 
     structure = client.get(
         f"/api/v2/ontologies/{ontology_id}/current-release/workspace",
@@ -226,7 +246,7 @@ def _paired_dataset(db, monkeypatch) -> None:
     )
 
 
-def test_release_mapping_contract_requires_complete_object_and_link_coverage():
+def test_release_mapping_contract_allows_unmapped_types_but_validates_definitions():
     snapshot = {
         "objectTypes": [
             {
@@ -259,8 +279,13 @@ def test_release_mapping_contract_requires_complete_object_and_link_coverage():
 
     codes = {item["code"] for item in validate_release_mapping_contract(snapshot)}
     assert "mapping_required_property_missing" in codes
-    assert "object_type_mapping_required" in codes
-    assert "link_type_mapping_required" in codes
+    assert "object_type_mapping_required" not in codes
+    assert "link_type_mapping_required" not in codes
+
+    structure_only = dict(snapshot)
+    structure_only["mappings"] = []
+    structure_only["linkMappings"] = []
+    assert validate_release_mapping_contract(structure_only) == []
 
     snapshot["mappings"][0]["fieldMapping"]["name"] = "name"
     snapshot["mappings"].append({
@@ -277,7 +302,7 @@ def test_release_mapping_contract_requires_complete_object_and_link_coverage():
     assert validate_release_mapping_contract(snapshot) == []
 
 
-def test_trial_and_promotion_reject_incomplete_mapping_contract(
+def test_structure_only_trial_and_promotion_publish_zero_instances(
         client, auth_headers, ontology, db):
     oid = ontology["id"]
     root = _root(client, auth_headers, oid)
@@ -292,38 +317,35 @@ def test_trial_and_promotion_reject_incomplete_mapping_contract(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
         headers=auth_headers, json={},
     )
-    assert trial.status_code == 422, trial.text
-    trial_errors = trial.json()["detail"]["errors"]
-    assert {item["code"] for item in trial_errors} >= {"object_type_mapping_required"}
-    assert db.query(OntologyTrialRun).filter_by(version_id=draft["id"]).count() == 0
-
-    # Defense in depth: a passed run created by an older deployment must not
-    # bypass the same mapping contract at promotion time.
-    draft_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
-    root_row = db.query(OntologyVersion).filter_by(id=root["id"]).one()
-    impact = impact_report(root_row.snapshot_formal, draft_row.snapshot_formal)
-    run = OntologyTrialRun(
-        id="legacy-passed-incomplete-run", ontology_id=oid,
-        version_id=draft_row.id, revision=draft_row.revision,
-        snapshot_hash=draft_row.snapshot_hash, status="passed",
-        dataset_versions=[], result_json={
-            "counts": {"objects": 0, "links": 0, "facts": 0, "datasets": 0},
-        },
-        impact_hash=impact["impactHash"], created_by=draft_row.created_by,
-    )
-    db.add(run)
-    db.commit()
+    assert trial.status_code == 201, trial.text
+    run = trial.json()["data"]
+    assert run["status"] == "passed"
+    assert run["result"]["counts"] == {
+        "objects": 0, "links": 0, "facts": 0, "datasets": 0,
+    }
+    assert {item["code"] for item in run["result"]["warnings"]} == {
+        "object_type_unmapped",
+    }
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers).json()["data"]
 
     promoted = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
         headers=auth_headers,
-        json={"trialRunId": run.id, "impactHash": impact["impactHash"]},
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
     )
-    assert promoted.status_code == 422, promoted.text
-    promotion_errors = promoted.json()["detail"]["errors"]
-    assert {item["code"] for item in promotion_errors} >= {"object_type_mapping_required"}
+    assert promoted.status_code == 201, promoted.text
+    release = promoted.json()["data"]
     db.expire_all()
-    assert db.query(OntologyProject).filter_by(id=oid).one().current_release_id == root["id"]
+    assert db.query(OntologyProject).filter_by(
+        id=oid).one().current_release_id == release["id"]
+    assert db.query(ObjectInstance).filter_by(ontology_id=oid).count() == 0
+    official = client.get(
+        f"/api/v2/formal/ontologies/{oid}/instances",
+        headers=auth_headers)
+    assert official.status_code == 200, official.text
+    assert official.json()["data"] == []
 
 
 def test_version_tree_uses_complete_snapshots_and_dependency_numbering(
@@ -647,6 +669,10 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     project = db.query(OntologyProject).filter_by(id=oid).one()
     assert project.current_release_id == release["id"] and project.version == "v1"
     assert db.query(ObjectInstance).filter_by(ontology_id=oid).count() == 2
+    assert {
+        item.ontology_release_id
+        for item in db.query(ObjectInstance).filter_by(ontology_id=oid).all()
+    } == {release["id"]}
     assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 4
     assert db.query(OntologyVersion).filter_by(id=root["id"]).one().snapshot_formal is not None
     assert db.query(OntologyVersion).filter_by(id=draft["id"]).one().lifecycle_status == "superseded"
@@ -698,6 +724,10 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     project = db.query(OntologyProject).filter_by(id=oid).one()
     assert project.current_release_id == release_v2["id"]
     assert db.query(ObjectInstance).filter_by(ontology_id=oid).count() == 2
+    assert {
+        item.ontology_release_id
+        for item in db.query(ObjectInstance).filter_by(ontology_id=oid).all()
+    } == {release_v2["id"]}
     assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 4
 
 

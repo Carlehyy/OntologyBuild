@@ -87,6 +87,7 @@ def _seed_release_instance_data(ontology_id, release, db):
         ObjectInstance(
             id="order-1",
             ontology_id=ontology_id,
+            ontology_release_id=release.id,
             object_type_id="ot-order",
             properties={"order_no": "A-001", "customer": "甲方"},
             computed={"risk": "低"},
@@ -98,6 +99,7 @@ def _seed_release_instance_data(ontology_id, release, db):
         ObjectInstance(
             id="order-2",
             ontology_id=ontology_id,
+            ontology_release_id=release.id,
             object_type_id="ot-order",
             properties={"order_no": "A-002", "customer": "乙方"},
             computed={"risk": "中"},
@@ -109,6 +111,7 @@ def _seed_release_instance_data(ontology_id, release, db):
         ObjectInstance(
             id="order-3",
             ontology_id=ontology_id,
+            ontology_release_id=release.id,
             object_type_id="ot-order",
             properties={
                 "order_no": "A-003",
@@ -124,6 +127,7 @@ def _seed_release_instance_data(ontology_id, release, db):
         ObjectInstance(
             id="owner-1",
             ontology_id=ontology_id,
+            ontology_release_id=release.id,
             object_type_id="ot-owner",
             properties={"name": "张三"},
             source="manual",
@@ -142,6 +146,7 @@ def _seed_release_instance_data(ontology_id, release, db):
         LinkInstance(
             id="link-1",
             ontology_id=ontology_id,
+            ontology_release_id=release.id,
             link_type_id="lt-owner",
             source_object_id="order-1",
             target_object_id="owner-1",

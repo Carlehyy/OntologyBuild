@@ -272,12 +272,12 @@ def _object_type_for_mapping(mapping: dict, object_types: dict[str, dict]) -> di
 
 
 def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
-    """Require every publishable type to have a complete materialization contract.
+    """Validate configured mappings without making them a publication prerequisite.
 
-    Drafts may be incomplete, but a trial is a release rehearsal.  This gate is
-    intentionally snapshot-only so both trial entry and promotion can enforce the
-    exact same definition boundary.  Dataset approval, checksums and row-level
-    correctness are validated while materializing the trial and again at promotion.
+    A structure-only or partially mapped release is valid and simply materializes
+    no data for its unmapped types.  Once a mapping is present, its identity,
+    required fields and endpoint contract remain fail-closed.  This gate is
+    snapshot-only so trial entry and promotion enforce the same definition.
     """
     snap = complete_snapshot(snapshot)
     errors: list[dict] = []
@@ -368,20 +368,12 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
                 "message": f"ObjectType「{label(object_type)}」未设置主键，不能进入试跑态",
                 "field": "primaryKey",
             })
-        if not mappings_by_type.get(object_type_id):
-            errors.append({
-                "code": "object_type_mapping_required", "kind": "objectType",
-                "id": object_type_id, "name": label(object_type),
-                "message": f"ObjectType「{label(object_type)}」没有数据映射，不能进入试跑态",
-                "field": "mappings",
-            })
 
     link_types = {
         str(item.get("id") or ""): item
         for item in snap["linkTypes"]
         if item.get("id")
     }
-    link_mappings_by_type: dict[str, list[dict]] = {}
     for mapping in snap["linkMappings"]:
         mapping_id = str(mapping.get("id") or "")
         mapping_name = str(mapping.get("relationType") or mapping_id)
@@ -395,8 +387,6 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
                 "field": "linkTypeId",
             })
             continue
-        link_mappings_by_type.setdefault(link_type_id, []).append(mapping)
-
         for field, text in (("srcDatasetId", "源端"), ("tgtDatasetId", "目标端"),
                             ("srcKey", "源端外键"), ("tgtKey", "目标端外键")):
             if not mapping.get(field):
@@ -461,14 +451,6 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
                 "field": property_name,
             })
 
-    for link_type_id, link_type in link_types.items():
-        if not link_mappings_by_type.get(link_type_id):
-            errors.append({
-                "code": "link_type_mapping_required", "kind": "linkType",
-                "id": link_type_id, "name": label(link_type),
-                "message": f"LinkType「{label(link_type)}」没有关系映射，不能进入试跑态",
-                "field": "linkMappings",
-            })
     return errors
 
 

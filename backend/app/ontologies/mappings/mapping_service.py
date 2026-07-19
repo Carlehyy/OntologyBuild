@@ -19,6 +19,18 @@ class MappingApplyError(RuntimeError):
     """映射写入或正规本体投影失败；调用方不得把本次运行视为 applied。"""
 
 
+class MappingReleaseScopeError(MappingApplyError):
+    """Mutable runtime mapping definitions do not match the current release."""
+
+
+def _release_field_mapping(value: dict | None) -> dict:
+    """Remove apply bookkeeping while retaining identity/projection semantics."""
+    return {
+        key: item for key, item in dict(value or {}).items()
+        if key != "__last_apply_error__" and not key.startswith("__applied_")
+    }
+
+
 def load_mapping_source_rows(db: Session, mapping: OntologyMapping, *,
                              require_approved: bool = True) -> tuple[list[dict], object | None]:
     """严格全量读取映射绑定的数据版本，返回 ``(rows, DatasetVersion)``。
@@ -97,6 +109,106 @@ class MappingService:
 
     def get_mappings(self, ontology_id: str) -> list[OntologyMapping]:
         return self._db.query(OntologyMapping).filter(OntologyMapping.ontology_id == ontology_id).all()
+
+    def _assert_current_release_scope(
+            self, ontology_id: str, mappings: list[OntologyMapping], *, project=None,
+    ) -> str | None:
+        """Return the immutable owner after comparing full mapping definitions.
+
+        Legacy projects without a release pointer keep their historical behavior.
+        Once a current release exists, however, mutable live mapping tables may
+        materialize formal data only when they exactly match that release.
+        """
+        from app.models.ontology import OntologyProject
+        from app.models.ontology_version import OntologyVersion
+        from app.models.v2.mapping import OntologyLinkMapping
+        from app.ontologies.versions.evolution_service import complete_snapshot
+
+        if project is None:
+            project = self._db.query(OntologyProject).filter(
+                OntologyProject.id == ontology_id,
+            ).first()
+        if project is None:
+            raise MappingApplyError(f"本体 {ontology_id} 不存在")
+        # Some legacy/internal callers use lightweight session doubles and have
+        # no release model at all.  Only a real project row can establish an
+        # immutable ownership boundary.
+        if not isinstance(project, OntologyProject):
+            return None
+        if not project.current_release_id:
+            return None
+
+        release = self._db.query(OntologyVersion).filter(
+            OntologyVersion.id == project.current_release_id,
+            OntologyVersion.ontology_id == ontology_id,
+            OntologyVersion.node_kind == "release",
+            OntologyVersion.lifecycle_status == "released",
+        ).first()
+        if release is None:
+            raise MappingReleaseScopeError(
+                "当前发布指针无效，已拒绝写入正式实例")
+        snapshot = complete_snapshot(release.snapshot_formal)
+
+        live_objects = {
+            str(item.id): {
+                "id": str(item.id),
+                "curatedDatasetId": item.curated_dataset_id,
+                "entityClass": item.entity_class,
+                "fieldMapping": _release_field_mapping(item.field_mapping),
+                "targetObjectTypeId": item.target_object_type_id,
+                "confidence": item.confidence,
+            }
+            for item in mappings
+        }
+        released_objects = {
+            str(item.get("id")): {
+                "id": str(item.get("id")),
+                "curatedDatasetId": item.get("curatedDatasetId"),
+                "entityClass": item.get("entityClass") or "",
+                "fieldMapping": _release_field_mapping(item.get("fieldMapping")),
+                "targetObjectTypeId": item.get("targetObjectTypeId"),
+                "confidence": item.get("confidence"),
+            }
+            for item in snapshot["mappings"] if item.get("id")
+        }
+
+        live_link_rows = self._db.query(OntologyLinkMapping).filter(
+            OntologyLinkMapping.ontology_id == ontology_id,
+        ).all()
+        live_links = {
+            str(item.id): {
+                "id": str(item.id),
+                "srcDatasetId": item.src_dataset_id,
+                "tgtDatasetId": item.tgt_dataset_id,
+                "relationType": item.relation_type,
+                "srcKey": item.src_key,
+                "tgtKey": item.tgt_key,
+                "linkTypeId": item.link_type_id,
+                "edgeDatasetId": item.edge_dataset_id,
+                "fieldMapping": _release_field_mapping(item.field_mapping),
+            }
+            for item in live_link_rows
+        }
+        released_links = {
+            str(item.get("id")): {
+                "id": str(item.get("id")),
+                "srcDatasetId": item.get("srcDatasetId"),
+                "tgtDatasetId": item.get("tgtDatasetId"),
+                "relationType": item.get("relationType") or "",
+                "srcKey": item.get("srcKey") or "",
+                "tgtKey": item.get("tgtKey") or "",
+                "linkTypeId": item.get("linkTypeId"),
+                "edgeDatasetId": item.get("edgeDatasetId"),
+                "fieldMapping": _release_field_mapping(item.get("fieldMapping")),
+            }
+            for item in snapshot["linkMappings"] if item.get("id")
+        }
+
+        if live_objects != released_objects or live_links != released_links:
+            raise MappingReleaseScopeError(
+                "当前运行映射不属于当前发布快照，已拒绝写入正式实例；"
+                "请在草稿中完成试跑并晋级发布")
+        return str(release.id)
 
     def remove_mapping_projection(self, mapping: OntologyMapping) -> list[str]:
         """Remove this mapping's materialized current state in the caller transaction.
@@ -209,6 +321,8 @@ class MappingService:
     def apply_mapping(self, mapping_id: str, data: list[dict], *,
                       ontology_id: str | None = None,
                       source_dataset_version_id: str | None = None) -> dict:
+        from app.models.ontology import OntologyProject
+
         q = self._db.query(OntologyMapping).filter(OntologyMapping.id == mapping_id)
         if ontology_id is not None:
             q = q.filter(OntologyMapping.ontology_id == ontology_id)
@@ -216,6 +330,15 @@ class MappingService:
         if not mapping:
             suffix = f" in ontology {ontology_id}" if ontology_id else ""
             raise ValueError(f"Mapping {mapping_id} not found{suffix}")
+
+        project = self._db.query(OntologyProject).filter(
+            OntologyProject.id == mapping.ontology_id,
+        ).with_for_update().first()
+        ontology_release_id = self._assert_current_release_scope(
+            mapping.ontology_id,
+            self.get_mappings(mapping.ontology_id),
+            project=project,
+        )
 
         mapping.status = "applying"
         self._db.flush()
@@ -255,7 +378,8 @@ class MappingService:
                 "property_mappings": (mapping.field_mapping or {}).get("__properties__", []),
             }}
             formal_projection = project_to_formal_ontology(
-                self._db, mapping.ontology_id, meta)
+                self._db, mapping.ontology_id, meta,
+                ontology_release_id=ontology_release_id)
             self._ensure_source_version_is_current(
                 mapping, source_dataset_version_id)
 
@@ -327,12 +451,17 @@ class MappingService:
                 raise MappingApplyError(f"本体 {ontology_id} 不存在")
             mappings = self.get_mappings(ontology_id)
             mapping_ids = [mapping.id for mapping in mappings]
+            ontology_release_id = self._assert_current_release_scope(
+                ontology_id, mappings, project=project)
             return self._build_all_transaction(
-                ontology_id, mappings, require_approved=require_approved)
+                ontology_id, mappings, require_approved=require_approved,
+                ontology_release_id=ontology_release_id)
         except Exception as exc:
             self._db.rollback()
             from app.ontologies.sentinels.cdc import discard_captured_changes
             discard_captured_changes(self._db)
+            if isinstance(exc, MappingReleaseScopeError):
+                raise
             try:
                 if not mapping_ids:
                     mapping_ids = [item[0] for item in self._db.query(
@@ -357,7 +486,8 @@ class MappingService:
 
     def _build_all_transaction(
             self, ontology_id: str, mappings: list[OntologyMapping], *,
-            require_approved: bool = False) -> dict:
+            require_approved: bool = False,
+            ontology_release_id: str | None = None) -> dict:
         if not mappings:
             return {"error": "no mappings configured", "ontology_id": ontology_id}
 
@@ -446,7 +576,8 @@ class MappingService:
         # LinkType / LinkInstance，让流水线数据直接在图谱编辑器里可见、可建模。
         from app.services.v2.mapping.formal_projection import project_to_formal_ontology
         formal_projection = project_to_formal_ontology(
-            self._db, ontology_id, mapping_meta)
+            self._db, ontology_id, mapping_meta,
+            ontology_release_id=ontology_release_id)
         for mapping_id, meta in mapping_meta.items():
             source_mapping = next(m for m in mappings if m.id == mapping_id)
             self._ensure_source_version_is_current(

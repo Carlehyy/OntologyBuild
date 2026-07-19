@@ -531,6 +531,14 @@ def execute_action(db: Session, ontology_id: str, body,
             validation_errors=["ontology_not_found"], actor_id=actor_id,
             ontology_version=ontology_version,
             ontology_release_id=ontology_release_id)
+    # Draft runtime rows are an editable compatibility projection, not official
+    # current-release data.  Published actions must stay inside the immutable
+    # release; draft actions continue to operate on the draft projection.
+    instance_release_id = (
+        ontology_release_id
+        if (project.status or "") == "published"
+        else None
+    )
     if not body.dry_run:
         from app.config import settings
         if settings.environment == "production":
@@ -557,9 +565,13 @@ def execute_action(db: Session, ontology_id: str, body,
     target_props: Optional[dict] = None
     target_instance = None
     if body.target_instance_id:
-        target_instance = db.query(ObjectInstance).filter(
+        target_query = db.query(ObjectInstance).filter(
             ObjectInstance.id == body.target_instance_id,
-            ObjectInstance.ontology_id == ontology_id).first()
+            ObjectInstance.ontology_id == ontology_id)
+        if instance_release_id is not None:
+            target_query = target_query.filter(
+                ObjectInstance.ontology_release_id == instance_release_id)
+        target_instance = target_query.first()
         target_props = dict(target_instance.properties or {}) if target_instance else None
 
     target_errors: list[str] = []
@@ -660,7 +672,9 @@ def execute_action(db: Session, ontology_id: str, body,
                     except SafeEvalError as e:
                         raise RuleExecutionError(rname, f"属性映射「{m.get('targetProperty')}」取值失败: {e}")
                 if not body.dry_run:
-                    inst = ObjectInstance(ontology_id=ontology_id, object_type_id=ot_id,
+                    inst = ObjectInstance(ontology_id=ontology_id,
+                                          ontology_release_id=instance_release_id,
+                                          object_type_id=ot_id,
                                           properties=props, source="action")
                     db.add(inst); db.flush()
                     # 主键缺失时自动生成（与前端引擎一致：主键=实例 id）
@@ -746,9 +760,13 @@ def execute_action(db: Session, ontology_id: str, body,
                     raise RuleExecutionError(rname, f"create_link 无法解析目标对象: {tval}")
                 target_object = None
                 if tsrc != "created_object" or not body.dry_run:
-                    target_object = db.query(ObjectInstance).filter(
+                    target_object_query = db.query(ObjectInstance).filter(
                         ObjectInstance.id == str(tgt),
-                        ObjectInstance.ontology_id == ontology_id).first()
+                        ObjectInstance.ontology_id == ontology_id)
+                    if instance_release_id is not None:
+                        target_object_query = target_object_query.filter(
+                            ObjectInstance.ontology_release_id == instance_release_id)
+                    target_object = target_object_query.first()
                     if not target_object:
                         raise RuleExecutionError(rname, f"链接目标实例不存在: {tgt}")
                     if target_object.object_type_id != lt.target_object_type_id:
@@ -757,7 +775,9 @@ def execute_action(db: Session, ontology_id: str, body,
                             f"目标实例类型不符合链接定义: {target_object.object_type_id} != "
                             f"{lt.target_object_type_id}")
                 if not body.dry_run:
-                    li = LinkInstance(ontology_id=ontology_id, link_type_id=lt_id,
+                    li = LinkInstance(ontology_id=ontology_id,
+                                      ontology_release_id=instance_release_id,
+                                      link_type_id=lt_id,
                                       source_object_id=target_instance.id, target_object_id=str(tgt))
                     db.add(li); db.flush()
                     pending_links.append({"link_id": li.id, "link_type_id": lt_id, "exists": True})
@@ -782,6 +802,9 @@ def execute_action(db: Session, ontology_id: str, body,
                         LinkInstance.ontology_id == ontology_id,
                         LinkInstance.link_type_id == lt_id,
                         LinkInstance.source_object_id == target_instance.id)
+                    if instance_release_id is not None:
+                        q = q.filter(
+                            LinkInstance.ontology_release_id == instance_release_id)
                     rows = q.all()
                     for li in rows:
                         pending_links.append({"link_id": li.id, "link_type_id": lt_id, "exists": False})
@@ -884,9 +907,14 @@ def execute_action(db: Session, ontology_id: str, body,
                 ontology_release_id=ontology_release_id,
             )
         for iid, trigger in affected.items():
-            inst = db.query(ObjectInstance).filter(
+            instance_query = db.query(ObjectInstance).filter(
                 ObjectInstance.id == iid,
-                ObjectInstance.ontology_id == ontology_id).first()
+                ObjectInstance.ontology_id == ontology_id,
+            )
+            if instance_release_id is not None:
+                instance_query = instance_query.filter(
+                    ObjectInstance.ontology_release_id == instance_release_id)
+            inst = instance_query.first()
             if inst:
                 recompute_instance_derived(
                     db, ontology_id=ontology_id, instance=inst,

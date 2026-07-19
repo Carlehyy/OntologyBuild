@@ -743,7 +743,8 @@ def apply_mapping(ontology_id: str, mapping_id: str, data: list[dict], db: Sessi
 def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = Depends(get_db)):
     from app.models.v2.mapping import OntologyMapping
     from app.services.v2.mapping.mapping_service import (
-        MappingApplyError, MappingSourceError, MappingService)
+        MappingApplyError, MappingReleaseScopeError, MappingSourceError,
+        MappingService)
 
     mapping = db.query(OntologyMapping).filter(
         OntologyMapping.id == mapping_id,
@@ -761,6 +762,11 @@ def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = 
         return result
     except MappingSourceError as e:
         raise HTTPException(422, str(e))
+    except MappingReleaseScopeError as e:
+        raise HTTPException(409, detail={
+            "code": "mapping_not_in_current_release",
+            "message": str(e),
+        })
     except MappingApplyError as e:
         raise HTTPException(500, str(e))
 
@@ -768,7 +774,8 @@ def apply_mapping_from_dataset(ontology_id: str, mapping_id: str, db: Session = 
 @router.post("/{ontology_id}/mappings/build-all")
 def build_all_mappings(ontology_id: str, db: Session = Depends(get_db)):
     from app.services.v2.mapping.mapping_service import (
-        MappingApplyError, MappingSourceError, MappingService)
+        MappingApplyError, MappingReleaseScopeError, MappingSourceError,
+        MappingService)
     from app.models.v2.mapping import OntologyLinkMapping
     svc = MappingService(db)
     try:
@@ -786,6 +793,11 @@ def build_all_mappings(ontology_id: str, db: Session = Depends(get_db)):
         return result
     except MappingSourceError as e:
         raise HTTPException(422, detail=str(e))
+    except MappingReleaseScopeError as e:
+        raise HTTPException(409, detail={
+            "code": "mapping_not_in_current_release",
+            "message": str(e),
+        })
     except MappingApplyError as e:
         raise HTTPException(500, detail=str(e))
     except Exception as e:

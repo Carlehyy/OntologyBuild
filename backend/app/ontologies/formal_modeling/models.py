@@ -167,6 +167,10 @@ class ObjectInstance(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Immutable owner of this materialized runtime row.  NULL is intentionally
+    # reserved for legacy/unattributed data and must never be inferred as the
+    # project's current release.
+    ontology_release_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     object_type_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
     # properties: Record<string, unknown>
@@ -192,6 +196,9 @@ class LinkInstance(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    # See ObjectInstance.ontology_release_id.  This is deliberately nullable
+    # for safe migration of historical rows whose release cannot be proven.
+    ontology_release_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     link_type_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
     source_object_id: Mapped[str] = mapped_column(String, nullable=False, index=True)

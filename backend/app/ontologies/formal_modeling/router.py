@@ -34,7 +34,9 @@ from app.ontologies.formal_modeling.validation import (
     validate_model, validate_instance_contract, validate_link_instance_contract,
 )
 from app.ontologies.versions.evolution_service import complete_snapshot
-from app.ontologies.release_context import current_release_context
+from app.ontologies.release_context import (
+    current_release_context, runtime_release_identity,
+)
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
@@ -868,9 +870,13 @@ router.include_router(_crud(OntologyFunction, S.FunctionCreate, S.FunctionUpdate
 # ============================================================
 @router.get("/{ontology_id}/instances")
 def list_instances(ontology_id: str, object_type_id: Optional[str] = None,
+                   expected_release_id: Optional[str] = None,
                    db: Session = Depends(get_db), _=Depends(get_current_user)):
-    _require_ontology(db, ontology_id)
+    context = current_release_context(
+        db, ontology_id, expected_release_id=expected_release_id)
     q = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id)
+    if expected_release_id is not None or (context.project.status or "") == "published":
+        q = q.filter(ObjectInstance.ontology_release_id == context.id)
     if object_type_id:
         q = q.filter(ObjectInstance.object_type_id == object_type_id)
     items = q.order_by(ObjectInstance.created_at.desc()).all()
@@ -1048,12 +1054,14 @@ def instance_browser_catalog(
         ObjectInstance.object_type_id, func.count(ObjectInstance.id),
     ).filter(
         ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.ontology_release_id == release.id,
         ObjectInstance.object_type_id.in_(object_type_ids),
     ).group_by(ObjectInstance.object_type_id).all()) if object_type_ids else {}
     link_counts = dict(db.query(
         LinkInstance.link_type_id, func.count(LinkInstance.id),
     ).filter(
         LinkInstance.ontology_id == ontology_id,
+        LinkInstance.ontology_release_id == release.id,
         LinkInstance.link_type_id.in_(link_type_ids),
     ).group_by(LinkInstance.link_type_id).all()) if link_type_ids else {}
     object_datasets, link_datasets = _release_dataset_associations(db, snapshot)
@@ -1095,6 +1103,7 @@ def instance_browser_objects(
     )
     query = db.query(ObjectInstance).filter(
         ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.ontology_release_id == release.id,
         ObjectInstance.object_type_id == object_type_id,
     )
     term = (keyword or "").strip()
@@ -1138,6 +1147,7 @@ def instance_browser_links(
     _release_catalog_item(snapshot["linkTypes"], link_type_id, "实体关系")
     query = db.query(LinkInstance).filter(
         LinkInstance.ontology_id == ontology_id,
+        LinkInstance.ontology_release_id == release.id,
         LinkInstance.link_type_id == link_type_id,
     )
     term = (keyword or "").strip()
@@ -1159,6 +1169,7 @@ def instance_browser_links(
     }
     endpoints = (db.query(ObjectInstance).filter(
         ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.ontology_release_id == release.id,
         ObjectInstance.id.in_(endpoint_ids),
     ).all()) if endpoint_ids else []
     endpoint_by_id = {item.id: item for item in endpoints}
@@ -1188,6 +1199,11 @@ def create_instance(ontology_id: str, body: S.ObjectInstanceCreate,
     project = _require_ontology(db, ontology_id, for_update=True)
     data = body.model_dump(exclude_none=True)
     data["id"] = data.get("id") or str(uuid.uuid4())
+    release_identity = runtime_release_identity(db, ontology_id)
+    data["ontology_release_id"] = (
+        release_identity.id
+        if release_identity is not None and (project.status or "") == "published"
+        else None)
     obj = ObjectInstance(ontology_id=ontology_id, **data)
     object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
     instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
@@ -1355,9 +1371,15 @@ def delete_instance(ontology_id: str, instance_id: str,
 #  Link Instances
 # ============================================================
 @router.get("/{ontology_id}/link-instances")
-def list_link_instances(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    _require_ontology(db, ontology_id)
-    items = db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id).all()
+def list_link_instances(
+        ontology_id: str, expected_release_id: Optional[str] = None,
+        db: Session = Depends(get_db), _=Depends(get_current_user)):
+    context = current_release_context(
+        db, ontology_id, expected_release_id=expected_release_id)
+    query = db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id)
+    if expected_release_id is not None or (context.project.status or "") == "published":
+        query = query.filter(LinkInstance.ontology_release_id == context.id)
+    items = query.all()
     return _ok([S.LinkInstanceOut.model_validate(x).model_dump(by_alias=True) for x in items])
 
 
@@ -1366,7 +1388,12 @@ def create_link_instance(ontology_id: str, body: S.LinkInstanceCreate,
                          db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     _reject_direct_runtime_data_write()
     project = _require_ontology(db, ontology_id, for_update=True)
+    release_identity = runtime_release_identity(db, ontology_id)
     obj = LinkInstance(id=str(uuid.uuid4()), ontology_id=ontology_id,
+                       ontology_release_id=(
+                           release_identity.id
+                           if release_identity and (project.status or "") == "published"
+                           else None),
                        **body.model_dump(exclude_none=True))
     link_types = db.query(LinkType).filter(LinkType.ontology_id == ontology_id).all()
     instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()

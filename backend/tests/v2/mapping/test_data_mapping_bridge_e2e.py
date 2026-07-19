@@ -6,14 +6,11 @@
 """
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from app.main import app
 from app.routers.v2 import datasets as datasets_module
 from app.routers.v2 import mappings as mappings_module
-from app.services.v2.mapping.mapping_service import MappingService
 
 
 class IsolatedStorage:
@@ -162,7 +159,7 @@ def test_mapping_api_rejects_incompatible_object_and_relation_types(
     assert bad_link.json()["detail"]["code"] == "link_mapping_type_mismatch"
 
 
-def test_asset_lake_to_ontology_mapping_bridge_and_reconciliation(
+def test_draft_mapping_cannot_bypass_trial_and_promotion(
         bridge_api, auth_headers, ontology):
     api, headers, ontology_id = bridge_api, auth_headers, ontology["id"]
     suppliers = _create_table(api, headers, "供应商", [
@@ -222,33 +219,13 @@ def test_asset_lake_to_ontology_mapping_bridge_and_reconciliation(
         "field_mapping": {"memo": "memo"},
     })
     assert link_mapping.status_code == 200, link_mapping.text
-    link_mapping_id = link_mapping.json()["link_mapping_id"]
-
-    with patch.object(MappingService, "_rebuild_neo4j_projection", return_value=True), \
-         patch.object(MappingService, "_rebuild_chroma_projection", return_value=4):
-        applied = api.post(
-            f"/api/v2/ontologies/{ontology_id}/mappings/{supplier_mapping_id}/apply-from-dataset",
-            headers=headers)
-    assert applied.status_code == 200, applied.text
-    assert applied.json()["total_entities"] == 4
+    applied = api.post(
+        f"/api/v2/ontologies/{ontology_id}/mappings/{supplier_mapping_id}/apply-from-dataset",
+        headers=headers)
+    assert applied.status_code == 409, applied.text
+    assert applied.json()["detail"]["code"] == "mapping_not_in_current_release"
 
     instances = api.get(f"{_formal(ontology_id)}/instances", headers=headers).json()["data"]
-    assert len(instances) == 4
-    assert {item["properties"].get("name") for item in instances
-            if item["objectTypeId"] == supplier_type} == {"甲供应商", "乙供应商"}
+    assert instances == []
     links = api.get(f"{_formal(ontology_id)}/link-instances", headers=headers).json()["data"]
-    assert len(links) == 2
-    assert {item["properties"]["memo"] for item in links} == {"主供", "备供"}
-
-    removed_link = api.delete(
-        f"/api/v2/ontologies/{ontology_id}/link-mappings/{link_mapping_id}", headers=headers)
-    assert removed_link.status_code == 204, removed_link.text
-    assert api.get(f"{_formal(ontology_id)}/link-instances", headers=headers).json()["data"] == []
-
-    removed_objects = api.delete(
-        f"/api/v2/ontologies/{ontology_id}/mappings/{supplier_mapping_id}", headers=headers)
-    assert removed_objects.status_code == 204, removed_objects.text
-    remaining = api.get(f"{_formal(ontology_id)}/instances", headers=headers).json()["data"]
-    assert len(remaining) == 2
-    assert {item["objectTypeId"] for item in remaining} == {order_type}
-
+    assert links == []

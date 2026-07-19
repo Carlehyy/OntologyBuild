@@ -90,11 +90,13 @@ export interface MappingDataset {
 export interface ObjectInstanceSummary {
   id: string
   objectTypeId: string
+  ontologyReleaseId?: string | null
 }
 
 export interface LinkInstanceSummary {
   id: string
   linkTypeId: string
+  ontologyReleaseId?: string | null
 }
 
 function primaryKeyColumns(value: unknown): string[] {
@@ -222,6 +224,7 @@ export function useMappingData(
     () => (workspaceQuery.data?.linkMappings || []).map(normalizeLinkMapping),
     [workspaceQuery.data?.linkMappings],
   )
+  const currentReleaseId = !versionId ? workspaceQuery.data?.versionId : undefined
   const curatedQuery = useQuery<CuratedDataset[]>({
     queryKey: ['curated-all'],
     enabled,
@@ -233,14 +236,18 @@ export function useMappingData(
     queryFn: () => apiClientV2.get('/datasets/overview'),
   })
   const instancesQuery = useQuery<ObjectInstanceSummary[]>({
-    queryKey: ['mapping-object-instances', ontologyId],
-    enabled: enabled && requireCollectionStatus && !versionId,
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/instances`),
+    queryKey: ['mapping-object-instances', ontologyId, currentReleaseId],
+    enabled: enabled && requireCollectionStatus && !versionId && Boolean(currentReleaseId),
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/instances?expected_release_id=${encodeURIComponent(currentReleaseId || '')}`,
+    ),
   })
   const linkInstancesQuery = useQuery<LinkInstanceSummary[]>({
-    queryKey: ['mapping-link-instances', ontologyId],
-    enabled: enabled && requireCollectionStatus && !versionId,
-    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/link-instances`),
+    queryKey: ['mapping-link-instances', ontologyId, currentReleaseId],
+    enabled: enabled && requireCollectionStatus && !versionId && Boolean(currentReleaseId),
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/link-instances?expected_release_id=${encodeURIComponent(currentReleaseId || '')}`,
+    ),
   })
 
   const datasetBase = useMemo<Omit<MappingDataset, 'columns'>[]>(() => {

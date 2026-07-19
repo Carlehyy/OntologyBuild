@@ -198,6 +198,7 @@ class ObjectInstanceUpdate(CamelModel):
 
 class ObjectInstanceOut(ObjectInstanceBase):
     id: str
+    ontology_release_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -216,6 +217,7 @@ class LinkInstanceCreate(LinkInstanceBase):
 
 class LinkInstanceOut(LinkInstanceBase):
     id: str
+    ontology_release_id: Optional[str] = None
     created_at: datetime
 
 

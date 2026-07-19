@@ -274,6 +274,8 @@ def project_to_formal_ontology(
     db,
     ontology_id: str,
     mapping_meta: dict | None = None,
+    *,
+    ontology_release_id: str | None = None,
 ) -> dict:
     """
     把已落地的 Entity / Relation 投影为正规本体。
@@ -493,16 +495,19 @@ def project_to_formal_ontology(
                 old_props = dict(existing_inst.properties or {})
                 changed = (old_props != props
                            or existing_inst.object_type_id != ot_id
-                           or existing_inst.external_id != ent.id)
+                           or existing_inst.external_id != ent.id
+                           or existing_inst.ontology_release_id != ontology_release_id)
                 if changed:
                     existing_inst.object_type_id = ot_id
+                    existing_inst.ontology_release_id = ontology_release_id
                     existing_inst.properties = props
                     existing_inst.source = "pipeline"
                     existing_inst.external_id = ent.id
                     new_facts = record_property_facts(
                         db, ontology_id=ontology_id, instance_id=inst_id,
                         object_type_id=ot_id, old_props=old_props, new_props=props,
-                        source="pipeline")
+                        source="pipeline",
+                        ontology_release_id=ontology_release_id)
                     if new_facts:
                         recompute_instance_derived(
                             db, ontology_id=ontology_id, instance=existing_inst,
@@ -513,6 +518,7 @@ def project_to_formal_ontology(
                 inst_obj = ObjectInstance(
                     id=inst_id,
                     ontology_id=ontology_id,
+                    ontology_release_id=ontology_release_id,
                     object_type_id=ot_id,
                     properties=props,
                     computed={},
@@ -524,7 +530,8 @@ def project_to_formal_ontology(
                 new_facts = record_property_facts(
                     db, ontology_id=ontology_id, instance_id=inst_id,
                     object_type_id=ot_id, old_props=None, new_props=props,
-                    source="pipeline")
+                    source="pipeline",
+                    ontology_release_id=ontology_release_id)
                 if new_facts:
                     recompute_instance_derived(
                         db, ontology_id=ontology_id, instance=inst_obj,
@@ -541,17 +548,27 @@ def project_to_formal_ontology(
         logger.info("投影：本体 %s 无 Relation，跳过链接投影", ontology_id)
         from app.ontologies.formal_modeling.validation import validate_instance_contract
         from app.ontologies.formal_modeling.facts import record_link_fact
-        for link in db.query(LinkInstance).filter(
-                LinkInstance.ontology_id == ontology_id).all():
+        link_query = db.query(LinkInstance).filter(
+            LinkInstance.ontology_id == ontology_id)
+        if ontology_release_id is not None:
+            link_query = link_query.filter(
+                LinkInstance.ontology_release_id == ontology_release_id)
+        for link in link_query.all():
             if link.source_relation_id:
                 record_link_fact(
                     db, ontology_id=ontology_id, link_instance_id=link.id,
                     link_type_id=link.link_type_id, exists=False,
-                    source="pipeline-reconcile")
+                    source="pipeline-reconcile",
+                    ontology_release_id=ontology_release_id)
                 db.delete(link)
                 summary["removed_link_instances"] += 1
         all_object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
-        all_instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+        instance_query = db.query(ObjectInstance).filter(
+            ObjectInstance.ontology_id == ontology_id)
+        if ontology_release_id is not None:
+            instance_query = instance_query.filter(
+                ObjectInstance.ontology_release_id == ontology_release_id)
+        all_instances = instance_query.all()
         contract_errors = validate_instance_contract(all_object_types, all_instances)
         if contract_errors:
             preview = "; ".join(error.get("message", "") for error in contract_errors[:5])
@@ -694,8 +711,10 @@ def project_to_formal_ontology(
                     or existing_li.source_object_id != src_inst
                     or existing_li.target_object_id != tgt_inst
                     or (existing_li.properties or {}) != li_props
-                    or existing_li.source_relation_id != rel.id):
+                    or existing_li.source_relation_id != rel.id
+                    or existing_li.ontology_release_id != ontology_release_id):
                 existing_li.link_type_id = lt_id
+                existing_li.ontology_release_id = ontology_release_id
                 existing_li.source_object_id = src_inst
                 existing_li.target_object_id = tgt_inst
                 existing_li.properties = li_props
@@ -705,6 +724,7 @@ def project_to_formal_ontology(
             li_obj = LinkInstance(
                 id=li_id,
                 ontology_id=ontology_id,
+                ontology_release_id=ontology_release_id,
                 link_type_id=lt_id,
                 source_object_id=src_inst,
                 target_object_id=tgt_inst,
@@ -715,7 +735,8 @@ def project_to_formal_ontology(
             db.flush()
             record_link_fact(
                 db, ontology_id=ontology_id, link_instance_id=li_id,
-                link_type_id=lt_id, exists=True, source="pipeline")
+                link_type_id=lt_id, exists=True, source="pipeline",
+                ontology_release_id=ontology_release_id)
             summary["link_instances"] += 1
 
     # Materialized links must mirror the current Relation projection.  Keep the
@@ -723,14 +744,19 @@ def project_to_formal_ontology(
     # disappeared after an approved lake snapshot or link-mapping change.
     current_relation_ids = {rel.id for rel in relations}
     from app.ontologies.formal_modeling.facts import record_link_fact
-    for link in db.query(LinkInstance).filter(
-            LinkInstance.ontology_id == ontology_id).all():
+    link_query = db.query(LinkInstance).filter(
+        LinkInstance.ontology_id == ontology_id)
+    if ontology_release_id is not None:
+        link_query = link_query.filter(
+            LinkInstance.ontology_release_id == ontology_release_id)
+    for link in link_query.all():
         relation_id = link.source_relation_id
         if relation_id and relation_id not in current_relation_ids:
             record_link_fact(
                 db, ontology_id=ontology_id, link_instance_id=link.id,
                 link_type_id=link.link_type_id, exists=False,
-                source="pipeline-reconcile")
+                source="pipeline-reconcile",
+                ontology_release_id=ontology_release_id)
             db.delete(link)
             summary["removed_link_instances"] += 1
 
@@ -748,8 +774,17 @@ def project_to_formal_ontology(
     )
     all_object_types = db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
     all_link_types = db.query(LinkType).filter(LinkType.ontology_id == ontology_id).all()
-    all_instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
-    all_links = db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id).all()
+    instance_query = db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == ontology_id)
+    link_query = db.query(LinkInstance).filter(
+        LinkInstance.ontology_id == ontology_id)
+    if ontology_release_id is not None:
+        instance_query = instance_query.filter(
+            ObjectInstance.ontology_release_id == ontology_release_id)
+        link_query = link_query.filter(
+            LinkInstance.ontology_release_id == ontology_release_id)
+    all_instances = instance_query.all()
+    all_links = link_query.all()
     contract_errors = [
         *validate_instance_contract(all_object_types, all_instances),
         *validate_link_instance_contract(all_link_types, all_instances, all_links),
