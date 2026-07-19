@@ -709,7 +709,7 @@ function HistoryRow({
       </td>
       <td className="max-w-56 px-4 py-2.5 text-center">
         <p className={`mx-auto truncate text-[10px] ${item.error ? 'text-red-600' : 'font-mono text-slate-400'}`} title={item.error || undefined}>
-          {item.error || `RUN-${String(item.id).padStart(6, '0')}`}
+          {item.error || '-'}
         </p>
       </td>
       <td className="px-4 py-2.5 text-center">
