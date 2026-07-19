@@ -13,6 +13,21 @@ def _create_editor(client, auth_headers):
     return response.json()["data"]
 
 
+def _create_custom_user(client, auth_headers):
+    response = client.post(
+        "/api/v1/users",
+        json={
+            "username": "custom_member",
+            "email": "custom_member@example.com",
+            "password": "custom123",
+            "role": "custom",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    return response.json()["data"]
+
+
 def _login(client, username, password):
     response = client.post(
         "/api/v1/auth/login",
@@ -74,6 +89,54 @@ def test_role_menu_permissions_protect_pages_and_apis(client, admin_user, auth_h
     # System configuration is administrator-only even when called directly.
     settings = client.get("/api/v1/settings/rules", headers=editor_headers)
     assert settings.status_code == 403
+
+
+def test_custom_role_has_one_assignment_and_configurable_menu_scope(
+    client, admin_user, auth_headers,
+):
+    multi_role = client.post(
+        "/api/v1/users",
+        json={
+            "username": "invalid_multi_role",
+            "email": "invalid_multi_role@example.com",
+            "password": "custom123",
+            "role": ["viewer", "custom"],
+        },
+        headers=auth_headers,
+    )
+    assert multi_role.status_code == 422
+
+    user = _create_custom_user(client, auth_headers)
+    assert user["role"] == "custom"
+    assert "roles" not in user
+
+    custom_headers = _login(client, "custom_member", "custom123")
+    profile = client.get("/api/v1/auth/profile", headers=custom_headers)
+    assert profile.status_code == 200
+    assert profile.json()["data"]["role"] == "custom"
+    assert profile.json()["data"]["menu_permissions"] == ["overview"]
+
+    listed = client.get(
+        "/api/v1/users/roles/menu-permissions",
+        headers=auth_headers,
+    )
+    assert listed.status_code == 200
+    assert [item["role"] for item in listed.json()["data"]] == [
+        "editor", "viewer", "custom",
+    ]
+
+    updated = client.put(
+        "/api/v1/users/roles/custom/menu-permissions",
+        json={"menu_keys": ["models"]},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"] == {"role": "custom", "menu_keys": ["models"]}
+
+    profile = client.get("/api/v1/auth/profile", headers=custom_headers)
+    assert profile.json()["data"]["menu_permissions"] == ["models"]
+    assert client.get("/api/v1/overview/stats", headers=custom_headers).status_code == 403
+    assert client.get("/api/v1/models", headers=custom_headers).status_code == 200
 
 
 def test_regular_user_cannot_read_or_change_role_permissions(client, admin_user, auth_headers):

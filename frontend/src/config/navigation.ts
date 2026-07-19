@@ -47,6 +47,8 @@ export const DEFAULT_NON_ADMIN_MENU_KEYS = [
   'models',
 ]
 
+export const DEFAULT_CUSTOM_MENU_KEYS = ['overview']
+
 export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览' },
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口' },
@@ -93,7 +95,10 @@ export function grantedMenuKeys(user: User | null): Set<string> {
   // Persisted sessions created before RBAC did not contain this field. Preserve
   // their former menu set until the next profile refresh; an explicit [] means
   // the administrator deliberately granted no pages.
-  return new Set(user.menu_permissions ?? DEFAULT_NON_ADMIN_MENU_KEYS)
+  const fallbackMenuKeys = user.role === 'custom'
+    ? DEFAULT_CUSTOM_MENU_KEYS
+    : DEFAULT_NON_ADMIN_MENU_KEYS
+  return new Set(user.menu_permissions ?? fallbackMenuKeys)
 }
 
 export function hasMenuAccess(user: User | null, key: string): boolean {

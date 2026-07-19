@@ -37,6 +37,11 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
 
     engine = create_engine(f"sqlite:///{db_path}")
     inspector = inspect(engine)
+    with engine.connect() as conn:
+        custom_menu_keys = conn.execute(text(
+            "SELECT menu_keys FROM role_menu_permissions WHERE role = 'custom'"
+        )).scalar_one()
+    assert json.loads(custom_menu_keys) == ["overview"]
     required = {
         "v2_n8n_pipelines",
         "v2_steward_conversations",

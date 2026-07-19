@@ -174,12 +174,12 @@ export const domainApi = {
 
 export const usersApi = {
   list: () => apiClient.get<import('@/types/auth').User[]>('/users'),
-  create: (body: { username: string; email: string; password: string; role: 'admin' | 'editor' | 'viewer' }) =>
+  create: (body: { username: string; email: string; password: string; role: 'admin' | 'editor' | 'viewer' | 'custom' }) =>
     apiClient.post('/users', body),
-  update: (id: string, body: { username?: string; email?: string; password?: string; role?: 'admin' | 'editor' | 'viewer'; is_active?: boolean }) =>
+  update: (id: string, body: { username?: string; email?: string; password?: string; role?: 'admin' | 'editor' | 'viewer' | 'custom'; is_active?: boolean }) =>
     apiClient.put(`/users/${id}`, body),
   delete: (id: string) => apiClient.delete(`/users/${id}`),
-  listRoleMenuPermissions: () => apiClient.get<{ role: 'editor' | 'viewer'; menu_keys: string[] }[]>('/users/roles/menu-permissions'),
-  updateRoleMenuPermissions: (role: 'editor' | 'viewer', menu_keys: string[]) =>
-    apiClient.put<{ role: 'editor' | 'viewer'; menu_keys: string[] }>(`/users/roles/${role}/menu-permissions`, { menu_keys }),
+  listRoleMenuPermissions: () => apiClient.get<{ role: 'editor' | 'viewer' | 'custom'; menu_keys: string[] }[]>('/users/roles/menu-permissions'),
+  updateRoleMenuPermissions: (role: 'editor' | 'viewer' | 'custom', menu_keys: string[]) =>
+    apiClient.put<{ role: 'editor' | 'viewer' | 'custom'; menu_keys: string[] }>(`/users/roles/${role}/menu-permissions`, { menu_keys }),
 }

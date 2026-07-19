@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Literal, Optional
 
 
-UserRole = Literal["admin", "editor", "viewer"]
+UserRole = Literal["admin", "editor", "viewer", "custom"]
 
 class UserOut(BaseModel):
     id: str

@@ -23,7 +23,7 @@ import { useAuthStore } from '@/stores/authStore'
 import type { User } from '@/types/auth'
 
 
-type ManagedRole = 'editor' | 'viewer'
+type ManagedRole = 'editor' | 'viewer' | 'custom'
 type UserRole = 'admin' | ManagedRole
 type ViewMode = 'accounts' | 'permissions'
 type StatusFilter = 'all' | 'active' | 'disabled'
@@ -42,6 +42,7 @@ const ROLE_META: Record<UserRole, { label: string; description: string; badge: s
   admin: { label: '管理员', description: '拥有平台全部菜单与管理权限', badge: 'bg-slate-900 text-white' },
   editor: { label: '编辑者', description: '按角色配置使用业务与数据功能', badge: 'bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200' },
   viewer: { label: '查看者', description: '按角色配置查看已授权页面', badge: 'bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200' },
+  custom: { label: '自定义', description: '使用管理员单独配置的菜单访问范围', badge: 'bg-cyan-50 text-cyan-700 ring-1 ring-inset ring-cyan-200' },
 }
 
 function errorMessage(error: any, fallback: string) {
@@ -274,8 +275,8 @@ export default function UserManagementPanel() {
       ) : (
         <section className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
-            <div className="px-2 pb-2 pt-1"><p className="text-xs font-semibold text-slate-700">选择普通角色</p><p className="mt-1 text-[11px] leading-5 text-slate-400">菜单权限作用于该角色下的全部用户</p></div>
-            {(['editor', 'viewer'] as ManagedRole[]).map(role => {
+            <div className="px-2 pb-2 pt-1"><p className="text-xs font-semibold text-slate-700">选择可配置角色</p><p className="mt-1 text-[11px] leading-5 text-slate-400">每位用户仅归属一个角色；菜单权限作用于该角色下的全部用户</p></div>
+            {(['editor', 'viewer', 'custom'] as ManagedRole[]).map(role => {
               const meta = ROLE_META[role]
               const count = users.filter(user => user.role === role).length
               return <button key={role} type="button" onClick={() => setSelectedRole(role)} className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-all ${selectedRole === role ? 'border-teal-300 bg-teal-50/80 shadow-sm' : 'border-transparent hover:border-slate-200 hover:bg-slate-50'}`}><div className={`flex h-9 w-9 items-center justify-center rounded-lg ${selectedRole === role ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-500'}`}><UserRoundCog size={17} /></div><div className="min-w-0 flex-1"><p className="text-sm font-medium text-slate-800">{meta.label}</p><p className="mt-0.5 text-[11px] text-slate-400">{count} 个账号</p></div><ChevronRight size={14} className={selectedRole === role ? 'text-teal-600' : 'text-slate-300'} /></button>
@@ -302,7 +303,7 @@ export default function UserManagementPanel() {
 
       {(creating || editing) && <Dialog title={editing ? '编辑用户' : '新增用户'} description={editing ? '修改账号资料；密码留空时保持原密码。' : '创建后，账号会继承所选角色的菜单权限。'} onClose={closeEditor}>
         <form onSubmit={event => { event.preventDefault(); saveUser.mutate() }} className="space-y-4 px-6 py-5">
-          <div className="grid gap-4 sm:grid-cols-2"><label className="text-xs font-medium text-slate-600">用户名 *</label><label className="hidden text-xs font-medium text-slate-600 sm:block">角色 *</label><input autoFocus value={draft.username} onChange={event => setDraft(current => ({ ...current, username: event.target.value }))} className="rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20" placeholder="例如：zhangsan" /><div><label className="mb-1.5 block text-xs font-medium text-slate-600 sm:hidden">角色 *</label><select value={draft.role} disabled={editing?.id === currentUser?.id} onChange={event => setDraft(current => ({ ...current, role: event.target.value as UserRole }))} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20 disabled:bg-slate-50"><option value="viewer">查看者</option><option value="editor">编辑者</option><option value="admin">管理员</option></select></div></div>
+          <div className="grid gap-4 sm:grid-cols-2"><label className="text-xs font-medium text-slate-600">用户名 *</label><label className="hidden text-xs font-medium text-slate-600 sm:block">角色 *</label><input autoFocus value={draft.username} onChange={event => setDraft(current => ({ ...current, username: event.target.value }))} className="rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20" placeholder="例如：zhangsan" /><div><label className="mb-1.5 block text-xs font-medium text-slate-600 sm:hidden">角色 *</label><select value={draft.role} disabled={editing?.id === currentUser?.id} onChange={event => setDraft(current => ({ ...current, role: event.target.value as UserRole }))} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20 disabled:bg-slate-50"><option value="viewer">查看者</option><option value="editor">编辑者</option><option value="custom">自定义</option><option value="admin">管理员</option></select></div></div>
           <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">邮箱 *</span><input type="email" value={draft.email} onChange={event => setDraft(current => ({ ...current, email: event.target.value }))} className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20" placeholder="name@company.com" /></label>
           <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-600">{editing ? '新密码' : '初始密码 *'}</span><input type="password" value={draft.password} onChange={event => setDraft(current => ({ ...current, password: event.target.value }))} className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-500/20" placeholder={editing ? '留空表示不修改' : '至少 6 个字符'} /></label>
           <div className="rounded-lg bg-slate-50 px-3.5 py-3 text-xs leading-5 text-slate-500"><span className="font-medium text-slate-700">{ROLE_META[draft.role].label}：</span>{ROLE_META[draft.role].description}</div>

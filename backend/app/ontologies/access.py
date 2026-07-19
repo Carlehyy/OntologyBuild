@@ -37,8 +37,8 @@ def require_ontology_access(
         return project
     if role == "editor" and user_id and project.created_by == user_id:
         return project
-    if role == "viewer":
-        raise HTTPException(403, "Viewer role is read-only")
+    if role in {"viewer", "custom"}:
+        raise HTTPException(403, "This role is read-only")
     raise HTTPException(403, "Only the ontology owner or an administrator may modify this ontology")
 
 

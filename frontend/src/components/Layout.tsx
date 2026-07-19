@@ -382,7 +382,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       <div className="min-w-0">
                         <p className="truncate font-medium text-[var(--color-text-primary)] text-sm">{user?.username || '未知用户'}</p>
                         <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
-                          {user?.role === 'admin' ? '管理员' : user?.role === 'editor' ? '编辑者' : '查看者'}
+                          {user?.role === 'admin' ? '管理员' : user?.role === 'editor' ? '编辑者' : user?.role === 'custom' ? '自定义' : '查看者'}
                         </p>
                       </div>
                     </div>
