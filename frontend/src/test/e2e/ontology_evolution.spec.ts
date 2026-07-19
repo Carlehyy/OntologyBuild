@@ -345,8 +345,77 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '查看历史版本' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()
 
+  // 发布前先返回结构化门禁结果：历史环境里通过过试跑的冻结版本也可能
+  // 缺少当前规则要求的属性映射。界面应归组解释并给出一条可执行修复路径。
+  const impactPattern = `**/api/v2/ontologies/${ontology.id}/versions/${draft.id}/impact`
+  const legacyFields = [
+    ['ot-governance-case', '治理案例', 'GovernanceCase', [
+      'appointment_person_id', 'appointment_person_name', 'eamap_person_id',
+      'eamap_person_name', 'has_change_review',
+    ]],
+    ['ot-control-snapshot', '业务代表治理监测快照', 'RepresentativeControlSnapshot', [
+      'appointment_person_id', 'appointment_person_name', 'change_review_ref',
+      'eamap_person_id', 'eamap_person_name',
+    ]],
+    ['ot-application-module', '应用系统模块', 'ApplicationModule', ['sub_product']],
+  ] as const
+  await page.route(impactPattern, async route => {
+    const response = await route.fetch()
+    const body = await response.json()
+    body.data.releaseReadiness = {
+      ready: false,
+      blockingCount: 11,
+      trialRunId: draft.latest_trial?.id,
+      repairStrategy: 'create_draft',
+      repairSourceVersionId: draft.id,
+      errors: legacyFields.flatMap(([targetId, targetName, mappingName, fields]) =>
+        fields.map(field => ({
+          code: 'mapping_property_missing',
+          kind: 'mapping',
+          id: `mapping-${targetId}`,
+          name: mappingName,
+          targetId,
+          targetName,
+          field,
+          message: `Mapping「${mappingName}」未覆盖 ObjectType「${targetName}」的存储属性「${field}」`,
+        }))),
+    }
+    await route.fulfill({ response, json: body })
+  })
   await page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为发布态' }).click()
-  await expect(page.getByText('审核 v0.1 的发布影响')).toBeVisible()
+  const blockedDialog = page.getByRole('dialog', { name: '发布前检查 · v0.1' })
+  await expect(blockedDialog.getByTestId('release-readiness-blocked')).toContainText('3 个本体元素存在 11 项映射问题')
+  await expect(blockedDialog.getByTestId('release-readiness-blocked')).toContainText('11 个存储属性尚未映射')
+  await expect(blockedDialog.getByRole('button', { name: '暂不可发布' })).toBeDisabled()
+  await expect(blockedDialog.getByRole('button', { name: '确认发布' })).toHaveCount(0)
+  const issueGroups = blockedDialog.getByTestId('release-readiness-group')
+  await expect(issueGroups).toHaveCount(3)
+  await expect(issueGroups.first()).toContainText('治理案例')
+  await issueGroups.first().locator('summary').click()
+  await expect(issueGroups.first()).toContainText('appointment_person_id')
+  await blockedDialog.getByRole('button', { name: '创建修复分支并完善映射' }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=.*&view=mapping`))
+  await page.unroute(impactPattern)
+
+  const repairTree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
+  const repairDraft = repairTree.versions.find((item: any) => item.version_number === 'v0.1.1')
+  expect(repairDraft).toMatchObject({ lifecycle_status: 'editing', node_kind: 'draft' })
+  const repairWorkspace = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/versions/${repairDraft.id}/workspace`)
+  expect(repairWorkspace).toMatchObject({ workspaceMode: 'draft', editable: true })
+  expect(repairWorkspace.objectTypes).toHaveLength(1)
+  expect(repairWorkspace.linkTypes).toHaveLength(1)
+  expect(repairWorkspace.actions).toHaveLength(1)
+  expect(repairWorkspace.functions).toHaveLength(1)
+  expect(repairWorkspace.mappings).toHaveLength(1)
+  expect(repairWorkspace.linkMappings).toHaveLength(1)
+
+  // 原试跑版本实际满足条件时仍走正常发布路径，验证友好预检没有放松后端门禁。
+  await page.goto(`/#/ontologies/${ontology.id}`)
+  await page.getByRole('button', { name: '查看历史版本' }).click()
+  await page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为发布态' }).click()
+  const readyDialog = page.getByRole('dialog', { name: '发布前检查 · v0.1' })
+  await expect(readyDialog.getByTestId('release-readiness-ready')).toContainText('发布条件已满足')
+  await expect(readyDialog.getByRole('button', { name: '确认发布' })).toBeEnabled()
   await page.getByRole('button', { name: '确认发布' }).click()
   await expect(page.getByTestId('version-node-v1')).toContainText('当前发布', { timeout: 20_000 })
   await expect(draftRow).toContainText('已晋级')

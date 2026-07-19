@@ -1401,11 +1401,14 @@ def get_draft_impact(
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).first()
     current = _current_release(db, project)
+    report = impact_report(current.snapshot_formal, draft.snapshot_formal)
     return {"data": {
-        **impact_report(current.snapshot_formal, draft.snapshot_formal),
+        **report,
         "baseReleaseId": draft.base_release_id,
         "currentReleaseId": current.id,
         "baseOutdated": draft.base_release_id != current.id,
+        "releaseReadiness": _release_readiness(
+            db, draft=draft, current=current, report=report),
     }}
 
 
@@ -1557,6 +1560,89 @@ def _verify_trial_dataset_pins(db: Session, run: OntologyTrialRun) -> list[dict]
                 f"数据集「{dataset.name}」固定版本校验和变化，拒绝发布",
                 item_id=dataset.id))
     return errors
+
+
+def _release_readiness(
+        db: Session, *, draft: OntologyVersion,
+        current: OntologyVersion, report: dict) -> dict:
+    """Return a read-only, structured preview of every deterministic publish gate.
+
+    The impact dialog consumes this before the user confirms publication.  It
+    deliberately never mutates the trial record: the authoritative promote
+    endpoint repeats the same fail-closed checks under row locks.
+    """
+    snap = complete_snapshot(draft.snapshot_formal)
+    errors: list[dict] = []
+
+    if draft.lifecycle_status != "trial_ready":
+        errors.append(_gate_error(
+            "trial_ready_required", "version",
+            "只有已通过并冻结的试跑态版本可以转为发布态",
+            item_id=draft.id, name=draft.version_number))
+    if draft.base_release_id != current.id:
+        errors.append(_gate_error(
+            "draft_base_outdated", "version",
+            "当前发布版已变化，需要先基于最新发布版合并本分支改动",
+            item_id=draft.id, name=draft.version_number))
+
+    # Revalidate mappings even for legacy passed trials. Older deployments may
+    # have allowed partial mappings, while current publication is fail-closed.
+    errors.extend(validate_release_mapping_contract(snap))
+
+    run = db.query(OntologyTrialRun).filter(
+        OntologyTrialRun.ontology_id == draft.ontology_id,
+        OntologyTrialRun.version_id == draft.id,
+        OntologyTrialRun.status == "passed",
+    ).order_by(desc(OntologyTrialRun.created_at)).first()
+    exact_trial = False
+    if run is None:
+        errors.append(_gate_error(
+            "passed_trial_required", "trialRun",
+            "发布前必须先完成一次通过的隔离试跑",
+            item_id=draft.id, name=draft.version_number))
+    else:
+        current_hash = snapshot_hash(snap)
+        exact_trial = (
+            run.revision == (draft.revision or 0)
+            and run.snapshot_hash == draft.snapshot_hash
+            and run.snapshot_hash == current_hash
+        )
+        if not exact_trial:
+            errors.append(_gate_error(
+                "trial_snapshot_stale", "trialRun",
+                "试跑记录与当前快照不一致，需要创建新草稿并重新试跑",
+                item_id=run.id, name=draft.version_number))
+        else:
+            errors.extend(_verify_trial_dataset_pins(db, run))
+            expected = (run.result_json or {}).get("counts") or {}
+            object_count = db.query(OntologyTrialObject).filter(
+                OntologyTrialObject.trial_run_id == run.id).count()
+            link_count = db.query(OntologyTrialLink).filter(
+                OntologyTrialLink.trial_run_id == run.id).count()
+            if (object_count != int(expected.get("objects") or 0)
+                    or link_count != int(expected.get("links") or 0)):
+                errors.append(_gate_error(
+                    "trial_materialization_incomplete", "trialRun",
+                    "试跑隔离投影不完整，需要创建新草稿后重新试跑",
+                    item_id=run.id, name=draft.version_number))
+            if run.impact_hash != report.get("impactHash"):
+                errors.append(_gate_error(
+                    "trial_impact_stale", "trialRun",
+                    "试跑影响范围与当前发布基线不一致，需要重新试跑",
+                    item_id=run.id, name=draft.version_number))
+
+    ready = len(errors) == 0
+    base_outdated = draft.base_release_id != current.id
+    return {
+        "ready": ready,
+        "blockingCount": len(errors),
+        "errors": errors,
+        "trialRunId": run.id if run else None,
+        "repairStrategy": (
+            None if ready else "rebase" if base_outdated else "create_draft"
+        ),
+        "repairSourceVersionId": current.id if base_outdated else draft.id,
+    }
 
 
 @router.post("/{ontology_id}/versions/{version_id}/promote", status_code=201)
