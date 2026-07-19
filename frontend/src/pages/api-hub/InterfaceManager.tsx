@@ -59,6 +59,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [publicationCopied, setPublicationCopied] = useState(false)
   const [proxyKeys, setProxyKeys] = useState(false)
   const [systemData, setSystemData] = useState(false)
+  const [extraGroups, setExtraGroups] = useState<string[]>([])
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newGroupError, setNewGroupError] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
   const [sizes, setSizes] = useState<[number, number]>([28, 72])
 
@@ -99,7 +103,16 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     })
     return [...groups.entries()].sort(([a], [b]) => a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'zh-CN'))
   }, [filtered])
-  const groupNames = [...new Set(interfaces.map(item => item.group_name).filter(Boolean))].sort()
+  const groupNames = useMemo(() => {
+    const names = new Set(extraGroups)
+    interfaces.forEach(item => {
+      const name = item.group_name.trim()
+      if (name) names.add(name)
+    })
+    const current = draft.group_name.trim()
+    if (current) names.add(current)
+    return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  }, [draft.group_name, extraGroups, interfaces])
   const isDirty = draftFingerprint(draft) !== draftFingerprint(baseline)
   const resultStale = Boolean(
     result && resultFingerprint !== requestFingerprint(draft)
@@ -139,6 +152,28 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     setPendingNavigation(null)
   }
   const patchDraft = <K extends keyof HubInterface>(key: K, value: HubInterface[K]) => setDraft(current => ({ ...current, [key]: value }))
+  const closeNewGroup = () => {
+    setNewGroupOpen(false)
+    setNewGroupError('')
+  }
+  const openNewGroup = () => {
+    setNewGroupName('')
+    setNewGroupError('')
+    setNewGroupOpen(true)
+  }
+  const changeGroup = (value: string) => {
+    if (value === '__new__') { openNewGroup(); return }
+    patchDraft('group_name', value)
+  }
+  const addNewGroup = () => {
+    const name = newGroupName.trim()
+    if (!name) { setNewGroupError('分类名称不能为空'); return }
+    if (name === '__new__') { setNewGroupError('该名称为保留字，请换一个'); return }
+    if (name === '默认分组') { setNewGroupError('「默认分组」为保留名称，请使用其他名称'); return }
+    setExtraGroups(current => current.includes(name) ? current : [...current, name])
+    patchDraft('group_name', name)
+    closeNewGroup()
+  }
 
   useEffect(() => {
     if (!isDirty) return undefined
@@ -410,8 +445,11 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex min-w-[430px] flex-[1_1_430px] items-center gap-2">
             <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-white px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="接口名称" />
-            <input list="api-hub-groups" value={draft.group_name} onChange={event => patchDraft('group_name', event.target.value)} className="h-8 w-36 shrink-0 rounded-md border border-[var(--color-border)] bg-white px-2.5 text-xs outline-none transition-colors hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="默认分组" title="输入或选择分组" />
-            <datalist id="api-hub-groups">{groupNames.map(group => <option key={group} value={group} />)}</datalist>
+            <select value={draft.group_name} onChange={event => changeGroup(event.target.value)} className="h-8 w-40 shrink-0 rounded-md border border-[var(--color-border)] bg-white px-2.5 text-xs outline-none transition-colors hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" title="选择或新增分类">
+              <option value="">默认分组</option>
+              {groupNames.map(group => <option key={group} value={group}>{group}</option>)}
+              <option value="__new__">＋ 新增分类…</option>
+            </select>
             <Button size="sm" loading={saving} onClick={save}><Check size={14} />{draft.id ? '保存配置' : '保存接口'}</Button>
             {isDirty && <span className="shrink-0 rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
           </div>
@@ -464,6 +502,14 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
       <ConfirmModal open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={remove} loading={saving} variant="danger" title={`删除“${draft.name}”？`} description="接口配置及其全部调用历史都会被删除，此操作不可撤销。" confirmText="删除接口" />
       <ConfirmModal open={Boolean(pendingNavigation)} onClose={() => setPendingNavigation(null)} onConfirm={discardAndNavigate} variant="danger" title="放弃未保存修改？" description="当前接口的未保存修改将丢失，且无法恢复。" confirmText="放弃并继续" />
+      <Modal open={newGroupOpen} onClose={closeNewGroup} title="新增分类" description="输入新的分类名称，添加后当前接口会立即选中该分类。" size="sm" footer={<><Button variant="outline" onClick={closeNewGroup}>取消</Button><Button onClick={addNewGroup}><CirclePlus size={14} />添加并选中</Button></>}>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2.5 text-xs leading-5 text-slate-600">分类会先保留在本次编辑会话中，保存当前接口后正式生效。</div>
+          <label htmlFor="api-hub-new-group" className="block text-xs font-semibold text-slate-700">分类名称</label>
+          <input id="api-hub-new-group" autoFocus autoComplete="off" value={newGroupName} onChange={event => { setNewGroupName(event.target.value); if (newGroupError) setNewGroupError('') }} onKeyDown={event => { if (event.key === 'Enter') addNewGroup() }} className={`h-10 w-full rounded-lg border bg-white px-3 text-sm outline-none transition-colors focus:ring-2 ${newGroupError ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-[var(--color-border)] focus:border-emerald-500 focus:ring-emerald-100'}`} placeholder="例如：用户中心 / 订单服务" />
+          {newGroupError && <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{newGroupError}</div>}
+        </div>
+      </Modal>
       <Modal open={Boolean(callExampleDraft)} onClose={() => setCallExampleDraft(null)} title="调用示例" description="命令已根据当前编辑器草稿生成，可复制到终端运行或导入 Postman。" size="2xl" footer={<><Button variant="outline" onClick={() => setCallExampleDraft(null)}>关闭</Button><Button onClick={async () => { await navigator.clipboard.writeText(callExample); setCallExampleCopied(true) }}><Copy size={14} />{callExampleCopied ? '已复制' : '复制命令'}</Button></>}>
         <div className="space-y-4">
           <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100 shadow-inner">{callExample}</pre>
