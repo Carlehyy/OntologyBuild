@@ -142,22 +142,22 @@ function MarkdownCodeBlock({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="my-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm">
-      <div className="flex min-h-9 items-center justify-between border-b border-white/10 bg-slate-900 px-3">
-        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+    <div className="my-4 overflow-hidden rounded-xl border border-[var(--color-border)] bg-slate-50 shadow-[0_8px_22px_rgba(15,118,110,0.06)]">
+      <div className="flex min-h-9 items-center justify-between border-b border-[var(--color-border)] bg-slate-100/80 px-3">
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-teal-700">
           {language || 'code'}
         </span>
         <button
           type="button"
           onClick={copy}
-          className="inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-[10px] text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+          className="inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-[10px] text-slate-500 transition-colors hover:bg-white hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
           aria-label={copied ? '代码已复制' : '复制代码'}
         >
           {copied ? <Check size={11} /> : <Copy size={11} />}
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto p-4 text-[12px] leading-6 text-slate-100">
+      <pre className="overflow-x-auto bg-slate-50 p-4 text-[12px] leading-6 text-slate-700 selection:bg-teal-100 selection:text-teal-950">
         <code className="font-mono">{source}</code>
       </pre>
     </div>
