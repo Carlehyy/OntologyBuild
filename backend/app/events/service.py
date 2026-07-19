@@ -163,9 +163,10 @@ async def add_attachment(db: Session, ev: RegisteredEvent, *, upload: UploadFile
     filename = upload.filename or ""
     mime = upload.content_type
     ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
-    allowed = {e.strip().lower() for e in settings.allowed_upload_extensions.split(",") if e.strip()}
-    if ext and allowed and ext not in allowed:
-        raise HTTPException(400, f"不支持的文件类型: .{ext}（允许: {settings.allowed_upload_extensions}）")
+    configured_extensions = settings.event_attachment_extensions
+    allowed = {e.strip().lower() for e in configured_extensions.split(",") if e.strip()}
+    if ext and allowed and "*" not in allowed and ext not in allowed:
+        raise HTTPException(400, f"不支持的事件附件类型: .{ext}（允许: {configured_extensions}）")
 
     att_id = str(uuid.uuid4())
     upload_dir = os.path.join(settings.uploads_dir, "events", ev.id)

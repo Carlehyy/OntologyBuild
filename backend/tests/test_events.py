@@ -1,7 +1,11 @@
 import hashlib
+import io
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 
 from app.events import models as event_models
+from app.events import router as event_router
 from app.events.models import EventAttachment, RegisteredEvent
 from app.shared.config import settings
 
@@ -149,3 +153,53 @@ def test_event_attachment_streams_and_cleans_file_when_limit_exceeded(
     attachment = uploaded.json()["data"]
     assert attachment["fileSize"] == len(valid_content)
     assert attachment["sha256"] == hashlib.sha256(valid_content).hexdigest()
+
+
+def test_event_attachments_accept_mail_formats_and_zip_is_temporary(
+    client, auth_headers, monkeypatch, tmp_path,
+):
+    uploads_dir = tmp_path / "uploads"
+    archives_dir = tmp_path / "archives"
+    archives_dir.mkdir()
+    monkeypatch.setattr(settings, "uploads_dir", str(uploads_dir))
+    monkeypatch.setattr(settings, "event_attachment_extensions", "*")
+
+    created = client.post(
+        "/api/v2/events",
+        headers=auth_headers,
+        json={"title": "邮件附件兼容与打包测试", "severity": "info"},
+    )
+    assert created.status_code == 201
+    event_id = created.json()["data"]["id"]
+
+    payloads = {
+        "incident.eml": b"Subject: alarm\r\n\r\nmail body",
+        "outlook.msg": b"mock-outlook-message",
+    }
+    for filename, content in payloads.items():
+        uploaded = client.post(
+            f"/api/v2/events/{event_id}/attachments",
+            headers=auth_headers,
+            files={"file": (filename, content, "application/octet-stream")},
+        )
+        assert uploaded.status_code == 201, uploaded.text
+
+    original_named_temporary_file = tempfile.NamedTemporaryFile
+
+    def temporary_archive(*args, **kwargs):
+        return original_named_temporary_file(*args, dir=archives_dir, **kwargs)
+
+    monkeypatch.setattr(event_router.tempfile, "NamedTemporaryFile", temporary_archive)
+    downloaded = client.get(
+        f"/api/v2/events/{event_id}/attachments/download-all",
+        headers=auth_headers,
+    )
+
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.headers["content-type"] == "application/zip"
+    assert "attachment" in downloaded.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        assert archive.namelist() == list(payloads)
+        for filename, content in payloads.items():
+            assert archive.read(filename) == content
+    assert list(archives_dir.iterdir()) == []

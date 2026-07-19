@@ -187,6 +187,11 @@ export const eventsApi = {
       .get(`/events/${eventId}/attachments/${att.id}/download`, { responseType: 'blob' })
       .then((blob: Blob) => saveBlob(blob, att.filename)),
 
+  downloadAttachmentsZip: (eventId: string, filename: string): Promise<void> =>
+    apiClientV2
+      .get(`/events/${eventId}/attachments/download-all`, { responseType: 'blob' })
+      .then((blob: Blob) => saveBlob(blob, filename)),
+
   // 密钥（admin）
   listKeys: (params: IngestKeyListParams = {}): Promise<IngestKeyListResp> =>
     apiClientV2.get('/events/ingest-keys', {

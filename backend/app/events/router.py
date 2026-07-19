@@ -13,6 +13,7 @@
   POST   /{id}/status           改状态（active/archived）
   DELETE /{id}                  软删除→归档（?hard=true 仅 admin 物理删）
   POST   /{id}/attachments      上传附件
+  GET    /{id}/attachments/download-all
   GET    /{id}/attachments/{aid}/download
   DELETE /{id}/attachments/{aid}
 
@@ -26,6 +27,9 @@
 """
 from __future__ import annotations
 
+import os
+import tempfile
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -35,6 +39,7 @@ from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.deps import get_db, get_current_user, require_admin
 from app.events import models as m, service
@@ -79,6 +84,27 @@ def _require_event(db: Session, event_id: str) -> RegisteredEvent:
     if not ev:
         raise HTTPException(404, "事件不存在")
     return ev
+
+
+def _remove_temporary_archive(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def _archive_name(filename: str, used_names: set[str]) -> str:
+    """生成安全且不重名的 ZIP 内文件名，避免目录穿越与同名覆盖。"""
+    normalized = (filename or "").replace("\\", "/")
+    base = os.path.basename(normalized).strip().strip(".") or "attachment"
+    stem, suffix = os.path.splitext(base)
+    candidate = base
+    index = 2
+    while candidate.casefold() in used_names:
+        candidate = f"{stem or 'attachment'} ({index}){suffix}"
+        index += 1
+    used_names.add(candidate.casefold())
+    return candidate
 
 
 # ══════════════════ 平台侧（JWT）══════════════════
@@ -319,6 +345,54 @@ async def upload_attachment(event_id: str, file: UploadFile = File(...),
     ev = _require_event(db, event_id)
     att = await service.add_attachment(db, ev, upload=file, user=user)
     return _ok(service.attachment_out(att))
+
+
+@router.get("/{event_id}/attachments/download-all")
+def download_all_attachments(event_id: str, db: Session = Depends(get_db),
+                             _=Depends(get_current_user)):
+    ev = _require_event(db, event_id)
+    attachments = (db.query(EventAttachment)
+                   .filter(EventAttachment.event_id == event_id)
+                   .order_by(EventAttachment.created_at.asc(), EventAttachment.id.asc()).all())
+    if not attachments:
+        raise HTTPException(404, "当前事件没有附件")
+
+    missing = [att.filename for att in attachments if not os.path.isfile(att.file_path)]
+    if missing:
+        raise HTTPException(410, f"附件文件已丢失: {missing[0]}")
+
+    temporary = tempfile.NamedTemporaryFile(prefix="event-attachments-", suffix=".zip", delete=False)
+    archive_path = temporary.name
+    temporary.close()
+    try:
+        used_names: set[str] = set()
+        with zipfile.ZipFile(
+            archive_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            allowZip64=True,
+        ) as archive:
+            for attachment in attachments:
+                archive.write(
+                    attachment.file_path,
+                    arcname=_archive_name(attachment.filename, used_names),
+                )
+    except FileNotFoundError as exc:
+        _remove_temporary_archive(archive_path)
+        raise HTTPException(410, "打包过程中有附件被删除，请刷新后重试") from exc
+    except Exception:
+        _remove_temporary_archive(archive_path)
+        raise
+
+    safe_event_no = "".join(
+        char for char in ev.event_no if char not in '\\/:*?"<>|' and ord(char) >= 32
+    ).strip() or "event"
+    return FileResponse(
+        archive_path,
+        filename=f"{safe_event_no}-附件.zip",
+        media_type="application/zip",
+        background=BackgroundTask(_remove_temporary_archive, archive_path),
+    )
 
 
 @router.get("/{event_id}/attachments/{att_id}/download")

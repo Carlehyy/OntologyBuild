@@ -20,7 +20,6 @@ const EVENT_TYPE_SUGGESTIONS = [
 
 const MAX_ATTACHMENT_MB = 200
 const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024
-const ATTACHMENT_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt'
 
 function fileIdentity(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`
@@ -245,7 +244,9 @@ export default function EventFormModal({
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
               <label className="text-sm font-medium text-slate-700">附件（可选，可多选）</label>
-              <p className="mt-0.5 text-xs text-slate-400">单文件不超过 {MAX_ATTACHMENT_MB}MB</p>
+              <p className="mt-0.5 text-xs text-slate-400">
+                支持邮件、文档、表格、图片、音视频、压缩包等文件，单文件不超过 {MAX_ATTACHMENT_MB}MB
+              </p>
             </div>
             {files.length > 0 && (
               <span className="text-xs font-medium text-emerald-700">
@@ -258,7 +259,6 @@ export default function EventFormModal({
             <input
               type="file"
               multiple
-              accept={ATTACHMENT_ACCEPT}
               className="sr-only"
               onChange={event => {
                 addFiles(Array.from(event.target.files || []))
