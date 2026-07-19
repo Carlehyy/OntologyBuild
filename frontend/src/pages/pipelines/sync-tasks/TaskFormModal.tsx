@@ -164,11 +164,12 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     const guard = form.skip_empty
       ? '若某次运行产出 0 行，将自动跳过入库、保护资产不被误清空。'
       : '未开启空输出保护：即使产出 0 行也会执行入库（可能清空资产），请谨慎。'
-    const enable = form.enabled ? '创建后任务立即启用并纳入调度。' : '创建后任务处于停用状态，需手动启用后才会调度。'
+    const action = isEdit ? '保存后' : '创建后'
+    const enable = form.enabled ? `${action}任务立即启用并纳入调度。` : `${action}任务处于停用状态，需手动启用后才会调度。`
     return `任务将${sched}，运行流水线${pName}；每次把最终产物以【${modeLabel}】方式写入 ${targets}（${modeDetail}）。${guard}${enable}`
   }
 
-  const show = (s: number) => isEdit || step === s
+  const show = (s: number) => step === s
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
@@ -186,25 +187,23 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
           </button>
         </div>
 
-        {/* 步骤指示器（居中） */}
-        {!isEdit && (
-          <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-center flex-wrap gap-y-2">
-            {STEPS.map((label, i) => (
-              <div key={i} className="flex items-center">
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
-                    ${i < step ? 'bg-emerald-100 text-emerald-600'
-                      : i === step ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/25'
-                      : 'bg-slate-100 text-slate-400'}`}>
-                    {i < step ? <Check size={12} /> : i + 1}
-                  </div>
-                  <span className={`text-xs whitespace-nowrap ${i === step ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>{label}</span>
+        {/* 新建与编辑共用同一套分步信息架构，避免编辑时把全部配置堆在一页。 */}
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-center flex-wrap gap-y-2">
+          {STEPS.map((label, i) => (
+            <div key={i} className="flex items-center">
+              <div className="flex items-center gap-1.5">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
+                  ${i < step ? 'bg-emerald-100 text-emerald-600'
+                    : i === step ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/25'
+                    : 'bg-slate-100 text-slate-400'}`}>
+                  {i < step ? <Check size={12} /> : i + 1}
                 </div>
-                {i < STEPS.length - 1 && <div className={`w-6 h-px mx-2 ${i < step ? 'bg-emerald-300' : 'bg-slate-200'}`} />}
+                <span className={`text-xs whitespace-nowrap ${i === step ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>{label}</span>
               </div>
-            ))}
-          </div>
-        )}
+              {i < STEPS.length - 1 && <div className={`w-6 h-px mx-2 ${i < step ? 'bg-emerald-300' : 'bg-slate-200'}`} />}
+            </div>
+          ))}
+        </div>
 
         {/* 内容 */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -405,10 +404,11 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
           )}
 
           {/* Step 4: 确认配置 */}
-          {!isEdit && step === 4 && (
+          {step === 4 && (
             <StepShell>
               <div className="rounded-xl border border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
                 <SummaryRow label="任务名" value={form.name} />
+                <SummaryRow label="任务描述" value={form.description} />
                 <SummaryRow label="流水线" value={selectedPipeline ? `${selectedPipeline.name}${selectedPipeline.version ? ` (v${selectedPipeline.version})` : ''}` : '-'} />
                 <SummaryRow label="产出资产" value={curatedList.length ? curatedList.map(c => c.name).join('、') : '-'} />
                 <SummaryRow label="入库方式" value={WRITE_MODE_META[form.write_mode].label} />
@@ -420,7 +420,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                     : form.schedule_type === 'CRON' ? `Cron: ${form.cron_expression || '-'}`
                     : `每 ${form.interval_seconds || 0} 秒`
                 } />
-                <SummaryRow label="创建后状态" value={form.enabled ? '立即启用' : '停用'} />
+                <SummaryRow label={isEdit ? '保存后状态' : '创建后状态'} value={form.enabled ? '立即启用' : '停用'} />
               </div>
 
               {/* 预期效果（自然语言） */}
@@ -437,10 +437,10 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
         {/* 底部 */}
         <div className="flex items-center justify-between px-6 py-3.5 border-t border-slate-100 bg-slate-50/60">
           <div className="flex items-center gap-2">
-            {(step === 0 || isEdit) && (
+            {step === 0 && (
               <button type="button" onClick={onClose} className="rounded-lg px-4 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-700">取消</button>
             )}
-            {step > 0 && !isEdit && (
+            {step > 0 && (
               <button type="button" onClick={() => { setStep(s => s - 1); setError('') }}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-slate-500 hover:text-slate-800">
                 <ChevronLeft size={14} /> 上一步
@@ -448,8 +448,8 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
             )}
           </div>
           <div className="flex gap-2">
-            {step > 0 && !isEdit && <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-slate-500 hover:bg-slate-100 rounded-lg transition">取消</button>}
-            {!isEdit && step < STEPS.length - 1 ? (
+            {step > 0 && <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-slate-500 hover:bg-slate-100 rounded-lg transition">取消</button>}
+            {step < STEPS.length - 1 ? (
               <button type="button" onClick={handleNext}
                 className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm text-white shadow-sm shadow-emerald-600/25 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/35">
                 下一步 <ChevronRight size={14} />

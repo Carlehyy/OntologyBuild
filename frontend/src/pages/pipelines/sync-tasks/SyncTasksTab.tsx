@@ -29,6 +29,13 @@ const SCHEDULE_LABEL: Record<string, { label: string; color: string; Icon: typeo
   INTERVAL:{ label: '间隔', color: 'text-blue-500',   Icon: Repeat },
 }
 
+const WRITE_MODE_TONE: Record<WriteMode, string> = {
+  overwrite: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  append: 'border-sky-200 bg-sky-50 text-sky-700',
+  upsert: 'border-violet-200 bg-violet-50 text-violet-700',
+  append_dedup: 'border-amber-200 bg-amber-50 text-amber-700',
+}
+
 const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50 overflow-hidden'
 
 function FlowArrow() {
@@ -74,9 +81,8 @@ function toLocalDate(iso: string): Date {
   return new Date(hasTz ? iso : iso + 'Z')
 }
 
-/** 标准时间的两行紧凑展示：日期在上、时间在下（省表格横向宽度） */
-function TimeStack({ iso, withSeconds, align = 'center' }: { iso: string | null; withSeconds?: boolean; align?: 'left' | 'center' }) {
-  if (!iso) return <span className="text-[11px] text-slate-400">—</span>
+function TimeInline({ iso, withSeconds }: { iso: string | null | undefined; withSeconds?: boolean }) {
+  if (!iso) return <span className="whitespace-nowrap text-xs text-slate-400">—</span>
   try {
     const d = toLocalDate(iso)
     const p = (n: number) => String(n).padStart(2, '0')
@@ -84,13 +90,10 @@ function TimeStack({ iso, withSeconds, align = 'center' }: { iso: string | null;
     const time = withSeconds
       ? `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
       : `${p(d.getHours())}:${p(d.getMinutes())}`
-    return (
-      <div className={`${align === 'left' ? 'text-left' : 'text-center'} whitespace-nowrap tabular-nums leading-tight`}>
-        <div className="text-xs text-slate-600">{date}</div>
-        <div className="mt-0.5 text-[11px] text-slate-400">{time}</div>
-      </div>
-    )
-  } catch { return <span className="text-[11px] text-slate-400">{iso}</span> }
+    return <span className="whitespace-nowrap text-xs tabular-nums text-slate-600">{date} {time}</span>
+  } catch {
+    return <span className="whitespace-nowrap text-xs text-slate-500">{iso}</span>
+  }
 }
 
 function relativeDuration(seconds?: number): string {
@@ -471,18 +474,23 @@ export default function SyncTasksTab() {
               ) : tasks.length === 0 ? (
                 <EmptyState activeTab={activeTab} hasSearch={!!search || !!filterPipelineId} onClear={clearFilters} onCreate={handleCreate} />
               ) : (
-                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                  <div className="overflow-auto scrollbar-thin">
-                    <table className="w-full min-w-[960px] text-sm">
+                <div className="min-w-full overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <div data-testid="task-table-scroll" className="overflow-x-auto overscroll-x-contain scrollbar-thin">
+                    <table className="w-max min-w-[1840px] table-auto text-sm">
                       <thead className="bg-slate-50">
                         <tr className="border-b border-slate-200 text-xs text-slate-600">
-                          <th className="px-4 py-2.5 text-left font-medium">任务</th>
-                          <th className="px-4 py-2.5 text-left font-medium">关联流水线</th>
-                          <th className="px-4 py-2.5 text-left font-medium">入库策略</th>
-                          <th className="px-4 py-2.5 text-left font-medium">调度计划</th>
-                          <th className="px-4 py-2.5 text-left font-medium">启停</th>
-                          <th className="px-4 py-2.5 text-left font-medium">最近执行与入湖</th>
-                          <th className="px-4 py-2.5 text-right font-medium">操作</th>
+                          <th className="sticky left-0 z-20 min-w-[220px] border-r border-slate-200 bg-slate-50 px-4 py-2.5 text-left font-medium shadow-[10px_0_14px_-14px_rgba(15,23,42,0.35)]">任务名称</th>
+                          <th className="min-w-[240px] px-4 py-2.5 text-left font-medium">任务描述</th>
+                          <th className="min-w-[240px] px-4 py-2.5 text-left font-medium">关联流水线</th>
+                          <th className="min-w-[105px] px-4 py-2.5 text-left font-medium">启停</th>
+                          <th className="min-w-[105px] px-4 py-2.5 text-left font-medium">运行状态</th>
+                          <th className="min-w-[110px] px-4 py-2.5 text-left font-medium">调度方式</th>
+                          <th className="min-w-[160px] px-4 py-2.5 text-left font-medium">调度规则</th>
+                          <th className="min-w-[190px] px-4 py-2.5 text-left font-medium">下次执行</th>
+                          <th className="min-w-[210px] px-4 py-2.5 text-left font-medium">入库策略</th>
+                          <th className="min-w-[185px] px-4 py-2.5 text-left font-medium">最近执行</th>
+                          <th className="min-w-[210px] px-4 py-2.5 text-left font-medium">入湖结果</th>
+                          <th className="sticky right-0 z-20 min-w-[150px] bg-slate-50 px-4 py-2.5 text-right font-medium">操作</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -494,54 +502,37 @@ export default function SyncTasksTab() {
                           const pipelineDisabled = !pipelineGone && t.pipeline_enabled === false
                           const sch = SCHEDULE_LABEL[t.schedule_type] || SCHEDULE_LABEL.MANUAL
                           const SchIcon = sch.Icon
+                          const scheduleRule = t.schedule_type === 'CRON'
+                            ? (t.cron_expression || '未配置 Cron')
+                            : t.schedule_type === 'INTERVAL'
+                              ? `每 ${relativeDuration(t.interval_seconds) || `${t.interval_seconds || 0} 秒`}`
+                              : '仅支持手动触发'
                           return (
-                            <tr key={t.id} className="group transition-colors hover:bg-slate-50/80">
-                              <td className="max-w-[220px] px-4 py-3 align-top">
-                                <div className="truncate text-sm font-medium text-slate-900" title={t.name}>{t.name}</div>
-                                <div className="mt-0.5 truncate text-[11px] text-slate-400" title={t.description || t.id}>
-                                  {t.description || `任务 ID · ${t.id.slice(0, 8)}`}
-                                </div>
+                            <tr key={t.id} className="group whitespace-nowrap transition-colors hover:bg-slate-50/80">
+                              <td className="sticky left-0 z-[1] min-w-[220px] border-r border-slate-100 bg-white px-4 py-3 align-middle shadow-[10px_0_14px_-14px_rgba(15,23,42,0.35)] group-hover:bg-slate-50">
+                                <span className="text-sm font-medium text-slate-900">{t.name}</span>
                               </td>
-                              <td className="max-w-[190px] px-4 py-3 align-top">
+                              <td className="px-4 py-3 align-middle text-xs text-slate-500">{t.description || '—'}</td>
+                              <td className="px-4 py-3 align-middle">
                                 <button
                                   type="button"
                                   onClick={() => !pipelineGone && navigate(`/data/pipelines?search=${encodeURIComponent(t.pipeline_name || t.pipeline_id)}`)}
-                                  className={`flex max-w-full items-center gap-1 text-xs ${pipelineGone ? 'cursor-default text-slate-400' : 'text-teal-700 hover:underline underline-offset-2'}`}
+                                  className={`inline-flex items-center gap-1 text-xs ${pipelineGone ? 'cursor-default text-slate-400' : 'text-teal-700 hover:underline underline-offset-2'}`}
                                   title={pipelineGone ? '流水线已删除' : '前往数据流水线管理页'}
                                 >
                                   <GitBranch size={11} className="shrink-0" />
-                                  <span className="truncate">{t.pipeline_name || t.pipeline_id.slice(0, 8)}</span>
+                                  <span>{t.pipeline_name || t.pipeline_id}</span>
+                                  {t.pipeline_version ? <span className="text-[10px] text-slate-400">v{t.pipeline_version}</span> : null}
                                   {!pipelineGone && <ExternalLink size={9} className="shrink-0 opacity-60" />}
                                 </button>
                                 {(pipelineGone || pipelineUnpub || pipelineDisabled) && (
-                                  <div className="mt-1 flex items-center gap-1 text-[10px] text-rose-500">
+                                  <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-rose-500">
                                     <AlertCircle size={10} />
                                     {pipelineGone ? '已删除' : pipelineUnpub ? '未发布' : '流水线已停用'}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="px-4 py-3 align-top">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700" title={wm?.desc}>
-                                    {wm?.label || t.write_mode}
                                   </span>
-                                </div>
-                                {t.skip_empty && (
-                                  <div className="mt-1.5 flex items-center gap-1 text-[10px] text-slate-400">
-                                    <ShieldCheck size={10} className="text-teal-500" /> 空输出保护
-                                  </div>
                                 )}
                               </td>
-                              <td className="px-4 py-3 align-top">
-                                <div className="flex items-center gap-1 text-[11px] text-slate-600">
-                                  <SchIcon size={11} className={sch.color} />
-                                  <span>{sch.label}</span>
-                                  {t.schedule_type === 'CRON' && t.cron_expression && <span className="font-mono text-slate-400">· {t.cron_expression}</span>}
-                                  {t.schedule_type === 'INTERVAL' && !!t.interval_seconds && <span className="text-slate-400">· 每 {relativeDuration(t.interval_seconds)}</span>}
-                                </div>
-                                {t.schedule_type !== 'MANUAL' && <div className="mt-1.5"><NextRunCell task={t} compact /></div>}
-                              </td>
-                              <td className="px-4 py-3 align-top">
+                              <td className="px-4 py-3 align-middle">
                                 <div className="flex items-center gap-2">
                                   <Switch checked={t.enabled} onChange={() => handleToggle(t)} />
                                   <span className={`text-[11px] font-medium ${t.enabled ? 'text-emerald-700' : 'text-slate-400'}`}>
@@ -549,24 +540,61 @@ export default function SyncTasksTab() {
                                   </span>
                                 </div>
                               </td>
-                              <td className="max-w-[150px] px-4 py-3 align-top">
-                                <RunStateBadge task={t} />
-                                {t.last_run_at && <div className="mt-1.5"><TimeStack iso={t.last_run_at} withSeconds align="left" /></div>}
-                                {t.status === 'failed' && t.last_error && (
-                                  <div className="mt-1 max-w-[140px] truncate text-[10px] text-rose-500" title={t.last_error}>{t.last_error}</div>
-                                )}
-                                {(t.last_impact || t.status === 'failed') && (
-                                  <div className="mt-1.5"><ExecResultCell impact={t.last_impact} status={t.status} /></div>
+                              <td className="px-4 py-3 align-middle"><RunStateBadge task={t} /></td>
+                              <td className="px-4 py-3 align-middle">
+                                <div className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+                                  <SchIcon size={11} className={sch.color} />
+                                  <span>{sch.label}</span>
+                                </div>
+                              </td>
+                              <td className={`px-4 py-3 align-middle text-xs ${t.schedule_type === 'CRON' ? 'font-mono text-slate-600' : 'text-slate-500'}`}>
+                                {scheduleRule}
+                              </td>
+                              <td className="px-4 py-3 align-middle">
+                                {t.schedule_type === 'MANUAL' ? (
+                                  <span className="text-xs text-slate-400">不自动调度</span>
+                                ) : !t.enabled ? (
+                                  <span className="text-xs text-slate-400">任务已停用</span>
+                                ) : t.next_run_at ? (
+                                  <div className="inline-flex items-center gap-2">
+                                    <TimeInline iso={t.next_run_at} />
+                                    <span className="text-[10px] text-teal-600">{formatFuture(t.next_run_at)}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400">待调度器计算</span>
                                 )}
                               </td>
-                              <td className="px-4 py-2 text-right align-middle">
+                              <td className="px-4 py-3 align-middle">
+                                <div className="inline-flex items-center gap-2">
+                                  <span data-write-mode={t.write_mode} className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-medium ${WRITE_MODE_TONE[t.write_mode]}`} title={wm?.desc}>
+                                    {wm?.label || t.write_mode}
+                                  </span>
+                                  <span className={`inline-flex items-center gap-1 text-[10px] ${t.skip_empty ? 'text-teal-600' : 'text-slate-400'}`}>
+                                    <ShieldCheck size={10} />空输出保护：{t.skip_empty ? '开启' : '关闭'}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 align-middle">
+                                {t.last_run_at ? <TimeInline iso={t.last_run_at} withSeconds /> : <span className="text-xs text-slate-400">尚未执行</span>}
+                              </td>
+                              <td className="px-4 py-3 align-middle">
+                                {t.status === 'failed' && t.last_error ? (
+                                  <span className="text-xs text-rose-600">{t.last_error}</span>
+                                ) : (
+                                  <div className="inline-flex items-center gap-2">
+                                    <span className="text-xs tabular-nums text-slate-500">产出 {t.last_rows ?? 0} 行</span>
+                                    <ExecResultCell impact={t.last_impact} status={t.status} />
+                                  </div>
+                                )}
+                              </td>
+                              <td className="sticky right-0 z-[1] bg-white px-4 py-2 text-right align-middle shadow-[-10px_0_14px_-14px_rgba(15,23,42,0.35)] group-hover:bg-slate-50">
                                 <div className="flex items-center justify-end gap-0.5">
                                   <IconBtn2 title={pipelineDisabled ? '关联流水线已停用' : '立即执行'}
                                     disabled={t.status === 'running' || isTriggering || pipelineGone || !!pipelineUnpub || pipelineDisabled}
                                     onClick={() => handleTrigger(t)} accent="teal">
                                     <RotateCw size={14} className={isTriggering ? 'animate-spin' : ''} />
                                   </IconBtn2>
-                                  <IconBtn2 title="执行历史" onClick={() => setHistoryTask(t)}>
+                                  <IconBtn2 title="执行记录" onClick={() => setHistoryTask(t)}>
                                     <History size={14} />
                                   </IconBtn2>
                                   <IconBtn2 title="编辑" onClick={() => handleEdit(t)}>
@@ -663,7 +691,7 @@ export default function SyncTasksTab() {
             <RecentRunFeed runs={stats?.recent_runs ?? []} />
           </div>
 
-          <div data-testid="seven-day-chart" className={`${PANEL} flex min-h-0 flex-1 flex-col p-4`}>
+          <div data-testid="seven-day-chart" className={`${PANEL} flex h-[clamp(208px,22vh,240px)] shrink-0 flex-col p-4`}>
             <div className="mb-1 flex items-center justify-between">
               <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
                 <span className="h-1.5 w-1.5 rounded-full bg-teal-600" />
@@ -671,7 +699,7 @@ export default function SyncTasksTab() {
               </h3>
               <span className="text-[11px] text-slate-500 tabular-nums">{trendData.total7d} 次</span>
             </div>
-            <div className="min-h-[128px] flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
               <ReactECharts option={miniTrendOption} style={{ height: '100%', width: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
           </div>
@@ -892,7 +920,6 @@ function RunStateBadge({ task }: { task: PipelineTask }) {
   return <span className={`inline-flex rounded-md px-2 py-1 text-[10px] ${meta.className}`}>{meta.label}</span>
 }
 
-// ── 下一次执行时间 ─────────────────────────────────────
 function formatFuture(iso: string): string {
   try {
     const diff = (toLocalDate(iso).getTime() - Date.now()) / 1000
@@ -904,22 +931,6 @@ function formatFuture(iso: string): string {
   } catch { return '' }
 }
 
-function NextRunCell({ task, compact = false }: { task: PipelineTask; compact?: boolean }) {
-  if (task.schedule_type === 'MANUAL')
-    return <span className="text-[11px] text-slate-400">手动触发</span>
-  if (!task.enabled)
-    return <span className="text-[11px] text-slate-400">已停用</span>
-  if (!task.next_run_at)
-    return <span className="text-[11px] text-slate-400">—</span>
-  return (
-    <div className="flex flex-col items-start">
-      {compact && <div className="mb-1 text-[9px] text-slate-400">下次执行</div>}
-      <TimeStack iso={task.next_run_at} align="left" />
-      <div className="mt-1 whitespace-nowrap text-[10px] text-teal-600">{formatFuture(task.next_run_at)}</div>
-    </div>
-  )
-}
-
 // ── 执行结果：最近一次执行对资产湖的影响 ──────────────
 function ExecResultCell({ impact, status }: { impact?: LakeImpact | null; status: string }) {
   if (status === 'failed') return <span className="rounded-md bg-rose-50 px-2 py-1 text-[10px] text-rose-600">执行失败</span>
@@ -927,7 +938,7 @@ function ExecResultCell({ impact, status }: { impact?: LakeImpact | null; status
   const added = impact.added ?? 0, updated = impact.updated ?? 0, deleted = impact.deleted ?? 0
   if (!added && !updated && !deleted) return <span className="text-[11px] text-slate-400">无变化</span>
   return (
-    <div className="flex max-w-[150px] flex-wrap items-center gap-1 text-[10px] tabular-nums">
+    <div className="inline-flex items-center gap-1 text-[10px] tabular-nums">
       {added > 0 && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">+{added}</span>}
       {updated > 0 && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">改 {updated}</span>}
       {deleted > 0 && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-rose-700">−{deleted}</span>}

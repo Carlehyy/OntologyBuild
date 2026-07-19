@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   X, CheckCircle2, XCircle, Loader2, Clock, ChevronDown, ChevronUp, Table2,
   ArrowRight, ShieldCheck, GitBranch, Settings2, Plus, Pencil, Minus, Database,
+  ChevronLeft, ChevronRight, FilterX,
 } from 'lucide-react'
 import {
   pipelineTasksApi, WRITE_MODE_META,
@@ -17,7 +18,12 @@ const STATUS_META: Record<string, { icon: React.ReactNode; color: string; label:
   running: { icon: <Loader2 size={13} className="animate-spin" />, color: 'text-blue-600 bg-blue-50', label: '执行中' },
   success: { icon: <CheckCircle2 size={13} />, color: 'text-emerald-600 bg-emerald-50', label: '成功' },
   failed:  { icon: <XCircle size={13} />, color: 'text-rose-600 bg-rose-50', label: '失败' },
+  cancelled: { icon: <XCircle size={13} />, color: 'text-amber-600 bg-amber-50', label: '已取消' },
 }
+
+type StatusFilter = '' | 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+type TriggerFilter = '' | 'manual' | 'scheduled'
+const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
 function formatDate(iso: string | null): string {
   if (!iso) return '-'
@@ -37,16 +43,61 @@ function formatDuration(start: string | null, end: string | null): string {
 export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; onClose: () => void }) {
   const [items, setItems] = useState<PipelineTaskRun[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('')
+  const [triggerFilter, setTriggerFilter] = useState<TriggerFilter>('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [audits, setAudits] = useState<Record<string, RunAudit | 'loading' | 'error'>>({})
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true)
-    pipelineTasksApi.histories(task.id, 1, 50)
-      .then(res => setItems(res.items))
-      .catch(err => console.error('加载历史失败', err))
+    setLoadError('')
+    const createdFrom = dateFrom ? new Date(`${dateFrom}T00:00:00+08:00`).toISOString() : undefined
+    const createdTo = dateTo ? new Date(`${dateTo}T23:59:59.999+08:00`).toISOString() : undefined
+    pipelineTasksApi.histories(task.id, {
+      page,
+      page_size: pageSize,
+      status: statusFilter || undefined,
+      trigger_type: triggerFilter || undefined,
+      created_from: createdFrom,
+      created_to: createdTo,
+    })
+      .then(res => {
+        setItems(res.items)
+        setTotal(res.total)
+        const pages = Math.max(1, Math.ceil(res.total / pageSize))
+        if (page > pages) setPage(pages)
+      })
+      .catch(err => {
+        setItems([])
+        setTotal(0)
+        setLoadError(err?.detail || err?.message || '执行记录加载失败')
+      })
       .finally(() => setLoading(false))
-  }, [task.id])
+  }, [dateFrom, dateTo, page, pageSize, statusFilter, task.id, triggerFilter])
+
+  useEffect(() => {
+    setExpanded(new Set())
+    void load()
+  }, [load])
+
+  const resetFilters = () => {
+    setStatusFilter('')
+    setTriggerFilter('')
+    setDateFrom('')
+    setDateTo('')
+    setPage(1)
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const rangeEnd = Math.min(total, page * pageSize)
+  const hasFilters = Boolean(statusFilter || triggerFilter || dateFrom || dateTo)
 
   const toggle = (runId: string) => {
     setExpanded(prev => {
@@ -65,24 +116,73 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex justify-end" onClick={onClose}>
-      <div className="w-full max-w-2xl bg-white h-full flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div data-testid="execution-history-drawer" className="w-full max-w-3xl bg-white h-full flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-slate-200 shrink-0">
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-slate-800">执行记录与审计</h3>
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+            <h3 className="text-base font-semibold text-slate-800">执行记录</h3>
+            <button type="button" onClick={onClose} aria-label="关闭执行记录" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"><X size={18} /></button>
           </div>
-          <p className="text-xs text-slate-400 mt-0.5 truncate">
+          <p className="text-xs text-slate-400 mt-0.5">
             {task.name} · 流水线「{task.pipeline_name}」 · 每次执行可逐条追溯配置、产物与资产湖影响
           </p>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="shrink-0 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
+          <div className="flex flex-wrap items-end gap-2.5">
+            <label className="space-y-1 text-[11px] text-slate-500">
+              <span className="block">执行状态</span>
+              <select aria-label="执行状态筛选" value={statusFilter} onChange={event => { setStatusFilter(event.target.value as StatusFilter); setPage(1) }}
+                className="h-8 min-w-28 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                <option value="">全部状态</option>
+                <option value="pending">排队中</option>
+                <option value="running">执行中</option>
+                <option value="success">成功</option>
+                <option value="failed">失败</option>
+                <option value="cancelled">已取消</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-[11px] text-slate-500">
+              <span className="block">触发方式</span>
+              <select aria-label="触发方式筛选" value={triggerFilter} onChange={event => { setTriggerFilter(event.target.value as TriggerFilter); setPage(1) }}
+                className="h-8 min-w-24 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                <option value="">全部方式</option>
+                <option value="manual">手动</option>
+                <option value="scheduled">定时</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-[11px] text-slate-500">
+              <span className="block">开始日期</span>
+              <input aria-label="执行记录开始日期" type="date" value={dateFrom} max={dateTo || undefined} onChange={event => { setDateFrom(event.target.value); setPage(1) }}
+                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500" />
+            </label>
+            <label className="space-y-1 text-[11px] text-slate-500">
+              <span className="block">结束日期</span>
+              <input aria-label="执行记录结束日期" type="date" value={dateTo} min={dateFrom || undefined} onChange={event => { setDateTo(event.target.value); setPage(1) }}
+                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500" />
+            </label>
+            {hasFilters && (
+              <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-white hover:text-rose-600">
+                <FilterX size={13} /> 清除筛选
+              </button>
+            )}
+            <span className="ml-auto pb-1 text-[11px] tabular-nums text-slate-400">显示 {rangeStart}–{rangeEnd} / {total}</span>
+          </div>
+        </div>
+
+        {loadError && (
+          <div className="mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <XCircle size={13} /><span className="flex-1">{loadError}</span>
+            <button type="button" onClick={() => void load()} className="font-medium hover:underline">重试</button>
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="py-20 text-center text-slate-400 text-sm flex items-center justify-center gap-1">
               <Loader2 size={14} className="animate-spin" />加载中...
             </div>
           ) : items.length === 0 ? (
-            <div className="py-20 text-center text-slate-400 text-sm">暂无执行记录</div>
+            <div className="py-20 text-center text-slate-400 text-sm">{hasFilters ? '当前筛选条件下暂无执行记录' : '暂无执行记录'}</div>
           ) : (
             <div className="divide-y divide-slate-100">
               {items.map(h => {
@@ -92,7 +192,7 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
                 const imp = h.lake_impact
                 return (
                   <div key={h.id} className="px-5 py-3">
-                    <div className="flex items-start justify-between gap-2 cursor-pointer" onClick={() => toggle(h.id)}>
+                    <button type="button" data-testid={`execution-record-${h.id}`} aria-expanded={isOpen} className="flex w-full items-start justify-between gap-2 text-left" onClick={() => toggle(h.id)}>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs ${sm.color}`}>
@@ -120,7 +220,7 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
                         </div>
                       </div>
                       {isOpen ? <ChevronUp size={14} className="text-slate-400 mt-1" /> : <ChevronDown size={14} className="text-slate-400 mt-1" />}
-                    </div>
+                    </button>
 
                     {isOpen && (
                       <div className="mt-3">
@@ -140,6 +240,25 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
               })}
             </div>
           )}
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+          <span className="mr-auto text-[11px] text-slate-400">点击任一记录可查看执行详情</span>
+          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            每页
+            <select aria-label="执行记录每页条数" value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
+              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-emerald-500">
+              {PAGE_SIZE_OPTIONS.map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
+            条
+          </label>
+          <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+          <div className="flex items-center gap-1">
+            <button type="button" aria-label="执行记录上一页" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || loading}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:opacity-35"><ChevronLeft size={13} /></button>
+            <button type="button" aria-label="执行记录下一页" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:opacity-35"><ChevronRight size={13} /></button>
+          </div>
         </div>
       </div>
     </div>

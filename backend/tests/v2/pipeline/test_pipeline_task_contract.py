@@ -209,6 +209,70 @@ def test_stats_and_histories_use_shanghai_day_and_explicit_utc(
     assert history["items"][0]["finished_at"] == "2026-07-15T16:30:05Z"
 
 
+def test_histories_support_filters_and_stable_pagination(db, monkeypatch):
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    task = create_task(_body(), db)
+    db.add_all([
+        PipelineRun(
+            id="run-scheduled-success",
+            pipeline_id="pipe-contract",
+            task_id=task["id"],
+            status="success",
+            stats={"trigger_type": "scheduled", "rows_out": 12},
+            created_at=datetime(2026, 7, 18, 2, 0),
+            started_at=datetime(2026, 7, 18, 2, 0),
+        ),
+        PipelineRun(
+            id="run-manual-failed",
+            pipeline_id="pipe-contract",
+            task_id=task["id"],
+            status="failed",
+            stats={"trigger_type": "manual"},
+            created_at=datetime(2026, 7, 17, 2, 0),
+            started_at=datetime(2026, 7, 17, 2, 0),
+        ),
+        PipelineRun(
+            id="run-legacy-manual",
+            pipeline_id="pipe-contract",
+            task_id=task["id"],
+            status="success",
+            stats={},
+            created_at=datetime(2026, 7, 16, 2, 0),
+            started_at=datetime(2026, 7, 16, 2, 0),
+        ),
+    ])
+    db.commit()
+
+    scheduled = list_histories(
+        task["id"],
+        status="success",
+        trigger_type="scheduled",
+        created_from=datetime(2026, 7, 18, tzinfo=timezone.utc),
+        created_to=datetime(2026, 7, 18, 23, 59, 59, tzinfo=timezone.utc),
+        db=db,
+    )
+    assert scheduled["total"] == 1
+    assert [item["id"] for item in scheduled["items"]] == ["run-scheduled-success"]
+
+    manual = list_histories(task["id"], trigger_type="manual", db=db)
+    assert manual["total"] == 2
+    assert {item["id"] for item in manual["items"]} == {
+        "run-manual-failed", "run-legacy-manual",
+    }
+
+    first_page = list_histories(task["id"], page=1, page_size=2, db=db)
+    second_page = list_histories(task["id"], page=2, page_size=2, db=db)
+    assert first_page["total"] == 3
+    assert [item["id"] for item in first_page["items"]] == [
+        "run-scheduled-success", "run-manual-failed",
+    ]
+    assert [item["id"] for item in second_page["items"]] == ["run-legacy-manual"]
+
+
 def test_task_cannot_be_enabled_while_pipeline_is_disabled(db, monkeypatch):
     pipe = _published_pipeline(db)
     monkeypatch.setattr(

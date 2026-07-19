@@ -11,6 +11,23 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = []) {
     }))
   })
 
+  const historyItems = Array.from({ length: 24 }, (_, index) => ({
+    id: `run-${String(index + 1).padStart(2, '0')}`,
+    status: index % 3 === 0 ? 'failed' : 'success',
+    trigger_type: index % 2 === 0 ? 'manual' : 'scheduled',
+    started_at: `2026-07-${String(18 - Math.floor(index / 3)).padStart(2, '0')}T02:00:00Z`,
+    finished_at: `2026-07-${String(18 - Math.floor(index / 3)).padStart(2, '0')}T02:00:05Z`,
+    rows_in: 10,
+    rows_out: 9,
+    lake_rows: 18,
+    write_mode: index % 2 === 0 ? 'overwrite' : 'append',
+    skipped_outputs: [],
+    curated_dataset_ids: ['dataset-orders'],
+    lake_impact: { added: 2, updated: 1, deleted: 0 },
+    config_snapshot: null,
+    error_message: index % 3 === 0 ? '测试执行失败' : '',
+  }))
+
   await page.route('**/api/**', async (route: Route) => {
     const url = new URL(route.request().url())
     if (!url.pathname.startsWith('/api/')) return route.continue()
@@ -22,6 +39,44 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = []) {
 
     if (url.pathname === '/api/v2/pipeline-tasks') {
       return ok({ total: tasks.length, items: tasks, page: 1, page_size: 10 })
+    }
+    if (url.pathname === '/api/v2/pipeline-tasks/task-orders/histories') {
+      const status = url.searchParams.get('status')
+      const triggerType = url.searchParams.get('trigger_type')
+      const pageNo = Number(url.searchParams.get('page') || 1)
+      const pageSize = Number(url.searchParams.get('page_size') || 10)
+      const filtered = historyItems.filter(run =>
+        (!status || run.status === status) && (!triggerType || run.trigger_type === triggerType),
+      )
+      return ok({
+        total: filtered.length,
+        items: filtered.slice((pageNo - 1) * pageSize, pageNo * pageSize),
+        page: pageNo,
+        page_size: pageSize,
+      })
+    }
+    if (/^\/api\/v2\/pipeline-tasks\/task-orders\/runs\/run-\d+\/audit$/.test(url.pathname)) {
+      const runId = url.pathname.split('/').at(-2) || 'run-01'
+      return ok({
+        id: runId,
+        task_id: 'task-orders',
+        status: 'success',
+        trigger_type: 'manual',
+        started_at: '2026-07-18T02:00:00Z',
+        finished_at: '2026-07-18T02:00:05Z',
+        created_at: '2026-07-18T02:00:00Z',
+        rows_in: 10,
+        rows_out: 9,
+        lake_rows: 18,
+        write_mode: 'overwrite',
+        lake_impact: { added: 2, updated: 1, deleted: 0 },
+        config_snapshot: {
+          write_mode: 'overwrite', schedule_type: 'CRON', cron_expression: '0 2 * * *', skip_empty: true,
+        },
+        pipeline: { id: 'pipeline-orders', name: '订单标准化流水线', version: 3, status: 'published', domain: '供应链' },
+        outputs: [],
+        error_message: '',
+      })
     }
     if (url.pathname === '/api/v2/pipeline-tasks/stats') {
       return ok({
@@ -76,7 +131,9 @@ test('任务池空状态、侧栏比例与新建任务字段契约完整展示',
   await expect(emptyState).toBeVisible()
   expect((await emptyState.boundingBox())?.height).toBeGreaterThan(300)
   await expect(page.getByText('最近执行记录')).toBeVisible()
-  expect((await page.getByTestId('seven-day-chart').boundingBox())?.height).toBeGreaterThan(150)
+  const sevenDayChartHeight = (await page.getByTestId('seven-day-chart').boundingBox())?.height ?? 0
+  expect(sevenDayChartHeight).toBeGreaterThanOrEqual(200)
+  expect(sevenDayChartHeight).toBeLessThanOrEqual(250)
 
   const filterIndicator = page.getByTestId('task-filter-indicator')
   const initialIndicatorX = (await filterIndicator.boundingBox())?.x ?? 0
@@ -110,9 +167,9 @@ test('任务池空状态、侧栏比例与新建任务字段契约完整展示',
   await page.screenshot({ path: testInfo.outputPath('task-modal-schema.png'), fullPage: true })
 })
 
-test('启停状态与执行状态分列展示，不再出现已启用后跟待运行', async ({ page }, testInfo) => {
+test('任务表格按优先级拆列、入库策略使用独立颜色并允许横向滚动', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1728, height: 1000 })
-  await mockTaskPool(page, [{
+  const baseTask = {
     id: 'task-orders',
     name: '订单每日入湖',
     description: '每天同步订单数据并写入资产湖',
@@ -136,15 +193,103 @@ test('启停状态与执行状态分列展示，不再出现已启用后跟待�
     last_error: '',
     created_at: '2026-07-18T02:00:00Z',
     updated_at: '2026-07-18T02:00:00Z',
-  }])
+  }
+  await mockTaskPool(page, [
+    baseTask,
+    {
+      ...baseTask,
+      id: 'task-orders-append',
+      name: '订单实时追加',
+      description: '实时追加订单增量数据并保留历史记录',
+      write_mode: 'append',
+      schedule_type: 'MANUAL',
+      cron_expression: '',
+      next_run_at: null,
+    },
+  ])
   await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
 
   const row = page.getByRole('row').filter({ hasText: '订单每日入湖' })
   await expect(row).toContainText('已启用')
   await expect(row).toContainText('尚未执行')
   await expect(row).not.toContainText('待运行')
-  await expect(page.getByRole('columnheader', { name: '入库策略' })).toBeVisible()
-  await expect(page.getByRole('columnheader', { name: '调度计划' })).toBeVisible()
-  await expect(page.getByRole('columnheader', { name: '启停' })).toBeVisible()
+  const headers = await page.getByRole('columnheader').allTextContents()
+  expect(headers).toEqual([
+    '任务名称', '任务描述', '关联流水线', '启停', '运行状态', '调度方式',
+    '调度规则', '下次执行', '入库策略', '最近执行', '入湖结果', '操作',
+  ])
+  const tableScroll = page.getByTestId('task-table-scroll')
+  expect(await tableScroll.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+  await expect(page.locator('[data-write-mode="overwrite"]')).toHaveClass(/emerald/)
+  await expect(page.locator('[data-write-mode="append"]')).toHaveClass(/sky/)
+  expect(await row.evaluate(element => getComputedStyle(element).whiteSpace)).toBe('nowrap')
   await page.screenshot({ path: testInfo.outputPath('task-table-status.png'), fullPage: true })
+  await tableScroll.evaluate(element => { element.scrollLeft = element.scrollWidth })
+  await page.screenshot({ path: testInfo.outputPath('task-table-write-modes.png'), fullPage: true })
+})
+
+test('编辑任务沿用五步向导，执行记录支持筛选分页且保留详情', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1728, height: 1000 })
+  await mockTaskPool(page, [{
+    id: 'task-orders',
+    name: '订单每日入湖',
+    description: '每天同步订单数据并写入资产湖',
+    pipeline_id: 'pipeline-orders',
+    pipeline_name: '订单标准化流水线',
+    pipeline_status: 'published',
+    pipeline_enabled: true,
+    pipeline_version: 3,
+    write_mode: 'overwrite',
+    primary_key: 'order_id',
+    soft_delete_column: '',
+    skip_empty: true,
+    schedule_type: 'CRON',
+    cron_expression: '0 2 * * *',
+    interval_seconds: 0,
+    enabled: true,
+    status: 'success',
+    last_run_at: '2026-07-18T02:00:00Z',
+    next_run_at: '2026-07-19T02:00:00Z',
+    last_rows: 9,
+    last_error: '',
+    created_at: '2026-07-18T02:00:00Z',
+    updated_at: '2026-07-18T02:00:00Z',
+  }])
+  await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
+
+  await page.getByTitle('编辑').click()
+  await expect(page.getByRole('heading', { name: '编辑调度任务' })).toBeVisible()
+  await expect(page.getByLabel('任务名称')).toBeVisible()
+  await expect(page.getByText('完整字段契约')).toBeHidden()
+  await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByLabel('任务名称')).toBeHidden()
+  await expect(page.getByText('完整字段契约')).toBeVisible()
+  await page.getByRole('button', { name: '关闭弹窗' }).click()
+
+  await page.getByTitle('执行记录').click()
+  const historyDrawer = page.getByTestId('execution-history-drawer')
+  await expect(historyDrawer.getByRole('heading', { name: '执行记录', exact: true })).toBeVisible()
+  await expect(page.getByText('点击任一记录可查看执行详情')).toBeVisible()
+
+  const statusRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/task-orders/histories') && url.searchParams.get('status') === 'success'
+  })
+  await page.getByLabel('执行状态筛选').selectOption('success')
+  await statusRequest
+  await expect(page.getByTestId('execution-record-run-02')).toBeVisible()
+
+  await page.getByTestId('execution-record-run-02').click()
+  await expect(page.getByText('执行信息')).toBeVisible()
+  await expect(page.getByText('调用的流水线')).toBeVisible()
+
+  await page.getByLabel('执行状态筛选').selectOption('')
+  const secondPageRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/task-orders/histories') && url.searchParams.get('page') === '2'
+  })
+  await page.getByRole('button', { name: '执行记录下一页' }).click()
+  await secondPageRequest
+  await expect(page.getByText('第 2 / 3 页')).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('task-history-filters.png'), fullPage: true })
 })

@@ -605,15 +605,44 @@ def trigger_task(
 def list_histories(
     task_id: str,
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = 10,
+    status: Optional[Literal["pending", "running", "success", "failed", "cancelled"]] = None,
+    trigger_type: Optional[Literal["manual", "scheduled"]] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
     db: Session = Depends(get_db),
 ):
+    if page < 1:
+        raise HTTPException(400, "page 必须大于等于 1")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(400, "page_size 必须在 1 到 100 之间")
+    if created_from and created_to and _as_utc(created_from) > _as_utc(created_to):
+        raise HTTPException(400, "开始时间不能晚于结束时间")
     task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "PipelineTask not found")
     q = db.query(PipelineRun).filter(PipelineRun.task_id == task_id)
+    if status:
+        q = q.filter(PipelineRun.status == status)
+    if trigger_type:
+        trigger_expr = PipelineRun.stats["trigger_type"].as_string()
+        if trigger_type == "manual":
+            q = q.filter(or_(
+                PipelineRun.stats.is_(None),
+                trigger_expr.is_(None),
+                trigger_expr == "manual",
+            ))
+        else:
+            q = q.filter(trigger_expr == trigger_type)
+    if created_from:
+        q = q.filter(PipelineRun.created_at >= _as_utc(created_from).replace(tzinfo=None))
+    if created_to:
+        q = q.filter(PipelineRun.created_at <= _as_utc(created_to).replace(tzinfo=None))
     total = q.count()
-    runs = q.order_by(PipelineRun.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    runs = q.order_by(
+        PipelineRun.created_at.desc(),
+        PipelineRun.id.desc(),
+    ).offset((page - 1) * page_size).limit(page_size).all()
     items = []
     for r in runs:
         stats = r.stats or {}

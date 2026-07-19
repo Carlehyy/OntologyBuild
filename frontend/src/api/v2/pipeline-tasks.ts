@@ -71,6 +71,22 @@ export interface PipelineTaskRun {
   error_message: string
 }
 
+export interface PipelineTaskHistoryParams {
+  page?: number
+  page_size?: number
+  status?: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+  trigger_type?: 'manual' | 'scheduled'
+  created_from?: string
+  created_to?: string
+}
+
+export interface PipelineTaskHistoryPage {
+  total: number
+  items: PipelineTaskRun[]
+  page: number
+  page_size: number
+}
+
 /** 单个成品数据集的行级影响明细（含样本） */
 export interface LakeImpactDetail {
   keyed_by: string[] | null
@@ -246,8 +262,10 @@ export const pipelineTasksApi = {
   trigger: (id: string, sync = false): Promise<Record<string, unknown>> =>
     apiClientV2.post(`/pipeline-tasks/${id}/trigger`, null, { params: { sync } }),
 
-  histories: (id: string, page = 1, page_size = 20): Promise<{ total: number; items: PipelineTaskRun[] }> =>
-    apiClientV2.get(`/pipeline-tasks/${id}/histories`, { params: { page, page_size } }),
+  histories: (id: string, params: PipelineTaskHistoryParams = {}): Promise<PipelineTaskHistoryPage> =>
+    apiClientV2.get(`/pipeline-tasks/${id}/histories`, {
+      params: { page: 1, page_size: 10, ...params },
+    }),
 
   /** 单次执行的完整审计明细（配置快照 + 输出样本 + 资产湖行级影响） */
   runAudit: (taskId: string, runId: string): Promise<RunAudit> =>
