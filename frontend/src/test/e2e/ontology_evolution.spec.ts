@@ -325,7 +325,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
   await expect(page.getByText(/历史发布 v0 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
 
-  // 本体结构页只展示最新发布快照，不提供任何图谱编辑器入口；
+  // 本体结构页只读展示最新发布快照，但顶部仍提供统一的图谱编辑器入口；
   // 标签切换不能改变顶部导航或右侧低频操作的位置。
   await page.goto(`/#/ontologies/${ontology.id}`)
   const detailHeader = page.getByTestId('ontology-detail-header')
@@ -353,7 +353,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByLabel('搜索本体结构')).toHaveAttribute('placeholder', '搜索对象实体或实体关系')
   await expect(page.getByTestId('published-structure-readonly')).toHaveText('发布快照 · 结构只读')
   await expect(page.getByRole('button', { name: '打开图谱编辑器修改模型' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '查看当前发布图谱' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '查看当前发布图谱' })).toBeVisible()
   await expect(page.getByRole('button', { name: '智能整理图谱' })).toBeVisible()
   const l1LayoutSaved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/layout'))
   await page.getByRole('button', { name: '智能整理图谱' }).click()

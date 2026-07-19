@@ -160,19 +160,15 @@ export default function OntologyDetailPage() {
           >
             {ontology.current_release_version || ontology.version || 'v0'}
           </span>
-          {activeGroup !== 'design' ? (
-            <button
-              type="button"
-              onClick={() => navigate(`/ontologies/${id}/graph`)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-              title="查看当前发布图谱"
-              aria-label="查看当前发布图谱"
-            >
-              <Network size={18} />
-            </button>
-          ) : (
-            <span aria-hidden="true" className="h-10 w-10 shrink-0" />
-          )}
+          <button
+            type="button"
+            onClick={() => navigate(`/ontologies/${id}/graph`)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+            title="查看当前发布图谱"
+            aria-label="查看当前发布图谱"
+          >
+            <Network size={18} />
+          </button>
           <button
             type="button"
             onClick={() => setShowVersionModal(true)}
