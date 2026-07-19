@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/authStore'
@@ -45,14 +46,17 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.token)
   const user = useAuthStore(s => s.user)
   const location = useLocation()
+  const authorized = !!token && !!user && canAccessPath(user, location.pathname)
+  useEffect(() => {
+    if (authorized) lastAuthorizedPath = location.pathname
+  }, [authorized, location.pathname])
   if (!token || !user) return <Navigate to="/login" replace />
-  if (!canAccessPath(user, location.pathname)) {
+  if (!authorized) {
     const returnTo = lastAuthorizedPath && canAccessPath(user, lastAuthorizedPath)
       ? lastAuthorizedPath
       : firstAccessiblePath(user)
     return <Layout><AccessDeniedPage returnTo={returnTo} /></Layout>
   }
-  lastAuthorizedPath = location.pathname
   return <Layout>{children}</Layout>
 }
 
