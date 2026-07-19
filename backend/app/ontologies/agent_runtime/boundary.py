@@ -245,7 +245,5 @@ def build_scope(db: Session, ontology_id: str, *,
             if isinstance(detail, dict):
                 raise ToolError(str(detail.get("message") or detail)) from exc
             raise ToolError(str(detail or exc)) from exc
-        if (ontology.status or "") != "published":
-            raise ToolError("智能助手只能在当前正式发布版本上运行")
     profile = get_or_create_profile(db, ontology_id)
     return ontology, profile, AgentScope(db, ontology, profile, release)

@@ -30,6 +30,7 @@ from app.config import settings
 from app.deps import get_db, get_current_user
 from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.models.ontology import OntologyProject
+from app.ontologies.release_context import create_initial_release
 from app.exploration import canvas as C
 from app.exploration import converter, readiness as R, schemas as S
 from app.exploration import workspace as W
@@ -513,6 +514,7 @@ def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
         })
 
     project = None
+    created_project = False
     if r.applied_ontology_id:
         # 再次应用：固定回到首次落地的本体（该本体被删则回退常规目标解析）
         project = db.query(OntologyProject).filter(
@@ -535,10 +537,29 @@ def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
             created_by=getattr(current_user, "id", None))
         db.add(project)
         db.flush()
+        created_project = True
+
+    if not created_project:
+        # Freeze a legacy project's existing structure before merging new draft
+        # content, so the merge remains outside its current released snapshot.
+        from app.ontologies.versions.router import _current_release
+
+        _current_release(db, project)
 
     result = converter.apply_draft(
         db, r.draft or {}, body.selected_keys, project.id,
         lineage={"sessionId": r.session_id, "documentId": r.document_id, "draftId": r.id})
+    if created_project:
+        from app.ontologies.versions.router import _snapshot_formal
+
+        create_initial_release(
+            db,
+            project,
+            snapshot=_snapshot_formal(db, project.id),
+            created_by=getattr(current_user, "id", None),
+            version_label="业务探索初始基线",
+            description="由业务探索草稿生成的完整发布基线",
+        )
     r.status = "applied"
     r.applied_ontology_id = project.id
     db.commit()

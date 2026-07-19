@@ -69,16 +69,16 @@ def _raise_validation(report: dict, message: str = "动态哨兵校验未通过"
     })
 
 
-def require_published_release(db: Session, ontology_id: str,
-                              release_id: str) -> CurrentReleaseContext:
-    context = current_release_context(
+def require_current_release(db: Session, ontology_id: str,
+                            release_id: str) -> CurrentReleaseContext:
+    """Bind an overlay to the exact immutable current release.
+
+    ``OntologyProject.status`` is a legacy editing-compatibility field.  A
+    project can have drafts while v0/v1/... remains its released runtime, so
+    release validity is decided exclusively by ``current_release_context``.
+    """
+    return current_release_context(
         db, ontology_id, expected_release_id=release_id)
-    if (context.project.status or "") != "published":
-        raise HTTPException(409, detail={
-            "code": "ontology_not_published",
-            "message": "智能助手动态哨兵只能叠加在当前正式发布版本之上",
-        })
-    return context
 
 
 def _lock_current_release(db: Session, context: CurrentReleaseContext) -> None:
@@ -94,11 +94,6 @@ def _lock_current_release(db: Session, context: CurrentReleaseContext) -> None:
             "message": "当前发布版本已变化，请刷新智能助手后重试",
             "expectedReleaseId": context.id,
             "currentReleaseId": project.current_release_id,
-        })
-    if (project.status or "") != "published":
-        raise HTTPException(409, detail={
-            "code": "ontology_not_published",
-            "message": "本体已不处于发布态，动态哨兵操作已拒绝",
         })
 
 

@@ -67,6 +67,60 @@ def _root(client, headers, ontology_id: str) -> dict:
     return root
 
 
+def test_ontology_list_freezes_legacy_project_into_v0_release(
+        client, auth_headers, admin_user, db):
+    """Every management-list item exposes a current released version.
+
+    Legacy projects created before version trees existed are repaired from
+    their complete current formal projection without requiring a version-tree
+    page visit first.
+    """
+    legacy = OntologyProject(
+        id="legacy-project-without-release",
+        name="旧本体发布基线回填",
+        domain="其他",
+        version="v0.1",
+        status="draft",
+        build_mode="manual",
+        created_by=admin_user.id,
+    )
+    db.add(legacy)
+    db.flush()
+    db.add(ObjectType(
+        id="legacy-object-type",
+        ontology_id=legacy.id,
+        name="LegacyOrder",
+        display_name="旧订单",
+        properties=[],
+        interfaces=[],
+        position_x=0,
+        position_y=0,
+    ))
+    db.commit()
+
+    response = client.get(
+        "/api/v1/ontologies?page_size=1000", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    item = next(row for row in response.json()["data"]["items"]
+                if row["id"] == legacy.id)
+    assert item["current_release_id"]
+    assert item["current_release_version"] == "v0"
+    assert item["version"] == "v0"
+    assert item["entity_count"] == 1
+
+    db.expire_all()
+    stored = db.query(OntologyProject).filter_by(id=legacy.id).one()
+    release = db.query(OntologyVersion).filter_by(
+        id=stored.current_release_id).one()
+    assert stored.version == "v0"
+    assert release.node_kind == "release"
+    assert release.lifecycle_status == "released"
+    assert release.base_release_id == release.id
+    assert [row["id"] for row in release.snapshot_formal["objectTypes"]] == [
+        "legacy-object-type",
+    ]
+
+
 def test_current_release_read_model_ignores_mutable_runtime_drift(
         client, auth_headers, ontology, db):
     """Detail structure/mapping reads are pinned to current_release_id.

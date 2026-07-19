@@ -105,7 +105,7 @@ def get_capabilities(ontology_id: str, release_id: str | None = None,
 
 
 def _dynamic_context_scope(db: Session, ontology_id: str, release_id: str):
-    context = dynamic_service.require_published_release(
+    context = dynamic_service.require_current_release(
         db, ontology_id, release_id)
     try:
         _, _, scope = build_scope(db, ontology_id, release_id=context.id)

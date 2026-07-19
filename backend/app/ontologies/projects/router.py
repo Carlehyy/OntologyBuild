@@ -6,7 +6,8 @@ from app.models.ontology import OntologyProject
 from app.models.user import User
 from app.models.domain import Domain
 from app.models.ontology_version import OntologyVersion
-from app.ontologies.versions.evolution_service import complete_snapshot, snapshot_hash
+from app.ontologies.release_context import create_initial_release
+from app.ontologies.versions.evolution_service import complete_snapshot
 from app.ontologies.access import require_ontology_access
 from app.ontologies.export.schemas import OntologyStructurePackage
 from app.ontologies.export.service import import_structure_package
@@ -39,7 +40,45 @@ def _release_map(db: Session, projects: list[OntologyProject]) -> dict[str, Onto
         return {}
     return {item.id: item for item in db.query(OntologyVersion).filter(
         OntologyVersion.id.in_(ids),
+        OntologyVersion.node_kind == "release",
+        OntologyVersion.lifecycle_status == "released",
     ).all()}
+
+
+def _resolved_release_map(
+    db: Session,
+    projects: list[OntologyProject],
+) -> dict[str, OntologyVersion]:
+    """Resolve every project's current immutable release, repairing legacy rows.
+
+    Ontologies created before the version-tree migration may have definitions
+    but no release row/pointer.  The version service already knows how to
+    freeze that complete projection into a v0 migration baseline; resolve it
+    here as well so every list consumer (especially the assistant) observes
+    the same invariant without first opening the version tree.
+    """
+    releases = _release_map(db, projects)
+    repaired = False
+    for project in projects:
+        if releases.get(project.current_release_id) is not None:
+            continue
+        locked_project = db.query(OntologyProject).filter(
+            OntologyProject.id == project.id,
+        ).with_for_update().populate_existing().one()
+        locked_release = _release_map(db, [locked_project]).get(
+            locked_project.current_release_id)
+        if locked_release is not None:
+            releases[locked_release.id] = locked_release
+            continue
+        # Local import avoids a router import cycle at application startup.
+        from app.ontologies.versions.router import _current_release
+
+        release = _current_release(db, locked_project)
+        releases[release.id] = release
+        repaired = True
+    if repaired:
+        db.commit()
+    return releases
 
 
 def _project_payload(project: OntologyProject, schema, release: OntologyVersion | None = None) -> dict:
@@ -76,7 +115,7 @@ def list_ontologies(
         q = q.filter(OntologyProject.domain == domain)
     total = q.count()
     items = q.order_by(OntologyProject.created_at.desc()).offset((page-1)*page_size).limit(page_size).all()
-    releases = _release_map(db, items)
+    releases = _resolved_release_map(db, items)
     result = []
     for item in items:
         release = releases.get(item.current_release_id)
@@ -103,17 +142,13 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
     db.flush()
     # v0 是不可变的完整空结构发布基线。project.status 暂时保留为 draft 仅兼容
     # 旧编辑接口；新版本工作流只认 version.node_kind/current_release_id。
-    root_snapshot = complete_snapshot(None)
-    root = OntologyVersion(
-        id=str(uuid.uuid4()), ontology_id=project.id, version_number="v0",
-        version_label="初始基线", description="系统创建的完整空结构基线",
-        node_kind="release", lifecycle_status="released", revision=0,
-        snapshot_formal=root_snapshot, snapshot_hash=snapshot_hash(root_snapshot),
-        published_at=project.created_at, created_by=current_user.id,
+    root = create_initial_release(
+        db,
+        project,
+        snapshot=None,
+        created_by=current_user.id,
+        description="系统创建的完整空结构基线",
     )
-    db.add(root)
-    db.flush()
-    project.current_release_id = root.id
     db.commit(); db.refresh(project)
     return {"data": _project_payload(project, OntologyOut, root)}
 
@@ -135,7 +170,7 @@ def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
-    release = _release_map(db, [p]).get(p.current_release_id)
+    release = _resolved_release_map(db, [p]).get(p.current_release_id)
     return {"data": _project_payload(p, OntologyOut, release)}
 
 @router.put("/{ontology_id}")
@@ -158,7 +193,7 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
     for k, v in update.items():
         setattr(p, k, v)
     db.commit(); db.refresh(p)
-    release = _release_map(db, [p]).get(p.current_release_id)
+    release = _resolved_release_map(db, [p]).get(p.current_release_id)
     return {"data": _project_payload(p, OntologyOut, release)}
 
 @router.delete("/{ontology_id}", status_code=204)

@@ -834,20 +834,24 @@ def _current_release(db: Session, project: OntologyProject) -> OntologyVersion:
             OntologyVersion.id == project.current_release_id,
             OntologyVersion.ontology_id == project.id,
             OntologyVersion.node_kind == "release",
+            OntologyVersion.lifecycle_status == "released",
         ).first()
     if current is None:
         current = db.query(OntologyVersion).filter(
             OntologyVersion.ontology_id == project.id,
             OntologyVersion.node_kind == "release",
+            OntologyVersion.lifecycle_status == "released",
         ).order_by(desc(OntologyVersion.published_at),
                    desc(OntologyVersion.created_at)).first()
     if current is None:
         # 存量安装首次访问时补齐完整基线；不猜增量历史，直接冻结当前定义。
         snap = complete_snapshot(_snapshot_formal(db, project.id))
+        release_id = str(uuid.uuid4())
         current = OntologyVersion(
-            id=str(uuid.uuid4()), ontology_id=project.id,
+            id=release_id, ontology_id=project.id,
             version_number="v0", version_label="迁移基线",
             description="从升级前当前完整结构生成",
+            base_release_id=release_id,
             node_kind="release", lifecycle_status="released", revision=0,
             snapshot_formal=snap, snapshot_hash=snapshot_hash(snap),
             published_at=datetime.now(timezone.utc), created_by=project.created_by,
@@ -868,8 +872,7 @@ def _current_release(db: Session, project: OntologyProject) -> OntologyVersion:
         db.flush()
     if project.current_release_id != current.id:
         project.current_release_id = current.id
-        if not str(project.version or "").startswith("v"):
-            project.version = current.version_number
+        project.version = current.version_number
         db.flush()
     return current
 

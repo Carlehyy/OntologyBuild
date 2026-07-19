@@ -30,7 +30,8 @@ async function mockAgentHeader(page: Page) {
         name: '供应链本体',
         domain: '供应链',
         description: '智能助手顶栏验证',
-        status: 'published',
+        // Project editing state is independent from its immutable v0 release.
+        status: 'draft',
         version: 'v1',
         current_release_id: 'release-1',
         current_release_version: 'v1',

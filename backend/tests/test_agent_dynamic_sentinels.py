@@ -77,7 +77,9 @@ def published_runtime(client, auth_headers, ontology, admin_user, db):
     release.snapshot_hash = snapshot_hash(snapshot)
     release.published_at = datetime.now(timezone.utc)
     project = db.query(OntologyProject).filter_by(id=ontology_id).one()
-    project.status = "published"
+    # v0 is already a released snapshot even though this legacy compatibility
+    # field remains draft.  All assistant operations must follow release_id.
+    project.status = "draft"
     project.version = release.version_number
     instance = db.query(ObjectInstance).filter_by(id="inst-order-1").one()
     instance.ontology_release_id = release_id
@@ -184,6 +186,38 @@ def test_dynamic_trial_has_zero_side_effects_then_enabled_runtime_matches_builti
     assert db.query(ActionExecutionLog).filter_by(
         ontology_release_id=runtime["release_id"]).count() == 1
     assert db.query(Sentinel).filter_by(id=row["id"]).one().enabled is True
+
+
+def test_scheduled_dynamic_sentinel_uses_v0_release_while_project_is_draft(
+    client, auth_headers, published_runtime, db,
+):
+    from app.models.sentinel import SentinelFiring
+    from app.ontologies.sentinels.engine import run_scheduled
+
+    runtime = published_runtime
+    definition = _definition(name="scheduled_v0_release", actions=False)
+    definition.update({"onChange": False, "onSchedule": True})
+    row = _create(client, auth_headers, runtime, definition)
+    trial = client.post(
+        f"{_fo(runtime['ontology_id'])}/agent/dynamic-sentinels/{row['id']}/trial",
+        headers=auth_headers,
+        json={"releaseId": runtime["release_id"]},
+    ).json()["data"]
+    enabled = client.post(
+        f"{_fo(runtime['ontology_id'])}/agent/dynamic-sentinels/{row['id']}/enabled",
+        headers=auth_headers,
+        json={
+            "releaseId": runtime["release_id"],
+            "expectedRevision": trial["definitionRevision"],
+            "enabled": True,
+        },
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    result = run_scheduled(db)
+    assert result["evaluated"] == 1
+    firing = db.query(SentinelFiring).filter_by(sentinel_id=row["id"]).one()
+    assert firing.ontology_release_id == runtime["release_id"]
 
 
 def test_management_surfaces_are_origin_isolated_and_validation_fails_closed(

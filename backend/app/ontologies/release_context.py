@@ -7,13 +7,15 @@ only release identity is ``OntologyProject.current_release_id``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import uuid
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
-from app.ontologies.versions.evolution_service import complete_snapshot
+from app.ontologies.versions.evolution_service import complete_snapshot, snapshot_hash
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,47 @@ class RuntimeReleaseIdentity:
 
     id: str
     version: str
+
+
+def create_initial_release(
+    db: Session,
+    project: OntologyProject,
+    *,
+    snapshot: dict | None,
+    created_by: str,
+    version_label: str = "初始基线",
+    description: str = "系统创建的完整发布基线",
+) -> OntologyVersion:
+    """Create the immutable v0 release that every ontology owns from birth."""
+    if project.current_release_id:
+        raise ValueError("ontology already has a current release")
+    existing = db.query(OntologyVersion.id).filter(
+        OntologyVersion.ontology_id == project.id,
+    ).first()
+    if existing is not None:
+        raise ValueError("ontology already has version history")
+    frozen = complete_snapshot(snapshot)
+    release_id = str(uuid.uuid4())
+    release = OntologyVersion(
+        id=release_id,
+        ontology_id=project.id,
+        version_number="v0",
+        version_label=version_label,
+        description=description,
+        base_release_id=release_id,
+        node_kind="release",
+        lifecycle_status="released",
+        revision=0,
+        snapshot_formal=frozen,
+        snapshot_hash=snapshot_hash(frozen),
+        published_at=project.created_at or datetime.now(timezone.utc),
+        created_by=created_by,
+    )
+    db.add(release)
+    db.flush()
+    project.current_release_id = release.id
+    project.version = release.version_number
+    return release
 
 
 def current_release_context(

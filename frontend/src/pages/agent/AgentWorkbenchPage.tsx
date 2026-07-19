@@ -1101,25 +1101,27 @@ export default function AgentWorkbenchPage() {
 
   // -- 本体 / 模型选择 --
   const { data: ontologies = [], isLoading: ontologiesLoading } = useQuery({
-    queryKey: ['ontologies'], queryFn: () => ontologyApi.list() as any,
+    queryKey: ['ontologies'], queryFn: () => ontologyApi.list({ page_size: 1000 }) as any,
   })
   const ontologyList = useMemo(
     () => (ontologies as any)?.items || ontologies || [], [ontologies])
-  const publishedOntologyList = useMemo(
-    () => ontologyList.filter((item: any) =>
-      item.status === 'published' && !!item.current_release_id), [ontologyList])
+  // A project may have editable drafts while its immutable current release
+  // remains queryable.  project.status is only a legacy compatibility field;
+  // the release pointer is the authoritative assistant scope (including v0).
+  const releasedOntologyList = useMemo(
+    () => ontologyList.filter((item: any) => !!item.current_release_id), [ontologyList])
   const [oid, setOid] = useState('')
   const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data' | 'trace'>('ontology')
 
   useEffect(() => {
-    if (publishedOntologyList.length === 0) {
+    if (releasedOntologyList.length === 0) {
       if (oid) setOid('')
       return
     }
-    if (oid && !publishedOntologyList.some((item: any) => item.id === oid)) setOid('')
-  }, [publishedOntologyList, oid])
+    if (oid && !releasedOntologyList.some((item: any) => item.id === oid)) setOid('')
+  }, [releasedOntologyList, oid])
 
-  const selectedOntology = publishedOntologyList.find((item: any) => item.id === oid)
+  const selectedOntology = releasedOntologyList.find((item: any) => item.id === oid)
   const releaseId = selectedOntology?.current_release_id || ''
 
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
@@ -1341,9 +1343,9 @@ export default function AgentWorkbenchPage() {
                   className="h-8 min-w-[180px] cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-3 pr-8 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 10px center' }}
                 >
-                  {publishedOntologyList.length === 0 && <option value="">无已发布本体</option>}
-                  {publishedOntologyList.length > 0 && <option value="">请选择已发布本体</option>}
-                  {publishedOntologyList.map((o: any) => (
+                  {releasedOntologyList.length === 0 && <option value="">无已发布本体</option>}
+                  {releasedOntologyList.length > 0 && <option value="">请选择已发布本体</option>}
+                  {releasedOntologyList.map((o: any) => (
                     <option key={o.id} value={o.id}>
                       {o.name} · {o.current_release_version || o.version}
                     </option>

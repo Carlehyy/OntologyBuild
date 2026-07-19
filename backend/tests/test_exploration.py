@@ -501,6 +501,20 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
     assert sens["daily_check"].on_schedule and not sens["daily_check"].on_change
     assert sens["orphan_rule"].bindings == [] and sens["orphan_rule"].primary_alias is None
 
+    # A newly materialized ontology is born with a complete immutable v0
+    # release, regardless of its legacy project-level editing status.
+    from app.models.ontology import OntologyProject
+    from app.models.ontology_version import OntologyVersion
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    release = db.query(OntologyVersion).filter_by(
+        id=project.current_release_id).one()
+    assert release.version_number == "v0"
+    assert release.node_kind == "release"
+    assert release.lifecycle_status == "released"
+    assert {item["name"] for item in release.snapshot_formal["objectTypes"]} == {
+        "Order", "Supplier", "Finance",
+    }
+
     # 血缘：五类元素都带 source（session/document/draft/draftKey/sourceRefs）
     from app.ontologies.formal_modeling.models import (ActionType, LinkType,
                                                        ObjectType, OntologyFunction)

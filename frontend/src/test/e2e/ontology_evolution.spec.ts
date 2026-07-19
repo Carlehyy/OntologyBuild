@@ -105,6 +105,20 @@ test('complete branch → real-data trial → reviewed release works in the brow
   })
   expect(ontology.version).toBe('v0')
   expect(ontology.current_release_version).toBe('v0')
+
+  // The project-level compatibility status is still draft at birth, but its
+  // immutable v0 release must already be selectable and queryable by Agent.
+  await page.goto('/#/agent')
+  const ontologySelect = page.getByLabel('选择本体')
+  const v0Option = ontologySelect.locator(`option[value="${ontology.id}"]`)
+  await expect(v0Option).toContainText(`${ontology.name} · v0`)
+  const capabilitiesLoaded = page.waitForResponse(response =>
+    response.url().includes(`/api/v2/formal/ontologies/${ontology.id}/agent/capabilities`)
+      && response.status() === 200)
+  await ontologySelect.selectOption(ontology.id)
+  await capabilitiesLoaded
+  await expect(ontologySelect).toHaveValue(ontology.id)
+
   const tree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
   const root = tree.versions.find((item: any) => item.version_number === 'v0')
   const draft = await api<any>(request, token, 'post', `/api/v2/ontologies/${ontology.id}/versions/${root.id}/drafts`, {

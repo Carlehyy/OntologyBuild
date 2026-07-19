@@ -10,10 +10,13 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from fastapi import HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.sentinel import Sentinel
 from app.models.ontology import OntologyProject
+from app.models.ontology_version import OntologyVersion
 from app.services.sentinel.evaluator import evaluate_sentinel
 from app.ontologies.agent_runtime.boundary import build_scope
 from app.ontologies.release_context import current_release_context
@@ -38,16 +41,38 @@ def _summary(firings) -> dict:
     }
 
 
-def _ontology_is_published(db: Session, ontology_id: str) -> bool:
+def _current_release_id(db: Session, ontology_id: str) -> str | None:
+    """Return the valid current release without consulting project.status."""
+    try:
+        return current_release_context(db, ontology_id).id
+    except HTTPException:
+        return None
+
+
+def _legacy_published_runtime(db: Session, ontology_id: str) -> bool:
+    """Temporary compatibility for pre-version-tree built-in Sentinels.
+
+    Assistant-created overlays always require an exact release.  This narrow
+    fallback only keeps historical graph-editor Sentinels running until the
+    legacy project is repaired with its v0 release pointer.
+    """
     return db.query(OntologyProject.id).filter(
         OntologyProject.id == ontology_id,
+        OntologyProject.current_release_id.is_(None),
         OntologyProject.status == "published",
     ).first() is not None
 
 
-def _not_published_summary() -> dict:
+def _runtime_available(db: Session, ontology_id: str) -> bool:
+    return (
+        _current_release_id(db, ontology_id) is not None
+        or _legacy_published_runtime(db, ontology_id)
+    )
+
+
+def _release_unavailable_summary() -> dict:
     result = _summary([])
-    result["skipped"] = "ontology_not_published"
+    result["skipped"] = "current_release_unavailable"
     return result
 
 
@@ -61,8 +86,6 @@ def _prepare_runtime(db: Session, ontology_id: str) -> str | None:
     if has_dynamic is None:
         return None
     context = current_release_context(db, ontology_id)
-    if (context.project.status or "") != "published":
-        return None
     _, _, scope = build_scope(db, ontology_id, release_id=context.id)
     reconcile_release(db, context, scope)
     return context.id
@@ -70,8 +93,8 @@ def _prepare_runtime(db: Session, ontology_id: str) -> str | None:
 
 def run_manual(db: Session, ontology_id: str) -> dict:
     """手动触发：全量评估本体所有启用哨兵。"""
-    if not _ontology_is_published(db, ontology_id):
-        return _not_published_summary()
+    if not _runtime_available(db, ontology_id):
+        return _release_unavailable_summary()
     _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
@@ -88,8 +111,8 @@ def run_for_save(db: Session, ontology_id: str) -> dict:
     图谱编辑器的实例变更只有保存时才落库——保存即"变化到达"时刻。
     边沿触发语义(SentinelMatchState)保证重复评估幂等，不会重复放炮。
     """
-    if not _ontology_is_published(db, ontology_id):
-        return _not_published_summary()
+    if not _runtime_available(db, ontology_id):
+        return _release_unavailable_summary()
     _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
@@ -104,8 +127,8 @@ def run_for_save(db: Session, ontology_id: str) -> dict:
 def run_for_change(db: Session, ontology_id: str, object_type_id: str,
                    changed_keys: Optional[list] = None) -> dict:
     """变化驱动：挑出 bindings 引用了该对象类型、且开启 on_change 的哨兵并评估。"""
-    if not _ontology_is_published(db, ontology_id):
-        return _not_published_summary()
+    if not _runtime_available(db, ontology_id):
+        return _release_unavailable_summary()
     _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
@@ -123,8 +146,8 @@ def run_for_change(db: Session, ontology_id: str, object_type_id: str,
 def run_for_link_change(db: Session, ontology_id: str) -> dict:
     """链接拓扑变化驱动：链接实例增删对声明了 links 约束的跨对象哨兵是"变化"。
     只评估 on_change 且带链接约束的哨兵（无链接约束的由属性 CDC 覆盖）。"""
-    if not _ontology_is_published(db, ontology_id):
-        return _not_published_summary()
+    if not _runtime_available(db, ontology_id):
+        return _release_unavailable_summary()
     _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
@@ -140,22 +163,38 @@ def run_for_link_change(db: Session, ontology_id: str) -> dict:
 def run_scheduled(db: Session) -> dict:
     """定期扫描：评估所有到达扫描间隔的哨兵(跨本体)，更新 last_scanned_at。"""
     now = _now()
-    published_ids = [row[0] for row in db.query(Sentinel.ontology_id).join(
+    dynamic_released_ids = [row[0] for row in db.query(Sentinel.ontology_id).join(
         OntologyProject, OntologyProject.id == Sentinel.ontology_id,
+    ).join(
+        OntologyVersion,
+        OntologyVersion.id == OntologyProject.current_release_id,
     ).filter(
-        OntologyProject.status == "published",
+        OntologyVersion.node_kind == "release",
+        OntologyVersion.lifecycle_status == "released",
         Sentinel.origin == "assistant_dynamic",
         Sentinel.retired_at.is_(None),
     ).distinct().all()]
-    for ontology_id in published_ids:
+    for ontology_id in dynamic_released_ids:
         _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).join(
-        OntologyProject, OntologyProject.id == Sentinel.ontology_id
+        OntologyProject, OntologyProject.id == Sentinel.ontology_id,
+    ).outerjoin(
+        OntologyVersion,
+        OntologyVersion.id == OntologyProject.current_release_id,
     ).filter(
         Sentinel.enabled == True,  # noqa: E712
         Sentinel.on_schedule == True,  # noqa: E712
         Sentinel.status == "published",
-        OntologyProject.status == "published",
+        or_(
+            and_(
+                OntologyVersion.node_kind == "release",
+                OntologyVersion.lifecycle_status == "released",
+            ),
+            and_(
+                OntologyProject.current_release_id.is_(None),
+                OntologyProject.status == "published",
+            ),
+        ),
     ).all()
     due = []
     for s in sentinels:
