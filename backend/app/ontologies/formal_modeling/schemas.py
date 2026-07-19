@@ -7,7 +7,7 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 def _to_camel(s: str) -> str:
@@ -364,6 +364,19 @@ class RunActionRequest(CamelModel):
     # Optional caller-provided retry key. Sentinel-generated state linkage stays
     # internal, but API clients can still obtain exactly-once durable effects.
     idempotency_key: Optional[str] = None
+
+
+class AdoptLegacyProjectionRequest(BaseModel):
+    """Compare-and-adopt guard for explicitly repairing historical projections."""
+    expectedReleaseId: str
+    expectedObjectInstances: int
+    expectedLinkInstances: int
+
+    @model_validator(mode="after")
+    def validate_expected_counts(self):
+        if self.expectedObjectInstances < 0 or self.expectedLinkInstances < 0:
+            raise ValueError("expected instance counts must be non-negative")
+        return self
 
 
 class TestFunctionRequest(CamelModel):

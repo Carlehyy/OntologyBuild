@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   Box,
@@ -14,6 +14,8 @@ import {
   Search,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import { useAuthStore } from '@/stores/authStore'
 
 interface ReleaseSummary {
   id: string
@@ -66,6 +68,16 @@ interface InstanceCatalog {
   release: ReleaseSummary
   objectTypes: ObjectTypeNode[]
   linkTypes: LinkTypeNode[]
+  legacyProjection: LegacyProjectionStatus
+}
+
+interface LegacyProjectionStatus {
+  objectInstances: number
+  linkInstances: number
+  total: number
+  canAdopt: boolean
+  recommendedAction: 'none' | 'adopt_legacy' | 'publish_draft' | 'manual_review'
+  blockingReasons: Array<{ code: string; message: string }>
 }
 
 interface ObjectRow {
@@ -185,18 +197,42 @@ function columnsFor(
 
 export default function FormalInstancesView({ ontologyId }: { ontologyId: string }) {
   const base = `/formal/ontologies/${ontologyId}/instance-browser`
+  const queryClient = useQueryClient()
+  const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const [selection, setSelection] = useState<Selection | null>(null)
   const [treeKeyword, setTreeKeyword] = useState('')
   const [draftKeyword, setDraftKeyword] = useState('')
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const [showAdoptConfirm, setShowAdoptConfirm] = useState(false)
 
   const catalogQuery = useQuery<InstanceCatalog>({
     queryKey: ['instance-browser-catalog', ontologyId],
     queryFn: () => apiClientV2.get(`${base}/catalog`),
   })
   const catalog = catalogQuery.data
+  const legacyProjection = catalog?.legacyProjection
+
+  const adoptMutation = useMutation({
+    mutationFn: () => {
+      if (!catalog || !legacyProjection) throw new Error('实例目录尚未加载完成')
+      return apiClientV2.post(`${base}/adopt-legacy`, {
+        expectedReleaseId: catalog.release.id,
+        expectedObjectInstances: legacyProjection.objectInstances,
+        expectedLinkInstances: legacyProjection.linkInstances,
+      })
+    },
+    onSuccess: async () => {
+      setShowAdoptConfirm(false)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['instance-browser-catalog', ontologyId] }),
+        queryClient.invalidateQueries({ queryKey: ['instance-browser-page', ontologyId] }),
+        queryClient.invalidateQueries({ queryKey: ['mapping-object-instances', ontologyId] }),
+        queryClient.invalidateQueries({ queryKey: ['mapping-link-instances', ontologyId] }),
+      ])
+    },
+  })
 
   useEffect(() => {
     if (!catalog) return
@@ -417,6 +453,59 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
           </div>
         </header>
 
+        {legacyProjection && legacyProjection.total > 0 && (
+          <div
+            data-testid="legacy-projection-warning"
+            role="status"
+            className={`mx-5 mt-3 flex shrink-0 items-start gap-3 rounded-xl border px-4 py-3 ${
+              legacyProjection.canAdopt
+                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                : 'border-blue-200 bg-blue-50 text-blue-900'
+            }`}
+          >
+            <AlertCircle size={18} className="mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold">
+                {legacyProjection.canAdopt ? '检测到可安全归属的历史实例' : '检测到尚未进入当前发布版本的运行数据'}
+              </p>
+              <p className="mt-1 text-[11px] leading-5 opacity-80">
+                共 {legacyProjection.objectInstances} 个对象实例、{legacyProjection.linkInstances} 条关系实例。
+                {legacyProjection.canAdopt
+                  ? ` 系统已验证类型、映射、时间边界和关系端点均与 ${catalog?.release.version} 一致，可由管理员显式归属。`
+                  : ' 这些数据仍保留在运行工作区，发布实例页不会把它们误认为正式数据。'}
+              </p>
+              {!legacyProjection.canAdopt && legacyProjection.blockingReasons.length > 0 && (
+                <p className="mt-1 text-[11px] leading-5 opacity-75">
+                  {legacyProjection.blockingReasons.map(item => item.message).join('；')}
+                </p>
+              )}
+              {adoptMutation.isError && (
+                <p role="alert" className="mt-2 text-[11px] font-medium text-red-700">
+                  {errorMessage(adoptMutation.error)}
+                </p>
+              )}
+            </div>
+            {legacyProjection.canAdopt && isAdmin ? (
+              <button
+                type="button"
+                data-testid="adopt-legacy-projection"
+                onClick={() => setShowAdoptConfirm(true)}
+                disabled={adoptMutation.isPending}
+                className="inline-flex h-8 shrink-0 items-center rounded-lg bg-amber-600 px-3 text-[11px] font-medium text-white transition hover:bg-amber-700 disabled:cursor-wait disabled:opacity-60"
+              >
+                {adoptMutation.isPending ? '正在修复…' : `安全归属到 ${catalog?.release.version}`}
+              </button>
+            ) : legacyProjection.recommendedAction === 'publish_draft' ? (
+              <a
+                href={`#/ontologies/${ontologyId}?tab=data-mapping`}
+                className="inline-flex h-8 shrink-0 items-center rounded-lg border border-blue-200 bg-white px-3 text-[11px] font-medium text-blue-700 transition hover:bg-blue-100"
+              >
+                查看数据映射
+              </a>
+            ) : null}
+          </div>
+        )}
+
         <form
           className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/50 px-5 py-2.5"
           onSubmit={event => {
@@ -532,6 +621,14 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
           </div>
         </footer>
       </section>
+      <ConfirmDialog
+        open={showAdoptConfirm}
+        title="确认归属历史实例"
+        message={`系统将把 ${legacyProjection?.objectInstances || 0} 个对象实例和 ${legacyProjection?.linkInstances || 0} 条关系实例连同可验证事实归属到当前发布版本 ${catalog?.release.version || ''}。操作会写入审计日志；若数据在确认期间变化，服务端将拒绝提交。`}
+        confirmLabel="确认安全归属"
+        onCancel={() => setShowAdoptConfirm(false)}
+        onConfirm={() => void adoptMutation.mutate()}
+      />
     </div>
   )
 }

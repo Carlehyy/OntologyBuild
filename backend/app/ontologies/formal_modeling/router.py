@@ -37,6 +37,11 @@ from app.ontologies.versions.evolution_service import complete_snapshot
 from app.ontologies.release_context import (
     current_release_context, runtime_release_identity,
 )
+from app.ontologies.formal_modeling.legacy_projection import (
+    LegacyProjectionAdoptionError,
+    adopt_legacy_projection,
+    assess_legacy_projection,
+)
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
@@ -1042,8 +1047,8 @@ def instance_browser_catalog(
         db: Session = Depends(get_db),
         _=Depends(get_current_user)):
     """Published schema tree plus counts from its current runtime projection."""
-    project = _require_ontology(db, ontology_id)
-    release, snapshot = _current_release_view(db, project)
+    context = current_release_context(db, ontology_id)
+    release, snapshot = context.release, context.snapshot
     object_type_ids = {
         str(item.get("id")) for item in snapshot["objectTypes"] if item.get("id")
     }
@@ -1065,6 +1070,7 @@ def instance_browser_catalog(
         LinkInstance.link_type_id.in_(link_type_ids),
     ).group_by(LinkInstance.link_type_id).all()) if link_type_ids else {}
     object_datasets, link_datasets = _release_dataset_associations(db, snapshot)
+    legacy_projection = assess_legacy_projection(db, context)
 
     return _ok({
         "release": _instance_browser_release(release),
@@ -1084,7 +1090,40 @@ def instance_browser_catalog(
             }
             for item in snapshot["linkTypes"]
         ],
+        "legacyProjection": legacy_projection.payload(),
     })
+
+
+@router.post("/{ontology_id}/instance-browser/adopt-legacy")
+def instance_browser_adopt_legacy(
+        ontology_id: str,
+        body: S.AdoptLegacyProjectionRequest,
+        db: Session = Depends(get_db),
+        current_user=Depends(require_admin)):
+    """Explicit admin-only repair; never weakens release-scoped reads."""
+    _require_ontology(db, ontology_id, for_update=True)
+    context = current_release_context(
+        db, ontology_id, expected_release_id=body.expectedReleaseId)
+    try:
+        result = adopt_legacy_projection(
+            db,
+            context,
+            expected_object_instances=body.expectedObjectInstances,
+            expected_link_instances=body.expectedLinkInstances,
+            actor=current_user,
+        )
+        db.commit()
+    except LegacyProjectionAdoptionError as exc:
+        db.rollback()
+        raise HTTPException(409, detail={
+            "code": exc.code,
+            "message": exc.message,
+            "legacyProjection": exc.assessment.payload(),
+        }) from exc
+    except Exception:
+        db.rollback()
+        raise
+    return _ok(result)
 
 
 @router.get("/{ontology_id}/instance-browser/objects")

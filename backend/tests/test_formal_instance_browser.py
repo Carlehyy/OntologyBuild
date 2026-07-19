@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
 from app.models.ontology_formal import (
-    LinkInstance, ObjectInstance, ObjectType,
+    LinkInstance, ObjectInstance, ObjectType, PropertyFact,
 )
 from app.models.ontology_version import OntologyVersion
+from app.models.inference import AuditLog
+from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
 from app.models.v2.dataset import Dataset
 
 
@@ -300,3 +302,236 @@ def test_instance_browser_requires_authentication(client, ontology):
         f"/api/v2/formal/ontologies/{ontology['id']}/instance-browser/catalog",
     )
     assert response.status_code in {401, 403}
+
+
+def _seed_legacy_projection_candidate(
+        ontology_id, release, db, *, mappings_released: bool):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    release.published_at = now - timedelta(hours=1)
+    object_mappings = [
+        {
+            "id": "mapping-orders",
+            "curatedDatasetId": "dataset-orders",
+            "entityClass": "Order",
+            "fieldMapping": {},
+            "targetObjectTypeId": "ot-order",
+            "status": "applied",
+            "confidence": None,
+        },
+        {
+            "id": "mapping-owners",
+            "curatedDatasetId": "dataset-owners",
+            "entityClass": "Owner",
+            "fieldMapping": {},
+            "targetObjectTypeId": "ot-owner",
+            "status": "applied",
+            "confidence": None,
+        },
+    ]
+    link_mappings = [{
+        "id": "mapping-owner-link",
+        "srcDatasetId": "dataset-orders",
+        "tgtDatasetId": "dataset-owners",
+        "relationType": "owned_by",
+        "srcKey": "owner_id",
+        "tgtKey": "id",
+        "status": "active",
+        "linkTypeId": "lt-owner",
+        "edgeDatasetId": None,
+        "fieldMapping": {},
+    }]
+    release.snapshot_formal = {
+        "objectTypes": [
+            {
+                "id": "ot-order", "name": "Order", "displayName": "订单",
+                "primaryKey": "p-order-id", "properties": [{
+                    "id": "p-order-id", "name": "id", "displayName": "订单号",
+                    "type": "string", "required": True,
+                }],
+            },
+            {
+                "id": "ot-owner", "name": "Owner", "displayName": "负责人",
+                "primaryKey": "p-owner-id", "properties": [{
+                    "id": "p-owner-id", "name": "id", "displayName": "负责人编号",
+                    "type": "string", "required": True,
+                }],
+            },
+        ],
+        "linkTypes": [{
+            "id": "lt-owner", "name": "owned_by", "displayName": "负责人关系",
+            "sourceObjectTypeId": "ot-order", "targetObjectTypeId": "ot-owner",
+            "cardinality": "many-to-one", "properties": [],
+        }],
+        "actions": [], "functions": [], "sentinels": [],
+        "mappings": object_mappings if mappings_released else [],
+        "linkMappings": link_mappings if mappings_released else [],
+    }
+    db.add_all([
+        Dataset(id="dataset-orders", name="订单数据", kind="structured"),
+        Dataset(id="dataset-owners", name="负责人数据", kind="structured"),
+        OntologyMapping(
+            id="mapping-orders", ontology_id=ontology_id,
+            curated_dataset_id="dataset-orders", entity_class="Order",
+            field_mapping={}, target_object_type_id="ot-order",
+            status="applied", confidence=None,
+        ),
+        OntologyMapping(
+            id="mapping-owners", ontology_id=ontology_id,
+            curated_dataset_id="dataset-owners", entity_class="Owner",
+            field_mapping={}, target_object_type_id="ot-owner",
+            status="applied", confidence=None,
+        ),
+        OntologyLinkMapping(
+            id="mapping-owner-link", ontology_id=ontology_id,
+            src_dataset_id="dataset-orders", tgt_dataset_id="dataset-owners",
+            relation_type="owned_by", src_key="owner_id", tgt_key="id",
+            status="active", link_type_id="lt-owner", edge_dataset_id=None,
+            field_mapping={},
+        ),
+        ObjectInstance(
+            id="legacy-order", ontology_id=ontology_id,
+            ontology_release_id=None, object_type_id="ot-order",
+            properties={"id": "O-1"}, source="pipeline",
+            external_id="source-order-1", created_at=now, updated_at=now,
+        ),
+        ObjectInstance(
+            id="legacy-owner", ontology_id=ontology_id,
+            ontology_release_id=None, object_type_id="ot-owner",
+            properties={"id": "U-1"}, source="pipeline",
+            external_id="source-owner-1", created_at=now, updated_at=now,
+        ),
+        LinkInstance(
+            id="legacy-link", ontology_id=ontology_id,
+            ontology_release_id=None, link_type_id="lt-owner",
+            source_object_id="legacy-order", target_object_id="legacy-owner",
+            properties={}, source_relation_id="source-link-1", created_at=now,
+        ),
+        PropertyFact(
+            id="legacy-order-fact", ontology_id=ontology_id,
+            instance_id="legacy-order", object_type_id="ot-order",
+            property_name="id", value={"v": "O-1"}, kind="property",
+            source="pipeline", ontology_release_id=None,
+            ontology_version=None, recorded_at=now,
+        ),
+        PropertyFact(
+            id="legacy-link-fact", ontology_id=ontology_id,
+            instance_id="legacy-link", object_type_id="lt-owner",
+            property_name="__exists__", value={"v": True}, kind="link",
+            source="pipeline", ontology_release_id=None,
+            ontology_version=None, recorded_at=now,
+        ),
+    ])
+    db.commit()
+
+
+def test_instance_browser_adopts_only_proven_legacy_projection(
+        client, auth_headers, ontology, db):
+    ontology_id = ontology["id"]
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_legacy_projection_candidate(
+        ontology_id, release, db, mappings_released=True)
+
+    catalog = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/catalog",
+        headers=auth_headers,
+    )
+    assert catalog.status_code == 200, catalog.text
+    legacy = catalog.json()["data"]["legacyProjection"]
+    assert legacy == {
+        "objectInstances": 2,
+        "linkInstances": 1,
+        "total": 3,
+        "canAdopt": True,
+        "recommendedAction": "adopt_legacy",
+        "blockingReasons": [],
+    }
+
+    adopted = client.post(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/adopt-legacy",
+        headers=auth_headers,
+        json={
+            "expectedReleaseId": release.id,
+            "expectedObjectInstances": 2,
+            "expectedLinkInstances": 1,
+        },
+    )
+    assert adopted.status_code == 200, adopted.text
+    assert adopted.json()["data"]["adopted"] == {
+        "objectInstances": 2,
+        "linkInstances": 1,
+        "propertyFacts": 2,
+    }
+
+    db.expire_all()
+    assert {
+        item.ontology_release_id
+        for item in db.query(ObjectInstance).filter_by(
+            ontology_id=ontology_id).all()
+    } == {release.id}
+    assert db.query(LinkInstance).filter_by(
+        ontology_id=ontology_id).one().ontology_release_id == release.id
+    assert {
+        (item.ontology_release_id, item.ontology_version)
+        for item in db.query(PropertyFact).filter_by(
+            ontology_id=ontology_id).all()
+    } == {(release.id, release.version_number)}
+    audit = db.query(AuditLog).filter_by(
+        ontology_id=ontology_id,
+        event_subtype="legacy_projection_adopted",
+    ).one()
+    assert audit.object_id == release.id
+    assert audit.meta["object_instances"] == 2
+
+    refreshed = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/catalog",
+        headers=auth_headers,
+    ).json()["data"]
+    assert refreshed["legacyProjection"]["total"] == 0
+    assert [item["instanceCount"] for item in refreshed["objectTypes"]] == [1, 1]
+    assert refreshed["linkTypes"][0]["instanceCount"] == 1
+
+
+def test_instance_browser_rejects_adoption_when_mappings_are_unreleased(
+        client, auth_headers, ontology, db):
+    ontology_id = ontology["id"]
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_legacy_projection_candidate(
+        ontology_id, release, db, mappings_released=False)
+
+    catalog = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/catalog",
+        headers=auth_headers,
+    ).json()["data"]
+    legacy = catalog["legacyProjection"]
+    assert legacy["objectInstances"] == 2
+    assert legacy["linkInstances"] == 1
+    assert legacy["canAdopt"] is False
+    assert legacy["recommendedAction"] == "publish_draft"
+    assert {
+        item["code"] for item in legacy["blockingReasons"]
+    } >= {"release_mapping_coverage_missing", "release_mapping_mismatch"}
+
+    rejected = client.post(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/adopt-legacy",
+        headers=auth_headers,
+        json={
+            "expectedReleaseId": release.id,
+            "expectedObjectInstances": 2,
+            "expectedLinkInstances": 1,
+        },
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["detail"]["code"] == "legacy_projection_not_adoptable"
+    db.expire_all()
+    assert db.query(ObjectInstance).filter_by(
+        ontology_id=ontology_id,
+        ontology_release_id=None,
+    ).count() == 2
+    assert db.query(AuditLog).filter_by(
+        ontology_id=ontology_id,
+        event_subtype="legacy_projection_adopted",
+    ).count() == 0
