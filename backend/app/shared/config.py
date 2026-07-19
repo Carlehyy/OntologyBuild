@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Development permits loopback MCP servers; production requires an explicit
     # allowlist and never inherits the API-Hub proxy policy implicitly.
     super_assistant_mcp_allowed_hosts: str = "localhost,127.0.0.1,::1"
+    # stdio launches a process inside the backend container. Keep it opt-in and
+    # require an explicit executable allowlist because this is equivalent to
+    # granting server-side code execution to assistant configurators.
+    super_assistant_mcp_stdio_enabled: bool = False
+    super_assistant_mcp_stdio_allowed_commands: str = ""
 
     # Data-steward conversation workspace and its isolated browser runtime.
     # Empty workspace root resolves to <uploads_dir>/steward-sessions.

@@ -35,8 +35,8 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
 
     folder = skill_directory("user-1", "skill-1")
     create_skill_folder(folder, render_skill_markdown(
-        name="qa_skill", display_name="QA Skill", description="Use this skill",
-        triggers=["qa"], instructions="Read references when necessary.",
+        name="qa-skill", description="Use this skill for QA work",
+        content="Read references when necessary.",
     ))
     with TestingSession() as db:
         db.add(User(
@@ -61,8 +61,8 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
             role="assistant", content="", status="streaming",
         )
         skill = SuperAssistantSkill(
-            id="skill-1", owner_id="user-1", name="qa_skill",
-            display_name="QA Skill", description="Use this skill", triggers=["qa"],
+            id="skill-1", owner_id="user-1", name="qa-skill",
+            display_name="qa-skill", description="Use this skill for QA work", triggers=[],
             folder_path=str(folder), manifest=build_manifest(folder), enabled=True,
         )
         db.add_all([model, conversation, user_message, assistant_message, skill])
@@ -71,7 +71,7 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
     responses = iter([
         {
             "content": None,
-            "tool_calls": [{"id": "call-1", "name": "use_skill", "arguments": {"name": "qa_skill"}}],
+            "tool_calls": [{"id": "call-1", "name": "use_skill", "arguments": {"name": "qa-skill"}}],
             "usage": {"inputTokens": 10, "outputTokens": 2},
         },
         {

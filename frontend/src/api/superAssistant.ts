@@ -36,9 +36,7 @@ export interface SkillFile {
 export interface SuperSkill {
   id: string
   name: string
-  display_name: string
   description: string
-  triggers: string[]
   manifest: SkillFile[]
   enabled: boolean
   revision: number
@@ -52,12 +50,17 @@ export interface McpTool {
   input_schema: Record<string, unknown>
 }
 
+export type McpTransport = 'stdio' | 'sse' | 'streamable_http'
+
 export interface SuperMcpServer {
   id: string
   name: string
-  transport: 'streamable_http'
+  transport: McpTransport
   url: string
   header_names: string[]
+  command: string | null
+  args: string[]
+  env_names: string[]
   enabled: boolean
   require_confirmation: boolean
   tool_manifest: McpTool[]
@@ -157,10 +160,9 @@ export const superAssistantApi = {
 
   skills: () => apiClientV2.get<SuperSkill[]>('/super-assistant/skills'),
   createSkill: (body: {
-    name: string; display_name: string; description: string; triggers: string[];
-    instructions: string; enabled: boolean
+    name: string; description: string; content: string; enabled: boolean
   }) => apiClientV2.post<SuperSkill>('/super-assistant/skills', body),
-  updateSkill: (id: string, body: Partial<Pick<SuperSkill, 'display_name' | 'description' | 'triggers' | 'enabled'>>) =>
+  updateSkill: (id: string, body: Partial<Pick<SuperSkill, 'enabled'>>) =>
     apiClientV2.patch<SuperSkill>(`/super-assistant/skills/${id}`, body),
   deleteSkill: (id: string) => apiClientV2.delete(`/super-assistant/skills/${id}`),
   importSkill: (archive: File) => {
@@ -178,11 +180,14 @@ export const superAssistantApi = {
 
   mcpServers: () => apiClientV2.get<SuperMcpServer[]>('/super-assistant/mcp-servers'),
   createMcpServer: (body: {
-    name: string; url: string; headers: Record<string, string>;
+    name: string; transport: McpTransport; url: string; headers: Record<string, string>;
+    command?: string | null; args?: string[]; env?: Record<string, string>;
     enabled: boolean; require_confirmation: boolean
   }) => apiClientV2.post<SuperMcpServer>('/super-assistant/mcp-servers', body),
   updateMcpServer: (id: string, body: Partial<{
-    url: string; headers: Record<string, string>; enabled: boolean; require_confirmation: boolean
+    transport: McpTransport; url: string; headers: Record<string, string>;
+    command: string | null; args: string[]; env: Record<string, string>;
+    enabled: boolean; require_confirmation: boolean
   }>) => apiClientV2.patch<SuperMcpServer>(`/super-assistant/mcp-servers/${id}`, body),
   deleteMcpServer: (id: string) => apiClientV2.delete(`/super-assistant/mcp-servers/${id}`),
   testMcpServer: (id: string) => apiClientV2.post<{ ok: boolean; message: string; tools: McpTool[] }>(

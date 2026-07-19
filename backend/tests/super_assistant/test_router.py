@@ -64,15 +64,16 @@ def test_user_can_manage_conversations_folder_skills_and_mcp(tmp_path, monkeypat
     ).json() == []
 
     created = client.post("/api/v2/super-assistant/skills", json={
-        "name": "folder_skill",
-        "display_name": "目录技能",
+        "name": "folder-skill",
         "description": "Uses companion files",
-        "triggers": ["folder"],
-        "instructions": "Read references when needed.",
+        "content": "Read references when needed.",
         "enabled": True,
     })
     assert created.status_code == 201, created.text
     skill = created.json()
+    assert skill["name"] == "folder-skill"
+    assert "display_name" not in skill
+    assert "triggers" not in skill
     assert [entry["path"] for entry in skill["manifest"]] == ["SKILL.md"]
 
     added = client.put(
@@ -96,9 +97,25 @@ def test_user_can_manage_conversations_folder_skills_and_mcp(tmp_path, monkeypat
     })
     assert server.status_code == 201, server.text
     payload = server.json()
+    assert payload["transport"] == "streamable_http"
     assert payload["header_names"] == ["Authorization"]
     assert "secret" not in server.text
     assert payload["require_confirmation"] is True
+
+    stdio = client.post("/api/v2/super-assistant/mcp-servers", json={
+        "name": "local_stdio",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@example/mcp-server"],
+        "env": {"API_KEY": "stdio-secret"},
+    })
+    assert stdio.status_code == 201, stdio.text
+    stdio_payload = stdio.json()
+    assert stdio_payload["transport"] == "stdio"
+    assert stdio_payload["command"] == "npx"
+    assert stdio_payload["args"] == ["-y", "@example/mcp-server"]
+    assert stdio_payload["env_names"] == ["API_KEY"]
+    assert "stdio-secret" not in stdio.text
 
     assert client.delete(
         f"/api/v2/super-assistant/conversations/{conversation['id']}"

@@ -1,7 +1,13 @@
 import pytest
 
 from app.shared.config import settings
-from app.super_assistant.mcp_client import McpClientError, _error_message, namespaced_tool_name, validate_mcp_url
+from app.super_assistant.mcp_client import (
+    McpClientError,
+    _error_message,
+    namespaced_tool_name,
+    normalize_connection,
+    validate_mcp_url,
+)
 
 
 def test_mcp_url_allowlist(monkeypatch):
@@ -26,3 +32,27 @@ def test_tool_namespace_is_stable_and_provider_safe():
 def test_anyio_exception_groups_are_unwrapped_for_users():
     error = ExceptionGroup("task group", [ConnectionError("connection refused")])
     assert _error_message(error) == "connection refused"
+
+
+def test_normalizes_mcp_remote_wrapper_to_direct_streamable_http(monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_mcp_allowed_hosts", "38.76.215.169")
+    assert normalize_connection(
+        transport="stdio",
+        command="npx",
+        args=["-y", "mcp-remote", "http://38.76.215.169:8765/mcp"],
+    ) == (
+        "streamable_http",
+        "http://38.76.215.169:8765/mcp",
+        None,
+        [],
+    )
+
+
+def test_validates_native_stdio_and_legacy_sse(monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_mcp_allowed_hosts", "localhost")
+    assert normalize_connection(
+        transport="stdio", command="npx", args=["-y", "@example/mcp-server"],
+    ) == ("stdio", "", "npx", ["-y", "@example/mcp-server"])
+    assert normalize_connection(
+        transport="sse", url="http://localhost:3000/sse",
+    ) == ("sse", "http://localhost:3000/sse", None, [])

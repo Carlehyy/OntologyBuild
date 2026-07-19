@@ -24,7 +24,7 @@ _TEXT_SUFFIXES = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".sql", ".xml",
     ".html", ".css", ".svg",
 }
-_SKILL_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$")
+_SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def skill_root() -> Path:
@@ -67,55 +67,50 @@ def resolve_file(folder: str | Path, relative_path: str, *, must_exist: bool = F
     return resolved
 
 
-def parse_skill_markdown(content: str, fallback_name: str | None = None) -> dict[str, Any]:
+def parse_skill_markdown(content: str) -> dict[str, Any]:
     if not content.strip():
         raise SkillStoreError("SKILL.md 不能为空")
-    metadata: dict[str, Any] = {}
-    body = content
-    if content.startswith("---"):
-        lines = content.splitlines()
-        end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
-        if end is None:
-            raise SkillStoreError("SKILL.md 的 YAML frontmatter 未闭合")
-        try:
-            loaded = yaml.safe_load("\n".join(lines[1:end])) or {}
-        except yaml.YAMLError as exc:
-            raise SkillStoreError(f"SKILL.md frontmatter 无法解析: {exc}") from exc
-        if not isinstance(loaded, dict):
-            raise SkillStoreError("SKILL.md frontmatter 必须是对象")
-        metadata = loaded
-        body = "\n".join(lines[end + 1:]).strip()
+    if not content.startswith("---"):
+        raise SkillStoreError("SKILL.md 必须以 YAML frontmatter 开头")
+    lines = content.splitlines()
+    end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+    if end is None:
+        raise SkillStoreError("SKILL.md 的 YAML frontmatter 未闭合")
+    try:
+        loaded = yaml.safe_load("\n".join(lines[1:end])) or {}
+    except yaml.YAMLError as exc:
+        raise SkillStoreError(f"SKILL.md frontmatter 无法解析: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise SkillStoreError("SKILL.md frontmatter 必须是对象")
+    metadata: dict[str, Any] = loaded
+    body = "\n".join(lines[end + 1:]).strip()
 
-    name = str(metadata.get("name") or fallback_name or "").strip()
-    if not _SKILL_NAME.fullmatch(name):
-        raise SkillStoreError("Skill name 只能包含字母、数字、下划线和连字符")
-    display_name = str(metadata.get("display_name") or metadata.get("title") or name).strip()
+    name = str(metadata.get("name") or "").strip()
+    if len(name) > 64 or not _SKILL_NAME.fullmatch(name):
+        raise SkillStoreError("Skill name 必须是不超过 64 位的小写字母、数字和连字符")
     description = str(metadata.get("description") or "").strip()
-    raw_triggers = metadata.get("triggers") or []
-    if isinstance(raw_triggers, str):
-        raw_triggers = [item.strip() for item in raw_triggers.split(",") if item.strip()]
-    if not isinstance(raw_triggers, list):
-        raise SkillStoreError("triggers 必须是字符串数组")
-    triggers = [str(item).strip() for item in raw_triggers if str(item).strip()][:100]
+    if not description:
+        raise SkillStoreError("SKILL.md frontmatter 必须包含 description")
+    if not body:
+        raise SkillStoreError("SKILL.md 必须包含具体技能内容")
     return {
         "name": name,
-        "display_name": display_name[:200] or name,
         "description": description[:4000],
-        "triggers": triggers,
-        "instructions": body,
+        "content": body,
     }
 
 
-def render_skill_markdown(*, name: str, display_name: str, description: str,
-                          triggers: list[str], instructions: str) -> str:
+def render_skill_markdown(*, name: str, description: str, content: str) -> str:
+    # Keep generated skills compatible with the standard package contract:
+    # only name and description belong in frontmatter; the body is the skill.
     metadata = {
         "name": name,
-        "display_name": display_name,
         "description": description,
-        "triggers": triggers,
     }
     frontmatter = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).strip()
-    return f"---\n{frontmatter}\n---\n\n{instructions.strip()}\n"
+    markdown = f"---\n{frontmatter}\n---\n\n{content.strip()}\n"
+    parse_skill_markdown(markdown)
+    return markdown
 
 
 def create_skill_folder(folder: Path, skill_markdown: str) -> None:

@@ -11,6 +11,7 @@ import {
 import { modelApi } from '@/api/ontologies'
 import {
   superAssistantApi,
+  type McpTransport,
   type SkillFile,
   type SuperConversation,
   type SuperMcpServer,
@@ -371,15 +372,45 @@ function DialogShell({ title, description, wide = false, onClose, children }: {
   children: React.ReactNode
 }) {
   const titleId = useId()
+  const descriptionId = useId()
+  const dialogRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previousFocus = document.activeElement as HTMLElement | null
+    const focusableSelector = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
+    const focusables = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+    focusables()[0]?.focus()
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
+      if (event.key !== 'Tab') return
+      const items = focusables()
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previousFocus?.focus()
+    }
+  }, [onClose])
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={onClose}>
-      <section role="dialog" aria-modal="true" aria-labelledby={titleId}
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}
         onMouseDown={event => event.stopPropagation()}
         className={`flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl ${wide ? 'max-w-5xl' : 'max-w-xl'}`}>
         <header className="flex items-start justify-between border-b border-[var(--color-border)] px-5 py-4">
           <div>
             <h2 id={titleId} className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h2>
-            {description && <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{description}</p>}
+            {description && <p id={descriptionId} className="mt-1 text-xs text-[var(--color-text-tertiary)]">{description}</p>}
           </div>
           <button type="button" onClick={onClose} aria-label="关闭"
             className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><X size={17} /></button>
@@ -394,26 +425,22 @@ function DialogShell({ title, description, wide = false, onClose, children }: {
 function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useToast()
   const [name, setName] = useState('')
-  const [displayName, setDisplayName] = useState('')
   const [description, setDescription] = useState('')
-  const [triggers, setTriggers] = useState('')
-  const [instructions, setInstructions] = useState('')
+  const [content, setContent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const save = async () => {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name) || !displayName.trim()) {
-      setError('请填写合法的 name 和显示名称')
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64 || !description.trim() || !content.trim()) {
+      setError('请填写合法的技能名称、技能描述和具体内容')
       return
     }
     setBusy(true); setError('')
     try {
       await superAssistantApi.createSkill({
         name,
-        display_name: displayName.trim(),
         description: description.trim(),
-        triggers: triggers.split(',').map(item => item.trim()).filter(Boolean),
-        instructions,
+        content,
         enabled: true,
       })
       await onSaved()
@@ -423,28 +450,20 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
   }
 
   return (
-    <DialogShell title="新建目录型 Skill" description="系统会创建 Skill 文件夹和必需的 SKILL.md；之后可继续添加 scripts、references、assets 等文件。" onClose={onClose}>
+    <DialogShell title="新建 Skill" description="系统会生成标准 SKILL.md，并在独立目录中保存该技能。" onClose={onClose}>
       <div className="flex-1 space-y-4 overflow-y-auto p-5">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="text-xs text-[var(--color-text-secondary)]">name <span className="text-red-500">*</span>
-            <input value={name} onChange={event => setName(event.target.value)} placeholder="research_helper"
-              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
-          </label>
-          <label className="text-xs text-[var(--color-text-secondary)]">显示名称 <span className="text-red-500">*</span>
-            <input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="研究助手"
-              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
-          </label>
-        </div>
-        <label className="block text-xs text-[var(--color-text-secondary)]">描述
+        <label className="block text-xs text-[var(--color-text-secondary)]">技能名称 <span className="text-red-500">*</span>
+          <input value={name} onChange={event => setName(event.target.value.toLowerCase().replace(/[_\s]+/g, '-'))} placeholder="research-helper"
+            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+          <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">用于技能包目录和调用标识，仅支持小写字母、数字和连字符。</span>
+        </label>
+        <label className="block text-xs text-[var(--color-text-secondary)]">技能描述 <span className="text-red-500">*</span>
           <textarea value={description} onChange={event => setDescription(event.target.value)} rows={2}
+            placeholder="说明这个技能做什么，以及什么情况下应使用它"
             className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
         </label>
-        <label className="block text-xs text-[var(--color-text-secondary)]">触发词
-          <input value={triggers} onChange={event => setTriggers(event.target.value)} placeholder="调研, 研究, summarize（逗号分隔）"
-            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
-        </label>
-        <label className="block text-xs text-[var(--color-text-secondary)]">初始指令
-          <textarea value={instructions} onChange={event => setInstructions(event.target.value)} rows={8} placeholder="# 工作流程&#10;1. …"
+        <label className="block text-xs text-[var(--color-text-secondary)]">具体内容 <span className="text-red-500">*</span>
+          <textarea value={content} onChange={event => setContent(event.target.value)} rows={10} placeholder="# 工作流程&#10;&#10;1. …"
             className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
         </label>
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
@@ -509,7 +528,7 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
   }
 
   return (
-    <DialogShell wide title={`编辑 Skill：${skill.display_name}`} description={`${skill.name} · revision ${revision} · ${files.length} 个文件`} onClose={onClose}>
+    <DialogShell wide title={`编辑 Skill：${skill.name}`} description={`revision ${revision} · ${files.length} 个文件`} onClose={onClose}>
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="flex min-h-40 flex-col border-b border-[var(--color-border)] bg-[var(--color-bg-base)] md:border-b-0 md:border-r">
           <div className="border-b border-[var(--color-border)] p-3">
@@ -564,32 +583,89 @@ function McpDialog({ server, onClose, onSaved }: {
 }) {
   const { toast } = useToast()
   const [name, setName] = useState(server?.name || '')
+  const [transport, setTransport] = useState<McpTransport>(server?.transport || 'streamable_http')
   const [url, setUrl] = useState(server?.url || '')
+  const [command, setCommand] = useState(server?.command || '')
+  const [args, setArgs] = useState(JSON.stringify(server?.args || [], null, 2))
   const [headers, setHeaders] = useState('')
+  const [env, setEnv] = useState('')
+  const [clientConfig, setClientConfig] = useState('')
   const [enabled, setEnabled] = useState(server?.enabled ?? true)
   const [confirmation, setConfirmation] = useState(server?.require_confirmation ?? true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const parseStringMap = (value: string, label: string): Record<string, string> | undefined => {
+    if (!value.trim()) return undefined
+    const parsed = JSON.parse(value)
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.values(parsed).some(item => typeof item !== 'string')) {
+      throw new Error(`${label} 必须是字符串键值 JSON 对象`)
+    }
+    return parsed as Record<string, string>
+  }
+
+  const applyClientConfig = () => {
+    setError('')
+    try {
+      const parsed = JSON.parse(clientConfig)
+      const collection = parsed?.mcpServers || parsed
+      if (!collection || Array.isArray(collection) || typeof collection !== 'object') {
+        throw new Error('配置必须包含 mcpServers 对象')
+      }
+      const entries = Object.entries(collection)
+      if (entries.length !== 1) throw new Error('请每次粘贴一个 MCP Server 配置')
+      const [configName, raw] = entries[0] as [string, any]
+      if (!raw || Array.isArray(raw) || typeof raw !== 'object') throw new Error('MCP Server 配置无效')
+      if (!server) setName(configName)
+
+      if (raw.command) {
+        const parsedArgs = Array.isArray(raw.args) ? raw.args.map(String) : []
+        const remoteIndex = parsedArgs.findIndex((item: string) => item === 'mcp-remote' || item.startsWith('mcp-remote@'))
+        const remoteUrl = remoteIndex >= 0
+          ? parsedArgs.slice(remoteIndex + 1).find((item: string) => /^https?:\/\//.test(item))
+          : undefined
+        if (/^(?:.*[\\/])?npx(?:\.cmd)?$/i.test(String(raw.command)) && remoteUrl) {
+          setTransport('streamable_http'); setUrl(remoteUrl); setCommand(''); setArgs('[]')
+        } else {
+          setTransport('stdio'); setCommand(String(raw.command)); setArgs(JSON.stringify(parsedArgs, null, 2)); setUrl('')
+        }
+        setEnv(raw.env ? JSON.stringify(raw.env, null, 2) : '')
+        setHeaders('')
+        return
+      }
+      if (!raw.url) throw new Error('配置需要 command 或 url')
+      const rawTransport = String(raw.transport || 'streamable_http').toLowerCase().replace(/[ -]/g, '_')
+      setTransport(rawTransport === 'sse' ? 'sse' : 'streamable_http')
+      setUrl(String(raw.url)); setHeaders(raw.headers ? JSON.stringify(raw.headers, null, 2) : '')
+      setCommand(''); setArgs('[]'); setEnv('')
+    } catch (error) { setError(errorText(error, '无法解析 MCP 配置')) }
+  }
+
   const save = async () => {
     setBusy(true); setError('')
     try {
-      let parsedHeaders: Record<string, string> | undefined
-      if (headers.trim()) {
-        const parsed = JSON.parse(headers)
-        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.values(parsed).some(value => typeof value !== 'string')) {
-          throw new Error('Headers 必须是字符串键值 JSON 对象')
-        }
-        parsedHeaders = parsed
+      const parsedHeaders = parseStringMap(headers, 'Headers')
+      const parsedEnv = parseStringMap(env, 'env')
+      const parsedArgs = JSON.parse(args || '[]')
+      if (!Array.isArray(parsedArgs) || parsedArgs.some(item => typeof item !== 'string')) {
+        throw new Error('args 必须是字符串 JSON 数组')
       }
+      if (transport === 'stdio' && !command.trim()) throw new Error('stdio 传输必须填写 command')
+      if (transport !== 'stdio' && !url.trim()) throw new Error('HTTP 传输必须填写 URL')
+      const changedTransport = !!server && server.transport !== transport
+      const connection = transport === 'stdio'
+        ? { transport, url: '', command: command.trim(), args: parsedArgs }
+        : { transport, url: url.trim(), command: null, args: [] }
       if (server) {
         await superAssistantApi.updateMcpServer(server.id, {
-          url, enabled, require_confirmation: confirmation,
-          ...(parsedHeaders ? { headers: parsedHeaders } : {}),
+          ...connection, enabled, require_confirmation: confirmation,
+          ...(parsedHeaders ? { headers: parsedHeaders } : changedTransport && transport === 'stdio' ? { headers: {} } : {}),
+          ...(parsedEnv ? { env: parsedEnv } : changedTransport && transport !== 'stdio' ? { env: {} } : {}),
         })
       } else {
         await superAssistantApi.createMcpServer({
-          name, url, headers: parsedHeaders || {}, enabled, require_confirmation: confirmation,
+          name, ...connection, headers: parsedHeaders || {}, env: parsedEnv || {},
+          enabled, require_confirmation: confirmation,
         })
       }
       await onSaved()
@@ -599,21 +675,55 @@ function McpDialog({ server, onClose, onSaved }: {
   }
 
   return (
-    <DialogShell title={server ? `编辑 MCP：${server.name}` : '添加 MCP Server'} description="首版支持 Streamable HTTP；请求头会加密存储且不会回显。" onClose={onClose}>
+    <DialogShell title={server ? `编辑 MCP：${server.name}` : '添加 MCP Server'} description="支持粘贴客户端 JSON，也可直接配置 stdio、SSE 或 Streamable HTTP。" onClose={onClose}>
       <div className="flex-1 space-y-4 overflow-y-auto p-5">
+        {!server && <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)]" open>
+          <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium text-[var(--color-text-secondary)]">粘贴 MCP 客户端 JSON</summary>
+          <div className="space-y-2 border-t border-[var(--color-border)] p-3">
+            <textarea value={clientConfig} onChange={event => setClientConfig(event.target.value)} rows={8}
+              placeholder={'{\n  "mcpServers": {\n    "api-hub": {\n      "command": "npx",\n      "args": ["-y", "mcp-remote", "https://example.com/mcp"]\n    }\n  }\n}'}
+              className="w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+            <button type="button" onClick={applyClientConfig} disabled={!clientConfig.trim()}
+              className="min-h-9 rounded-md border border-[var(--color-border)] bg-white px-3 text-xs text-teal-700 hover:bg-teal-50 disabled:opacity-50">解析并填入下方表单</button>
+          </div>
+        </details>}
         <label className="block text-xs text-[var(--color-text-secondary)]">名称 <span className="text-red-500">*</span>
           <input value={name} disabled={!!server} onChange={event => setName(event.target.value)} placeholder="knowledge_search"
             className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60" />
         </label>
-        <label className="block text-xs text-[var(--color-text-secondary)]">Streamable HTTP URL <span className="text-red-500">*</span>
-          <input type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://mcp.example.com/mcp"
-            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
-          <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">服务域名需由部署方加入 SUPER_ASSISTANT_MCP_ALLOWED_HOSTS。</span>
+        <label className="block text-xs text-[var(--color-text-secondary)]">传输方式 <span className="text-red-500">*</span>
+          <select value={transport} onChange={event => setTransport(event.target.value as McpTransport)}
+            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100">
+            <option value="streamable_http">Streamable HTTP（推荐）</option>
+            <option value="sse">SSE（旧版兼容）</option>
+            <option value="stdio">stdio（启动本地进程）</option>
+          </select>
         </label>
-        <label className="block text-xs text-[var(--color-text-secondary)]">请求头 JSON
-          <textarea value={headers} onChange={event => setHeaders(event.target.value)} rows={4} placeholder={server ? `留空保持现有请求头（${server.header_names.join(', ') || '无'}）` : '{\n  "Authorization": "Bearer …"\n}'}
-            className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
-        </label>
+        {transport === 'stdio' ? <>
+          <label className="block text-xs text-[var(--color-text-secondary)]">command <span className="text-red-500">*</span>
+            <input value={command} onChange={event => setCommand(event.target.value)} placeholder="npx"
+              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+          </label>
+          <label className="block text-xs text-[var(--color-text-secondary)]">args JSON
+            <textarea value={args} onChange={event => setArgs(event.target.value)} rows={4} placeholder={'["-y", "@example/mcp-server"]'}
+              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+          </label>
+          <label className="block text-xs text-[var(--color-text-secondary)]">env JSON
+            <textarea value={env} onChange={event => setEnv(event.target.value)} rows={4} placeholder={server ? `留空保持现有环境变量（${server.env_names.join(', ') || '无'}）` : '{\n  "API_KEY": "…"\n}'}
+              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+          </label>
+          <p className="rounded-lg bg-amber-50 p-3 text-[11px] leading-5 text-amber-800">stdio 会在后端容器内启动进程，部署方必须显式启用并允许该 command。env 会加密存储且不回显。</p>
+        </> : <>
+          <label className="block text-xs text-[var(--color-text-secondary)]">MCP URL <span className="text-red-500">*</span>
+            <input type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://mcp.example.com/mcp"
+              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+            <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">服务域名需由部署方加入 SUPER_ASSISTANT_MCP_ALLOWED_HOSTS。</span>
+          </label>
+          <label className="block text-xs text-[var(--color-text-secondary)]">请求头 JSON
+            <textarea value={headers} onChange={event => setHeaders(event.target.value)} rows={4} placeholder={server ? `留空保持现有请求头（${server.header_names.join(', ') || '无'}）` : '{\n  "Authorization": "Bearer …"\n}'}
+              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+          </label>
+        </>}
         <label className="flex min-h-11 items-center justify-between rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
           启用此 Server
           <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-teal-700" />
@@ -627,7 +737,7 @@ function McpDialog({ server, onClose, onSaved }: {
       </div>
       <footer className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
         <button onClick={onClose} className="min-h-10 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
-        <button onClick={save} disabled={busy || !name || !url} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
+        <button onClick={save} disabled={busy || !name || (transport === 'stdio' ? !command : !url)} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
           {busy && <Loader2 size={13} className="animate-spin" />} 保存
         </button>
       </footer>
@@ -668,7 +778,7 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
   }
 
   const removeSkill = async (skill: SuperSkill) => {
-    if (!window.confirm(`确定删除 Skill「${skill.display_name}」及其整个文件夹？`)) return
+    if (!window.confirm(`确定删除 Skill「${skill.name}」及其整个文件夹？`)) return
     try { await superAssistantApi.deleteSkill(skill.id); await refreshSkills(); toast({ tone: 'success', title: 'Skill 已删除' }) }
     catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
   }
@@ -737,15 +847,15 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                     <div className="flex items-start gap-2">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Folder size={16} /></div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-semibold text-[var(--color-text-primary)]">{skill.display_name}</p>
-                        <p className="mt-0.5 truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">{skill.name} · r{skill.revision} · {skill.manifest.length} files</p>
+                        <p className="truncate font-mono text-xs font-semibold text-[var(--color-text-primary)]">{skill.name}</p>
+                        <p className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">r{skill.revision} · {skill.manifest.length} files</p>
                       </div>
-                      <input type="checkbox" aria-label={`${skill.enabled ? '停用' : '启用'} ${skill.display_name}`} checked={skill.enabled} onChange={() => void toggleSkill(skill)} className="mt-1 h-4 w-4 accent-teal-700" />
+                      <input type="checkbox" aria-label={`${skill.enabled ? '停用' : '启用'} ${skill.name}`} checked={skill.enabled} onChange={() => void toggleSkill(skill)} className="mt-1 h-4 w-4 accent-teal-700" />
                     </div>
                     <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
                     <div className="mt-2 flex justify-end gap-1">
                       <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
-                      <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.display_name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                      <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                     </div>
                   </article>
                 ))}
@@ -765,11 +875,12 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><PlugZap size={16} /></div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5"><p className="truncate text-xs font-semibold text-[var(--color-text-primary)]">{server.name}</p><span className={`h-2 w-2 rounded-full ${server.last_test_status === 'success' ? 'bg-emerald-500' : server.last_test_status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} /></div>
-                        <p className="mt-1 truncate text-[10px] text-[var(--color-text-tertiary)]">{server.url}</p>
+                        <p className="mt-1 truncate text-[10px] text-[var(--color-text-tertiary)]">{server.transport === 'stdio' ? `${server.command} ${server.args.join(' ')}` : server.url}</p>
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <span className="rounded bg-[var(--color-bg-base)] px-1.5 py-0.5 text-[9px] text-[var(--color-text-tertiary)]">{server.tool_manifest.length} tools</span>
+                      <span className="rounded bg-[var(--color-bg-base)] px-1.5 py-0.5 text-[9px] text-[var(--color-text-tertiary)]">{server.transport === 'streamable_http' ? 'Streamable HTTP' : server.transport.toUpperCase()}</span>
                       <span className="rounded bg-[var(--color-bg-base)] px-1.5 py-0.5 text-[9px] text-[var(--color-text-tertiary)]">{server.require_confirmation ? '执行前确认' : '自动执行'}</span>
                       {!server.enabled && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
                     </div>

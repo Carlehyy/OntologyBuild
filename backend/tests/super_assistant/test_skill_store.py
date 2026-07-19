@@ -35,29 +35,30 @@ def _archive(files: dict[str, str]) -> bytes:
 
 def test_parse_and_render_standard_skill_markdown():
     content = render_skill_markdown(
-        name="research_helper",
-        display_name="研究助手",
+        name="research-helper",
         description="收集和整理资料",
-        triggers=["研究", "调研"],
-        instructions="# Workflow\n\nFollow the references.",
+        content="# Workflow\n\nFollow the references.",
     )
     parsed = parse_skill_markdown(content)
-    assert parsed["name"] == "research_helper"
-    assert parsed["display_name"] == "研究助手"
-    assert parsed["triggers"] == ["研究", "调研"]
-    assert parsed["instructions"].startswith("# Workflow")
+    assert parsed == {
+        "name": "research-helper",
+        "description": "收集和整理资料",
+        "content": "# Workflow\n\nFollow the references.",
+    }
+    assert "display_name:" not in content
+    assert "triggers:" not in content
 
 
 def test_imports_complete_folder_and_edits_nested_text_file(isolated_skill_root):
     folder = skill_directory("user-1", "skill-1")
     payload = _archive({
-        "research-helper/SKILL.md": "---\nname: research_helper\ndescription: Research\n---\n\nUse references.",
+        "research-helper/SKILL.md": "---\nname: research-helper\ndescription: Research\n---\n\nUse references.",
         "research-helper/references/guide.md": "original",
         "research-helper/scripts/collect.py": "print('ok')",
         "research-helper/assets/icon.png": "not-a-real-png",
     })
     metadata = import_skill_archive(payload, folder)
-    assert metadata["name"] == "research_helper"
+    assert metadata["name"] == "research-helper"
     manifest = build_manifest(folder)
     assert {item["path"] for item in manifest} == {
         "SKILL.md", "references/guide.md", "scripts/collect.py", "assets/icon.png",
@@ -70,7 +71,7 @@ def test_imports_complete_folder_and_edits_nested_text_file(isolated_skill_root)
 def test_rejects_zip_path_traversal(isolated_skill_root):
     folder = skill_directory("user-1", "skill-2")
     payload = _archive({
-        "SKILL.md": "---\nname: safe_skill\n---\nbody",
+        "SKILL.md": "---\nname: safe-skill\ndescription: Safe skill\n---\nbody",
         "../outside.txt": "bad",
     })
     with pytest.raises(SkillStoreError, match="相对路径"):
@@ -81,10 +82,21 @@ def test_rejects_zip_path_traversal(isolated_skill_root):
 def test_rejects_symlink_entries(isolated_skill_root):
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("SKILL.md", "---\nname: safe_skill\n---\nbody")
+        archive.writestr("SKILL.md", "---\nname: safe-skill\ndescription: Safe skill\n---\nbody")
         link = zipfile.ZipInfo("scripts/link")
         link.create_system = 3
         link.external_attr = (stat.S_IFLNK | 0o777) << 16
         archive.writestr(link, "../../secret")
     with pytest.raises(SkillStoreError, match="符号链接"):
         import_skill_archive(output.getvalue(), skill_directory("user-1", "skill-3"))
+
+
+@pytest.mark.parametrize("content, message", [
+    ("# Missing frontmatter", "frontmatter"),
+    ("---\nname: missing-description\n---\nbody", "description"),
+    ("---\nname: invalid_name\ndescription: Invalid\n---\nbody", "Skill name"),
+    ("---\nname: empty-body\ndescription: Empty\n---\n", "具体技能内容"),
+])
+def test_rejects_nonstandard_skill_markdown(content, message):
+    with pytest.raises(SkillStoreError, match=message):
+        parse_skill_markdown(content)

@@ -14,10 +14,12 @@ from app.deps import get_current_user, get_db
 from app.model_configs.models import ModelConfig
 from app.super_assistant.mcp_client import (
     McpClientError,
+    decrypt_env,
     decrypt_headers,
     discover_tools,
+    encrypt_env,
     encrypt_headers,
-    validate_mcp_url,
+    normalize_connection,
 )
 from app.super_assistant.models import (
     SuperAssistantConversation,
@@ -310,9 +312,11 @@ def create_skill(
         id=str(uuid.uuid4()),
         owner_id=current_user.id,
         name=body.name,
-        display_name=body.display_name,
+        # Retained columns keep existing databases migration-compatible. Skill
+        # identity and activation come exclusively from standard SKILL.md data.
+        display_name=body.name,
         description=body.description,
-        triggers=[item.strip() for item in body.triggers if item.strip()],
+        triggers=[],
         folder_path="",
         enabled=body.enabled,
     )
@@ -320,10 +324,8 @@ def create_skill(
     item.folder_path = str(folder)
     markdown = render_skill_markdown(
         name=item.name,
-        display_name=item.display_name,
         description=item.description,
-        triggers=item.triggers,
-        instructions=body.instructions,
+        content=body.content,
     )
     try:
         create_skill_folder(folder, markdown)
@@ -365,9 +367,9 @@ async def import_skill(
     try:
         metadata = import_skill_archive(data, folder)
         item.name = metadata["name"]
-        item.display_name = metadata["display_name"]
+        item.display_name = metadata["name"]
         item.description = metadata["description"]
-        item.triggers = metadata["triggers"]
+        item.triggers = []
         item.manifest = build_manifest(folder)
         db.add(item)
         db.commit()
@@ -389,31 +391,11 @@ def update_skill(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     item = _skill(db, current_user.id, skill_id)
-    try:
-        parsed = parse_skill_markdown(read_text_file(item.folder_path, "SKILL.md"), item.name)
-        if body.display_name is not None:
-            item.display_name = body.display_name.strip()
-        if body.description is not None:
-            item.description = body.description.strip()
-        if body.triggers is not None:
-            item.triggers = [trigger.strip() for trigger in body.triggers if trigger.strip()]
-        if body.enabled is not None:
-            item.enabled = body.enabled
-        write_text_file(item.folder_path, "SKILL.md", render_skill_markdown(
-            name=item.name,
-            display_name=item.display_name,
-            description=item.description,
-            triggers=item.triggers,
-            instructions=parsed["instructions"],
-        ))
-        item.manifest = build_manifest(item.folder_path)
-        item.revision += 1
-        db.commit()
-        db.refresh(item)
-        return item
-    except SkillStoreError as exc:
-        db.rollback()
-        raise _storage_error(exc) from exc
+    if body.enabled is not None:
+        item.enabled = body.enabled
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 @router.delete("/skills/{skill_id}", status_code=204)
@@ -423,7 +405,7 @@ def remove_skill(
 ):
     item = _skill(db, current_user.id, skill_id)
     try:
-        delete_skill_folder(item.folder_path)
+        delete_skill_folder(skill_directory(current_user.id, item.id))
     except SkillStoreError as exc:
         raise _storage_error(exc) from exc
     db.delete(item)
@@ -438,7 +420,7 @@ def list_skill_files(
 ):
     item = _skill(db, current_user.id, skill_id)
     try:
-        item.manifest = build_manifest(item.folder_path)
+        item.manifest = build_manifest(skill_directory(current_user.id, item.id))
         db.commit()
         return item.manifest
     except SkillStoreError as exc:
@@ -452,7 +434,8 @@ def get_skill_file(
 ):
     item = _skill(db, current_user.id, skill_id)
     try:
-        return {"path": file_path, "content": read_text_file(item.folder_path, file_path)}
+        folder = skill_directory(current_user.id, item.id)
+        return {"path": file_path, "content": read_text_file(folder, file_path)}
     except SkillStoreError as exc:
         raise _storage_error(exc) from exc
 
@@ -463,8 +446,9 @@ def put_skill_file(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     item = _skill(db, current_user.id, skill_id)
+    folder = skill_directory(current_user.id, item.id)
     try:
-        metadata = parse_skill_markdown(body.content, item.name) if file_path == "SKILL.md" else None
+        metadata = parse_skill_markdown(body.content) if file_path == "SKILL.md" else None
         if metadata and metadata["name"] != item.name:
             duplicate = db.query(SuperAssistantSkill).filter(
                 SuperAssistantSkill.owner_id == current_user.id,
@@ -473,18 +457,18 @@ def put_skill_file(
             ).first()
             if duplicate:
                 raise SkillStoreError("同名 Skill 已存在")
-        write_text_file(item.folder_path, file_path, body.content)
-        manifest = build_manifest(item.folder_path)
+        write_text_file(folder, file_path, body.content)
+        manifest = build_manifest(folder)
         from app.shared.config import settings
         if len(manifest) > settings.super_assistant_max_skill_files:
             if not any(entry["path"] == file_path for entry in item.manifest):
-                delete_file(item.folder_path, file_path)
+                delete_file(folder, file_path)
             raise SkillStoreError("Skill 文件数量超过限制")
         if metadata:
             item.name = metadata["name"]
-            item.display_name = metadata["display_name"]
+            item.display_name = metadata["name"]
             item.description = metadata["description"]
-            item.triggers = metadata["triggers"]
+            item.triggers = []
         item.manifest = manifest
         item.revision += 1
         db.commit()
@@ -501,8 +485,9 @@ def remove_skill_file(
 ):
     item = _skill(db, current_user.id, skill_id)
     try:
-        delete_file(item.folder_path, file_path)
-        item.manifest = build_manifest(item.folder_path)
+        folder = skill_directory(current_user.id, item.id)
+        delete_file(folder, file_path)
+        item.manifest = build_manifest(folder)
         item.revision += 1
         db.commit()
         return Response(status_code=204)
@@ -518,7 +503,7 @@ def export_skill(
 ):
     item = _skill(db, current_user.id, skill_id)
     try:
-        payload = export_skill_archive(item.folder_path)
+        payload = export_skill_archive(skill_directory(current_user.id, item.id))
     except SkillStoreError as exc:
         raise _storage_error(exc) from exc
     return StreamingResponse(
@@ -543,16 +528,24 @@ def create_mcp_server(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     try:
-        url = validate_mcp_url(body.url)
+        transport, url, command, args = normalize_connection(
+            transport=body.transport, url=body.url, command=body.command, args=body.args,
+        )
         encrypted, names = encrypt_headers(body.headers)
+        env_encrypted, env_names = encrypt_env(body.env)
     except McpClientError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     item = SuperAssistantMcpServer(
         owner_id=current_user.id,
         name=body.name,
+        transport=transport,
         url=url,
         headers_encrypted=encrypted,
         header_names=names,
+        command=command,
+        args=args,
+        env_encrypted=env_encrypted,
+        env_names=env_names,
         enabled=body.enabled,
         require_confirmation=body.require_confirmation,
     )
@@ -573,13 +566,30 @@ def update_mcp_server(
 ):
     item = _server(db, current_user.id, server_id)
     try:
-        if body.url is not None:
-            item.url = validate_mcp_url(body.url)
+        connection_changed = any(value is not None for value in (
+            body.transport, body.url, body.command, body.args,
+        ))
+        if connection_changed:
+            transport, url, command, args = normalize_connection(
+                transport=body.transport or item.transport,
+                url=body.url if body.url is not None else item.url,
+                command=body.command if body.command is not None else item.command,
+                args=body.args if body.args is not None else item.args,
+            )
+            item.transport = transport
+            item.url = url
+            item.command = command
+            item.args = args
             item.tool_manifest = []
             item.last_test_status = None
             item.last_test_message = None
         if body.headers is not None:
             item.headers_encrypted, item.header_names = encrypt_headers(body.headers)
+            item.tool_manifest = []
+            item.last_test_status = None
+            item.last_test_message = None
+        if body.env is not None:
+            item.env_encrypted, item.env_names = encrypt_env(body.env)
             item.tool_manifest = []
             item.last_test_status = None
             item.last_test_message = None
@@ -614,7 +624,14 @@ async def test_mcp_server(
     item = _server(db, current_user.id, server_id)
     item.last_tested_at = datetime.now(timezone.utc)
     try:
-        tools = await discover_tools(item.url, decrypt_headers(item.headers_encrypted))
+        tools = await discover_tools(
+            transport=item.transport,
+            url=item.url,
+            headers=decrypt_headers(item.headers_encrypted),
+            command=item.command,
+            args=item.args,
+            env=decrypt_env(item.env_encrypted),
+        )
         item.tool_manifest = tools
         item.last_test_status = "success"
         item.last_test_message = f"连接成功，发现 {len(tools)} 个工具"
