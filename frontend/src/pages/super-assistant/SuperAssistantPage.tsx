@@ -1385,7 +1385,7 @@ export default function SuperAssistantPage() {
         </main>
 
         {hasMessages && (
-          <footer className="shrink-0 bg-[var(--color-bg-elevated)] px-4 pb-5 pt-2 sm:px-8 sm:pb-6">
+          <footer className="shrink-0 bg-[var(--color-bg-elevated)] px-4 pb-8 pt-2 sm:px-8 sm:pb-10">
             <div className="mx-auto max-w-4xl">
               {renderComposer()}
             </div>
