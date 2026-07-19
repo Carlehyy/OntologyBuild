@@ -12,6 +12,7 @@ import {
   ExclamationTriangleIcon,
   ShieldCheckIcon,
   ArrowPathIcon,
+  CircleStackIcon,
 } from '@heroicons/react/24/outline';
 import { useOntologyStore } from '../store/ontologyStore';
 import { lintOntology, lintSummary, type LintIssue } from '../utils/schemaLint';
@@ -27,9 +28,10 @@ interface HeaderProps {
   showLinks?: boolean;
   onToggleObjects?: () => void;
   showObjects?: boolean;
+  onOpenMapping?: () => void;
 }
 
-export default function Header({ readOnly = false, stageLabel, onToggleActions, onToggleFunctions, showActions, showFunctions, onToggleLinks, showLinks, onToggleObjects, showObjects }: HeaderProps) {
+export default function Header({ readOnly = false, stageLabel, onToggleActions, onToggleFunctions, showActions, showFunctions, onToggleLinks, showLinks, onToggleObjects, showObjects, onOpenMapping }: HeaderProps) {
   const { ontology, syncStatus, isDirty, syncError, saveToBackend, discardAndReload, lastSentinelSummary } = useOntologyStore();
 
   if (!ontology) return null;
@@ -92,6 +94,18 @@ export default function Header({ readOnly = false, stageLabel, onToggleActions, 
         </div>
 
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 text-sm text-surface-500 md:ml-0 md:justify-self-end">
+          {onOpenMapping && (
+            <button
+              type="button"
+              data-testid="open-mapping-workspace"
+              onClick={onOpenMapping}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2.5 py-1.5 text-xs font-medium text-teal-300 transition-colors hover:border-teal-400/50 hover:bg-teal-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              title="查看对象实体、实体关系与数据资产湖的映射"
+            >
+              <CircleStackIcon className="h-4 w-4" />
+              数据映射
+            </button>
+          )}
           {readOnly && (
             <span className="rounded-lg border border-surface-700 bg-surface-800/70 px-2.5 py-1.5 text-xs font-medium text-surface-300">
               {stageLabel || '只读快照'}

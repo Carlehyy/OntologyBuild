@@ -238,12 +238,16 @@ test('complete branch → real-data trial → reviewed release works in the brow
   // 草稿映射快照使用 camelCase DTO；工作台必须完整回显，不能误判为空后覆盖。
   await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
   await draftRow.getByRole('button', { name: '配置映射' }).click()
-  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/mapping-config\\?versionId=${draft.id}`))
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}&view=mapping`))
   await page.locator('.dmc-tutorial header button').click()
+  await expect(page.getByTestId('mapping-workspace')).toHaveAttribute('data-workspace-mode', 'draft')
   await expect(page.locator('.react-flow__node')).toHaveCount(3, { timeout: 20_000 })
   await expect(page.locator('.react-flow__edge')).toHaveCount(4)
   await expect(page.locator('.dmc-canvas-stats')).toContainText('字段映射 4')
-  await page.getByRole('button', { name: '返回数据映射' }).click()
+  await page.getByRole('button', { name: '返回模型结构' }).first().click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}$`))
+  await page.goto(`/#/ontologies/${ontology.id}`)
+  await page.getByRole('button', { name: '查看历史版本' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()
 
   await page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为试跑态' }).click()
@@ -256,7 +260,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
 
   // 试跑态虽然冻结结构，但模型定义必须可查看，画布仍可移动。
   await page.goto(`/#/ontologies/${ontology.id}/graph?versionId=${draft.id}`)
-  await expect(page.getByText(/试跑态 v0\.1 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/试跑态 v0\.1 · 可只读查看本次隔离实例/)).toBeVisible({ timeout: 20_000 })
   // 功能入口在所有状态保持稳定：安全查看/布局能力可用，结构和正式运行操作明确禁用。
   await expect(page.getByRole('button', { name: '对象实体', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '导入', exact: true })).toBeDisabled()
@@ -280,6 +284,13 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByText('真机二号')).toBeVisible()
   await expect(page.getByRole('button', { name: '新建实例' })).toBeDisabled()
   await page.getByRole('button', { name: '关闭对象实例浏览器' }).click()
+
+  await page.getByTitle('打开菜单').click()
+  await expect(page.getByTestId('graph-runtime-tool-sentinel')).toBeEnabled()
+  await page.getByTestId('graph-runtime-tool-sentinel').click()
+  await expect(page.getByRole('heading', { name: '哨兵引擎' })).toBeVisible()
+  await expect(page.getByText('正在查看冻结的哨兵定义和隔离试跑评估')).toBeVisible()
+  await page.getByRole('button', { name: '关闭哨兵引擎' }).click()
 
   await page.getByTitle('打开菜单').click()
   await page.getByTestId('graph-runtime-tool-runaction').click()
@@ -516,9 +527,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
     `/api/v2/formal/ontologies/${ontology.id}/facts/recent?limit=10&kind=decision`)
   expect(decisionFacts.some((fact: any) => fact.value === 'REJECTED')).toBeTruthy()
 
-  // 旧的无版本映射 URL 必须 fail closed，不能再直接写运行投影表。
+  // 旧的无版本映射 URL 只能展示当前发布快照，不得写运行投影表。
   await page.goto(`/#/ontologies/${ontology.id}/mapping-config`)
-  await expect(page.getByText('映射结构只能在草稿版本中维护，当前入口未指定草稿。')).toBeVisible()
+  await expect(page.getByTestId('mapping-workspace')).toHaveAttribute('data-workspace-mode', 'release')
+  await expect(page.getByText('发布快照 · 只读查看')).toBeVisible()
   await expect(page.getByRole('button', { name: '保存配置' })).toHaveCount(0)
 
   await request.delete(`${API}/api/v1/ontologies/${ontology.id}`, {

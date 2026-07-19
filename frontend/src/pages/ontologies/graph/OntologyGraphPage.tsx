@@ -19,6 +19,7 @@ import ObjectList from '../../../palantir-graph/components/panels/ObjectList';
 import SentinelPanel from '../../../palantir-graph/components/panels/SentinelPanel';
 import { FloatingMenu } from '../../../palantir-graph/components/FloatingMenu';
 import { getGraphWorkspaceCapabilities } from '../../../palantir-graph/workspaceCapabilities';
+import MappingConfigurationPage from '../mapping/MappingConfigurationPage';
 
 const HelpGuide = lazy(() => import('../../../palantir-graph/components/panels/HelpGuide'));
 const GraphDatabaseView = lazy(() => import('../../../palantir-graph/components/panels/GraphDatabaseView'));
@@ -44,6 +45,7 @@ export default function OntologyGraphPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const versionId = searchParams.get('versionId');
+  const mappingView = searchParams.get('view') === 'mapping';
 
   const [showHelp, setShowHelp] = useState(false);
   const [showGraphDB, setShowGraphDB] = useState(false);
@@ -87,7 +89,7 @@ export default function OntologyGraphPage() {
 
   // 加载后端本体后再绑定脏标记监听，避免把后端加载结果误判为用户编辑
   useEffect(() => {
-    if (!ontologyId) return;
+    if (!ontologyId || mappingView) return;
     let off: (() => void) | undefined;
     let cancelled = false;
 
@@ -102,7 +104,7 @@ export default function OntologyGraphPage() {
       cancelled = true;
       off?.();
     };
-  }, [ontologyId, versionId, loadFromBackend]);
+  }, [ontologyId, versionId, loadFromBackend, mappingView]);
 
   // 撤销/重做历史记录（与后端加载无关，进入编辑器即绑定）
   useEffect(() => attachHistory(), []);
@@ -110,6 +112,7 @@ export default function OntologyGraphPage() {
   // 快捷键：Ctrl+K 搜索 / Ctrl+Z 撤销 / Ctrl+Shift+Z·Ctrl+Y 重做 / Ctrl+S 保存
   // Delete 删除选中（带影响预览）/ Esc 关闭右侧面板
   useEffect(() => {
+    if (mappingView) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const inEditable = !!el && (
@@ -157,10 +160,11 @@ export default function OntologyGraphPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [capabilities.canEditSchema]);
+  }, [capabilities.canEditSchema, mappingView]);
 
   // 为 body 添加作用域类，确保 Palantir 样式只在本页面生效
   useEffect(() => {
+    if (mappingView) return;
     const originalClass = document.body.className;
     const originalOverflow = document.body.style.overflow;
     document.body.classList.add('palantir-graph-root');
@@ -169,7 +173,7 @@ export default function OntologyGraphPage() {
       document.body.className = originalClass;
       document.body.style.overflow = originalOverflow;
     };
-  }, []);
+  }, [mappingView]);
 
   const openFunctionTest = (fnId?: string) => {
     setTestFunctionId(fnId || '');
@@ -207,7 +211,7 @@ export default function OntologyGraphPage() {
   const stage = workspaceMode === 'draft'
     ? { tone: 'sky', text: `草稿 ${ontology?.version || ''} · 可编辑并查看全部模型定义，不产生 Fact、不执行本体网络` }
     : workspaceMode === 'trial'
-      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 可查看定义并保存画布布局，真实数据仅写入隔离空间` }
+      ? { tone: 'amber', text: `试跑态 ${ontology?.version || ''} · 可只读查看本次隔离实例，动作与外部副作用保持禁用` }
       : workspaceMode === 'release'
         ? { tone: 'slate', text: `历史发布 ${ontology?.version || ''} · 可查看定义并保存画布布局，不承载当前运行数据` }
         : workspaceMode === 'archived'
@@ -220,6 +224,14 @@ export default function OntologyGraphPage() {
     slate: 'border-slate-500/40 bg-slate-950/90 text-slate-200',
     emerald: 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200',
   }[stage.tone];
+
+  if (mappingView) {
+    return (
+      <div className="fixed inset-0 z-[9999] h-screen w-screen overflow-hidden">
+        <MappingConfigurationPage graphWorkspace />
+      </div>
+    );
+  }
 
   return (
     <ReactFlowProvider>
@@ -267,6 +279,12 @@ export default function OntologyGraphPage() {
           showLinks={showLinkPanel}
           onToggleObjects={() => setShowObjectPanel(v => !v)}
           showObjects={showObjectPanel}
+          onOpenMapping={() => {
+            const params = new URLSearchParams();
+            if (versionId) params.set('versionId', versionId);
+            params.set('view', 'mapping');
+            navigate(`/ontologies/${ontologyId}/graph?${params.toString()}`);
+          }}
         />
         <main className="h-full pt-16">
           <Canvas

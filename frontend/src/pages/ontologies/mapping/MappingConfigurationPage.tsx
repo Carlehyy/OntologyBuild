@@ -74,7 +74,7 @@ function ObjectCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
       <div className="dmc-node__fields">
         {properties.map(property => <div key={property.id || property.name} className="dmc-node-field">
           <Handle type="target" position={Position.Left} id={property.name} className="dmc-handle dmc-handle--target" />
-          {object.primaryKey === property.name ? <KeyRound size={11} className="is-key" /> : <span className="dmc-field-spacer" />}
+          {object.primaryKey === property.name || object.primaryKey === property.id ? <KeyRound size={11} className="is-key" /> : <span className="dmc-field-spacer" />}
           <span title={property.displayName || property.name}>{property.displayName || property.name}</span>{property.required && <i>*</i>}<em>{typeLabel(property.type)}</em>
         </div>)}
       </div>
@@ -137,13 +137,13 @@ function nextLaneY(nodes: MappingNode[], lane: 'dataset' | 'target') {
     .reduce((bottom, node) => Math.max(bottom, node.position.y + estimatedNodeHeight(node) + 36), 55)
 }
 
-export default function MappingConfigurationPage() {
+export default function MappingConfigurationPage({ graphWorkspace = false }: { graphWorkspace?: boolean }) {
   const { id: ontologyId = '' } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
   const versionId = searchParams.get('versionId')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const data = useMappingData(ontologyId, false, versionId, Boolean(versionId))
+  const data = useMappingData(ontologyId, false, versionId, true)
   const [nodes, setNodes, onNodesChange] = useNodesState<MappingNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [leftSearch, setLeftSearch] = useState('')
@@ -159,6 +159,7 @@ export default function MappingConfigurationPage() {
   const [tutorialBounds, setTutorialBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const pageRef = useRef<HTMLDivElement>(null)
   const initialized = useRef(false)
+  const editable = data.workspaceEditable === true
 
   const previewQuery = useQuery<PreviewResponse>({
     queryKey: ['mapping-config-preview', selectedDatasetId],
@@ -178,6 +179,7 @@ export default function MappingConfigurationPage() {
   }, [])
 
   const addDatasetNode = useCallback((dataset: MappingDataset, position?: { x: number; y: number }) => {
+    if (!editable) return
     const nodeId = `dataset:${dataset.id}`
     if (nodes.some(node => node.id === nodeId)) return
     setNodes(current => [...current, {
@@ -185,9 +187,10 @@ export default function MappingConfigurationPage() {
       data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId },
     }])
     setDirty(true)
-  }, [nodes, setNodes])
+  }, [editable, nodes, setNodes])
 
   const addTargetNode = useCallback((kind: 'object' | 'relation', id: string, position?: { x: number; y: number }) => {
+    if (!editable) return
     const nodeId = `${kind}:${id}`
     if (nodes.some(node => node.id === nodeId)) return
     if (kind === 'object') {
@@ -209,7 +212,7 @@ export default function MappingConfigurationPage() {
       }])
     }
     setDirty(true)
-  }, [data.linkTypes, nodes, objectById, setNodes])
+  }, [data.linkTypes, editable, nodes, objectById, setNodes])
 
   useEffect(() => {
     initialized.current = false
@@ -282,14 +285,14 @@ export default function MappingConfigurationPage() {
   }, [data, datasetById, objectById, ontologyId, setEdges, setNodes])
 
   useEffect(() => {
-    if (!dirty) return
+    if (!editable || !dirty) return
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
       event.returnValue = ''
     }
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
-  }, [dirty])
+  }, [dirty, editable])
 
   useEffect(() => {
     if (tutorialStep === null || !pageRef.current) { setTutorialBounds(null); return }
@@ -306,6 +309,7 @@ export default function MappingConfigurationPage() {
   }, [tutorialStep])
 
   const onConnect = useCallback((connection: Connection) => {
+    if (!editable) return
     if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) return
     const sourceNode = nodes.find(node => node.id === connection.source)
     const targetNode = nodes.find(node => node.id === connection.target)
@@ -324,7 +328,7 @@ export default function MappingConfigurationPage() {
     }
     setEdges(current => [...current, { ...connection, id: `draft:${Date.now()}:${Math.random().toString(36).slice(2)}`, type: 'smoothstep' } as Edge])
     setDirty(true); setNotice(null)
-  }, [edges, nodes, setEdges, targetProperty])
+  }, [editable, edges, nodes, setEdges, targetProperty])
 
   const invalidEdges = useMemo(() => edges.filter(edge => {
     const sourceNode = nodes.find(node => node.id === edge.source)
@@ -440,9 +444,15 @@ export default function MappingConfigurationPage() {
       })
     })
   }
-  const clearCanvas = () => { if (nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null) } }
+  const clearCanvas = () => { if (editable && nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null) } }
   const leaveWorkspace = () => {
     if (dirty && !window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')) return
+    if (graphWorkspace) {
+      navigate(versionId
+        ? `/ontologies/${ontologyId}/graph?versionId=${encodeURIComponent(versionId)}`
+        : `/ontologies/${ontologyId}/graph`)
+      return
+    }
     navigate(versionId
       ? `/ontologies/${ontologyId}?tab=versions`
       : `/ontologies/${ontologyId}?tab=data-mapping`)
@@ -455,9 +465,7 @@ export default function MappingConfigurationPage() {
     { icon: Eye, title: '预览数据，最后统一保存', text: '点击数据集的眼睛可在底部核对实例。所有操作先保存在当前前端草稿，只有右上角“保存配置”才会写入数据库。' },
   ]
 
-  if (!versionId) return <div className="dmc-page-loading dmc-page-loading--error"><AlertCircle /><span>映射结构只能在草稿版本中维护，当前入口未指定草稿。</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>前往版本演进</button></div>
   if (data.isLoading) return <div className="dmc-page-loading"><Loader2 className="animate-spin" />正在加载映射工作台…</div>
-  if (data.workspaceEditable === false) return <div className="dmc-page-loading dmc-page-loading--error"><AlertCircle /><span>当前版本处于{data.workspaceMode === 'trial' ? '试跑冻结态' : '只读态'}，不可修改映射。</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>返回版本演进</button></div>
   if (data.isError) return <div className="dmc-page-loading dmc-page-loading--error"><AlertCircle />映射工作台加载失败，请返回后重试。</div>
 
   const filteredDatasets = data.datasets.filter(item => item.name.toLowerCase().includes(leftSearch.toLowerCase()))
@@ -465,11 +473,11 @@ export default function MappingConfigurationPage() {
   const mappedTargetHandles = new Set(edges.map(edge => `${edge.target}:${edge.targetHandle}`))
 
   return (
-    <div className="dmc-page" ref={pageRef}>
+    <div className={`dmc-page ${editable ? '' : 'dmc-page--readonly'}`} ref={pageRef} data-testid="mapping-workspace" data-workspace-mode={data.workspaceMode || 'release'}>
       <header className="dmc-header">
-        <div className="dmc-brand"><button onClick={leaveWorkspace} aria-label="返回数据映射"><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射配置</b><small>对象实体、实体关系与数据资产字段映射</small></div></div>
+        <div className="dmc-brand"><button onClick={leaveWorkspace} aria-label={graphWorkspace ? '返回模型结构' : '返回数据映射'}><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
         <label className="dmc-global-search"><Search size={14} /><input placeholder="搜索画布节点、数据集或本体属性…" onChange={event => { setLeftSearch(event.target.value); setRightSearch(event.target.value) }} /></label>
-        <div className="dmc-header-actions"><button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button><button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button><span className="dmc-divider" /><button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button></div>
+        <div className="dmc-header-actions"><button className="dmc-model-switch" onClick={leaveWorkspace} title="返回模型结构"><Boxes size={15} /><span>模型结构</span></button><button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button>{editable && <button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button>}<span className="dmc-divider" />{editable ? <button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button> : <span className="dmc-readonly-badge"><Eye size={14} />只读快照</span>}</div>
       </header>
 
       {notice && <div className={`dmc-notice dmc-notice--${notice.tone}`}>{notice.tone === 'good' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}<span>{notice.text}</span><button onClick={() => setNotice(null)}><X size={13} /></button></div>}
@@ -483,7 +491,7 @@ export default function MappingConfigurationPage() {
             {filteredDatasets.map(dataset => {
               const expanded = expandedAssets.has(dataset.id)
               const added = nodes.some(node => node.id === `dataset:${dataset.id}`)
-              return <div className="dmc-asset" key={dataset.id}><div className="dmc-asset-main"><button onClick={() => setExpandedAssets(current => { const next = new Set(current); if (expanded) next.delete(dataset.id); else next.add(dataset.id); return next })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button><span className={`dmc-asset-icon dmc-asset-icon--${dataset.source}`}><Table2 size={13} /></span><span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows ?? 0} 行 · {dataset.columns.length} 字段</small></span><button className="dmc-eye" onClick={() => setSelectedDatasetId(dataset.id)} title="预览数据"><Eye size={12} /></button><button className="dmc-add" disabled={added} onClick={() => addDatasetNode(dataset)}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>{expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}</div>
+              return <div className="dmc-asset" key={dataset.id}><div className="dmc-asset-main"><button onClick={() => setExpandedAssets(current => { const next = new Set(current); if (expanded) next.delete(dataset.id); else next.add(dataset.id); return next })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button><span className={`dmc-asset-icon dmc-asset-icon--${dataset.source}`}><Table2 size={13} /></span><span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows ?? 0} 行 · {dataset.columns.length} 字段</small></span><button className="dmc-eye" onClick={() => setSelectedDatasetId(dataset.id)} title="预览数据"><Eye size={12} /></button><button className="dmc-add" disabled={!editable || added} onClick={() => addDatasetNode(dataset)} title={!editable ? '只读快照不可添加节点' : undefined}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>{expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}</div>
             })}
           </div>
           <div className="dmc-sidebar-foot"><span><Database size={11} />成品 {data.datasets.filter(item => item.source === 'curated').length}</span><span><Table2 size={11} />人工 {data.datasets.filter(item => item.source === 'manual').length}</span></div>
@@ -492,10 +500,11 @@ export default function MappingConfigurationPage() {
         <main className="dmc-canvas-wrap">
           <ReactFlow<MappingNode, Edge>
             nodes={nodes} edges={edges} nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
-            onEdgesDelete={() => setDirty(true)} onNodesDelete={() => setDirty(true)}
+            onNodesChange={onNodesChange} onEdgesChange={editable ? onEdgesChange : undefined} onConnect={editable ? onConnect : undefined}
+            onEdgesDelete={editable ? () => setDirty(true) : undefined} onNodesDelete={editable ? () => setDirty(true) : undefined}
+            nodesConnectable={editable} nodesDraggable
             fitView fitViewOptions={{ padding: .18 }} minZoom={.3} maxZoom={1.5}
-            deleteKeyCode={['Backspace', 'Delete']} connectionLineStyle={{ stroke: '#109486', strokeWidth: 2 }}
+            deleteKeyCode={editable ? ['Backspace', 'Delete'] : null} connectionLineStyle={{ stroke: '#109486', strokeWidth: 2 }}
           >
             <Background gap={18} size={1} color="#dce3e7" />
             <Controls position="bottom-left" showInteractive={false} />
@@ -519,7 +528,7 @@ export default function MappingConfigurationPage() {
                 : ((target as MappingLinkType).properties || []).filter(item => item.source !== 'computed' && !item.computed)
               const total = properties.length + (rightKind === 'relation' ? 2 : 0)
               const mapped = [...mappedTargetHandles].filter(key => key.startsWith(`${nodeId}:`)).length
-              return <div className="dmc-target-item" key={target.id}><span className={`dmc-target-icon dmc-target-icon--${rightKind}`}>{rightKind === 'object' ? <Boxes size={14} /> : <GitBranch size={14} />}</span><span><b>{target.displayName || target.name}</b><small>{rightKind === 'object' ? '对象实体' : '实体关系'} · {mapped}/{total} 已映射</small></span><em data-complete={total > 0 && mapped === total} data-partial={mapped > 0 && mapped < total}>{mapped === 0 ? '未配置' : mapped === total ? '已完成' : '配置中'}</em><button disabled={added} onClick={() => addTargetNode(rightKind, target.id)}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>
+              return <div className="dmc-target-item" key={target.id}><span className={`dmc-target-icon dmc-target-icon--${rightKind}`}>{rightKind === 'object' ? <Boxes size={14} /> : <GitBranch size={14} />}</span><span><b>{target.displayName || target.name}</b><small>{rightKind === 'object' ? '对象实体' : '实体关系'} · {mapped}/{total} 已映射</small></span><em data-complete={total > 0 && mapped === total} data-partial={mapped > 0 && mapped < total}>{mapped === 0 ? '未配置' : mapped === total ? '已完成' : '配置中'}</em><button disabled={!editable || added} onClick={() => addTargetNode(rightKind, target.id)} title={!editable ? '只读快照不可添加节点' : undefined}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>
             })}
           </div>
           <div className="dmc-unmapped-summary"><AlertCircle size={13} /><span><b>{(rightKind === 'object' ? data.objectTypes : data.linkTypes).filter(target => !nodes.some(node => node.id === `${rightKind}:${target.id}`) && (rightKind === 'object' ? !data.mappings.some(mapping => mappingTargetId(mapping) === target.id) : !linkMappingForType(target as MappingLinkType, data.linkMappings))).length} 个尚未配置</b><small>加入画布后可建立字段映射</small></span></div>

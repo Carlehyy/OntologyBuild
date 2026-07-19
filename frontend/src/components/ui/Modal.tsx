@@ -79,7 +79,7 @@ export function Modal({
         </button>
 
         {(title || description) && (
-          <header className="flex items-start gap-3 px-6 pb-3 pt-5 pr-14">
+          <header className="flex shrink-0 items-start gap-3 px-6 pb-3 pt-5 pr-14">
             {headerIcon && (
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
                 {headerIcon}
@@ -101,12 +101,12 @@ export function Modal({
         )}
 
         <div className={cn(
-          'min-h-0 overflow-y-auto px-6 py-4',
+          'min-h-0 flex-1 overflow-y-auto px-6 py-4',
           !(title || description) && 'pt-6',
           contentClassName,
         )}>{children}</div>
         {footer && (
-          <footer className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-6 py-4">
+          <footer className="flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-6 py-4">
             {footer}
           </footer>
         )}

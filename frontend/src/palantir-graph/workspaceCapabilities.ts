@@ -43,6 +43,7 @@ const RUNTIME_DISABLED_REASON: Record<Exclude<OntologyWorkspaceMode, 'runtime'>,
 export function getGraphWorkspaceCapabilities(mode: OntologyWorkspaceMode): GraphWorkspaceCapabilities {
   const canEditSchema = mode === 'draft';
   const hasRuntimeData = mode === 'runtime';
+  const hasBrowsableInstances = mode === 'runtime' || mode === 'trial';
   const dataScope: OntologyDataScope = mode === 'runtime'
     ? 'runtime'
     : mode === 'trial'
@@ -59,10 +60,12 @@ export function getGraphWorkspaceCapabilities(mode: OntologyWorkspaceMode): Grap
     canSearch: true,
     canExport: true,
     canImport: canEditSchema,
-    canBrowseInstances: hasRuntimeData || mode === 'trial',
+    canBrowseInstances: hasBrowsableInstances,
     canViewRunHistory: hasRuntimeData || mode === 'trial',
     canManageAutonomy: hasRuntimeData,
-    canManageSentinels: hasRuntimeData,
+    // 哨兵属于版本快照中的第五类模型定义；非运行态仍可打开查看，
+    // 只有草稿态由面板允许编辑，运行态继续使用线上哨兵接口。
+    canManageSentinels: true,
     canRunActions: hasRuntimeData,
     canTestFunctions: hasRuntimeData,
     canViewGraphDatabase: true,

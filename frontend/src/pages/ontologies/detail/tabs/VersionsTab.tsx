@@ -143,7 +143,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
   const openMapping = (node: VersionNode) => {
     onClose?.()
-    navigate(`/ontologies/${ontologyId}/mapping-config?versionId=${node.id}`)
+    navigate(`/ontologies/${ontologyId}/graph?versionId=${node.id}&view=mapping`)
   }
 
   const createDraft = useMutation({

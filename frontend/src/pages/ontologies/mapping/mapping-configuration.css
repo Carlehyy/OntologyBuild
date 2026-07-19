@@ -93,6 +93,31 @@
 .dmc-global-search input::placeholder,
 .dmc-side-search input::placeholder { color: #a2adb5; }
 .dmc-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.dmc-header-actions > .dmc-model-switch:not(.dmc-save) {
+  width: auto;
+  padding: 0 9px;
+  gap: 5px;
+  color: #52616c;
+  border-color: #d7e2e3;
+  background: #f7f9f9;
+  font-size: 11px;
+  font-weight: 700;
+}
+.dmc-readonly-badge {
+  min-width: 94px;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid #d8e1e3;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #65727d;
+  background: #f4f7f7;
+  font-size: 11px;
+  font-weight: 700;
+}
 .dmc-divider { width: 1px; height: 25px; margin: 0 6px; background: #dde5e7; }
 .dmc-save {
   min-width: 104px;
@@ -271,6 +296,8 @@
 .dmc-handle { z-index: 4 !important; width: 10px !important; height: 10px !important; border: 2px solid #fff !important; box-shadow: 0 0 0 1px rgba(66,82,91,.1); }
 .dmc-handle--source { right: 0 !important; background: #18a294 !important; }
 .dmc-handle--target { left: 0 !important; background: #6876c9 !important; }
+.dmc-page--readonly .dmc-handle { opacity: .42; cursor: default !important; }
+.dmc-page--readonly .react-flow__edge-path { stroke-dasharray: 0; }
 .dmc-node-field--endpoint { color: #9b6a20; background: #fffaf1; }
 .dmc-node-field--endpoint .dmc-handle--target { background: #d99b3d !important; }
 .dmc-relation-endpoints { height: 26px; padding: 0 10px; display: flex; align-items: center; justify-content: center; gap: 6px; color: #a27532; background: #fff8eb; font-size: 10px; }
