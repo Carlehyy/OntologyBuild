@@ -804,7 +804,7 @@ export default function ExplorationPage() {
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
             <div
               data-testid="exploration-composer-shell"
-              className="workspace-topology-surface relative overflow-visible rounded-xl border border-[var(--color-border)] transition-colors focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-500/10"
+              className="workspace-topology-surface relative overflow-visible rounded-xl border border-teal-500 ring-1 ring-teal-500/10 transition-colors focus-within:ring-teal-500/20"
             >
               <div data-testid="exploration-composer-input" className="px-3 pb-2 pt-2.5">
                 <textarea

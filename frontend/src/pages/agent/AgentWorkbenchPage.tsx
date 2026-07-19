@@ -1439,11 +1439,6 @@ export default function AgentWorkbenchPage() {
                   <FileText size={14} />
                   <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">{oid ? '生成分析报告' : '分析报告'}</span>
                 </button>
-                <button onClick={resetChat} disabled={!oid}
-                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-500 transition-colors hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-700 disabled:opacity-30 disabled:cursor-not-allowed">
-                  <Plus size={14} />
-                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">创建新会话</span>
-                </button>
                 <div className="relative">
                   <button
                     type="button"
@@ -1451,9 +1446,10 @@ export default function AgentWorkbenchPage() {
                     disabled={!oid}
                     aria-label="查看历史会话"
                     aria-expanded={showHistory}
+                    data-testid="agent-session-history-button"
                     className={`group/tip relative flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
-                      ? 'border-teal-300 bg-teal-50 text-teal-700'
-                      : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                      ? 'border-teal-400 bg-teal-100 text-teal-800'
+                      : 'border-teal-200 bg-teal-50 text-teal-600 hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700'}`}
                   >
                     <History size={14} />
                     <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">查看历史会话</span>

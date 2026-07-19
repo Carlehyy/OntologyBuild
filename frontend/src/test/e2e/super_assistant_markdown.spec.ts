@@ -106,7 +106,7 @@ async function mockSuperAssistant(page: Page) {
   })
 }
 
-test('渲染 Markdown 主体并允许拖动上下文浮窗', async ({ page }) => {
+test('渲染 Markdown 主体并在顶栏展示上下文用量', async ({ page }) => {
   await mockSuperAssistant(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/#/super-assistant')
@@ -122,31 +122,37 @@ test('渲染 Markdown 主体并允许拖动上下文浮窗', async ({ page }) =>
   await expect(page.getByText('围栏外的补充说明。')).toBeVisible()
   await expect(page.getByText('### 三级标题', { exact: true })).toHaveCount(0)
 
-  const panel = page.locator('aside[aria-label^="当前上下文占比"]')
-  const handle = panel.getByRole('button', { name: /移动当前上下文窗口/ })
-  const before = await panel.boundingBox()
-  const handleBox = await handle.boundingBox()
-  expect(before).not.toBeNull()
-  expect(handleBox).not.toBeNull()
+  await expect(page.getByTestId('super-assistant-context-usage')).toHaveAttribute(
+    'aria-label',
+    '上下文占比 1.0%，974 / 100k',
+  )
+})
 
-  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(handleBox!.x - 230, handleBox!.y - 150, { steps: 8 })
-  await page.mouse.up()
+test('标题编辑与顶部工具默认使用可识别的状态色', async ({ page }) => {
+  await mockSuperAssistant(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/super-assistant')
 
-  const moved = await panel.boundingBox()
-  expect(moved).not.toBeNull()
-  expect(moved!.x).toBeLessThan(before!.x - 150)
-  expect(moved!.y).toBeLessThan(before!.y - 90)
+  const contextUsage = page.getByTestId('super-assistant-context-usage')
+  const configButton = page.getByRole('button', { name: '打开助手配置' })
+  const historyButton = page.getByRole('button', { name: '查看会话记录' })
 
-  const main = await panel.locator('..').boundingBox()
-  expect(main).not.toBeNull()
-  expect(moved!.x).toBeGreaterThanOrEqual(main!.x + 10)
-  expect(moved!.y).toBeGreaterThanOrEqual(main!.y + 10)
+  await expect(contextUsage).toHaveCSS('background-color', 'rgba(240, 253, 250, 0.8)')
+  await expect(configButton).toHaveCSS('background-color', 'rgb(255, 251, 235)')
+  await expect(historyButton).toHaveCSS('background-color', 'rgb(240, 249, 255)')
 
-  await handle.dblclick()
-  const reset = await panel.boundingBox()
-  expect(reset).not.toBeNull()
-  expect(Math.abs(reset!.x - before!.x)).toBeLessThan(2)
-  expect(Math.abs(reset!.y - before!.y)).toBeLessThan(2)
+  const contextBox = await contextUsage.boundingBox()
+  const configBox = await configButton.boundingBox()
+  const historyBox = await historyButton.boundingBox()
+  expect(contextBox).not.toBeNull()
+  expect(configBox).not.toBeNull()
+  expect(historyBox).not.toBeNull()
+  expect(Math.abs(contextBox!.y - configBox!.y)).toBeLessThan(2)
+  expect(Math.abs(contextBox!.y - historyBox!.y)).toBeLessThan(2)
+
+  await page.getByRole('button', { name: /Markdown 渲染验证/ }).click()
+  const cancelButton = page.getByRole('button', { name: '取消编辑会话名称' })
+  await expect(page.getByRole('textbox', { name: '编辑会话名称' })).toBeVisible()
+  await expect(cancelButton).toHaveCSS('background-color', 'rgb(255, 241, 242)')
+  await expect(cancelButton).toHaveCSS('color', 'rgb(225, 29, 72)')
 })

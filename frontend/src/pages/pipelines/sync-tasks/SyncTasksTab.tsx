@@ -477,21 +477,21 @@ export default function SyncTasksTab() {
               ) : (
                 <div className="min-w-full overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div data-testid="task-table-scroll" className="overflow-x-auto overscroll-x-contain scrollbar-thin">
-                    <table className="w-max min-w-[1840px] table-auto text-sm">
+                    <table className="w-max min-w-[1840px] table-auto text-center text-sm">
                       <thead className="bg-slate-50">
                         <tr className="border-b border-slate-200 text-xs text-slate-600">
-                          <th className="sticky left-0 z-20 min-w-[220px] border-r border-slate-200 bg-slate-50 px-4 py-2.5 text-left font-medium shadow-[10px_0_14px_-14px_rgba(15,23,42,0.35)]">任务名称</th>
-                          <th className="min-w-[240px] px-4 py-2.5 text-left font-medium">任务描述</th>
-                          <th className="min-w-[240px] px-4 py-2.5 text-left font-medium">关联流水线</th>
-                          <th className="min-w-[105px] px-4 py-2.5 text-left font-medium">启停</th>
-                          <th className="min-w-[105px] px-4 py-2.5 text-left font-medium">运行状态</th>
-                          <th className="min-w-[110px] px-4 py-2.5 text-left font-medium">调度方式</th>
-                          <th className="min-w-[160px] px-4 py-2.5 text-left font-medium">调度规则</th>
-                          <th className="min-w-[190px] px-4 py-2.5 text-left font-medium">下次执行</th>
-                          <th className="min-w-[210px] px-4 py-2.5 text-left font-medium">入库策略</th>
-                          <th className="min-w-[185px] px-4 py-2.5 text-left font-medium">最近执行</th>
-                          <th className="min-w-[210px] px-4 py-2.5 text-left font-medium">入湖结果</th>
-                          <th className="sticky right-0 z-20 min-w-[150px] bg-slate-50 px-4 py-2.5 text-right font-medium">操作</th>
+                          <th scope="col" data-column="task-name" className="sticky left-0 z-20 min-w-[200px] border-r border-slate-200 bg-slate-50 px-4 py-2.5 text-center font-medium shadow-[10px_0_14px_-14px_rgba(15,23,42,0.35)]">任务名称</th>
+                          <th scope="col" data-column="run-status" className="min-w-[105px] px-4 py-2.5 text-center font-medium">运行状态</th>
+                          <th scope="col" data-column="enabled" className="min-w-[105px] px-4 py-2.5 text-center font-medium">启停</th>
+                          <th scope="col" data-column="pipeline" className="min-w-[240px] px-4 py-2.5 text-center font-medium">关联流水线</th>
+                          <th scope="col" data-column="last-run" className="min-w-[185px] px-4 py-2.5 text-center font-medium">最近执行</th>
+                          <th scope="col" data-column="lake-result" className="min-w-[210px] px-4 py-2.5 text-center font-medium">入湖结果</th>
+                          <th scope="col" data-column="next-run" className="min-w-[190px] px-4 py-2.5 text-center font-medium">下次执行</th>
+                          <th scope="col" data-column="schedule-type" className="min-w-[110px] px-4 py-2.5 text-center font-medium">调度方式</th>
+                          <th scope="col" data-column="write-mode" className="min-w-[210px] px-4 py-2.5 text-center font-medium">入库策略</th>
+                          <th scope="col" data-column="schedule-rule" className="min-w-[160px] px-4 py-2.5 text-center font-medium">调度规则</th>
+                          <th scope="col" data-column="description" className="min-w-[240px] px-4 py-2.5 text-center font-medium">任务描述</th>
+                          <th scope="col" data-column="actions" className="sticky right-0 z-20 min-w-[150px] border-l border-slate-200 bg-slate-50 px-4 py-2.5 text-center font-medium shadow-[-10px_0_14px_-14px_rgba(15,23,42,0.35)]">操作</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -510,11 +510,19 @@ export default function SyncTasksTab() {
                               : '仅支持手动触发'
                           return (
                             <tr key={t.id} className="group whitespace-nowrap transition-colors hover:bg-slate-50/80">
-                              <td className="sticky left-0 z-[1] min-w-[220px] border-r border-slate-100 bg-white px-4 py-3 align-middle shadow-[10px_0_14px_-14px_rgba(15,23,42,0.35)] group-hover:bg-slate-50">
-                                <span className="text-sm font-medium text-slate-900">{t.name}</span>
+                              <td data-column="task-name" className="sticky left-0 z-[1] min-w-[200px] border-r border-slate-100 bg-white px-4 py-3 text-center align-middle shadow-[10px_0_14px_-14px_rgba(15,23,42,0.35)] group-hover:bg-slate-50">
+                                <span className="mx-auto block max-w-[176px] truncate text-sm font-medium text-slate-900" title={t.name}>{t.name}</span>
                               </td>
-                              <td className="px-4 py-3 align-middle text-xs text-slate-500">{t.description || '—'}</td>
-                              <td className="px-4 py-3 align-middle">
+                              <td data-column="run-status" className="px-4 py-3 text-center align-middle"><RunStateBadge task={t} /></td>
+                              <td data-column="enabled" className="px-4 py-3 text-center align-middle">
+                                <div className="flex items-center justify-center gap-2">
+                                  <Switch checked={t.enabled} onChange={() => handleToggle(t)} />
+                                  <span className={`text-[11px] font-medium ${t.enabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                    {t.enabled ? '已启用' : '已停用'}
+                                  </span>
+                                </div>
+                              </td>
+                              <td data-column="pipeline" className="px-4 py-3 text-center align-middle">
                                 <button
                                   type="button"
                                   onClick={() => !pipelineGone && navigate(`/data/pipelines?search=${encodeURIComponent(t.pipeline_name || t.pipeline_id)}`)}
@@ -533,25 +541,20 @@ export default function SyncTasksTab() {
                                   </span>
                                 )}
                               </td>
-                              <td className="px-4 py-3 align-middle">
-                                <div className="flex items-center gap-2">
-                                  <Switch checked={t.enabled} onChange={() => handleToggle(t)} />
-                                  <span className={`text-[11px] font-medium ${t.enabled ? 'text-emerald-700' : 'text-slate-400'}`}>
-                                    {t.enabled ? '已启用' : '已停用'}
-                                  </span>
-                                </div>
+                              <td data-column="last-run" className="px-4 py-3 text-center align-middle">
+                                {t.last_run_at ? <TimeInline iso={t.last_run_at} withSeconds /> : <span className="text-xs text-slate-400">尚未执行</span>}
                               </td>
-                              <td className="px-4 py-3 align-middle"><RunStateBadge task={t} /></td>
-                              <td className="px-4 py-3 align-middle">
-                                <div className="inline-flex items-center gap-1 text-[11px] text-slate-600">
-                                  <SchIcon size={11} className={sch.color} />
-                                  <span>{sch.label}</span>
-                                </div>
+                              <td data-column="lake-result" className="px-4 py-3 text-center align-middle">
+                                {t.status === 'failed' && t.last_error ? (
+                                  <span className="text-xs text-rose-600">{t.last_error}</span>
+                                ) : (
+                                  <div className="inline-flex items-center justify-center gap-2">
+                                    <span className="text-xs tabular-nums text-slate-500">产出 {t.last_rows ?? 0} 行</span>
+                                    <ExecResultCell impact={t.last_impact} status={t.status} />
+                                  </div>
+                                )}
                               </td>
-                              <td className={`px-4 py-3 align-middle text-xs ${t.schedule_type === 'CRON' ? 'font-mono text-slate-600' : 'text-slate-500'}`}>
-                                {scheduleRule}
-                              </td>
-                              <td className="px-4 py-3 align-middle">
+                              <td data-column="next-run" className="px-4 py-3 text-center align-middle">
                                 {t.schedule_type === 'MANUAL' ? (
                                   <span className="text-xs text-slate-400">不自动调度</span>
                                 ) : !t.enabled ? (
@@ -565,8 +568,14 @@ export default function SyncTasksTab() {
                                   <span className="text-xs text-slate-400">待调度器计算</span>
                                 )}
                               </td>
-                              <td className="px-4 py-3 align-middle">
-                                <div className="inline-flex items-center gap-2">
+                              <td data-column="schedule-type" className="px-4 py-3 text-center align-middle">
+                                <div className="inline-flex items-center justify-center gap-1 text-[11px] text-slate-600">
+                                  <SchIcon size={11} className={sch.color} />
+                                  <span>{sch.label}</span>
+                                </div>
+                              </td>
+                              <td data-column="write-mode" className="px-4 py-3 text-center align-middle">
+                                <div className="inline-flex items-center justify-center gap-2">
                                   <span data-write-mode={t.write_mode} className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-medium ${WRITE_MODE_TONE[t.write_mode]}`} title={wm?.desc}>
                                     {wm?.label || t.write_mode}
                                   </span>
@@ -575,21 +584,14 @@ export default function SyncTasksTab() {
                                   </span>
                                 </div>
                               </td>
-                              <td className="px-4 py-3 align-middle">
-                                {t.last_run_at ? <TimeInline iso={t.last_run_at} withSeconds /> : <span className="text-xs text-slate-400">尚未执行</span>}
+                              <td data-column="schedule-rule" className={`px-4 py-3 text-center align-middle text-xs ${t.schedule_type === 'CRON' ? 'font-mono text-slate-600' : 'text-slate-500'}`}>
+                                {scheduleRule}
                               </td>
-                              <td className="px-4 py-3 align-middle">
-                                {t.status === 'failed' && t.last_error ? (
-                                  <span className="text-xs text-rose-600">{t.last_error}</span>
-                                ) : (
-                                  <div className="inline-flex items-center gap-2">
-                                    <span className="text-xs tabular-nums text-slate-500">产出 {t.last_rows ?? 0} 行</span>
-                                    <ExecResultCell impact={t.last_impact} status={t.status} />
-                                  </div>
-                                )}
+                              <td data-column="description" className="px-4 py-3 text-center align-middle text-xs text-slate-500">
+                                <span className="mx-auto block max-w-[216px] truncate" title={t.description || undefined}>{t.description || '—'}</span>
                               </td>
-                              <td className="sticky right-0 z-[1] bg-white px-4 py-2 text-right align-middle shadow-[-10px_0_14px_-14px_rgba(15,23,42,0.35)] group-hover:bg-slate-50">
-                                <div className="flex items-center justify-end gap-0.5">
+                              <td data-column="actions" className="sticky right-0 z-[1] border-l border-slate-100 bg-white px-4 py-2 text-center align-middle shadow-[-10px_0_14px_-14px_rgba(15,23,42,0.35)] group-hover:bg-slate-50">
+                                <div className="flex items-center justify-center gap-0.5">
                                   <IconBtn2 title={pipelineDisabled ? '关联流水线已停用' : '立即执行'}
                                     disabled={t.status === 'running' || isTriggering || pipelineGone || !!pipelineUnpub || pipelineDisabled}
                                     onClick={() => handleTrigger(t)} accent="teal">
@@ -861,7 +863,7 @@ function RecentRunFeed({ runs }: { runs: PipelineTaskRecentRun[] }) {
     failed: { label: '失败', dot: 'bg-rose-500', text: 'text-rose-600' },
   }
   return (
-    <div className="min-h-0 flex-1 overflow-auto pr-1 scrollbar-thin">
+    <div data-testid="recent-run-feed" className="scrollbar-none min-h-0 flex-1 overflow-y-auto pr-1">
       {runs.slice(0, RECENT_RUN_LIMIT).map((run, index) => {
         const meta = statusMeta[run.status] || statusMeta.pending
         return (

@@ -300,9 +300,10 @@ function ContextUsage({ messages, model }: { messages: SuperMessage[]; model?: M
 
   return (
     <aside
+      data-testid="super-assistant-context-usage"
       aria-label={`${sourceLabel}占比 ${percentageLabel}，${formatTokenCount(used)} / ${formatTokenCount(limit)}`}
       title={sourceDescription}
-      className="flex h-9 w-40 shrink-0 flex-col justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 xl:w-48"
+      className="flex h-9 w-40 shrink-0 flex-col justify-center rounded-lg border border-teal-200 bg-teal-50/80 px-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.55)] xl:w-48"
     >
       <div className="flex min-w-0 items-center gap-1.5 text-[10px] leading-none">
         <Gauge size={11} className="shrink-0 text-teal-700" aria-hidden="true" />
@@ -1290,7 +1291,8 @@ export default function SuperAssistantPage() {
                   {savingTitle ? <Loader2 size={14} className="animate-spin" /> : <Check size={15} />}
                 </button>
                 <button type="button" onClick={() => setEditingTitle(false)} aria-label="取消编辑会话名称"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]">
+                  title="取消编辑"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-100 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
                   <X size={14} />
                 </button>
               </form>
@@ -1324,9 +1326,9 @@ export default function SuperAssistantPage() {
             aria-label={configOpen ? '关闭助手配置' : '打开助手配置'}
             aria-expanded={configOpen}
             title="助手配置"
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${configOpen
-              ? 'border-teal-300 bg-teal-50 text-teal-700'
-              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 ${configOpen
+              ? 'border-amber-400 bg-amber-100 text-amber-800'
+              : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800'}`}
           >
             <Settings2 size={15} />
           </button>
@@ -1337,9 +1339,9 @@ export default function SuperAssistantPage() {
               aria-label="查看会话记录"
               aria-expanded={sessionsOpen}
               title="查看会话记录"
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${sessionsOpen
-                ? 'border-teal-300 bg-teal-50 text-teal-700'
-                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${sessionsOpen
+                ? 'border-sky-400 bg-sky-100 text-sky-800'
+                : 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100 hover:text-sky-800'}`}
             >
               <History size={15} />
             </button>

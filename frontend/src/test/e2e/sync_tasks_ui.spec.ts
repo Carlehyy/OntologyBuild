@@ -145,6 +145,11 @@ test('任务池空状态、侧栏比例与新建任务字段契约完整展示',
   expect((await emptyState.boundingBox())?.height).toBeGreaterThan(300)
   await expect(page.getByText('最近执行记录')).toBeVisible()
   await expect(page.getByTestId('recent-run-item')).toHaveCount(30)
+  const recentRunFeed = page.getByTestId('recent-run-feed')
+  expect(await recentRunFeed.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
+  await expect(recentRunFeed).toHaveCSS('scrollbar-width', 'none')
+  await recentRunFeed.evaluate(element => { element.scrollTop = 120 })
+  expect(await recentRunFeed.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
   const sevenDayChart = page.getByTestId('seven-day-chart')
   const recentRunCard = page.getByTestId('recent-run-card')
   const taskListPanel = page.getByTestId('task-list-panel')
@@ -240,16 +245,32 @@ test('任务表格按优先级拆列、入库策略使用独立颜色并允许�
   await expect(row).not.toContainText('待运行')
   const headers = await page.getByRole('columnheader').allTextContents()
   expect(headers).toEqual([
-    '任务名称', '任务描述', '关联流水线', '启停', '运行状态', '调度方式',
-    '调度规则', '下次执行', '入库策略', '最近执行', '入湖结果', '操作',
+    '任务名称', '运行状态', '启停', '关联流水线', '最近执行', '入湖结果',
+    '下次执行', '调度方式', '入库策略', '调度规则', '任务描述', '操作',
   ])
   const tableScroll = page.getByTestId('task-table-scroll')
   expect(await tableScroll.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+  const headerAlignments = await page.getByRole('columnheader').evaluateAll(elements =>
+    elements.map(element => getComputedStyle(element).textAlign),
+  )
+  expect(headerAlignments).toEqual(Array(headers.length).fill('center'))
+  const cellAlignments = await row.locator('td').evaluateAll(elements =>
+    elements.map(element => getComputedStyle(element).textAlign),
+  )
+  expect(cellAlignments).toEqual(Array(headers.length).fill('center'))
+  const fixedName = row.locator('[data-column="task-name"]')
+  const fixedActions = row.locator('[data-column="actions"]')
+  await expect(fixedName).toHaveCSS('position', 'sticky')
+  await expect(fixedActions).toHaveCSS('position', 'sticky')
+  const fixedNameX = (await fixedName.boundingBox())?.x ?? 0
+  const fixedActionsX = (await fixedActions.boundingBox())?.x ?? 0
   await expect(page.locator('[data-write-mode="overwrite"]')).toHaveClass(/emerald/)
   await expect(page.locator('[data-write-mode="append"]')).toHaveClass(/sky/)
   expect(await row.evaluate(element => getComputedStyle(element).whiteSpace)).toBe('nowrap')
   await page.screenshot({ path: testInfo.outputPath('task-table-status.png'), fullPage: true })
   await tableScroll.evaluate(element => { element.scrollLeft = element.scrollWidth })
+  expect(Math.abs(((await fixedName.boundingBox())?.x ?? 0) - fixedNameX)).toBeLessThanOrEqual(1)
+  expect(Math.abs(((await fixedActions.boundingBox())?.x ?? 0) - fixedActionsX)).toBeLessThanOrEqual(1)
   await page.screenshot({ path: testInfo.outputPath('task-table-write-modes.png'), fullPage: true })
 })
 

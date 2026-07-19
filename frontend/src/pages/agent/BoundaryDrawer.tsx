@@ -149,10 +149,11 @@ export function BoundaryDrawer({ oid, open, onClose }: {
         role="dialog"
         aria-modal="true"
         aria-labelledby="agent-boundary-title"
-        className="animate-slide-up relative flex h-[78vh] min-h-[520px] w-[720px] max-w-[94vw] max-h-[760px] flex-col overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
+        data-testid="agent-boundary-dialog"
+        className="animate-slide-up relative flex max-h-[86dvh] w-[720px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
         onMouseDown={event => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex items-center gap-2">
             <Shield size={15} className="text-[var(--color-primary)]" />
             <h3 id="agent-boundary-title" className="text-sm font-semibold text-[var(--color-text-primary)]">智能体授权边界</h3>
@@ -162,7 +163,7 @@ export function BoundaryDrawer({ oid, open, onClose }: {
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto p-4 space-y-5">
+        <div data-testid="agent-boundary-body" className="min-h-0 space-y-5 overflow-y-auto p-4">
           <p className="text-[11px] leading-relaxed text-[var(--color-text-tertiary)] bg-[var(--color-bg-base)] rounded-md p-2.5 border border-[var(--color-border)]">
             智能体不访问底层数据库、不扫描数据集 schema——它的全部世界就是这里授权的对象、链接与动作。
             读默认开放、写默认拒绝；动作即使授权，真实执行也必须由用户确认，需审批的动作还会进入人工审批队列。
@@ -200,14 +201,14 @@ export function BoundaryDrawer({ oid, open, onClose }: {
 
           <label className="text-xs text-[var(--color-text-secondary)] space-y-1 block">
             <span>附加指令（追加到系统提示，如业务口径、回答风格）</span>
-            <textarea rows={3} value={extra} onChange={e => setExtra(e.target.value)}
+            <textarea rows={3} value={extra} onChange={e => setExtra(e.target.value)} data-testid="agent-boundary-extra"
                       className="w-full px-2 py-1.5 text-sm border border-[var(--color-border)] rounded-md bg-[var(--color-bg-base)] resize-none" />
           </label>
 
           {error && <Badge variant="danger">{error}</Badge>}
         </div>
 
-        <div className="flex justify-center gap-3 border-t border-[var(--color-border)] px-4 py-3">
+        <div data-testid="agent-boundary-footer" className="flex shrink-0 justify-center gap-3 border-t border-[var(--color-border)] px-4 py-3">
           <Button variant="outline" size="sm" onClick={onClose} className="min-w-24 border-emerald-200 text-emerald-700 hover:bg-emerald-50">取消</Button>
           <Button variant="success" size="sm" onClick={save} disabled={saving} className="min-w-24 bg-emerald-600 hover:bg-emerald-700">
             {saving && <Loader2 size={12} className="animate-spin" />}保存边界
