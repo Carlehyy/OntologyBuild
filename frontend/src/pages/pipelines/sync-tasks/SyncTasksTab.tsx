@@ -37,6 +37,7 @@ const WRITE_MODE_TONE: Record<WriteMode, string> = {
 }
 
 const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50 overflow-hidden'
+const RECENT_RUN_LIMIT = 30
 
 function FlowArrow() {
   return (
@@ -365,7 +366,7 @@ export default function SyncTasksTab() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 2xl:grid-cols-12">
         <div className="col-span-1 flex min-h-0 flex-col 2xl:col-span-9">
-          <div className={`${PANEL} flex min-h-0 flex-1 flex-col`}>
+          <div data-testid="task-list-panel" className={`${PANEL} flex min-h-0 flex-1 flex-col`}>
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-100 px-5 py-3">
               <div ref={quickTabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
                 <span
@@ -680,17 +681,6 @@ export default function SyncTasksTab() {
             </div>
           </div>
 
-          <div className={`${PANEL} flex h-[196px] shrink-0 flex-col p-4`}>
-            <div className="mb-2.5 flex shrink-0 items-center justify-between">
-              <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                最近执行记录
-              </h3>
-              <span className="text-[10px] text-slate-400">实时留痕</span>
-            </div>
-            <RecentRunFeed runs={stats?.recent_runs ?? []} />
-          </div>
-
           <div data-testid="seven-day-chart" className={`${PANEL} flex h-[clamp(208px,22vh,240px)] shrink-0 flex-col p-4`}>
             <div className="mb-1 flex items-center justify-between">
               <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
@@ -702,6 +692,17 @@ export default function SyncTasksTab() {
             <div className="min-h-0 flex-1 overflow-hidden">
               <ReactECharts option={miniTrendOption} style={{ height: '100%', width: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
+          </div>
+
+          <div data-testid="recent-run-card" className={`${PANEL} flex min-h-[196px] flex-1 flex-col p-4`}>
+            <div className="mb-2.5 flex shrink-0 items-center justify-between">
+              <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                最近执行记录
+              </h3>
+              <span className="text-[10px] text-slate-400">实时留痕</span>
+            </div>
+            <RecentRunFeed runs={stats?.recent_runs ?? []} />
           </div>
         </aside>
       </div>
@@ -861,13 +862,13 @@ function RecentRunFeed({ runs }: { runs: PipelineTaskRecentRun[] }) {
   }
   return (
     <div className="min-h-0 flex-1 overflow-auto pr-1 scrollbar-thin">
-      {runs.slice(0, 6).map((run, index) => {
+      {runs.slice(0, RECENT_RUN_LIMIT).map((run, index) => {
         const meta = statusMeta[run.status] || statusMeta.pending
         return (
-          <div key={run.id} className="relative flex gap-2.5 pb-2.5 last:pb-0">
+          <div key={run.id} data-testid="recent-run-item" className="relative flex gap-2.5 pb-2.5 last:pb-0">
             <div className="relative flex w-2 shrink-0 justify-center pt-1.5">
               <span className={`relative z-10 h-2 w-2 rounded-full ring-2 ring-white ${meta.dot}`} />
-              {index < Math.min(runs.length, 6) - 1 && <span className="absolute bottom-0 top-2.5 w-px bg-slate-100" />}
+              {index < Math.min(runs.length, RECENT_RUN_LIMIT) - 1 && <span className="absolute bottom-0 top-2.5 w-px bg-slate-100" />}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">

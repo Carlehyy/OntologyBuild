@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 type MockTask = Record<string, unknown>
 
-async function mockTaskPool(page: Page, tasks: MockTask[] = []) {
+async function mockTaskPool(page: Page, tasks: MockTask[] = [], recentRuns: MockTask[] = []) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
     localStorage.setItem('auth-store', JSON.stringify({
@@ -92,7 +92,7 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = []) {
           { date: '2026-07-17', runs: 0, errors: 0 },
           { date: '2026-07-18', runs: 0, errors: 0 },
         ],
-        recent_runs: [],
+        recent_runs: recentRuns,
       })
     }
     if (url.pathname === '/api/v2/pipeline-tasks/pipeline-options') return ok({ items: [] })
@@ -124,16 +124,41 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = []) {
 
 test('任务池空状态、侧栏比例与新建任务字段契约完整展示', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1728, height: 1000 })
-  await mockTaskPool(page)
+  const recentRuns = Array.from({ length: 35 }, (_, index) => ({
+    id: `recent-${index + 1}`,
+    task_id: `task-${index + 1}`,
+    task_name: `最近执行任务 ${index + 1}`,
+    pipeline_name: '订单标准化流水线',
+    status: 'success',
+    trigger_type: 'scheduled',
+    started_at: `2026-07-18T${String(23 - (index % 20)).padStart(2, '0')}:00:00Z`,
+    finished_at: `2026-07-18T${String(23 - (index % 20)).padStart(2, '0')}:00:05Z`,
+    rows_out: 10,
+    lake_impact: { added: 10, updated: 0, deleted: 0 },
+    error_message: '',
+  }))
+  await mockTaskPool(page, [], recentRuns)
   await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
 
   const emptyState = page.getByTestId('task-empty-state')
   await expect(emptyState).toBeVisible()
   expect((await emptyState.boundingBox())?.height).toBeGreaterThan(300)
   await expect(page.getByText('最近执行记录')).toBeVisible()
-  const sevenDayChartHeight = (await page.getByTestId('seven-day-chart').boundingBox())?.height ?? 0
+  await expect(page.getByTestId('recent-run-item')).toHaveCount(30)
+  const sevenDayChart = page.getByTestId('seven-day-chart')
+  const recentRunCard = page.getByTestId('recent-run-card')
+  const taskListPanel = page.getByTestId('task-list-panel')
+  const sevenDayChartBox = await sevenDayChart.boundingBox()
+  const recentRunCardBox = await recentRunCard.boundingBox()
+  const taskListPanelBox = await taskListPanel.boundingBox()
+  const sevenDayChartHeight = sevenDayChartBox?.height ?? 0
   expect(sevenDayChartHeight).toBeGreaterThanOrEqual(200)
   expect(sevenDayChartHeight).toBeLessThanOrEqual(250)
+  expect(sevenDayChartBox?.y ?? 0).toBeLessThan(recentRunCardBox?.y ?? 0)
+  const recentRunBottom = (recentRunCardBox?.y ?? 0) + (recentRunCardBox?.height ?? 0)
+  const taskListBottom = (taskListPanelBox?.y ?? 0) + (taskListPanelBox?.height ?? 0)
+  expect(Math.abs(recentRunBottom - taskListBottom)).toBeLessThanOrEqual(1)
+  await page.screenshot({ path: testInfo.outputPath('sidebar-order-alignment.png'), fullPage: true })
 
   const filterIndicator = page.getByTestId('task-filter-indicator')
   const initialIndicatorX = (await filterIndicator.boundingBox())?.x ?? 0

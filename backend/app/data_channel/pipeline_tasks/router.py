@@ -398,13 +398,13 @@ def stats_overview(db: Session = Depends(get_db)):
         if run_status == "failed":
             trend[key]["errors"] += 1
 
-    # 右侧执行动态：按执行创建时间倒序展示任务触发的真实记录，口径与统计一致。
+    # 右侧执行动态：按执行创建时间倒序展示最新 30 条真实记录，口径与统计一致。
     recent_runs = (
         db.query(PipelineRun, PipelineTask, Pipeline)
         .join(PipelineTask, PipelineTask.id == PipelineRun.task_id)
         .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
         .order_by(PipelineRun.created_at.desc())
-        .limit(8)
+        .limit(30)
         .all()
     )
 

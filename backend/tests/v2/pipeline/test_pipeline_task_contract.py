@@ -160,6 +160,34 @@ def test_stats_returns_real_seven_day_series(db, monkeypatch):
     assert all(item["task_name"] == "订单每日入湖" for item in stats["recent_runs"])
 
 
+def test_stats_returns_latest_thirty_recent_runs(db, monkeypatch):
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    task = create_task(_body(), db)
+    newest = datetime.utcnow()
+    db.add_all([
+        PipelineRun(
+            id=f"recent-run-{index:02d}",
+            pipeline_id="pipe-contract",
+            task_id=task["id"],
+            status="success",
+            created_at=newest - timedelta(minutes=index),
+        )
+        for index in range(35)
+    ])
+    db.commit()
+
+    recent_runs = stats_overview(db)["recent_runs"]
+
+    assert len(recent_runs) == 30
+    assert [item["id"] for item in recent_runs] == [
+        f"recent-run-{index:02d}" for index in range(30)
+    ]
+
+
 def test_task_search_includes_related_pipeline_name(db, monkeypatch):
     _published_pipeline(db)
     monkeypatch.setattr(
