@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -277,6 +278,98 @@ def preview_curated(dataset_id: str, limit: int = 100, db: Session = Depends(get
         return {"dataset_id": dataset_id, "name": name, "rows": rows, "count": len(rows)}
     except Exception as e:
         raise HTTPException(502, f"成品数据读取失败：{e}")
+
+
+@router.get("/{dataset_id}/export")
+def export_curated(
+    dataset_id: str,
+    format: str = Query("csv", pattern="^(csv|xlsx)$"),
+    db: Session = Depends(get_db),
+):
+    """导出成品数据集最新版本全量数据，并叠加该版本已批准的行级修改。"""
+    import io
+    import json
+    from urllib.parse import quote
+
+    from app.models.v2.dataset import Dataset
+    from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
+    from app.data_channel.curated.review_service import (
+        current_version_review,
+        load_all_rows_with_edits,
+    )
+
+    dataset = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.kind == "curated",
+    ).first()
+    if not dataset:
+        raise HTTPException(404, "Curated dataset not found")
+    review = current_version_review(db, dataset_id)
+    if review is None or review.status not in {"approved", "rejected"}:
+        raise HTTPException(409, detail={
+            "code": "dataset_pending_review",
+            "message": "当前数据版本尚未完成审核，不能从只读详情导出。请先完成审核。",
+        })
+
+    try:
+        rows = load_all_rows_with_edits(db, dataset_id)
+    except DatasetReadError as exc:
+        raise HTTPException(502, f"成品数据导出失败：{exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(409, detail={
+            "code": "review_edit_identity_error",
+            "message": str(exc),
+        }) from exc
+
+    schema = dataset.schema_json if isinstance(dataset.schema_json, dict) else {}
+    columns: list[str] = []
+
+    def add_column(value) -> None:
+        name = str(value or "").strip()
+        if name and name not in columns:
+            columns.append(name)
+
+    for item in schema.get("columns") or []:
+        add_column(item.get("name") if isinstance(item, dict) else item)
+    for item in schema.get("columns_typed") or []:
+        if isinstance(item, dict):
+            add_column(item.get("name"))
+    for row in rows:
+        for name in row:
+            add_column(name)
+
+    safe_name = "".join(c for c in dataset.name if c not in '\\/:*?"<>|').strip() or "成品数据集"
+    filename = f"{safe_name}.{format}"
+    disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+
+    if format == "csv":
+        data = b"\xef\xbb\xbf" + rows_to_csv_bytes(rows, columns)
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": disposition},
+        )
+
+    import openpyxl
+    workbook = openpyxl.Workbook(write_only=True)
+    sheet = workbook.create_sheet(title="数据")
+    sheet.append(columns)
+    for row in rows:
+        values = []
+        for column in columns:
+            value = row.get(column, "")
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            values.append(value)
+        sheet.append(values)
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 @router.get("/{dataset_id}/review-diff")

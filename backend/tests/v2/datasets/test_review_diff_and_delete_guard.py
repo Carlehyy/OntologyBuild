@@ -129,6 +129,108 @@ def test_review_full_views_are_explicitly_paginated(api, auth_headers, db):
     }
 
 
+def test_curated_export_is_full_and_includes_approved_edits(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[
+        {"id": "1", "name": "审核前"},
+        {"id": "2", "name": "保持不变"},
+    ]])
+    service = ReviewService(db)
+    review = service.start_review(ds_id)
+    service.batch_edit_rows(review.id, [{
+        "row_pk": "1", "field_name": "name",
+        "old_value": "审核前", "new_value": "审核后",
+    }])
+    service.approve(review.id)
+
+    csv_response = api.get(
+        f"/api/v2/curated/{ds_id}/export?format=csv",
+        headers=auth_headers,
+    )
+    assert csv_response.status_code == 200, csv_response.text
+    assert csv_response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in csv_response.headers["content-disposition"]
+    csv_text = csv_response.content.decode("utf-8-sig")
+    assert "id,name" in csv_text
+    assert "1,审核后" in csv_text
+    assert "2,保持不变" in csv_text
+    assert "审核前" not in csv_text
+
+    xlsx_response = api.get(
+        f"/api/v2/curated/{ds_id}/export?format=xlsx",
+        headers=auth_headers,
+    )
+    assert xlsx_response.status_code == 200, xlsx_response.text
+    assert xlsx_response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    import openpyxl
+    workbook = openpyxl.load_workbook(io.BytesIO(xlsx_response.content), read_only=True)
+    values = list(workbook.active.iter_rows(values_only=True))
+    assert values == [("id", "name"), ("1", "审核后"), ("2", "保持不变")]
+
+
+def test_pending_curated_version_cannot_use_reviewed_export(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "待审核"}]])
+    response = api.get(
+        f"/api/v2/curated/{ds_id}/export?format=csv",
+        headers=auth_headers,
+    )
+    assert response.status_code == 409, response.text
+    assert "dataset_pending_review" in response.text
+
+
+def test_review_diff_without_primary_key_uses_full_row_add_delete(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [
+        [{"body": {"status": "old"}, "webhook": "same"}],
+        [{"body": {"status": "new"}, "webhook": "same"}],
+    ], pk="")
+    response = api.get(
+        f"/api/v2/curated/{ds_id}/review-diff",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json().get("data", response.json())
+    assert payload["pk"] == []
+    assert payload["delta"]["keyed_by"] is None
+    assert payload["delta"]["updated_count"] == 0
+    assert payload["delta"]["added_count"] == 1
+    assert payload["delta"]["deleted_count"] == 1
+
+
+def test_curated_schema_uses_pipeline_field_display_names(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[{
+        "order_id": "SO-1",
+        "body": {"status": "new"},
+    }]], pk="order_id")
+    dataset = db.query(Dataset).filter(Dataset.id == ds_id).one()
+    dataset.schema_json = {
+        **dict(dataset.schema_json or {}),
+        "columns": ["order_id", "body"],
+        "columns_typed": [
+            {"name": "order_id", "type": "string"},
+            {"name": "body", "type": "json"},
+        ],
+        "types_source": "published_pipeline_contract",
+        "field_names": {
+            "order_id": "订单编号",
+            "body": "body",
+        },
+        "contract_definitions": [
+            {"field_key": "order_id", "field_name": "订单编号", "field_type": "string", "nullable": False},
+            {"field_key": "body", "field_name": "body", "field_type": "json", "nullable": True},
+        ],
+    }
+    db.commit()
+
+    response = api.get(f"/api/v2/datasets/{ds_id}/schema", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    columns = {
+        column["name"]: column
+        for column in response.json().get("data", response.json())["columns"]
+    }
+    assert columns["order_id"]["display_name"] == "订单编号"
+    assert columns["body"]["display_name"] == "body"
+
+
 def test_review_diff_first_version_all_added(api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [
         [{"id": "1", "name": "a"}, {"id": "2", "name": "b"}],   # 仅 v1

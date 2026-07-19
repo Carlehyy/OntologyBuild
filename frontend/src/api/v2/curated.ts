@@ -107,8 +107,15 @@ const curatedApi = {
   reject: (id: string, notes = '') =>
     apiClientV2.post(`/curated/${id}/review?action=reject&notes=${encodeURIComponent(notes)}`),
 
-  /** Delete a curated dataset (admin only; approved datasets are blocked) */
+  /** 完整删除成品数据集（仅管理员；存在外部引用时拦截） */
   delete: (id: string) => apiClientV2.delete(`/curated/${id}`),
+
+  /** 导出最新已审核版本的全量数据，不受详情分页限制 */
+  export: (id: string, format: 'csv' | 'xlsx'): Promise<Blob> =>
+    apiClientV2.get(`/curated/${id}/export`, {
+      params: { format },
+      responseType: 'blob',
+    }),
 
   /** Start a review session for row-level edits */
   startReview: (id: string) =>

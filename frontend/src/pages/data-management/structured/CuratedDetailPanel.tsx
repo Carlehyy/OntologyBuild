@@ -2,9 +2,11 @@ import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'rea
 import {
   X, CheckCircle, AlertTriangle, Clock,
   Save, Loader2, Pencil, Plus, Minus, KeyRound, RefreshCw, Table2,
+  ChevronLeft, ChevronRight, Download, FileSpreadsheet, LockKeyhole,
+  Info,
 } from 'lucide-react'
 import curatedApi, { type ReviewDiff } from '@/api/v2/curated'
-import datasetsApi, { type DatasetSchemaColumn } from '@/api/v2/datasets'
+import datasetsApi, { FIELD_TYPE_LABELS, type DatasetSchemaColumn } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 interface Props {
@@ -59,7 +61,19 @@ const cellComparable = (row: DataRow, column: string) => {
   return `present:${value === undefined ? 'undefined' : cellText(value)}`
 }
 
-const REVIEW_PAGE_SIZE = 200
+const REVIEW_PAGE_SIZES = [20, 50, 100, 200, 500, 1000] as const
+const DEFAULT_REVIEW_PAGE_SIZE = 50
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
 
 function errorText(error: unknown, fallback: string): string {
   if (!error || typeof error !== 'object') return fallback
@@ -87,6 +101,11 @@ function columnsFromRows(rows: DataRow[], preferred: string[] = []): string[] {
   return columns
 }
 
+const columnDisplayText = (name: string, schemaColumn?: DatasetSchemaColumn) => {
+  const displayName = schemaColumn?.display_name?.trim()
+  return displayName && displayName !== name ? `${displayName}（${name}）` : name
+}
+
 function ColumnLabel({
   name, primaryKeys, schemaColumn,
 }: {
@@ -95,17 +114,29 @@ function ColumnLabel({
   schemaColumn?: DatasetSchemaColumn
 }) {
   const isPrimaryKey = primaryKeys.includes(name)
+  const isRequired = isPrimaryKey || schemaColumn?.nullable === false
   const displayName = schemaColumn?.display_name?.trim()
   const hasChineseName = Boolean(displayName && displayName !== name)
   return (
     <span className="inline-flex items-center gap-1.5" title={hasChineseName ? `字段标识：${name}` : undefined}>
-      <span>{hasChineseName ? `${displayName}（${name}）` : name}</span>
+      <span>{columnDisplayText(name, schemaColumn)}</span>
       {!hasChineseName && (
-        <span className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[9px] font-normal text-slate-400">中文名未配置</span>
+        <span
+          className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[9px] font-normal text-slate-400"
+          title="来源流水线没有提供独立的中文显示名，当前沿用字段标识；这不是字段读取错误"
+        >沿用字段标识</span>
       )}
       {isPrimaryKey && (
-        <span className="inline-flex items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-medium text-amber-700" title="主键列：已校验全量非空，用于稳定识别数据行">
+        <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700" title="主键列：已校验全量非空，用于稳定识别数据行">
           <KeyRound size={8} /> 主键 · 非空
+        </span>
+      )}
+      {!isPrimaryKey && isRequired && (
+        <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-600">非空</span>
+      )}
+      {schemaColumn?.type && (
+        <span className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[9px] font-normal text-slate-500">
+          {FIELD_TYPE_LABELS[schemaColumn.type] ?? schemaColumn.type}
         </span>
       )}
     </span>
@@ -113,24 +144,25 @@ function ColumnLabel({
 }
 
 /** 只读数据表（列取所有行键的并集，保持稳定表头） */
-function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, schemaColumns = {} }: {
+function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, schemaColumns = {}, fillAvailable = false }: {
   rows: DataRow[]
   highlight?: 'add' | 'del'
   primaryKeys?: string[]
   startIndex?: number
   schemaColumns?: Record<string, DatasetSchemaColumn>
+  fillAvailable?: boolean
 }) {
-  if (!rows.length) return <div className="p-6 text-center text-xs text-gray-400">无数据</div>
+  if (!rows.length) return <div className={`grid place-items-center text-xs text-slate-400 ${fillAvailable ? 'h-full rounded-xl border border-slate-200 bg-slate-50/30' : 'p-6'}`}>无数据</div>
   const cols = columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)])
   const tint = highlight === 'add' ? 'bg-green-50/40' : highlight === 'del' ? 'bg-red-50/40' : ''
   return (
-    <div className="max-w-full overflow-x-auto">
-      <table className="w-full text-xs min-w-max">
-        <thead className="bg-gray-50 border-b sticky top-0">
+    <div className={fillAvailable ? 'h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white' : 'max-w-full overflow-x-auto'}>
+      <table className="w-full min-w-max border-separate border-spacing-0 text-xs">
+        <thead className="sticky top-0 z-20 bg-slate-50">
           <tr>
-            <th className="px-4 py-2 text-gray-400 font-normal text-left w-12">#</th>
+            <th className="sticky left-0 z-30 w-12 border-b border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-center font-normal text-slate-400">#</th>
             {cols.map(c => (
-              <th key={c} className="min-w-[130px] px-4 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
+              <th key={c} className="min-w-[150px] whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-left font-medium text-slate-700">
                 <ColumnLabel name={c} primaryKeys={primaryKeys} schemaColumn={schemaColumns[c]} />
               </th>
             ))}
@@ -138,12 +170,12 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, sche
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className={`border-b ${tint}`}>
-              <td className="px-4 py-2 text-gray-300 tabular-nums select-none">{startIndex + i + 1}</td>
+            <tr key={i} className={`${tint} transition-colors hover:bg-slate-50/70`}>
+              <td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2.5 text-center tabular-nums text-slate-300 select-none">{startIndex + i + 1}</td>
               {cols.map(c => (
-                <td key={c} className={`px-4 py-2 max-w-[260px] ${primaryKeys.includes(c) ? 'bg-amber-50/50 font-mono' : ''}`}>
-                  <span className="block truncate text-gray-700" title={cellText(row[c])}>
-                    {cellText(row[c]) || <span className="text-gray-300">—</span>}
+                <td key={c} className={`max-w-[320px] border-b border-slate-100 px-4 py-2.5 ${primaryKeys.includes(c) ? 'bg-amber-50/45 font-mono' : ''}`}>
+                  <span className="block truncate text-slate-700" title={cellText(row[c])}>
+                    {cellText(row[c]) || <span className="text-slate-300">—</span>}
                   </span>
                 </td>
               ))}
@@ -172,7 +204,7 @@ function UpdatedRowsTable({
       <table className="w-full min-w-max text-xs">
         <thead className="sticky top-0 z-10 border-b bg-slate-50">
           <tr>
-            <th className="sticky left-0 z-20 min-w-[92px] border-r bg-slate-50 px-3 py-2 text-left font-medium text-slate-500">对比行</th>
+            <th className="sticky left-0 z-20 min-w-[170px] border-r bg-slate-50 px-3 py-2 text-left font-medium text-slate-500">对比行 / 变更列</th>
             {columns.map(column => (
               <th key={column} className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium text-slate-600">
                 <ColumnLabel name={column} primaryKeys={primaryKeys} schemaColumn={schemaColumns[column]} />
@@ -185,12 +217,18 @@ function UpdatedRowsTable({
             const changedColumns = new Set(
               columns.filter(column => cellComparable(update.before, column) !== cellComparable(update.after, column)),
             )
+            const changedColumnLabels = Array.from(changedColumns)
+              .map(column => columnDisplayText(column, schemaColumns[column]))
+              .join('、')
             return (
               <Fragment key={`${primaryKeys.map(key => cellText(update.after[key])).join('::') || 'row'}-${index}`}>
                 <tr className="border-t border-amber-200 bg-red-50/35">
-                  <td className="sticky left-0 z-[5] border-r border-amber-100 bg-red-50 px-3 py-2 align-top">
+                  <td className="sticky left-0 z-[5] min-w-[170px] border-r border-amber-100 bg-red-50 px-3 py-2 align-top">
                     <span className="inline-flex rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">更新前</span>
                     <span className="ml-1 text-[10px] text-slate-400">#{index + 1}</span>
+                    <span className="mt-1 block max-w-[150px] truncate text-[9px] text-red-600" title={`变更列：${changedColumnLabels}`}>
+                      变更列：{changedColumnLabels}
+                    </span>
                   </td>
                   {columns.map(column => {
                     const changed = changedColumns.has(column)
@@ -204,8 +242,9 @@ function UpdatedRowsTable({
                   })}
                 </tr>
                 <tr className="border-b border-amber-200 bg-emerald-50/35">
-                  <td className="sticky left-0 z-[5] border-r border-amber-100 bg-emerald-50 px-3 py-2 align-top">
+                  <td className="sticky left-0 z-[5] min-w-[170px] border-r border-amber-100 bg-emerald-50 px-3 py-2 align-top">
                     <span className="inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">更新后</span>
+                    <span className="ml-1 text-[9px] text-emerald-600">绿色为新值</span>
                   </td>
                   {columns.map(column => {
                     const changed = changedColumns.has(column)
@@ -242,7 +281,10 @@ export default function CuratedDetailPanel({
   const [loadError, setLoadError] = useState('')
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>()
   const [pageOffset, setPageOffset] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_REVIEW_PAGE_SIZE)
   const [switchingReview, setSwitchingReview] = useState(false)
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null)
+  const [exportMessage, setExportMessage] = useState('')
 
   // 「本次全量」可编辑视图的状态
   const [rows, setRows] = useState<DataRow[]>([])
@@ -271,7 +313,7 @@ export default function CuratedDetailPanel({
   const loadDiff = useCallback(() => {
     setLoading(true)
     setLoadError('')
-    curatedApi.reviewDiff(datasetId, REVIEW_PAGE_SIZE, pageOffset, selectedReviewId)
+    curatedApi.reviewDiff(datasetId, pageSize, pageOffset, selectedReviewId)
       .then(res => {
         const wrapped = res as ReviewDiff & { data?: ReviewDiff }
         const d = wrapped.data ?? res
@@ -281,7 +323,7 @@ export default function CuratedDetailPanel({
       })
       .catch((error: unknown) => setLoadError(errorText(error, '数据加载失败，请稍后重试')))
       .finally(() => setLoading(false))
-  }, [datasetId, pageOffset, selectedReviewId])
+  }, [datasetId, pageOffset, pageSize, selectedReviewId])
 
   useEffect(() => { void Promise.resolve().then(loadDiff) }, [loadDiff])
 
@@ -449,6 +491,22 @@ export default function CuratedDetailPanel({
     }
   }
 
+  const handleExport = async (format: 'csv' | 'xlsx') => {
+    if (reviewPending) return
+    setExporting(format)
+    setExportMessage('')
+    setActionError('')
+    try {
+      const blob = await curatedApi.export(datasetId, format)
+      downloadBlob(blob, `${datasetName}.${format}`)
+      setExportMessage(`已导出当前已审核版本的全部 ${(diff?.current?.total ?? 0).toLocaleString()} 行数据`)
+    } catch (error: unknown) {
+      setActionError(`${format.toUpperCase()} 导出失败：${errorText(error, '请稍后重试')}`)
+    } finally {
+      setExporting(null)
+    }
+  }
+
   const delta = diff?.delta
   const changeCount = delta ? delta.added_count + delta.updated_count + delta.deleted_count : 0
   const primaryKeys = diff?.pk ?? []
@@ -463,6 +521,10 @@ export default function CuratedDetailPanel({
   const pageEnd = pagedView
     ? Math.min((pagedView.offset ?? pageOffset) + pagedView.rows.length, pagedView.total)
     : 0
+  const totalRows = diff?.current?.total ?? 0
+  const pagedTotal = pagedView?.total ?? 0
+  const currentPage = pagedTotal ? Math.floor((pagedView?.offset ?? pageOffset) / pageSize) + 1 : 1
+  const totalPages = Math.max(1, Math.ceil(pagedTotal / pageSize))
 
   const switchPage = (nextOffset: number) => {
     if (hasPending || editingCell) {
@@ -472,38 +534,73 @@ export default function CuratedDetailPanel({
     setPageOffset(Math.max(0, nextOffset))
   }
 
+  const changePageSize = (nextSize: number) => {
+    if (hasPending || editingCell) {
+      setActionError('请先结束编辑并保存或放弃本页修改，再调整分页大小。')
+      return
+    }
+    setPageSize(nextSize)
+    setPageOffset(0)
+  }
+
   const VIEW_TABS: [View, string, number | null][] = [
     ['changes', '变化量', delta ? changeCount : null],
-    ['previous', '上一版全量', diff?.previous?.total ?? null],
-    ['current', '本次全量', diff?.current?.total ?? null],
+    ['previous', '上一版本全量', diff?.previous?.total ?? null],
+    ['current', '本次接受后全量', diff?.current?.total ?? null],
   ]
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-6" onClick={requestClose}>
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]" onClick={requestClose}>
         <div
-          className="bg-white rounded-xl shadow-2xl z-50 flex flex-col w-full max-w-5xl"
-          style={{ maxHeight: 'calc(100vh - 3rem)' }}
+          className="z-50 flex h-[78vh] max-h-[760px] min-h-[520px] w-[min(96vw,1440px)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
           onClick={e => e.stopPropagation()}
           role="dialog"
           aria-modal="true"
           aria-labelledby="curated-review-title"
         >
           {/* Header */}
-          <div className="flex items-start justify-between px-6 py-4 border-b shrink-0">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 id="curated-review-title" className="font-semibold text-base truncate">{datasetName}</h2>
-                <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+          <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-5 py-4">
+            <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">
+              <Table2 size={15} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 id="curated-review-title" className="truncate text-sm font-semibold text-slate-900">{datasetName}</h2>
+                <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${STATUS_STYLE[status] || 'border-gray-200 bg-gray-100 text-gray-600'}`}>
                   {STATUS_ICON(status)}
                   {STATUS_LABEL[status] || status}
                 </span>
+                <span className="text-xs tabular-nums text-slate-400">
+                  v{diff?.current?.version_no ?? '—'} · {totalRows.toLocaleString()} 行
+                </span>
+                {primaryKeys.length > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700" title="主键列已校验非空">
+                    <LockKeyhole size={10} /> 主键：{primaryKeys.join('、')}
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-gray-400 mt-0.5">来自管道：{pipelineName}</p>
+              <p className="mt-1 text-xs text-slate-400">
+                来源流水线：{pipelineName} · {reviewPending ? '核对变化并完成审核，当前版本支持行级修改。' : '当前版本仅供查看，可分页浏览或导出全量数据。'}
+              </p>
             </div>
-            <button onClick={requestClose} className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-black ml-4 shrink-0" aria-label="关闭审核详情">
-              <X size={16} />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {!reviewPending && (
+                <>
+                  <button type="button" onClick={() => void handleExport('csv')} disabled={Boolean(exporting)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-50">
+                    {exporting === 'csv' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} 导出 CSV
+                  </button>
+                  <button type="button" onClick={() => void handleExport('xlsx')} disabled={Boolean(exporting)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-50">
+                    {exporting === 'xlsx' ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />} 导出 Excel
+                  </button>
+                </>
+              )}
+              <button onClick={requestClose} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30" aria-label="关闭审核详情">
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           {/* 待审核时才提供决定与编辑；审核一经完成，详情永久只读。 */}
@@ -541,10 +638,10 @@ export default function CuratedDetailPanel({
             </button>
           </div>
           ) : (
-            <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50/55 px-6 py-3 text-xs text-emerald-800">
+            <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50/55 px-5 py-3 text-xs text-emerald-800">
               <CheckCircle size={14} className="shrink-0" />
               <span className="font-medium">当前没有新数据需要审核</span>
-              <span className="text-emerald-700/75">以下展示最近一次已完成审核的数据版本，内容只读。</span>
+              <span className="text-emerald-700/75">以下展示最近一次已完成审核的数据版本，内容只读；导出不受当前分页限制。</span>
             </div>
           )}
 
@@ -578,22 +675,32 @@ export default function CuratedDetailPanel({
             </div>
           )}
 
+          {exportMessage && (
+            <div className="mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700" role="status">
+              <CheckCircle size={13} className="shrink-0" />
+              <span className="flex-1">{exportMessage}</span>
+              <button type="button" onClick={() => setExportMessage('')} className="text-emerald-500 hover:text-emerald-800" aria-label="关闭导出提示">×</button>
+            </div>
+          )}
+
           {schemaLoadError && (
             <div className="flex shrink-0 items-center gap-2 border-b border-amber-100 bg-amber-50 px-6 py-2 text-xs text-amber-700">
               <AlertTriangle size={13} /> {schemaLoadError}
             </div>
           )}
 
-          {!loading && !loadError && diff && primaryKeys.length === 0 && (
-            <div className="flex shrink-0 items-start gap-2 border-b border-amber-100 bg-amber-50 px-6 py-2 text-xs text-amber-800">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              <span>该成品数据集尚未声明主键，不满足稳定识别数据行的契约。请在来源流水线的字段契约中设置非空主键后重新产出。</span>
+          {!loading && !loadError && diff && reviewPending && primaryKeys.length === 0 && (
+            <div className="flex shrink-0 items-start gap-2 border-b border-sky-100 bg-sky-50/70 px-5 py-2.5 text-xs text-sky-800">
+              <Info size={13} className="mt-0.5 shrink-0" />
+              <span>
+                当前流水线采用无主键模式，可以正常审核。系统会按整行内容比较，因此字段变化会显示为“删除旧行 + 新增新行”，无法归并成更新行；为避免修改错行，行级编辑也会关闭。
+              </span>
             </div>
           )}
 
           {/* View switcher */}
           {!loading && !loadError && (
-            <div className="flex items-center gap-1 px-6 py-2 border-b bg-white shrink-0">
+            <div className="flex shrink-0 items-center gap-1 border-b border-slate-100 bg-white px-5 py-2.5">
               {reviewPending ? VIEW_TABS.map(([v, label, count]) => (
                 <button key={v} onClick={() => {
                   if ((hasPending || editingCell) && v !== view) {
@@ -615,32 +722,21 @@ export default function CuratedDetailPanel({
               {reviewPending && (
                 <span className="ml-2 text-[11px] text-gray-400">
                   {view === 'changes' && '相对上一版的新增/更新/删除，聚焦本次改动'}
-                  {view === 'previous' && '上一版本完整数据（分页查看，对照用）'}
-                  {view === 'current' && (canEditRows ? '本次待审完整数据（分页查看）· 双击非主键单元格可编辑' : '本次待审完整数据（分页查看）· 未声明主键，无法可靠进行行级编辑')}
+                  {view === 'previous' && '上一版本完整数据（分页查看，用于对照）'}
+                  {view === 'current' && (canEditRows ? '如果接受本次变化，数据集将呈现的完整数据 · 双击非主键单元格可编辑' : '如果接受本次变化，数据集将呈现的完整数据 · 无主键模式下仅可审核查看')}
                 </span>
-              )}
-              {pagedView && pagedView.total > 0 && (
-                <div className="ml-auto flex items-center gap-2 text-[11px] text-gray-500">
-                  <span>第 {pageStart.toLocaleString()}–{pageEnd.toLocaleString()} 行 / 共 {pagedView.total.toLocaleString()} 行</span>
-                  <button type="button" className="rounded border px-2 py-1 disabled:opacity-40"
-                    disabled={(pagedView.offset ?? pageOffset) <= 0 || loading}
-                    onClick={() => switchPage((pagedView.offset ?? pageOffset) - REVIEW_PAGE_SIZE)}>上一页</button>
-                  <button type="button" className="rounded border px-2 py-1 disabled:opacity-40"
-                    disabled={!pagedView.has_more || loading}
-                    onClick={() => switchPage((pagedView.offset ?? pageOffset) + REVIEW_PAGE_SIZE)}>下一页</button>
-                </div>
               )}
             </div>
           )}
 
           {/* Body */}
-          <div className="flex-1 overflow-auto">
+          <div className={`min-h-0 flex-1 ${reviewPending && view === 'changes' ? 'overflow-auto' : 'overflow-hidden px-5 py-3'}`}>
             {loading ? (
-              <div className="flex items-center justify-center h-48 text-gray-400 text-sm gap-2">
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-400">
                 <Loader2 size={16} className="animate-spin" /> 加载中...
               </div>
             ) : loadError ? (
-              <div className="flex h-48 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-red-600">
+              <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-red-600">
                 <AlertTriangle size={24} className="opacity-70" />
                 <p className="font-medium">审核数据加载失败</p>
                 <p className="max-w-lg text-xs text-red-500">{loadError}</p>
@@ -654,20 +750,21 @@ export default function CuratedDetailPanel({
                 primaryKeys={primaryKeys}
                 startIndex={diff?.current?.offset ?? pageOffset}
                 schemaColumns={schemaColumns}
+                fillAvailable
               />
             ) : view === 'changes' ? (
               <ChangesView delta={delta ?? null} prevNo={diff?.previous?.version_no ?? null}
                 curNo={diff?.current?.version_no ?? null} primaryKeys={primaryKeys} schemaColumns={schemaColumns} />
             ) : view === 'previous' ? (
               diff?.previous?.version_no == null
-                ? <div className="p-8 text-center text-sm text-gray-400">这是首个版本，没有上一版可对照。</div>
-                : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} schemaColumns={schemaColumns} />
+                ? <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-sm text-gray-400">这是首个版本，没有上一版可对照。</div>
+                : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} schemaColumns={schemaColumns} fillAvailable />
             ) : (
               /* current — editable */
               rows.length === 0 ? (
-                <div className="p-8 text-center text-sm text-gray-400">暂无数据行</div>
+                <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-sm text-gray-400">暂无数据行</div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="h-full overflow-auto rounded-xl border border-slate-200 bg-white">
                   <table className="w-full text-xs min-w-max">
                     <thead className="bg-gray-50 border-b sticky top-0">
                       <tr>
@@ -721,6 +818,87 @@ export default function CuratedDetailPanel({
               )
             )}
           </div>
+
+          {reviewPending ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+              {view === 'changes' ? (
+                <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+                  <Info size={12} className="text-teal-700" />
+                  变化量基于两个完整版本计算；更新前使用红色，更新后使用绿色，具体变更列会单独标出。
+                </span>
+              ) : (
+                <>
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                    每页
+                    <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
+                      className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                      aria-label="待审核数据每页显示条数">
+                      {REVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+                    </select>
+                    条
+                  </label>
+                  <div className="flex items-center gap-1 text-xs text-slate-500">
+                    <button type="button" onClick={() => switchPage(pageOffset - pageSize)} disabled={pageOffset <= 0 || loading}
+                      aria-label="上一页"
+                      className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                      <ChevronLeft size={13} />
+                    </button>
+                    <span className="min-w-52 text-center tabular-nums">
+                      第 {currentPage} / {totalPages} 页 · {pagedTotal ? `${pageStart.toLocaleString()}–${pageEnd.toLocaleString()}` : 0} / {pagedTotal.toLocaleString()} 行
+                    </span>
+                    <button type="button" onClick={() => switchPage(pageOffset + pageSize)} disabled={!pagedView?.has_more || loading}
+                      aria-label="下一页"
+                      className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </>
+              )}
+              {hasPending && (
+                <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700">
+                  {pendingEdits.size} 处修改尚未保存
+                </span>
+              )}
+              <button type="button" onClick={requestClose}
+                className="ml-auto h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98]">
+                关闭
+              </button>
+            </div>
+          ) : (
+            <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+              <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                每页
+                <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                  aria-label="已审核数据每页显示条数">
+                  {REVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+                </select>
+                条
+              </label>
+              <div className="flex items-center gap-1 text-xs text-slate-500">
+                <button type="button" onClick={() => switchPage(pageOffset - pageSize)} disabled={pageOffset <= 0 || loading}
+                  aria-label="上一页"
+                  className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                  <ChevronLeft size={13} />
+                </button>
+                <span className="min-w-52 text-center tabular-nums">
+                  第 {currentPage} / {totalPages} 页 · {pagedTotal ? `${pageStart.toLocaleString()}–${pageEnd.toLocaleString()}` : 0} / {pagedTotal.toLocaleString()} 行
+                </span>
+                <button type="button" onClick={() => switchPage(pageOffset + pageSize)} disabled={!diff?.current?.has_more || loading}
+                  aria-label="下一页"
+                  className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+              <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+                <LockKeyhole size={11} /> 只读模式，不会修改数据
+              </span>
+              <button type="button" onClick={requestClose}
+                className="ml-auto h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98]">
+                关闭
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -755,6 +933,15 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
         <span className="text-gray-500">
           {prevNo == null ? '首个版本（全部为新增）' : `v${prevNo} → v${curNo}`}
         </span>
+        {primaryKeys.length ? (
+          <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-600">
+            <KeyRound size={9} /> 按主键 {primaryKeys.join('、')} 识别同一行
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2 py-1 text-[10px] text-sky-700">
+            <Info size={9} /> 无主键 · 按整行比较，不单独识别更新
+          </span>
+        )}
         <span className="inline-flex items-center gap-1 text-green-600"><Plus size={12} />新增 {added_count}</span>
         <span className="inline-flex items-center gap-1 text-amber-600"><Pencil size={11} />更新 {updated_count}</span>
         <span className="inline-flex items-center gap-1 text-red-500"><Minus size={12} />删除 {deleted_count}</span>
