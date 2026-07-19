@@ -49,18 +49,23 @@ def _claim_task(db, task_id: str) -> tuple[object | None, str | None, str | None
 
 
 def _release_claim(db, task, token: str, *, status: str, error: str = "",
-                   rows: int = 0) -> bool:
+                   rows: int = 0, run_id: str | None = None,
+                   trigger_type: str | None = None) -> bool:
     """仅当前租约持有者能落最终状态，防止过期旧执行覆盖恢复后的新执行。"""
     return _release_claim_by_id(
         db, task.id, token, status=status, error=error, rows=rows,
+        run_id=run_id, trigger_type=trigger_type,
     )
 
 
 def _release_claim_by_id(db, task_id: str, token: str, *, status: str,
-                         error: str = "", rows: int = 0) -> bool:
+                         error: str = "", rows: int = 0,
+                         run_id: str | None = None,
+                         trigger_type: str | None = None) -> bool:
     """按稳定标量释放租约，供 ORM 对象可能失效的异常恢复路径使用。"""
     from app.data_channel.pipeline_tasks.models import PipelineTask
 
+    occurred_at = datetime.utcnow()
     updated = db.query(PipelineTask).filter(
         PipelineTask.id == task_id,
         PipelineTask.execution_token == token,
@@ -68,12 +73,38 @@ def _release_claim_by_id(db, task_id: str, token: str, *, status: str,
         PipelineTask.status: status,
         PipelineTask.execution_token: None,
         PipelineTask.lease_expires_at: None,
-        PipelineTask.last_run_at: datetime.utcnow(),
+        PipelineTask.last_run_at: occurred_at,
         PipelineTask.last_rows: rows,
         PipelineTask.last_error: error,
-        PipelineTask.updated_at: datetime.utcnow(),
+        PipelineTask.updated_at: occurred_at,
     }, synchronize_session=False)
+    inbox_event_id = None
+    if updated and status in {"success", "failed"}:
+        from app.inbox.service import enqueue_pipeline_task_result
+        inbox_event_id = enqueue_pipeline_task_result(
+            db,
+            task_id=task_id,
+            status=status,
+            error=error,
+            occurrence_id=run_id or token,
+            run_id=run_id,
+            trigger_type=trigger_type,
+            occurred_at=occurred_at,
+        )
     db.commit()
+    if inbox_event_id:
+        # The task result and outbox event committed atomically. Projection is
+        # attempted immediately; on failure the event remains pending and will
+        # be retried at the next inbox read or application startup.
+        from sqlalchemy.orm import sessionmaker
+        inbox_db = sessionmaker(bind=db.get_bind())()
+        try:
+            from app.inbox.service import drain_outbox
+            drain_outbox(inbox_db, event_id=inbox_event_id)
+        except Exception:  # noqa: BLE001 - task outcome is already durable
+            logger.exception("PipelineTask %s 收件箱事件即时投递失败", task_id)
+        finally:
+            inbox_db.close()
     return bool(updated)
 
 
@@ -84,6 +115,7 @@ def _record_run_initialization_failure(
     run_id: str,
     execution_token: str,
     message: str,
+    trigger_type: str,
 ) -> bool:
     """收口运行记录初始化失败，且绝不覆盖后来接管租约的执行者。
 
@@ -110,6 +142,8 @@ def _record_run_initialization_failure(
         execution_token,
         status="failed",
         error=message,
+        run_id=run_id,
+        trigger_type=trigger_type,
     )
 
 
@@ -121,6 +155,7 @@ def _recover_run_initialization_failure(
     run_id: str,
     execution_token: str,
     message: str,
+    trigger_type: str,
 ) -> bool:
     """清理失败初始化；原会话不可用时换新会话重试一次。"""
     try:
@@ -130,6 +165,7 @@ def _recover_run_initialization_failure(
             run_id=run_id,
             execution_token=execution_token,
             message=message,
+            trigger_type=trigger_type,
         )
     except Exception:  # noqa: BLE001 - 正在恢复数据库异常，必须切换会话重试
         logger.exception(
@@ -149,6 +185,7 @@ def _recover_run_initialization_failure(
             run_id=run_id,
             execution_token=execution_token,
             message=message,
+            trigger_type=trigger_type,
         )
     finally:
         retry_db.close()
@@ -248,6 +285,7 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
                 run_id=run_id,
                 execution_token=execution_token,
                 message=message,
+                trigger_type=trigger_type,
             )
             if not released:
                 logger.warning(
@@ -284,6 +322,8 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
                 status="success" if ok else "failed",
                 error=final_error,
                 rows=int(stats.get("lake_rows") or stats.get("rows_out") or 0),
+                run_id=run_id,
+                trigger_type=trigger_type,
             )
             if not released:
                 logger.warning(

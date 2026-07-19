@@ -3,10 +3,9 @@ import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import {
   Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
-  Inbox, UserCircle, CheckCircle2, Bell, AlertTriangle, User, Clock, Trash2,
-  Menu, X,
+  UserCircle, User, Menu, X,
 } from 'lucide-react'
-import { Modal } from '@/components/ui/Modal'
+import InboxPopover from '@/components/inbox/InboxPopover'
 import { visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -19,54 +18,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const [inboxOpen, setInboxOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
-  const [dismissingIds, setDismissingIds] = useState<number[]>([])
-  const [detailItem, setDetailItem] = useState<InboxItem | null>(null)
   const inboxRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
-
-  interface InboxItem {
-    id: number
-    type: 'approval' | 'alert' | 'notification'
-    title: string
-    time: string
-    submitter: string
-    detail: string
-  }
-
-  const [inboxItems, setInboxItems] = useState<InboxItem[]>([
-    { id: 1, type: 'approval', title: '数据集审批：供应商数据v2.3', time: '10分钟前', submitter: '张三', detail: '提交了供应商数据集 v2.3 版本进行审批，包含 240 条供应商记录，新增字段"信用评级"和"合作年限"。请在24小时内完成审批，以便后续数据流水线使用。' },
-    { id: 2, type: 'alert', title: '数据质量告警：采购订单表', time: '15分钟前', submitter: '系统', detail: '数据质量检测发现采购订单表中有 12 条记录存在字段为空的问题，涉及字段："交货日期"(8条)、"付款方式"(4条)。建议尽快处理以避免影响后续数据映射。' },
-    { id: 3, type: 'approval', title: '本体映射审批：采购订单实体', time: '30分钟前', submitter: '李四', detail: '提交了采购订单实体的本体映射配置，新增 6 个属性映射，关联了供应商实体和客户实体。请确认映射关系和基数配置是否正确。' },
-    { id: 4, type: 'notification', title: 'MySQL连接器同步完成', time: '1小时前', submitter: '系统', detail: 'MySQL数据库连接器同步任务已完成，本次同步共处理 1,234 条记录，更新 156 条，新增 89 条，无异常。' },
-    { id: 5, type: 'alert', title: '同步任务失败：客户数据同步', time: '1.5小时前', submitter: '系统', detail: '客户数据同步任务执行失败，错误原因：数据库连接超时。请检查数据库配置是否正确、网络连接是否正常。失败前已处理 456/1200 条记录。' },
-    { id: 6, type: 'notification', title: '新用户注册', time: '2小时前', submitter: '系统', detail: '新用户 editor_role 已完成注册，当前角色为默认编辑者，请管理员分配相应的本体访问权限。' },
-    { id: 7, type: 'approval', title: 'Curated 数据集审批：客户清单', time: '3小时前', submitter: '王五', detail: '提交了客户清单 Curated 数据集进行审批，经过清洗和转换后共 567 条客户记录，数据质量评分 92 分，请审核后批准发布。' },
-    { id: 8, type: 'notification', title: '流水线构建完成', time: '4小时前', submitter: '系统', detail: '数据处理流水线"供应商数据管道"已成功构建并运行完成，输出结果已写入 Curated 数据集。' },
-    { id: 9, type: 'alert', title: '存储空间不足警告', time: '5小时前', submitter: '系统', detail: '服务器上传目录使用率已达 85%，剩余空间约 1.5GB。建议清理不必要的临时文件或扩展存储空间。' },
-    { id: 10, type: 'approval', title: '提示词模板审批：医疗领域提取', time: '6小时前', submitter: '赵六', detail: '提交了医疗领域文档信息提取的提示词模板，用于从临床文档中提取疾病、症状、药物等实体信息，请审批后发布使用。' },
-    { id: 11, type: 'notification', title: '本体质量审查报告已生成', time: '昨天', submitter: '系统', detail: '本体质量审查 Agent 已完成对当前本体的质量检查，发现 3 个潜在问题（2个孤立实体、1个关系基数异常），请查看详细报告。' },
-    { id: 12, type: 'notification', title: '模型配置更新完成', time: '昨天', submitter: '管理员', detail: '系统默认大语言模型已从 gpt-3.5-turbo 切换为 gpt-4o，新配置立即生效，后续所有 LLM 提取任务将使用新模型。' },
-  ])
-
-  const handleDismiss = (id: number) => {
-    setDismissingIds(prev => [...prev, id])
-    // 先让滑出+透明度动画完成，再折叠高度
-    setTimeout(() => {
-      setInboxItems(prev => prev.filter(i => i.id !== id))
-      setDismissingIds(prev => prev.filter(did => did !== id))
-    }, 500)
-  }
-
-  const pendingCount = inboxItems.filter(i => i.type === 'approval' || i.type === 'alert').length
-  // 按优先级排序：待审批 > 告警 > 通知
-  const sortedItems = [...inboxItems].sort((a, b) => {
-    const order: Record<string, number> = { approval: 0, alert: 1, notification: 2 }
-    return order[a.type] - order[b.type]
-  })
-  const alertItems = inboxItems.filter(i => i.type === 'alert')
-  const notificationItems = inboxItems.filter(i => i.type === 'notification')
-  const approvalItems = inboxItems.filter(i => i.type === 'approval')
-  // 按时间排序（假设已按时间从新到旧排列）
 
   useEffect(() => {
     if (!expandedGroup) return
@@ -229,134 +182,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-1">
               {/* 收件箱 */}
               <div className="relative" ref={inboxRef}>
-                <button
-                  onClick={() => { setInboxOpen(!inboxOpen); setUserMenuOpen(false) }}
-                  className={`relative flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
-                    inboxOpen ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                  }`}
-                  title="收件箱"
-                >
-                  <Inbox size={22} strokeWidth={1.8} />
-                  {pendingCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] bg-[var(--color-danger)] text-white text-[10px] font-semibold rounded-full flex items-center justify-center px-1 shadow-sm">
-                      {pendingCount}
-                    </span>
-                  )}
-                </button>
-
-                {/* 收件箱下拉面板 */}
-                {inboxOpen && (
-                  <div className="absolute right-0 mt-3 w-[380px] bg-[var(--color-bg-elevated)] rounded-lg shadow-lg border border-[var(--color-border)] z-50 overflow-hidden anim-fade-in-down origin-top">
-                    {/* 头部：标题与三个状态同一行，用 whitespace-nowrap 防止中文断行 */}
-                    <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center gap-3">
-                      <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">收件箱</span>
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-orange-600 dark:text-orange-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
-                        待审批 <span className="font-semibold">{approvalItems.length}</span>
-                      </span>
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-red-600 dark:text-red-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                        告警 <span className="font-semibold">{alertItems.length}</span>
-                      </span>
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-blue-600 dark:text-blue-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                        通知 <span className="font-semibold">{notificationItems.length}</span>
-                      </span>
-                      {notificationItems.length > 0 && (
-                        <button
-                          onClick={() => setInboxItems(prev => prev.filter(i => i.type !== 'notification'))}
-                          className="ml-auto shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] transition-colors"
-                        >
-                          <Trash2 size={12} /> 清空通知
-                        </button>
-                      )}
-                    </div>
-
-                    {/* 消息列表 */}
-                    <div className="max-h-[420px] overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[var(--color-border)] [&::-webkit-scrollbar-track]:bg-transparent">
-                      {sortedItems.length === 0 ? (
-                        <div className="py-16 flex flex-col items-center text-center">
-                          <div className="w-12 h-12 rounded-full bg-[var(--color-bg-base)] flex items-center justify-center mb-3">
-                            <Inbox size={22} className="text-[var(--color-text-tertiary)]" />
-                          </div>
-                          <p className="text-sm text-[var(--color-text-tertiary)]">暂无待办消息</p>
-                        </div>
-                      ) : (
-                        <div className="divide-y divide-[var(--color-border)]">
-                          {sortedItems.map((item) => {
-                            const isApproval = item.type === 'approval'
-                            const isAlert = item.type === 'alert'
-                            const isDismissing = dismissingIds.includes(item.id)
-                            return (
-                              <div
-                                key={item.id}
-                                className={`px-4 py-3 flex items-center gap-3 ${isDismissing ? 'pointer-events-none' : ''} hover:bg-[var(--color-bg-hover)] transition-colors`}
-                                style={{
-                                  transform: isDismissing ? 'translateX(100%)' : 'translateX(0)',
-                                  opacity: isDismissing ? 0 : 1,
-                                  height: isDismissing ? 0 : 'auto',
-                                  paddingTop: isDismissing ? 0 : undefined,
-                                  paddingBottom: isDismissing ? 0 : undefined,
-                                  transition: 'transform 0.45s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease-in-out, height 0.3s ease 0.2s, padding 0.3s ease 0.2s',
-                                  overflow: 'hidden',
-                                }}
-                              >
-                                {/* 左侧图标 */}
-                                <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
-                                  isApproval
-                                    ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
-                                    : isAlert
-                                    ? 'bg-red-500/15 text-red-600 dark:text-red-400'
-                                    : 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                                }`}>
-                                  {isApproval ? <CheckCircle2 size={16} /> : isAlert ? <AlertTriangle size={16} /> : <Bell size={16} />}
-                                </div>
-
-                                {/* 内容 */}
-                                <div className="flex-1 min-w-0">
-                                  <p className={`text-sm leading-snug font-medium ${
-                                    isApproval || isAlert ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'
-                                  }`}>
-                                    {item.title}
-                                  </p>
-                                  <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-tertiary)]">
-                                    <span>{item.submitter}</span>
-                                    <span className="text-[var(--color-border)]">·</span>
-                                    <span>{item.time}</span>
-                                  </div>
-                                </div>
-
-                                {/* 操作按钮 */}
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <button
-                                    onClick={() => handleDismiss(item.id)}
-                                    className="px-2.5 py-1 text-xs text-[var(--color-text-primary)] bg-[var(--color-border)] hover:bg-[var(--color-border-hover)] active:scale-95 rounded transition-all duration-150"
-                                  >
-                                    忽略
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setInboxOpen(false)
-                                      setTimeout(() => setDetailItem(item), 150)
-                                    }}
-                                    className="px-2.5 py-1 text-xs text-white bg-[var(--color-nav-bg)] hover:opacity-90 active:scale-95 rounded transition-all duration-150"
-                                  >
-                                    处理
-                                  </button>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 底部 */}
-                    <button className="w-full px-4 py-2.5 text-sm text-[var(--color-primary)] hover:bg-[var(--color-bg-hover)] transition-colors flex items-center justify-center gap-1 border-t border-[var(--color-border)]">
-                      查看全部消息 <span className="text-[var(--color-text-tertiary)]">({inboxItems.length})</span>
-                    </button>
-                  </div>
-                )}
+                <InboxPopover
+                  open={inboxOpen}
+                  onOpenChange={nextOpen => {
+                    setInboxOpen(nextOpen)
+                    if (nextOpen) setUserMenuOpen(false)
+                  }}
+                  onNavigate={navigate}
+                />
               </div>
 
               {/* 用户中心 */}
@@ -433,70 +266,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
-      
-      {/* 消息详情弹窗 */}
-      <Modal 
-        open={!!detailItem} 
-        onClose={() => setDetailItem(null)}
-        title={detailItem?.title}
-        size="md"
-        footer={
-          <>
-            <button 
-              onClick={() => setDetailItem(null)}
-              className="px-3 py-1.5 text-sm text-[var(--color-text-secondary)] bg-[var(--color-bg-hover)] hover:bg-[var(--color-border)] active:scale-95 rounded-md transition-all duration-150"
-            >
-              关闭
-            </button>
-            <button 
-              onClick={() => {
-                if (detailItem) {
-                  handleDismiss(detailItem.id)
-                  setDetailItem(null)
-                }
-              }}
-              className="px-3 py-1.5 text-sm text-white bg-[var(--color-nav-bg)] hover:opacity-90 active:scale-95 rounded-md transition-all duration-150"
-            >
-              确认处理
-            </button>
-          </>
-        }
-      >
-        {detailItem && (
-          <div className="space-y-4">
-            {/* 类型标签 */}
-            <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                detailItem.type === 'approval' 
-                  ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400' 
-                  : detailItem.type === 'alert'
-                  ? 'bg-red-500/15 text-red-600 dark:text-red-400'
-                  : 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-              }`}>
-                {detailItem.type === 'approval' ? <CheckCircle2 size={12} /> : detailItem.type === 'alert' ? <AlertTriangle size={12} /> : <Bell size={12} />}
-                {detailItem.type === 'approval' ? '待审批' : detailItem.type === 'alert' ? '告警' : '通知'}
-              </span>
-            </div>
-            
-            {/* 详细内容 */}
-            <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-              {detailItem.detail}
-            </p>
-            
-            {/* 元信息 */}
-            <div className="pt-3 border-t border-[var(--color-border)] flex items-center gap-4 text-xs text-[var(--color-text-tertiary)]">
-              <span className="flex items-center gap-1">
-                <User size={12} />
-                {detailItem.submitter}
-              </span>
-              <span className="flex items-center gap-1">
-                <Clock size={12} />
-                {detailItem.time}
-              </span>
-            </div>
-          </div>
-        )}
-      </Modal>
     </div>
   )
 }

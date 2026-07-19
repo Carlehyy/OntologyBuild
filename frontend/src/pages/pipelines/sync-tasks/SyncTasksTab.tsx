@@ -115,6 +115,7 @@ export default function SyncTasksTab() {
   const [showForm, setShowForm] = useState(false)
   const [editingTask, setEditingTask] = useState<PipelineTask | null>(null)
   const [historyTask, setHistoryTask] = useState<PipelineTask | null>(null)
+  const [historyRunId, setHistoryRunId] = useState<string | null>(null)
   const [triggeringIds, setTriggeringIds] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<PipelineTask | null>(null)
   const [actionError, setActionError] = useState('')
@@ -123,6 +124,8 @@ export default function SyncTasksTab() {
   const [pipelineOptions, setPipelineOptions] = useState<PipelineFilterOption[]>([])
   const quickTabsRef = useRef<HTMLDivElement>(null)
   const [quickIndicator, setQuickIndicator] = useState({ left: 0, width: 0 })
+  const deepLinkedTaskId = searchParams.get('task_id')
+  const deepLinkedRunId = searchParams.get('run_id')
 
   useEffect(() => {
     const pid = searchParams.get('pipeline')
@@ -134,6 +137,22 @@ export default function SyncTasksTab() {
     }
 
   }, [])
+
+  useEffect(() => {
+    if (!deepLinkedTaskId) return
+    let active = true
+    pipelineTasksApi.get(deepLinkedTaskId)
+      .then(task => {
+        if (!active) return
+        setHistoryTask(task)
+        setHistoryRunId(deepLinkedRunId)
+      })
+      .catch(err => {
+        if (!active) return
+        setActionError(err?.detail || err?.message || '收件箱关联的任务已不存在或无权访问')
+      })
+    return () => { active = false }
+  }, [deepLinkedRunId, deepLinkedTaskId])
 
   // 筛选 & 分页
   const [searchInput, setSearchInput] = useState('')
@@ -597,7 +616,7 @@ export default function SyncTasksTab() {
                                     onClick={() => handleTrigger(t)} accent="teal">
                                     <RotateCw size={14} className={isTriggering ? 'animate-spin' : ''} />
                                   </IconBtn2>
-                                  <IconBtn2 title="执行记录" onClick={() => setHistoryTask(t)}>
+                                  <IconBtn2 title="执行记录" onClick={() => { setHistoryTask(t); setHistoryRunId(null) }}>
                                     <History size={14} />
                                   </IconBtn2>
                                   <IconBtn2 title="编辑" onClick={() => handleEdit(t)}>
@@ -717,7 +736,24 @@ export default function SyncTasksTab() {
           onSaved={handleFormSaved}
         />
       )}
-      {historyTask && <HistoryDrawer task={historyTask} onClose={() => setHistoryTask(null)} />}
+      {historyTask && (
+        <HistoryDrawer
+          task={historyTask}
+          initialRunId={historyRunId}
+          onClose={() => {
+            setHistoryTask(null)
+            setHistoryRunId(null)
+            if (searchParams.has('task_id') || searchParams.has('run_id')) {
+              setSearchParams(prev => {
+                const next = new URLSearchParams(prev)
+                next.delete('task_id')
+                next.delete('run_id')
+                return next
+              }, { replace: true })
+            }
+          }}
+        />
+      )}
       <ConfirmDialog
         open={!!deleteTarget}
         title="删除调度任务"

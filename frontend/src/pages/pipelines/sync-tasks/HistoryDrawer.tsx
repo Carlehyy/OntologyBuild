@@ -40,7 +40,15 @@ function formatDuration(start: string | null, end: string | null): string {
   } catch { return '-' }
 }
 
-export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; onClose: () => void }) {
+export default function HistoryDrawer({
+  task,
+  initialRunId,
+  onClose,
+}: {
+  task: PipelineTask
+  initialRunId?: string | null
+  onClose: () => void
+}) {
   const [items, setItems] = useState<PipelineTaskRun[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -53,6 +61,7 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
   const [dateTo, setDateTo] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [audits, setAudits] = useState<Record<string, RunAudit | 'loading' | 'error'>>({})
+  const [linkedRun, setLinkedRun] = useState<PipelineTaskRun | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -86,6 +95,44 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
     void load()
   }, [load])
 
+  useEffect(() => {
+    setLinkedRun(null)
+    if (!initialRunId) return
+    let active = true
+    setAudits(current => ({ ...current, [initialRunId]: 'loading' }))
+    pipelineTasksApi.runAudit(task.id, initialRunId)
+      .then(audit => {
+        if (!active) return
+        setAudits(current => ({ ...current, [initialRunId]: audit }))
+        setLinkedRun({
+          id: audit.id,
+          status: audit.status,
+          trigger_type: audit.trigger_type,
+          started_at: audit.started_at,
+          finished_at: audit.finished_at,
+          rows_in: audit.rows_in,
+          rows_out: audit.rows_out,
+          lake_rows: audit.lake_rows,
+          write_mode: audit.write_mode,
+          skipped_outputs: audit.outputs.filter(output => output.skipped).map(output => ({
+            curated_dataset_id: output.curated_dataset_id,
+            reason: output.skipped,
+          })),
+          curated_dataset_ids: audit.outputs.flatMap(output => output.curated_dataset_id ? [output.curated_dataset_id] : []),
+          lake_impact: audit.lake_impact,
+          config_snapshot: audit.config_snapshot,
+          error_message: audit.error_message,
+        })
+        setExpanded(current => new Set(current).add(initialRunId))
+      })
+      .catch(() => {
+        if (!active) return
+        setAudits(current => ({ ...current, [initialRunId]: 'error' }))
+        setExpanded(current => new Set(current).add(initialRunId))
+      })
+    return () => { active = false }
+  }, [initialRunId, task.id])
+
   const resetFilters = () => {
     setStatusFilter('')
     setTriggerFilter('')
@@ -98,6 +145,9 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
   const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1
   const rangeEnd = Math.min(total, page * pageSize)
   const hasFilters = Boolean(statusFilter || triggerFilter || dateFrom || dateTo)
+  const visibleItems = linkedRun && !items.some(item => item.id === linkedRun.id)
+    ? [linkedRun, ...items]
+    : items
 
   const toggle = (runId: string) => {
     setExpanded(prev => {
@@ -181,11 +231,11 @@ export default function HistoryDrawer({ task, onClose }: { task: PipelineTask; o
             <div className="py-20 text-center text-slate-400 text-sm flex items-center justify-center gap-1">
               <Loader2 size={14} className="animate-spin" />加载中...
             </div>
-          ) : items.length === 0 ? (
+          ) : visibleItems.length === 0 ? (
             <div className="py-20 text-center text-slate-400 text-sm">{hasFilters ? '当前筛选条件下暂无执行记录' : '暂无执行记录'}</div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {items.map(h => {
+              {visibleItems.map(h => {
                 const sm = STATUS_META[h.status] || STATUS_META.running
                 const isOpen = expanded.has(h.id)
                 const skipped = (h.skipped_outputs?.length ?? 0) > 0

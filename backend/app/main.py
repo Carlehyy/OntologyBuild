@@ -100,6 +100,9 @@ def _seed_db():
             SuperAssistantConversation, SuperAssistantMessage,
             SuperAssistantToolRun, SuperAssistantSkill, SuperAssistantMcpServer,
         )
+        from app.inbox.models import (  # noqa: F401
+            InboxItem, InboxDelivery, InboxEventReceipt, InboxOutboxEvent,
+        )
         # 生产 schema 只认 Alembic。create_all 会把漏跑迁移伪装成“可启动”，
         # 却没有回填、外键与唯一约束；开发/测试仍保留零配置建库便利。
         if settings.environment != "production":
@@ -227,6 +230,11 @@ def _seed_db():
                             "schema 迁移失败(将导致该表读写 500): %s -> %s", stmt, e)
 
         seed_admin(db)
+
+        # Retry domain results that committed just before a previous process
+        # stopped, but whose personal inbox projection had not completed yet.
+        from app.inbox.service import drain_outbox
+        drain_outbox(db, limit=100)
 
         # 对象存储删除采用 transactional outbox：上次停机/存储故障遗留的任务在
         # 启动时重试。空队列不会初始化 MinIO 客户端，不增加健康检查压力。
@@ -584,6 +592,8 @@ app.include_router(inference_v2.router, prefix="/api/v2/ontologies", tags=["v2-i
 app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-extraction"], dependencies=legacy_ontology_guard)
 app.include_router(sync_tasks_v2.router, prefix="/api/v2/sync-tasks", tags=["v2-sync-tasks"], dependencies=asset_lake_guard)
 app.include_router(pipeline_tasks_v2.router, prefix="/api/v2/pipeline-tasks", tags=["v2-pipeline-tasks"], dependencies=asset_lake_guard)
+from app.inbox import router as inbox_router
+app.include_router(inbox_router.router, prefix="/api/v2/inbox", tags=["inbox"])
 app.include_router(steward_v2.router, prefix="/api/v2/steward", tags=["v2-steward"], dependencies=[*asset_lake_guard, *pipeline_guard])
 # WebSocket uses a one-time, user-bound ticket issued by the authenticated
 # steward router.  It intentionally sits outside HTTPBearer dependencies because

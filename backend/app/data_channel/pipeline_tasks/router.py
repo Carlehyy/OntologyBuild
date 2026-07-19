@@ -445,7 +445,11 @@ def stats_overview(db: Session = Depends(get_db)):
 # ========== CRUD ==========
 
 @router.post("", status_code=201)
-def create_task(body: PipelineTaskCreate, db: Session = Depends(get_db)):
+def create_task(
+    body: PipelineTaskCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     _, pipe_pk = _validate(db, body)
     task = PipelineTask(
         id=str(uuid.uuid4()),
@@ -461,6 +465,7 @@ def create_task(body: PipelineTaskCreate, db: Session = Depends(get_db)):
         interval_seconds=body.interval_seconds or 0,
         enabled=body.enabled,
         status="idle",
+        created_by=getattr(current_user, "id", None),
     )
     db.add(task)
     db.commit()

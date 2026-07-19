@@ -86,6 +86,15 @@ class PipelineTask(Base):
     last_rows = Column(Integer, default=0)
     last_error = Column(Text, default="")
 
+    # 收件箱投递的默认负责人。历史任务由迁移从关联流水线创建人回填；
+    # 无法确定时，投递服务会安全回退到启用中的管理员。
+    created_by = Column(
+        String,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -123,6 +132,7 @@ class PipelineTask(Base):
             "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
             "last_rows": self.last_rows,
             "last_error": self.last_error,
+            "created_by": self.created_by,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

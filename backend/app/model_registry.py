@@ -22,6 +22,7 @@ MODEL_MODULES = (
     "app.data_channel.sync_tasks.models",
     "app.events.models",
     "app.exploration.models",
+    "app.inbox.models",
     "app.model_configs.models",
     "app.models.extraction_task",
     "app.ontologies.actions.models",

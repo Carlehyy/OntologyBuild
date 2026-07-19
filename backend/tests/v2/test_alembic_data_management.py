@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
@@ -56,9 +58,16 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         "v2_ontology_mappings",
         "v2_manual_dataset_shares",
         "v2_manual_dataset_changes",
+        "inbox_items",
+        "inbox_deliveries",
+        "inbox_event_receipts",
+        "inbox_outbox_events",
     }
     assert required <= set(inspector.get_table_names())
     assert "task_id" in {c["name"] for c in inspector.get_columns("v2_pipeline_runs")}
+    assert "created_by" in {
+        c["name"] for c in inspector.get_columns("v2_pipeline_tasks")
+    }
     assert "validation_attestation" in {
         c["name"] for c in inspector.get_columns("v2_pipelines")
     }
@@ -130,6 +139,77 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
     )
     assert "source_connection_id IS NOT NULL" in source_where
     assert "source_resource IS NOT NULL" in source_where
+    engine.dispose()
+
+
+def test_inbox_upgrade_from_existing_0037_backfills_task_owner(tmp_path, monkeypatch):
+    """Exercise the real upgrade branch, not only current-metadata fresh install."""
+    backend = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "existing-before-inbox.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = _alembic_config(backend, db_path)
+    command.upgrade(cfg, "0037_custom_role")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        # 0017 creates missing tables from current metadata on a fresh test DB.
+        # Strip the new schema to faithfully represent a deployed 0037 database.
+        for table in (
+            "inbox_deliveries",
+            "inbox_event_receipts",
+            "inbox_outbox_events",
+            "inbox_items",
+        ):
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+        operations = Operations(MigrationContext.configure(conn))
+        operations.drop_index(
+            "ix_v2_pipeline_tasks_created_by",
+            table_name="v2_pipeline_tasks",
+        )
+        with operations.batch_alter_table("v2_pipeline_tasks") as batch:
+            batch.drop_column("created_by")
+
+        conn.execute(text(
+            "INSERT INTO users "
+            "(id,username,email,password_hash,role,is_active,created_at,updated_at) "
+            "VALUES ('owner-1','owner','owner@example.test','x','editor',1,"
+            "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO v2_pipelines "
+            "(id,name,spec,status,enabled,version,created_by,created_at,updated_at) "
+            "VALUES ('pipe-1','存量流水线','{}','published',1,1,'owner-1',"
+            "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO v2_pipeline_tasks "
+            "(id,name,description,pipeline_id,write_mode,skip_empty,schedule_type,"
+            "enabled,status,created_at,updated_at) "
+            "VALUES ('task-1','存量任务','迁移验证','pipe-1','overwrite',1,"
+            "'MANUAL',1,'idle',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    inspector = inspect(engine)
+    with engine.connect() as conn:
+        owner = conn.execute(text(
+            "SELECT created_by FROM v2_pipeline_tasks WHERE id='task-1'"
+        )).scalar_one()
+    assert owner == "owner-1"
+    assert any(
+        fk["constrained_columns"] == ["created_by"]
+        and fk["referred_table"] == "users"
+        for fk in inspector.get_foreign_keys("v2_pipeline_tasks")
+    )
+    assert {
+        "inbox_items",
+        "inbox_deliveries",
+        "inbox_event_receipts",
+        "inbox_outbox_events",
+    } <= set(inspector.get_table_names())
     engine.dispose()
 
 
