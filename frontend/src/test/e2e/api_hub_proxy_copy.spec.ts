@@ -17,6 +17,7 @@ const publishedInterface = {
   ],
   body_type: 'json',
   body_content: '{"productId":1001,"password":"private"}',
+  file_fields: [],
   use_w3: false,
   mcp_enabled: false,
   open_enabled: false,
@@ -40,6 +41,8 @@ const forwardingPackage = {
   body_type: 'json',
   body_template: '{\n  "productId": 1001\n}',
   editable_body_keys: ['/productId'],
+  multipart_fields: [],
+  file_fields: [],
   generated_at: '2026-07-18T10:00:00Z',
 }
 
@@ -73,7 +76,7 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
       await route.fulfill({ json: publishedInterface })
       return
     }
-    if (request.method() === 'POST' && path === '/api/api-hub/interfaces/7/http-publication/auto') {
+    if (request.method() === 'PUT' && path === '/api/api-hub/interfaces/7/http-publication') {
       await route.fulfill({ json: publishedInterface })
       return
     }
@@ -116,7 +119,7 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
   await page.getByRole('button', { name: '转发调用', exact: true }).click()
 
   const dialog = page.getByRole('dialog', { name: /转发调用/ })
-  await dialog.getByRole('button', { name: '生成新的调用包' }).click()
+  await dialog.getByRole('button', { name: '保存并生成调用包' }).click()
   const executableExample = dialog.locator('pre')
   await expect(executableExample).toContainText('/proxy/orders?page=1')
   await expect(executableExample).toContainText('X-API-Hub-Key: hub_one_time_secret')

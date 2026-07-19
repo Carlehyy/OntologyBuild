@@ -15,6 +15,7 @@ http.interceptors.response.use(
 )
 
 export interface KV { key: string; value: string }
+export interface FileField { key: string; accept: string; multiple: boolean }
 
 export interface HubInterface {
   id: number | null
@@ -25,8 +26,9 @@ export interface HubInterface {
   url: string
   query_params: KV[]
   headers: KV[]
-  body_type: 'none' | 'json' | 'form' | 'raw'
+  body_type: 'none' | 'json' | 'form' | 'multipart' | 'raw'
   body_content: string
+  file_fields: FileField[]
   use_w3: boolean
   mcp_enabled: boolean
   open_enabled: boolean
@@ -50,6 +52,7 @@ export interface RunResult {
   content_type: string
   error: string | null
   relogin: boolean
+  download?: { blob: Blob; filename: string }
 }
 
 export interface RunSummary {
@@ -197,6 +200,8 @@ export interface ForwardingPackage {
   body_type: HubInterface['body_type']
   body_template: string
   editable_body_keys: string[]
+  multipart_fields: KV[]
+  file_fields: FileField[]
   generated_at: string
 }
 
@@ -219,6 +224,16 @@ export const apiHub = {
   autoHttpPublication: (id: number) => data<HubInterface>(http.post(`/interfaces/${id}/http-publication/auto`)),
   run: (id: number) => data<RunResult>(http.post(`/interfaces/${id}/run`)),
   runDraft: (body: HubInterface) => data<RunResult>(http.post('/interfaces/preview-run', body)),
+  runDraftRaw: async (body: HubInterface, selectedFiles: File[][]) => {
+    const requestBody: HubInterface | FormData = body.body_type === 'multipart'
+      ? multipartDraft(body, selectedFiles)
+      : body
+    const response = await http.post<ArrayBuffer>('/interfaces/preview-run/raw', requestBody, {
+      responseType: 'arraybuffer',
+      validateStatus: () => true,
+    })
+    return rawRunResult(response.status, response.headers as Record<string, unknown>, response.data)
+  },
   listRuns: (params: Record<string, string | number>) => data<{ items: RunSummary[]; total: number; page: number; size: number }>(http.get('/runs', { params })),
   runOverview: (timezoneOffsetMinutes = new Date().getTimezoneOffset()) =>
     data<RunOverview>(http.get('/runs/overview', { params: { timezone_offset_minutes: timezoneOffsetMinutes } })),
@@ -255,6 +270,7 @@ export function emptyHubInterface(): HubInterface {
     headers: [{ key: '', value: '' }],
     body_type: 'none',
     body_content: '',
+    file_fields: [],
     use_w3: false,
     mcp_enabled: false,
     open_enabled: false,
@@ -265,6 +281,77 @@ export function emptyHubInterface(): HubInterface {
     proxy_body_enabled: false,
     proxy_body_keys: [],
   }
+}
+
+function multipartDraft(body: HubInterface, selectedFiles: File[][]): FormData {
+  const form = new FormData()
+  form.append('__interface', JSON.stringify(body))
+  body.file_fields.forEach((field, index) => {
+    if (!field.key.trim()) return
+    ;(selectedFiles[index] || []).forEach(file => form.append(field.key.trim(), file, file.name))
+  })
+  return form
+}
+
+function rawRunResult(status: number, rawHeaders: Record<string, unknown>, data: ArrayBuffer): RunResult {
+  const headers = Object.fromEntries(
+    Object.entries(rawHeaders).map(([key, value]) => [key.toLowerCase(), String(value)]),
+  )
+  const bytes = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer
+  if (headers['x-api-hub-upstream'] !== '1') {
+    const text = new TextDecoder().decode(bytes)
+    try {
+      const payload = JSON.parse(text) as { detail?: string }
+      throw { detail: payload.detail || `平台调用失败（HTTP ${status}）` }
+    } catch (error) {
+      if (error && typeof error === 'object' && 'detail' in error) throw error
+      throw { detail: text || `平台调用失败（HTTP ${status}）` }
+    }
+  }
+
+  const declaredContentType = headers['content-type'] || ''
+  const contentType = declaredContentType || 'application/octet-stream'
+  const disposition = headers['content-disposition'] || ''
+  const textual = !declaredContentType || isTextContentType(contentType)
+  const decoded = textual ? new TextDecoder().decode(bytes) : ''
+  const responseBody = textual
+    ? (decoded.length > 1_000_000 ? `${decoded.slice(0, 1_000_000)}\n\n…（响应过大，页面预览已截断）` : decoded)
+    : `（二进制响应：${bytes.byteLength} bytes，Content-Type: ${contentType.split(';', 1)[0]}）`
+  const downloadable = bytes.byteLength > 0 && (Boolean(disposition) || !textual)
+  return {
+    run_id: Number(headers['x-api-hub-run-id']) || undefined,
+    ok: status >= 200 && status < 300,
+    status_code: status,
+    elapsed_ms: Number(headers['x-api-hub-elapsed-ms']) || 0,
+    response_headers: headers,
+    response_body: responseBody,
+    content_type: contentType,
+    error: status >= 200 && status < 300 ? null : `上游返回 HTTP ${status}`,
+    relogin: headers['x-api-hub-relogin'] === '1',
+    download: downloadable ? {
+      blob: new Blob([bytes], { type: contentType }),
+      filename: contentDispositionFilename(disposition) || 'download',
+    } : undefined,
+  }
+}
+
+function isTextContentType(value: string): boolean {
+  const mime = value.split(';', 1)[0].trim().toLowerCase()
+  return mime.startsWith('text/') || mime.endsWith('+json') || mime.endsWith('+xml') || [
+    'application/json', 'application/xml', 'application/javascript',
+    'application/x-www-form-urlencoded', 'application/graphql',
+  ].includes(mime)
+}
+
+function contentDispositionFilename(value: string): string {
+  const utf8 = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (utf8) {
+    try { return decodeURIComponent(utf8.replace(/^"|"$/g, '')) }
+    catch { return utf8 }
+  }
+  return value.match(/filename="([^"]+)"/i)?.[1]
+    || value.match(/filename=([^;]+)/i)?.[1]?.trim()
+    || ''
 }
 
 export function apiError(error: unknown): string {

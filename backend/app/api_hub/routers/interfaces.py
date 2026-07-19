@@ -5,8 +5,11 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException
+import anyio
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
+from starlette.datastructures import FormData, UploadFile
 
 from .. import config, db, executor, publication
 
@@ -15,7 +18,7 @@ router = APIRouter(prefix="/interfaces", tags=["api-hub-interfaces"])
 _RESERVED_GROUP = "默认分组"
 _SLOW_RUN_MS = 500
 _ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-_ALLOWED_BODY_TYPES = {"none", "json", "form", "raw"}
+_ALLOWED_BODY_TYPES = {"none", "json", "form", "multipart", "raw"}
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _PROXY_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _PROXY_RESERVED_HEADERS = {
@@ -30,6 +33,10 @@ _PROXY_RESERVED_HEADERS = {
     "trailer",
     "upgrade",
 }
+_RAW_RESPONSE_BLOCKLIST = _PROXY_RESERVED_HEADERS | {
+    "content-encoding",  # requests transparently decompresses upstream content
+    "set-cookie",       # never write an upstream cookie into the platform origin
+}
 
 
 def _check_group_name(name: str):
@@ -43,6 +50,12 @@ class KV(BaseModel):
     value: str = ""
 
 
+class FileField(BaseModel):
+    key: str = ""
+    accept: str = ""
+    multiple: bool = False
+
+
 class InterfaceIn(BaseModel):
     name: str = "未命名接口"
     description: str = ""
@@ -51,8 +64,9 @@ class InterfaceIn(BaseModel):
     url: str = ""
     query_params: List[KV] = Field(default_factory=list)
     headers: List[KV] = Field(default_factory=list)
-    body_type: str = "none"   # none | json | form | raw
+    body_type: str = "none"   # none | json | form | multipart | raw
     body_content: str = ""
+    file_fields: List[FileField] = Field(default_factory=list)
     use_w3: bool = False
     mcp_enabled: bool = False
     open_enabled: bool = False
@@ -143,9 +157,89 @@ class InterfaceIn(BaseModel):
             item.key = key
         return value
 
+    @field_validator("file_fields")
+    @classmethod
+    def validate_file_fields(cls, value: List[FileField]) -> List[FileField]:
+        if len(value) > 50:
+            raise ValueError("文件字段不能超过 50 个")
+        seen = set()
+        for item in value:
+            key = item.key.strip()
+            marker = key.lower()
+            if key and not _HEADER_NAME_RE.fullmatch(key):
+                raise ValueError(f"文件字段名称无效：{key}")
+            if marker and marker in seen:
+                raise ValueError(f"文件字段名称重复：{key}")
+            if len(item.accept) > 500:
+                raise ValueError(f"文件类型限制过长：{key}")
+            item.key = key
+            item.accept = item.accept.strip()
+            if marker:
+                seen.add(marker)
+        return value
+
 
 class PreviewInterfaceIn(InterfaceIn):
     id: int | None = Field(default=None, gt=0)
+
+
+def _body_form_pairs(text: str) -> list[tuple[str, str]]:
+    pairs = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            pairs.append((key, value.strip()))
+    return pairs
+
+
+def _matches_file_accept(filename: str, content_type: str, accept: str) -> bool:
+    rules = [item.strip().lower() for item in (accept or "").split(",") if item.strip()]
+    if not rules:
+        return True
+    filename = (filename or "").lower()
+    content_type = (content_type or "application/octet-stream").split(";", 1)[0].strip().lower()
+    return any(
+        rule == "*/*"
+        or (rule.startswith(".") and filename.endswith(rule))
+        or (rule.endswith("/*") and content_type.startswith(rule[:-1]))
+        or rule == content_type
+        for rule in rules
+    )
+
+
+def _raw_run_response(result: dict) -> Response:
+    if result.get("status_code") is None:
+        status = 504 if result.get("error_type") == "timeout" else 502
+        return JSONResponse(
+            status_code=status,
+            content={
+                "detail": result.get("error") or "真实接口调用失败",
+                "run_id": result.get("run_id"),
+            },
+        )
+    headers = {
+        key: value
+        for key, value in (result.get("response_headers") or {}).items()
+        if key.lower() not in _RAW_RESPONSE_BLOCKLIST
+    }
+    headers.update(
+        {
+            "X-Api-Hub-Upstream": "1",
+            "X-Api-Hub-Run-Id": str(result.get("run_id") or ""),
+            "X-Api-Hub-Elapsed-Ms": str(result.get("elapsed_ms") or 0),
+            "X-Api-Hub-Relogin": "1" if result.get("relogin") else "0",
+        }
+    )
+    return Response(
+        content=result.get("response_content") or b"",
+        status_code=result["status_code"],
+        headers=headers,
+        media_type=None,
+    )
 
 
 def _load_json_list(value) -> list:
@@ -204,8 +298,8 @@ def _validate_proxy_publish(
             status_code=400,
             detail="以下 Header 由平台代理层管理，不能配置为透传项：" + ", ".join(blocked),
         )
-    if body_keys and body.body_type not in {"json", "form"}:
-        raise HTTPException(status_code=400, detail="只有 JSON 或 Form Body 支持字段级开放")
+    if body_keys and body.body_type not in {"json", "form", "multipart"}:
+        raise HTTPException(status_code=400, detail="只有 JSON、Form 或 Multipart Body 支持字段级开放")
     if body.body_type == "json" and any(not key.startswith("/") for key in body_keys):
         raise HTTPException(status_code=400, detail="JSON Body 字段路径必须以 / 开头")
     return slug, query_keys, header_keys, body_keys
@@ -223,6 +317,7 @@ def _row_to_dict(row) -> dict:
         "headers": _load_json_list(row["headers"]),
         "body_type": row["body_type"],
         "body_content": row["body_content"],
+        "file_fields": _load_json_list(row["file_fields"]),
         "use_w3": bool(row["use_w3"]),
         "mcp_enabled": bool(row["mcp_enabled"]),
         "open_enabled": bool(row["open_enabled"]),
@@ -265,13 +360,14 @@ def create_interface(body: InterfaceIn):
         slug, query_keys, header_keys, body_keys = _validate_proxy_publish(conn, body)
         cur = conn.execute(
             "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-            "body_type, body_content, use_w3, mcp_enabled, open_enabled, http_enabled, proxy_slug, "
+            "body_type, body_content, file_fields, use_w3, mcp_enabled, open_enabled, http_enabled, proxy_slug, "
             "proxy_query_keys, proxy_header_keys, proxy_body_enabled, proxy_body_keys, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 body.name, body.description, body.group_name, body.method.upper(), body.url,
                 _dump_kv(body.query_params), _dump_kv(body.headers),
                 body.body_type, body.body_content,
+                json.dumps([item.model_dump() for item in body.file_fields], ensure_ascii=False),
                 1 if body.use_w3 else 0, 1 if body.mcp_enabled else 0,
                 1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
                 json.dumps(query_keys, ensure_ascii=False),
@@ -295,6 +391,94 @@ def preview_run(body: PreviewInterfaceIn):
     return executor.run_interface(iface)
 
 
+@router.post("/preview-run/raw")
+async def preview_run_raw(request: Request):
+    """Execute the editor draft and return the upstream bytes unchanged.
+
+    JSON requests cover ordinary bodies. Multipart requests carry the serialized
+    draft in ``__interface`` and runtime files under their configured field names.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > config.PROXY_MAX_REQUEST_BYTES:
+                raise HTTPException(status_code=413, detail="请求体超过平台调用上限")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length 无效") from exc
+
+    form: FormData | None = None
+    overrides = executor.RequestOverrides(source="ui")
+    try:
+        content_type = (request.headers.get("content-type") or "").lower()
+        if content_type.startswith("multipart/form-data"):
+            form = await request.form(max_files=50, max_fields=200)
+            draft_json = form.get("__interface")
+            if not isinstance(draft_json, str):
+                raise HTTPException(status_code=422, detail="缺少接口调用配置")
+            try:
+                body = PreviewInterfaceIn.model_validate_json(draft_json)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="接口调用配置无效") from exc
+
+            configured = {item.key: item for item in body.file_fields if item.key}
+            file_counts: dict[str, int] = {}
+            files: list[executor.RequestFile] = []
+            total_size = len(draft_json.encode("utf-8"))
+            for field_name, value in form.multi_items():
+                if field_name == "__interface":
+                    continue
+                if not isinstance(value, UploadFile):
+                    raise HTTPException(status_code=400, detail=f"文件字段 {field_name} 格式无效")
+                definition = configured.get(field_name)
+                if definition is None:
+                    raise HTTPException(status_code=400, detail=f"文件字段未在接口中配置：{field_name}")
+                file_counts[field_name] = file_counts.get(field_name, 0) + 1
+                if file_counts[field_name] > 1 and not definition.multiple:
+                    raise HTTPException(status_code=400, detail=f"文件字段不允许多文件：{field_name}")
+                if not _matches_file_accept(
+                    value.filename or "", value.content_type or "", definition.accept
+                ):
+                    raise HTTPException(status_code=400, detail=f"文件类型不符合字段限制：{field_name}")
+                size = value.size
+                if size is not None:
+                    total_size += size
+                files.append(
+                    executor.RequestFile(
+                        field_name=field_name,
+                        filename=value.filename or "upload",
+                        stream=value.file,
+                        content_type=value.content_type or "application/octet-stream",
+                        size=size,
+                    )
+                )
+            if total_size > config.PROXY_MAX_REQUEST_BYTES:
+                raise HTTPException(status_code=413, detail="请求体超过平台调用上限")
+            overrides.multipart_fields = _body_form_pairs(body.body_content)
+            overrides.files = files
+        else:
+            try:
+                body = PreviewInterfaceIn.model_validate(await request.json())
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="接口调用配置无效") from exc
+            if body.body_type == "multipart":
+                overrides.multipart_fields = _body_form_pairs(body.body_content)
+                overrides.files = []
+
+        if body.id is not None:
+            with db.get_conn() as conn:
+                _get_or_404(conn, body.id)
+        iface = body.model_dump(mode="json")
+        result = await anyio.to_thread.run_sync(
+            lambda: executor.run_interface(
+                iface, overrides, include_response_content=True
+            )
+        )
+        return _raw_run_response(result)
+    finally:
+        if form is not None:
+            await form.close()
+
+
 @router.get("/{iid}")
 def get_interface(iid: int):
     with db.get_conn() as conn:
@@ -311,13 +495,14 @@ def update_interface(iid: int, body: InterfaceIn):
         slug, query_keys, header_keys, body_keys = _validate_proxy_publish(conn, body, iid)
         conn.execute(
             "UPDATE interfaces SET name=?, description=?, group_name=?, method=?, url=?, query_params=?, "
-            "headers=?, body_type=?, body_content=?, use_w3=?, mcp_enabled=?, open_enabled=?, "
+            "headers=?, body_type=?, body_content=?, file_fields=?, use_w3=?, mcp_enabled=?, open_enabled=?, "
             "http_enabled=?, proxy_slug=?, proxy_query_keys=?, proxy_header_keys=?, "
             "proxy_body_enabled=?, proxy_body_keys=?, updated_at=? WHERE id=?",
             (
                 body.name, body.description, body.group_name, body.method.upper(), body.url,
                 _dump_kv(body.query_params), _dump_kv(body.headers),
                 body.body_type, body.body_content,
+                json.dumps([item.model_dump() for item in body.file_fields], ensure_ascii=False),
                 1 if body.use_w3 else 0, 1 if body.mcp_enabled else 0,
                 1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
                 json.dumps(query_keys, ensure_ascii=False),

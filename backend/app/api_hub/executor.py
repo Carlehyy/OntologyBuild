@@ -36,6 +36,17 @@ _HOP_BY_HOP_HEADERS = {
 
 
 @dataclass
+class RequestFile:
+    """One runtime multipart file. File bytes are never persisted in interface config/history."""
+
+    field_name: str
+    filename: str
+    stream: Any
+    content_type: str = "application/octet-stream"
+    size: int | None = None
+
+
+@dataclass
 class RequestOverrides:
     """一次调用允许覆盖的请求值和审计上下文。"""
 
@@ -43,6 +54,8 @@ class RequestOverrides:
     headers: list[tuple[str, str]] | None = None
     body: Any = _UNSET
     content_type: str | None = None
+    multipart_fields: list[tuple[str, str]] | None = None
+    files: list[RequestFile] | None = None
     source: str = "ui"
     proxy_key_id: int | None = None
     proxy_key_name: str | None = None
@@ -185,7 +198,45 @@ def _build_kwargs(
     }
 
     body_for_snapshot: Any = _UNSET
-    if overrides.body is not _UNSET:
+    if overrides.multipart_fields is not None or overrides.files is not None:
+        fields = _kv_pairs(overrides.multipart_fields)
+        parts: list[tuple[str, tuple]] = [
+            (key, (None, value)) for key, value in fields
+        ]
+        file_snapshot = []
+        for item in overrides.files or []:
+            try:
+                item.stream.seek(0)
+            except (AttributeError, OSError, ValueError):
+                pass
+            parts.append(
+                (
+                    item.field_name,
+                    (
+                        item.filename or "upload",
+                        item.stream,
+                        item.content_type or "application/octet-stream",
+                    ),
+                )
+            )
+            file_snapshot.append(
+                {
+                    "field": item.field_name,
+                    "filename": item.filename or "upload",
+                    "content_type": item.content_type or "application/octet-stream",
+                    "size": item.size,
+                }
+            )
+        # Let requests generate the multipart boundary. A saved/static Content-Type
+        # would otherwise carry a stale boundary and corrupt the upload.
+        _pop_header(headers, "Content-Type")
+        if parts:
+            kwargs["files"] = parts
+        body_for_snapshot = {
+            "fields": [{"key": key, "value": value} for key, value in fields],
+            "files": file_snapshot,
+        }
+    elif overrides.body is not _UNSET:
         kwargs["data"] = overrides.body
         body_for_snapshot = overrides.body
         if overrides.content_type:
@@ -202,6 +253,15 @@ def _build_kwargs(
             form = _parse_form(body)
             kwargs["data"] = form
             body_for_snapshot = body
+        elif body_type == "multipart":
+            form = _parse_form(body)
+            _pop_header(headers, "Content-Type")
+            if form:
+                kwargs["files"] = [(key, (None, value)) for key, value in form]
+            body_for_snapshot = {
+                "fields": [{"key": key, "value": value} for key, value in form],
+                "files": [],
+            }
         elif body_type == "raw" and body:
             kwargs["data"] = body.encode("utf-8")
             body_for_snapshot = body
@@ -244,6 +304,21 @@ def _build_kwargs(
 
 
 def _safe_text(resp: requests.Response) -> str:
+    content_type = (resp.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+    textual = (
+        content_type.startswith("text/")
+        or content_type.endswith("+json")
+        or content_type.endswith("+xml")
+        or content_type in {
+            "application/json",
+            "application/xml",
+            "application/javascript",
+            "application/x-www-form-urlencoded",
+            "application/graphql",
+        }
+    )
+    if content_type and not textual:
+        return f"（二进制响应：{len(resp.content)} bytes，Content-Type: {content_type}）"
     try:
         text = resp.text
     except Exception:  # noqa: BLE001

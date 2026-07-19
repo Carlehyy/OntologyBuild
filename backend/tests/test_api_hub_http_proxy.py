@@ -37,6 +37,7 @@ class EchoHandler(BaseHTTPRequestHandler):
             payload = b"\x00\x01\xfe\xffAPI-HUB"
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="payload.bin"')
             self.send_header("X-Upstream", "binary")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -128,7 +129,7 @@ def test_http_proxy_migrates_existing_api_hub_database(tmp_path, monkeypatch):
         }
     assert {
         "http_enabled", "proxy_slug", "proxy_query_keys",
-        "proxy_header_keys", "proxy_body_enabled", "proxy_body_keys",
+        "proxy_header_keys", "proxy_body_enabled", "proxy_body_keys", "file_fields",
     } <= interface_columns
     assert {"source", "proxy_key_id", "proxy_key_name", "source_ip"} <= run_columns
     assert {"proxy_keys", "proxy_key_interfaces"} <= tables
@@ -374,6 +375,7 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
     assert binary.status_code == 200
     assert binary.content == b"\x00\x01\xfe\xffAPI-HUB"
     assert binary.headers["content-type"] == "application/octet-stream"
+    assert binary.headers["content-disposition"] == 'attachment; filename="payload.bin"'
 
     with db.get_conn() as conn:
         persisted_run = conn.execute(
@@ -390,6 +392,126 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
     assert response_headers["Set-Cookie"] == "UPSTREAM_SECRET=must-not-leak"
     assert "private" in persisted_run["response_body"]
     assert "platform-cookie" in persisted_run["response_body"]
+
+
+def test_editor_direct_call_uploads_multipart_and_downloads_binary(proxy_env):
+    client = proxy_env["client"]
+    interface = _interface(
+        client,
+        proxy_env["upstream_url"],
+        name="Multipart Direct",
+        method="POST",
+        proxy_slug="multipart-direct",
+        query_params=[],
+        proxy_query_keys=[],
+        body_type="multipart",
+        body_content="note=from-editor",
+        file_fields=[{"key": "file", "accept": ".txt,text/plain", "multiple": False}],
+        proxy_body_enabled=True,
+        proxy_body_keys=["note", "file"],
+    )
+
+    response = client.post(
+        "/interfaces/preview-run/raw",
+        data={"__interface": json.dumps(interface, ensure_ascii=False)},
+        files={"file": ("hello.txt", b"direct-file-content", "text/plain")},
+    )
+    assert response.status_code == 200, response.text
+    echoed = response.json()
+    headers = {name.lower(): value for name, value in echoed["headers"].items()}
+    assert headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert 'name="note"' in echoed["body"]
+    assert "from-editor" in echoed["body"]
+    assert 'name="file"; filename="hello.txt"' in echoed["body"]
+    assert "direct-file-content" in echoed["body"]
+    assert response.headers["x-api-hub-upstream"] == "1"
+
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT request_snapshot FROM runs WHERE interface_id=? ORDER BY id DESC",
+            (interface["id"],),
+        ).fetchone()
+    snapshot = json.loads(row["request_snapshot"])
+    assert snapshot["body_content"]["files"] == [
+        {
+            "field": "file",
+            "filename": "hello.txt",
+            "content_type": "text/plain",
+            "size": len(b"direct-file-content"),
+        }
+    ]
+    assert "direct-file-content" not in row["request_snapshot"]
+
+    binary_draft = {
+        **interface,
+        "method": "GET",
+        "url": proxy_env["upstream_url"] + "/binary",
+        "body_type": "none",
+        "body_content": "",
+        "file_fields": [],
+    }
+    binary = client.post("/interfaces/preview-run/raw", json=binary_draft)
+    assert binary.status_code == 200
+    assert binary.content == b"\x00\x01\xfe\xffAPI-HUB"
+    assert binary.headers["content-type"] == "application/octet-stream"
+    assert binary.headers["content-disposition"] == 'attachment; filename="payload.bin"'
+
+
+def test_http_proxy_rebuilds_and_validates_multipart_upload(proxy_env):
+    client = proxy_env["client"]
+    interface = _interface(
+        client,
+        proxy_env["upstream_url"],
+        name="Multipart Proxy",
+        method="POST",
+        proxy_slug="multipart-upload",
+        query_params=[],
+        proxy_query_keys=[],
+        body_type="multipart",
+        body_content="note=fixed-default\ninternal=platform-only",
+        file_fields=[{"key": "file", "accept": ".txt,text/plain", "multiple": False}],
+        proxy_body_enabled=True,
+        proxy_body_keys=["note", "file"],
+    )
+    package = client.post(f"/proxy/packages/{interface['id']}").json()
+    assert package["multipart_fields"] == [{"key": "note", "value": "fixed-default"}]
+    assert package["file_fields"] == [
+        {"key": "file", "accept": ".txt,text/plain", "multiple": False}
+    ]
+    key = _key(client, interface_ids=[interface["id"]])
+
+    response = client.post(
+        "/proxy/multipart-upload",
+        headers={config.PROXY_KEY_HEADER: key["secret"]},
+        data={"note": "caller-value"},
+        files={"file": ("hello.txt", b"proxy-file-content", "text/plain")},
+    )
+    assert response.status_code == 200, response.text
+    echoed = response.json()
+    headers = {name.lower(): value for name, value in echoed["headers"].items()}
+    assert headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert "caller-value" in echoed["body"]
+    assert "fixed-default" not in echoed["body"]
+    assert "internal" in echoed["body"]
+    assert "platform-only" in echoed["body"]
+    assert 'filename="hello.txt"' in echoed["body"]
+    assert "proxy-file-content" in echoed["body"]
+
+    denied = client.post(
+        "/proxy/multipart-upload",
+        headers={config.PROXY_KEY_HEADER: key["secret"]},
+        files={"other": ("hello.txt", b"blocked", "text/plain")},
+    )
+    assert denied.status_code == 400
+    assert "未开放" in denied.json()["detail"]
+
+    wrong_type = client.post(
+        "/proxy/multipart-upload",
+        headers={config.PROXY_KEY_HEADER: key["secret"]},
+        files={"file": ("payload.exe", b"blocked", "application/octet-stream")},
+    )
+    assert wrong_type.status_code == 400
+    assert "文件类型" in wrong_type.json()["detail"]
 
 
 def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
@@ -448,7 +570,7 @@ def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
     )
     assert backup_response.status_code == 200
     payload = backup_response.json()
-    assert payload["version"] == 4
+    assert payload["version"] == 5
     assert "proxy_keys" not in payload
     assert key["secret"] not in backup_response.text
     exported = next(item for item in payload["interfaces"] if item["name"] == "Echo")

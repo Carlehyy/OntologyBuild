@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Braces, Check, ChevronRight, CirclePlus, Copy, FileCode2, Folder, Play,
+  Braces, Check, ChevronRight, CirclePlus, Copy, Download, FileCode2, FileUp, Folder, Play,
   Plus, Search, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2,
   LoaderCircle,
 } from 'lucide-react'
@@ -42,6 +42,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<RunResult | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<File[][]>([])
   const [resultFingerprint, setResultFingerprint] = useState('')
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -115,7 +116,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   }, [draft.group_name, extraGroups, interfaces])
   const isDirty = draftFingerprint(draft) !== draftFingerprint(baseline)
   const resultStale = Boolean(
-    result && resultFingerprint !== requestFingerprint(draft)
+    result && resultFingerprint !== requestFingerprint(draft, selectedFiles)
   )
   const callExample = useMemo(
     () => callExampleDraft ? buildCallExample(callExampleDraft, includeLogin ? callExampleCookie : '') : '',
@@ -128,6 +129,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     setBaseline(structuredClone(item))
     setResult(null)
     setResultFingerprint('')
+    setSelectedFiles([])
   }
   const createNow = () => {
     setSelectedId(null)
@@ -135,6 +137,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     setBaseline(emptyHubInterface())
     setResult(null)
     setResultFingerprint('')
+    setSelectedFiles([])
   }
   const select = (item: HubInterface) => {
     if (item.id === selectedId) return
@@ -240,8 +243,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     setRunning(true)
     try {
       const payload = { ...draft, method: draft.method.toUpperCase() }
-      const fingerprint = requestFingerprint(payload)
-      setResult(await apiHub.runDraft(payload))
+      const fingerprint = requestFingerprint(payload, selectedFiles)
+      setResult(await apiHub.runDraftRaw(payload, selectedFiles))
       setResultFingerprint(fingerprint)
     } catch (error) { onError(apiError(error)) }
     finally { setRunning(false) }
@@ -258,6 +261,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       setDraft(next ? structuredClone(next) : emptyHubInterface())
       setBaseline(next ? structuredClone(next) : emptyHubInterface())
       setResult(null)
+      setSelectedFiles([])
       setDeleteOpen(false)
     } catch (error) { onError(apiError(error)) }
     finally { setSaving(false) }
@@ -454,7 +458,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             {isDirty && <span className="shrink-0 rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint('') }}><Copy size={14} /></Button>}
+            {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint(''); setSelectedFiles([]) }}><Copy size={14} /></Button>}
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
             {draft.id && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />转发调用</Button>}
             {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的转发调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? '转发调用示例复制成功' : ''}</span></Button>}
@@ -493,7 +497,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         <div className="min-h-[150px] shrink-0 overflow-y-auto border-b border-[var(--color-border)] p-4">
           {editorTab === 'params' && <KVEditor value={draft.query_params} onChange={value => patchDraft('query_params', value)} keyPlaceholder="参数名" valuePlaceholder="参数值" />}
           {editorTab === 'headers' && <KVEditor value={draft.headers} onChange={value => patchDraft('headers', value)} keyPlaceholder="Header" valuePlaceholder="值" />}
-          {editorTab === 'body' && <BodyEditor draft={draft} patchDraft={patchDraft} />}
+          {editorTab === 'body' && <BodyEditor draft={draft} patchDraft={patchDraft} selectedFiles={selectedFiles} setSelectedFiles={setSelectedFiles} />}
           {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="描述接口用途、参数要求与返回结果，供 Agent 渐进式发现时理解此接口。" />}
         </div>
 
@@ -545,8 +549,86 @@ function KVEditor({ value, onChange, keyPlaceholder, valuePlaceholder }: { value
   return <div className="space-y-2">{rows.map((row, index) => <div key={index} className="flex items-center gap-2"><input value={row.key} onChange={event => update(index, 'key', event.target.value)} className="h-8 w-2/5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 font-mono text-xs outline-none" placeholder={keyPlaceholder} /><input value={row.value} onChange={event => update(index, 'value', event.target.value)} className="h-8 min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 font-mono text-xs outline-none" placeholder={valuePlaceholder} /><button onClick={() => onChange(rows.filter((_, i) => i !== index))} className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"><X size={14} /></button></div>)}<button onClick={() => onChange([...rows, { key: '', value: '' }])} className="flex items-center gap-1 text-xs text-[var(--color-nav-bg)]"><Plus size={13} />添加一行</button></div>
 }
 
-function BodyEditor({ draft, patchDraft }: { draft: HubInterface; patchDraft: <K extends keyof HubInterface>(key: K, value: HubInterface[K]) => void }) {
-  return <div><div className="mb-2 flex gap-1">{(['none', 'json', 'form', 'raw'] as const).map(type => <button key={type} onClick={() => patchDraft('body_type', type)} className={`rounded px-2.5 py-1 text-[11px] ${draft.body_type === type ? 'bg-[var(--color-nav-light)] font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}>{type.toUpperCase()}</button>)}</div>{draft.body_type === 'none' ? <div className="rounded-md border border-dashed border-[var(--color-border)] py-9 text-center text-xs text-[var(--color-text-tertiary)]">当前请求不发送 Body</div> : <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder={draft.body_type === 'json' ? '{\n  "key": "value"\n}' : draft.body_type === 'form' ? 'key=value\nother=value' : '原始请求内容'} />}</div>
+function BodyEditor({
+  draft,
+  patchDraft,
+  selectedFiles,
+  setSelectedFiles,
+}: {
+  draft: HubInterface
+  patchDraft: <K extends keyof HubInterface>(key: K, value: HubInterface[K]) => void
+  selectedFiles: File[][]
+  setSelectedFiles: React.Dispatch<React.SetStateAction<File[][]>>
+}) {
+  const updateFileField = (index: number, patch: Partial<HubInterface['file_fields'][number]>) => {
+    patchDraft('file_fields', draft.file_fields.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item))
+  }
+  const removeFileField = (index: number) => {
+    patchDraft('file_fields', draft.file_fields.filter((_, itemIndex) => itemIndex !== index))
+    setSelectedFiles(current => current.filter((_, itemIndex) => itemIndex !== index))
+  }
+  const chooseFiles = (index: number, files: FileList | null) => {
+    const chosenFiles = files ? Array.from(files) : []
+    setSelectedFiles(current => {
+      const next = [...current]
+      next[index] = chosenFiles
+      return next
+    })
+  }
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap gap-1">
+        {(['none', 'json', 'form', 'multipart', 'raw'] as const).map(type => (
+          <button key={type} type="button" onClick={() => patchDraft('body_type', type)} className={`rounded px-2.5 py-1 text-[11px] ${draft.body_type === type ? 'bg-[var(--color-nav-light)] font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}>
+            {type.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      {draft.body_type === 'none' ? (
+        <div className="rounded-md border border-dashed border-[var(--color-border)] py-9 text-center text-xs text-[var(--color-text-tertiary)]">当前请求不发送 Body</div>
+      ) : draft.body_type === 'multipart' ? (
+        <div className="grid gap-3 lg:grid-cols-[minmax(240px,0.9fr)_minmax(360px,1.4fr)]">
+          <label className="block">
+            <span className="mb-1.5 block text-[11px] font-semibold text-slate-700">文本字段</span>
+            <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-32 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder={'description=说明\ncategory=document'} />
+            <span className="mt-1 block text-[10px] leading-4 text-slate-400">每行一个 key=value，调用时与文件一起组成 multipart/form-data。</span>
+          </label>
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <span className="text-[11px] font-semibold text-slate-700">文件字段</span>
+              <button type="button" onClick={() => { patchDraft('file_fields', [...draft.file_fields, { key: draft.file_fields.length ? `file${draft.file_fields.length + 1}` : 'file', accept: '', multiple: false }]); setSelectedFiles(current => [...current, []]) }} className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-800"><Plus size={12} />添加文件字段</button>
+            </div>
+            <div className="space-y-2">
+              {draft.file_fields.length ? draft.file_fields.map((field, index) => {
+                const files = selectedFiles[index] || []
+                return (
+                  <div key={index} className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input aria-label={`第 ${index + 1} 个文件字段名`} value={field.key} onChange={event => updateFileField(index, { key: event.target.value })} className="h-8 min-w-[110px] flex-1 rounded-md border border-slate-200 bg-white px-2.5 font-mono text-xs outline-none focus:border-emerald-500" placeholder="字段名，例如 file" />
+                      <input aria-label={`${field.key || `第 ${index + 1} 个字段`}允许的文件类型`} value={field.accept} onChange={event => updateFileField(index, { accept: event.target.value })} className="h-8 min-w-[150px] flex-[1.3] rounded-md border border-slate-200 bg-white px-2.5 font-mono text-[11px] outline-none focus:border-emerald-500" placeholder=".pdf,image/*（可选）" />
+                      <label className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-emerald-200 bg-white px-2.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 focus-within:ring-2 focus-within:ring-emerald-200">
+                        <FileUp size={13} />选择文件
+                        <input type="file" accept={field.accept || undefined} multiple={field.multiple} className="sr-only" onChange={event => { chooseFiles(index, event.target.files); event.currentTarget.value = '' }} />
+                      </label>
+                      <button type="button" onClick={() => removeFileField(index)} aria-label={`删除文件字段 ${field.key || index + 1}`} className="text-slate-400 hover:text-red-600"><X size={14} /></button>
+                    </div>
+                    <div className="mt-2 flex min-h-6 flex-wrap items-center gap-2">
+                      <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-slate-500"><input type="checkbox" checked={field.multiple} onChange={event => { updateFileField(index, { multiple: event.target.checked }); if (!event.target.checked) setSelectedFiles(current => current.map((items, itemIndex) => itemIndex === index ? items.slice(0, 1) : items)) }} className="accent-emerald-600" />允许多文件</label>
+                      {files.length ? files.map(file => <span key={`${file.name}-${file.lastModified}`} title={file.name} className="max-w-[210px] truncate rounded bg-emerald-50 px-2 py-1 text-[10px] text-emerald-800">{file.name} · {formatFileSize(file.size)}</span>) : <span className="text-[10px] text-slate-400">本次调用尚未选择文件</span>}
+                      {files.length > 0 && <button type="button" onClick={() => chooseFiles(index, null)} className="ml-auto text-[10px] font-medium text-slate-500 hover:text-red-600">清空</button>}
+                    </div>
+                  </div>
+                )
+              }) : <button type="button" onClick={() => { patchDraft('file_fields', [{ key: 'file', accept: '', multiple: false }]); setSelectedFiles([[]]) }} className="flex h-32 w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"><FileUp size={20} /><span className="mt-2 text-xs font-medium">添加文件上传字段</span><span className="mt-1 text-[10px]">文件只用于本次调用，不会保存到接口配置</span></button>}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder={draft.body_type === 'json' ? '{\n  "key": "value"\n}' : draft.body_type === 'form' ? 'key=value\nother=value' : '原始请求内容'} />
+      )}
+    </div>
+  )
 }
 
 function ResponsePanel({ result, stale, loading, useW3 }: { result: RunResult | null; stale: boolean; loading: boolean; useW3: boolean }) {
@@ -572,6 +654,16 @@ function ResponsePanel({ result, stale, loading, useW3 }: { result: RunResult | 
     copyResetRef.current = setTimeout(() => setCopyFeedback(null), 1800)
   }
 
+  const downloadResponse = () => {
+    if (!result?.download) return
+    const url = URL.createObjectURL(result.download.blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = result.download.filename
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4">
@@ -588,16 +680,19 @@ function ResponsePanel({ result, stale, loading, useW3 }: { result: RunResult | 
           </>
         )}
         {result && !loading && (
-          <button
-            type="button"
-            onClick={() => void copyResponse()}
-            disabled={!copyText}
-            title="复制响应内容"
-            className={`ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-all duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${copyStatus === 'copied' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : copyStatus === 'failed' ? 'border-red-200 bg-red-50 text-red-600' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700'}`}
-          >
-            {copyStatus === 'copied' ? <Check size={12} /> : <Copy size={12} />}
-            {copyStatus === 'copied' ? '已复制' : copyStatus === 'failed' ? '复制失败' : '复制'}
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {result.download && <button type="button" onClick={downloadResponse} title={`下载 ${result.download.filename}`} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"><Download size={12} />下载文件</button>}
+            <button
+              type="button"
+              onClick={() => void copyResponse()}
+              disabled={!copyText}
+              title="复制响应内容"
+              className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-all duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${copyStatus === 'copied' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : copyStatus === 'failed' ? 'border-red-200 bg-red-50 text-red-600' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700'}`}
+            >
+              {copyStatus === 'copied' ? <Check size={12} /> : <Copy size={12} />}
+              {copyStatus === 'copied' ? '已复制' : copyStatus === 'failed' ? '复制失败' : '复制'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -662,7 +757,7 @@ function formatResponseBody(body: string) {
   }
 }
 
-function requestFingerprint(item: HubInterface) {
+function requestFingerprint(item: HubInterface, selectedFiles: File[][] = []) {
   return JSON.stringify({
     method: item.method,
     url: item.url,
@@ -670,6 +765,13 @@ function requestFingerprint(item: HubInterface) {
     headers: item.headers,
     body_type: item.body_type,
     body_content: item.body_content,
+    file_fields: item.file_fields,
+    selected_files: selectedFiles.map(files => files.map(file => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified,
+    }))),
     use_w3: item.use_w3,
   })
 }
@@ -695,11 +797,18 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 function buildCallExample(draft: HubInterface, cookie: string) {
   const url = new URL(draft.url)
   draft.query_params.filter(item => item.key.trim()).forEach(item => url.searchParams.append(item.key.trim(), item.value))
   const method = methods.includes(draft.method.toUpperCase()) ? draft.method.toUpperCase() : 'GET'
   const headers = draft.headers.filter(item => item.key.trim()).map(item => ({ key: item.key.trim(), value: item.value }))
+    .filter(item => draft.body_type !== 'multipart' || item.key.toLowerCase() !== 'content-type')
   const hasContentType = headers.some(item => item.key.toLowerCase() === 'content-type')
   let body = ''
   if (draft.body_type === 'json' && draft.body_content.trim()) {
@@ -720,6 +829,10 @@ function buildCallExample(draft: HubInterface, cookie: string) {
   const pieces = [`curl -X ${method} ${shellQuote(url.toString())}`, '  -k']
   headers.forEach(item => pieces.push(`  -H ${shellQuote(`${item.key}: ${item.value}`)}`))
   if (cookie) pieces.push(`  -b ${shellQuote(cookie)}`)
+  if (draft.body_type === 'multipart') {
+    draft.body_content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).forEach(line => pieces.push(`  -F ${shellQuote(line)}`))
+    draft.file_fields.filter(field => field.key.trim()).forEach(field => pieces.push(`  -F ${shellQuote(`${field.key.trim()}=@/path/to/file`)}`))
+  }
   if (body) pieces.push(`  --data-raw ${shellQuote(body)}`)
   return pieces.join(' \\\n')
 }

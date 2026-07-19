@@ -49,9 +49,20 @@ export function buildProxyCallExample({
   })
 
   if (bodyEnabled) {
-    const contentType = findValue(item.headers, 'Content-Type', true) || defaultContentType(item.body_type)
-    parts.push(`--header ${shellQuote(`Content-Type: ${contentType}`)}`)
-    parts.push(`--data-raw ${shellQuote(bodyExample(item, bodyKeys))}`)
+    if (item.body_type === 'multipart') {
+      const allowed = new Set(bodyKeys)
+      item.body_content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).forEach(line => {
+        const key = line.split('=', 1)[0].trim()
+        if (!allowed.size || allowed.has(key)) parts.push(`--form ${shellQuote(line)}`)
+      })
+      item.file_fields.filter(field => !allowed.size || allowed.has(field.key)).forEach(field => {
+        parts.push(`--form ${shellQuote(`${field.key}=@/path/to/file`)}`)
+      })
+    } else {
+      const contentType = findValue(item.headers, 'Content-Type', true) || defaultContentType(item.body_type)
+      parts.push(`--header ${shellQuote(`Content-Type: ${contentType}`)}`)
+      parts.push(`--data-raw ${shellQuote(bodyExample(item, bodyKeys))}`)
+    }
   }
 
   return parts.join(' \\\n  ')
@@ -81,6 +92,7 @@ function headerExample(key: string): string {
 }
 
 function defaultContentType(bodyType: HubInterface['body_type']): string {
+  if (bodyType === 'multipart') return 'multipart/form-data'
   if (bodyType === 'form') return 'application/x-www-form-urlencoded'
   if (bodyType === 'raw') return 'text/plain; charset=utf-8'
   return 'application/json; charset=utf-8'

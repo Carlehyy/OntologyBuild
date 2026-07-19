@@ -83,7 +83,16 @@ def infer_body_keys(interface: dict) -> list[str]:
             return []
         return _json_leaf_paths(value) if isinstance(value, dict) else []
     if body_type == "form":
-        return _unique_safe_keys(key for key, _ in _parse_saved_form(body))
+        return _unique_safe_keys(key for key, _ in parse_saved_form(body))
+    if body_type == "multipart":
+        return _unique_safe_keys(
+            [key for key, _ in parse_saved_form(body)]
+            + [
+                item.get("key", "")
+                for item in interface.get("file_fields") or []
+                if isinstance(item, dict)
+            ]
+        )
     # Raw request bodies cannot be safely decomposed. Keep the saved body fixed.
     return []
 
@@ -128,10 +137,34 @@ def body_template(interface: dict) -> str:
                 continue
         return json.dumps(template, ensure_ascii=False, indent=2)
     if body_type == "form":
-        defaults = _parse_saved_form(body)
+        defaults = parse_saved_form(body)
         allowed_set = set(allowed)
         return urlencode([(key, value) for key, value in defaults if key in allowed_set])
     return ""
+
+
+def multipart_text_fields(interface: dict) -> list[dict[str, str]]:
+    if (interface.get("body_type") or "none").lower() != "multipart":
+        return []
+    allowed = set(interface.get("proxy_body_keys") or [])
+    return [
+        {"key": key, "value": value}
+        for key, value in parse_saved_form(interface.get("body_content") or "")
+        if not allowed or key in allowed
+    ]
+
+
+def multipart_file_fields(interface: dict) -> list[dict]:
+    if (interface.get("body_type") or "none").lower() != "multipart":
+        return []
+    allowed = set(interface.get("proxy_body_keys") or [])
+    return [
+        item
+        for item in interface.get("file_fields") or []
+        if isinstance(item, dict)
+        and item.get("key")
+        and (not allowed or item.get("key") in allowed)
+    ]
 
 
 def _unique_safe_keys(values, *, lower: bool = False) -> list[str]:
@@ -147,7 +180,7 @@ def _unique_safe_keys(values, *, lower: bool = False) -> list[str]:
     return result
 
 
-def _parse_saved_form(body: str) -> list[tuple[str, str]]:
+def parse_saved_form(body: str) -> list[tuple[str, str]]:
     result: list[tuple[str, str]] = []
     for line in (body or "").splitlines():
         line = line.strip()
@@ -255,6 +288,6 @@ def _merge_form_body(default_body: str, incoming: bytes, allowed: list[str]) -> 
     if denied:
         raise PublicationBodyError("以下 Body 字段未开放：" + ", ".join(denied))
     replaced = {key for key, _ in incoming_pairs}
-    merged = [item for item in _parse_saved_form(default_body) if item[0] not in replaced]
+    merged = [item for item in parse_saved_form(default_body) if item[0] not in replaced]
     merged.extend(incoming_pairs)
     return urlencode(merged, doseq=True).encode("utf-8")

@@ -304,6 +304,11 @@ function recommendedPublicationCandidates(item: HubInterface) {
     } catch { body = [] }
   } else if (item.body_type === 'form') {
     body = item.body_content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).map(line => line.split('=', 1)[0].trim())
+  } else if (item.body_type === 'multipart') {
+    body = [
+      ...item.body_content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).map(line => line.split('=', 1)[0].trim()),
+      ...item.file_fields.map(field => field.key),
+    ]
   }
   body = uniqueKeys(body, false, true)
   return { query, headers, body, rawBody: item.body_type === 'raw' }
@@ -380,7 +385,10 @@ function curlCode(value: ForwardingPackage, endpoint: string, queryEntries: read
     : ''
   const lines = [`curl -X ${value.method} ${shellQuote(endpoint + query)}`, `  -H ${shellQuote(`${value.key_header}: ${value.secret}`)}`]
   headerEntries.forEach(([key, item]) => lines.push(`  -H ${shellQuote(`${key}: ${item}`)}`))
-  if (value.body_template) {
+  if (value.body_type === 'multipart') {
+    value.multipart_fields.forEach(item => lines.push(`  -F ${shellQuote(`${item.key}=${item.value}`)}`))
+    value.file_fields.forEach(field => lines.push(`  -F ${shellQuote(`${field.key}=@/path/to/file`)}`))
+  } else if (value.body_template) {
     const contentType = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
     lines.push(`  -H ${shellQuote(`Content-Type: ${contentType}`)}`)
     lines.push(`  --data-raw ${shellQuote(value.body_template)}`)
@@ -390,7 +398,7 @@ function curlCode(value: ForwardingPackage, endpoint: string, queryEntries: read
 
 function pythonCode(value: ForwardingPackage, endpoint: string, queryEntries: readonly (readonly [string, string])[], headerEntries: readonly (readonly [string, string])[]) {
   const headers = Object.fromEntries([[value.key_header, value.secret], ...headerEntries])
-  if (value.body_template) headers['Content-Type'] = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
+  if (value.body_template && value.body_type !== 'multipart') headers['Content-Type'] = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
   const parts = [
     'import requests',
     '',
@@ -398,24 +406,45 @@ function pythonCode(value: ForwardingPackage, endpoint: string, queryEntries: re
     `params = ${JSON.stringify(Object.fromEntries(queryEntries), null, 2)}`,
     `headers = ${JSON.stringify(headers, null, 2)}`,
   ]
-  if (value.body_template) parts.push(`body = ${JSON.stringify(value.body_template)}`)
-  parts.push('', `response = requests.request(${JSON.stringify(value.method)}, url, params=params, headers=headers${value.body_template ? ', data=body' : ''})`, 'response.raise_for_status()', 'print(response.text)')
+  if (value.body_type === 'multipart') {
+    parts.push(`data = ${JSON.stringify(Object.fromEntries(value.multipart_fields.map(item => [item.key, item.value])), null, 2)}`)
+    parts.push('files = [')
+    value.file_fields.forEach(field => parts.push(`    (${JSON.stringify(field.key)}, ("YOUR_FILENAME", open("/path/to/file", "rb"), "application/octet-stream")),`))
+    parts.push(']')
+  } else if (value.body_template) parts.push(`body = ${JSON.stringify(value.body_template)}`)
+  const requestPayload = value.body_type === 'multipart' ? ', data=data, files=files' : value.body_template ? ', data=body' : ''
+  parts.push('', `response = requests.request(${JSON.stringify(value.method)}, url, params=params, headers=headers${requestPayload})`, 'response.raise_for_status()', 'print(response.text)')
   return parts.join('\n')
 }
 
 function javascriptCode(value: ForwardingPackage, endpoint: string, queryEntries: readonly (readonly [string, string])[], headerEntries: readonly (readonly [string, string])[]) {
   const headers = Object.fromEntries([[value.key_header, value.secret], ...headerEntries])
-  if (value.body_template) headers['Content-Type'] = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
+  if (value.body_template && value.body_type !== 'multipart') headers['Content-Type'] = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
   const parts = [
     `const url = new URL(${JSON.stringify(endpoint)});`,
     `const params = ${JSON.stringify(Object.fromEntries(queryEntries), null, 2)};`,
     'Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));',
     '',
+  ]
+  if (value.body_type === 'multipart') {
+    parts.push('const form = new FormData();')
+    value.multipart_fields.forEach(item => parts.push(`form.append(${JSON.stringify(item.key)}, ${JSON.stringify(item.value)});`))
+    value.file_fields.forEach((field, index) => {
+      const selector = `input[type="file"][data-field=${JSON.stringify(field.key)}]`
+      const variable = `files_${field.key.replace(/[^a-zA-Z0-9_$]/g, '_') || 'upload'}_${index + 1}`
+      parts.push(`const ${variable} = document.querySelector(${JSON.stringify(selector)})?.files;`)
+      parts.push(`if (!${variable}?.length) throw new Error(${JSON.stringify(`请选择文件字段 ${field.key}`)});`)
+      parts.push(`${field.multiple ? `[...${variable}].forEach(file => form.append(${JSON.stringify(field.key)}, file));` : `form.append(${JSON.stringify(field.key)}, ${variable}[0]);`}`)
+    })
+    parts.push('')
+  }
+  parts.push(
     'const response = await fetch(url, {',
     `  method: ${JSON.stringify(value.method)},`,
     `  headers: ${JSON.stringify(headers, null, 2).replaceAll('\n', '\n  ')},`,
-  ]
-  if (value.body_template) parts.push(`  body: ${JSON.stringify(value.body_template)},`)
+  )
+  if (value.body_type === 'multipart') parts.push('  body: form,')
+  else if (value.body_template) parts.push(`  body: ${JSON.stringify(value.body_template)},`)
   parts.push('});', 'if (!response.ok) throw new Error(`HTTP ${response.status}`);', 'console.log(await response.text());')
   return parts.join('\n')
 }

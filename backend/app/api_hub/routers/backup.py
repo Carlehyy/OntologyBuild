@@ -27,7 +27,7 @@ router = APIRouter(prefix="/backup", tags=["api-hub-backup"])
 
 # 备份文件的标识，还原时用于校验来源
 BACKUP_APP = "API-Hub"
-BACKUP_VERSION = 4
+BACKUP_VERSION = 5
 _SENSITIVE_NAME_RE = re.compile(
     r"(authorization|cookie|token|secret|password|passwd|api[-_]?key|session)",
     re.IGNORECASE,
@@ -36,7 +36,7 @@ _SENSITIVE_NAME_RE = re.compile(
 # 可移植的接口字段（不含 id、created_at、updated_at、sort_order 等本地/派生字段）
 _IFACE_FIELDS = (
     "name", "description", "group_name", "method", "url", "query_params", "headers",
-    "body_type", "body_content", "use_w3", "mcp_enabled", "open_enabled",
+    "body_type", "body_content", "file_fields", "use_w3", "mcp_enabled", "open_enabled",
     "http_enabled", "proxy_slug", "proxy_query_keys", "proxy_header_keys",
     "proxy_body_enabled", "proxy_body_keys",
 )
@@ -80,7 +80,7 @@ def _row_to_portable(row, *, include_sensitive: bool) -> dict:
         v = row[f]
         if f in (
             "query_params", "headers", "proxy_query_keys", "proxy_header_keys",
-            "proxy_body_keys",
+            "proxy_body_keys", "file_fields",
         ):
             try:
                 v = json.loads(v) if v else []
@@ -228,10 +228,10 @@ def import_backup(body: ImportIn):
 
             conn.execute(
                 "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-                "body_type, body_content, use_w3, mcp_enabled, open_enabled, http_enabled, "
+                "body_type, body_content, file_fields, use_w3, mcp_enabled, open_enabled, http_enabled, "
                 "proxy_slug, proxy_query_keys, proxy_header_keys, proxy_body_enabled, "
                 "proxy_body_keys, created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name,
                     candidate.description,
@@ -242,6 +242,7 @@ def import_backup(body: ImportIn):
                     _dump_kv(candidate.headers),
                     candidate.body_type,
                     candidate.body_content,
+                    json.dumps([item.model_dump() for item in candidate.file_fields], ensure_ascii=False),
                     1 if candidate.use_w3 else 0,
                     0,
                     0,

@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS interfaces (
     url           TEXT    NOT NULL DEFAULT '',
     query_params  TEXT    NOT NULL DEFAULT '[]',   -- JSON: [{key,value}]
     headers       TEXT    NOT NULL DEFAULT '[]',   -- JSON: [{key,value}]
-    body_type     TEXT    NOT NULL DEFAULT 'none', -- none|json|form|raw
+    body_type     TEXT    NOT NULL DEFAULT 'none', -- none|json|form|multipart|raw
     body_content  TEXT    NOT NULL DEFAULT '',
+    file_fields   TEXT    NOT NULL DEFAULT '[]',   -- JSON: multipart file field definitions
     use_w3        INTEGER NOT NULL DEFAULT 0,
     mcp_enabled   INTEGER NOT NULL DEFAULT 0,
     open_enabled  INTEGER NOT NULL DEFAULT 0,
@@ -130,6 +131,10 @@ def _migrate(conn) -> None:
     if "proxy_body_keys" not in cols:
         conn.execute(
             "ALTER TABLE interfaces ADD COLUMN proxy_body_keys TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "file_fields" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN file_fields TEXT NOT NULL DEFAULT '[]'"
         )
 
     run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}

@@ -10,6 +10,7 @@ import anyio
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from starlette.datastructures import FormData, UploadFile
 
 from .. import config, db, executor, publication
 from .interfaces import _row_to_dict
@@ -280,6 +281,8 @@ def create_proxy_package(interface_id: int):
         "body_type": interface.get("body_type") or "none",
         "body_template": publication.body_template(interface),
         "editable_body_keys": interface.get("proxy_body_keys") or [],
+        "multipart_fields": publication.multipart_text_fields(interface),
+        "file_fields": publication.multipart_file_fields(interface),
         "generated_at": generated_at.isoformat(),
     }
 
@@ -355,6 +358,83 @@ def _response_headers(headers: dict, *, use_w3: bool) -> dict[str, str]:
     }
 
 
+def _matches_file_accept(filename: str, content_type: str, accept: str) -> bool:
+    rules = [item.strip().lower() for item in (accept or "").split(",") if item.strip()]
+    if not rules:
+        return True
+    filename = (filename or "").lower()
+    content_type = (content_type or "application/octet-stream").split(";", 1)[0].strip().lower()
+    return any(
+        rule == "*/*"
+        or (rule.startswith(".") and filename.endswith(rule))
+        or (rule.endswith("/*") and content_type.startswith(rule[:-1]))
+        or rule == content_type
+        for rule in rules
+    )
+
+
+async def _multipart_request_parts(
+    request: Request,
+    interface: dict,
+) -> tuple[FormData, list[tuple[str, str]], list[executor.RequestFile], bool]:
+    """Parse a caller multipart body and close its temporary files on validation errors."""
+    form = await request.form(max_files=50, max_fields=200)
+    try:
+        allowed = set(interface.get("proxy_body_keys") or [])
+        incoming_fields: list[tuple[str, str]] = []
+        incoming_files: list[executor.RequestFile] = []
+        incoming_names: set[str] = set()
+        file_counts: dict[str, int] = {}
+        file_config = {
+            item.get("key"): item
+            for item in interface.get("file_fields") or []
+            if isinstance(item, dict) and item.get("key")
+        }
+        total_size = 0
+        for field_name, value in form.multi_items():
+            incoming_names.add(field_name)
+            if allowed and field_name not in allowed:
+                raise HTTPException(status_code=400, detail=f"Body 字段未开放：{field_name}")
+            if isinstance(value, UploadFile):
+                definition = file_config.get(field_name)
+                if definition is None:
+                    raise HTTPException(status_code=400, detail=f"文件字段未在接口中配置：{field_name}")
+                file_counts[field_name] = file_counts.get(field_name, 0) + 1
+                if file_counts[field_name] > 1 and not definition.get("multiple"):
+                    raise HTTPException(status_code=400, detail=f"文件字段不允许多文件：{field_name}")
+                if not _matches_file_accept(
+                    value.filename or "", value.content_type or "", definition.get("accept") or ""
+                ):
+                    raise HTTPException(status_code=400, detail=f"文件类型不符合字段限制：{field_name}")
+                if value.size is not None:
+                    total_size += value.size
+                incoming_files.append(
+                    executor.RequestFile(
+                        field_name=field_name,
+                        filename=value.filename or "upload",
+                        stream=value.file,
+                        content_type=value.content_type or "application/octet-stream",
+                        size=value.size,
+                    )
+                )
+            else:
+                text_value = str(value)
+                total_size += len(text_value.encode("utf-8"))
+                incoming_fields.append((field_name, text_value))
+        if total_size > config.PROXY_MAX_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="请求体超过平台代理上限")
+        defaults = [
+            item
+            for item in publication.parse_saved_form(interface.get("body_content") or "")
+            if item[0] not in incoming_names
+        ]
+        fields = defaults + incoming_fields
+        return form, fields, incoming_files, bool(incoming_fields or incoming_files)
+    except Exception:
+        await form.close()
+        raise
+
+
 @public_router.api_route(
     "/{slug}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
@@ -406,20 +486,36 @@ async def call_published_interface(slug: str, request: Request):
         if key.lower() in allowed_headers
     ]
 
-    body_announced = "content-length" in request.headers or "transfer-encoding" in request.headers
-    body = await request.body() if body_announced else b""
-    if len(body) > config.PROXY_MAX_REQUEST_BYTES:
-        raise HTTPException(status_code=413, detail="请求体超过平台代理上限")
-    has_body = bool(body)
-    if has_body and not iface.get("proxy_body_enabled"):
-        raise HTTPException(status_code=400, detail="该接口未开放请求 Body")
-    if has_body:
-        try:
-            body = publication.merge_caller_body(iface, body)
-        except publication.PublicationBodyError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     body_type = (iface.get("body_type") or "none").lower()
+    body_announced = "content-length" in request.headers or "transfer-encoding" in request.headers
+    body = b""
+    form: FormData | None = None
+    multipart_fields: list[tuple[str, str]] | None = None
+    multipart_files: list[executor.RequestFile] | None = None
+
+    if body_type == "multipart" and body_announced:
+        request_content_type = (request.headers.get("content-type") or "").lower()
+        if not request_content_type.startswith("multipart/form-data"):
+            raise HTTPException(status_code=400, detail="该接口要求 multipart/form-data 请求")
+        form, multipart_fields, multipart_files, has_body = await _multipart_request_parts(
+            request, iface
+        )
+    else:
+        body = await request.body() if body_announced else b""
+        if len(body) > config.PROXY_MAX_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="请求体超过平台代理上限")
+        has_body = bool(body)
+        if has_body:
+            try:
+                body = publication.merge_caller_body(iface, body)
+            except publication.PublicationBodyError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if has_body and not iface.get("proxy_body_enabled"):
+        if form is not None:
+            await form.close()
+        raise HTTPException(status_code=400, detail="该接口未开放请求 Body")
+
     managed_content_type = {
         "json": "application/json; charset=utf-8",
         "form": "application/x-www-form-urlencoded",
@@ -433,14 +529,21 @@ async def call_published_interface(slug: str, request: Request):
         "proxy_key_name": key_row["name"],
         "source_ip": request.client.host if request.client else None,
     }
-    if has_body:
+    if multipart_fields is not None or multipart_files is not None:
+        override_args["multipart_fields"] = multipart_fields or []
+        override_args["files"] = multipart_files or []
+    elif has_body:
         override_args["body"] = body
     overrides = executor.RequestOverrides(**override_args)
-    result = await anyio.to_thread.run_sync(
-        lambda: executor.run_interface(
-            iface, overrides, include_response_content=True
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: executor.run_interface(
+                iface, overrides, include_response_content=True
+            )
         )
-    )
+    finally:
+        if form is not None:
+            await form.close()
 
     if result.get("status_code") is None:
         status = 504 if result.get("error_type") == "timeout" else 502
