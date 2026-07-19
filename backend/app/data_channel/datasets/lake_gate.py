@@ -99,18 +99,27 @@ def contract_pk(defs: list | None) -> str:
 
 
 def validate_contract_structure(defs: list | None) -> list[str]:
-    """契约结构校验：字段标识命名合法 + 唯一。返回错误文案列表（空 = 通过）。
+    """契约结构校验：必填元数据 + 字段标识命名合法、唯一。返回错误文案列表（空 = 通过）。
 
     发布端点与数据管家审批共用同一套校验——n8n 的发布动作是审批，
     结构性坏契约（重复 field_key 会让入湖改名时两列互相覆盖）必须在
     两条发布路径上都拦住，而不是只拦画布流水线。
     """
     errors: list[str] = []
-    for raw in defs or []:
+    for index, raw in enumerate(defs or [], start=1):
         if not isinstance(raw, dict):
             errors.append("字段契约项必须是对象")
             continue
-        raw_type = str(raw.get("field_type") or "string").strip().lower()
+        field_key = str(raw.get("field_key") or "").strip()
+        field_name = str(raw.get("field_name") or "").strip()
+        raw_type = str(raw.get("field_type") or "").strip().lower()
+        if not field_key:
+            errors.append(f"第 {index} 个字段的字段标识不能为空")
+        if not field_name:
+            errors.append(f"第 {index} 个字段的字段名称不能为空")
+        if not raw_type:
+            errors.append(f"第 {index} 个字段的字段类型不能为空")
+            continue
         normalized_type = _LEGACY_TYPE_ALIASES.get(raw_type, raw_type)
         if normalized_type not in CONTRACT_FIELD_TYPES:
             errors.append(

@@ -517,7 +517,15 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
             )
 
     if "column_definitions" in update_data:
-        from app.data_channel.datasets.lake_gate import normalize_definitions
+        from app.data_channel.datasets.lake_gate import (
+            normalize_definitions,
+            validate_contract_structure,
+        )
+        structure_errors = validate_contract_structure(
+            update_data.get("column_definitions"))
+        if structure_errors:
+            raise HTTPException(
+                400, f"字段契约结构非法：{'；'.join(structure_errors)}。请回到「设置主键组」修正。")
         update_data["column_definitions"] = normalize_definitions(
             update_data.get("column_definitions"))
 

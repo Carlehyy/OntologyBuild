@@ -73,3 +73,31 @@ def test_draft_pipeline_persists_primary_key_as_non_nullable(db):
     )
 
     assert result["column_definitions"][0]["nullable"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "label"),
+    [("field_key", "字段标识"), ("field_name", "字段名称"), ("field_type", "字段类型")],
+)
+def test_draft_pipeline_rejects_blank_required_contract_fields(db, field, label):
+    pipeline = Pipeline(name="草稿流水线", status="draft")
+    db.add(pipeline)
+    db.commit()
+    definition = {
+        "source_key": "tenant_id",
+        "field_key": "tenant_id",
+        "field_name": "租户 ID",
+        "field_type": "string",
+        "is_primary_key": False,
+        "nullable": True,
+    }
+    definition[field] = "   "
+
+    with pytest.raises(HTTPException, match=f"{label}不能为空") as exc:
+        update_pipeline(
+            pipeline.id,
+            PipelineUpdate(column_definitions=[definition]),
+            db,
+        )
+
+    assert exc.value.status_code == 400

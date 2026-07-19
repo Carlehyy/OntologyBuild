@@ -251,13 +251,33 @@ def test_persist_contract_redeclares_on_overwrite_with_audit_trail():
 
 def test_validate_contract_structure_rejects_bad_and_dup_field_keys():
     errors = validate_contract_structure([
-        {"field_key": "订单号"},                       # 非法命名
-        {"field_key": "user_name"},
-        {"source_key": "uname", "field_key": "user_name"},  # 重复入湖列名
+        {"field_key": "订单号", "field_name": "订单号", "field_type": "string"},  # 非法命名
+        {"field_key": "user_name", "field_name": "用户名", "field_type": "string"},
+        {"source_key": "uname", "field_key": "user_name", "field_name": "用户姓名", "field_type": "string"},  # 重复入湖列名
     ])
     assert any("不合法" in e for e in errors)
     assert any("重复" in e for e in errors)
-    assert validate_contract_structure([{"field_key": "ok_col"}]) == []
+    assert validate_contract_structure([{
+        "field_key": "ok_col", "field_name": "有效字段", "field_type": "string",
+    }]) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "label"),
+    [("field_key", "字段标识"), ("field_name", "字段名称"), ("field_type", "字段类型")],
+)
+def test_validate_contract_structure_requires_field_metadata(field, label):
+    definition = {
+        "source_key": "order_id",
+        "field_key": "order_id",
+        "field_name": "订单号",
+        "field_type": "string",
+    }
+    definition[field] = "   "
+
+    errors = validate_contract_structure([definition])
+
+    assert any(f"{label}不能为空" in error for error in errors)
 
 
 def test_apply_column_contract_dup_field_key_hard_fails():

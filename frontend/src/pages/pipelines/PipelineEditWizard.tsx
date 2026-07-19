@@ -20,6 +20,26 @@ const normType = (t?: string): string => {
   return (CONTRACT_FIELD_TYPES as readonly string[]).includes(mapped) ? mapped : 'string'
 }
 
+type RequiredContractField = 'field_key' | 'field_name' | 'field_type'
+
+const REQUIRED_CONTRACT_FIELD_LABELS: Record<RequiredContractField, string> = {
+  field_key: '字段标识',
+  field_name: '字段名称',
+  field_type: '字段类型',
+}
+
+const getMissingRequiredContractFields = (definitions: ColumnDefinition[]) =>
+  definitions.flatMap((definition, rowIndex) =>
+    (Object.keys(REQUIRED_CONTRACT_FIELD_LABELS) as RequiredContractField[])
+      .filter(field => !String(definition[field] || '').trim())
+      .map(field => ({
+        rowIndex,
+        field,
+        label: REQUIRED_CONTRACT_FIELD_LABELS[field],
+        sourceKey: definition.source_key,
+      })),
+  )
+
 interface Props {
   pipeline: Pipeline
   onClose: () => void
@@ -57,6 +77,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const [columnDefs, setColumnDefs] = useState<ColumnDefinition[]>([])
   const [validateResult, setValidateResult] = useState<ValidateDefinitionsResult | null>(null)
   const [validating, setValidating] = useState(false)
+  const [requiredValidationAttempted, setRequiredValidationAttempted] = useState(false)
 
   // ── 阶段 4: 确认配置 ──
   const [saving, setSaving] = useState(false)
@@ -114,6 +135,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
       const declared = res.outputs.length === 1 && res.outputs[0].pk_source === 'lake'
         ? new Set(splitPk(res.outputs[0].pk)) : undefined
       setColumnDefs(initColumnDefs(allCols, pipeline.column_definitions, declared))
+      setRequiredValidationAttempted(false)
       setDryRunPhase('done')
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
@@ -155,6 +177,19 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
 
   // ── 阶段 3: 校验（全量，基于第 2 步暂存数据）──
   const runValidate = async () => {
+    setRequiredValidationAttempted(true)
+    const requiredErrors = getMissingRequiredContractFields(columnDefs)
+    if (requiredErrors.length > 0) {
+      setValidateResult({
+        valid: false,
+        errors: requiredErrors.map(error => ({
+          field_key: error.sourceKey,
+          severity: 'error',
+          message: `原始列「${error.sourceKey || error.rowIndex + 1}」的${error.label}不能为空`,
+        })),
+      })
+      return
+    }
     if (!dryRunResult?.dry_run_id) {
       setValidateResult({ valid: false, errors: [{ field_key: '', message: '缺少试运行数据，请回到「执行预览」重新执行', severity: 'error' }] })
       return
@@ -218,6 +253,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const pkFields = columnDefs.filter(d => d.is_primary_key)
   const hasErrors = validateResult && !validateResult.valid
   const errorMap = new Map((validateResult?.errors || []).map(e => [e.field_key, e]))
+  const missingRequiredFields = getMissingRequiredContractFields(columnDefs)
+  const missingRequiredByRow = new Map<number, Set<RequiredContractField>>()
+  for (const error of missingRequiredFields) {
+    const fields = missingRequiredByRow.get(error.rowIndex) || new Set<RequiredContractField>()
+    fields.add(error.field)
+    missingRequiredByRow.set(error.rowIndex, fields)
+  }
   const contractEditable = !isPublished && !multiOutput
 
   // 名称/描述到第 4 步保存才落库——中途关窗要提醒，避免静默丢改动
@@ -228,6 +270,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   }
 
   const updateColDef = (index: number, patch: Partial<ColumnDefinition>) => {
+    setValidateResult(null)
     setColumnDefs(prev => prev.map((d, i) => {
       if (i !== index) return d
       const next = { ...d, ...patch }
@@ -272,7 +315,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         role="dialog"
         aria-modal="true"
         aria-labelledby="pipeline-edit-title"
-        className="flex h-[88vh] max-h-[88vh] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
+        className="flex h-auto max-h-[88vh] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
       >
         {/* 头部 */}
         <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-3.5">
@@ -322,7 +365,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         </div>
 
         {/* 内容区 */}
-        <div className="scrollbar-thin flex-1 overflow-auto bg-white p-5 sm:px-6 sm:py-5">
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-auto overscroll-contain bg-white p-5 sm:px-6 sm:py-5">
           {/* ──────── 阶段 1: 流水线信息 ──────── */}
           {step === 1 && (
             <div className="space-y-4">
@@ -464,7 +507,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-xs text-gray-400">
                 <KeyRound size={12} />
-                <span>定义每个字段的入湖契约：字段标识（入湖列名，可改名）、名称、类型、主键、允许空值</span>
+                <span>定义每个字段的入湖契约：字段标识（入湖列名，可改名）、名称、类型、主键、允许空值；<span className="text-red-500">*</span> 为必填项</span>
                 {isPublished && <span className="text-amber-600 font-medium">（已发布 · 只读）</span>}
               </div>
 
@@ -501,9 +544,9 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   <thead className="bg-gray-50 border-b">
                     <tr>
                       <th className="text-left px-3 py-2 font-medium text-gray-600 w-36">原始列名</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">字段标识（入湖列名）</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">字段名称</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">字段类型</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">字段标识（入湖列名）<span className="ml-0.5 text-red-500" aria-label="必填">*</span></th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">字段名称<span className="ml-0.5 text-red-500" aria-label="必填">*</span></th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">字段类型<span className="ml-0.5 text-red-500" aria-label="必填">*</span></th>
                       <th className="text-center px-3 py-2 font-medium text-gray-600 w-16">主键</th>
                       <th className="text-center px-3 py-2 font-medium text-gray-600 w-16">允许空</th>
                     </tr>
@@ -514,8 +557,9 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                       const disabled = !contractEditable
                       const fieldErrors = errorMap.get(d.field_key)
                       const allErrors = [fieldErrors].filter(Boolean)
+                      const missingFields = requiredValidationAttempted ? missingRequiredByRow.get(i) : undefined
                       return (
-                        <tr key={i} className={allErrors.length > 0 ? 'bg-red-50' : 'hover:bg-gray-50'}>
+                        <tr key={i} className={allErrors.length > 0 || missingFields?.size ? 'bg-red-50' : 'hover:bg-gray-50'}>
                           <td className="px-3 py-1.5 text-gray-500 font-mono text-[11px]" title={d.source_key}>
                             <div className="flex min-w-0 items-center gap-1.5">
                               <span className="truncate">{d.source_key}</span>
@@ -546,32 +590,47 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                               <input
                                 value={d.field_key}
                                 disabled={disabled}
+                                required
+                                aria-required="true"
+                                aria-invalid={missingFields?.has('field_key') || undefined}
+                                aria-describedby={missingFields?.has('field_key') ? `field-key-error-${i}` : undefined}
                                 onChange={e => updateColDef(i, { field_key: e.target.value })}
                                 title={declaredInLake ? '湖中已固化的主键列：改名后需以「全量覆盖」运行一次重建资产' : d.source_key !== d.field_key ? `入湖时 ${d.source_key} → ${d.field_key}` : undefined}
-                                className={`w-full px-2 py-1 border rounded text-xs font-mono ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : d.source_key !== d.field_key ? 'border-blue-300 bg-blue-50/40' : ''}`}
+                                className={`w-full px-2 py-1 border rounded text-xs font-mono ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : missingFields?.has('field_key') ? 'border-red-400 bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-200' : d.source_key !== d.field_key ? 'border-blue-300 bg-blue-50/40' : ''}`}
                               />
                               {declaredInLake && <Lock size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-amber-400 pointer-events-none" />}
                             </div>
+                            {missingFields?.has('field_key') && <p id={`field-key-error-${i}`} className="mt-0.5 text-[10px] text-red-600">字段标识为必填项</p>}
                           </td>
                           <td className="px-1 py-1">
                             <input
                               value={d.field_name}
                               disabled={disabled}
+                              required
+                              aria-required="true"
+                              aria-invalid={missingFields?.has('field_name') || undefined}
+                              aria-describedby={missingFields?.has('field_name') ? `field-name-error-${i}` : undefined}
                               onChange={e => updateColDef(i, { field_name: e.target.value })}
-                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : missingFields?.has('field_name') ? 'border-red-400 bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-200' : ''}`}
                             />
+                            {missingFields?.has('field_name') && <p id={`field-name-error-${i}`} className="mt-0.5 text-[10px] text-red-600">字段名称为必填项</p>}
                           </td>
                           <td className="px-1 py-1">
                             <select
                               value={d.field_type}
                               disabled={disabled}
+                              required
+                              aria-required="true"
+                              aria-invalid={missingFields?.has('field_type') || undefined}
+                              aria-describedby={missingFields?.has('field_type') ? `field-type-error-${i}` : undefined}
                               onChange={e => updateColDef(i, { field_type: e.target.value })}
-                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : missingFields?.has('field_type') ? 'border-red-400 bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-200' : ''}`}
                             >
                               {CONTRACT_FIELD_TYPES.map(t => (
                                 <option key={t} value={t}>{t}</option>
                               ))}
                             </select>
+                            {missingFields?.has('field_type') && <p id={`field-type-error-${i}`} className="mt-0.5 text-[10px] text-red-600">字段类型为必填项</p>}
                           </td>
                           <td className="px-1 py-1 text-center">
                             <input
@@ -601,7 +660,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
 
               {/* 校验错误/警告展示 */}
               {hasErrors && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-1">
+                <div role="alert" aria-live="polite" className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-1">
                   {(validateResult?.errors || []).map((e, i) => (
                     <div key={i} className="flex items-start gap-1.5 text-xs">
                       {e.severity === 'warning'
