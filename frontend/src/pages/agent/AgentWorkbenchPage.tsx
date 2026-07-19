@@ -18,6 +18,7 @@ import {
   AlertTriangle, BadgeCheck, FileSearch, PenLine, Network,
   FunctionSquare, Minus, Maximize2, KeyRound, X, Download, ExternalLink,
   ChevronRight, Copy, Check, List, ArrowLeftRight, FileText, Workflow,
+  BellRing,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
@@ -28,7 +29,9 @@ import {
   type AgentCapabilities, type AgentStep, type AgentCitation, type AgentProposal,
 } from '@/api/agent'
 import { ProposalCard } from './ProposalCard'
+import { SentinelProposalCard } from './SentinelProposalCard'
 import { BoundaryDrawer } from './BoundaryDrawer'
+import { DynamicSentinelDrawer } from './DynamicSentinelDrawer'
 import { ChartBlock, AgentChart, type ChartSpec } from './AgentChart'
 import type { GraphAssistantSignal } from './InstanceKnowledgeGraph'
 import { useOntologyStore } from '../../palantir-graph/store/ontologyStore'
@@ -157,6 +160,8 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   aggregate_objects: { label: '聚合统计', icon: Sigma },
   get_object_history: { label: '事实溯源', icon: ScrollText },
   list_actions: { label: '查看动作', icon: ListChecks },
+  list_dynamic_sentinels: { label: '查看动态哨兵', icon: BellRing },
+  propose_dynamic_sentinel_change: { label: '校验哨兵提案', icon: BellRing },
   propose_action: { label: '预演提案', icon: FlaskConical },
 }
 
@@ -1098,16 +1103,24 @@ export default function AgentWorkbenchPage() {
   const { data: ontologies = [], isLoading: ontologiesLoading } = useQuery({
     queryKey: ['ontologies'], queryFn: () => ontologyApi.list() as any,
   })
-  const ontologyList = (ontologies as any)?.items || ontologies || []
+  const ontologyList = useMemo(
+    () => (ontologies as any)?.items || ontologies || [], [ontologies])
+  const publishedOntologyList = useMemo(
+    () => ontologyList.filter((item: any) =>
+      item.status === 'published' && !!item.current_release_id), [ontologyList])
   const [oid, setOid] = useState('')
   const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data' | 'trace'>('ontology')
 
   useEffect(() => {
-    if (ontologyList.length === 0) {
+    if (publishedOntologyList.length === 0) {
       if (oid) setOid('')
       return
     }
-  }, [ontologyList, oid])
+    if (oid && !publishedOntologyList.some((item: any) => item.id === oid)) setOid('')
+  }, [publishedOntologyList, oid])
+
+  const selectedOntology = publishedOntologyList.find((item: any) => item.id === oid)
+  const releaseId = selectedOntology?.current_release_id || ''
 
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
   const llmModels = Array.isArray(models) ? (models as any[]).filter((m: any) => m.config_type === 'llm' || !m.config_type) : []
@@ -1124,9 +1137,9 @@ export default function AgentWorkbenchPage() {
   const syncError = useOntologyStore(s => s.syncError)
 
   useEffect(() => {
-    if (!oid) return
-    void loadFromBackend(oid)
-  }, [oid, loadFromBackend])
+    if (!oid || !releaseId) return
+    void loadFromBackend(oid, releaseId)
+  }, [oid, releaseId, loadFromBackend])
 
   const modelReady = !!oid && backendId === oid && syncStatus !== 'loading' && !!graphOntology
   const modelOntology = modelReady ? graphOntology : null
@@ -1142,10 +1155,25 @@ export default function AgentWorkbenchPage() {
 
   // -- 能力边界 --
   const { data: caps } = useQuery<AgentCapabilities>({
-    queryKey: ['agent-capabilities', oid],
-    queryFn: () => agentApi.capabilities(oid),
-    enabled: !!oid,
+    queryKey: ['agent-capabilities', oid, releaseId],
+    queryFn: () => agentApi.capabilities(oid, releaseId),
+    enabled: !!oid && !!releaseId,
   })
+  const dynamicObjectTypes = useMemo(() => {
+    if (!caps) return []
+    const allowed = new Set(caps.objectTypes.map(item => item.id))
+    return objectTypes.filter(item => allowed.has(item.id))
+  }, [caps, objectTypes])
+  const dynamicLinkTypes = useMemo(() => {
+    if (!caps) return []
+    const allowed = new Set(caps.linkTypes.map(item => item.id))
+    return linkTypes.filter(item => allowed.has(item.id))
+  }, [caps, linkTypes])
+  const dynamicActions = useMemo(() => {
+    if (!caps) return []
+    const allowed = new Set(caps.actions.map(item => item.id))
+    return actions.filter(item => allowed.has(item.id))
+  }, [actions, caps])
 
   // -- 会话 --
   const [conversationId, setConversationId] = useState<string | null>(null)
@@ -1153,6 +1181,7 @@ export default function AgentWorkbenchPage() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [sentinelDrawerOpen, setSentinelDrawerOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showJump, setShowJump] = useState(false)
   const [graphSignal, setGraphSignal] = useState<GraphAssistantSignal | null>(null)
@@ -1169,9 +1198,9 @@ export default function AgentWorkbenchPage() {
   }, [])
 
   const { data: conversations = [], refetch: refetchConversations } = useQuery({
-    queryKey: ['agent-conversations', oid],
-    queryFn: () => agentApi.conversations(oid),
-    enabled: !!oid,
+    queryKey: ['agent-conversations', oid, releaseId],
+    queryFn: () => agentApi.conversations(oid, releaseId),
+    enabled: !!oid && !!releaseId,
   })
 
   const resetChat = useCallback(() => {
@@ -1181,7 +1210,7 @@ export default function AgentWorkbenchPage() {
     setShowJump(false)
     setGraphSignal(null)
   }, [])
-  useEffect(() => { resetChat() }, [oid, resetChat])
+  useEffect(() => { resetChat() }, [oid, releaseId, resetChat])
 
   const loadConversation = async (cid: string) => {
     const conv = await agentApi.conversation(oid, cid)
@@ -1228,7 +1257,9 @@ export default function AgentWorkbenchPage() {
 
     const turnSteps: AgentStep[] = []
     try {
-      await streamAgentChat(oid, { message: question, conversationId, modelId }, ev => {
+      await streamAgentChat(oid, {
+        message: question, conversationId, modelId, releaseId,
+      }, ev => {
         if (ev.type === 'meta') setConversationId(ev.conversationId)
         else if (ev.type === 'step') {
           const { type: _t, ...step } = ev
@@ -1255,7 +1286,7 @@ export default function AgentWorkbenchPage() {
       setBusy(false)
       refetchConversations()
     }
-  }, [busy, conversationId, input, modelId, oid, refetchConversations])
+  }, [busy, conversationId, input, modelId, oid, releaseId, refetchConversations])
 
   const suggested = useMemo<string[]>(() => {
     const first = caps?.objectTypes?.[0]?.displayName
@@ -1265,8 +1296,6 @@ export default function AgentWorkbenchPage() {
       '分析一个字段拟议变化的直接和间接关联范围',
     ] : []
   }, [caps])
-
-  const selectedOntology = ontologyList.find((o: any) => o.id === oid)
 
   if (ontologiesLoading) return <LoadingState message="加载配置..." />
 
@@ -1312,9 +1341,13 @@ export default function AgentWorkbenchPage() {
                   className="h-8 min-w-[180px] cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-3 pr-8 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 10px center' }}
                 >
-                  {ontologyList.length === 0 && <option value="">无本体</option>}
-                  {ontologyList.length > 0 && <option value="">请选择本体</option>}
-                  {ontologyList.map((o: any) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  {publishedOntologyList.length === 0 && <option value="">无已发布本体</option>}
+                  {publishedOntologyList.length > 0 && <option value="">请选择已发布本体</option>}
+                  {publishedOntologyList.map((o: any) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name} · {o.current_release_version || o.version}
+                    </option>
+                  ))}
                 </select>
                 <div className="flex items-center rounded-md border border-slate-200 bg-slate-50 p-0.5" aria-label="切换工作台视图">
                   {([
@@ -1358,6 +1391,7 @@ export default function AgentWorkbenchPage() {
               )}>
                 <InstanceKnowledgeGraph
                   oid={oid}
+                  releaseId={releaseId}
                   assistantSignal={graphSignal}
                   onAskAssistant={question => void send(question)}
                 />
@@ -1419,6 +1453,17 @@ export default function AgentWorkbenchPage() {
                 >
                   {llmModels.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
+                <button
+                  type="button"
+                  onClick={() => setSentinelDrawerOpen(true)}
+                  disabled={!oid || !releaseId}
+                  aria-label="管理动态哨兵"
+                  data-testid="dynamic-sentinel-button"
+                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-600 transition-colors hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <BellRing size={14} />
+                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">动态哨兵</span>
+                </button>
                 {isAdmin && (
                   <button onClick={() => setDrawerOpen(true)} disabled={!oid} aria-label="授权边界配置"
                     className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-500 transition-colors hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700 disabled:opacity-30 disabled:cursor-not-allowed">
@@ -1559,9 +1604,9 @@ export default function AgentWorkbenchPage() {
                           ))}
                         </div>
                       )}
-                      {msg.proposals.map(p => (
-                        <ProposalCard key={p.proposalId} oid={oid} proposal={p} />
-                      ))}
+                      {msg.proposals.map(p => p.kind === 'sentinel'
+                        ? <SentinelProposalCard key={p.proposalId} oid={oid} proposal={p} />
+                        : <ProposalCard key={p.proposalId} oid={oid} proposal={p} />)}
                       {!msg.loading && !msg.error && <ProvenanceBar steps={msg.steps} cited={msg.citations.length} />}
                     </div>
                   </div>
@@ -1629,6 +1674,15 @@ export default function AgentWorkbenchPage() {
       </div>
 
       <BoundaryDrawer oid={oid} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <DynamicSentinelDrawer
+        oid={oid}
+        releaseId={releaseId}
+        open={sentinelDrawerOpen}
+        onClose={() => setSentinelDrawerOpen(false)}
+        objectTypes={dynamicObjectTypes}
+        linkTypes={dynamicLinkTypes}
+        actions={dynamicActions}
+      />
     </div>
   )
 }

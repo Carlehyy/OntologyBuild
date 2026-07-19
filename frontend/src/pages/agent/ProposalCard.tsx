@@ -8,9 +8,9 @@ import { useState } from 'react'
 import {
   Play, ShieldCheck, CheckCircle2, XCircle, Clock3, Loader2, FlaskConical,
 } from 'lucide-react'
-import { agentApi, type AgentProposal, type ExecuteProposalResult } from '@/api/agent'
+import { agentApi, type AgentActionProposal, type ExecuteProposalResult } from '@/api/agent'
 
-export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentProposal }) {
+export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentActionProposal }) {
   const [executing, setExecuting] = useState(false)
   const [result, setResult] = useState<ExecuteProposalResult | null>(null)
   const [error, setError] = useState('')
@@ -26,6 +26,7 @@ export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentPr
         actionId: proposal.actionId,
         parameters: proposal.parameters,
         targetInstanceId: proposal.targetInstanceId,
+        releaseId: proposal.releaseId,
       })
       setResult(r)
     } catch (e: any) {

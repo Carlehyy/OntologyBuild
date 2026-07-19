@@ -13,7 +13,7 @@
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -23,6 +23,8 @@ from app.models.ontology_formal import (
     ObjectType, LinkType, ActionType, ObjectInstance,
 )
 from app.ontologies.agent_runtime.models import AgentProfile
+from app.ontologies.release_context import CurrentReleaseContext, current_release_context
+from app.ontologies.versions.evolution_service import snapshot_models
 
 
 class ToolError(Exception):
@@ -49,28 +51,42 @@ def _allowed(ids: Optional[list], item_id: str) -> bool:
 class AgentScope:
     """profile 过滤后的本体视图。工具层只认识这个对象，不认识原始表。"""
 
-    def __init__(self, db: Session, ontology: OntologyProject, profile: AgentProfile):
+    def __init__(self, db: Session, ontology: OntologyProject, profile: AgentProfile,
+                 release: CurrentReleaseContext | None = None):
         self.db = db
         self.ontology = ontology
         self.profile = profile
+        self.release = release
+        self.release_id = release.id if release is not None else None
 
         oid = ontology.id
-        all_types = db.query(ObjectType).filter(ObjectType.ontology_id == oid).all()
-        self.object_types: dict[str, ObjectType] = {
+        if release is not None:
+            # The mutable fo_* tables are only the runtime projection.  Names,
+            # properties, action rules and relationship endpoints shown to the
+            # assistant must come from the exact immutable release snapshot,
+            # not merely from live rows that happen to share the same ids.
+            released = snapshot_models(release.snapshot)
+            all_types = released["objectTypes"]
+            all_links = released["linkTypes"]
+            all_actions = released["actions"]
+        else:
+            all_types = db.query(ObjectType).filter(ObjectType.ontology_id == oid).all()
+            all_links = db.query(LinkType).filter(LinkType.ontology_id == oid).all()
+            all_actions = db.query(ActionType).filter(ActionType.ontology_id == oid).all()
+
+        self.object_types: dict[str, Any] = {
             t.id: t for t in all_types
             if _allowed(profile.allowed_object_type_ids, t.id)
         }
 
-        all_links = db.query(LinkType).filter(LinkType.ontology_id == oid).all()
-        self.link_types: dict[str, LinkType] = {
+        self.link_types: dict[str, Any] = {
             lt.id: lt for lt in all_links
             if _allowed(profile.allowed_link_type_ids, lt.id)
             and lt.source_object_type_id in self.object_types
             and lt.target_object_type_id in self.object_types
         }
 
-        all_actions = db.query(ActionType).filter(ActionType.ontology_id == oid).all()
-        self.actions: dict[str, ActionType] = {
+        self.actions: dict[str, Any] = {
             a.id: a for a in all_actions
             if _allowed(profile.allowed_action_ids, a.id)
             and (a.object_type_id is None or a.object_type_id in self.object_types)
@@ -88,16 +104,16 @@ class AgentScope:
         names = "、".join(f"{i.display_name}({i.name})" for i in pool.values()) or "（无）"
         raise ToolError(f"{kind}「{ref}」不存在或不在授权范围内。可用{kind}：{names}")
 
-    def require_object_type(self, ref: str) -> ObjectType:
+    def require_object_type(self, ref: str) -> Any:
         return self._resolve(self.object_types, ref, "对象类型")
 
-    def require_link_type(self, ref: str) -> LinkType:
+    def require_link_type(self, ref: str) -> Any:
         return self._resolve(self.link_types, ref, "链接类型")
 
-    def require_action(self, ref: str) -> ActionType:
+    def require_action(self, ref: str) -> Any:
         return self._resolve(self.actions, ref, "动作")
 
-    def resolve_property(self, ot: ObjectType, ref: str) -> str:
+    def resolve_property(self, ot: Any, ref: str) -> str:
         """把属性引用（name 或 displayName）解析为规范 name；越界即 ToolError（含可用属性）。
 
         合法集直接取自 ot.properties —— 派生/计算属性也声明在其中（source='computed'，
@@ -119,6 +135,8 @@ class AgentScope:
         """实例必须属于本体 + 其类型在授权范围内。"""
         if not inst or inst.ontology_id != self.ontology.id:
             raise ToolError("对象实例不存在")
+        if self.release_id is not None and inst.ontology_release_id != self.release_id:
+            raise ToolError("对象实例不属于当前发布版本")
         if inst.object_type_id not in self.object_types:
             raise ToolError("该实例所属的对象类型不在授权范围内")
         return inst
@@ -128,7 +146,10 @@ class AgentScope:
     def instance_counts(self) -> dict[str, int]:
         rows = (self.db.query(ObjectInstance.object_type_id, func.count(ObjectInstance.id))
                 .filter(ObjectInstance.ontology_id == self.ontology.id)
-                .group_by(ObjectInstance.object_type_id).all())
+                )
+        if self.release_id is not None:
+            rows = rows.filter(ObjectInstance.ontology_release_id == self.release_id)
+        rows = rows.group_by(ObjectInstance.object_type_id).all()
         return {tid: n for tid, n in rows if tid in self.object_types}
 
     def skill_card(self) -> str:
@@ -209,9 +230,22 @@ class AgentScope:
         }
 
 
-def build_scope(db: Session, ontology_id: str) -> tuple[OntologyProject, AgentProfile, AgentScope]:
+def build_scope(db: Session, ontology_id: str, *,
+                release_id: str | None = None) -> tuple[OntologyProject, AgentProfile, AgentScope]:
     ontology = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not ontology:
         raise ToolError("本体不存在")
+    release = None
+    if release_id is not None:
+        try:
+            release = current_release_context(
+                db, ontology_id, expected_release_id=release_id)
+        except Exception as exc:
+            detail = getattr(exc, "detail", None)
+            if isinstance(detail, dict):
+                raise ToolError(str(detail.get("message") or detail)) from exc
+            raise ToolError(str(detail or exc)) from exc
+        if (ontology.status or "") != "published":
+            raise ToolError("智能助手只能在当前正式发布版本上运行")
     profile = get_or_create_profile(db, ontology_id)
-    return ontology, profile, AgentScope(db, ontology, profile)
+    return ontology, profile, AgentScope(db, ontology, profile, release)

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, StrictBool, conint, field_validator, model_validator
 
 from app.ontologies.formal_modeling.schemas import CamelModel
 
@@ -43,6 +43,7 @@ class ChatRequest(CamelModel):
     message: str
     conversation_id: Optional[str] = None
     model_id: Optional[str] = None
+    release_id: Optional[str] = None
     stream: bool = True
 
 
@@ -50,9 +51,116 @@ class ExecuteProposalRequest(CamelModel):
     action_id: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     target_instance_id: Optional[str] = None
+    release_id: Optional[str] = None
+
+
+class _StrictDynamicModel(CamelModel):
+    """LLM-facing mutation contracts reject, rather than silently discard, input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DynamicSentinelBinding(_StrictDynamicModel):
+    alias: str = Field(min_length=1, max_length=50, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    object_type_id: str = Field(min_length=1, max_length=200)
+    filter: Optional[str] = Field(default=None, max_length=2000)
+
+
+class DynamicSentinelLink(_StrictDynamicModel):
+    from_alias: str = Field(alias="from", min_length=1, max_length=50)
+    link_type_id: str = Field(min_length=1, max_length=200)
+    to: str = Field(min_length=1, max_length=50)
+
+
+class DynamicSentinelDefinition(_StrictDynamicModel):
+    name: str = Field(
+        min_length=2, max_length=100,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$",
+    )
+    display_name: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    bindings: list[DynamicSentinelBinding] = Field(min_length=1, max_length=12)
+    links: list[DynamicSentinelLink] = Field(default_factory=list, max_length=24)
+    condition: Optional[str] = Field(default=None, max_length=4000)
+    condition_rows: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    condition_logic: str = Field(default="and", pattern=r"^(and|or)$")
+    primary_alias: str = Field(min_length=1, max_length=50)
+    action_ids: list[str] = Field(default_factory=list, max_length=20)
+    action_parameters: dict[str, Any] = Field(default_factory=dict)
+    on_change: StrictBool = True
+    on_schedule: StrictBool = False
+    scan_interval_seconds: conint(strict=True, ge=60, le=86400) = 300
+    trigger_mode: str = Field(
+        default="on_enter",
+        pattern=r"^(on_enter|on_enter_leave|run_on_all)$",
+    )
+    muted: StrictBool = False
+
+    @field_validator("name", "display_name")
+    @classmethod
+    def _strip_required(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _validate_trigger(self):
+        if not self.on_change and not self.on_schedule:
+            raise ValueError("动态哨兵至少需要启用变化触发或定时扫描之一")
+        aliases = [item.alias for item in self.bindings]
+        if len(aliases) != len(set(aliases)):
+            raise ValueError("bindings alias 不允许重复")
+        if self.primary_alias not in aliases:
+            raise ValueError("primaryAlias 必须引用已声明的 binding alias")
+        if len(self.action_ids) != len(set(self.action_ids)):
+            raise ValueError("actionIds 不允许重复")
+        if self.condition_rows:
+            raise ValueError("助手动态哨兵只接受 condition 作为唯一执行条件，conditionRows 必须为空")
+        return self
+
+
+class DynamicSentinelCreateRequest(_StrictDynamicModel):
+    release_id: str = Field(min_length=1)
+    definition: DynamicSentinelDefinition
+
+
+class DynamicSentinelUpdateRequest(_StrictDynamicModel):
+    release_id: str = Field(min_length=1)
+    expected_revision: int = Field(ge=1)
+    definition: DynamicSentinelDefinition
+
+
+class DynamicSentinelReleaseRequest(_StrictDynamicModel):
+    release_id: str = Field(min_length=1)
+
+
+class DynamicSentinelToggleRequest(DynamicSentinelReleaseRequest):
+    enabled: StrictBool
+    expected_revision: int = Field(ge=1)
+
+
+class DynamicSentinelProposalCommand(_StrictDynamicModel):
+    operation: str = Field(pattern=r"^(create|update|enable|disable|delete)$")
+    release_id: str
+    sentinel_id: Optional[str] = None
+    expected_revision: Optional[int] = Field(default=None, ge=1)
+    definition: Optional[DynamicSentinelDefinition] = None
+
+    @model_validator(mode="after")
+    def _validate_operation_payload(self):
+        if self.operation == "create" and self.definition is None:
+            raise ValueError("创建动态哨兵必须提供 definition")
+        if self.operation != "create" and not self.sentinel_id:
+            raise ValueError("该操作必须提供 sentinelId")
+        if self.operation != "create" and self.expected_revision is None:
+            raise ValueError("该操作必须提供 expectedRevision，防止覆盖并发修改")
+        if self.operation == "update" and self.definition is None:
+            raise ValueError("更新动态哨兵必须提供 definition")
+        if self.operation not in {"create", "update"} and self.definition is not None:
+            raise ValueError("启停或删除操作不能携带 definition")
+        return self
 
 
 class GraphPathRequest(CamelModel):
+    release_id: Optional[str] = None
     source_instance_id: str
     target_instance_id: str
     direction: str = "both"
@@ -61,6 +169,7 @@ class GraphPathRequest(CamelModel):
 
 
 class GraphImpactRequest(CamelModel):
+    release_id: Optional[str] = None
     instance_id: str
     property: str
     proposed_value: Any = None
@@ -71,6 +180,7 @@ class GraphImpactRequest(CamelModel):
 class ConversationOut(CamelModel):
     id: str
     title: str
+    ontology_release_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

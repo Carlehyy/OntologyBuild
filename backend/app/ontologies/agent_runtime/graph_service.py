@@ -39,6 +39,22 @@ def _clamp(value: Any, low: int, high: int, default: int) -> int:
     return max(low, min(parsed, high))
 
 
+def _instance_query(scope: AgentScope):
+    query = scope.db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == scope.ontology.id)
+    if scope.release_id is not None:
+        query = query.filter(ObjectInstance.ontology_release_id == scope.release_id)
+    return query
+
+
+def _link_query(scope: AgentScope):
+    query = scope.db.query(LinkInstance).filter(
+        LinkInstance.ontology_id == scope.ontology.id)
+    if scope.release_id is not None:
+        query = query.filter(LinkInstance.ontology_release_id == scope.release_id)
+    return query
+
+
 def _property_name(object_type, property_ref: Optional[str]) -> Optional[str]:
     if not property_ref:
         return None
@@ -242,10 +258,8 @@ def build_workspace_graph(
                 truncated = True
                 break
             take = min(per_type, remaining)
-            q = scope.db.query(ObjectInstance).filter(
-                ObjectInstance.ontology_id == scope.ontology.id,
-                ObjectInstance.object_type_id == object_type.id,
-            )
+            q = _instance_query(scope).filter(
+                ObjectInstance.object_type_id == object_type.id)
             if keyword:
                 pattern = f"%{keyword}%"
                 q = q.filter(or_(
@@ -269,9 +283,8 @@ def build_workspace_graph(
         instance_ids = [instance.id for instance in loaded_instances]
         visible_link_ids = list(scope.link_types)
         if instance_ids and visible_link_ids:
-            links = (scope.db.query(LinkInstance)
+            links = (_link_query(scope)
                      .filter(
-                         LinkInstance.ontology_id == scope.ontology.id,
                          LinkInstance.link_type_id.in_(visible_link_ids),
                          LinkInstance.source_object_id.in_(instance_ids),
                          LinkInstance.target_object_id.in_(instance_ids),
@@ -354,10 +367,8 @@ def _frontier_links(
 ) -> tuple[list[LinkInstance], bool]:
     if not frontier or not scope.link_types or remaining <= 0:
         return [], False
-    q = scope.db.query(LinkInstance).filter(
-        LinkInstance.ontology_id == scope.ontology.id,
-        LinkInstance.link_type_id.in_(list(scope.link_types)),
-    )
+    q = _link_query(scope).filter(
+        LinkInstance.link_type_id.in_(list(scope.link_types)))
     if seen_edges:
         q = q.filter(~LinkInstance.id.in_(seen_edges))
     if direction == "outgoing":
@@ -376,8 +387,7 @@ def _frontier_links(
         for endpoint_id in (row.source_object_id, row.target_object_id)
     }
     visible_endpoint_ids = {
-        row.id for row in scope.db.query(ObjectInstance).filter(
-            ObjectInstance.ontology_id == scope.ontology.id,
+        row.id for row in _instance_query(scope).filter(
             ObjectInstance.object_type_id.in_(list(scope.object_types)),
             ObjectInstance.id.in_(endpoint_ids),
         ).all()
@@ -465,9 +475,7 @@ def _instances_by_ids(scope: AgentScope, ids: Iterable[str]) -> dict[str, Object
     unique = list(dict.fromkeys(ids))
     if not unique:
         return {}
-    rows = (scope.db.query(ObjectInstance)
-            .filter(ObjectInstance.ontology_id == scope.ontology.id,
-                    ObjectInstance.id.in_(unique)).all())
+    rows = (_instance_query(scope).filter(ObjectInstance.id.in_(unique)).all())
     return {row.id: row for row in rows if row.object_type_id in scope.object_types}
 
 
@@ -513,9 +521,7 @@ def find_paths(
     edge_ids = {edge_id for path in paths for edge_id in path["edgeIds"]}
     link_rows = []
     if edge_ids:
-        link_rows = (scope.db.query(LinkInstance)
-                     .filter(LinkInstance.ontology_id == scope.ontology.id,
-                             LinkInstance.id.in_(edge_ids)).all())
+        link_rows = (_link_query(scope).filter(LinkInstance.id.in_(edge_ids)).all())
     return {
         "kind": "path",
         "sourceInstanceId": source.id,
@@ -615,9 +621,7 @@ def analyze_change_impact(
 
     links = []
     if used_edge_ids:
-        links = (scope.db.query(LinkInstance)
-                 .filter(LinkInstance.ontology_id == scope.ontology.id,
-                         LinkInstance.id.in_(used_edge_ids)).all())
+        links = (_link_query(scope).filter(LinkInstance.id.in_(used_edge_ids)).all())
     direct_count = sum(1 for item in impact_items if item["classification"] == "direct")
     return {
         "kind": "impact",

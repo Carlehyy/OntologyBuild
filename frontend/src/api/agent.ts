@@ -46,6 +46,8 @@ export interface AgentCapabilities {
   maxRowsPerQuery: number
   maxSteps: number
   skillCard: string
+  releaseId?: string | null
+  releaseVersion?: string | null
 }
 
 export interface AgentStep {
@@ -68,8 +70,10 @@ export interface AgentCitation {
   snippet?: string
 }
 
-export interface AgentProposal {
+export interface AgentActionProposal {
+  kind?: 'action'
   proposalId: string
+  releaseId?: string | null
   actionId: string
   actionName: string
   parameters: Record<string, unknown>
@@ -79,6 +83,80 @@ export interface AgentProposal {
   validationErrors: string[]
   effects: { type: string; description?: string; [k: string]: unknown }[]
 }
+
+export interface DynamicSentinelDefinition {
+  name: string
+  displayName: string
+  description?: string | null
+  bindings: { alias: string; objectTypeId: string; filter?: string | null }[]
+  links: { from: string; linkTypeId: string; to: string }[]
+  condition?: string | null
+  conditionRows?: Record<string, unknown>[]
+  conditionLogic?: 'and' | 'or'
+  primaryAlias: string
+  actionIds: string[]
+  actionParameters: Record<string, unknown>
+  onChange: boolean
+  onSchedule: boolean
+  scanIntervalSeconds: number
+  triggerMode: 'on_enter' | 'on_enter_leave' | 'run_on_all'
+  muted: boolean
+}
+
+export interface DynamicSentinelTrialReport {
+  passed: boolean
+  releaseId: string
+  candidateCount: number
+  matchCount: number
+  plannedActionCount: number
+  plannedActions: {
+    actionId: string
+    actionName: string
+    targetInstanceId?: string | null
+    match: Record<string, string>
+    parameters: Record<string, unknown>
+    validationErrors: string[]
+  }[]
+  plannedActionsTruncated: boolean
+  candidateCapReached: boolean
+  errors: string[]
+  durationMs: number
+  sideEffects: 'none'
+}
+
+export interface DynamicSentinel extends DynamicSentinelDefinition {
+  id: string
+  ontologyId: string
+  origin: 'assistant_dynamic'
+  boundReleaseId: string
+  createdBy?: string | null
+  definitionRevision: number
+  enabled: boolean
+  status: string
+  validationReport?: { passed: boolean; errors: { message?: string }[]; compatibility?: string } | null
+  lastTrialAt?: string | null
+  lastTrialReport?: DynamicSentinelTrialReport | null
+  trialCurrent: boolean
+  canEnable: boolean
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface AgentSentinelProposal {
+  kind: 'sentinel'
+  proposalId: string
+  operation: 'create' | 'update' | 'enable' | 'disable' | 'delete'
+  sentinelId: string | null
+  sentinelName: string
+  releaseId: string
+  expectedRevision: number | null
+  definition: DynamicSentinelDefinition | null
+  status: string
+  validationErrors: string[]
+  validationReport?: Record<string, unknown>
+}
+
+export type AgentProposal = AgentActionProposal | AgentSentinelProposal
 
 export interface AgentMessageDTO {
   id: string
@@ -100,7 +178,7 @@ export interface AgentConversationDTO {
 }
 
 export type AgentEvent =
-  | { type: 'meta'; conversationId: string; model: string }
+  | { type: 'meta'; conversationId: string; model: string; releaseId?: string | null }
   | ({ type: 'step' } & AgentStep)
   | { type: 'answer'; content: string; citations: AgentCitation[]; proposals: AgentProposal[]; usage?: unknown }
   | { type: 'error'; message: string }
@@ -326,13 +404,16 @@ export const agentApi = {
   getProfile: (oid: string) => apiClientV2.get<AgentProfile>(`${base(oid)}/profile`),
   updateProfile: (oid: string, body: AgentProfileUpdate) =>
     apiClientV2.put<AgentProfile>(`${base(oid)}/profile`, body),
-  capabilities: (oid: string) => apiClientV2.get<AgentCapabilities>(`${base(oid)}/capabilities`),
+  capabilities: (oid: string, releaseId?: string | null) => apiClientV2.get<AgentCapabilities>(`${base(oid)}/capabilities`, {
+    params: { release_id: releaseId || undefined },
+  }),
   graph: (oid: string, params: {
     depth?: 1 | 2 | 3
     query?: string
     objectType?: string
     focusInstanceId?: string
     limitPerType?: number
+    releaseId?: string | null
   }) => apiClientV2.get<AgentGraphData>(`${base(oid)}/graph`, {
     params: {
       depth: params.depth,
@@ -340,16 +421,20 @@ export const agentApi = {
       object_type: params.objectType,
       focus_instance_id: params.focusInstanceId,
       limit_per_type: params.limitPerType,
+      release_id: params.releaseId || undefined,
     },
   }),
-  graphInstance: (oid: string, instanceId: string) =>
-    apiClientV2.get<AgentInstanceDetail>(`${base(oid)}/graph/instances/${encodeURIComponent(instanceId)}`),
+  graphInstance: (oid: string, instanceId: string, releaseId?: string | null) =>
+    apiClientV2.get<AgentInstanceDetail>(`${base(oid)}/graph/instances/${encodeURIComponent(instanceId)}`, {
+      params: { release_id: releaseId || undefined },
+    }),
   findPaths: (oid: string, body: {
     sourceInstanceId: string
     targetInstanceId: string
     direction?: 'both' | 'outgoing' | 'incoming'
     maxDepth?: number
     maxPaths?: number
+    releaseId?: string | null
   }) => apiClientV2.post<AgentGraphPathResult>(`${base(oid)}/graph/paths`, body),
   analyzeImpact: (oid: string, body: {
     instanceId: string
@@ -357,14 +442,44 @@ export const agentApi = {
     proposedValue: unknown
     direction?: 'both' | 'outgoing' | 'incoming'
     maxDepth?: number
+    releaseId?: string | null
   }) => apiClientV2.post<AgentGraphImpactResult>(`${base(oid)}/graph/impact`, body),
-  conversations: (oid: string) => apiClientV2.get<AgentConversationDTO[]>(`${base(oid)}/conversations`),
+  conversations: (oid: string, releaseId?: string | null) => apiClientV2.get<AgentConversationDTO[]>(`${base(oid)}/conversations`, {
+    params: { release_id: releaseId || undefined },
+  }),
   conversation: (oid: string, cid: string) =>
     apiClientV2.get<AgentConversationDTO>(`${base(oid)}/conversations/${cid}`),
   deleteConversation: (oid: string, cid: string) =>
     apiClientV2.delete(`${base(oid)}/conversations/${cid}`),
-  executeProposal: (oid: string, body: { actionId: string; parameters: Record<string, unknown>; targetInstanceId?: string | null }) =>
+  executeProposal: (oid: string, body: { actionId: string; parameters: Record<string, unknown>; targetInstanceId?: string | null; releaseId?: string | null }) =>
     apiClientV2.post<ExecuteProposalResult>(`${base(oid)}/execute-proposal`, body),
+  dynamicSentinels: (oid: string, releaseId: string) =>
+    apiClientV2.get<DynamicSentinel[]>(`${base(oid)}/dynamic-sentinels`, { params: { release_id: releaseId } }),
+  createDynamicSentinel: (oid: string, releaseId: string, definition: DynamicSentinelDefinition) =>
+    apiClientV2.post<DynamicSentinel>(`${base(oid)}/dynamic-sentinels`, { releaseId, definition }),
+  updateDynamicSentinel: (oid: string, releaseId: string, row: DynamicSentinel, definition: DynamicSentinelDefinition) =>
+    apiClientV2.put<DynamicSentinel>(`${base(oid)}/dynamic-sentinels/${row.id}`, {
+      releaseId, expectedRevision: row.definitionRevision, definition,
+    }),
+  trialDynamicSentinel: (oid: string, releaseId: string, id: string) =>
+    apiClientV2.post<DynamicSentinel>(`${base(oid)}/dynamic-sentinels/${id}/trial`, { releaseId }),
+  setDynamicSentinelEnabled: (oid: string, releaseId: string, row: DynamicSentinel, enabled: boolean) =>
+    apiClientV2.post<DynamicSentinel>(`${base(oid)}/dynamic-sentinels/${row.id}/enabled`, {
+      releaseId, expectedRevision: row.definitionRevision, enabled,
+    }),
+  deleteDynamicSentinel: (oid: string, releaseId: string, row: DynamicSentinel) =>
+    apiClientV2.delete(`${base(oid)}/dynamic-sentinels/${row.id}`, {
+      params: { release_id: releaseId, expected_revision: row.definitionRevision },
+    }),
+  executeDynamicSentinelProposal: (oid: string, proposal: AgentSentinelProposal) =>
+    apiClientV2.post<DynamicSentinel | { status: string; id: string }>(
+      `${base(oid)}/dynamic-sentinels/execute-proposal`, {
+        operation: proposal.operation,
+        releaseId: proposal.releaseId,
+        sentinelId: proposal.sentinelId,
+        expectedRevision: proposal.expectedRevision,
+        definition: proposal.definition,
+      }),
   reportTemplates: (oid: string) =>
     apiClientV2.get<AnalysisReportTemplate[]>(`${base(oid)}/report-templates`),
   createReportTemplate: (oid: string, body: { brief: string; modelId?: string | null; conversationId?: string | null }) =>
@@ -402,7 +517,7 @@ function apiRoot(): string {
 
 export async function streamAgentChat(
   oid: string,
-  body: { message: string; conversationId?: string | null; modelId?: string | null },
+  body: { message: string; conversationId?: string | null; modelId?: string | null; releaseId?: string | null },
   onEvent: (e: AgentEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -414,6 +529,7 @@ export async function streamAgentChat(
       message: body.message,
       conversationId: body.conversationId || undefined,
       modelId: body.modelId || undefined,
+      releaseId: body.releaseId || undefined,
       stream: true,
     }),
     signal,

@@ -62,6 +62,7 @@ class AgentConversation(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    ontology_release_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
 

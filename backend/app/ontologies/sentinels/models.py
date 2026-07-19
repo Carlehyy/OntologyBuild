@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     String, DateTime, ForeignKey, Text, JSON, Boolean, Integer, UniqueConstraint,
+    CheckConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,6 +41,12 @@ class Sentinel(Base):
     命中后依次执行 action_ids；动作作用目标为 primary_alias 对应的对象实例。
     """
     __tablename__ = "sentinels"
+    __table_args__ = (
+        CheckConstraint(
+            "origin IN ('release_builtin', 'assistant_dynamic')",
+            name="ck_sentinels_origin",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(
@@ -79,6 +86,25 @@ class Sentinel(Base):
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")    # draft | published
+
+    # 管理边界不是展示元数据：origin 由服务端写入且创建后不可变。
+    # release_builtin 随本体版本快照发布；assistant_dynamic 是发布版之上的
+    # 运行时叠加层，只允许智能助手接口管理，永不进入本体版本快照。
+    origin: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="release_builtin",
+        server_default="release_builtin", index=True,
+    )
+    bound_release_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    definition_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1")
+    validation_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    last_trial_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_trial_release_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_trial_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_trial_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     # 血缘出处（Schema 也是事实）：如业务探索草稿生成的影子哨兵
     # {"kind": "business_exploration", "sessionId", "documentId", "draftId", "draftKey", "sourceRefs"}

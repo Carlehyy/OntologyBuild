@@ -15,6 +15,9 @@ from sqlalchemy.orm import Session
 from app.models.sentinel import Sentinel
 from app.models.ontology import OntologyProject
 from app.services.sentinel.evaluator import evaluate_sentinel
+from app.ontologies.agent_runtime.boundary import build_scope
+from app.ontologies.release_context import current_release_context
+from app.ontologies.sentinels.dynamic_service import reconcile_release
 
 
 def _now():
@@ -48,10 +51,28 @@ def _not_published_summary() -> dict:
     return result
 
 
+def _prepare_runtime(db: Session, ontology_id: str) -> str | None:
+    """Fail closed when the published contract changed since the last trial."""
+    has_dynamic = db.query(Sentinel.id).filter(
+        Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == "assistant_dynamic",
+        Sentinel.retired_at.is_(None),
+    ).first()
+    if has_dynamic is None:
+        return None
+    context = current_release_context(db, ontology_id)
+    if (context.project.status or "") != "published":
+        return None
+    _, _, scope = build_scope(db, ontology_id, release_id=context.id)
+    reconcile_release(db, context, scope)
+    return context.id
+
+
 def run_manual(db: Session, ontology_id: str) -> dict:
     """手动触发：全量评估本体所有启用哨兵。"""
     if not _ontology_is_published(db, ontology_id):
         return _not_published_summary()
+    _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
         Sentinel.enabled == True,  # noqa: E712
@@ -69,6 +90,7 @@ def run_for_save(db: Session, ontology_id: str) -> dict:
     """
     if not _ontology_is_published(db, ontology_id):
         return _not_published_summary()
+    _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
         Sentinel.enabled == True,  # noqa: E712
@@ -84,6 +106,7 @@ def run_for_change(db: Session, ontology_id: str, object_type_id: str,
     """变化驱动：挑出 bindings 引用了该对象类型、且开启 on_change 的哨兵并评估。"""
     if not _ontology_is_published(db, ontology_id):
         return _not_published_summary()
+    _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
         Sentinel.enabled == True,  # noqa: E712
@@ -102,6 +125,7 @@ def run_for_link_change(db: Session, ontology_id: str) -> dict:
     只评估 on_change 且带链接约束的哨兵（无链接约束的由属性 CDC 覆盖）。"""
     if not _ontology_is_published(db, ontology_id):
         return _not_published_summary()
+    _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).filter(
         Sentinel.ontology_id == ontology_id,
         Sentinel.enabled == True,  # noqa: E712
@@ -116,6 +140,15 @@ def run_for_link_change(db: Session, ontology_id: str) -> dict:
 def run_scheduled(db: Session) -> dict:
     """定期扫描：评估所有到达扫描间隔的哨兵(跨本体)，更新 last_scanned_at。"""
     now = _now()
+    published_ids = [row[0] for row in db.query(Sentinel.ontology_id).join(
+        OntologyProject, OntologyProject.id == Sentinel.ontology_id,
+    ).filter(
+        OntologyProject.status == "published",
+        Sentinel.origin == "assistant_dynamic",
+        Sentinel.retired_at.is_(None),
+    ).distinct().all()]
+    for ontology_id in published_ids:
+        _prepare_runtime(db, ontology_id)
     sentinels = db.query(Sentinel).join(
         OntologyProject, OntologyProject.id == Sentinel.ontology_id
     ).filter(

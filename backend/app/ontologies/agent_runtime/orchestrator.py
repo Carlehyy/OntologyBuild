@@ -82,6 +82,7 @@ def _system_prompt(scope) -> str:
 5. 需要修改数据时：只能用 propose_action 做预演并生成提案，真实执行由用户在界面上确认。绝不能声称你已经完成了修改。
 6. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
 7. 用户询问某字段拟议变化会波及哪些对象时，先用 analyze_change_impact 展示直接/间接关系可达范围。它是只读模拟，不代表确定业务因果；除非工具返回了受治理的因果规则，否则必须称为“关联范围”，不得声称这些对象一定会改变。
+8. 管理哨兵时，只能管理来源为 assistant_dynamic 的动态哨兵。发布版本内置哨兵只读且绝不能生成其编辑、启停或删除提案。所有动态哨兵变更必须先用 propose_dynamic_sentinel_change 生成提案，等待用户在界面确认；创建后默认停用，必须通过当前发布版全量试跑才能启用。
 
 {_CHARTS_GUIDE}
 {extra_block}"""
@@ -112,6 +113,11 @@ def _summarize(name: str, result: dict) -> str:
         return f"{result.get('instance', '')} 的 {len(result.get('facts', []))} 条事实"
     if name == "list_actions":
         return f"{len(result.get('actions', []))} 个可用动作"
+    if name == "list_dynamic_sentinels":
+        return f"{len(result.get('sentinels', []))} 个助手动态哨兵"
+    if name == "propose_dynamic_sentinel_change":
+        p = result.get("proposal") or {}
+        return f"动态哨兵{p.get('operation', '')}提案：{p.get('sentinelName', '')}"
     if name == "propose_action":
         p = result.get("proposal") or {}
         ok = p.get("status") == "success"
@@ -231,10 +237,12 @@ def _history_digest(older: list) -> Optional[str]:
 
 def run_agent_turn(db: Session, ontology_id: str, user, question: str,
                    conversation_id: Optional[str] = None,
-                   model_id: Optional[str] = None) -> Iterator[dict]:
+                   model_id: Optional[str] = None,
+                   release_id: Optional[str] = None) -> Iterator[dict]:
     """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。"""
     try:
-        yield from _run(db, ontology_id, user, question, conversation_id, model_id)
+        yield from _run(
+            db, ontology_id, user, question, conversation_id, model_id, release_id)
     except GeneratorExit:
         # 浏览器刷新/离开会主动关闭 SSE。生成器关闭后不能在 finally 中继续 yield，
         # 否则 Python 会抛出 ``generator ignored GeneratorExit`` 并污染服务日志。
@@ -246,9 +254,11 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
 
 
 def _run(db: Session, ontology_id: str, user, question: str,
-         conversation_id: Optional[str], model_id: Optional[str]) -> Iterator[dict]:
+         conversation_id: Optional[str], model_id: Optional[str],
+         release_id: Optional[str]) -> Iterator[dict]:
     try:
-        ontology, profile, scope = build_scope(db, ontology_id)
+        ontology, profile, scope = build_scope(
+            db, ontology_id, release_id=release_id)
     except ToolError as e:
         yield {"type": "error", "message": str(e)}
         return
@@ -269,9 +279,15 @@ def _run(db: Session, ontology_id: str, user, question: str,
     if conversation_id:
         conv = db.query(AgentConversation).filter(
             AgentConversation.id == conversation_id,
-            AgentConversation.ontology_id == ontology_id).first()
+            AgentConversation.ontology_id == ontology_id,
+            AgentConversation.user_id == user_id,
+            AgentConversation.ontology_release_id == scope.release_id,
+        ).first()
     if not conv:
-        conv = AgentConversation(ontology_id=ontology_id, user_id=user_id,
+        conv = AgentConversation(
+                                 ontology_id=ontology_id,
+                                 ontology_release_id=scope.release_id,
+                                 user_id=user_id,
                                  title=question.strip()[:60] or "新对话")
         db.add(conv)
         db.flush()
@@ -286,7 +302,8 @@ def _run(db: Session, ontology_id: str, user, question: str,
     db.add(AgentMessage(conversation_id=conv.id, role="user", content=question))
     db.commit()
 
-    yield {"type": "meta", "conversationId": conv.id, "model": call_kwargs.get("model")}
+    yield {"type": "meta", "conversationId": conv.id,
+           "model": call_kwargs.get("model"), "releaseId": scope.release_id}
 
     messages: list[dict] = [{"role": "system", "content": _system_prompt(scope)}]
     digest = _history_digest(older)

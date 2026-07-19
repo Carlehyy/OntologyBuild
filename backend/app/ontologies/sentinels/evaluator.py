@@ -107,11 +107,15 @@ def _sentinel_execution_lock(db: Session, sentinel_id: str):
         lock.release()
 
 
-def _instances(db: Session, ontology_id: str, object_type_id: str):
-    return db.query(ObjectInstance).filter(
+def _instances(db: Session, ontology_id: str, object_type_id: str,
+               release_id: str | None = None):
+    query = db.query(ObjectInstance).filter(
         ObjectInstance.ontology_id == ontology_id,
         ObjectInstance.object_type_id == object_type_id,
-    ).all()
+    )
+    if release_id is not None:
+        query = query.filter(ObjectInstance.ontology_release_id == release_id)
+    return query.all()
 
 
 def _passes(expr: str | None, alias: str, props: dict,
@@ -127,11 +131,14 @@ def _passes(expr: str | None, alias: str, props: dict,
 
 
 def _traverse(db: Session, ontology_id: str, link_type_id: str,
-              instance_id: str, forward: bool, target_type: str):
+              instance_id: str, forward: bool, target_type: str,
+              release_id: str | None = None):
     q = db.query(LinkInstance).filter(
         LinkInstance.ontology_id == ontology_id,
         LinkInstance.link_type_id == link_type_id,
     )
+    if release_id is not None:
+        q = q.filter(LinkInstance.ontology_release_id == release_id)
     if forward:
         rows = q.filter(LinkInstance.source_object_id == instance_id).all()
         ids = [r.target_object_id for r in rows]
@@ -140,15 +147,20 @@ def _traverse(db: Session, ontology_id: str, link_type_id: str,
         ids = [r.source_object_id for r in rows]
     if not ids:
         return []
-    return db.query(ObjectInstance).filter(
+    query = db.query(ObjectInstance).filter(
         ObjectInstance.id.in_(ids),
         ObjectInstance.object_type_id == target_type,
         ObjectInstance.ontology_id == ontology_id,
-    ).all()
+    )
+    if release_id is not None:
+        query = query.filter(ObjectInstance.ontology_release_id == release_id)
+    return query.all()
 
 
 def _resolve_tuples(db: Session, ontology_id: str, sentinel: Sentinel,
-                    errors: list[str] | None = None) -> list[dict]:
+                    errors: list[str] | None = None,
+                    release_id: str | None = None,
+                    metadata: dict | None = None) -> list[dict]:
     """解析满足绑定 filter 与链接约束的对象元组列表。元组：{alias: ObjectInstance}"""
     bindings = sentinel.bindings or []
     if not bindings:
@@ -157,7 +169,7 @@ def _resolve_tuples(db: Session, ontology_id: str, sentinel: Sentinel,
 
     b0 = bindings[0]
     tuples: list[dict] = []
-    for inst in _instances(db, ontology_id, b0["objectTypeId"]):
+    for inst in _instances(db, ontology_id, b0["objectTypeId"], release_id):
         if _passes(b0.get("filter"), b0["alias"], inst.properties or {}, errors):
             tuples.append({b0["alias"]: inst})
 
@@ -172,26 +184,32 @@ def _resolve_tuples(db: Session, ontology_id: str, sentinel: Sentinel,
             for t in tuples:
                 if link.get("to") == alias and link.get("from") in t:
                     related = _traverse(db, ontology_id, link["linkTypeId"],
-                                        t[link["from"]].id, forward=True, target_type=otype)
+                                        t[link["from"]].id, forward=True,
+                                        target_type=otype, release_id=release_id)
                 elif link.get("from") == alias and link.get("to") in t:
                     related = _traverse(db, ontology_id, link["linkTypeId"],
-                                        t[link["to"]].id, forward=False, target_type=otype)
+                                        t[link["to"]].id, forward=False,
+                                        target_type=otype, release_id=release_id)
                 else:
                     related = []
                 for r in related:
                     if _passes(filt, alias, r.properties or {}, errors):
                         nt = dict(t); nt[alias] = r; new_tuples.append(nt)
                         if len(new_tuples) >= MAX_TUPLES:
+                            if metadata is not None:
+                                metadata["candidateCapReached"] = True
                             break
                 if len(new_tuples) >= MAX_TUPLES:
                     break
         else:
-            cands = [i for i in _instances(db, ontology_id, otype)
+            cands = [i for i in _instances(db, ontology_id, otype, release_id)
                      if _passes(filt, alias, i.properties or {}, errors)]
             for t in tuples:
                 for r in cands:
                     nt = dict(t); nt[alias] = r; new_tuples.append(nt)
                     if len(new_tuples) >= MAX_TUPLES:
+                        if metadata is not None:
+                            metadata["candidateCapReached"] = True
                         break
                 if len(new_tuples) >= MAX_TUPLES:
                     break
@@ -299,6 +317,90 @@ def _configured_action_parameters(sentinel: Sentinel, action_id: str, tup: dict,
         else:
             params[str(name)] = value
     return params, errors
+
+
+def preview_sentinel(db: Session, ontology_id: str, sentinel: Sentinel,
+                     release_id: str) -> dict:
+    """Evaluate the complete current-release dataset without runtime effects.
+
+    This deliberately does not call ``execute_action`` and does not create
+    firing logs, facts or match-state rows.  It resolves every matching tuple
+    and every action parameter so enabling can fail closed before the reactive
+    engine is allowed to see the definition.  Cross-object combinations retain
+    the engine's hard safety cap; hitting it makes the trial fail instead of
+    presenting a partial run as complete.
+    """
+    started = time.time()
+    errors: list[str] = []
+    metadata: dict = {"candidateCapReached": False}
+    tuples = _resolve_tuples(
+        db, ontology_id, sentinel, errors,
+        release_id=release_id, metadata=metadata,
+    )
+    matched = [item for item in tuples if _holds(sentinel.condition, item, errors)]
+    primary = sentinel.primary_alias or (
+        sentinel.bindings[0].get("alias") if sentinel.bindings else None)
+    actions = {
+        row.id: row for row in db.query(ActionType).filter(
+            ActionType.ontology_id == ontology_id,
+            ActionType.id.in_(list(sentinel.action_ids or []) or [""]),
+        ).all()
+    }
+    planned_samples: list[dict] = []
+    parameter_error_count = 0
+    for tup in matched:
+        target = _binding_instance(tup, primary, primary)
+        target_id = target.id if target is not None else None
+        match = {alias: instance.id for alias, instance in tup.items()}
+        for action_id in sentinel.action_ids or []:
+            action = actions.get(action_id)
+            parameters, binding_errors = _configured_action_parameters(
+                sentinel, action_id, tup, primary)
+            if action is None:
+                binding_errors.append(f"动作不存在: {action_id}")
+            elif action.object_type_id and (
+                    target is None or target.object_type_id != action.object_type_id):
+                binding_errors.append(
+                    f"动作 {action.display_name or action.name} 的目标类型与命中对象不一致")
+            if action is not None:
+                from app.services.formal.action_engine import prepare_action_parameters
+                parameters, parameter_errors = prepare_action_parameters(
+                    action, parameters)
+                binding_errors.extend(parameter_errors)
+            if binding_errors:
+                parameter_error_count += len(binding_errors)
+                if len(errors) < 20:
+                    errors.extend(binding_errors[:20 - len(errors)])
+            if len(planned_samples) < 200:
+                planned_samples.append({
+                    "actionId": action_id,
+                    "actionName": (
+                        action.display_name or action.name if action is not None
+                        else action_id
+                    ),
+                    "targetInstanceId": target_id,
+                    "match": match,
+                    "parameters": parameters,
+                    "validationErrors": binding_errors,
+                })
+    if metadata["candidateCapReached"]:
+        errors.append(
+            f"跨对象候选组合超过安全上限 {MAX_TUPLES}，请收窄绑定过滤条件后重试")
+    total_actions = len(matched) * len(sentinel.action_ids or [])
+    return {
+        "passed": not errors and not metadata["candidateCapReached"],
+        "releaseId": release_id,
+        "candidateCount": len(tuples),
+        "matchCount": len(matched),
+        "plannedActionCount": total_actions,
+        "plannedActions": planned_samples,
+        "plannedActionsTruncated": total_actions > len(planned_samples),
+        "parameterErrorCount": parameter_error_count,
+        "candidateCapReached": bool(metadata["candidateCapReached"]),
+        "errors": errors[:20],
+        "durationMs": int((time.time() - started) * 1000),
+        "sideEffects": "none",
+    }
 
 
 def _action_idempotency_key(sentinel: Sentinel, state: SentinelMatchState,
@@ -642,7 +744,8 @@ def _evaluate_inner(db: Session, ontology_id: str, sentinel: Sentinel,
     eval_errors: list[str] = []   # 表达式求值错误——fail-closed 但必须可见
 
     # 1) 当前命中集
-    tuples = _resolve_tuples(db, ontology_id, sentinel, eval_errors)
+    tuples = _resolve_tuples(
+        db, ontology_id, sentinel, eval_errors, release_id=release_id)
     matched = [t for t in tuples if _holds(sentinel.condition, t, eval_errors)]
     # 命中键 → 元组(同键去重,保留首个)
     current: dict[str, dict] = {}

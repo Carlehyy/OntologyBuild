@@ -197,6 +197,48 @@ TOOL_DEFS: list[dict] = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_dynamic_sentinels",
+        "description": "列出当前发布版本之上的助手动态哨兵。只返回 assistant_dynamic；发布版内置哨兵不在可管理集合中。用户询问已有动态哨兵或准备修改时先调用。",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "propose_dynamic_sentinel_change",
+        "description": "生成动态哨兵创建/更新/启用/停用/删除提案。只生成提案，不直接写库；内置哨兵永远不可操作。创建或更新 definition 会接受对象/关系/动作的 id、name 或显示名并由服务端规范化、强校验。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string", "enum": ["create", "update", "enable", "disable", "delete"]},
+                "sentinel_id": {"type": "string", "description": "update/enable/disable/delete 必填，只能来自 list_dynamic_sentinels"},
+                "definition": {
+                    "type": "object",
+                    "description": "create 必填；update 可只给要修改的字段，服务端与当前完整定义合并后校验",
+                    "properties": {
+                        "name": {"type": "string", "description": "稳定英文技术名，如 overdue_order_alert"},
+                        "displayName": {"type": "string"},
+                        "description": {"type": "string"},
+                        "bindings": {"type": "array", "items": {"type": "object", "properties": {
+                            "alias": {"type": "string"}, "objectType": {"type": "string"}, "filter": {"type": "string"}
+                        }, "required": ["alias", "objectType"]}},
+                        "links": {"type": "array", "items": {"type": "object", "properties": {
+                            "from": {"type": "string"}, "linkType": {"type": "string"}, "to": {"type": "string"}
+                        }, "required": ["from", "linkType", "to"]}},
+                        "condition": {"type": "string"},
+                        "primaryAlias": {"type": "string"},
+                        "actions": {"type": "array", "items": {"type": "string"}},
+                        "actionParameters": {"type": "object", "additionalProperties": True},
+                        "onChange": {"type": "boolean"},
+                        "onSchedule": {"type": "boolean"},
+                        "scanIntervalSeconds": {"type": "integer"},
+                        "triggerMode": {"type": "string", "enum": ["on_enter", "on_enter_leave", "run_on_all"]},
+                        "muted": {"type": "boolean"}
+                    },
+                    "additionalProperties": False
+                }
+            },
+            "required": ["operation"]
+        }
+    },
+    {
         "name": "propose_action",
         "description": "对某动作做预演（dry-run）：跑完整校验并模拟全部效果，但不落任何实际变更。这是 agent 唯一的'写'入口——预演结果会作为提案展示给用户，由用户决定是否真实执行。需要修改数据时必须用本工具，禁止假装已经执行。",
         "parameters": {
@@ -381,19 +423,33 @@ class ToolRunner:
 
     # ------------------------------------------------------------ 各工具实现
 
+    def _instance_query(self):
+        query = self.db.query(ObjectInstance).filter(
+            ObjectInstance.ontology_id == self.scope.ontology.id)
+        if self.scope.release_id is not None:
+            query = query.filter(
+                ObjectInstance.ontology_release_id == self.scope.release_id)
+        return query
+
+    def _link_query(self, *entities):
+        query = self.db.query(*(entities or (LinkInstance,))).filter(
+            LinkInstance.ontology_id == self.scope.ontology.id)
+        if self.scope.release_id is not None:
+            query = query.filter(
+                LinkInstance.ontology_release_id == self.scope.release_id)
+        return query
+
     def _instances_of(self, type_id: str) -> list[ObjectInstance]:
-        return (self.db.query(ObjectInstance)
-                .filter(ObjectInstance.ontology_id == self.scope.ontology.id,
-                        ObjectInstance.object_type_id == type_id)
+        return (self._instance_query()
+                .filter(ObjectInstance.object_type_id == type_id)
                 .order_by(ObjectInstance.created_at.desc())
                 .limit(_SCAN_CAP).all())
 
     def _stream_instances(self, type_id: str):
         """流式产出某类型的全部实例（yield_per，不materialize全表）。聚合走此口，
         以修正原先 .limit(5000) 盲截断导致的『大数据量下统计静默算错』。"""
-        return (self.db.query(ObjectInstance)
-                .filter(ObjectInstance.ontology_id == self.scope.ontology.id,
-                        ObjectInstance.object_type_id == type_id)
+        return (self._instance_query()
+                .filter(ObjectInstance.object_type_id == type_id)
                 .yield_per(2000))
 
     def _validated_filters(self, ot, filters):
@@ -460,9 +516,8 @@ class ToolRunner:
             for direction, self_col, other_col in (
                     ("out", LinkInstance.source_object_id, LinkInstance.target_object_id),
                     ("in", LinkInstance.target_object_id, LinkInstance.source_object_id)):
-                links = (self.db.query(LinkInstance)
-                         .filter(LinkInstance.ontology_id == self.scope.ontology.id,
-                                 LinkInstance.link_type_id == lt.id,
+                links = (self._link_query()
+                         .filter(LinkInstance.link_type_id == lt.id,
                                  self_col == inst.id)
                          .limit(50).all())
                 if not links:
@@ -470,7 +525,7 @@ class ToolRunner:
                 sample = []
                 for li in links[:5]:
                     other_id = li.target_object_id if direction == "out" else li.source_object_id
-                    other = self.db.query(ObjectInstance).filter(
+                    other = self._instance_query().filter(
                         ObjectInstance.id == other_id).first()
                     if other and other.object_type_id in self.scope.object_types:
                         sample.append({"instanceId": other.id, "label": _label(self.scope, other)})
@@ -489,15 +544,14 @@ class ToolRunner:
         self_col = LinkInstance.source_object_id if direction == "out" else LinkInstance.target_object_id
         limit = self._limit(args.get("limit"))
 
-        links = (self.db.query(LinkInstance)
-                 .filter(LinkInstance.ontology_id == self.scope.ontology.id,
-                         LinkInstance.link_type_id == lt.id,
+        links = (self._link_query()
+                 .filter(LinkInstance.link_type_id == lt.id,
                          self_col == inst.id)
                  .limit(limit + 1).all())
         items = []
         for li in links[:limit]:
             other_id = li.target_object_id if direction == "out" else li.source_object_id
-            other = self.db.query(ObjectInstance).filter(ObjectInstance.id == other_id).first()
+            other = self._instance_query().filter(ObjectInstance.id == other_id).first()
             if not other or other.object_type_id not in self.scope.object_types:
                 continue
             self._cite(other)
@@ -544,9 +598,9 @@ class ToolRunner:
             next_ids: list[str] = []
             next_seen: set[str] = set()
             for node_id in cur:
-                links = (self.db.query(LinkInstance.source_object_id, LinkInstance.target_object_id)
-                         .filter(LinkInstance.ontology_id == self.scope.ontology.id,
-                                 LinkInstance.link_type_id == lt.id, self_col == node_id)
+                links = (self._link_query(
+                            LinkInstance.source_object_id, LinkInstance.target_object_id)
+                         .filter(LinkInstance.link_type_id == lt.id, self_col == node_id)
                          .limit(_HOP_FANOUT_CAP).all())
                 for src_id, tgt_id in links:
                     other = tgt_id if direction == "out" else src_id
@@ -569,7 +623,7 @@ class ToolRunner:
         limit = self._limit(args.get("limit"))
         items = []
         for oid in frontier[:limit]:
-            inst = self.db.query(ObjectInstance).filter(ObjectInstance.id == oid).first()
+            inst = self._instance_query().filter(ObjectInstance.id == oid).first()
             if not inst or inst.object_type_id not in self.scope.object_types:
                 continue  # 终点仍受作用域约束
             self._cite(inst)
@@ -706,6 +760,8 @@ class ToolRunner:
         q = self.db.query(PropertyFact).filter(
             PropertyFact.ontology_id == self.scope.ontology.id,
             PropertyFact.instance_id == inst.id)
+        if self.scope.release_id is not None:
+            q = q.filter(PropertyFact.ontology_release_id == self.scope.release_id)
         if args.get("property_name"):
             q = q.filter(PropertyFact.property_name == args["property_name"])
         facts = q.order_by(*fact_order_clause()).limit(limit).all()
@@ -741,6 +797,53 @@ class ToolRunner:
             })
         return {"actions": items}
 
+    def _tool_list_dynamic_sentinels(self, args: dict) -> dict:
+        if self.scope.release is None:
+            raise ToolError("动态哨兵管理需要锁定当前正式发布版本")
+        from app.ontologies.sentinels import dynamic_service
+        rows = dynamic_service.list_dynamic(
+            self.db, self.scope.release, self.scope)
+        return {"releaseId": self.scope.release_id, "sentinels": rows}
+
+    def _tool_propose_dynamic_sentinel_change(self, args: dict) -> dict:
+        if self.scope.release is None:
+            raise ToolError("动态哨兵管理需要锁定当前正式发布版本")
+        operation = str(args.get("operation") or "").strip()
+        if operation not in {"create", "update", "enable", "disable", "delete"}:
+            raise ToolError("operation 必须是 create/update/enable/disable/delete")
+        from fastapi import HTTPException
+        from app.ontologies.sentinels import dynamic_service
+        sentinel_id = str(args.get("sentinel_id") or "").strip() or None
+        definition = args.get("definition")
+        expected_revision = None
+        try:
+            if operation != "create":
+                row = dynamic_service.dynamic_row(
+                    self.db, self.scope.ontology.id, sentinel_id or "")
+                expected_revision = row.definition_revision
+                if operation == "update":
+                    patch = definition if isinstance(definition, dict) else {}
+                    definition = {
+                        **dynamic_service.definition_from_row(row),
+                        **patch,
+                    }
+            proposal = dynamic_service.proposal(
+                self.db, self.scope.release, self.scope, operation,
+                sentinel_id=sentinel_id,
+                definition=definition if isinstance(definition, dict) else None,
+                expected_revision=expected_revision,
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                raise ToolError(str(detail.get("message") or detail)) from exc
+            raise ToolError(str(detail)) from exc
+        self.proposals.append(proposal)
+        return {
+            "proposal": proposal,
+            "note": "已生成动态哨兵变更提案，等待用户在界面确认；尚未修改任何哨兵。",
+        }
+
     def _tool_propose_action(self, args: dict) -> dict:
         if not self.scope.profile.allow_action_proposals:
             raise ToolError("当前授权边界禁止提出动作提案（allow_action_proposals=false）")
@@ -759,7 +862,9 @@ class ToolRunner:
         log = execute_action(self.db, self.scope.ontology.id, body)
 
         proposal = {
+            "kind": "action",
             "proposalId": f"prop-{int(time.time() * 1000)}-{len(self.proposals)}",
+            "releaseId": self.scope.release_id,
             "actionId": action.id,
             "actionName": action.display_name,
             "parameters": args.get("parameters") or {},

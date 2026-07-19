@@ -25,6 +25,7 @@ export interface GraphAssistantSignal {
 
 interface Props {
   oid: string
+  releaseId: string
   assistantSignal?: GraphAssistantSignal | null
   onAskAssistant: (question: string) => void
 }
@@ -142,7 +143,7 @@ function parseProposedValue(raw: string, propertyType?: string) {
   return raw
 }
 
-export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssistant }: Props) {
+export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal, onAskAssistant }: Props) {
   const graphHostRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<Core | null>(null)
   const [depth, setDepth] = useState<1 | 2 | 3>(2)
@@ -186,6 +187,7 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
         query: nextQuery || undefined,
         focusInstanceId: nextDepth === 3 ? focusInstanceId : undefined,
         limitPerType: 20,
+        releaseId,
       })
       setGraph(result)
     } catch (requestError) {
@@ -193,7 +195,7 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
     } finally {
       setLoading(false)
     }
-  }, [depth, oid, query])
+  }, [depth, oid, query, releaseId])
 
   useEffect(() => {
     setDepth(2)
@@ -205,8 +207,8 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
     setPathResult(null)
     setImpactResult(null)
     setCitedIds([])
-    if (oid) void loadGraph(2, '')
-  }, [oid])
+    if (oid && releaseId) void loadGraph(2, '')
+  }, [oid, releaseId])
 
   const selectedNode = useMemo(
     () => graph.nodes.find(node => node.id === selectedNodeId)
@@ -223,12 +225,12 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
     }
     let active = true
     setDetailLoading(true)
-    agentApi.graphInstance(oid, selectedNode.entityId)
+    agentApi.graphInstance(oid, selectedNode.entityId, releaseId)
       .then(result => { if (active) setDetail(result) })
       .catch(requestError => { if (active) setError(errorMessage(requestError)) })
       .finally(() => { if (active) setDetailLoading(false) })
     return () => { active = false }
-  }, [oid, selectedNode])
+  }, [oid, releaseId, selectedNode])
 
   useEffect(() => {
     if (!assistantSignal) return
@@ -260,12 +262,12 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
     setQuery(missingCitation.instanceId)
     setQueryInput(missingCitation.label)
     setLoading(true)
-    agentApi.graph(oid, { depth: 2, query: missingCitation.instanceId, limitPerType: 20 })
+    agentApi.graph(oid, { depth: 2, query: missingCitation.instanceId, limitPerType: 20, releaseId })
       .then(nextGraph => { if (active) setGraph(nextGraph) })
       .catch(requestError => { if (active) setError(errorMessage(requestError)) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [assistantSignal, oid])
+  }, [assistantSignal, oid, releaseId])
 
   const overlayNodes = useMemo(
     () => pathResult?.nodes || impactResult?.nodes || [],
@@ -590,6 +592,7 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
         direction,
         maxDepth: 6,
         maxPaths: 5,
+        releaseId,
       })
       setPathResult(result)
       setImpactResult(null)
@@ -619,6 +622,7 @@ export default function InstanceKnowledgeGraph({ oid, assistantSignal, onAskAssi
         proposedValue: parseProposedValue(proposedValue.trim(), selectedPropertyDefinition?.type),
         direction,
         maxDepth: impactDepth,
+        releaseId,
       })
       setImpactResult(result)
       setPathResult(null)

@@ -35,6 +35,8 @@ from app.ontologies.agent_runtime.graph_service import (
     get_instance_detail,
 )
 from app.ontologies.agent_runtime import reporting
+from app.ontologies.access import require_ontology_access
+from app.ontologies.sentinels import dynamic_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -86,14 +88,153 @@ def update_profile(ontology_id: str, body: S.AgentProfileUpdate,
 
 
 @router.get("/{ontology_id}/agent/capabilities")
-def get_capabilities(ontology_id: str, db: Session = Depends(get_db),
+def get_capabilities(ontology_id: str, release_id: str | None = None,
+                     db: Session = Depends(get_db),
                      _=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id)
+        _, _, scope = build_scope(db, ontology_id, release_id=release_id)
     except ToolError as e:
         raise HTTPException(404, str(e))
-    return _ok({**scope.summary(), "skillCard": scope.skill_card()})
+    return _ok({**scope.summary(), "skillCard": scope.skill_card(),
+                "releaseId": scope.release_id,
+                "releaseVersion": scope.release.version if scope.release else None})
+
+
+# ---------------------------------------------------------------- 动态哨兵叠加层
+
+
+def _dynamic_context_scope(db: Session, ontology_id: str, release_id: str):
+    context = dynamic_service.require_published_release(
+        db, ontology_id, release_id)
+    try:
+        _, _, scope = build_scope(db, ontology_id, release_id=context.id)
+    except ToolError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return context, scope
+
+
+@router.get("/{ontology_id}/agent/dynamic-sentinels")
+def list_dynamic_sentinels(
+    ontology_id: str,
+    release_id: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=False)
+    context, scope = _dynamic_context_scope(db, ontology_id, release_id)
+    return _ok(dynamic_service.list_dynamic(db, context, scope))
+
+
+@router.post("/{ontology_id}/agent/dynamic-sentinels", status_code=201)
+def create_dynamic_sentinel(
+    ontology_id: str,
+    body: S.DynamicSentinelCreateRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=True)
+    context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
+    row = dynamic_service.create_dynamic(
+        db, context, scope,
+        body.definition.model_dump(mode="json", by_alias=True),
+        str(getattr(current_user, "id", "") or "") or None,
+    )
+    return _ok(dynamic_service.serialize_dynamic(row))
+
+
+@router.post("/{ontology_id}/agent/dynamic-sentinels/execute-proposal")
+def execute_dynamic_sentinel_proposal(
+    ontology_id: str,
+    body: S.DynamicSentinelProposalCommand,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=True)
+    context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
+    definition = (
+        body.definition.model_dump(mode="json", by_alias=True)
+        if body.definition is not None else None
+    )
+    if body.operation == "create":
+        row = dynamic_service.create_dynamic(
+            db, context, scope, definition or {},
+            str(getattr(current_user, "id", "") or "") or None)
+        return _ok(dynamic_service.serialize_dynamic(row))
+    if body.operation == "update":
+        row = dynamic_service.update_dynamic(
+            db, context, scope, body.sentinel_id or "",
+            body.expected_revision or 0, definition or {})
+        return _ok(dynamic_service.serialize_dynamic(row))
+    if body.operation in {"enable", "disable"}:
+        row = dynamic_service.set_enabled(
+            db, context, scope, body.sentinel_id or "",
+            body.expected_revision or 0, body.operation == "enable")
+        return _ok(dynamic_service.serialize_dynamic(row))
+    dynamic_service.retire_dynamic(
+        db, context, body.sentinel_id or "", body.expected_revision)
+    return _ok({"status": "retired", "id": body.sentinel_id})
+
+
+@router.put("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}")
+def update_dynamic_sentinel(
+    ontology_id: str,
+    sentinel_id: str,
+    body: S.DynamicSentinelUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=True)
+    context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
+    row = dynamic_service.update_dynamic(
+        db, context, scope, sentinel_id, body.expected_revision,
+        body.definition.model_dump(mode="json", by_alias=True))
+    return _ok(dynamic_service.serialize_dynamic(row))
+
+
+@router.post("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}/trial")
+def trial_dynamic_sentinel(
+    ontology_id: str,
+    sentinel_id: str,
+    body: S.DynamicSentinelReleaseRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=True)
+    context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
+    row = dynamic_service.run_trial(db, context, scope, sentinel_id)
+    return _ok(dynamic_service.serialize_dynamic(row))
+
+
+@router.post("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}/enabled")
+def toggle_dynamic_sentinel(
+    ontology_id: str,
+    sentinel_id: str,
+    body: S.DynamicSentinelToggleRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=True)
+    context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
+    row = dynamic_service.set_enabled(
+        db, context, scope, sentinel_id, body.expected_revision, body.enabled)
+    return _ok(dynamic_service.serialize_dynamic(row))
+
+
+@router.delete("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}")
+def delete_dynamic_sentinel(
+    ontology_id: str,
+    sentinel_id: str,
+    release_id: str = Query(...),
+    expected_revision: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    require_ontology_access(db, ontology_id, current_user, write=True)
+    context, _ = _dynamic_context_scope(db, ontology_id, release_id)
+    dynamic_service.retire_dynamic(
+        db, context, sentinel_id, expected_revision)
+    return _ok({"status": "retired", "id": sentinel_id})
 
 
 @router.get("/{ontology_id}/agent/graph")
@@ -104,13 +245,14 @@ def get_agent_graph(
     object_type: str | None = Query(default=None, max_length=200),
     focus_instance_id: str | None = Query(default=None, max_length=200),
     limit_per_type: int = Query(default=20, ge=1, le=50),
+    release_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
     """授权范围内的渐进式数据图谱：L1 类型、L2 实例、L3 聚焦属性。"""
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id)
+        _, _, scope = build_scope(db, ontology_id, release_id=release_id)
         return _ok(build_workspace_graph(
             scope,
             depth=depth,
@@ -127,12 +269,13 @@ def get_agent_graph(
 def get_agent_graph_instance(
     ontology_id: str,
     instance_id: str,
+    release_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id)
+        _, _, scope = build_scope(db, ontology_id, release_id=release_id)
         return _ok(get_instance_detail(scope, instance_id))
     except ToolError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -147,7 +290,8 @@ def query_agent_graph_paths(
 ):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id)
+        _, _, scope = build_scope(
+            db, ontology_id, release_id=body.release_id)
         return _ok(find_paths(
             scope,
             body.source_instance_id,
@@ -169,7 +313,8 @@ def query_agent_graph_impact(
 ):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id)
+        _, _, scope = build_scope(
+            db, ontology_id, release_id=body.release_id)
         return _ok(analyze_change_impact(
             scope,
             body.instance_id,
@@ -447,7 +592,8 @@ def chat(ontology_id: str, body: S.ChatRequest,
     if not body.stream:
         events = list(run_agent_turn(db, ontology_id, current_user, body.message,
                                      conversation_id=body.conversation_id,
-                                     model_id=body.model_id))
+                                     model_id=body.model_id,
+                                     release_id=body.release_id))
         answer = next((e for e in events if e["type"] == "answer"), None)
         error = next((e for e in events if e["type"] == "error"), None)
         meta = next((e for e in events if e["type"] == "meta"), {})
@@ -473,7 +619,8 @@ def chat(ontology_id: str, body: S.ChatRequest,
         try:
             for event in run_agent_turn(session, ontology_id, user, body.message,
                                         conversation_id=body.conversation_id,
-                                        model_id=body.model_id):
+                                        model_id=body.model_id,
+                                        release_id=body.release_id):
                 yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
         finally:
             session.close()
@@ -485,13 +632,15 @@ def chat(ontology_id: str, body: S.ChatRequest,
 
 @router.get("/{ontology_id}/agent/conversations")
 def list_conversations(ontology_id: str, db: Session = Depends(get_db),
+                       release_id: str | None = Query(default=None),
                        current_user=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
-    rows = (db.query(AgentConversation)
-            .filter(AgentConversation.ontology_id == ontology_id,
-                    AgentConversation.user_id == getattr(current_user, "id", None))
-            .order_by(AgentConversation.updated_at.desc())
-            .limit(50).all())
+    query = db.query(AgentConversation).filter(
+        AgentConversation.ontology_id == ontology_id,
+        AgentConversation.user_id == getattr(current_user, "id", None))
+    if release_id is not None:
+        query = query.filter(AgentConversation.ontology_release_id == release_id)
+    rows = query.order_by(AgentConversation.updated_at.desc()).limit(50).all()
     return _ok([S.ConversationOut.model_validate(c).model_dump(by_alias=True) for c in rows])
 
 
@@ -544,10 +693,16 @@ def execute_proposal(ontology_id: str, body: S.ExecuteProposalRequest,
     """
     _require_ontology(db, ontology_id)
     try:
-        _, profile, scope = build_scope(db, ontology_id)
+        _, profile, scope = build_scope(
+            db, ontology_id, release_id=body.release_id)
         if not profile.enabled:
             raise ToolError("该本体的智能体已停用")
         action = scope.require_action(body.action_id)
+        if body.target_instance_id:
+            from app.models.ontology_formal import ObjectInstance
+            target = db.query(ObjectInstance).filter(
+                ObjectInstance.id == body.target_instance_id).first()
+            scope.visible_instance(target)
     except ToolError as e:
         raise HTTPException(403, str(e))
 

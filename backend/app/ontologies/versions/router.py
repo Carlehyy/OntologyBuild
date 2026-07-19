@@ -661,7 +661,10 @@ def _release_errors(db: Session, ontology_id: str) -> list[dict]:
                 item_id=function.id or "", name=function.display_name or function.name,
                 field="language"))
 
-    sentinels = q(Sentinel)
+    sentinels = db.query(Sentinel).filter(
+        Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == "release_builtin",
+    ).all()
     errors.extend(_validate_sentinels(sentinels, object_types, link_types, actions))
 
     mappings = q(OntologyMapping)
@@ -761,7 +764,10 @@ def _snapshot_formal(db: Session, ontology_id: str) -> dict:
         "linkTypes": [FS.LinkTypeOut.model_validate(x).model_dump(mode="json", by_alias=True) for x in q(FoLinkType)],
         "actions": [FS.ActionTypeOut.model_validate(x).model_dump(mode="json", by_alias=True) for x in q(FoActionType)],
         "functions": [FS.FunctionOut.model_validate(x).model_dump(mode="json", by_alias=True) for x in q(FoFunction)],
-        "sentinels": [_snapshot_sentinel(x) for x in q(Sentinel)],
+        "sentinels": [_snapshot_sentinel(x) for x in db.query(Sentinel).filter(
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == "release_builtin",
+        ).all()],
         "mappings": [_snapshot_mapping(x) for x in q(OntologyMapping)],
         "linkMappings": [_snapshot_link_mapping(x) for x in q(OntologyLinkMapping)],
     }
@@ -1669,7 +1675,8 @@ def promote_draft(
                     fields[f"__applied_{role}_version_id__"] = pinned[str(dataset_id)].get("versionId")
             mapping.field_mapping = fields
         for sentinel in db.query(Sentinel).filter(
-                Sentinel.ontology_id == ontology_id).all():
+                Sentinel.ontology_id == ontology_id,
+                Sentinel.origin == "release_builtin").all():
             sentinel.status = "published"
 
         for item in old_links:
@@ -1871,7 +1878,8 @@ def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
     # Sentinel 没有独立 publish 端点：本体发布是它的唯一上线边界。
     # 先提升 enabled 定义，再做快照，保证版本记录与实际运行状态一致。
     for sentinel in db.query(Sentinel).filter(
-            Sentinel.ontology_id == ontology_id).all():
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == "release_builtin").all():
         sentinel.status = "published"
     db.flush()
     formal_snapshot = _snapshot_formal(db, ontology_id)
@@ -1989,7 +1997,8 @@ def unpublish_ontology(ontology_id: str, db: Session = Depends(get_db),
         })
     project.status = "draft"
     for sentinel in db.query(Sentinel).filter(
-            Sentinel.ontology_id == ontology_id).all():
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == "release_builtin").all():
         sentinel.status = "draft"
     db.add(AuditLog(
         id=str(uuid.uuid4()),
@@ -2036,11 +2045,18 @@ def _restore_formal_snapshot(db: Session, ontology_id: str, snap: dict) -> dict:
 
     # 旧版快照没有下列 key 时保留当前定义，不把“未快照”误解为空集合。
     if "sentinels" in snap:
+        builtin_ids = [item[0] for item in db.query(Sentinel.id).filter(
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == "release_builtin",
+        ).all()]
         db.query(SentinelMatchState).filter(
             SentinelMatchState.ontology_id == ontology_id,
+            SentinelMatchState.sentinel_id.in_(builtin_ids or [""]),
         ).delete(synchronize_session=False)
-        db.query(Sentinel).filter(Sentinel.ontology_id == ontology_id).delete(
-            synchronize_session=False)
+        db.query(Sentinel).filter(
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == "release_builtin",
+        ).delete(synchronize_session=False)
         for item in snap.get("sentinels") or []:
             db.add(Sentinel(
                 id=item.get("id") or str(uuid.uuid4()),
@@ -2063,6 +2079,7 @@ def _restore_formal_snapshot(db: Session, ontology_id: str, snap: dict) -> dict:
                 muted=bool(item.get("muted", False)),
                 enabled=bool(item.get("enabled", True)),
                 status=item.get("status") or "draft",
+                origin="release_builtin",
                 source=_json_safe(item.get("source")),
             ))
 
@@ -2243,7 +2260,8 @@ def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(ge
         if project is not None:
             project.status = "draft"
         for sentinel in db.query(Sentinel).filter(
-                Sentinel.ontology_id == ontology_id).all():
+                Sentinel.ontology_id == ontology_id,
+                Sentinel.origin == "release_builtin").all():
             sentinel.status = "draft"
         db.commit()
         raise HTTPException(503, detail={

@@ -19,6 +19,7 @@ from app.models.ontology import OntologyProject
 from app.ontologies.release_context import current_release_context
 from app.services.sentinel.engine import run_manual
 from app.ontologies.access import ontology_access_guard
+from app.ontologies.sentinels.dynamic_service import ORIGIN_BUILTIN
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
@@ -97,6 +98,7 @@ def _dict(s: Sentinel) -> dict[str, Any]:
         "triggerMode": s.trigger_mode, "muted": s.muted,
         "lastScannedAt": s.last_scanned_at.isoformat() if s.last_scanned_at else None,
         "enabled": s.enabled, "status": s.status,
+        "origin": s.origin,
         "source": s.source,
         "createdAt": s.created_at.isoformat() if s.created_at else None,
         "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
@@ -135,6 +137,7 @@ def _released_dict(ontology_id: str, raw: dict, live: Sentinel | None) -> dict[s
         ),
         "enabled": bool(raw.get("enabled", True)),
         "status": "published",
+        "origin": ORIGIN_BUILTIN,
         "source": raw.get("source"),
         "createdAt": None,
         "updatedAt": None,
@@ -151,6 +154,7 @@ def list_sentinels(ontology_id: str, release_id: Optional[str] = None,
         ids = {str(item["id"]) for item in released}
         live_by_id = {item.id: item for item in db.query(Sentinel).filter(
             Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == ORIGIN_BUILTIN,
             Sentinel.id.in_(ids),
         ).all()} if ids else {}
         return {"data": [
@@ -158,7 +162,9 @@ def list_sentinels(ontology_id: str, release_id: Optional[str] = None,
             for item in released
         ]}
     items = db.query(Sentinel).filter(
-        Sentinel.ontology_id == ontology_id).order_by(Sentinel.created_at.desc()).all()
+        Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == ORIGIN_BUILTIN,
+    ).order_by(Sentinel.created_at.desc()).all()
     return {"data": [_dict(s) for s in items]}
 
 
@@ -168,6 +174,7 @@ def create_sentinel(ontology_id: str, body: SentinelIn,
     _require_draft(db, ontology_id)
     s = Sentinel(
         ontology_id=ontology_id,
+        origin=ORIGIN_BUILTIN,
         **body.model_dump(exclude={"status"}),
         status="draft",
     )
@@ -242,7 +249,8 @@ def list_notifications(ontology_id: str, limit: int = 50,
 def get_sentinel(ontology_id: str, sentinel_id: str,
                  db: Session = Depends(get_db), _=Depends(get_current_user)):
     s = db.query(Sentinel).filter(
-        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
+        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == ORIGIN_BUILTIN).first()
     if not s:
         raise HTTPException(404, "Sentinel not found")
     return {"data": _dict(s)}
@@ -252,7 +260,8 @@ def get_sentinel(ontology_id: str, sentinel_id: str,
 def update_sentinel(ontology_id: str, sentinel_id: str, body: SentinelUpdate,
                     db: Session = Depends(get_db), _=Depends(get_current_user)):
     s = db.query(Sentinel).filter(
-        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
+        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == ORIGIN_BUILTIN).first()
     if not s:
         raise HTTPException(404, "Sentinel not found")
     update = body.model_dump(exclude_unset=True)
@@ -282,7 +291,8 @@ def delete_sentinel(ontology_id: str, sentinel_id: str,
                     db: Session = Depends(get_db), _=Depends(get_current_user)):
     _require_draft(db, ontology_id)
     s = db.query(Sentinel).filter(
-        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
+        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == ORIGIN_BUILTIN).first()
     if not s:
         raise HTTPException(404, "Sentinel not found")
     # 命中状态一并清理：残留 match_state 会让重建同名哨兵时边沿差分失真
@@ -295,7 +305,8 @@ def delete_sentinel(ontology_id: str, sentinel_id: str,
 def toggle_sentinel(ontology_id: str, sentinel_id: str,
                     db: Session = Depends(get_db), _=Depends(get_current_user)):
     s = db.query(Sentinel).filter(
-        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id).first()
+        Sentinel.id == sentinel_id, Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == ORIGIN_BUILTIN).first()
     if not s:
         raise HTTPException(404, "Sentinel not found")
     project = _project(db, ontology_id, for_update=True)
