@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import {
   Bot, Check, ChevronRight, CircleAlert, Copy, FileCode2, FileText, Folder, Gauge,
   History, List, Loader2, MessageSquare, Pencil, PlugZap, Plus,
-  Move, Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
+  Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
   Wrench, X,
 } from 'lucide-react'
 
@@ -253,173 +253,70 @@ const usageNumber = (value: unknown) => {
   return Number.isFinite(number) && number >= 0 ? number : 0
 }
 
-const formatTokenCount = (value: number) => value >= 1000
-  ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
-  : String(Math.round(value))
+const compactTokenCount = (value: number, divisor: number, suffix: string) => {
+  const scaled = value / divisor
+  const digits = scaled >= 10 ? 0 : 1
+  return `${scaled.toFixed(digits).replace(/\.0$/, '')}${suffix}`
+}
+
+const formatTokenCount = (value: number) => value >= 1_000_000
+  ? compactTokenCount(value, 1_000_000, 'M')
+  : value >= 1000
+    ? compactTokenCount(value, 1000, 'k')
+    : String(Math.round(value))
 
 function ContextUsage({ messages, model }: { messages: SuperMessage[]; model?: ModelConfig }) {
-  const panelRef = useRef<HTMLElement>(null)
-  const dragRef = useRef<{
-    pointerId: number
-    clientX: number
-    clientY: number
-    x: number
-    y: number
-  } | null>(null)
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
-  const [dragging, setDragging] = useState(false)
-
-  const clampPosition = useCallback((next: { x: number; y: number }) => {
-    const panel = panelRef.current
-    const container = panel?.offsetParent as HTMLElement | null
-    if (!panel || !container) return next
-    const padding = 12
-    const maximumX = Math.max(padding, container.clientWidth - panel.offsetWidth - padding)
-    const maximumY = Math.max(padding, container.clientHeight - panel.offsetHeight - padding)
-    return {
-      x: Math.min(maximumX, Math.max(padding, next.x)),
-      y: Math.min(maximumY, Math.max(padding, next.y)),
-    }
-  }, [])
-
-  const currentPosition = useCallback(() => {
-    const panel = panelRef.current
-    const container = panel?.offsetParent as HTMLElement | null
-    if (!panel || !container) return { x: 12, y: 12 }
-    const panelRect = panel.getBoundingClientRect()
-    const containerRect = container.getBoundingClientRect()
-    return clampPosition({
-      x: panelRect.left - containerRect.left,
-      y: panelRect.top - containerRect.top,
-    })
-  }, [clampPosition])
-
-  useEffect(() => {
-    const panel = panelRef.current
-    const container = panel?.offsetParent as HTMLElement | null
-    if (!panel || !container || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => {
-      setPosition(current => current ? clampPosition(current) : current)
-    })
-    observer.observe(panel)
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [clampPosition])
-
-  const startDragging = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    const start = currentPosition()
-    setPosition(start)
-    setDragging(true)
-    dragRef.current = {
-      pointerId: event.pointerId,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      x: start.x,
-      y: start.y,
-    }
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  const moveDragging = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    setPosition(clampPosition({
-      x: drag.x + event.clientX - drag.clientX,
-      y: drag.y + event.clientY - drag.clientY,
-    }))
-  }
-
-  const stopDragging = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (dragRef.current?.pointerId !== event.pointerId) return
-    dragRef.current = null
-    setDragging(false)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-  }
-
-  const moveWithKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'Home') {
-      event.preventDefault()
-      setPosition(null)
-      return
-    }
-    const directions: Record<string, { x: number; y: number }> = {
-      ArrowLeft: { x: -12, y: 0 },
-      ArrowRight: { x: 12, y: 0 },
-      ArrowUp: { x: 0, y: -12 },
-      ArrowDown: { x: 0, y: 12 },
-    }
-    const direction = directions[event.key]
-    if (!direction) return
-    event.preventDefault()
-    const current = position || currentPosition()
-    setPosition(clampPosition({ x: current.x + direction.x, y: current.y + direction.y }))
-  }
-
   const lastAssistant = [...messages].reverse().find(message => (
     message.role === 'assistant' && message.status === 'complete' && Object.keys(message.token_usage || {}).length > 0
   ))
   const usage = lastAssistant?.token_usage || {}
   const configuredLimit = usageNumber(model?.options?.max_context_tokens)
   const limit = usageNumber(usage.contextLimit) || configuredLimit || 64_000
-  const hasSnapshot = usageNumber(usage.contextTokens) > 0
+  const contextTokens = Number(usage.contextTokens)
+  const hasSnapshot = Object.prototype.hasOwnProperty.call(usage, 'contextTokens')
+    && Number.isFinite(contextTokens)
+    && contextTokens >= 0
   const used = hasSnapshot ? usageNumber(usage.contextTokens) : usageNumber(usage.inputTokens)
-  const percentage = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0
+  const percentage = limit > 0 ? Math.min(100, (used / limit) * 100) : 0
+  const percentageLabel = percentage === 0
+    ? '0%'
+    : percentage < 0.05
+      ? '<0.1%'
+      : percentage < 10
+        ? `${percentage.toFixed(1)}%`
+        : `${Math.round(percentage)}%`
   const tone = percentage >= 85
     ? 'bg-rose-500'
     : percentage >= 65
       ? 'bg-amber-500'
       : 'bg-teal-600'
+  const sourceLabel = hasSnapshot ? '上下文' : used ? '上下文估算' : '上下文'
+  const sourceDescription = hasSnapshot
+    ? '最近一次模型实际输入上下文'
+    : used
+      ? '旧会话仅记录累计输入；单轮调用通常准确，多轮工具调用可能偏大'
+      : '发送消息后更新'
 
   return (
     <aside
-      ref={panelRef}
-      aria-label={`当前上下文占比 ${percentage}%`}
-      style={position ? {
-        left: 0,
-        top: 0,
-        right: 'auto',
-        bottom: 'auto',
-        transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
-      } : undefined}
-      className={`absolute bottom-3 right-3 z-10 w-48 rounded-xl border bg-[color:var(--color-bg-elevated)]/95 p-3 backdrop-blur transition-[border-color,box-shadow] duration-200 ${dragging
-        ? 'border-teal-300 shadow-[0_20px_44px_rgba(15,118,110,0.18)] ring-2 ring-teal-100'
-        : 'border-[var(--color-border)] shadow-[0_14px_34px_rgba(15,23,42,0.12)]'}`}
+      aria-label={`${sourceLabel}占比 ${percentageLabel}，${formatTokenCount(used)} / ${formatTokenCount(limit)}`}
+      title={sourceDescription}
+      className="flex h-9 w-40 shrink-0 flex-col justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 xl:w-48"
     >
-      <button
-        type="button"
-        onPointerDown={startDragging}
-        onPointerMove={moveDragging}
-        onPointerUp={stopDragging}
-        onPointerCancel={stopDragging}
-        onLostPointerCapture={() => { dragRef.current = null; setDragging(false) }}
-        onKeyDown={moveWithKeyboard}
-        onDoubleClick={() => setPosition(null)}
-        aria-label="移动当前上下文窗口；方向键微调，Home 键或双击归位"
-        title="拖动调整位置 · 双击归位"
-        className={`flex w-full touch-none select-none items-center gap-2 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-      >
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
-          <Gauge size={14} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-medium text-[var(--color-text-tertiary)]">当前上下文</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-[var(--color-text-primary)]">{percentage}%</p>
-        </div>
-        <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+      <div className="flex min-w-0 items-center gap-1.5 text-[10px] leading-none">
+        <Gauge size={11} className="shrink-0 text-teal-700" aria-hidden="true" />
+        <span className="truncate font-medium text-[var(--color-text-secondary)]">{sourceLabel}</span>
+        <span className="ml-auto shrink-0 font-semibold tabular-nums text-[var(--color-text-primary)]">{percentageLabel}</span>
+        <span className="hidden shrink-0 tabular-nums text-[var(--color-text-tertiary)] xl:inline">
           {formatTokenCount(used)} / {formatTokenCount(limit)}
         </span>
-        <Move size={12} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
-      </button>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
-        <div className={`h-full rounded-full transition-[width] duration-300 ${tone}`} style={{ width: `${percentage}%` }} />
       </div>
-      <p className="mt-2 text-[9px] leading-4 text-[var(--color-text-tertiary)]">
-        {hasSnapshot ? '最近一次模型输入' : used ? '历史会话按累计输入估算' : '发送消息后更新'}
-      </p>
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
+        <div
+          className={`h-full rounded-full transition-[width] duration-300 ${tone}`}
+          style={{ width: used > 0 ? `max(2px, ${percentage}%)` : '0%' }}
+        />
+      </div>
     </aside>
   )
 }
@@ -1231,6 +1128,7 @@ export default function SuperAssistantPage() {
               </button>
             )}
           </div>
+          {!loading && selectedConversation && <ContextUsage messages={messages} model={selectedModel} />}
           <label className="sr-only" htmlFor="super-assistant-model">会话模型</label>
           <select id="super-assistant-model" value={selectedModelId} onChange={event => void changeModel(event.target.value)} disabled={!selectedId || running}
             className="h-9 w-48 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60 sm:w-64 xl:w-80">
@@ -1301,7 +1199,6 @@ export default function SuperAssistantPage() {
               </div>
             </div>
           )}
-          {!loading && selectedConversation && <ContextUsage messages={messages} model={selectedModel} />}
         </main>
 
         {hasMessages && (
