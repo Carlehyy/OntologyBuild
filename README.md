@@ -44,23 +44,44 @@ docker compose -f docker-compose.v2.yml up --build
 
 ### 方式二 · 本地手动启动(最小依赖,无外部服务)
 
-**前置要求:** Python 3.11+（推荐 3.12）、Node.js 20.19+ 或 22.12+。
-较旧的运行时无法安装或运行当前锁定依赖版本。
+**前置要求:** Python 3.12、Node.js 20.19+ 或 22.13+。推荐使用
+[uv](https://docs.astral.sh/uv/) 创建 Python 环境,它会在本机缺少 Python 3.12 时自动准备兼容版本。
+
+> `backend/pyproject.toml` 与 `backend/uv.lock` 当前锁定 Python 3.12.x。不要使用系统自带的
+> Python 3.9/3.10。前端使用 Vite 8 与 ESLint 10,Node.js 18 已不再兼容。
 
 ```bash
 # 后端
 cd backend
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv venv --python 3.12 .venv
+source .venv/bin/activate                            # Windows: .venv\Scripts\activate
+uv pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000           # 开发态自动建表
 
 # 前端(另开一个终端)
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
 打开 [http://localhost:5173](http://localhost:5173),默认账号 `admin / admin123`。
+
+后端存活检查:
+
+```bash
+curl http://localhost:8000/health/live
+# 预期返回: {"status":"ok"}
+```
+
+手动开发模式无需复制根目录的 `.env.example`,也无需预先执行 `alembic upgrade head`。后端默认使用
+`/tmp/ontoprompt.db` 并在启动时自动建表。根目录的 `.env.example` 主要供 Docker Compose 使用,
+其中 `db`、`redis`、`minio` 等服务名不能直接用于本机进程;如需自定义本地配置,请在 `backend/.env`
+中使用 `localhost` 地址或显式设置 SQLite `DATABASE_URL`。
+
+启动日志中出现 `Neo4j unavailable` / `Neo4j 不可用，跳过索引初始化` 属于预期降级,不会阻止
+核心平台使用。Neo4j、MinIO、ChromaDB 与 Redis 未启动时,系统分别回退到 SQLite 图谱、本地文件存储、
+SQL 搜索与同步任务执行。需要数据管家的实时浏览器时,仍须额外准备开放 CDP 的 Chromium 并配置
+`STEWARD_BROWSER_CDP_URL`;需要 LLM 能力时,还须配置对应提供商的 API Key。
 
 > 无 Docker 的源码部署 + 公网隧道预览,见 [DEPLOY.md](./DEPLOY.md)。
 
