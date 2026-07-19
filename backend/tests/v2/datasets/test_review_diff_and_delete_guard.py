@@ -1,7 +1,7 @@
-"""审批三视角 + 删除安全加固。
+"""审批三视角 + 完整删除安全加固。
 
 对应本轮需求：
-1. 存在任何审核证据的成品数据集不可物理删除
+1. 成品数据集可完整删除，审核记录与行级修改随数据集一起清理
 2. 审批可看三视角：变化量 / 上一版全量 / 本次全量
 3. 删除权限收敛：人工删除限管理员；成品/人工删除被本体映射引用时拦截
 """
@@ -411,19 +411,19 @@ def test_review_session_approve_uses_same_mapping_dispatch(api, auth_headers, db
     assert called == [review_id]
 
 
-# ── 禁删已审批 ─────────────────────────────────────────────────
-def test_approved_curated_cannot_be_deleted(api, auth_headers, db, admin_user):
+# ── 完整删除已审批数据集 ───────────────────────────────────────
+def test_approved_curated_can_be_fully_deleted(api, auth_headers, db, admin_user):
     ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "a"}]])
     # 审批通过
     r = api.post(f"/api/v2/curated/{ds_id}/review", params={"action": "approve"}, headers=auth_headers)
     assert r.status_code == 200, r.text
-    # 删除应被硬拦截
+    review_id = r.json().get("data", r.json())["review_id"]
+
     r = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
-    assert r.status_code == 409, r.text
-    assert "review_evidence_locked" in r.text
-    # force 也不能绕
-    r = api.delete(f"/api/v2/curated/{ds_id}?force=true", headers=auth_headers)
-    assert r.status_code == 409, r.text
+    assert r.status_code == 204, r.text
+    assert db.query(CuratedReview).filter(CuratedReview.id == review_id).count() == 0
+    assert db.query(DatasetVersion).filter(DatasetVersion.dataset_id == ds_id).count() == 0
+    assert db.query(Dataset).filter(Dataset.id == ds_id).count() == 0
 
 
 def test_new_version_does_not_inherit_old_approval(api, auth_headers, db):
@@ -473,7 +473,7 @@ def test_pending_curated_can_be_deleted(api, auth_headers, db):
     assert r.status_code == 204, r.text
 
 
-def test_pending_review_and_edits_block_dataset_physical_deletion(api, auth_headers, db):
+def test_pending_review_and_edits_are_removed_with_dataset(api, auth_headers, db):
     from app.models.v2.curated import CuratedReview, CuratedRowEdit
 
     ds_id = _make_curated_with_versions(
@@ -486,13 +486,12 @@ def test_pending_review_and_edits_block_dataset_physical_deletion(api, auth_head
     }])
 
     response = api.delete(f"/api/v2/curated/{ds_id}", headers=auth_headers)
-    assert response.status_code == 409, response.text
-    assert "review_evidence_locked" in response.text
-    assert db.query(CuratedReview).filter(CuratedReview.id == review_id).one()
-    assert db.query(CuratedRowEdit).filter(CuratedRowEdit.review_id == review_id).one()
-    assert db.query(Dataset).filter(Dataset.id == ds_id).one()
+    assert response.status_code == 204, response.text
+    assert db.query(CuratedRowEdit).filter(CuratedRowEdit.review_id == review_id).count() == 0
+    assert db.query(CuratedReview).filter(CuratedReview.id == review_id).count() == 0
+    assert db.query(Dataset).filter(Dataset.id == ds_id).count() == 0
     assert db.query(DatasetVersion).filter(
-        DatasetVersion.dataset_id == ds_id).count() == 1
+        DatasetVersion.dataset_id == ds_id).count() == 0
 
 
 # ── 依赖检查：被本体映射引用时拦截 ─────────────────────────────

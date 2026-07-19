@@ -162,10 +162,10 @@ def list_curated(
 @router.delete("/{dataset_id}", status_code=204)
 def delete_curated(dataset_id: str, force: bool = False,
                    db: Session = Depends(get_db), _admin=Depends(require_admin)):
-    """删除 Curated Dataset 及其版本数据（仅管理员）。
+    """完整删除 Curated Dataset 及其审核、版本数据（仅管理员）。
 
     安全约束：
-    - 只要存在任何审核记录就不可物理删除。审核与行级修改是治理证据，不能通过
+    - 删除数据集时同步删除其审核记录和行级修改；
     - 被流水线 / 本体映射引用时始终拦截；force 已禁用，避免外键层实际失败却
       向用户承诺“强删成功”。
     """
@@ -178,17 +178,6 @@ def delete_curated(dataset_id: str, force: bool = False,
     if not ds:
         raise HTTPException(404, "Curated dataset not found")
 
-    review_count = db.query(CuratedReview).filter(
-        CuratedReview.curated_dataset_id == dataset_id
-    ).count()
-    if review_count:
-        raise HTTPException(409, detail={
-            "code": "review_evidence_locked",
-            "message": (
-                f"该成品数据集存在 {review_count} 条审核记录，不能物理删除治理证据。"
-                "请保留资产；如需退出使用，请等待平台提供归档流程。"
-            ),
-        })
     if force:
         raise HTTPException(400, "force 强制删除已禁用；请先解除流水线和本体映射依赖")
 
@@ -205,9 +194,19 @@ def delete_curated(dataset_id: str, force: bool = False,
             "pipelines": pipelines, "mappings": mappings,
         })
 
-    # 清理关联版本和媒体项。对象 URI 先在同一个数据库事务写入 outbox；提交
-    # 成功后再物理删除，存储暂时不可用时保留任务供后续重试。
+    # 完整清理审核证据、关联版本和媒体项。对象 URI 先在同一个数据库事务写入
+    # outbox；提交成功后再物理删除，存储暂时不可用时保留任务供后续重试。
     enqueue_dataset_storage_deletions(db, dataset_id)
+    review_ids = [review.id for review in db.query(CuratedReview.id).filter(
+        CuratedReview.curated_dataset_id == dataset_id
+    ).all()]
+    if review_ids:
+        db.query(CuratedRowEdit).filter(
+            CuratedRowEdit.review_id.in_(review_ids)
+        ).delete(synchronize_session=False)
+        db.query(CuratedReview).filter(
+            CuratedReview.curated_dataset_id == dataset_id
+        ).delete(synchronize_session=False)
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
         db.query(MediaItem).filter(MediaItem.dataset_version_id.in_(ver_ids)).delete(synchronize_session=False)

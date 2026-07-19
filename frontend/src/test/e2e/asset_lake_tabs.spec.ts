@@ -133,8 +133,13 @@ test('成品数据集列表与详情按待办语义展示审核状态', async ({
   await expect(page.getByRole('cell', { name: '已审核' })).toBeVisible()
   await expect(page.getByText(/2026.*07.*18.*14:35/)).toBeVisible()
   await expect(page.getByRole('button', { name: '查看' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '删除' })).toBeDisabled()
+  const deleteButton = page.getByRole('button', { name: '删除' })
+  await expect(deleteButton).toBeEnabled()
   await expect(page.getByRole('button', { name: /批准|拒绝|撤回/ })).toHaveCount(0)
+
+  await deleteButton.click()
+  await expect(page.getByText(/全部历史版本、审核记录和行级审核修改都将被永久删除/)).toBeVisible()
+  await page.getByRole('button', { name: '取消' }).click()
 
   await page.getByRole('button', { name: /2 行/ }).click()
   const dialog = page.getByRole('dialog', { name: '客户订单成品表' })

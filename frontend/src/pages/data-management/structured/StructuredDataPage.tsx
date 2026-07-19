@@ -24,7 +24,6 @@ interface Row {
   curatedStatus: string
   rowCount: number | null
   quality: number | null
-  hasReviewEvidence: boolean
   updatedAt: string | null
 }
 
@@ -396,7 +395,6 @@ function CuratedView() {
       pipelineId: pl?.id ?? '', pipelineName: pl?.name ?? '—', domain: pl?.domain || '通用',
       curatedId: c.id, curatedName: c.name, curatedStatus: c.status || 'pending_review',
       rowCount: c.row_count ?? null, quality: c.quality_score ?? null,
-      hasReviewEvidence: Boolean(c.has_review_evidence),
       updatedAt: c.updated_at ?? null,
     })
 
@@ -675,9 +673,8 @@ function CuratedView() {
                         <button
                           type="button"
                           onClick={() => setDeleteRow(row)}
-                          disabled={row.hasReviewEvidence}
-                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300 disabled:hover:bg-white"
-                          title={row.hasReviewEvidence ? '已有审核记录，治理证据不可物理删除' : '删除数据集'}
+                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 active:scale-[0.98]"
+                          title="完整删除数据集"
                         >
                           <Trash2 size={12} /> 删除
                         </button>
@@ -732,7 +729,7 @@ function CuratedView() {
       <ConfirmDialog
         open={!!deleteRow}
         title="删除数据集"
-        message={`确认删除「${deleteRow?.curatedName}」？将永久删除该数据集及其全部历史版本，不可恢复。若已被流水线或本体映射引用，删除会被拦截。`}
+        message={`确认完整删除「${deleteRow?.curatedName}」？该数据集、全部历史版本、审核记录和行级审核修改都将被永久删除，且不可恢复。若已被流水线或本体映射引用，删除会被拦截。`}
         confirmLabel={deleting ? '删除中...' : '确认删除'}
         onConfirm={handleQuickDelete}
         onCancel={() => setDeleteRow(null)}
