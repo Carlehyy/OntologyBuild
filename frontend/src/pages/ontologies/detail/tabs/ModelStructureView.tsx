@@ -752,7 +752,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           defaultViewport={{ x: 0, y: 0, zoom: 0.78 }} proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd5e1" />
-          <MiniMap pannable zoomable position="bottom-left" className="!m-3 !h-[96px] !w-[150px] !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#0f766e' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
+          <MiniMap pannable zoomable position="bottom-left" style={{ width: 150, height: 96 }} className="!m-3 !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#0f766e' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
         </ReactFlow>
 
         <div className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] text-slate-500 shadow-sm backdrop-blur">
