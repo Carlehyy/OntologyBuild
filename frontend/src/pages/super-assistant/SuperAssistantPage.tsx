@@ -636,7 +636,8 @@ function McpDialog({ server, onClose, onSaved }: {
 }
 
 
-function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshServers }: {
+function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, refreshServers }: {
+  open: boolean
   onClose: () => void
   skills: SuperSkill[]
   servers: SuperMcpServer[]
@@ -690,8 +691,17 @@ function ConfigurationPanel({ onClose, skills, servers, refreshSkills, refreshSe
 
   return (
     <>
-      <aside className="absolute inset-y-0 right-0 z-30 flex w-[min(26rem,100%)] shrink-0 lg:relative lg:inset-auto lg:z-auto lg:w-[26rem]">
-        <section aria-label="助手配置" className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[-10px_0_34px_rgba(15,23,42,0.08)]">
+      <aside
+        aria-hidden={!open}
+        inert={!open}
+        className={`absolute inset-y-0 right-0 z-30 w-[min(26rem,100%)] overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none lg:relative lg:inset-auto lg:z-auto ${open
+          ? 'pointer-events-auto lg:w-[26rem]'
+          : 'pointer-events-none lg:w-0'}`}
+      >
+        <section
+          aria-label="助手配置"
+          className={`absolute inset-y-0 right-0 flex w-[min(26rem,100vw)] min-h-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none lg:translate-x-0 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        >
           <header className="flex shrink-0 items-start justify-between border-b border-[var(--color-border)] px-4 py-3.5">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">助手配置</h2>
@@ -1087,7 +1097,7 @@ export default function SuperAssistantPage() {
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--color-bg-base)]">
       <section className="flex min-w-0 flex-1 flex-col bg-[var(--color-bg-elevated)]">
-        <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
+        <header className="relative z-10 flex h-[4.3125rem] shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
           <div className="min-w-0 flex-1">
             {editingTitle ? (
               <form className="flex max-w-lg items-center gap-1.5" onSubmit={event => { event.preventDefault(); void saveTitle() }}>
@@ -1210,15 +1220,14 @@ export default function SuperAssistantPage() {
         )}
       </section>
 
-      {configOpen && (
-        <ConfigurationPanel
-          onClose={() => setConfigOpen(false)}
-          skills={skills}
-          servers={servers}
-          refreshSkills={refreshSkills}
-          refreshServers={refreshServers}
-        />
-      )}
+      <ConfigurationPanel
+        open={configOpen}
+        onClose={() => setConfigOpen(false)}
+        skills={skills}
+        servers={servers}
+        refreshSkills={refreshSkills}
+        refreshServers={refreshServers}
+      />
     </div>
   )
 }
