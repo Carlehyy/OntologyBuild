@@ -7,6 +7,7 @@ import {
 } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 interface Props {
   open: boolean
@@ -101,7 +102,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
 
   const copy = async (value: string, key: string) => {
     try {
-      await navigator.clipboard.writeText(value)
+      await writeTextToClipboard(value)
       setCopied(key)
     } catch { onError('复制失败，请手动选择代码复制') }
   }

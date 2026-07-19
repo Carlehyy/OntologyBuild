@@ -7,6 +7,7 @@ import {
 import { apiError, apiHub, emptyHubInterface, type HubInterface, type KV, type RunResult } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import {
   OpenInterfacesModal, ProxyKeysModal, SystemDataModal,
 } from './InterfaceDataModals'
@@ -356,7 +357,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         proxyPath: info.path,
         keyHeader: info.key_header,
       })
-      await navigator.clipboard.writeText(example)
+      await writeTextToClipboard(example)
       setPublicationCopied(true)
     } catch (error) {
       onError(apiError(error) || '复制失败，请检查浏览器剪贴板权限')
@@ -514,7 +515,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {newGroupError && <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{newGroupError}</div>}
         </div>
       </Modal>
-      <Modal open={Boolean(callExampleDraft)} onClose={() => setCallExampleDraft(null)} title="调用示例" description="命令已根据当前编辑器草稿生成，可复制到终端运行或导入 Postman。" size="2xl" footer={<><Button variant="outline" onClick={() => setCallExampleDraft(null)}>关闭</Button><Button onClick={async () => { await navigator.clipboard.writeText(callExample); setCallExampleCopied(true) }}><Copy size={14} />{callExampleCopied ? '已复制' : '复制命令'}</Button></>}>
+      <Modal open={Boolean(callExampleDraft)} onClose={() => setCallExampleDraft(null)} title="调用示例" description="命令已根据当前编辑器草稿生成，可复制到终端运行或导入 Postman。" size="2xl" footer={<><Button variant="outline" onClick={() => setCallExampleDraft(null)}>关闭</Button><Button onClick={async () => { await writeTextToClipboard(callExample); setCallExampleCopied(true) }}><Copy size={14} />{callExampleCopied ? '已复制' : '复制命令'}</Button></>}>
         <div className="space-y-4">
           <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100 shadow-inner">{callExample}</pre>
           {callExampleDraft?.use_w3 && (
@@ -646,7 +647,7 @@ function ResponsePanel({ result, stale, loading, useW3 }: { result: RunResult | 
     if (!copyText) return
     if (copyResetRef.current) clearTimeout(copyResetRef.current)
     try {
-      await navigator.clipboard.writeText(copyText)
+      await writeTextToClipboard(copyText)
       setCopyFeedback({ text: copyText, status: 'copied' })
     } catch {
       setCopyFeedback({ text: copyText, status: 'failed' })

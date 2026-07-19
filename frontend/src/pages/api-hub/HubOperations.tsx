@@ -6,6 +6,7 @@ import {
 } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/Card'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 interface Props {
   credential: CredentialStatus | null
@@ -235,7 +236,7 @@ function SystemMcpCard({ info, onMessage }: { info: McpInfo | null; onMessage: (
       return
     }
     try {
-      await writeToClipboard(value)
+      await writeTextToClipboard(value)
       setCopied(target)
       onMessage({ text: `${label}已复制到剪贴板。`, kind: 'success' })
     } catch {
@@ -282,32 +283,6 @@ function SystemMcpCard({ info, onMessage }: { info: McpInfo | null; onMessage: (
       </CardContent>
     </Card>
   )
-}
-
-async function writeToClipboard(value: string) {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value)
-      return
-    } catch {
-      // Clipboard API may be blocked on non-HTTPS deployments; fall back below.
-    }
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = value
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  document.body.appendChild(textarea)
-  try {
-    textarea.focus()
-    textarea.select()
-    textarea.setSelectionRange(0, value.length)
-    if (!document.execCommand('copy')) throw new Error('Clipboard copy was rejected')
-  } finally {
-    textarea.remove()
-  }
 }
 
 const cardClass = 'flex min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm transition-all duration-200 hover:shadow-lg'

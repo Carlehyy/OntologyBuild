@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { apiError, apiHub, type RunDetail, type RunOverview, type RunSummary } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 const PAGE_SIZE = 20
 const DEFAULT_SLOW_THRESHOLD = 500
@@ -197,7 +198,7 @@ export default function RunHistory() {
 
   const copyText = async (key: string, value: string) => {
     try {
-      await navigator.clipboard.writeText(value)
+      await writeTextToClipboard(value)
       setCopied(key)
       window.setTimeout(() => setCopied(current => current === key ? '' : current), 1600)
     } catch {
