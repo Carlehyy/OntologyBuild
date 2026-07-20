@@ -283,6 +283,13 @@ def validate_managed_workflow_contract(
             f"托管执行流必须汇入 1 个且仅 1 个末端输出节点，当前为 {len(sinks)} 个："
             f"{'、'.join(sorted(sinks)) or '无'}。")
     output = by_name[sinks[0]]
+    if str(output.get("type") or "") == "n8n-nodes-base.httpRequest":
+        options = (output.get("parameters") or {}).get("options") or {}
+        response = (options.get("response") or {}).get("response") or {}
+        if str(response.get("responseFormat") or "").lower() == "file":
+            raise StewardError(
+                f"末端输出节点「{output.get('name')}」配置为 File/binary 响应。"
+                "请继续接平台文件网关上传节点，并以普通 JSON file_ref 作为唯一末端输出。")
     return {
         "webhook_node_id": str(webhook["id"]),
         "webhook_node_name": webhook_name,

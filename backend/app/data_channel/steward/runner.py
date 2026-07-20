@@ -34,6 +34,80 @@ _DEFAULT_WAIT = 120       # 等待 n8n 执行完成的默认秒数
 _MAX_ROWS = 50000         # 单次运行入湖行数上限（防误配置撑爆 SQLite）
 
 
+def _runtime_payload(*, pipeline_id: str, workflow_id: str, invocation_id: str,
+                     purpose: str, owner_id: str | None,
+                     payload: dict | None = None) -> dict:
+    """Add server-owned invocation/file context; callers cannot override it."""
+    from app.data_channel.file_assets.service import gateway_context
+
+    result = dict(payload or {})
+    result["run_id"] = invocation_id
+    result["file_gateway"] = gateway_context(
+        pipeline_id=pipeline_id,
+        workflow_id=workflow_id,
+        invocation_id=invocation_id,
+        purpose=purpose,
+        owner_id=owner_id,
+    )
+    return result
+
+
+def _scrub_runtime_file_context(value: Any, gateway_token: str) -> Any:
+    """Keep server-owned gateway credentials out of previews and lake rows.
+
+    Older workflows sometimes pass the full Webhook body through unchanged.
+    Removing the well-known context key preserves their pre-existing columns.
+    If a workflow copied/renamed the token, fail closed rather than persisting
+    a live credential under an arbitrary user-controlled key.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _scrub_runtime_file_context(child, gateway_token)
+            for key, child in value.items()
+            if key != "file_gateway"
+        }
+    if isinstance(value, list):
+        return [_scrub_runtime_file_context(child, gateway_token) for child in value]
+    if isinstance(value, str) and gateway_token and gateway_token in value:
+        raise StewardError(
+            "末端输出包含本次文件网关短时令牌。请删除该字段，只保留上传响应中的 file_ref。")
+    return value
+
+
+def _validate_file_refs(db: Session, rows: list[dict], *, pipeline_id: str,
+                        invocation_id: str,
+                        gateway_token: str) -> tuple[list[dict], list[str]]:
+    from app.data_channel.file_assets.service import (
+        reconcile_invocation,
+        validate_and_canonicalize_refs,
+    )
+
+    safe_rows = _scrub_runtime_file_context(rows, gateway_token)
+    canonical, asset_ids = validate_and_canonicalize_refs(
+        db, safe_rows, pipeline_id=pipeline_id, invocation_id=invocation_id)
+    # Anything uploaded in this invocation but omitted from the terminal JSON
+    # is an orphan, not an implicit output.
+    reconcile_invocation(
+        db,
+        pipeline_id=pipeline_id,
+        invocation_id=invocation_id,
+        referenced_ids=asset_ids,
+    )
+    return canonical, asset_ids
+
+
+def _abandon_file_invocation(db: Session, *, pipeline_id: str,
+                             invocation_id: str) -> None:
+    from app.data_channel.file_assets.service import abandon_invocation
+
+    try:
+        db.rollback()
+        abandon_invocation(db, pipeline_id=pipeline_id, invocation_id=invocation_id)
+    except Exception:  # noqa: BLE001 -- cleanup is retried by expiry/outbox workers
+        db.rollback()
+        logger.exception("清理失败的 n8n 文件执行上下文失败")
+
+
 def normalize_rows(body: Any) -> list[dict]:
     """把 webhook 响应 / 执行输出规整为 list[dict] 行数据。"""
     if body is None:
@@ -105,6 +179,16 @@ def _extract_execution_rows(execution: dict, expected_output_node: str) -> tuple
     items = main[0]
     if not isinstance(items, list):
         raise StewardError(f"输出节点「{expected_output_node}」的 main[0] 必须是 n8n item 数组。")
+    binary_items = [
+        item for item in items
+        if isinstance(item, dict) and isinstance(item.get("binary"), dict)
+        and bool(item.get("binary"))
+    ]
+    if binary_items:
+        raise StewardError(
+            f"输出节点「{expected_output_node}」仍携带 {len(binary_items)} 个 binary item。"
+            "平台不会把 n8n 二进制直接写入行数据；请先上传到本次 Webhook 提供的 "
+            "file_gateway，再让末节点只输出普通 JSON 与 file_ref。")
     return normalize_rows(items), meta
 
 
@@ -240,6 +324,7 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
         raise StewardError("该 n8n 流水线缺少数据管家治理记录，无法运行。请停用并归档后新建流水线替代。")
     client = service.get_n8n_client(db)
     workflow_id = rec.n8n_workflow_id
+    invocation_id = str(uuid.uuid4())
     wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
     from app.data_channel.datasets.lock import dataset_write_lock
     with dataset_write_lock(
@@ -261,11 +346,28 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
             except Exception as exc:  # noqa: BLE001
                 raise StewardError(f"为执行预览临时启用已发布工作流失败：{exc}") from exc
         try:
+            runtime_payload = _runtime_payload(
+                pipeline_id=pl.id,
+                workflow_id=workflow_id,
+                invocation_id=invocation_id,
+                purpose="preview",
+                owner_id=rec.created_by,
+                payload=payload or {"source": "ontoprompt-dry-run"},
+            )
             rows, exec_meta = trigger_and_collect(
                 client, workflow_id, webhook_path,
-                payload=payload or {"source": "ontoprompt-dry-run"},
+                payload=runtime_payload,
                 wait_seconds=wait_seconds,
                 expected_output_node=output_node_name)
+            rows, asset_ids = _validate_file_refs(
+                db, rows, pipeline_id=pl.id, invocation_id=invocation_id,
+                gateway_token=runtime_payload["file_gateway"]["token"])
+            exec_meta["file_invocation_id"] = invocation_id
+            exec_meta["file_asset_ids"] = asset_ids
+        except Exception:
+            _abandon_file_invocation(
+                db, pipeline_id=pl.id, invocation_id=invocation_id)
+            raise
         finally:
             if not was_active:
                 try:
@@ -306,18 +408,50 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
         ):
             _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(
                 db_, pl_, client, require_active=True)
+            runtime_payload = _runtime_payload(
+                pipeline_id=pl_.id,
+                workflow_id=workflow_id,
+                invocation_id=run.id,
+                purpose="run",
+                owner_id=rec.created_by,
+                payload={"source": "ontoprompt"},
+            )
             rows, exec_meta = trigger_and_collect(
                 client, workflow_id, webhook_path,
-                payload={"source": "ontoprompt", "run_id": run.id},
+                payload=runtime_payload,
                 wait_seconds=wait_seconds,
                 expected_output_node=output_node_name)
+            rows, asset_ids = _validate_file_refs(
+                db_, rows, pipeline_id=pl_.id, invocation_id=run.id,
+                gateway_token=runtime_payload["file_gateway"]["token"])
+            exec_meta["file_invocation_id"] = run.id
+            exec_meta["file_asset_ids"] = asset_ids
         if exec_meta.get("error"):
             raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
         return rows, exec_meta
 
     contract_cols = ((pl.definition or {}).get("n8n") or {}).get("expected_columns") or None
-    run_external_pipeline(db, pl, run, write_opts, engine_name="n8n",
-                          collector=collector, contract_columns=contract_cols)
+    def finalize_files(db_, pl_, _run, _outputs, exec_meta, dataset_version_id):
+        from app.data_channel.file_assets.service import commit_invocation
+
+        commit_invocation(
+            db_,
+            pipeline_id=pl_.id,
+            invocation_id=run.id,
+            referenced_ids=exec_meta.get("file_asset_ids") or [],
+            dataset_version_id=dataset_version_id,
+        )
+
+    run_external_pipeline(
+        db, pl, run, write_opts, engine_name="n8n",
+        collector=collector, contract_columns=contract_cols,
+        output_finalizer=finalize_files,
+    )
+    if run.status != "success":
+        _abandon_file_invocation(db, pipeline_id=pl.id, invocation_id=run.id)
+    else:
+        from app.data_channel.datasets.service import drain_storage_deletion_outbox
+        drain_storage_deletion_outbox(db)
 
 
 def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None,
@@ -333,6 +467,9 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
     activeVersionId 而拒绝展示已经成功产生的输出。
     """
     client = service.get_n8n_client(db)
+    if not rec.pipeline_id:
+        raise StewardError("受管 n8n 工作流缺少平台影子流水线，无法签发文件上传上下文。")
+    invocation_id = str(uuid.uuid4())
     from app.data_channel.datasets.lock import dataset_write_lock
     # 锁必须覆盖 GET active → 临时 activate → 触发 → 恢复 deactivate → 最终 GET。
     # 只锁 trigger 会让并发 publish 在中途启用成功，随后本预览按旧 was_active
@@ -358,11 +495,30 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
             # webhook 注册非即时，稍等再触发
             time.sleep(1.5)
         try:
+            runtime_payload = _runtime_payload(
+                pipeline_id=rec.pipeline_id,
+                workflow_id=rec.n8n_workflow_id,
+                invocation_id=invocation_id,
+                purpose="preview",
+                owner_id=rec.created_by,
+                payload=payload or {"source": "ontoprompt-test"},
+            )
             rows, exec_meta = trigger_and_collect(
                 client, rec.n8n_workflow_id, webhook_path,
-                payload=payload or {"source": "ontoprompt-test"},
+                payload=runtime_payload,
                 wait_seconds=wait_seconds,
                 expected_output_node=output_node_name)
+            rows, asset_ids = _validate_file_refs(
+                db, rows, pipeline_id=rec.pipeline_id,
+                invocation_id=invocation_id,
+                gateway_token=runtime_payload["file_gateway"]["token"])
+            exec_meta["file_invocation_id"] = invocation_id
+            exec_meta["file_asset_ids"] = asset_ids
+        except Exception:
+            _abandon_file_invocation(
+                db, pipeline_id=rec.pipeline_id,
+                invocation_id=invocation_id)
+            raise
         finally:
             if not was_active:
                 try:

@@ -26,7 +26,7 @@ NODE_CATALOG: list[dict] = [
 
     # ── 数据获取 ──
     {"type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "category": "http",
-     "name": "HTTP Request", "usage": "调用任意 REST API 拉取/回传数据",
+     "name": "HTTP Request", "usage": "调用 REST API；也可下载 binary 并 multipart 上传平台文件网关",
      "key_params": {"method": "GET", "url": "https://…", "sendQuery": True,
                     "queryParameters": {"parameters": [{"name": "page", "value": "1"}]}}},
     {"type": "n8n-nodes-base.rssFeedRead", "typeVersion": 1.1, "category": "http",
@@ -121,11 +121,13 @@ NODE_DETAIL: dict[str, dict] = {
             "sendHeaders + headerParameters": "自定义请求头（同上结构）",
             "sendBody + contentType + jsonBody/bodyParameters": "POST 体：contentType=json 时 specifyBody=json 配 jsonBody",
             "options.pagination": "内置分页，见 n8n_reference('patterns') 的 paginated_api",
+            "options.response.response.responseFormat": "下载附件时设 file，并用 outputPropertyName 指定 binary 字段（建议 data）",
+            "contentType=multipart-form-data + bodyParameters": "上传附件时用 parameterType=formBinaryData 引用 binary 字段，并附带 idempotency_key",
         },
         "example": {"method": "GET", "url": "https://api.example.com/items",
                     "sendQuery": True,
                     "queryParameters": {"parameters": [{"name": "limit", "value": "100"}]}},
-        "notes": "需认证时优先让用户在 n8n 配好凭据，再 authentication=genericCredentialType 引用 credentials；别把密钥明文写进 header。",
+        "notes": "业务接口认证优先使用 n8n 凭据。平台附件网关是例外：Authorization 必须动态引用本次 Webhook 的 file_gateway.token，绝不能写死；详见 n8n_reference('files')。",
     },
     "n8n-nodes-base.set": {
         "params": {

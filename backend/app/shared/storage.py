@@ -7,7 +7,7 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Mapping
 
 import logging
 
@@ -151,13 +151,15 @@ class StorageService:
         data: BinaryIO,
         content_type: str = "application/octet-stream",
         length: int = -1,
+        metadata: Mapping[str, str] | None = None,
     ) -> str:
         """上传对象并返回 URI(s3://bucket/key)。"""
         self.ensure_bucket(bucket)
         if self._available and self._client:
             # minio-py 在 length=-1 时使用 chunked read
             self._client.put_object(
-                bucket, key, data, length=length, content_type=content_type
+                bucket, key, data, length=length, content_type=content_type,
+                metadata=dict(metadata or {}),
             )
         else:
             self._require_available()
@@ -176,10 +178,14 @@ class StorageService:
         key: str,
         data: bytes,
         content_type: str = "application/octet-stream",
+        metadata: Mapping[str, str] | None = None,
     ) -> str:
         """上传 bytes。MinIO 未连接时回退本地文件。"""
         if self._available and self._client:
-            return self.put_object(bucket, key, io.BytesIO(data), content_type, length=len(data))
+            return self.put_object(
+                bucket, key, io.BytesIO(data), content_type,
+                length=len(data), metadata=metadata,
+            )
         self._require_available()
         # Explicit development/test fallback.
         local = self._local_path(bucket, key, create_parent=True)

@@ -171,6 +171,7 @@ def delete_curated(dataset_id: str, force: bool = False,
       向用户承诺“强删成功”。
     """
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+    from app.data_channel.file_assets.models import PipelineFileAsset
     from app.data_channel.datasets.service import (
         drain_storage_deletion_outbox,
         enqueue_dataset_storage_deletions,
@@ -211,6 +212,9 @@ def delete_curated(dataset_id: str, force: bool = False,
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
         db.query(MediaItem).filter(MediaItem.dataset_version_id.in_(ver_ids)).delete(synchronize_session=False)
+        db.query(PipelineFileAsset).filter(
+            PipelineFileAsset.dataset_version_id.in_(ver_ids)
+        ).delete(synchronize_session=False)
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()

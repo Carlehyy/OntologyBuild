@@ -21,7 +21,7 @@ import {
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
-  downloadBrowserCompanion, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
+  downloadBrowserCompanion, downloadPipelineFile, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
   type BrowserCapture, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep, type StewardTablePreview,
@@ -144,14 +144,58 @@ function Md({ text }: { text: string }) {
   )
 }
 
-function PreviewCell({ value }: { value: string | number | boolean | null }) {
+type PipelineFileRef = {
+  $type: 'file_ref'
+  id: string
+  name: string
+  size: number
+  download_url: string
+}
+
+function isPipelineFileRef(value: unknown): value is PipelineFileRef {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<PipelineFileRef>
+  return item.$type === 'file_ref' && typeof item.id === 'string'
+    && typeof item.name === 'string' && typeof item.download_url === 'string'
+}
+
+function previewBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return '未知大小'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 ** 2).toFixed(1)} MB`
+}
+
+function PreviewCell({ value }: { value: unknown }) {
+  const [loading, setLoading] = useState(false)
   if (value === null || value === undefined || value === '') {
     return <span className="text-slate-300">空</span>
   }
   if (typeof value === 'boolean') {
     return <span className={value ? 'text-emerald-700' : 'text-slate-500'}>{value ? '是' : '否'}</span>
   }
-  const text = String(value)
+  if (isPipelineFileRef(value)) {
+    return (
+      <button
+        type="button"
+        disabled={loading}
+        onClick={() => {
+          setLoading(true)
+          void downloadPipelineFile(value.download_url, value.name)
+            .catch(() => undefined)
+            .finally(() => setLoading(false))
+        }}
+        title={`${value.name} · ${previewBytes(value.size)}`}
+        className="inline-flex max-w-[280px] items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-800 hover:bg-teal-100 disabled:cursor-wait disabled:opacity-60"
+      >
+        <Paperclip size={11} className="shrink-0" />
+        <span className="truncate">{value.name}</span>
+        <span className="shrink-0 text-[9px] font-normal text-teal-600">{previewBytes(value.size)}</span>
+        {loading ? <Loader2 size={10} className="shrink-0 animate-spin" /> : <Download size={10} className="shrink-0" />}
+      </button>
+    )
+  }
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
   return <span title={text} className="block max-w-[280px] truncate">{text}</span>
 }
 

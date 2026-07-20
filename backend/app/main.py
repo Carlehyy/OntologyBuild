@@ -7,6 +7,7 @@ v1 兼容：/api/v1/* 路由全部保留
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
+import asyncio
 import hmac
 import json
 import urllib.request
@@ -41,6 +42,7 @@ from app.routers.v2 import sync_tasks as sync_tasks_v2
 from app.data_channel.pipeline_tasks import router as pipeline_tasks_v2
 from app.data_channel.steward import router as steward_v2
 from app.data_channel.steward import browser_ws as steward_browser_ws
+from app.data_channel.file_assets import router as pipeline_file_assets
 from app.routers.v2 import test_data as test_data_v2
 from app.data_channel.access import asset_lake_access_guard
 from app.data_channel.datasets.sharing_router import (
@@ -91,6 +93,7 @@ def _seed_db():
         from app.data_channel.steward.models import (  # noqa: F401
             N8nPipeline, StewardConversation, StewardMessage,
         )
+        from app.data_channel.file_assets.models import PipelineFileAsset  # noqa: F401
         # 事件登记 (智能助手↔数据通道之间的事件采集入口：主体/附件/审计/第三方密钥)
         from app.events.models import (  # noqa: F401
             RegisteredEvent, EventAttachment, EventAuditLog, EventIngestKey,
@@ -238,6 +241,8 @@ def _seed_db():
 
         # 对象存储删除采用 transactional outbox：上次停机/存储故障遗留的任务在
         # 启动时重试。空队列不会初始化 MinIO 客户端，不增加健康检查压力。
+        from app.data_channel.file_assets.service import cleanup_expired_assets
+        cleanup_expired_assets(db)
         from app.data_channel.datasets.service import drain_storage_deletion_outbox
         drain_storage_deletion_outbox(
             db, strict_schema=settings.environment == "production")
@@ -365,6 +370,8 @@ async def lifespan(app: FastAPI):
     from app.api_hub import mcp_server as api_hub_mcp
     # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建
     api_hub_public, api_hub_system = api_hub_mcp.reset_session_managers()
+    from app.data_channel.file_assets.service import file_asset_cleanup_loop
+    file_cleanup_task = asyncio.create_task(file_asset_cleanup_loop())
     try:
         async with (
             _mcp_server.reset_session_manager().run(),
@@ -373,6 +380,11 @@ async def lifespan(app: FastAPI):
         ):
             yield
     finally:
+        file_cleanup_task.cancel()
+        try:
+            await file_cleanup_task
+        except asyncio.CancelledError:
+            pass
         from app.data_channel.steward.browser_runtime import browser_manager
         browser_manager.close_all()
         try:
@@ -580,6 +592,17 @@ app.include_router(datasets_v2.router, prefix="/api/v2/datasets", tags=["v2-data
 app.include_router(manual_sharing_router, prefix="/api/v2/manual-dataset-sharing", tags=["manual-dataset-sharing"], dependencies=asset_lake_guard)
 app.include_router(public_manual_sharing_router, prefix="/api/public/manual-datasets", tags=["public-manual-datasets"])
 app.include_router(pipelines_v2.router, prefix="/api/v2/pipelines", tags=["v2-pipelines"], dependencies=pipeline_guard)
+app.include_router(
+    pipeline_file_assets.upload_router,
+    prefix="/api/v2/file-transfer",
+    tags=["v2-pipeline-file-transfer"],
+)
+app.include_router(
+    pipeline_file_assets.asset_router,
+    prefix="/api/v2/file-assets",
+    tags=["v2-pipeline-file-assets"],
+    dependencies=[*asset_lake_guard, *pipeline_guard],
+)
 app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph"], dependencies=ontology_guard)
 app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"], dependencies=ontology_guard)
 app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"], dependencies=asset_lake_guard)

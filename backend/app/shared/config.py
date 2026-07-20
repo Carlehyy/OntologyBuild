@@ -98,6 +98,24 @@ class Settings(BaseSettings):
     # Relative paths are resolved against the backend project root.
     storage_local_dir: str = "storage"
 
+    # n8n never receives long-lived MinIO credentials.  Every invocation gets
+    # a short-lived, pipeline-scoped upload token and calls this platform file
+    # gateway instead.  The URL must be reachable from the n8n runtime (the
+    # Docker service name is the production-compose default).
+    pipeline_file_gateway_base_url: str = "http://backend:8000/api/v2/file-transfer"
+    pipeline_file_upload_token_minutes: int = 15
+    pipeline_file_max_upload_mb: int = 100
+    pipeline_file_preview_retention_hours: int = 24
+    pipeline_file_pending_retention_hours: int = 2
+    # Opportunistic cleanup also runs during uploads and startup.  This worker
+    # bounds physical-object retention even when a quiet deployment receives
+    # no new pipeline traffic for a long time.
+    pipeline_file_cleanup_interval_seconds: int = 300
+    pipeline_file_allowed_extensions: str = (
+        "csv,xlsx,xls,json,xml,pdf,docx,doc,pptx,ppt,md,txt,"
+        "png,jpg,jpeg,gif,webp,svg,zip,gz,tar"
+    )
+
     # Development can expose self-registration. Production must disable it and
     # provision users through authenticated administrative flows.
     allow_public_registration: bool = True

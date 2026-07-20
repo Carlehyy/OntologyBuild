@@ -16,6 +16,7 @@ MODEL_MODULES = (
     "app.data_channel.curated.models",
     "app.data_channel.datasets.models",
     "app.data_channel.datasets.sharing_models",
+    "app.data_channel.file_assets.models",
     "app.data_channel.pipeline_tasks.models",
     "app.data_channel.pipelines.models",
     "app.data_channel.steward.models",

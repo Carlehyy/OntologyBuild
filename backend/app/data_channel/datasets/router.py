@@ -639,6 +639,7 @@ def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(g
     若数据集由旧版同步任务（DataSyncTask）驱动，自动禁用该任务防止重建。"""
     import logging
     from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+    from app.data_channel.file_assets.models import PipelineFileAsset
     from app.models.v2.sync_task import DataSyncTask
     from app.data_channel.datasets.service import (
         drain_storage_deletion_outbox,
@@ -693,6 +694,9 @@ def delete_dataset(dataset_id: str, force: bool = False, db: Session = Depends(g
     ver_ids = [v.id for v in db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()]
     if ver_ids:
         db.query(MediaItem).filter(MediaItem.dataset_version_id.in_(ver_ids)).delete(synchronize_session=False)
+        db.query(PipelineFileAsset).filter(
+            PipelineFileAsset.dataset_version_id.in_(ver_ids)
+        ).delete(synchronize_session=False)
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()

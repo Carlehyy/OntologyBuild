@@ -61,7 +61,7 @@ export interface StewardTablePreview {
   node?: string
   executionId?: string
   columns: string[]
-  rows: Record<string, string | number | boolean | null>[]
+  rows: Record<string, unknown>[]
   totalRows: number
   shownRows: number
   totalColumns: number
@@ -251,6 +251,26 @@ export async function getStewardFileBlob(cid: string, artifactId: string): Promi
   })
   if (!resp.ok) throw new Error(`文件预览加载失败 (${resp.status})`)
   return resp.blob()
+}
+
+export async function downloadPipelineFile(downloadUrl: string, filename: string): Promise<void> {
+  const token = localStorage.getItem('token') || ''
+  const runtimeWindow = typeof window !== 'undefined'
+    ? window as Window & { __API_BASE_URL__?: string }
+    : undefined
+  const runtimeBase = (runtimeWindow?.__API_BASE_URL__ || '').replace(/\/$/, '')
+  const url = downloadUrl.startsWith('/') ? `${runtimeBase}${downloadUrl}` : downloadUrl
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (!resp.ok) throw new Error(`附件下载失败 (${resp.status})`)
+  const blob = await resp.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(objectUrl)
 }
 
 // ---------- SSE 流式 chat ----------

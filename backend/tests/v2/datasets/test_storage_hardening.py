@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
 from app.data_channel.datasets.router import _estimate_rowcount
 from app.data_channel.datasets.service import DatasetReadError, DatasetService, _parse_stored_rows
+from app.data_channel.file_assets.models import PipelineFileAsset
 from app.data_channel.pipeline_tasks.merge import load_latest_rows
 from app.models.v2.dataset import DatasetVersion, DatasetWriteLock, MediaItem
 from app.shared.storage import StorageService
@@ -184,6 +185,41 @@ def test_retention_prunes_old_snapshots(svc, storage, monkeypatch):
     assert svc.get_dataset(ds.id).latest_version_id == versions[-1].id
     # 最新版本内容完好
     assert svc.load_all_rows(ds.id) == [{"n": "4"}]
+
+
+def test_retention_prunes_file_assets_bound_to_old_version(
+    db, svc, storage, monkeypatch,
+):
+    """Version retention must not leave committed pipeline attachments in MinIO."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "dataset_version_keep", 1)
+    ds = svc.create_dataset("附件随版本回收", "curated")
+    v1 = svc.create_version(ds.id, _csv_bytes([{"id": "old"}]), rowcount=1)
+    file_uri = "s3://media/pipeline-files/test/committed.pdf"
+    storage.objects[file_uri] = b"attachment"
+    db.add(PipelineFileAsset(
+        pipeline_id=None,
+        workflow_id="wf-retention",
+        invocation_id="run-retention",
+        purpose="run",
+        status="committed",
+        idempotency_key="attachment-1",
+        original_name="committed.pdf",
+        object_key="pipeline-files/test/committed.pdf",
+        storage_uri=file_uri,
+        size=len(b"attachment"),
+        content_type="application/pdf",
+        sha256="a" * 64,
+        dataset_version_id=v1.id,
+    ))
+    db.commit()
+
+    svc.create_version(ds.id, _csv_bytes([{"id": "new"}]), rowcount=1)
+
+    assert db.query(PipelineFileAsset).filter_by(dataset_version_id=v1.id).first() is None
+    assert file_uri not in storage.objects
+    assert file_uri in storage.deleted
 
 
 def test_retention_spares_versions_with_media(db, svc, storage, monkeypatch):

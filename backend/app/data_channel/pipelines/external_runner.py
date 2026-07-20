@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
                           engine_name: str,
                           collector: Callable,
-                          contract_columns: list[str] | None = None) -> None:
+                          contract_columns: list[str] | None = None,
+                          output_finalizer: Callable | None = None) -> None:
     """执行一次外部引擎流水线，负责把 run 写到终态。
 
     collector(db, pipeline) -> (rows: list[dict], exec_meta: dict)，失败时抛异常。
@@ -55,13 +56,10 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
                                         contract_columns=contract_columns)
 
         curated_ids = [o["curated_dataset_id"] for o in outputs]
-        pl.target_curated_ids = curated_ids
-        run.status = "success"
-        run.finished_at = datetime.now(timezone.utc)
-        run.dataset_version_id = next(
+        dataset_version_id = next(
             (o.get("dataset_version_id") for o in outputs if o.get("dataset_version_id")), None)
         gate_warnings = [w for o in outputs for w in (o.get("gate_warnings") or [])]
-        run.stats = {
+        stats = {
             **(run.stats or {}),
             "engine": engine_name,
             f"{engine_name}_execution": exec_meta,
@@ -75,6 +73,18 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
             "curated_dataset_ids": curated_ids,
             "meta": {"outputs": outputs},
         }
+        # Engines with side assets (for example n8n FileRefs) finalize their
+        # metadata in the same final DB transaction as the run success state.
+        # Dataset versions are already immutable/published by the lake writer;
+        # a finalizer failure therefore marks this run failed and leaves side
+        # assets eligible for compensation instead of exposing broken refs.
+        if output_finalizer is not None:
+            output_finalizer(db, pl, run, outputs, exec_meta, dataset_version_id)
+        pl.target_curated_ids = curated_ids
+        run.status = "success"
+        run.finished_at = datetime.now(timezone.utc)
+        run.dataset_version_id = dataset_version_id
+        run.stats = stats
     except Exception as e:  # noqa: BLE001 — 引擎失败必须落到 run 终态而非炸掉调度进程
         logger.error("%s 流水线运行失败: %s", engine_name, e, exc_info=True)
         run.status = "failed"

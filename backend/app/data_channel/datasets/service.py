@@ -256,6 +256,7 @@ def enqueue_storage_deletions(db: Session, storage_uris: list[str]) -> list[str]
 def enqueue_dataset_storage_deletions(db: Session, dataset_id: str) -> list[str]:
     """收集 DatasetVersion、媒体原件和 OCR 结果 URI 并写入同事务 outbox。"""
     from app.models.v2.dataset import MediaItem
+    from app.data_channel.file_assets.models import PipelineFileAsset
 
     versions = db.query(DatasetVersion.id, DatasetVersion.storage_uri).filter(
         DatasetVersion.dataset_id == dataset_id).all()
@@ -269,19 +270,30 @@ def enqueue_dataset_storage_deletions(db: Session, dataset_id: str) -> list[str]
                 uris.append(row.storage_uri)
             if row.ocr_result_uri:
                 uris.append(row.ocr_result_uri)
+        pipeline_files = db.query(PipelineFileAsset.storage_uri).filter(
+            PipelineFileAsset.dataset_version_id.in_(version_ids),
+            PipelineFileAsset.storage_uri.is_not(None),
+        ).all()
+        uris.extend(row.storage_uri for row in pipeline_files if row.storage_uri)
     return enqueue_storage_deletions(db, uris)
 
 
 def _storage_uri_is_referenced(db: Session, storage_uri: str) -> bool:
     """共享 URI 防护：只要还有任一资产元数据引用，就暂不物理删除。"""
     from app.models.v2.dataset import MediaItem
+    from app.data_channel.file_assets.models import PipelineFileAsset
 
     if db.query(DatasetVersion.id).filter(
             DatasetVersion.storage_uri == storage_uri).first() is not None:
         return True
-    return db.query(MediaItem.id).filter(
+    if db.query(MediaItem.id).filter(
         (MediaItem.storage_uri == storage_uri)
         | (MediaItem.ocr_result_uri == storage_uri)
+    ).first() is not None:
+        return True
+    return db.query(PipelineFileAsset.id).filter(
+        PipelineFileAsset.storage_uri == storage_uri,
+        PipelineFileAsset.status.in_(("ready", "committed")),
     ).first() is not None
 
 
@@ -507,6 +519,7 @@ class DatasetService:
 
     def _prune_versions(self, dataset_id: str) -> None:
         from app.config import settings
+        from app.data_channel.file_assets.models import PipelineFileAsset
         from app.models.v2.dataset import MediaItem
         from app.models.v2.curated import CuratedReview
 
@@ -531,10 +544,25 @@ class DatasetService:
         for v in candidates:
             if v.id in media_ver_ids or v.id in reviewed_ver_ids:
                 continue
-            if v.storage_uri:
+            storage_uris = [v.storage_uri] if v.storage_uri else []
+            # File rows cascade with DatasetVersion. Queue their private MinIO
+            # objects before deleting the version so metadata and object
+            # lifecycle remain in the same transaction boundary.
+            file_assets = self._db.query(PipelineFileAsset).filter(
+                PipelineFileAsset.dataset_version_id == v.id,
+            ).all()
+            storage_uris.extend(
+                asset.storage_uri for asset in file_assets if asset.storage_uri)
+            if storage_uris:
                 # 元数据删除与 outbox 同事务；对象存储失败不再迫使版本元数据永远
                 # 留在湖里，也不会造成无追踪的对象泄漏。
-                enqueue_storage_deletions(self._db, [v.storage_uri])
+                enqueue_storage_deletions(self._db, storage_uris)
+            # Do not depend on database-specific FK enforcement here.  Some
+            # SQLite deployments/tests cannot enable ON DELETE CASCADE; an
+            # explicit delete also ensures the outbox drain no longer sees a
+            # committed reference and can reclaim the object immediately.
+            for asset in file_assets:
+                self._db.delete(asset)
             self._db.delete(v)
             removed += 1
         if removed:

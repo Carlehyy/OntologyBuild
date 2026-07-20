@@ -11,6 +11,7 @@ from app.data_channel.datasets.service import (
     drain_storage_deletion_outbox,
     enqueue_dataset_storage_deletions,
 )
+from app.data_channel.file_assets.models import PipelineFileAsset
 from app.models.v2.dataset import (
     Dataset,
     DatasetVersion,
@@ -69,6 +70,8 @@ def _seed_dataset_with_all_object_kinds(db, storage: FakeStorage, kind: str):
     ocr_uri = f"s3://media/{dataset.id}/ocr.json"
     storage.objects[media_uri] = b"pdf"
     storage.objects[ocr_uri] = b"{}"
+    pipeline_file_uri = f"s3://media/pipeline-files/{dataset.id}/attachment.pdf"
+    storage.objects[pipeline_file_uri] = b"attachment"
     db.add(MediaItem(
         dataset_version_id=version.id,
         media_type="pdf",
@@ -76,8 +79,25 @@ def _seed_dataset_with_all_object_kinds(db, storage: FakeStorage, kind: str):
         ocr_status="done",
         ocr_result_uri=ocr_uri,
     ))
+    db.add(PipelineFileAsset(
+        pipeline_id=None,
+        workflow_id="wf-delete",
+        invocation_id=f"run-{dataset.id}",
+        purpose="run",
+        status="committed",
+        idempotency_key="attachment-1",
+        original_name="attachment.pdf",
+        object_key=f"pipeline-files/{dataset.id}/attachment.pdf",
+        storage_uri=pipeline_file_uri,
+        size=len(b"attachment"),
+        content_type="application/pdf",
+        sha256="b" * 64,
+        dataset_version_id=version.id,
+    ))
     db.commit()
-    return dataset, version, {version.storage_uri, media_uri, ocr_uri}
+    return dataset, version, {
+        version.storage_uri, media_uri, ocr_uri, pipeline_file_uri,
+    }
 
 
 @pytest.mark.parametrize(
@@ -122,7 +142,7 @@ def test_storage_failure_keeps_retryable_outbox_after_metadata_commit(
 
     fake_storage.fail_deletes = False
     result = drain_storage_deletion_outbox(db, fake_storage)
-    assert result == {"deleted": 3, "failed": 0, "deferred": 0}
+    assert result == {"deleted": 4, "failed": 0, "deferred": 0}
     assert db.query(StorageDeletionOutbox).count() == 0
     assert not (uris & set(fake_storage.objects))
 
@@ -132,7 +152,7 @@ def test_enqueue_participates_in_callers_transaction(db, fake_storage):
         db, fake_storage, "structured")
 
     enqueue_dataset_storage_deletions(db, dataset.id)
-    assert db.query(StorageDeletionOutbox).count() == 3
+    assert db.query(StorageDeletionOutbox).count() == 4
     # 模拟后续元数据删除失败：调用方 rollback 必须同时撤销 outbox。
     db.rollback()
 

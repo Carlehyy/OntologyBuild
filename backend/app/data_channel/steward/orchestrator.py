@@ -110,15 +110,16 @@ def _system_prompt(
 # 平台数据流水线约定（重要）
 1. **平台调度入口**：工作流应以 Webhook 触发器开头 —— parameters 建议 {{"httpMethod": "POST", "path": "ob-<流水线短名>", "responseMode": "lastNode"}}。骨架已自带这样一个 Webhook。平台运行该流水线时 POST 这个 webhook，并把**末节点输出的 items 作为行数据写入数据资产湖**（支持任务池的 overwrite/append/upsert 入库方式）。
 2. **不要添加 Schedule/Cron Trigger 作为受管流水线的调度入口**：运行计划由数据任务池统一管理，n8n 只保留平台 Webhook。这样发布状态、运行记录与入湖结果才是一条可审计链路；Manual Trigger 仅可用于 n8n 内部临时调试，不能作为唯一触发器。
-3. 末节点输出应是"一行一个 item、字段扁平"的表格形数据（用 Set/Code 节点整形），便于入湖后治理与映射。
+3. 末节点输出应是"一行一个 item"的表格形数据：普通列保持标量；附件列只能使用平台 `file_ref` 对象。绝不能让末节点携带 n8n binary、base64、MinIO 地址或预签名 URL。
 4. 数据库/SaaS 节点的凭据无法由 API 创建：先告诉用户去 n8n 界面配置凭据，再在节点里引用凭据名。
+5. **附件必须走平台文件网关**：Webhook 输入会为本次执行注入短时 `file_gateway.upload_url/token/invocation_id`。先用 HTTP Request 下载为 binary，再 multipart 上传到该动态 URL，最后把响应里的 `file_ref` 放入末节点 JSON。网关令牌不能写死、不能保存为 n8n credential，MinIO 长期凭据永远不会下发给 n8n。编排前查 `n8n_reference('files')`；需要完整骨架查 `n8n_reference('patterns')` 的 `rest_api_with_attachment`。
 
 # 常用节点速查（type / typeVersion）
 {catalog_digest()}
 
 # 节点编排要点（拼参数前必看；细节用 describe_node / n8n_reference 查）
 - 动态取值必须写表达式 `={{{{ $json.字段 }}}}`（忘了 `=` 前缀是最常见的"取不到值"）；跨节点引用用节点显示名。
-- Set(v3.4) 用 assignments 结构整形"扁平列"；整形逻辑复杂上 Code（必须 return [{{json:{{…}}}}]）。
+- Set(v3.4) 用 assignments 结构整形普通列与 FileRef 附件列；整形逻辑复杂上 Code（必须 return [{{json:{{…}}}}]，不能 return binary）。
 - 需要认证的节点别写明文密钥：让用户在 n8n 配好凭据再引用；动手前用 check_credentials 看实例缺哪些、有哪些可复用。
 - 不确定某节点参数就 describe_node 查 worked example；不知从哪起就 n8n_reference('patterns') 抄骨架；表达式/Code 写法查 n8n_reference('expressions'|'code')。
 

@@ -201,11 +201,11 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "n8n_reference",
-        "description": "查编排参考：expressions（{{ }} 表达式语法与坑）/ code（Code 节点写法与返回契约）/ patterns（可复用的数据流水线骨架，直接抄 nodes/connections 再改）。",
+        "description": "查编排参考：expressions（{{ }} 表达式语法与坑）/ code（Code 节点写法与返回契约）/ files（平台 FileRef 与附件网关）/ patterns（可复用骨架）。",
         "parameters": {
             "type": "object",
             "properties": {
-                "topic": {"type": "string", "enum": ["expressions", "code", "patterns"]},
+                "topic": {"type": "string", "enum": ["expressions", "code", "files", "patterns"]},
             },
             "required": ["topic"],
         },
@@ -455,6 +455,26 @@ def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
         return value
     if isinstance(value, str):
         return value if len(value) <= _EXEC_CELL_CHARS else value[:_EXEC_CELL_CHARS] + "…"
+    if isinstance(value, dict) and value.get("$type") == "file_ref":
+        asset_id = str(value.get("id") or "")
+        name = str(value.get("name") or "附件")[:240]
+        if asset_id:
+            try:
+                size = max(0, int(value.get("size") or 0))
+            except (TypeError, ValueError):
+                size = 0
+            # The route is reconstructed instead of trusting n8n output.  The
+            # runner already scope-validates fresh executions; this also keeps
+            # inspect_runs previews from turning an arbitrary URL into a link.
+            return {
+                "$type": "file_ref",
+                "id": asset_id,
+                "name": name,
+                "size": size,
+                "content_type": str(value.get("content_type") or "application/octet-stream")[:200],
+                "sha256": str(value.get("sha256") or "")[:64],
+                "download_url": f"/api/v2/file-assets/{asset_id}/download",
+            }
     if depth >= 3:
         return "[嵌套内容已折叠]"
     if isinstance(value, dict):

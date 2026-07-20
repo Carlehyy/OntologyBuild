@@ -30,13 +30,77 @@ CODE_REF = """Code 节点（n8n-nodes-base.code, typeVersion 2）：
 - 取输入：`$input.all()` 全部 items；`$input.first().json`；`$json` 当前 item。
 - Python 模式（beta, language=python）：用 `_input.all()`、`_json`，只能用标准库，
   返回 `[{'json': {...}}]`。能用 JS 就别用 Python。
-返回契约：末节点若是 Code，必须吐“一行一个 item、json 里字段扁平”的结构，平台才能入湖。"""
+返回契约：末节点若是 Code，必须吐“一行一个 item、json 里字段为标量或平台 FileRef”的结构。不要把 n8n binary 放进末节点。"""
+
+
+FILE_REF_REF = """平台受管附件（n8n → 平台文件网关 → 私有 MinIO）：
+- 每次平台触发 Webhook 时都会在 `$node["Webhook"].json.body.file_gateway` 注入：
+  `upload_url`、短时 `token`、`invocation_id`、`max_bytes`。不要把 token 写死进 workflow。
+- 下载源附件的 HTTP Request 把 Response Format 设为 File，二进制字段建议统一叫 `data`。
+- 再用 HTTP Request POST 到 `={{ $node["Webhook"].json.body.file_gateway.upload_url }}`；
+  Header `Authorization` = `={{ 'Bearer ' + $node["Webhook"].json.body.file_gateway.token }}`；
+  Body 选 multipart/form-data，`file` 参数取 Binary File 字段 `data`，另传稳定的
+  `idempotency_key`（推荐“业务记录主键:附件字段/序号”，同一次重试必须相同）。
+- 上传响应是 `{file_ref:{...}}`。末节点只输出 `file_ref` 对象和普通 JSON 列；平台会校验
+  id、流水线、本次执行、大小、哈希并重写为可信元数据。禁止输出 storage_uri、MinIO 凭据、
+  预签名 URL、base64 或 n8n binary。
+- FileRef 形状：`{"$type":"file_ref","id":"…","name":"报告.pdf","size":123,
+  "content_type":"application/pdf","sha256":"…","download_url":"/api/v2/file-assets/…/download"}`。
+  download_url 是平台鉴权地址，不是公开链接；预览附件默认 24 小时过期，正式入湖附件随数据集版本管理。
+- 文件名只用于展示；平台会去路径、去控制字符并作为元数据保存。MinIO object key 始终由平台生成。
+- 上传成功但未出现在末节点 JSON 的文件会被当作孤儿清理；所以不要在上传后丢掉 file_ref。"""
 
 
 # ── 可复用骨架（nodes/connections 可直接抄，改 url/query/字段即可） ──
 # 平台约定：Webhook 触发（POST, responseMode=lastNode），末节点输出扁平行数据。
 
 PATTERNS: list[dict] = [
+    {
+        "name": "rest_api_with_attachment",
+        "title": "JSON API + 附件 → FileRef → 入湖",
+        "when": "接口行数据含 attachment_url 等附件地址：JSON 保持表格输出，附件经平台网关存入私有 MinIO。",
+        "nodes": [
+            {"name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2,
+             "parameters": {"httpMethod": "POST", "path": "ob-<短名>", "responseMode": "lastNode"}},
+            {"name": "拉取数据", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+             "parameters": {"method": "GET", "url": "https://api.example.com/items"}},
+            {"name": "下载附件", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+             "parameters": {"method": "GET", "url": "={{ $json.attachment_url }}",
+                            "options": {"response": {"response": {
+                                "responseFormat": "file", "outputPropertyName": "data"}}}}},
+            {"name": "上传附件", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
+             "parameters": {
+                 "method": "POST",
+                 "url": "={{ $node[\"Webhook\"].json.body.file_gateway.upload_url }}",
+                 "sendHeaders": True,
+                 "headerParameters": {"parameters": [{
+                     "name": "Authorization",
+                     "value": "={{ 'Bearer ' + $node[\"Webhook\"].json.body.file_gateway.token }}"}]},
+                 "sendBody": True,
+                 "contentType": "multipart-form-data",
+                 "bodyParameters": {"parameters": [
+                     {"parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "data"},
+                     {"name": "idempotency_key",
+                      "value": "={{ $node[\"拉取数据\"].json.id + ':attachment' }}"},
+                 ]},
+             }},
+            {"name": "整形输出", "type": "n8n-nodes-base.set", "typeVersion": 3.4,
+             "parameters": {"mode": "manual", "assignments": {"assignments": [
+                 {"id": "f1", "name": "id", "type": "string",
+                  "value": "={{ $node[\"拉取数据\"].json.id }}"},
+                 {"id": "f2", "name": "标题", "type": "string",
+                  "value": "={{ $node[\"拉取数据\"].json.title }}"},
+                 {"id": "f3", "name": "附件", "type": "object", "value": "={{ $json.file_ref }}"},
+             ]}}},
+        ],
+        "connections": {
+            "Webhook": {"main": [[{"node": "拉取数据", "type": "main", "index": 0}]]},
+            "拉取数据": {"main": [[{"node": "下载附件", "type": "main", "index": 0}]]},
+            "下载附件": {"main": [[{"node": "上传附件", "type": "main", "index": 0}]]},
+            "上传附件": {"main": [[{"node": "整形输出", "type": "main", "index": 0}]]},
+        },
+        "note": "编排前先查 n8n_reference('files')。多附件要逐个上传，并让每个 file_ref 都进入末节点 JSON。",
+    },
     {
         "name": "rest_api_to_lake",
         "title": "REST API → 整形 → 入湖",
@@ -134,7 +198,7 @@ PATTERNS: list[dict] = [
     },
 ]
 
-_TOPICS = {"expressions", "code", "patterns"}
+_TOPICS = {"expressions", "code", "files", "patterns"}
 
 
 def reference(topic: str) -> dict:
@@ -144,6 +208,8 @@ def reference(topic: str) -> dict:
         return {"topic": "expressions", "text": EXPRESSION_REF}
     if topic in ("code", "code_node", "js", "javascript"):
         return {"topic": "code", "text": CODE_REF}
+    if topic in ("file", "files", "attachment", "attachments", "file_ref"):
+        return {"topic": "files", "text": FILE_REF_REF}
     if topic in ("pattern", "patterns", "template", "templates"):
         return {"topic": "patterns",
                 "patterns": [{"name": p["name"], "title": p["title"], "when": p["when"],

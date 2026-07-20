@@ -19,6 +19,7 @@ from app.data_channel.steward import service
 from app.data_channel.steward.models import N8nPipeline
 from app.data_channel.steward.runner import (
     _extract_execution_rows,
+    _scrub_runtime_file_context,
     collect_n8n_rows,
     normalize_rows,
     trigger_and_collect,
@@ -634,6 +635,15 @@ def test_publish_fixes_expected_columns_from_wizard_preview(
 
     rows, exec_meta = collect_test_rows(db, draft_record)
     assert exec_meta.get("error") is None, exec_meta
+    webhook_body = fake_n8n._executions[-1]["data"]["resultData"]["runData"]["Webhook"][0]["data"]["main"][0][0]["json"]["body"]
+    gateway = webhook_body["file_gateway"]
+    from app.data_channel.file_assets.service import decode_upload_token
+    file_claims = decode_upload_token(gateway["token"])
+    assert gateway["upload_url"].endswith("/api/v2/file-transfer/upload")
+    assert file_claims["pipeline_id"] == draft_record.pipeline_id
+    assert file_claims["workflow_id"] == draft_record.n8n_workflow_id
+    assert file_claims["invocation_id"] == webhook_body["run_id"]
+    assert file_claims["purpose"] == "preview"
     persist_test_result(db, draft_record, rows, exec_meta)
     # 预览不改变发布/激活状态：临时激活后已还原为未激活
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is False
@@ -785,6 +795,17 @@ def test_managed_contract_accepts_one_post_webhook_and_one_sink():
     assert contract["webhook_path"] == WEBHOOK_PATH
     assert contract["output_node_id"] == "node-output"
     assert contract["output_node_name"] == "整理字段"
+
+
+def test_managed_contract_rejects_terminal_http_file_response():
+    workflow = _managed_workflow()
+    output = workflow["nodes"][1]
+    output["type"] = "n8n-nodes-base.httpRequest"
+    output["parameters"] = {
+        "options": {"response": {"response": {"responseFormat": "file"}}},
+    }
+    with pytest.raises(StewardError, match="file_ref"):
+        service.validate_managed_workflow_contract(workflow)
 
 
 def test_managed_contract_requires_exactly_one_enabled_webhook():
@@ -1282,8 +1303,9 @@ def test_describe_node_and_reference(db, fake_n8n):
 
     assert "text" in runner.run("n8n_reference", {"topic": "expressions"})
     assert "text" in runner.run("n8n_reference", {"topic": "code"})
+    assert "file_gateway" in runner.run("n8n_reference", {"topic": "files"})["text"]
     pats = runner.run("n8n_reference", {"topic": "patterns"})
-    assert len(pats["patterns"]) >= 3 and "nodes" in pats["patterns"][0]
+    assert any(p["name"] == "rest_api_with_attachment" for p in pats["patterns"])
     assert "error" in runner.run("n8n_reference", {"topic": "乱写"})
 
 
@@ -1551,6 +1573,40 @@ def test_n8n_execution_must_be_unique_and_successful():
     with pytest.raises(StewardError, match="未成功"):
         trigger_and_collect(
             Client(), "wf", "hook", wait_seconds=1, expected_output_node="Output")
+
+
+def test_n8n_terminal_binary_is_rejected():
+    execution = {
+        "id": "binary-output",
+        "status": "success",
+        "data": {"resultData": {
+            "lastNodeExecuted": "Output",
+            "runData": {"Output": [{"data": {"main": [[{
+                "json": {"id": 1},
+                "binary": {"data": {"fileName": "report.pdf"}},
+            }]]}}]},
+        }},
+    }
+    with pytest.raises(StewardError, match="file_gateway"):
+        _extract_execution_rows(execution, "Output")
+
+
+def test_file_gateway_runtime_context_never_enters_output_rows():
+    token = "signed-runtime-token"
+    rows = [{
+        "id": "A-1",
+        "body": {
+            "source": "ontoprompt",
+            "file_gateway": {"token": token, "upload_url": "http://backend/upload"},
+        },
+    }]
+    assert _scrub_runtime_file_context(rows, token) == [{
+        "id": "A-1", "body": {"source": "ontoprompt"},
+    }]
+
+    with pytest.raises(StewardError, match="短时令牌"):
+        _scrub_runtime_file_context(
+            [{"renamed_secret": f"Bearer {token}"}], token)
 
 
 def test_n8n_missing_execution_lineage_is_not_webhook_success():
