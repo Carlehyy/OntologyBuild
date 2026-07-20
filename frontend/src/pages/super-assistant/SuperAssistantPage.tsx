@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Bot, Check, ChevronRight, CircleAlert, Copy, FileCode2, FileText, Folder, Gauge,
+  Bot, Check, ChevronRight, CircleAlert, Copy, Database, FileCode2, FileText, Folder, Gauge,
   History, List, Loader2, MessageSquare, Pencil, PlugZap, Plus,
   Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
   Wrench, X,
@@ -794,6 +794,7 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
   const [editingSkill, setEditingSkill] = useState<SuperSkill | null>(null)
   const [editingMcp, setEditingMcp] = useState<SuperMcpServer | 'new' | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [installingMinio, setInstallingMinio] = useState(false)
   const [updatingServerSetting, setUpdatingServerSetting] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
 
@@ -851,6 +852,23 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
     try { await superAssistantApi.deleteMcpServer(server.id); await refreshServers(); toast({ tone: 'success', title: 'MCP Server 已删除' }) }
     catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
   }
+
+  const installPlatformMinio = async () => {
+    setInstallingMinio(true)
+    try {
+      const server = await superAssistantApi.installPlatformMinio()
+      await refreshServers()
+      toast({
+        tone: 'success',
+        title: '平台 MinIO MCP 已添加',
+        description: `已发现 ${server.tool_manifest.length} 个工具，默认执行前确认。`,
+      })
+    } catch (error) {
+      toast({ tone: 'error', title: '无法添加平台 MinIO', description: errorText(error, '请联系管理员先完成 MinIO 配置') })
+    } finally { setInstallingMinio(false) }
+  }
+
+  const platformMinio = servers.find(server => server.builtin_key === 'minio')
 
   return (
     <>
@@ -949,7 +967,7 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
                         <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
-                        <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>
+                        {!server.builtin_key && <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>}
                         <button type="button" onClick={() => void removeServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                       </div>
                     </div>
@@ -972,10 +990,18 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                 </button>
               </div>
             ) : (
-              <button type="button" onClick={() => setEditingMcp('new')}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
-                <Plus size={14} /> 添加 MCP Server
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setEditingMcp('new')}
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                  <Plus size={14} /> 添加 MCP
+                </button>
+                <button type="button" onClick={() => void installPlatformMinio()} disabled={!!platformMinio || installingMinio}
+                  title={platformMinio ? '平台 MinIO 已添加' : '管理员完成 MinIO 配置后可直接接入'}
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-sky-400 bg-sky-50/70 px-3 text-xs font-medium text-sky-700 transition-all hover:border-sky-500 hover:bg-sky-100 disabled:cursor-default disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
+                  {installingMinio ? <Loader2 size={14} className="animate-spin" /> : platformMinio ? <Check size={14} /> : <Database size={14} />}
+                  {platformMinio ? 'MinIO 已添加' : '添加平台 MinIO'}
+                </button>
+              </div>
             )}
             <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
           </footer>

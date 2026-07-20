@@ -38,22 +38,39 @@ class StorageService:
     _shared_unavailable_until: float = 0.0
     _RETRY_INTERVAL = 60.0
 
+    @classmethod
+    def unavailable(cls) -> "StorageService":
+        """Build a fail-closed service without attempting a second endpoint."""
+        instance = cls.__new__(cls)
+        instance._available = False
+        instance._client = None
+        instance._allow_local_fallback = False
+        return instance
+
     def __init__(
         self,
         endpoint: str | None = None,
         access_key: str | None = None,
         secret_key: str | None = None,
         secure: bool | None = None,
+        region: str | None = None,
+        allow_local_fallback: bool | None = None,
     ):
         import time
         self._available = False
         self._client = None
-        self._allow_local_fallback = bool(settings.storage_local_fallback)
+        self._allow_local_fallback = (
+            bool(settings.storage_local_fallback)
+            if allow_local_fallback is None else bool(allow_local_fallback)
+        )
         if not _MINIO_AVAILABLE:
             logger.warning("MinIO client not installed — storage unavailable")
             return
 
-        is_default = endpoint is None and access_key is None and secret_key is None and secure is None
+        is_default = (
+            endpoint is None and access_key is None and secret_key is None
+            and secure is None and region is None and allow_local_fallback is None
+        )
         cls = StorageService
         if is_default:
             if cls._shared_client is not None:
@@ -68,6 +85,7 @@ class StorageService:
                 access_key=access_key or settings.minio_access_key,
                 secret_key=secret_key or settings.minio_secret_key,
                 secure=secure if secure is not None else settings.minio_use_ssl,
+                region=region or None,
             )
             client.list_buckets()  # 连接验证
             self._client = client
@@ -288,7 +306,57 @@ _storage_service: StorageService | None = None
 
 
 def get_storage_service() -> StorageService:
+    """Return the shared client, preferring a verified administrator config."""
     global _storage_service
     if _storage_service is None:
-        _storage_service = StorageService()
+        config = None
+        try:
+            from app.database import SessionLocal
+            from app.settings.object_storage.models import MinioConfig
+
+            db = SessionLocal()
+            try:
+                config = db.query(MinioConfig).filter(
+                    MinioConfig.id == "default",
+                    MinioConfig.enabled.is_(True),
+                    MinioConfig.connected.is_(True),
+                ).first()
+            finally:
+                db.close()
+        except Exception as exc:
+            # Old databases may not yet have the new configuration table.
+            logger.debug("Database MinIO configuration unavailable: %s", exc)
+        else:
+            if config:
+                try:
+                    from app.services.encryption_service import decrypt
+
+                    _storage_service = StorageService(
+                        endpoint=config.endpoint,
+                        access_key=decrypt(config.access_key_encrypted),
+                        secret_key=decrypt(config.secret_key_encrypted),
+                        secure=config.secure,
+                        region=config.region,
+                        allow_local_fallback=False,
+                    )
+                except Exception as exc:
+                    # A selected managed endpoint must fail closed. Falling through
+                    # to environment/local storage could split or silently misplace
+                    # user assets after an encryption-key or connection failure.
+                    logger.warning("Managed MinIO configuration is unusable: %s", exc)
+                    _storage_service = StorageService.unavailable()
+        if _storage_service is None:
+            _storage_service = StorageService()
     return _storage_service
+
+
+def reset_storage_service() -> None:
+    """Drop the cached client after an administrator changes configuration."""
+    global _storage_service
+    if _storage_service is not None:
+        client = getattr(_storage_service, "_client", None)
+        http = getattr(client, "_http", None)
+        clear = getattr(http, "clear", None)
+        if callable(clear):
+            clear()
+    _storage_service = None

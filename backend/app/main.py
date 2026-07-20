@@ -87,6 +87,9 @@ def _seed_db():
             ExplorationAttachment,
         )
         from app.models.workflow_config import WorkflowConfig  # noqa: F401
+        from app.settings.object_storage.models import (  # noqa: F401
+            MinioConfig, MinioOperationAudit,
+        )
         # 数据管家 (对话式 n8n 数据流水线：治理记录 + 会话)
         from app.data_channel.steward.models import (  # noqa: F401
             N8nPipeline, StewardConversation, StewardMessage,
@@ -363,11 +366,13 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning(f"SyncScheduler 启动失败: {e}")
     from app import mcp_server as _mcp_server
     from app.api_hub import mcp_server as api_hub_mcp
+    from app.settings.object_storage import mcp_server as minio_mcp
     # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建
     api_hub_public, api_hub_system = api_hub_mcp.reset_session_managers()
     try:
         async with (
             _mcp_server.reset_session_manager().run(),
+            minio_mcp.reset_session_manager().run(),
             api_hub_public.run(),
             api_hub_system.run(),
         ):
@@ -443,6 +448,7 @@ class McpMiddleware:
         path = scope.get("path", "")
         from app.api_hub import config as api_hub_config
         from app.api_hub import mcp_server as api_hub_mcp
+        from app.settings.object_storage import mcp_server as minio_mcp
         if path == api_hub_config.SYSTEM_MCP_PATH or path.startswith(api_hub_config.SYSTEM_MCP_PATH + "/"):
             if not api_hub_config.SYSTEM_MCP_TOKEN:
                 await _send_json(send, 503, {"error": "system MCP is disabled"})
@@ -472,6 +478,23 @@ class McpMiddleware:
             hub_scope["path"] = "/"
             hub_scope["raw_path"] = b"/"
             await api_hub_mcp.handle_mcp(hub_scope, receive, send)
+            return
+        if path == "/mcp/minio" or path.startswith("/mcp/minio/"):
+            headers = dict(scope.get("headers") or [])
+            auth = headers.get(b"authorization", b"").decode("latin-1")
+            if not auth.startswith("Bearer "):
+                await _send_json(send, 401, {"detail": "Missing MinIO MCP Bearer token"})
+                return
+            token = auth.removeprefix("Bearer ").strip()
+            try:
+                minio_mcp.validate_bearer_token(token)
+            except HTTPException as exc:
+                await _send_json(send, exc.status_code, {"detail": exc.detail})
+                return
+            minio_scope = dict(scope)
+            minio_scope["path"] = "/"
+            minio_scope["raw_path"] = b"/"
+            await minio_mcp.handle_mcp(minio_scope, receive, send)
             return
         if path == "/mcp" or path.startswith("/mcp/"):
             headers = dict(scope.get("headers") or [])
@@ -689,13 +712,20 @@ def health(db: Session = Depends(get_db)):
             except Exception:
                 pass
 
-    # MinIO check.  The unauthenticated liveness endpoint is sufficient here:
+    # MinIO check.  Prefer the administrator-managed endpoint when enabled.
+    # The unauthenticated liveness endpoint is sufficient here:
     # credential correctness is exercised by real storage operations, while
     # readiness must not create a new unclosed urllib3 pool every few seconds.
     try:
-        minio_endpoint = settings.minio_endpoint.rstrip("/")
+        from app.settings.object_storage.models import MinioConfig
+        managed = db.query(MinioConfig).filter(
+            MinioConfig.id == "default",
+            MinioConfig.enabled.is_(True),
+            MinioConfig.connected.is_(True),
+        ).first()
+        minio_endpoint = (managed.endpoint if managed else settings.minio_endpoint).rstrip("/")
         if "://" not in minio_endpoint:
-            scheme = "https" if settings.minio_use_ssl else "http"
+            scheme = "https" if (managed.secure if managed else settings.minio_use_ssl) else "http"
             minio_endpoint = f"{scheme}://{minio_endpoint}"
         _probe_http_service(f"{minio_endpoint}/minio/health/live")
         checks["minio"] = "ok"

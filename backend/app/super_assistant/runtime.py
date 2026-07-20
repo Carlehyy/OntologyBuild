@@ -19,6 +19,7 @@ from app.super_assistant.models import (
     SuperAssistantToolRun,
 )
 from app.super_assistant.skill_store import read_text_file, skill_directory
+from app.settings.object_storage.service import execute_minio_tool
 
 
 _DEFAULT_CONTEXT_TOKENS = 64_000
@@ -272,16 +273,22 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                         server, original_name = server_tuple
                         tool_run.status = "running"
                         db.commit()
-                        output = asyncio.run(call_tool(
-                            transport=server.transport,
-                            url=server.url,
-                            headers=decrypt_headers(server.headers_encrypted),
-                            command=server.command,
-                            args=server.args,
-                            env=decrypt_env(server.env_encrypted),
-                            tool_name=original_name,
-                            arguments=arguments,
-                        ))
+                        if server.builtin_key == "minio":
+                            output = execute_minio_tool(
+                                db, original_name, arguments,
+                                actor_type="super_assistant", actor_id=owner_id,
+                            )
+                        else:
+                            output = asyncio.run(call_tool(
+                                transport=server.transport,
+                                url=server.url,
+                                headers=decrypt_headers(server.headers_encrypted),
+                                command=server.command,
+                                args=server.args,
+                                env=decrypt_env(server.env_encrypted),
+                                tool_name=original_name,
+                                arguments=arguments,
+                            ))
                     elif tool_name in {"use_skill", "read_skill_file"}:
                         output = _execute_builtin(db, owner_id, tool_name, arguments)
                     else:
