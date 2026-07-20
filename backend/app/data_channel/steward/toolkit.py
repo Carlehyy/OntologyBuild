@@ -447,6 +447,15 @@ def _validate_connections(nodes: list[dict], connections: dict) -> None:
                         raise StewardError(f"connections 引用了不存在的目标节点「{tgt}」。现有节点：{sorted(names)}")
 
 
+def _contains_file_ref(value: Any) -> bool:
+    if isinstance(value, dict):
+        return value.get("$type") == "file_ref" or any(
+            _contains_file_ref(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_file_ref(item) for item in value)
+    return False
+
+
 def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
     """Return a bounded, JSON-safe preview value without leaking credential-shaped fields."""
     if _SENSITIVE_OUTPUT_KEY.search(key):
@@ -489,7 +498,8 @@ def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
     # downloadable in the UI. Oversized arbitrary JSON still falls back to a
     # truncated string, preserving the existing cell-size budget.
     text = json.dumps(safe, ensure_ascii=False, default=str)
-    return safe if len(text) <= _EXEC_CELL_CHARS else text[:_EXEC_CELL_CHARS] + "…"
+    return (safe if _contains_file_ref(safe) or len(text) <= _EXEC_CELL_CHARS
+            else text[:_EXEC_CELL_CHARS] + "…")
 
 
 def _execution_table_preview(items: list, sample_limit: int | None = None,

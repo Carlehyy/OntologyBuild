@@ -1316,7 +1316,7 @@ def test_execution_preview_preserves_nested_file_refs_for_download_buttons():
     preview = _execution_table_preview([{"json": {
         "files": [{
             "$type": "file_ref",
-            "id": "asset-1",
+            "id": "c124ae83-0348-4e84-9f87-4c88bb137ae4",
             "name": "README.md",
             "size": 5624,
             "content_type": "text/plain",
@@ -1326,10 +1326,13 @@ def test_execution_preview_preserves_nested_file_refs_for_download_buttons():
         "metadata": {"status": "ok", "access_token": "secret"},
     }}])
 
-    file_ref = preview["rows"][0]["files"][0]
+    files = preview["rows"][0]["files"]
+    assert isinstance(files, list)
+    file_ref = files[0]
     assert file_ref["$type"] == "file_ref"
     assert file_ref["name"] == "README.md"
-    assert file_ref["download_url"] == "/api/v2/file-assets/asset-1/download"
+    assert file_ref["download_url"] == (
+        "/api/v2/file-assets/c124ae83-0348-4e84-9f87-4c88bb137ae4/download")
     assert preview["rows"][0]["metadata"]["access_token"] == "[已隐藏]"
 
 
