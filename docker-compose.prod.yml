@@ -111,6 +111,7 @@ services:
       STEWARD_BROWSER_IDLE_TIMEOUT_SECONDS: ${STEWARD_BROWSER_IDLE_TIMEOUT_SECONDS:-900}
       STEWARD_BROWSER_REAPER_INTERVAL_SECONDS: ${STEWARD_BROWSER_REAPER_INTERVAL_SECONDS:-30}
       STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
+      PIPELINE_FILE_GATEWAY_BASE_URL: ${PIPELINE_FILE_GATEWAY_BASE_URL:-http://backend:8000/api/v2/file-transfer}
     depends_on:
       db:
         condition: service_healthy

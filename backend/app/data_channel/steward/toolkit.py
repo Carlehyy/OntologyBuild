@@ -480,13 +480,16 @@ def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
     if isinstance(value, dict):
         safe = {str(k): _safe_output_value(v, str(k), depth + 1)
                 for k, v in list(value.items())[:24]}
-        text = json.dumps(safe, ensure_ascii=False, default=str)
     elif isinstance(value, list):
         safe = [_safe_output_value(item, "", depth + 1) for item in value[:20]]
-        text = json.dumps(safe, ensure_ascii=False, default=str)
     else:
         text = str(value)
-    return text if len(text) <= _EXEC_CELL_CHARS else text[:_EXEC_CELL_CHARS] + "…"
+        return text if len(text) <= _EXEC_CELL_CHARS else text[:_EXEC_CELL_CHARS] + "…"
+    # Keep bounded containers structured so nested file_ref values remain
+    # downloadable in the UI. Oversized arbitrary JSON still falls back to a
+    # truncated string, preserving the existing cell-size budget.
+    text = json.dumps(safe, ensure_ascii=False, default=str)
+    return safe if len(text) <= _EXEC_CELL_CHARS else text[:_EXEC_CELL_CHARS] + "…"
 
 
 def _execution_table_preview(items: list, sample_limit: int | None = None,

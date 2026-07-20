@@ -16,6 +16,7 @@ from app.data_channel.file_assets.service import (
     commit_invocation,
     create_upload_token,
     decode_upload_token,
+    gateway_context,
     sanitize_original_name,
     store_upload,
     validate_and_canonicalize_refs,
@@ -75,6 +76,33 @@ def _claims(pipeline, binding, owner_id, *, invocation="inv-1", purpose="preview
         owner_id=owner_id,
     )
     return token, decode_upload_token(token)
+
+
+def test_gateway_context_requires_absolute_credential_free_url(monkeypatch):
+    monkeypatch.setattr(settings, "pipeline_file_gateway_base_url", "backend:8000/files")
+    with pytest.raises(FileAssetError, match="绝对 HTTP"):
+        gateway_context(
+            pipeline_id="pipeline-1", workflow_id="workflow-1",
+            invocation_id="invocation-1", purpose="preview", owner_id="user-1")
+
+    monkeypatch.setattr(
+        settings, "pipeline_file_gateway_base_url",
+        "https://user:secret@example.com/api/v2/file-transfer")
+    with pytest.raises(FileAssetError, match="不能包含账号"):
+        gateway_context(
+            pipeline_id="pipeline-1", workflow_id="workflow-1",
+            invocation_id="invocation-1", purpose="preview", owner_id="user-1")
+
+
+def test_gateway_context_uses_configured_n8n_reachable_url(monkeypatch):
+    monkeypatch.setattr(
+        settings, "pipeline_file_gateway_base_url",
+        "https://platform.example.com/api/v2/file-transfer/")
+    context = gateway_context(
+        pipeline_id="pipeline-1", workflow_id="workflow-1",
+        invocation_id="invocation-1", purpose="preview", owner_id="user-1")
+    assert context["upload_url"] == (
+        "https://platform.example.com/api/v2/file-transfer/upload")
 
 
 def test_filename_is_metadata_not_object_path(db, admin_user, managed_pipeline):

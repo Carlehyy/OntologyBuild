@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, BinaryIO
+from urllib.parse import urlsplit
 
 from jose import JWTError, jwt
 from sqlalchemy.exc import IntegrityError
@@ -132,7 +133,19 @@ def gateway_context(
     *, pipeline_id: str, workflow_id: str, invocation_id: str,
     purpose: str, owner_id: str | None,
 ) -> dict[str, Any]:
-    base_url = settings.pipeline_file_gateway_base_url.rstrip("/")
+    base_url = str(settings.pipeline_file_gateway_base_url or "").strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise FileAssetError(
+            "PIPELINE_FILE_GATEWAY_BASE_URL 必须是 n8n 可访问的绝对 HTTP(S) 地址，"
+            "且不能包含账号、查询参数或片段")
     return {
         "contract_version": 1,
         "upload_url": f"{base_url}/upload",

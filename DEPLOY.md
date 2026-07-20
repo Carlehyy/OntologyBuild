@@ -221,3 +221,15 @@ http://64.90.17.41/
 
 如需改端口，在服务器 `.env` 中设置 `PUBLIC_PORT`，并同步更新 `DEPLOY_HEALTH_URL`。
 
+### 外部 n8n 与附件文件网关
+
+数据管家不会把 MinIO 长期凭据交给 n8n；每次执行只注入短时、流水线范围内的上传令牌。
+n8n 必须能够访问服务器 `.env` 中的文件网关地址：
+
+```text
+PIPELINE_FILE_GATEWAY_BASE_URL=https://平台域名/api/v2/file-transfer
+```
+
+自动部署会在该变量缺失或仍为 `http://backend:8000/...` 默认值时，根据
+`DEPLOY_HEALTH_URL` 自动写入可达地址。若 n8n 不在平台 Docker 网络中，不能继续使用
+`backend` 服务名。公网文件传输必须配置 HTTPS；HTTP 仅适合临时验收。

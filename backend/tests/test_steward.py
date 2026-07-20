@@ -25,7 +25,7 @@ from app.data_channel.steward.runner import (
     trigger_and_collect,
 )
 from app.data_channel.steward.service import StewardError
-from app.data_channel.steward.toolkit import ToolRunner
+from app.data_channel.steward.toolkit import ToolRunner, _execution_table_preview
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 from app.settings.workflows.n8n_client import N8nClient
 
@@ -1305,8 +1305,32 @@ def test_describe_node_and_reference(db, fake_n8n):
     assert "text" in runner.run("n8n_reference", {"topic": "code"})
     assert "file_gateway" in runner.run("n8n_reference", {"topic": "files"})["text"]
     pats = runner.run("n8n_reference", {"topic": "patterns"})
-    assert any(p["name"] == "rest_api_with_attachment" for p in pats["patterns"])
+    attachment_pattern = next(
+        p for p in pats["patterns"] if p["name"] == "rest_api_with_attachment")
+    assert any(node["name"] == "保留文件名" for node in attachment_pattern["nodes"])
+    assert attachment_pattern["connections"]["下载附件"]["main"][0][0]["node"] == "保留文件名"
     assert "error" in runner.run("n8n_reference", {"topic": "乱写"})
+
+
+def test_execution_preview_preserves_nested_file_refs_for_download_buttons():
+    preview = _execution_table_preview([{"json": {
+        "files": [{
+            "$type": "file_ref",
+            "id": "asset-1",
+            "name": "README.md",
+            "size": 5624,
+            "content_type": "text/plain",
+            "sha256": "a" * 64,
+            "download_url": "https://untrusted.example/file",
+        }],
+        "metadata": {"status": "ok", "access_token": "secret"},
+    }}])
+
+    file_ref = preview["rows"][0]["files"][0]
+    assert file_ref["$type"] == "file_ref"
+    assert file_ref["name"] == "README.md"
+    assert file_ref["download_url"] == "/api/v2/file-assets/asset-1/download"
+    assert preview["rows"][0]["metadata"]["access_token"] == "[已隐藏]"
 
 
 def test_execute_pipeline_triggers_fresh_draft_run_and_restores_state(

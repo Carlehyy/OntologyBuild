@@ -153,6 +153,28 @@ env_value() {
     END { gsub(/\r$/, "", value); print value }
   ' .env
 }
+configure_pipeline_file_gateway() {
+  local current default_url public_url
+  current="$(env_value PIPELINE_FILE_GATEWAY_BASE_URL)"
+  default_url="http://backend:8000/api/v2/file-transfer"
+  public_url="${HEALTH_URL%/}/api/v2/file-transfer"
+  if [ -z "$current" ] || [ "$current" = "$default_url" ]; then
+    set_env_value PIPELINE_FILE_GATEWAY_BASE_URL "$public_url"
+    current="$public_url"
+    log "configured PIPELINE_FILE_GATEWAY_BASE_URL from the deployment health URL"
+  fi
+  case "$current" in
+    http://127.0.0.1/*|http://127.0.0.1:*|http://localhost/*|http://localhost:*|http://backend:*|https://*) ;;
+    http://*)
+      log "warning: PIPELINE_FILE_GATEWAY_BASE_URL uses public plain HTTP; configure HTTPS before production file transfers"
+      ;;
+    *)
+      log "PIPELINE_FILE_GATEWAY_BASE_URL must be an absolute HTTP(S) URL"
+      exit 1
+      ;;
+  esac
+}
+configure_pipeline_file_gateway
 require_secret() {
   local key="$1"
   local value

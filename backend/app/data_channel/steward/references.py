@@ -37,6 +37,9 @@ FILE_REF_REF = """平台受管附件（n8n → 平台文件网关 → 私有 Min
 - 每次平台触发 Webhook 时都会在 `$node["Webhook"].json.body.file_gateway` 注入：
   `upload_url`、短时 `token`、`invocation_id`、`max_bytes`。不要把 token 写死进 workflow。
 - 下载源附件的 HTTP Request 把 Response Format 设为 File，二进制字段建议统一叫 `data`。
+- 下载节点经常把文件名退化成 `data`/`data.txt`。上传前应增加 Code 节点，把
+  `binary.data.fileName` 设置为业务接口返回的原始文件名（缺失时再使用安全兜底名）；
+  不要用二进制字段名冒充文件名。
 - 再用 HTTP Request POST 到 `={{ $node["Webhook"].json.body.file_gateway.upload_url }}`；
   Header `Authorization` = `={{ 'Bearer ' + $node["Webhook"].json.body.file_gateway.token }}`；
   Body 选 multipart/form-data，`file` 参数取 Binary File 字段 `data`，另传稳定的
@@ -68,6 +71,13 @@ PATTERNS: list[dict] = [
              "parameters": {"method": "GET", "url": "={{ $json.attachment_url }}",
                             "options": {"response": {"response": {
                                 "responseFormat": "file", "outputPropertyName": "data"}}}}},
+            {"name": "保留文件名", "type": "n8n-nodes-base.code", "typeVersion": 2,
+             "parameters": {"mode": "runOnceForAllItems", "jsCode":
+                 "const item = $input.first();\n"
+                 "if (!item.binary?.data) throw new Error('附件下载结果缺少 binary.data');\n"
+                 "const sourceName = $('拉取数据').first().json.attachment_name;\n"
+                 "item.binary.data.fileName = String(sourceName || item.binary.data.fileName || 'attachment.bin');\n"
+                 "return [item];"}},
             {"name": "上传附件", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2,
              "parameters": {
                  "method": "POST",
@@ -96,7 +106,8 @@ PATTERNS: list[dict] = [
         "connections": {
             "Webhook": {"main": [[{"node": "拉取数据", "type": "main", "index": 0}]]},
             "拉取数据": {"main": [[{"node": "下载附件", "type": "main", "index": 0}]]},
-            "下载附件": {"main": [[{"node": "上传附件", "type": "main", "index": 0}]]},
+            "下载附件": {"main": [[{"node": "保留文件名", "type": "main", "index": 0}]]},
+            "保留文件名": {"main": [[{"node": "上传附件", "type": "main", "index": 0}]]},
             "上传附件": {"main": [[{"node": "整形输出", "type": "main", "index": 0}]]},
         },
         "note": "编排前先查 n8n_reference('files')。多附件要逐个上传，并让每个 file_ref 都进入末节点 JSON。",

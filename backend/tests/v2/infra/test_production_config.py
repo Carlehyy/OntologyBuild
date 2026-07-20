@@ -99,7 +99,7 @@ def test_secret_key_derived_encryption_remains_decryptable(monkeypatch):
     assert encryption.decrypt(ciphertext) == "existing-connection-password"
 
 
-def _run_deploy_validation(app_dir: Path):
+def _run_deploy_validation(app_dir: Path, *, health_url: str | None = None):
     env = os.environ.copy()
     env.update({
         "APP_DIR": str(app_dir),
@@ -107,6 +107,8 @@ def _run_deploy_validation(app_dir: Path):
         "DEPLOY_VALIDATE_ONLY": "1",
         "STRICT_PRODUCTION_CONFIG": "0",
     })
+    if health_url is not None:
+        env["HEALTH_URL"] = health_url
     return subprocess.run(
         ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=20,
@@ -138,6 +140,8 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
     assert generated["MINIO_ACCESS_KEY"] != "minioadmin"
     assert generated["MINIO_SECRET_KEY"] != "minioadmin"
     assert generated["STRICT_PRODUCTION_CONFIG"] == "false"
+    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
+        "http://127.0.0.1:80/api/v2/file-transfer")
     assert generated["SECRET_KEY"] not in result.stdout
     assert stat.S_IMODE(generated_path.stat().st_mode) == 0o600
 
@@ -151,3 +155,35 @@ def test_existing_example_env_warns_but_does_not_block_deploy(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "warning: SECRET_KEY" in result.stdout
     assert "production environment validation succeeded" in result.stdout
+    generated = _read_env(tmp_path / ".env")
+    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
+        "http://127.0.0.1:80/api/v2/file-transfer")
+
+
+def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env")
+
+    result = _run_deploy_validation(
+        tmp_path, health_url="https://platform.example.com/")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
+        "https://platform.example.com/api/v2/file-transfer")
+
+
+def test_deploy_preserves_explicit_pipeline_file_gateway(tmp_path):
+    content = (ROOT / ".env.example").read_text().replace(
+        "PIPELINE_FILE_GATEWAY_BASE_URL=http://backend:8000/api/v2/file-transfer",
+        "PIPELINE_FILE_GATEWAY_BASE_URL=https://platform.example.com/api/v2/file-transfer",
+    )
+    (tmp_path / ".env.example").write_text(content)
+    (tmp_path / ".env").write_text(content)
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
+        "https://platform.example.com/api/v2/file-transfer")
