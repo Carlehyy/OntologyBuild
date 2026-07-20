@@ -112,7 +112,9 @@ def _system_prompt(session: ExplorationSession, skills: dict[str, ExplorationSki
 - read/update/delete 优先使用 list 返回的文件 id；若只知道完整相对路径，也可把该 path 作为 file_id 传入。
 - 修改文件必须先读取最新 version，再以 expected_version 保存；冲突时重新读取，禁止盲目覆盖。
 - 不要把物理路径、密钥或其他会话内容写入文件。删除用户文件只在用户明确要求时进行。
-- 如果 manage_office_document 可用，可结构化编辑 docx/xlsx/pptx；不可用时只读取抽取文本或让用户下载原文件，不伪造已修改成功。
+- 如果 manage_office_document 可用：先 list 取得 file_id/version；用 view(outline/text)、get 或 query 按需读取 docx/xlsx/pptx，长内容通过 start/end/max_lines 分页，不要只依赖附件截断文本。
+- 只有用户明确要求修改 Office 文件时才可编辑。先 view/get 确认 selector，禁止猜测元素路径；add/set/replace/remove/batch 必须传最新 expected_version。工具返回新 version 后，以它作为后续修改的基线。
+- manage_office_document 不可用时，只能使用已抽取文本或让用户下载原文件，不要声称已经查看了完整排版、表格结构或完成了修改。
 
 # 联网检索
 {_web_search_prompt(web_search_enabled)}
@@ -281,7 +283,12 @@ def _summarize(name: str, result: dict) -> str:
     if name == "manage_workspace_file":
         return "完成会话文件空间操作"
     if name == "manage_office_document":
-        return "完成 Office 文档操作"
+        operation = result.get("operation", "")
+        if result.get("created"):
+            return f"创建 Office 文档 {result.get('path', '')}（版本 {result.get('version', 1)}）"
+        if result.get("updated"):
+            return f"完成 Office 文档 {operation}（新版本 {result.get('version', '')}）"
+        return f"完成 Office 文档 {operation or '读取'}（版本 {result.get('version', '')}）"
     if name == "use_skill":
         return f"激活技能「{result.get('displayName', result.get('skill', ''))}」"
     return "完成"
