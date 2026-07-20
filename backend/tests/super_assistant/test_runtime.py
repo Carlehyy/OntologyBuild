@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -105,6 +107,80 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
         tool_run = db.query(SuperAssistantToolRun).one()
         assert tool_run.tool_name == "use_skill"
         assert tool_run.status == "success"
+
+
+def test_runtime_excludes_disabled_skill_and_rejects_direct_loading(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_skill_root", str(tmp_path / "skills"))
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'disabled-skill-runtime.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine, tables=[
+        User.__table__, ModelConfig.__table__,
+        SuperAssistantConversation.__table__, SuperAssistantSkill.__table__,
+        SuperAssistantMcpServer.__table__, SuperAssistantMessage.__table__,
+        SuperAssistantToolRun.__table__,
+    ])
+    TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    monkeypatch.setattr(runtime, "SessionLocal", TestingSession)
+
+    folder = skill_directory("user-disabled", "skill-disabled")
+    create_skill_folder(folder, render_skill_markdown(
+        name="disabled-skill", description="This description must not enter the prompt",
+        content="These instructions must not be available.",
+    ))
+    with TestingSession() as db:
+        db.add(User(
+            id="user-disabled", username="disabled-owner", email="disabled@example.com",
+            password_hash="unused", role="editor",
+        ))
+        db.add(ModelConfig(
+            id="model-disabled", name="Fake", config_type="llm", provider="openai",
+            models=["fake-model"], options={}, enabled=True, is_default=True,
+            created_by="user-disabled",
+        ))
+        db.add(SuperAssistantConversation(
+            id="conversation-disabled", owner_id="user-disabled", title="Disabled skill",
+            model_config_id="model-disabled",
+        ))
+        db.add(SuperAssistantMessage(
+            id="user-message-disabled", conversation_id="conversation-disabled",
+            role="user", content="do not use disabled skill", status="complete",
+        ))
+        db.add(SuperAssistantMessage(
+            id="assistant-message-disabled", conversation_id="conversation-disabled",
+            role="assistant", content="", status="streaming",
+        ))
+        db.add(SuperAssistantSkill(
+            id="skill-disabled", owner_id="user-disabled", name="disabled-skill",
+            display_name="disabled-skill", description="This description must not enter the prompt",
+            triggers=[], folder_path=str(folder), manifest=build_manifest(folder), enabled=False,
+        ))
+        db.commit()
+
+    def fake_chat(_call_kwargs, messages, _tools):
+        assert "disabled-skill" not in messages[0]["content"]
+        assert "This description must not enter the prompt" not in messages[0]["content"]
+        return {
+            "content": "停用的 Skill 未进入运行时。",
+            "tool_calls": [],
+            "usage": {"inputTokens": 12, "outputTokens": 6},
+        }
+
+    monkeypatch.setattr(runtime.provider, "chat", fake_chat)
+    events = "".join(runtime.stream_chat(
+        conversation_id="conversation-disabled",
+        owner_id="user-disabled",
+        assistant_message_id="assistant-message-disabled",
+        requested_model_id="model-disabled",
+    ))
+    assert "停用的 Skill 未进入运行时" in events
+
+    with TestingSession() as db:
+        result = json.loads(runtime._execute_builtin(
+            db, "user-disabled", "use_skill", {"name": "disabled-skill"},
+        ))
+    assert "不存在或未启用" in result["error"]
 
 
 def test_runtime_executes_builtin_minio_mcp_without_network_or_credentials(tmp_path, monkeypatch):

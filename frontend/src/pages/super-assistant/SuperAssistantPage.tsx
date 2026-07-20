@@ -761,7 +761,7 @@ function McpDialog({ server, onClose, onSaved }: {
 }
 
 
-function McpSettingSwitch({ label, ariaLabel, checked, busy, onToggle }: {
+function SettingSwitch({ label, ariaLabel, checked, busy, onToggle }: {
   label: string
   ariaLabel: string
   checked: boolean
@@ -772,8 +772,10 @@ function McpSettingSwitch({ label, ariaLabel, checked, busy, onToggle }: {
     <div className="inline-flex items-center gap-1.5">
       <span className="text-[10px] text-[var(--color-text-secondary)]">{label}</span>
       <button type="button" role="switch" aria-label={ariaLabel} aria-checked={checked} aria-busy={busy} disabled={busy} onClick={onToggle}
-        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 focus-visible:ring-offset-1 disabled:cursor-wait disabled:opacity-60 ${checked ? 'bg-teal-600' : 'bg-slate-300'}`}>
-        <span aria-hidden="true" className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+        className="relative inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 focus-visible:ring-offset-1 disabled:cursor-wait disabled:opacity-60">
+        <span aria-hidden="true" className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors motion-reduce:transition-none ${busy ? 'animate-pulse motion-reduce:animate-none' : ''} ${checked ? 'bg-teal-600' : 'bg-slate-300'}`}>
+          <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform motion-reduce:transition-none ${checked ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+        </span>
       </button>
     </div>
   )
@@ -795,6 +797,7 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
   const [editingMcp, setEditingMcp] = useState<SuperMcpServer | 'new' | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [installingMinio, setInstallingMinio] = useState(false)
+  const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null)
   const [updatingServerSetting, setUpdatingServerSetting] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
 
@@ -809,8 +812,16 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
   }
 
   const toggleSkill = async (skill: SuperSkill) => {
-    try { await superAssistantApi.updateSkill(skill.id, { enabled: !skill.enabled }); await refreshSkills() }
-    catch (error) { toast({ tone: 'error', title: '更新失败', description: errorText(error) }) }
+    if (updatingSkillId) return
+    setUpdatingSkillId(skill.id)
+    try {
+      await superAssistantApi.updateSkill(skill.id, { enabled: !skill.enabled })
+      await refreshSkills()
+    } catch (error) {
+      toast({ tone: 'error', title: 'Skill 设置更新失败', description: errorText(error) })
+    } finally {
+      setUpdatingSkillId(null)
+    }
   }
 
   const removeSkill = async (skill: SuperSkill) => {
@@ -921,8 +932,15 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                         <p className="truncate font-mono text-xs font-semibold text-[var(--color-text-primary)]">{skill.name}</p>
                         <p className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">r{skill.revision} · {skill.manifest.length} files</p>
                       </div>
-                      <input type="checkbox" aria-label={`${skill.enabled ? '停用' : '启用'} ${skill.name}`} checked={skill.enabled} onChange={() => void toggleSkill(skill)} className="mt-1 h-4 w-4 accent-teal-700" />
+                      <SettingSwitch
+                        label="启用"
+                        ariaLabel={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
+                        checked={skill.enabled}
+                        busy={updatingSkillId !== null}
+                        onToggle={() => void toggleSkill(skill)}
+                      />
                     </div>
+                    {!skill.enabled && <span className="mt-2 inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
                     <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
                     <div className="mt-2 flex justify-end gap-1">
                       <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
@@ -958,10 +976,10 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                     {server.last_test_message && <p className="mt-2 line-clamp-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]">{server.last_test_message}</p>}
                     <div className="mt-2 flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-3">
-                        <McpSettingSwitch label="启用" ariaLabel={`${server.enabled ? '停用' : '启用'} MCP ${server.name}`} checked={server.enabled}
+                        <SettingSwitch label="启用" ariaLabel={`${server.enabled ? '停用' : '启用'} MCP ${server.name}`} checked={server.enabled}
                           busy={updatingServerSetting !== null}
                           onToggle={() => void updateServerSetting(server, 'enabled', !server.enabled)} />
-                        <McpSettingSwitch label="自动执行" ariaLabel={`${server.require_confirmation ? '开启' : '关闭'} ${server.name} 自动执行`} checked={!server.require_confirmation}
+                        <SettingSwitch label="自动执行" ariaLabel={`${server.require_confirmation ? '开启' : '关闭'} ${server.name} 自动执行`} checked={!server.require_confirmation}
                           busy={updatingServerSetting !== null}
                           onToggle={() => void updateServerSetting(server, 'require_confirmation', !server.require_confirmation)} />
                       </div>

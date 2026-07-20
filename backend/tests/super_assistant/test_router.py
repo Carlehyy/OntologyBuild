@@ -72,9 +72,22 @@ def test_user_can_manage_conversations_folder_skills_and_mcp(tmp_path, monkeypat
     assert created.status_code == 201, created.text
     skill = created.json()
     assert skill["name"] == "folder-skill"
+    assert skill["enabled"] is True
     assert "display_name" not in skill
     assert "triggers" not in skill
     assert [entry["path"] for entry in skill["manifest"]] == ["SKILL.md"]
+
+    disabled = client.patch(
+        f"/api/v2/super-assistant/skills/{skill['id']}",
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["enabled"] is False
+    listed_skill = next(
+        item for item in client.get("/api/v2/super-assistant/skills").json()
+        if item["id"] == skill["id"]
+    )
+    assert listed_skill["enabled"] is False
 
     added = client.put(
         f"/api/v2/super-assistant/skills/{skill['id']}/files/references/guide.md",
