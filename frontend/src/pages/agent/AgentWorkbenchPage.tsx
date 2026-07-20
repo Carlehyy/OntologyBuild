@@ -1301,7 +1301,7 @@ export default function AgentWorkbenchPage() {
 
   if (ontologiesLoading) return <LoadingState message="加载配置..." />
 
-  const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm'
+  const panelClass = 'workspace-topology-surface min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-sm'
   const graphLoading = workspaceView === 'ontology' && !!oid && backendId === oid && syncStatus === 'loading'
   const graphError = workspaceView === 'ontology' && !!oid && backendId === oid && syncStatus === 'error' && !graphOntology
 
@@ -1313,7 +1313,7 @@ export default function AgentWorkbenchPage() {
         style={{ gridTemplateColumns: `minmax(420px, ${sizes[0]}fr) 4px minmax(560px, ${sizes[1]}fr)` }}
       >
         {/* 2. 本体结构 / 数据推演图谱 */}
-        <section className={`${panelClass} col-start-3 row-start-1 flex flex-col bg-white`}>
+        <section data-testid="agent-ontology-panel" className={`${panelClass} col-start-3 row-start-1 flex flex-col`}>
           <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -1377,7 +1377,7 @@ export default function AgentWorkbenchPage() {
             </div>
           </div>
 
-          <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
+          <div className="workspace-topology-surface relative min-h-0 flex-1 overflow-hidden">
             {workspaceView === 'trace' ? (
               <AgentCallChainView
                 messages={messages}
@@ -1427,7 +1427,7 @@ export default function AgentWorkbenchPage() {
         <SplitHandle onPointerDown={startResize} />
 
         {/* 1. 智能对话 */}
-        <section className={`${panelClass} col-start-1 row-start-1 flex flex-col`}>
+        <section data-testid="agent-chat-panel" className={`${panelClass} col-start-1 row-start-1 flex flex-col`}>
           <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -1517,7 +1517,7 @@ export default function AgentWorkbenchPage() {
             </div>
           </div>
 
-          <div className="scrollbar-thin flex-1 overflow-auto bg-[#f8fbff] bg-[radial-gradient(circle_at_18%_16%,rgba(14,165,233,0.10),transparent_24%),radial-gradient(circle_at_84%_18%,rgba(45,212,191,0.10),transparent_22%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.88))] px-4 py-4">
+          <div data-testid="agent-chat-region" className="workspace-topology-surface scrollbar-thin flex-1 overflow-auto px-4 py-4">
             {messages.length === 0 ? (
               <div className="flex min-h-full flex-col justify-center py-8 text-center anim-scale-in">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-600 text-white shadow-sm">

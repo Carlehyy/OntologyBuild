@@ -159,6 +159,22 @@ test('智能助手顶栏只保留有色历史会话入口', async ({ page }) => 
   await expect(historyButton).toHaveCSS('background-color', 'rgb(204, 251, 241)')
 })
 
+test('智能对话与本体拓扑图沿用业务场景画布背景', async ({ page }) => {
+  await mockAgentHeader(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+  await page.getByLabel('选择本体').selectOption('ontology-1')
+
+  const chatPanel = page.getByTestId('agent-chat-panel')
+  const chatRegion = page.getByTestId('agent-chat-region')
+  const ontologyPanel = page.getByTestId('agent-ontology-panel')
+
+  await expect(chatPanel).toHaveCSS('background-color', 'rgb(248, 251, 255)')
+  await expect(chatRegion).toHaveCSS('background-color', 'rgb(248, 251, 255)')
+  await expect(ontologyPanel).toHaveCSS('background-color', 'rgb(248, 251, 255)')
+  await expect(chatRegion).toHaveCSS('background-image', 'none')
+})
+
 test('授权边界弹窗高度跟随内容且附加指令后无大块留白', async ({ page }) => {
   await mockAgentHeader(page)
   await page.setViewportSize({ width: 1280, height: 900 })

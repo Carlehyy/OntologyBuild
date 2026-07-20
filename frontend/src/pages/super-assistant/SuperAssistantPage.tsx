@@ -1194,11 +1194,12 @@ export default function SuperAssistantPage() {
 
   const renderComposer = (prominent = false) => (
     <div className="w-full">
-      <div className={`flex items-end gap-2 rounded-2xl border bg-[var(--color-bg-elevated)] p-2 transition-all focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${prominent
+      <div data-testid="super-assistant-composer" className={`flex items-end gap-2 rounded-2xl border bg-[var(--color-bg-elevated)] p-2 transition-all focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${prominent
         ? 'border-slate-200 shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
         : 'border-[var(--color-border)] shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}>
         <textarea
           ref={textareaRef}
+          autoFocus
           value={input}
           onChange={event => setInput(event.target.value)}
           rows={1}
@@ -1335,7 +1336,7 @@ export default function SuperAssistantPage() {
           <div className="relative">
             <button
               type="button"
-              onClick={() => { setConfigOpen(false); setSessionsOpen(value => !value) }}
+              onClick={() => setSessionsOpen(value => !value)}
               aria-label="查看会话记录"
               aria-expanded={sessionsOpen}
               title="查看会话记录"

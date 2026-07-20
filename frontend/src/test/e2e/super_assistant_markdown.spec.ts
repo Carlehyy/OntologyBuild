@@ -156,3 +156,27 @@ test('标题编辑与顶部工具默认使用可识别的状态色', async ({ pa
   await expect(cancelButton).toHaveCSS('background-color', 'rgb(255, 241, 242)')
   await expect(cancelButton).toHaveCSS('color', 'rgb(225, 29, 72)')
 })
+
+test('打开会话记录时保留已展示的助手配置', async ({ page }) => {
+  await mockSuperAssistant(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/super-assistant')
+
+  await page.getByRole('button', { name: '打开助手配置' }).click()
+  await expect(page.getByRole('heading', { name: '助手配置' })).toBeVisible()
+
+  await page.getByRole('button', { name: '查看会话记录' }).click()
+
+  await expect(page.getByRole('dialog', { name: '历史会话' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '助手配置' })).toBeVisible()
+  await expect(page.locator('button[title="助手配置"]')).toHaveAttribute('aria-expanded', 'true')
+})
+
+test('消息输入框默认获得焦点并展示绿色边框', async ({ page }) => {
+  await mockSuperAssistant(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/super-assistant')
+
+  await expect(page.getByRole('textbox', { name: '向超级助手发送消息' })).toBeFocused()
+  await expect(page.getByTestId('super-assistant-composer')).toHaveCSS('border-color', 'rgb(20, 184, 166)')
+})
