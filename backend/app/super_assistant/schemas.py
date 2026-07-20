@@ -148,6 +148,7 @@ class McpServerUpdate(BaseModel):
 class McpServerOut(ORMModel):
     id: str
     name: str
+    builtin_key: str | None
     transport: str
     url: str
     header_names: list[str]

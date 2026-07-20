@@ -55,6 +55,7 @@ export type McpTransport = 'stdio' | 'sse' | 'streamable_http'
 export interface SuperMcpServer {
   id: string
   name: string
+  builtin_key: string | null
   transport: McpTransport
   url: string
   header_names: string[]
@@ -192,5 +193,8 @@ export const superAssistantApi = {
   deleteMcpServer: (id: string) => apiClientV2.delete(`/super-assistant/mcp-servers/${id}`),
   testMcpServer: (id: string) => apiClientV2.post<{ ok: boolean; message: string; tools: McpTool[] }>(
     `/super-assistant/mcp-servers/${id}/test`,
+  ),
+  installPlatformMinio: () => apiClientV2.post<SuperMcpServer>(
+    '/super-assistant/mcp-servers/platform-minio',
   ),
 }

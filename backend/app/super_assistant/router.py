@@ -59,6 +59,12 @@ from app.super_assistant.skill_store import (
     skill_directory,
     write_text_file,
 )
+from app.settings.object_storage.models import MinioConfig
+from app.settings.object_storage.service import (
+    ConfiguredMinioService,
+    MinioServiceError,
+    minio_tool_manifest,
+)
 
 
 router = APIRouter()
@@ -538,6 +544,7 @@ def create_mcp_server(
     item = SuperAssistantMcpServer(
         owner_id=current_user.id,
         name=body.name,
+        builtin_key=None,
         transport=transport,
         url=url,
         headers_encrypted=encrypted,
@@ -566,6 +573,8 @@ def update_mcp_server(
 ):
     item = _server(db, current_user.id, server_id)
     try:
+        if item.builtin_key and body.model_fields_set - {"enabled", "require_confirmation"}:
+            raise McpClientError("平台内置 MCP 仅允许修改启用和执行确认设置")
         connection_changed = any(value is not None for value in (
             body.transport, body.url, body.command, body.args,
         ))
@@ -624,22 +633,77 @@ async def test_mcp_server(
     item = _server(db, current_user.id, server_id)
     item.last_tested_at = datetime.now(timezone.utc)
     try:
-        tools = await discover_tools(
-            transport=item.transport,
-            url=item.url,
-            headers=decrypt_headers(item.headers_encrypted),
-            command=item.command,
-            args=item.args,
-            env=decrypt_env(item.env_encrypted),
-        )
+        if item.builtin_key == "minio":
+            service = ConfiguredMinioService.from_db(db)
+            if not service.config.mcp_enabled:
+                raise MinioServiceError("MinIO MCP 已被管理员停用")
+            service.status()
+            tools = minio_tool_manifest()
+        else:
+            tools = await discover_tools(
+                transport=item.transport,
+                url=item.url,
+                headers=decrypt_headers(item.headers_encrypted),
+                command=item.command,
+                args=item.args,
+                env=decrypt_env(item.env_encrypted),
+            )
         item.tool_manifest = tools
         item.last_test_status = "success"
         item.last_test_message = f"连接成功，发现 {len(tools)} 个工具"
         db.commit()
         return McpTestOut(ok=True, message=item.last_test_message, tools=tools)
-    except McpClientError as exc:
+    except Exception as exc:
         item.tool_manifest = []
         item.last_test_status = "error"
         item.last_test_message = str(exc)[:500]
         db.commit()
         return McpTestOut(ok=False, message=str(exc), tools=[])
+
+
+@router.post("/mcp-servers/platform-minio", response_model=McpServerOut)
+def install_platform_minio_mcp(
+    db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    config = db.query(MinioConfig).filter(MinioConfig.id == "default").first()
+    if not config or not config.enabled or not config.connected or not config.mcp_enabled:
+        raise HTTPException(status_code=409, detail="平台 MinIO MCP 尚未由管理员连接并启用")
+    try:
+        ConfiguredMinioService.from_db(db).status()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"平台 MinIO 当前不可用：{exc}") from exc
+
+    item = db.query(SuperAssistantMcpServer).filter(
+        SuperAssistantMcpServer.owner_id == current_user.id,
+        SuperAssistantMcpServer.builtin_key == "minio",
+    ).first()
+    if not item:
+        name_taken = db.query(SuperAssistantMcpServer).filter(
+            SuperAssistantMcpServer.owner_id == current_user.id,
+            SuperAssistantMcpServer.name == "platform_minio",
+        ).first()
+        if name_taken:
+            raise HTTPException(status_code=409, detail="已有同名 platform_minio MCP，请先重命名或删除")
+        item = SuperAssistantMcpServer(
+            owner_id=current_user.id,
+            name="platform_minio",
+            builtin_key="minio",
+            transport="streamable_http",
+            url="builtin://minio",
+            headers_encrypted=None,
+            header_names=[],
+            command=None,
+            args=[],
+            env_encrypted=None,
+            env_names=[],
+            enabled=True,
+            require_confirmation=True,
+        )
+        db.add(item)
+    item.tool_manifest = minio_tool_manifest()
+    item.last_test_status = "success"
+    item.last_test_message = f"平台内置连接成功，发现 {len(item.tool_manifest)} 个工具"
+    item.last_tested_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(item)
+    return item
