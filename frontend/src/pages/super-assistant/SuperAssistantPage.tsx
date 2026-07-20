@@ -932,6 +932,10 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                         <p className="truncate font-mono text-xs font-semibold text-[var(--color-text-primary)]">{skill.name}</p>
                         <p className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">r{skill.revision} · {skill.manifest.length} files</p>
                       </div>
+                    </div>
+                    {!skill.enabled && <span className="mt-2 inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
+                    <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
+                    <div className="mt-2 flex items-center justify-between gap-2">
                       <SettingSwitch
                         label="启用"
                         ariaLabel={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
@@ -939,12 +943,10 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                         busy={updatingSkillId !== null}
                         onToggle={() => void toggleSkill(skill)}
                       />
-                    </div>
-                    {!skill.enabled && <span className="mt-2 inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
-                    <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
-                    <div className="mt-2 flex justify-end gap-1">
-                      <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
-                      <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
+                        <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                      </div>
                     </div>
                   </article>
                 ))}
