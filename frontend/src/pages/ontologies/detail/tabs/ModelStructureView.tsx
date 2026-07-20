@@ -12,6 +12,7 @@ import {
   Maximize2, Route, Search, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
   Bolt, Clock3, Database,
 } from 'lucide-react'
+import { agentApi, type DynamicSentinel } from '@/api/agent'
 import { apiClientV2 } from '@/api/client'
 import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
 import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
@@ -19,7 +20,7 @@ import {
   actionNodeId, buildStructureGraph, findPaths, functionUsage, propertyNodeId,
   relationEdgeId, routeStructureEdges, sentinelUsage,
   type GraphPath, type HighlightSet, type PublishedWorkspace, type StructureEdge,
-  type StructureNode,
+  type StructureNode, type StructureSentinel,
 } from './structureGraphModel'
 
 type Level = 1 | 2
@@ -56,6 +57,35 @@ function errorMessage(error: unknown) {
 function objectName(workspace: PublishedWorkspace, id: string) {
   const item = workspace.objectTypes.find(objectType => objectType.id === id)
   return item?.displayName || item?.name || id
+}
+
+function dynamicStructureSentinel(item: DynamicSentinel): StructureSentinel {
+  return {
+    id: item.id,
+    name: item.name,
+    displayName: item.displayName,
+    description: item.description ?? undefined,
+    bindings: item.bindings,
+    links: item.links,
+    condition: item.condition ?? undefined,
+    conditionRows: item.conditionRows,
+    conditionLogic: item.conditionLogic,
+    primaryAlias: item.primaryAlias,
+    actionIds: item.actionIds,
+    actionParameters: item.actionParameters,
+    onChange: item.onChange,
+    onSchedule: item.onSchedule,
+    scanIntervalSeconds: item.scanIntervalSeconds,
+    muted: item.muted,
+    enabled: item.enabled,
+    status: item.status,
+    triggerMode: item.triggerMode,
+    origin: 'assistant_dynamic',
+    boundReleaseId: item.boundReleaseId,
+    trialCurrent: item.trialCurrent,
+    canEnable: item.canEnable,
+    validationReport: item.validationReport,
+  }
 }
 
 function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
@@ -146,6 +176,7 @@ interface DependencyOption {
   technicalName: string
   description?: string
   meta?: string
+  source?: 'release_builtin' | 'assistant_dynamic'
 }
 
 function DependencyPicker({
@@ -165,6 +196,8 @@ function DependencyPicker({
   const Icon = isFunction ? FunctionSquare : ShieldCheck
   const title = isFunction ? '激活函数' : '哨兵规则'
   const helper = isFunction ? '选择后高亮直接使用该函数的对象、属性和动作' : '选择后查看规则绑定、条件属性与动作覆盖范围'
+  const builtInCount = items.filter(item => item.source === 'release_builtin').length
+  const dynamicCount = items.filter(item => item.source === 'assistant_dynamic').length
   const tone = isFunction
     ? {
       icon: 'bg-violet-50 text-violet-600 ring-violet-100',
@@ -236,7 +269,10 @@ function DependencyPicker({
               <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${tone.icon}`}><Icon size={16} /></span>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">{title}<span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} /><span className="text-xs font-medium tabular-nums text-slate-400">{items.length}</span></span>
-                <span className="mt-0.5 block text-[11px] leading-4 text-slate-400">{helper}</span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-slate-400">
+                  {helper}
+                  {!isFunction && <span data-testid="sentinel-dependency-source-counts"> · 发布内置 {builtInCount} · 动态 {dynamicCount}</span>}
+                </span>
               </span>
               {selected && <button type="button" data-testid={`${kind}-dependency-clear`} onClick={() => { onChange(''); onOpenChange(false) }} className="mt-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700">清除</button>}
             </header>
@@ -256,7 +292,18 @@ function DependencyPicker({
                     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? tone.selectedIcon : 'bg-slate-100 text-slate-500 group-hover:bg-white'}`}><Icon size={14} /></span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-slate-700">{item.label}</span>
-                      <span className="mt-0.5 block truncate font-mono text-[10px] text-slate-400">{item.technicalName}{item.meta ? ` · ${item.meta}` : ''}</span>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 truncate font-mono text-[10px] text-slate-400">{item.technicalName}</span>
+                        {item.source && (
+                          <span
+                            data-testid={`${kind}-dependency-source-${item.id}`}
+                            className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${item.source === 'assistant_dynamic' ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}
+                          >
+                            {item.source === 'assistant_dynamic' ? '动态创建' : '发布内置'}
+                          </span>
+                        )}
+                      </span>
+                      {item.meta && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.meta}</span>}
                       {item.description && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.description}</span>}
                     </span>
                     {active && <Check size={15} className="shrink-0" />}
@@ -546,7 +593,17 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     label: item.displayName || item.name,
     technicalName: item.name,
     description: item.description,
-    meta: item.enabled === false ? '已停用' : item.onSchedule ? '定时扫描' : item.onChange ? '变更触发' : '规则触发',
+    source: item.origin || 'release_builtin',
+    meta: [
+      item.origin === 'assistant_dynamic'
+        ? item.validationReport?.passed === false
+          ? '版本不兼容'
+          : item.trialCurrent === false
+            ? '待试跑'
+            : item.enabled === false ? '已停用' : '已启用'
+        : item.enabled === false ? '已停用' : null,
+      item.onSchedule ? '定时扫描' : item.onChange ? '变更触发' : '规则触发',
+    ].filter(Boolean).join(' · '),
   })), [workspace.sentinels])
 
   const chooseSearchResult = useCallback((result: SearchResult) => {
@@ -784,8 +841,28 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
     queryKey: ['current-release-workspace', ontologyId],
     queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/current-release/workspace`),
   })
-  if (releaseQuery.isLoading) return <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
+  const releaseId = releaseQuery.data?.versionId || ''
+  const dynamicSentinelsQuery = useQuery<DynamicSentinel[]>({
+    queryKey: ['agent-dynamic-sentinels', ontologyId, releaseId],
+    queryFn: () => agentApi.dynamicSentinels(ontologyId, releaseId),
+    enabled: Boolean(releaseId && releaseQuery.data?.isCurrentRelease),
+  })
+  if (releaseQuery.isLoading || (releaseId && dynamicSentinelsQuery.isLoading)) return <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
   if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease || releaseQuery.data.workspaceMode !== 'release' || releaseQuery.data.editable !== false) return <div className="flex h-full items-center justify-center gap-2 bg-red-50 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示可变模型数据。</div>
+  if (dynamicSentinelsQuery.isError) return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-amber-50 px-6 text-center text-sm text-amber-800" role="alert">
+      <AlertCircle size={20} />
+      <p>动态哨兵读取失败，已停止展示不完整的哨兵覆盖数据。</p>
+      <button type="button" onClick={() => void dynamicSentinelsQuery.refetch()} className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400">重新加载</button>
+    </div>
+  )
   if (releaseQuery.data.objectTypes.length === 0) return <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100"><Database size={22} /></span><p className="text-sm">当前发布版还没有对象实体</p></div>
-  return <ReactFlowProvider><StructureGraph ontologyId={ontologyId} workspace={releaseQuery.data} /></ReactFlowProvider>
+  const sentinels: StructureSentinel[] = [
+    ...releaseQuery.data.sentinels.map(item => ({
+      ...item, origin: item.origin || 'release_builtin' as const,
+    })),
+    ...(dynamicSentinelsQuery.data || []).map(dynamicStructureSentinel),
+  ]
+  const workspace = { ...releaseQuery.data, sentinels }
+  return <ReactFlowProvider><StructureGraph ontologyId={ontologyId} workspace={workspace} /></ReactFlowProvider>
 }

@@ -238,6 +238,18 @@ def test_management_surfaces_are_origin_isolated_and_validation_fails_closed(
         headers=auth_headers, params={"release_id": runtime["release_id"]},
     )
     assert [item["id"] for item in assistant_list.json()["data"]] == [dynamic["id"]]
+
+    # The immutable release workspace remains the built-in source of truth.
+    # Read-only consumers may merge this with the dynamic endpoint for display,
+    # but assistant overlays must never leak into the version snapshot itself.
+    release_workspace = client.get(
+        f"/api/v2/ontologies/{runtime['ontology_id']}/current-release/workspace",
+        headers=auth_headers,
+    )
+    assert release_workspace.status_code == 200, release_workspace.text
+    assert [item["id"] for item in release_workspace.json()["data"]["sentinels"]] == [
+        "sentinel-builtin",
+    ]
     assert client.get(
         f"/api/v1/ontologies/{runtime['ontology_id']}/sentinels/{dynamic['id']}",
         headers=auth_headers,

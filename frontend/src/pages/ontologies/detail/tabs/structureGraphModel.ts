@@ -80,6 +80,16 @@ export interface StructureSentinel {
   muted?: boolean
   enabled?: boolean
   status?: string
+  triggerMode?: string
+  origin?: 'release_builtin' | 'assistant_dynamic'
+  boundReleaseId?: string
+  trialCurrent?: boolean
+  canEnable?: boolean
+  validationReport?: {
+    passed: boolean
+    compatibility?: string
+    errors?: Array<{ message?: string }>
+  } | null
 }
 
 export interface PublishedWorkspace {

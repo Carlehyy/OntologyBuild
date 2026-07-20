@@ -434,6 +434,33 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('version-node-v1')).toContainText('当前发布', { timeout: 20_000 })
   await expect(draftRow).toContainText('已晋级')
 
+  const releasedTree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
+  await api<any>(request, token, 'put', `/api/v2/formal/ontologies/${ontology.id}/agent/profile`, {
+    allowedActionIds: [`act-browser-order-${suffix}`],
+  })
+  const dynamicSentinel = await api<any>(request, token, 'post', `/api/v2/formal/ontologies/${ontology.id}/agent/dynamic-sentinels`, {
+    releaseId: releasedTree.current_release_id,
+    definition: {
+      name: `assistant_browser_order_${suffix}`,
+      displayName: '真机订单动态哨兵',
+      description: '验证本体结构能够合并展示后天创建的哨兵',
+      bindings: [{ alias: 'o', objectTypeId, filter: null }],
+      links: [],
+      condition: "o.name == '真机一号'",
+      conditionRows: [],
+      conditionLogic: 'and',
+      primaryAlias: 'o',
+      actionIds: [`act-browser-order-${suffix}`],
+      actionParameters: {},
+      onChange: true,
+      onSchedule: false,
+      scanIntervalSeconds: 300,
+      triggerMode: 'on_enter',
+      muted: false,
+    },
+  })
+  expect(dynamicSentinel).toMatchObject({ origin: 'assistant_dynamic', enabled: false, trialCurrent: false })
+
   // 只有版本演进里可以打开历史快照，且历史发布版严格只读。
   await page.getByTestId('version-node-v0').getByRole('button', { name: '打开编辑器' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=`))
@@ -484,6 +511,20 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('structure-node-property')).toHaveCount(2)
   await expect(page.getByTestId('structure-node-action')).toHaveCount(1)
   await expect(page.getByLabel('搜索本体结构')).toHaveAttribute('placeholder', '搜索对象、关系、属性或动作')
+
+  // 发布快照保持不可变，但结构分析选择器需额外合并当前发布版的动态哨兵。
+  await page.getByLabel('查看哨兵覆盖范围').click()
+  await expect(page.getByTestId('sentinel-dependency-source-counts')).toHaveText('· 发布内置 0 · 动态 1')
+  const dynamicOption = page.getByTestId(`sentinel-dependency-option-${dynamicSentinel.id}`)
+  await expect(dynamicOption).toContainText('真机订单动态哨兵')
+  await expect(dynamicOption).toContainText('动态创建')
+  await expect(dynamicOption).toContainText('待试跑 · 变更触发')
+  await expect(page.getByTestId(`sentinel-dependency-source-${dynamicSentinel.id}`)).toHaveText('动态创建')
+  await dynamicOption.click()
+  await expect(page.locator(`.react-flow__node[data-id="${objectTypeId}"] > div`)).toHaveClass(/border-fuchsia-500/)
+  await expect(page.locator(`.react-flow__node[data-id="property:${objectTypeId}:p-name"] > div`)).toHaveClass(/border-violet-500/)
+  await expect(page.locator(`.react-flow__node[data-id="action:act-browser-order-${suffix}"] > div`)).toHaveClass(/border-violet-500/)
+
   await page.getByLabel('查看激活函数使用关系').click()
   await page.getByTestId(`function-dependency-option-fn-browser-order-${suffix}`).click()
   await expect(page.locator(`.react-flow__node[data-id="${objectTypeId}"] > div`)).toHaveClass(/border-violet-500/)
