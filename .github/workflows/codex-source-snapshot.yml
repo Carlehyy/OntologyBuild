@@ -1,0 +1,53 @@
+name: Codex source snapshot
+
+on:
+  pull_request:
+    branches:
+      - nano-ontoprompt
+    paths:
+      - ".github/workflows/codex-source-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ontologybuild-source
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            backend/app/**
+            backend/tests/**
+            backend/alembic/**
+            backend/alembic.ini
+            backend/pyproject.toml
+            backend/requirements.txt
+            backend/uv.lock
+            backend/Dockerfile
+            frontend/src/**
+            frontend/package.json
+            frontend/package-lock.json
+            frontend/index.html
+            frontend/tsconfig*.json
+            frontend/vite.config.*
+            frontend/playwright.config.*
+            frontend/eslint.config.*
+            frontend/Dockerfile
+            docker/**
+            docker-compose*.yml
+            README.md
+            DEPLOY.md
+            .env.example
+            !**/.env
+            !**/.env.*
+            !**/*.pem
+            !**/*.key
+            !**/*secret*
+            !**/node_modules/**
+            !**/__pycache__/**
+            !uploads/**
