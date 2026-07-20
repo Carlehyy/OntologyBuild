@@ -172,20 +172,79 @@ USE_SKILL_TOOL = {
 OFFICE_TOOL = {
     "name": "manage_office_document",
     "description": (
-        "使用已配置的 OfficeCLI 在当前会话空间内创建、查看和编辑 docx/xlsx/pptx。"
-        "operation=create 传 logical_path；view/add/set/remove 传 file_id。"
-        "add/set 用 selector 定位元素并传 props；所有命令均为结构化白名单，不可执行 shell。"
+        "在当前会话空间内安全查看、查询和编辑 docx/xlsx/pptx。先用 manage_workspace_file.list "
+        "取得 file_id/version，再用 view/get/query 检查内容和元素路径。修改仅在用户明确要求时执行，"
+        "必须传最近读取到的 expected_version；batch 可把多个编辑作为一次原子修改。"
+        "所有命令均为结构化白名单，不能访问宿主机路径或外部资源。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "operation": {"type": "string", "enum": ["create", "view", "add", "set", "remove"]},
-            "file_id": {"type": "string"},
-            "logical_path": {"type": "string"},
-            "selector": {"type": "string", "description": "OfficeCLI 元素路径，缺省 /"},
-            "element_type": {"type": "string", "description": "add 操作的元素类型"},
-            "props": {"type": "object", "description": "add/set 的属性键值"},
-            "view": {"type": "string", "enum": ["outline", "text", "html"]},
+            "operation": {
+                "type": "string",
+                "enum": [
+                    "create", "view", "get", "query", "validate",
+                    "add", "set", "replace", "remove", "batch",
+                ],
+            },
+            "file_id": {
+                "type": "string",
+                "description": "除 create 外必填；manage_workspace_file.list 返回的会话文件 id",
+            },
+            "logical_path": {
+                "type": "string",
+                "description": "create 使用的会话内相对路径，后缀须为 docx/xlsx/pptx",
+            },
+            "selector": {
+                "type": "string",
+                "description": "get/query/add/set/replace/remove 使用的 Office 元素路径，缺省 /",
+            },
+            "element_type": {"type": "string", "description": "add 操作新增的元素类型"},
+            "props": {
+                "type": "object",
+                "description": "add/set/replace/remove 的属性键值；不允许文件、URL 或素材源属性",
+            },
+            "view": {
+                "type": "string",
+                "enum": ["outline", "text", "annotated", "stats", "issues"],
+                "description": "view 的输出模式；outline 适合先了解结构，text 适合读取正文",
+            },
+            "depth": {
+                "type": "integer", "minimum": 0, "maximum": 4,
+                "description": "get 返回的子元素深度",
+            },
+            "find": {"type": "string", "description": "query/replace 的查找文本或表达式"},
+            "replacement": {"type": "string", "description": "replace 的替换文本"},
+            "expected_version": {
+                "type": "integer",
+                "description": "所有修改操作必填；来自最近一次 list/view/get/query 返回的 version",
+            },
+            "start": {"type": "integer", "description": "view 的起始行/项（1-based）"},
+            "end": {"type": "integer", "description": "view 的结束行/项（含）"},
+            "max_lines": {
+                "type": "integer", "minimum": 1, "maximum": 500,
+                "description": "view 单次最多返回行数；长文档应分页读取",
+            },
+            "columns": {"type": "string", "description": "xlsx view 的列范围"},
+            "cell_range": {"type": "string", "description": "xlsx view 的单元格范围"},
+            "edits": {
+                "type": "array", "maxItems": 20,
+                "description": "batch 的编辑列表，按顺序在同一工作副本上执行并一次提交",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string", "enum": ["add", "set", "replace", "remove"],
+                        },
+                        "selector": {"type": "string"},
+                        "element_type": {"type": "string"},
+                        "props": {"type": "object"},
+                        "find": {"type": "string"},
+                        "replacement": {"type": "string"},
+                    },
+                    "required": ["operation"],
+                },
+            },
         },
         "required": ["operation"],
     },
@@ -228,6 +287,12 @@ class ExplorationToolRunner:
                 selector=str(args.get("selector") or "/"),
                 element_type=args.get("element_type"), props=args.get("props") or {},
                 view=str(args.get("view") or "outline"),
+                depth=args.get("depth"), find=args.get("find"),
+                replacement=args.get("replacement"),
+                expected_version=args.get("expected_version"),
+                edits=args.get("edits") or [], start=args.get("start"),
+                end=args.get("end"), max_lines=args.get("max_lines"),
+                columns=args.get("columns"), cell_range=args.get("cell_range"),
             )
         if name == "use_skill":
             return self._use_skill(args)
