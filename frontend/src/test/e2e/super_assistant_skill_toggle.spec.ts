@@ -89,7 +89,18 @@ test('Skill 可从助手配置中停用并重新启用', async ({ page }) => {
   await page.getByRole('button', { name: '打开助手配置' }).click()
 
   const disableSwitch = page.getByRole('switch', { name: '停用 Skill research-helper' })
+  const fileButton = page.getByRole('button', { name: '文件', exact: true })
   await expect(disableSwitch).toBeChecked()
+  await expect(fileButton).toBeVisible()
+  const switchBox = await disableSwitch.boundingBox()
+  const fileButtonBox = await fileButton.boundingBox()
+  expect(switchBox).not.toBeNull()
+  expect(fileButtonBox).not.toBeNull()
+  expect(Math.abs(
+    switchBox!.y + switchBox!.height / 2 - (fileButtonBox!.y + fileButtonBox!.height / 2),
+  )).toBeLessThan(2)
+  expect(switchBox!.x).toBeLessThan(fileButtonBox!.x)
+
   await disableSwitch.click()
   await firstPatchStarted
   await expect(disableSwitch).toHaveAttribute('aria-busy', 'true')
