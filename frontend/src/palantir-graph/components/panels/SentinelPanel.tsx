@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { v4 as uuidv4 } from 'uuid'
 import {
   ShieldExclamationIcon, PlusIcon, TrashIcon, XMarkIcon, BoltIcon,
 } from '@heroicons/react/24/outline'
@@ -267,7 +268,7 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
         else await sentinelApi.create(ontologyId, body)
       } else {
         if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
-        const id = draft.id || crypto.randomUUID()
+        const id = draft.id || uuidv4()
         const previous = list.find(item => item.id === id)
         const nextSentinel: Sentinel = {
           ...(previous || {} as Sentinel),

@@ -195,7 +195,11 @@ export function normalizeType(value?: string): string {
 }
 
 export function typesCompatible(source?: string, target?: string): boolean {
-  return normalizeType(source) === normalizeType(target)
+  const sourceType = normalizeType(source)
+  const targetType = normalizeType(target)
+  // 人工数据集以 JSON 契约保存结构化值；JSON 数组应能映射到本体 array 属性。
+  if (sourceType === 'json' && targetType === 'array') return true
+  return sourceType === targetType
 }
 
 export function useMappingData(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { v4 as uuidv4 } from 'uuid'
 import {
   Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow,
   useEdgesState, useNodesState,
@@ -500,7 +501,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const mappings = desiredObjectMappings.map(desired => {
         const existing = data.mappings.find(item => item.curated_dataset_id === desired.datasetId && mappingTargetId(item) === desired.object.id)
         return {
-          id: existing?.id || crypto.randomUUID(),
+          id: existing?.id || uuidv4(),
           curatedDatasetId: desired.datasetId,
           entityClass: desired.object.name,
           targetObjectTypeId: desired.object.id,
@@ -511,7 +512,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const linkMappings = desiredLinkMappings.desired.map(desired => {
         const existing = linkMappingForType(desired.relation, data.linkMappings)
         return {
-          id: existing?.id || crypto.randomUUID(),
+          id: existing?.id || uuidv4(),
           srcDatasetId: desired.srcDatasetId, tgtDatasetId: desired.tgtDatasetId,
           edgeDatasetId: desired.edgeDatasetId,
           relationType: desired.relation.name, linkTypeId: desired.relation.id,

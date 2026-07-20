@@ -11,6 +11,7 @@ import pytest
 from app.main import app
 from app.routers.v2 import datasets as datasets_module
 from app.routers.v2 import mappings as mappings_module
+from app.ontologies.mappings.router import _mapping_types_compatible
 
 
 class IsolatedStorage:
@@ -29,6 +30,11 @@ class IsolatedStorage:
 
     def delete_object(self, uri):
         self.objects.pop(uri, None)
+
+
+def test_json_dataset_column_can_map_to_array_property():
+    assert _mapping_types_compatible("json", "array")
+    assert not _mapping_types_compatible("string", "array")
 
 
 @pytest.fixture

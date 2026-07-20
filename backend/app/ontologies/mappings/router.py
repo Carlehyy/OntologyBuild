@@ -104,6 +104,19 @@ def _normal_mapping_type(raw: object) -> str:
     return aliases.get(value, value)
 
 
+def _mapping_types_compatible(source_type: str, target_type: str) -> bool:
+    """Allow a lake JSON column to feed an ontology array property.
+
+    The manual-dataset contract deliberately stores nested lists as JSON, while
+    the formal ontology vocabulary exposes them as ``array``.  Treating that
+    lossless representation as incompatible made array properties impossible
+    to map through the asset lake.
+    """
+    return source_type == target_type or (
+        source_type == "json" and target_type == "array"
+    )
+
+
 def _dataset_column_types(db: Session, dataset_id: str) -> dict[str, str]:
     from app.models.v2.dataset import Dataset
 
@@ -161,7 +174,7 @@ def _assert_mapping_types_compatible(
             })
             continue
         target_type_name = _normal_mapping_type(target_property.get("type"))
-        if source_type != target_type_name:
+        if not _mapping_types_compatible(source_type, target_type_name):
             failures.append({
                 "source": source_name, "source_type": source_type,
                 "target": target_name, "target_type": target_type_name,
