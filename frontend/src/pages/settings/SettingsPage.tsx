@@ -14,8 +14,9 @@ import {
   type ExtractionRuleState,
 } from '@/utils/extractionRules'
 import UserManagementPanel from './UserManagementPanel'
+import MinioSettingsPanel from './components/MinioSettingsPanel'
 
-type ActiveTab = 'extraction_rules' | 'users' | 'prompts' | 'agents' | 'workflows' | 'domains'
+type ActiveTab = 'extraction_rules' | 'users' | 'prompts' | 'agents' | 'workflows' | 'minio' | 'domains'
 type AgentInfo = { id: string; name: string; description: string }
 
 const TAB_FROM_PATH: Record<string, ActiveTab> = {
@@ -27,6 +28,7 @@ const TAB_FROM_PATH: Record<string, ActiveTab> = {
   '/settings/prompts': 'prompts',
   '/settings/agents': 'agents',
   '/settings/workflows': 'workflows',
+  '/settings/minio': 'minio',
   '/settings/domains': 'domains',
 }
 
@@ -37,6 +39,7 @@ const TAB_PARAM_MAP: Record<string, ActiveTab> = {
   'prompts': 'prompts',
   'agents': 'agents',
   'workflows': 'workflows',
+  'minio': 'minio',
   'domains': 'domains',
 }
 
@@ -752,6 +755,8 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      {activeTab === 'minio' && <MinioSettingsPanel />}
 
       {activeTab === 'extraction_rules' && (
         <div className="max-w-2xl space-y-6">

@@ -125,6 +125,27 @@ export const modelApi = {
   }) => apiClient.get<ModelCallLogPage>(`/models/${id}/calls`, { params }),
 }
 
+export interface MinioConfig {
+  enabled: boolean
+  endpoint: string
+  secure: boolean
+  region: string
+  default_bucket: string
+  has_access_key: boolean
+  has_secret_key: boolean
+  read_enabled: boolean
+  write_enabled: boolean
+  delete_enabled: boolean
+  mcp_enabled: boolean
+  has_mcp_token: boolean
+  mcp_token_hint: string
+  connected: boolean
+  last_test_status: string | null
+  last_test_message: string | null
+  last_tested_at: string | null
+  mcp_path: string
+}
+
 export const settingsApi = {
   getRules: () => apiClient.get<{ rule_key: string; rule_value: string; rule_label_cn: string; rule_label_en: string; editable: boolean }[]>('/settings/rules'),
   updateRules: (rules: { rule_key: string; rule_value: string }[]) => apiClient.put('/settings/rules', rules),
@@ -160,6 +181,20 @@ export const settingsApi = {
     enabled: boolean; api_url: string; api_key: string; timeout_seconds: number;
   }) => apiClient.post<{ ok: boolean; message: string; api_base: string }>(
     '/settings/workflow-config/test', body,
+  ),
+
+  // Administrator-managed MinIO object storage
+  getMinioConfig: () => apiClient.get<MinioConfig>('/settings/minio-config'),
+  testMinioConnection: (body: {
+    enabled: boolean; endpoint: string; secure: boolean; region: string; default_bucket: string;
+    access_key: string; secret_key: string; read_enabled: boolean; write_enabled: boolean;
+    delete_enabled: boolean; mcp_enabled: boolean; create_default_bucket: boolean; timeout_seconds: number;
+  }) => apiClient.post<{
+    ok: boolean; message: string; endpoint: string; bucket_count: number;
+    default_bucket_ready: boolean; mcp_path: string; mcp_token: string | null;
+  }>('/settings/minio-config/test', body),
+  rotateMinioMcpToken: () => apiClient.post<{ token: string; token_hint: string; mcp_path: string }>(
+    '/settings/minio-config/mcp-token/rotate',
   ),
 }
 
