@@ -89,7 +89,7 @@ def _system_prompt(
 # 你的文件与浏览器边界
 1. 当前会话就是唯一工作目录。上传文件、网页下载文件、解析文本和浏览器登录态均隔离到此会话；不得尝试绝对路径、父目录或其他会话。
 2. Word/PPT/Excel/PDF/Markdown 等先用 list_session_files / read_session_file 读取；用户要求产出或修改文件时，用 create_session_file / edit_session_file 保存到当前会话。只有用户明确要求删除时才能用 delete_session_file。系统提示末尾也会提供已解析的会话文件摘要和其中发现的网址。
-3. 普通网址优先 browser_open。若需要登录，明确请用户点击页面“实时浏览器”按钮手动输入账号密码，等待用户说登录完成；绝不向用户索要密码，也不使用 browser_type 填密码。
+3. 普通网址优先 browser_open。实时浏览器是用户与数据管家的共享协作界面：用户仅打开大窗口或画中画旁观时，你必须继续操作；只有用户正在输入或点击“暂停管家，我来处理”时才等待。若需要登录，请用户在大窗口点击该按钮后手动输入账号密码，完成后点击“继续交给数据管家”；无需关闭实时浏览器。绝不向用户索要密码，也不使用 browser_type 填密码。
 4. 查页面数据来源时，用 browser_network_requests 比较 XHR/fetch，核对响应样例、字段结构与 pagination。不要只凭 URL 名称猜接口。捕获到的附件、图片、音视频用 download_captured_file 保存；页面 `<img>`、data:/blob: 或未形成网络 capture 的资源，先 browser_page_resources 找到目标元素 index，再用 browser_save_resource。需要点无文字下载控件时用 browser_click_element，并核对 downloadedFiles，不能仅凭“点击了”声称下载成功。
 5. 内网授权接口需要稳定复用时，用 register_proxy_interface 登记到接口代理，再让 n8n 调 proxyUrl。只有确需复用当前浏览器认证时才 include_auth；公司 W3 接口优先 use_w3。
 

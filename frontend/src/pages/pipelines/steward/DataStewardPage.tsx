@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import {
   downloadBrowserCompanion, downloadPipelineFile, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
-  type BrowserCapture, type BrowserSource, type StewardArtifact,
+  type BrowserCapture, type BrowserCollaborationState, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep, type StewardTablePreview,
 } from '@/api/steward'
@@ -115,6 +115,10 @@ const PIP_MAX_HEIGHT = 720
 
 type BrowserDisplayMode = 'closed' | 'modal' | 'pip'
 type PipResizeDirection = 'horizontal' | 'vertical' | 'diagonal'
+
+const OBSERVING_COLLABORATION: BrowserCollaborationState = {
+  controller: 'agent', mode: 'observe', agentCanAct: true, expiresIn: 0,
+}
 
 function Md({ text }: { text: string }) {
   return (
@@ -1586,6 +1590,8 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
   const [frame, setFrame] = useState('')
   const [connected, setConnected] = useState(false)
   const [liveTransport, setLiveTransport] = useState<'websocket' | 'http' | ''>('')
+  const [collaboration, setCollaboration] = useState<BrowserCollaborationState>(OBSERVING_COLLABORATION)
+  const [controlBusy, setControlBusy] = useState(false)
   const [attaching, setAttaching] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -1602,6 +1608,11 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
   const [sourceBusy, setSourceBusy] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const httpLeaseRef = useRef<string | null>(null)
+  const controlAckRef = useRef<{
+    resolve: (status: BrowserCollaborationState) => void
+    reject: (error: Error) => void
+    timeoutId: number
+  } | null>(null)
   const liveRunRef = useRef(0)
   const inputQueueRef = useRef<Promise<void>>(Promise.resolve())
   const imageRef = useRef<HTMLImageElement>(null)
@@ -1639,6 +1650,8 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
   const [pipDragging, setPipDragging] = useState(false)
   const [pipResizeDirection, setPipResizeDirection] = useState<PipResizeDirection | null>(null)
   const pipResizing = pipResizeDirection !== null
+  const userHoldingControl = collaboration.controller === 'user' && collaboration.mode === 'held'
+  const userTemporarilyActive = collaboration.controller === 'user' && collaboration.mode === 'transient'
 
   const maxPipWidthAtPosition = useCallback((left: number, _top: number) => Math.max(0, Math.min(
     PIP_MAX_WIDTH,
@@ -1907,6 +1920,12 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
 
   const stopLive = useCallback(() => {
     liveRunRef.current += 1
+    const pendingControl = controlAckRef.current
+    controlAckRef.current = null
+    if (pendingControl) {
+      window.clearTimeout(pendingControl.timeoutId)
+      pendingControl.reject(new Error('实时浏览器连接已结束'))
+    }
     const ws = wsRef.current
     wsRef.current = null
     ws?.close()
@@ -1915,12 +1934,14 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
     if (leaseId) void stewardApi.browserLiveHttpRelease(conversationId, leaseId).catch(() => undefined)
     setConnected(false)
     setLiveTransport('')
+    setCollaboration(OBSERVING_COLLABORATION)
+    setControlBusy(false)
   }, [conversationId])
 
   const startHttpFallback = useCallback(async (runId: number) => {
     const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms))
     while (liveRunRef.current === runId) {
-      let attached: { leaseId: string; expiresIn: number; frameIntervalMs: number }
+      let attached: { leaseId: string; expiresIn: number; frameIntervalMs: number; collaboration: BrowserCollaborationState }
       try {
         attached = await stewardApi.browserLiveHttpAttach(conversationId)
         if (liveRunRef.current !== runId) {
@@ -1930,6 +1951,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
         httpLeaseRef.current = attached.leaseId
         setConnected(true)
         setLiveTransport('http')
+        setCollaboration(attached.collaboration)
         setError('')
       } catch (err: unknown) {
         if (liveRunRef.current !== runId) return
@@ -1952,6 +1974,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
           setAttaching(false)
           setError('')
           setFrame(`data:image/jpeg;base64,${nextFrame.data}`)
+          setCollaboration(nextFrame.collaboration)
           if (nextFrame.url) { setCurrentUrl(nextFrame.url); setUrl(nextFrame.url) }
         } catch (err: unknown) {
           if (liveRunRef.current !== runId) break
@@ -2023,7 +2046,17 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
           window.clearTimeout(timeoutId)
           setAttaching(false)
           setFrame(`data:image/jpeg;base64,${msg.data}`)
+          if (msg.collaboration) setCollaboration(msg.collaboration)
           if (msg.url) { setCurrentUrl(msg.url); setUrl(msg.url) }
+        } else if (msg.type === 'collaboration' && msg.collaboration) {
+          setCollaboration(msg.collaboration)
+          const pendingControl = controlAckRef.current
+          controlAckRef.current = null
+          if (pendingControl) {
+            window.clearTimeout(pendingControl.timeoutId)
+            pendingControl.resolve(msg.collaboration)
+          }
+          setControlBusy(false)
         } else if (msg.type === 'error') {
           setAttaching(false)
           setError(msg.message || '浏览器画面异常')
@@ -2040,6 +2073,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
       try {
         const session = await stewardApi.browserSession(conversationId)
         if (cancelled || !session.active) return
+        setCollaboration(session.collaboration || OBSERVING_COLLABORATION)
         if (session.url) { setCurrentUrl(session.url); setUrl(session.url) }
         waitingForFrame = true
         await connectLive()
@@ -2126,6 +2160,11 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
     : ''
 
   const send = (message: Record<string, unknown>) => {
+    if (!userHoldingControl) {
+      setCollaboration({
+        controller: 'user', mode: 'transient', agentCanAct: false, expiresIn: 3,
+      })
+    }
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message))
       return
@@ -2136,9 +2175,56 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
       .catch(() => undefined)
       .then(async () => {
         if (httpLeaseRef.current !== leaseId) return
-        await stewardApi.browserLiveHttpInput(conversationId, leaseId, message)
+        const result = await stewardApi.browserLiveHttpInput(conversationId, leaseId, message)
+        setCollaboration(result.collaboration)
       })
       .catch((err: unknown) => setError(errorText(err, '浏览器操作发送失败')))
+  }
+
+  const changeUserControl = async (action: 'hold' | 'release'): Promise<boolean> => {
+    if (!connected || controlBusy) return false
+    setControlBusy(true)
+    setError('')
+    const optimistic: BrowserCollaborationState = action === 'hold'
+      ? { controller: 'user', mode: 'held', agentCanAct: false, expiresIn: 30 }
+      : OBSERVING_COLLABORATION
+    setCollaboration(optimistic)
+    try {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        const socket = wsRef.current
+        const result = await new Promise<BrowserCollaborationState>((resolve, reject) => {
+          const timeoutId = window.setTimeout(() => {
+            if (controlAckRef.current?.timeoutId === timeoutId) controlAckRef.current = null
+            reject(new Error('协作控制权切换超时'))
+          }, 5000)
+          controlAckRef.current = { resolve, reject, timeoutId }
+          socket.send(JSON.stringify({ type: 'control', action }))
+        })
+        setCollaboration(result)
+      } else {
+        const leaseId = httpLeaseRef.current
+        if (!leaseId) throw new Error('实时浏览器尚未连接')
+        const result = await stewardApi.browserLiveHttpControl(
+          conversationId, leaseId, action)
+        setCollaboration(result.collaboration)
+      }
+      return true
+    } catch (err: unknown) {
+      setCollaboration(OBSERVING_COLLABORATION)
+      setError(errorText(err, '协作控制权切换失败'))
+      return false
+    } finally {
+      setControlBusy(false)
+    }
+  }
+
+  const minimizeToObserver = async () => {
+    setShowSources(false)
+    if (collaboration.controller === 'user') {
+      const released = await changeUserControl('release')
+      if (!released) return
+    }
+    onMinimize()
   }
 
   const point = (event: React.MouseEvent<HTMLImageElement>) => {
@@ -2196,7 +2282,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
             <span className={`h-2 w-2 shrink-0 rounded-full ${connected ? 'bg-emerald-400' : 'bg-slate-500'}`} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[11px] font-medium text-slate-100">实时浏览器</span>
-              <span className="block truncate text-[9px] text-slate-400">{currentUrl || (attaching ? '正在连接当前会话…' : '等待打开网页')}</span>
+              <span className="block truncate text-[9px] text-slate-400">旁观中 · 数据管家可继续操作</span>
             </span>
             {connected && liveTransport === 'http' && (
               <span title="WebSocket 不可用，已自动切换到 HTTPS" className="shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">HTTP</span>
@@ -2264,6 +2350,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
           <GripHorizontal size={14} className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 text-slate-500" />
           <Eye size={12} className="shrink-0 text-slate-400" />
           <span className="truncate">仅预览 · 恢复大窗口后可点击与输入</span>
+          <span data-testid="browser-pip-observer" className="sr-only">画中画不占用浏览器控制权</span>
         </button>
         <button
           type="button"
@@ -2297,6 +2384,23 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
         <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-2">
           <Monitor size={15} className="text-teal-600" />
           <div className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+          <div
+            data-testid="browser-collaboration-status"
+            role="status"
+            aria-live="polite"
+            className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium ${userHoldingControl
+              ? 'border-amber-200 bg-amber-50 text-amber-700'
+              : userTemporarilyActive
+                ? 'border-sky-200 bg-sky-50 text-sky-700'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}
+          >
+            {userHoldingControl || userTemporarilyActive ? <User size={12} /> : <Bot size={12} />}
+            {userHoldingControl
+              ? '你正在操作 · 管家等待'
+              : userTemporarilyActive
+                ? '协同操作中 · 管家稍候'
+                : '数据管家可操作 · 你可随时参与'}
+          </div>
           {connected && liveTransport === 'http' && (
             <span title="当前网络禁止 WebSocket，画面与操作已自动切换到 HTTPS"
               className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">HTTP 兼容模式</span>
@@ -2317,12 +2421,26 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
             <Settings size={12} /> 浏览器来源
           </button>
           <button
+            data-testid="browser-control-toggle"
+            type="button"
+            disabled={!connected || controlBusy}
+            onClick={() => void changeUserControl(userHoldingControl ? 'release' : 'hold')}
+            aria-pressed={userHoldingControl}
+            className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${userHoldingControl
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+          >
+            {controlBusy ? <Loader2 size={12} className="animate-spin" /> : userHoldingControl ? <Bot size={12} /> : <User size={12} />}
+            {userHoldingControl ? '继续交给数据管家' : '暂停管家，我来处理'}
+          </button>
+          <button
             ref={modalPipButtonRef}
             type="button"
-            onClick={() => { setShowSources(false); onMinimize() }}
+            disabled={controlBusy}
+            onClick={() => void minimizeToObserver()}
             aria-label="切换到画中画"
             title="画中画"
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs text-gray-600 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs text-gray-600 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             <PictureInPicture2 size={12} /> 画中画
           </button>
@@ -2408,7 +2526,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
         <div className="flex h-full min-h-0 bg-[#15171b]">
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-2">
             {frame ? (
-              <img ref={imageRef} src={frame} draggable={false} tabIndex={0} alt="会话浏览器实时画面"
+              <img ref={imageRef} data-testid="steward-live-browser-frame" src={frame} draggable={false} tabIndex={0} alt="会话浏览器协作画面"
                 className="max-h-full max-w-full select-none outline-none ring-teal-400 focus:ring-2"
                 onMouseDown={e => { e.currentTarget.focus(); send({ type: 'mouse', action: 'down', ...point(e), button: e.button === 2 ? 'right' : 'left' }) }}
                 onMouseUp={e => send({ type: 'mouse', action: 'up', ...point(e), button: e.button === 2 ? 'right' : 'left' })}
@@ -2457,8 +2575,9 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
           )}
         </div>
         </div>
-        <div className="border-t bg-white px-4 py-2 text-[11px] text-gray-500">
-          登录凭据由你直接输入到隔离浏览器，数据管家不会读取密码；完成登录后关闭弹窗并在对话中告诉它继续即可。
+        <div className="flex items-center justify-between gap-4 border-t bg-white px-4 py-2 text-[11px] text-gray-500">
+          <span>协同浏览器支持你旁观并随时参与；普通点击结束后管家会自动继续。登录等长操作可先暂停管家，完成后直接交还，无需关闭窗口。</span>
+          <span className="shrink-0 text-gray-400">密码只由你在隔离浏览器中输入</span>
         </div>
       </div>
     </div>

@@ -283,7 +283,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "browser_open",
-        "description": "在当前会话的独立浏览器中打开合法 http/https 网址。浏览器登录态只属于本会话；需要账号密码时应让用户点击页面上的“实时浏览器”按钮手动登录。",
+        "description": "在当前会话的独立浏览器中打开合法 http/https 网址。浏览器登录态只属于本会话；用户可在实时浏览器中旁观且不会阻止你操作，需要账号密码时应让用户点击“暂停管家，我来处理”后手动登录，再点“继续交给数据管家”。",
         "parameters": {
             "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"],
         },

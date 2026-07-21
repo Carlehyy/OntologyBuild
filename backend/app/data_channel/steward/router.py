@@ -349,6 +349,10 @@ class BrowserLiveInputBody(BrowserLiveLeaseBody):
     message: dict[str, object]
 
 
+class BrowserLiveControlBody(BrowserLiveLeaseBody):
+    action: str
+
+
 def _browser_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (BrowserRuntimeError, StewardError, workspace.WorkspaceError)):
         return HTTPException(422, str(exc))
@@ -612,8 +616,22 @@ def browser_live_http_input(conversation_id: str, body: BrowserLiveInputBody,
                             current_user=Depends(get_current_user)):
     _require_conversation(db, conversation_id, current_user)
     try:
-        browser_manager.http_live_input(conversation_id, body.leaseId, body.message)
-        return _ok({"accepted": True})
+        collaboration = browser_manager.http_live_input(
+            conversation_id, body.leaseId, body.message)
+        return _ok({"accepted": True, "collaboration": collaboration})
+    except Exception as exc:  # noqa: BLE001
+        raise _browser_error(exc)
+
+
+@router.post("/conversations/{conversation_id}/browser/live-http/control")
+def browser_live_http_control(conversation_id: str, body: BrowserLiveControlBody,
+                              db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    _require_conversation(db, conversation_id, current_user)
+    try:
+        collaboration = browser_manager.http_live_control(
+            conversation_id, body.leaseId, body.action)
+        return _ok({"collaboration": collaboration})
     except Exception as exc:  # noqa: BLE001
         raise _browser_error(exc)
 

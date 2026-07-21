@@ -456,15 +456,78 @@ def test_browser_capacity_evicts_lru_for_global_and_user_limits(monkeypatch):
     assert set(manager._sessions) == {"u2-live"}
 
 
-def test_live_browser_handoff_blocks_agent_but_allows_user_actions():
+def test_live_browser_observer_does_not_block_agent():
     manager, _ = _manager_for_lifecycle_tests([], {"conversation": 1})
 
-    with pytest.raises(BrowserRuntimeError, match="手动接管"):
-        manager._assert_actor_allowed("conversation", "agent")
+    manager._assert_actor_allowed("conversation", "agent")
     manager._assert_actor_allowed("conversation", "user")
 
 
-def test_http_live_lease_blocks_agent_and_expires(monkeypatch):
+def test_explicit_user_control_blocks_agent_until_released(monkeypatch):
+    manager, _ = _manager_for_lifecycle_tests([], {"conversation": 1})
+    manager._user_controls = {}
+    monkeypatch.setattr(settings, "steward_browser_http_lease_seconds", 5)
+
+    status = manager._claim_user_control(
+        "conversation", "viewer-1", mode="held")
+
+    assert status["controller"] == "user"
+    assert status["mode"] == "held"
+    with pytest.raises(BrowserRuntimeError, match="协作浏览器"):
+        manager._assert_actor_allowed("conversation", "agent")
+    manager._assert_actor_allowed("conversation", "user")
+
+    released = manager._release_user_control("conversation", "viewer-1")
+    assert released["controller"] == "agent"
+    manager._assert_actor_allowed("conversation", "agent")
+
+
+def test_transient_user_activity_expires_without_closing_live_browser(monkeypatch):
+    manager, _ = _manager_for_lifecycle_tests([], {"conversation": 1})
+    manager._user_controls = {}
+    monkeypatch.setattr(settings, "steward_browser_user_activity_seconds", 1)
+
+    manager._claim_user_control("conversation", "viewer-1", mode="transient")
+    with pytest.raises(BrowserRuntimeError, match="协作浏览器"):
+        manager._assert_actor_allowed("conversation", "agent")
+
+    manager._user_controls["conversation"]["expiresAt"] = time.monotonic() - 1
+    manager._assert_actor_allowed("conversation", "agent")
+    assert manager._is_live("conversation") is True
+
+
+@pytest.mark.asyncio
+async def test_queued_user_input_gets_priority_over_agent_operation(monkeypatch):
+    manager, _ = _manager_for_lifecycle_tests([], {"conversation": 1})
+    manager._user_controls = {}
+    monkeypatch.setattr(settings, "steward_browser_user_activity_seconds", 1)
+    operation_lock = asyncio.Lock()
+    session = SimpleNamespace(operation_lock=operation_lock)
+    order = []
+
+    await operation_lock.acquire()
+
+    async def agent_operation():
+        async with manager._browser_operation(session, "conversation", "agent"):
+            order.append("agent")
+
+    async def user_operation():
+        async with operation_lock:
+            order.append("user")
+            manager._user_controls["conversation"]["expiresAt"] = time.monotonic() - 1
+
+    agent_task = asyncio.create_task(agent_operation())
+    await asyncio.sleep(0)
+    manager._claim_user_control("conversation", "viewer-1", mode="transient")
+    user_task = asyncio.create_task(user_operation())
+    operation_lock.release()
+
+    await asyncio.wait_for(user_task, timeout=1)
+    await asyncio.wait_for(agent_task, timeout=1)
+    assert order == ["user", "agent"]
+
+
+def test_http_live_lease_is_observer_and_expires(monkeypatch):
     session = SimpleNamespace(
         conversation_id="conversation",
         operation_lock=asyncio.Lock(),
@@ -475,6 +538,7 @@ def test_http_live_lease_blocks_agent_and_expires(monkeypatch):
     manager._sessions = {"conversation": session}
     manager._live_clients = {}
     manager._live_leases = {}
+    manager._user_controls = {}
     monkeypatch.setattr(settings, "steward_browser_http_lease_seconds", 5)
     monkeypatch.setattr(settings, "steward_browser_http_frame_interval_ms", 500)
 
@@ -482,11 +546,12 @@ def test_http_live_lease_blocks_agent_and_expires(monkeypatch):
 
     assert attached["expiresIn"] == 5
     assert attached["frameIntervalMs"] == 500
-    with pytest.raises(BrowserRuntimeError, match="手动接管"):
-        manager._assert_actor_allowed("conversation", "agent")
+    assert attached["collaboration"]["controller"] == "agent"
+    manager._assert_actor_allowed("conversation", "agent")
 
     manager._live_leases["conversation"][attached["leaseId"]] = time.monotonic() - 1
     manager._assert_actor_allowed("conversation", "agent")
+    assert manager._is_live("conversation") is False
     assert manager._live_leases == {}
 
 
@@ -498,15 +563,36 @@ def test_http_live_fallback_routes_keep_auth_and_input_contract(
         headers=auth_headers,
     ).json()["data"]
     calls = []
+    collaboration = {
+        "controller": "agent", "mode": "observe",
+        "agentCanAct": True, "expiresIn": 0,
+    }
     monkeypatch.setattr(browser_manager, "attach_http_live", lambda cid: {
         "leaseId": "lease-1", "expiresIn": 30, "frameIntervalMs": 500,
+        "collaboration": collaboration,
     })
     monkeypatch.setattr(browser_manager, "http_live_screenshot", lambda cid, lease: {
         "data": "jpeg-base64", "url": "https://example.com/current",
+        "collaboration": collaboration,
     })
     monkeypatch.setattr(
         browser_manager, "http_live_input",
-        lambda cid, lease, message: calls.append((cid, lease, message)),
+        lambda cid, lease, message: (
+            calls.append((cid, lease, message)) or {
+                "controller": "user", "mode": "transient",
+                "agentCanAct": False, "expiresIn": 3,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        browser_manager, "http_live_control",
+        lambda cid, lease, action: (
+            calls.append((cid, lease, action)) or {
+                "controller": "user" if action == "hold" else "agent",
+                "mode": "held" if action == "hold" else "observe",
+                "agentCanAct": action != "hold", "expiresIn": 30 if action == "hold" else 0,
+            }
+        ),
     )
     monkeypatch.setattr(
         browser_manager, "release_http_live",
@@ -529,13 +615,21 @@ def test_http_live_fallback_routes_keep_auth_and_input_contract(
         json={"leaseId": "lease-1", "message": {"type": "key", "key": "Enter"}},
         headers=auth_headers,
     )
-    assert sent.json()["data"] == {"accepted": True}
+    assert sent.json()["data"]["accepted"] is True
+    assert sent.json()["data"]["collaboration"]["mode"] == "transient"
+    held = client.post(
+        f"{base}/control",
+        json={"leaseId": "lease-1", "action": "hold"},
+        headers=auth_headers,
+    )
+    assert held.json()["data"]["collaboration"]["mode"] == "held"
     released = client.post(
         f"{base}/release", json={"leaseId": "lease-1"}, headers=auth_headers,
     )
     assert released.json()["data"] == {"released": True}
     assert calls == [
         (conversation["id"], "lease-1", {"type": "key", "key": "Enter"}),
+        (conversation["id"], "lease-1", "hold"),
         (conversation["id"], "lease-1", "released"),
     ]
 
@@ -556,11 +650,19 @@ def test_browser_session_info_reports_existing_agent_page():
         "active": True,
         "url": "https://example.com/current",
         "live": False,
+        "collaboration": {
+            "controller": "agent", "mode": "observe",
+            "agentCanAct": True, "expiresIn": 0,
+        },
     }
     assert asyncio.run(manager._session_info("missing")) == {
         "active": False,
         "url": "",
         "live": False,
+        "collaboration": {
+            "controller": "agent", "mode": "observe",
+            "agentCanAct": True, "expiresIn": 0,
+        },
     }
 
 

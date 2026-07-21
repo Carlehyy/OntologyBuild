@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # leaving the Agent paused forever when a tab or network disappears.
     steward_browser_http_lease_seconds: int = 30
     steward_browser_http_frame_interval_ms: int = 500
+    # Human input in the shared live browser temporarily takes priority.  The
+    # Agent waits for this short quiet window instead of treating an observer
+    # connection as a permanent manual takeover.
+    steward_browser_user_activity_seconds: int = 3
     # One Chromium process is shared, while every active conversation owns an
     # isolated BrowserContext.  Bound those contexts and suspend idle ones so a
     # user cannot exhaust the sidecar simply by creating conversations.
