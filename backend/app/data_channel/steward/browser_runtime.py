@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Coroutine
@@ -421,6 +422,7 @@ class BrowserManager:
         self._ticket_lock = threading.Lock()
         self._live_clients: dict[str, int] = {}
         self._live_leases: dict[str, dict[str, float]] = {}
+        self._user_controls: dict[str, dict[str, Any]] = {}
         self._reaper_task: asyncio.Task | None = None
         self._registry_lock = asyncio.Lock()
 
@@ -467,6 +469,72 @@ class BrowserManager:
         self._prune_live_leases(conversation_id)
         leases = getattr(self, "_live_leases", {}).get(conversation_id, {})
         return self._live_clients.get(conversation_id, 0) > 0 or bool(leases)
+
+    def _control_ttl(self, mode: str) -> int:
+        if mode == "held":
+            return max(5, int(settings.steward_browser_http_lease_seconds))
+        return max(1, int(settings.steward_browser_user_activity_seconds))
+
+    def _prune_user_control(self, conversation_id: str | None = None) -> None:
+        registry = getattr(self, "_user_controls", None)
+        if not registry:
+            return
+        now = time.monotonic()
+        conversation_ids = [conversation_id] if conversation_id else list(registry)
+        for cid in conversation_ids:
+            state = registry.get(cid)
+            if state and float(state.get("expiresAt") or 0) <= now:
+                registry.pop(cid, None)
+
+    def _control_status(self, conversation_id: str) -> dict[str, Any]:
+        self._prune_user_control(conversation_id)
+        state = getattr(self, "_user_controls", {}).get(conversation_id)
+        if not state:
+            return {
+                "controller": "agent",
+                "mode": "observe",
+                "agentCanAct": True,
+                "expiresIn": 0,
+            }
+        remaining = max(0.0, float(state["expiresAt"]) - time.monotonic())
+        return {
+            "controller": "user",
+            "mode": str(state["mode"]),
+            "agentCanAct": False,
+            "expiresIn": max(1, int(remaining + 0.999)),
+        }
+
+    def _claim_user_control(self, conversation_id: str, client_id: str,
+                            *, mode: str) -> dict[str, Any]:
+        self._prune_user_control(conversation_id)
+        registry = getattr(self, "_user_controls", None)
+        if registry is None:
+            self._user_controls = {}
+            registry = self._user_controls
+        current = registry.get(conversation_id)
+        # Normal clicks/keystrokes must not downgrade an explicit login hold.
+        if current and current.get("mode") == "held" and mode == "transient":
+            current["expiresAt"] = time.monotonic() + self._control_ttl("held")
+        else:
+            registry[conversation_id] = {
+                "clientId": client_id,
+                "mode": mode,
+                "expiresAt": time.monotonic() + self._control_ttl(mode),
+            }
+        return self._control_status(conversation_id)
+
+    def _renew_user_control(self, conversation_id: str, client_id: str) -> None:
+        self._prune_user_control(conversation_id)
+        state = getattr(self, "_user_controls", {}).get(conversation_id)
+        if state and state.get("clientId") == client_id and state.get("mode") == "held":
+            state["expiresAt"] = time.monotonic() + self._control_ttl("held")
+
+    def _release_user_control(self, conversation_id: str,
+                              client_id: str | None = None) -> dict[str, Any]:
+        state = getattr(self, "_user_controls", {}).get(conversation_id)
+        if state and (client_id is None or state.get("clientId") == client_id):
+            self._user_controls.pop(conversation_id, None)
+        return self._control_status(conversation_id)
 
     def _prune_live_leases(self, conversation_id: str | None = None) -> None:
         """Drop abandoned HTTP takeover leases.
@@ -536,17 +604,51 @@ class BrowserManager:
         return reclaimed
 
     def _assert_actor_allowed(self, conversation_id: str, actor: str) -> None:
-        if actor == "agent" and self._is_live(conversation_id):
+        if actor == "agent" and self._control_status(conversation_id)["controller"] == "user":
             raise BrowserRuntimeError(
-                "用户正在实时浏览器中手动接管当前会话，Agent 浏览器操作已暂停。"
-                "请等待用户关闭实时浏览器窗口或明确结束接管后再继续。"
+                "用户正在协作浏览器中操作，数据管家已在当前步骤等待。"
+                "完成后点击“继续交给数据管家”即可恢复，无需关闭浏览器。"
             )
+
+    async def _wait_actor_allowed(self, conversation_id: str, actor: str) -> None:
+        if actor != "agent":
+            return
+        while True:
+            status = self._control_status(conversation_id)
+            if status["controller"] != "user":
+                return
+            if status["mode"] == "held":
+                self._assert_actor_allowed(conversation_id, actor)
+            # A normal human click or keystroke is cooperative, not an error:
+            # wait for the short quiet window, then continue automatically.
+            await asyncio.sleep(min(0.25, max(0.05, float(status["expiresIn"]))))
+
+    @asynccontextmanager
+    async def _browser_operation(self, session: BrowserSession,
+                                 conversation_id: str, actor: str):
+        """Serialize page mutations while giving freshly queued user input priority."""
+        if actor == "user":
+            self._claim_user_control(
+                conversation_id, "rest-user", mode="transient")
+        while True:
+            await self._wait_actor_allowed(conversation_id, actor)
+            await session.operation_lock.acquire()
+            if (actor != "agent"
+                    or self._control_status(conversation_id)["controller"] != "user"):
+                break
+            # User input may have arrived after the pre-lock check. Let that
+            # queued interaction run first, then retry after the quiet window.
+            session.operation_lock.release()
+        try:
+            yield
+        finally:
+            session.operation_lock.release()
 
     async def _attach_live(self, conversation_id: str) -> None:
         session = await self._require(conversation_id)
-        # Do not turn on manual takeover in the middle of an Agent navigation.
-        # Otherwise the in-flight tool can reach its final state read after the
-        # live client attaches and incorrectly fail with "manual takeover".
+        # Attaching a viewer never takes control, but still wait for an
+        # in-flight navigation before starting frame capture so the first frame
+        # is a stable page rather than a half-painted transition.
         async with session.operation_lock:
             self._live_clients[conversation_id] = self._live_clients.get(conversation_id, 0) + 1
             session.touch()
@@ -561,18 +663,23 @@ class BrowserManager:
         """Return a cheap snapshot without scraping or mutating the page."""
         session = self._sessions.get(conversation_id)
         if not session or session.page.is_closed():
-            return {"active": False, "url": "", "live": False}
+            return {
+                "active": False, "url": "", "live": False,
+                "collaboration": self._control_status(conversation_id),
+            }
         session.touch()
         return {
             "active": True,
             "url": session.page.url,
             "live": self._is_live(conversation_id),
+            "collaboration": self._control_status(conversation_id),
         }
 
     def session_info(self, conversation_id: str) -> dict:
         return self.call(self._session_info(conversation_id), timeout=10)
 
-    async def _detach_live(self, conversation_id: str) -> None:
+    async def _detach_live(self, conversation_id: str,
+                           client_id: str | None = None) -> None:
         count = self._live_clients.get(conversation_id, 0)
         if count <= 1:
             self._live_clients.pop(conversation_id, None)
@@ -581,9 +688,12 @@ class BrowserManager:
         session = self._sessions.get(conversation_id)
         if session:
             session.touch()
+        if client_id:
+            self._release_user_control(conversation_id, client_id)
 
-    async def detach_live(self, conversation_id: str) -> None:
-        await self.acall(self._detach_live(conversation_id), timeout=10)
+    async def detach_live(self, conversation_id: str,
+                          client_id: str | None = None) -> None:
+        await self.acall(self._detach_live(conversation_id, client_id), timeout=10)
 
     def _http_lease_ttl(self) -> int:
         return max(5, int(settings.steward_browser_http_lease_seconds))
@@ -599,6 +709,7 @@ class BrowserManager:
             "leaseId": lease_id,
             "expiresIn": self._http_lease_ttl(),
             "frameIntervalMs": max(250, int(settings.steward_browser_http_frame_interval_ms)),
+            "collaboration": self._control_status(conversation_id),
         }
 
     def attach_http_live(self, conversation_id: str) -> dict:
@@ -613,6 +724,7 @@ class BrowserManager:
         if not lease_id or lease_id not in leases:
             raise BrowserRuntimeError("HTTP 实时浏览器接管已过期，请重新连接")
         leases[lease_id] = time.monotonic() + self._http_lease_ttl()
+        self._renew_user_control(conversation_id, lease_id)
         session = await self._require(conversation_id)
         session.touch()
 
@@ -628,15 +740,37 @@ class BrowserManager:
 
     async def _http_live_input(
         self, conversation_id: str, lease_id: str, message: dict,
-    ) -> None:
+    ) -> dict[str, Any]:
         await self._renew_http_live(conversation_id, lease_id)
-        await self._input(conversation_id, message)
+        return await self._input(conversation_id, message, client_id=lease_id)
 
-    def http_live_input(self, conversation_id: str, lease_id: str, message: dict) -> None:
-        self.call(
+    def http_live_input(self, conversation_id: str, lease_id: str,
+                        message: dict) -> dict[str, Any]:
+        return self.call(
             self._http_live_input(conversation_id, lease_id, message),
             timeout=max(10, int(settings.steward_browser_timeout_seconds) + 5),
         )
+
+    async def _set_live_control(self, conversation_id: str, client_id: str,
+                                action: str) -> dict[str, Any]:
+        session = await self._require(conversation_id)
+        session.touch()
+        if action == "hold":
+            return self._claim_user_control(
+                conversation_id, client_id, mode="held")
+        if action == "release":
+            return self._release_user_control(conversation_id, client_id)
+        raise BrowserRuntimeError("协作浏览器控制动作只支持 hold 或 release")
+
+    async def set_live_control(self, conversation_id: str, client_id: str,
+                               action: str) -> dict[str, Any]:
+        return await self.acall(
+            self._set_live_control(conversation_id, client_id, action), timeout=10)
+
+    def http_live_control(self, conversation_id: str, lease_id: str,
+                          action: str) -> dict[str, Any]:
+        return self.call(
+            self._set_live_control(conversation_id, lease_id, action), timeout=10)
 
     async def _release_http_live(self, conversation_id: str, lease_id: str) -> None:
         leases = self._live_leases.get(conversation_id)
@@ -644,6 +778,7 @@ class BrowserManager:
             leases.pop(lease_id, None)
             if not leases:
                 self._live_leases.pop(conversation_id, None)
+        self._release_user_control(conversation_id, lease_id)
         session = self._sessions.get(conversation_id)
         if session:
             session.touch()
@@ -718,7 +853,7 @@ class BrowserManager:
         selected_target = browser_target or managed_browser_target()
         user_id = str(user_id) if user_id is not None else None
         self._ensure_reaper()
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = self._sessions.get(conversation_id)
         if session is not None and session.source_key != selected_target.key:
             await self._close(conversation_id)
@@ -758,7 +893,7 @@ class BrowserManager:
         elif user_id is not None and session.user_id is None:
             session.user_id = user_id
 
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             try:
                 response = await session.page.goto(
@@ -779,7 +914,8 @@ class BrowserManager:
                         "restoredSession": restored, "reclaimedSessionCount": len(reclaimed)}
             await session.save_state_if_due()
             session.touch()
-            result = await self._state(conversation_id, actor=actor)
+            result = await self._state(
+                conversation_id, actor=actor, check_control=False)
         result.update({
             "restoredSession": restored,
             "reclaimedSessionCount": len(reclaimed),
@@ -799,8 +935,10 @@ class BrowserManager:
             raise BrowserRuntimeError("当前会话尚未启动浏览器，请先打开目标网址")
         return session
 
-    async def _state(self, conversation_id: str, *, actor: str = "agent") -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+    async def _state(self, conversation_id: str, *, actor: str = "agent",
+                     check_control: bool = True) -> dict:
+        if check_control:
+            await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         session.touch()
         page = session.page
@@ -830,9 +968,9 @@ class BrowserManager:
         self, conversation_id: str, keyword: str | None = None, limit: int = 50,
         *, actor: str = "agent",
     ) -> list[dict]:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             rows = await session.page.evaluate(r"""(selector) => {
               return [...document.querySelectorAll(selector)].slice(0, 240).map((el, index) => {
@@ -860,10 +998,10 @@ class BrowserManager:
             conversation_id, keyword, limit, actor=actor))
 
     async def _navigate(self, conversation_id: str, url: str, *, actor: str = "agent") -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         target = _safe_url(url)
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             try:
                 response = await session.page.goto(
@@ -882,7 +1020,8 @@ class BrowserManager:
                         "downloadStarted": True, "targetUrl": target}
             await session.save_state()
             session.touch()
-            return await self._state(conversation_id, actor=actor)
+            return await self._state(
+                conversation_id, actor=actor, check_control=False)
 
     def navigate(self, conversation_id: str, url: str, *, actor: str = "agent") -> dict:
         return self.call(self._navigate(conversation_id, url, actor=actor))
@@ -902,19 +1041,20 @@ class BrowserManager:
                 pass
         await session.save_state()
         session.touch()
-        state = await self._state(conversation_id, actor=actor)
+        state = await self._state(
+            conversation_id, actor=actor, check_control=False)
         state["downloadedFiles"] = [
             row for row in workspace.list_files(conversation_id) if row["id"] not in before
         ]
         return state
 
     async def _click_text(self, conversation_id: str, text: str, *, actor: str = "agent") -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         query = (text or "").strip()
         if not query:
             raise BrowserRuntimeError("点击文本不能为空")
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             locator = session.page.get_by_text(query, exact=True).first
             if await locator.count() == 0:
@@ -928,9 +1068,9 @@ class BrowserManager:
 
     async def _click_element(self, conversation_id: str, element_index: int,
                              *, actor: str = "agent") -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             locator = session.page.locator(_PAGE_ELEMENT_SELECTOR).nth(int(element_index))
             if await locator.count() == 0:
                 raise BrowserRuntimeError("页面元素已变化，请重新读取 browser_state 后再点击")
@@ -945,9 +1085,9 @@ class BrowserManager:
         self, conversation_id: str, element_index: int, filename: str | None = None,
         *, actor: str = "agent",
     ) -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             info = await session.page.evaluate(r"""({selector, index}) => {
               const el = document.querySelectorAll(selector)[index];
@@ -1022,9 +1162,9 @@ class BrowserManager:
 
     async def _type(self, conversation_id: str, selector: str, text: str,
                     press_enter: bool = False, *, actor: str = "agent") -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             locator = session.page.locator(selector).first
             if await locator.count() == 0:
@@ -1036,14 +1176,18 @@ class BrowserManager:
             if press_enter:
                 await locator.press("Enter")
             session.touch()
-            return await self._state(conversation_id, actor=actor)
+            return await self._state(
+                conversation_id, actor=actor, check_control=False)
 
     def type_text(self, conversation_id: str, selector: str, text: str,
                   press_enter: bool = False, *, actor: str = "agent") -> dict:
         return self.call(self._type(conversation_id, selector, text, press_enter, actor=actor))
 
-    async def _input(self, conversation_id: str, message: dict) -> None:
+    async def _input(self, conversation_id: str, message: dict,
+                     *, client_id: str = "live-user") -> dict[str, Any]:
         session = await self._require(conversation_id)
+        self._claim_user_control(
+            conversation_id, client_id, mode="transient")
         async with session.operation_lock:
             session.touch()
             page = session.page
@@ -1068,19 +1212,30 @@ class BrowserManager:
             elif kind == "text":
                 await page.keyboard.insert_text(str(message.get("text") or ""))
             session.touch()
+            return self._control_status(conversation_id)
 
-    async def input(self, conversation_id: str, message: dict) -> None:
-        await self.acall(self._input(conversation_id, message))
+    async def input(self, conversation_id: str, message: dict,
+                    *, client_id: str = "live-user") -> dict[str, Any]:
+        return await self.acall(
+            self._input(conversation_id, message, client_id=client_id))
 
-    async def _screenshot(self, conversation_id: str) -> dict:
+    async def _screenshot(self, conversation_id: str,
+                          client_id: str | None = None) -> dict:
         session = await self._require(conversation_id)
+        if client_id:
+            self._renew_user_control(conversation_id, client_id)
         session.touch()
         await session.save_state_if_due()
         image = await session.page.screenshot(type="jpeg", quality=68, animations="disabled")
-        return {"data": base64.b64encode(image).decode("ascii"), "url": session.page.url}
+        return {
+            "data": base64.b64encode(image).decode("ascii"),
+            "url": session.page.url,
+            "collaboration": self._control_status(conversation_id),
+        }
 
-    async def screenshot(self, conversation_id: str) -> dict:
-        return await self.acall(self._screenshot(conversation_id))
+    async def screenshot(self, conversation_id: str,
+                         client_id: str | None = None) -> dict:
+        return await self.acall(self._screenshot(conversation_id, client_id))
 
     def list_captures(self, conversation_id: str, keyword: str | None = None, limit: int = 50) -> list[dict]:
         rows = workspace.load_captures(conversation_id, max(limit * 4, 100))
@@ -1090,7 +1245,7 @@ class BrowserManager:
         return [public_capture(r) for r in rows[-max(1, min(limit, 100)):]]
 
     async def _download(self, conversation_id: str, capture_id: str, *, actor: str = "agent") -> dict:
-        self._assert_actor_allowed(conversation_id, actor)
+        await self._wait_actor_allowed(conversation_id, actor)
         session = await self._require(conversation_id)
         capture = workspace.require_capture(conversation_id, capture_id)
         if capture.get("method") != "GET":
@@ -1099,7 +1254,7 @@ class BrowserManager:
             k: v for k, v in (capture.get("requestHeaders") or {}).items()
             if k.lower() not in {"host", "content-length", "cookie", "accept-encoding"}
         }
-        async with session.operation_lock:
+        async with self._browser_operation(session, conversation_id, actor):
             session.touch()
             response = await session.context.request.get(capture["url"], headers=headers, timeout=int(settings.steward_browser_timeout_seconds) * 1000)
             if not response.ok:
@@ -1132,6 +1287,7 @@ class BrowserManager:
                 await session.context.close()
         self._live_clients.pop(conversation_id, None)
         self._live_leases.pop(conversation_id, None)
+        self._user_controls.pop(conversation_id, None)
 
     def close(self, conversation_id: str) -> None:
         self.call(self._close(conversation_id), timeout=20)

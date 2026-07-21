@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -69,21 +70,28 @@ async def browser_live(websocket: WebSocket, conversation_id: str, ticket: str =
         await websocket.close(code=4401, reason="invalid or expired browser ticket")
         return
     await websocket.accept()
+    client_id = secrets.token_urlsafe(18)
     try:
         await browser_manager.attach_live(conversation_id)
     except Exception:
         await websocket.close(code=1011, reason="browser handoff unavailable")
         return
     stopped = asyncio.Event()
+    send_lock = asyncio.Lock()
+
+    async def send_json(payload: dict) -> None:
+        async with send_lock:
+            await websocket.send_json(payload)
 
     async def send_frames() -> None:
         interval = max(100, int(settings.steward_browser_frame_interval_ms)) / 1000
         while not stopped.is_set():
             try:
-                frame = await browser_manager.screenshot(conversation_id)
-                await websocket.send_json({"type": "frame", **frame})
+                frame = await browser_manager.screenshot(
+                    conversation_id, client_id=client_id)
+                await send_json({"type": "frame", **frame})
             except Exception as exc:  # noqa: BLE001
-                await websocket.send_json({"type": "error", "message": str(exc)})
+                await send_json({"type": "error", "message": str(exc)})
                 await asyncio.sleep(1)
             await asyncio.sleep(interval)
 
@@ -91,12 +99,21 @@ async def browser_live(websocket: WebSocket, conversation_id: str, ticket: str =
         while not stopped.is_set():
             message = await websocket.receive_json()
             if message.get("type") == "ping":
-                await websocket.send_json({"type": "pong"})
+                await send_json({"type": "pong"})
                 continue
             try:
-                await browser_manager.input(conversation_id, message)
+                if message.get("type") == "control":
+                    status = await browser_manager.set_live_control(
+                        conversation_id, client_id, str(message.get("action") or ""))
+                else:
+                    status = await browser_manager.input(
+                        conversation_id, message, client_id=client_id)
+                await send_json({
+                    "type": "collaboration",
+                    "collaboration": status,
+                })
             except Exception as exc:  # noqa: BLE001 — 单个坏按键不应断开实时会话
-                await websocket.send_json({"type": "error", "message": str(exc)})
+                await send_json({"type": "error", "message": str(exc)})
 
     sender = asyncio.create_task(send_frames())
     receiver = asyncio.create_task(receive_input())
@@ -112,6 +129,6 @@ async def browser_live(websocket: WebSocket, conversation_id: str, ticket: str =
         receiver.cancel()
         await asyncio.gather(sender, receiver, return_exceptions=True)
         try:
-            await browser_manager.detach_live(conversation_id)
+            await browser_manager.detach_live(conversation_id, client_id)
         except Exception:
             pass
