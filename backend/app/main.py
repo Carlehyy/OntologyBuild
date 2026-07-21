@@ -21,6 +21,10 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from app.database import engine, Base, SessionLocal
 from app.config import settings
+from app.shared.schema_compat import (
+    assert_critical_schema,
+    repair_development_schema,
+)
 from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit, mcp as mcp_router, domains
 from app.routers import formal as formal_router
 from app.routers import sentinel as sentinel_router
@@ -117,6 +121,14 @@ def _seed_db():
         # Lightweight column migrations — create_all skips existing tables
         with engine.connect() as conn:
             if settings.environment != "production":
+                # Legacy local SQLite databases are intentionally allowed to run
+                # without an Alembic revision. Keep late, additive model changes
+                # usable after an ordinary backend restart.
+                repaired = repair_development_schema(conn)
+                if repaired:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "已修复开发数据库缺失字段: %s", ", ".join(repaired))
                 columns = {
                     col["name"]
                     for col in inspect(conn).get_columns("extraction_tasks")
@@ -234,6 +246,10 @@ def _seed_db():
                         import logging
                         logging.getLogger(__name__).error(
                             "schema 迁移失败(将导致该表读写 500): %s -> %s", stmt, e)
+
+            # Surface a missed production migration or failed dev repair before
+            # an MCP request reaches SQLAlchemy and becomes an opaque HTTP 500.
+            assert_critical_schema(conn, Base.metadata)
 
         seed_admin(db)
 

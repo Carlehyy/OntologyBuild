@@ -44,6 +44,7 @@ MODEL_MODULES = (
     "app.ontologies.versions.models",
     "app.settings.agents.models",
     "app.settings.domains.models",
+    "app.settings.object_storage.models",
     "app.settings.open_interfaces.models",
     "app.settings.prompts.models",
     "app.settings.rules.models",
