@@ -14,7 +14,7 @@ from typing import Any
 
 import requests
 
-from . import config, credential, db
+from . import config, credential, db, tls
 from .outbound_security import OutboundTargetError, request_with_safe_redirects
 
 _LOGIN_HOST = "login.huawei.com"
@@ -346,7 +346,7 @@ def _blank_result() -> dict:
 def _session_for_request(use_w3: bool, result: dict) -> requests.Session | None:
     if not use_w3:
         session = requests.Session()
-        session.verify = config.TLS_CA_BUNDLE or True
+        tls.configure_session(session)
         return session
 
     session = credential.build_session_from_saved()
