@@ -15,14 +15,13 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
 from . import config, tls
 from . import db
 from app.shared.encryption import decrypt, encrypt
-from .outbound_security import request_with_safe_redirects
 
 _LOCK = threading.Lock()
 _STATUS_KEY = "w3_refresh_status"
@@ -44,8 +43,23 @@ _DEFAULT_HEADERS = {
 }
 
 
+class _W3Session(requests.Session):
+    """Keep requests' redirect flow while validating every login hop."""
+
+    def get_redirect_target(self, response: requests.Response) -> Optional[str]:
+        location = super().get_redirect_target(response)
+        if location is None:
+            return None
+        try:
+            return validate_login_url(urljoin(response.url, location))
+        except ValueError as exc:
+            raise requests.exceptions.InvalidURL(
+                f"W3 登录重定向被拒绝：{exc}"
+            ) from exc
+
+
 def _new_session() -> requests.Session:
-    s = requests.Session()
+    s = _W3Session()
     tls.configure_session(s, use_system_trust=True)
     s.headers.update(_DEFAULT_HEADERS)
     return s
@@ -83,14 +97,17 @@ def _login_with(username: str, password: str, login_url: str) -> requests.Sessio
         "password": password,
         "encryptedPasswordSwitch": "off",
     }
+    # W3 SSO relies on requests' native redirect handling to carry the same
+    # cookie jar through the complete login flow.  Business-interface calls
+    # still use request_with_safe_redirects; the login entry point itself has
+    # already been restricted to the administrator-managed HTTPS allowlist.
+    s.max_redirects = config.OUTBOUND_MAX_REDIRECTS
     try:
-        resp = request_with_safe_redirects(
-            s,
-            "POST",
+        resp = s.post(
             login_url,
-            validator=validate_login_url,
             json=payload,
             headers={"Content-Type": "application/json; charset=UTF-8"},
+            allow_redirects=True,
             timeout=config.HTTP_TIMEOUT,
         )
         resp.raise_for_status()

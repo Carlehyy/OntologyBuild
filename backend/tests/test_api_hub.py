@@ -438,6 +438,76 @@ def test_online_credential_config_is_encrypted_and_password_is_never_returned(hu
     assert "允许清单" in malicious_login_url.json()["detail"]
 
 
+def test_w3_login_uses_native_redirects_and_keeps_sso_cookie_jar(monkeypatch):
+    class FakeResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"statusCode": 0}
+
+    class FakeSession:
+        def __init__(self):
+            self.cookies = requests.cookies.RequestsCookieJar()
+            self.max_redirects = 30
+            self.post_call = None
+
+        def post(self, url, **kwargs):
+            self.post_call = (url, kwargs)
+            self.cookies.set("JSESSIONID", "login-session", domain="login.example")
+            self.cookies.set("hwssot", "sso-token", domain=".example")
+            return FakeResponse()
+
+    session = FakeSession()
+    monkeypatch.setattr(credential_service, "_new_session", lambda: session)
+    monkeypatch.setattr(config, "W3_LOGIN_ALLOWED_HOSTS", ("login.example",))
+    monkeypatch.setattr(config, "OUTBOUND_MAX_REDIRECTS", 7)
+    monkeypatch.setattr(config, "HTTP_TIMEOUT", 12)
+
+    result = credential_service._login_with(
+        "w3-user", "private-password", "https://login.example/session"
+    )
+
+    assert result is session
+    assert session.max_redirects == 7
+    assert session.cookies.get("hwssot", domain=".example") == "sso-token"
+    assert session.post_call == (
+        "https://login.example/session",
+        {
+            "json": {
+                "loginAccount": "w3-user",
+                "uid": "w3-user",
+                "password": "private-password",
+                "encryptedPasswordSwitch": "off",
+            },
+            "headers": {"Content-Type": "application/json; charset=UTF-8"},
+            "allow_redirects": True,
+            "timeout": 12,
+        },
+    )
+
+
+def test_w3_session_validates_every_native_redirect(monkeypatch):
+    monkeypatch.setattr(config, "W3_LOGIN_ALLOWED_HOSTS", ("login.example",))
+    session = credential_service._W3Session()
+    response = requests.Response()
+    response.status_code = 302
+    response.url = "https://login.example/session"
+
+    response.headers["Location"] = "/sso/complete"
+    assert session.get_redirect_target(response) == (
+        "https://login.example/sso/complete"
+    )
+
+    response.headers["Location"] = "https://attacker.example/collect"
+    with pytest.raises(
+        requests.exceptions.InvalidURL, match="W3 登录重定向被拒绝"
+    ):
+        session.get_redirect_target(response)
+
+
 def test_preview_run_uses_draft_without_saving_and_keeps_full_history(
     hub_client, monkeypatch
 ):
