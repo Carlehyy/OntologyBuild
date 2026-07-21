@@ -560,6 +560,7 @@ pipeline_guard = menu_guard(
 agent_guard = menu_guard("agent")
 explore_guard = menu_guard("explore")
 assistant_guard = menu_guard("super_assistant")
+community_plugins_guard = menu_guard("community.plugins")
 events_guard = menu_guard("events")
 admin_guard = [Depends(require_admin)]
 
@@ -662,6 +663,14 @@ app.include_router(
     prefix="/api/v2/super-assistant",
     tags=["super-assistant"],
     dependencies=assistant_guard,
+)
+# 开放社区复用超级助手的用户级 MCP 清单，但拥有独立菜单权限边界。
+from app.community import router as community_router
+app.include_router(
+    community_router.router,
+    prefix="/api/v2/community",
+    tags=["community"],
+    dependencies=community_plugins_guard,
 )
 app.include_router(sentinel_router.router, prefix="/api/v1/ontologies/{ontology_id}/sentinels", tags=["sentinel"], dependencies=ontology_guard)
 # 数据采集器 — AI HOT 等真实数据源接入

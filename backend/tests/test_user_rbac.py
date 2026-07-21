@@ -154,6 +154,64 @@ def test_regular_user_cannot_read_or_change_role_permissions(client, admin_user,
     ).status_code == 403
 
 
+def test_plugin_community_has_an_independent_mcp_permission_boundary(
+    client, admin_user, auth_headers,
+):
+    _create_editor(client, auth_headers)
+    response = client.put(
+        "/api/v1/users/roles/editor/menu-permissions",
+        json={"menu_keys": ["community.plugins"]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["menu_keys"] == [
+        "community", "community.plugins",
+    ]
+
+    editor_headers = _login(client, "team_editor", "editor123")
+    assert client.get(
+        "/api/v2/super-assistant/mcp-servers",
+        headers=editor_headers,
+    ).status_code == 403
+
+    created = client.post(
+        "/api/v2/community/mcp-servers",
+        json={
+            "name": "community_stdio",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@example/mcp-server"],
+            "enabled": False,
+            "require_confirmation": True,
+        },
+        headers=editor_headers,
+    )
+    assert created.status_code == 201, created.text
+    server = created.json()
+    assert server["name"] == "community_stdio"
+    assert server["enabled"] is False
+
+    listed = client.get(
+        "/api/v2/community/mcp-servers",
+        headers=editor_headers,
+    )
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [server["id"]]
+
+    disabled = client.patch(
+        f"/api/v2/community/mcp-servers/{server['id']}",
+        json={"require_confirmation": False},
+        headers=editor_headers,
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["require_confirmation"] is False
+
+    assert client.delete(
+        f"/api/v2/community/mcp-servers/{server['id']}",
+        headers=editor_headers,
+    ).status_code == 204
+
+
 def test_authorized_pages_can_read_cross_module_reference_data(client, admin_user, auth_headers, db):
     editor = _create_editor(client, auth_headers)
     editor_headers = _login(client, "team_editor", "editor123")

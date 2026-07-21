@@ -20,6 +20,9 @@ ALL_MENU_KEYS = (
     "api_hub.interfaces",
     "api_hub.history",
     "api_hub.authorization",
+    "community",
+    "community.skills",
+    "community.plugins",
     "models",
 )
 
@@ -42,6 +45,8 @@ PARENT_MENU_KEYS = {
     "api_hub.interfaces": "api_hub",
     "api_hub.history": "api_hub",
     "api_hub.authorization": "api_hub",
+    "community.skills": "community",
+    "community.plugins": "community",
 }
 GROUP_MENU_KEYS = {
     "data": ("data.pipelines", "data.sync_tasks", "data.structured"),
@@ -49,6 +54,10 @@ GROUP_MENU_KEYS = {
         "api_hub.interfaces",
         "api_hub.history",
         "api_hub.authorization",
+    ),
+    "community": (
+        "community.skills",
+        "community.plugins",
     ),
 }
 

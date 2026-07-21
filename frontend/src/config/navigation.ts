@@ -1,6 +1,8 @@
 import type { ElementType } from 'react'
 import {
   Bot,
+  Blocks,
+  BookOpenCheck,
   BrainCircuit,
   ClipboardList,
   Compass,
@@ -45,6 +47,9 @@ export const DEFAULT_NON_ADMIN_MENU_KEYS = [
   'data.pipelines',
   'data.sync_tasks',
   'data.structured',
+  'community',
+  'community.skills',
+  'community.plugins',
   'models',
 ]
 
@@ -69,6 +74,12 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
       { key: 'api_hub.interfaces', to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理', description: '接口定义与代理配置' },
       { key: 'api_hub.history', to: '/api-hub/history', icon: History, label: '调用历史', description: '接口调用记录' },
       { key: 'api_hub.authorization', to: '/api-hub/authorization', icon: KeyRound, label: '授权配置', description: '凭据与授权策略' },
+    ],
+  },
+  {
+    key: 'community', to: '/community', icon: Blocks, label: '开放社区', description: '技能与插件能力中心', subItems: [
+      { key: 'community.skills', to: '/community/skills', icon: BookOpenCheck, label: '技能社区', description: '发现与管理平台技能' },
+      { key: 'community.plugins', to: '/community/plugins', icon: PlugZap, label: '插件社区', description: '管理 MCP Server 清单' },
     ],
   },
   { key: 'models', to: '/models', icon: Cpu, label: '模型配置', description: '模型提供商与运行配置' },
@@ -131,6 +142,9 @@ export function menuKeyForPath(pathname: string): string | null {
   if (pathname.startsWith('/api-hub/history')) return 'api_hub.history'
   if (pathname.startsWith('/api-hub/authorization') || pathname.startsWith('/api-hub/operations')) return 'api_hub.authorization'
   if (pathname.startsWith('/api-hub/interfaces')) return 'api_hub.interfaces'
+  if (pathname === '/community' || pathname === '/community/') return 'community'
+  if (pathname.startsWith('/community/skills')) return 'community.skills'
+  if (pathname.startsWith('/community/plugins')) return 'community.plugins'
   if (pathname.startsWith('/ontologies')) return 'ontologies'
   if (pathname.startsWith('/agent')) return 'agent'
   if (pathname.startsWith('/overview')) return 'overview'

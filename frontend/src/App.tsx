@@ -30,6 +30,8 @@ import ReportStudioPage from '@/pages/agent/ReportStudioPage'
 import EventRegistryPage from '@/pages/events/EventRegistryPage'
 import ExplorationPage from '@/pages/explore/ExplorationPage'
 import SuperAssistantPage from '@/pages/super-assistant/SuperAssistantPage'
+import SkillCommunityPage from '@/pages/community/SkillCommunityPage'
+import PluginCommunityPage from '@/pages/community/PluginCommunityPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
@@ -119,6 +121,9 @@ export default function App() {
           <Route path="/models" element={<ProtectedRoute><ModelsPage /></ProtectedRoute>} />
           <Route path="/api-hub" element={<Navigate to="/api-hub/interfaces" replace />} />
           <Route path="/api-hub/:tab" element={<ProtectedRoute><ApiHubPage /></ProtectedRoute>} />
+          <Route path="/community" element={<Navigate to="/community/skills" replace />} />
+          <Route path="/community/skills" element={<ProtectedRoute><SkillCommunityPage /></ProtectedRoute>} />
+          <Route path="/community/plugins" element={<ProtectedRoute><PluginCommunityPage /></ProtectedRoute>} />
           <Route path="/agent/reports" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent/reports/:templateId" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent" element={<ProtectedRoute><AgentWorkbenchPage /></ProtectedRoute>} />
