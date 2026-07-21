@@ -10,15 +10,17 @@ def test_explicit_ca_bundle_has_priority(monkeypatch):
     monkeypatch.setattr(config, "TLS_CA_BUNDLE", "/managed/ca.pem")
     monkeypatch.setattr(tls, "_uses_windows_system_trust", lambda: True)
 
-    session = tls.configure_session(requests.Session())
+    session = tls.configure_session(
+        requests.Session(), use_system_trust=True
+    )
 
     assert session.verify == "/managed/ca.pem"
     assert type(session.get_adapter("https://")) is HTTPAdapter
 
 
-def test_non_windows_keeps_requests_default_trust(monkeypatch):
+def test_regular_interface_keeps_requests_default_trust_on_windows(monkeypatch):
     monkeypatch.setattr(config, "TLS_CA_BUNDLE", "")
-    monkeypatch.setattr(tls, "_uses_windows_system_trust", lambda: False)
+    monkeypatch.setattr(tls, "_uses_windows_system_trust", lambda: True)
 
     session = tls.configure_session(requests.Session())
 
@@ -26,11 +28,25 @@ def test_non_windows_keeps_requests_default_trust(monkeypatch):
     assert type(session.get_adapter("https://")) is HTTPAdapter
 
 
-def test_windows_uses_system_context_with_strict_verification(monkeypatch):
+def test_non_windows_w3_keeps_requests_default_trust(monkeypatch):
+    monkeypatch.setattr(config, "TLS_CA_BUNDLE", "")
+    monkeypatch.setattr(tls, "_uses_windows_system_trust", lambda: False)
+
+    session = tls.configure_session(
+        requests.Session(), use_system_trust=True
+    )
+
+    assert session.verify is True
+    assert type(session.get_adapter("https://")) is HTTPAdapter
+
+
+def test_windows_w3_uses_system_context_with_strict_verification(monkeypatch):
     monkeypatch.setattr(config, "TLS_CA_BUNDLE", "")
     monkeypatch.setattr(tls, "_uses_windows_system_trust", lambda: True)
 
-    session = tls.configure_session(requests.Session())
+    session = tls.configure_session(
+        requests.Session(), use_system_trust=True
+    )
     adapter = session.get_adapter("https://")
     assert isinstance(adapter, tls._WindowsSystemTrustAdapter)
 
