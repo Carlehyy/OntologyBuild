@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from . import config
+from . import config, tls
 from . import db
 from app.shared.encryption import decrypt, encrypt
 from .outbound_security import request_with_safe_redirects
@@ -46,7 +46,7 @@ _DEFAULT_HEADERS = {
 
 def _new_session() -> requests.Session:
     s = requests.Session()
-    s.verify = config.TLS_CA_BUNDLE or True
+    tls.configure_session(s)
     s.headers.update(_DEFAULT_HEADERS)
     return s
 
