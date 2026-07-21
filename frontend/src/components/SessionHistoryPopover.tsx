@@ -17,6 +17,7 @@ interface SessionHistoryPopoverProps<T extends SessionHistoryItem> {
   onDelete?: (id: string) => void | Promise<void>
   renderItemIcon: (item: T) => ReactNode
   emptyDescription: string
+  topOffsetClassName?: string
 }
 
 function formatSessionTime(value: string): string {
@@ -40,6 +41,7 @@ export default function SessionHistoryPopover<T extends SessionHistoryItem>({
   onDelete,
   renderItemIcon,
   emptyDescription,
+  topOffsetClassName = 'mt-[14px]',
 }: SessionHistoryPopoverProps<T>) {
   if (!open) return null
 
@@ -49,7 +51,7 @@ export default function SessionHistoryPopover<T extends SessionHistoryItem>({
       <section
         role="dialog"
         aria-label="历史会话"
-        className="absolute right-0 top-full z-30 mt-[14px] w-[min(380px,calc(100vw-32px))] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up"
+        className={`absolute right-0 top-full z-30 ${topOffsetClassName} w-[min(380px,calc(100vw-32px))] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up`}
       >
         <header className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
           <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">历史会话</span>

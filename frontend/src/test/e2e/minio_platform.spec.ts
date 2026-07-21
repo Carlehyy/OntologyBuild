@@ -80,9 +80,8 @@ test('管理员测试并保存 MinIO 后只显示一次外部 MCP 配置', async
 })
 
 
-test('超级助手一键添加平台内置 MinIO MCP', async ({ page }) => {
+test('超级助手配置隐藏平台内置 MinIO，只展示可用的外部 MCP', async ({ page }) => {
   await authenticate(page)
-  let installed = false
   const builtin = {
     id: 'minio-mcp-1',
     name: 'platform_minio',
@@ -106,6 +105,15 @@ test('超级助手一键添加平台内置 MinIO MCP', async ({ page }) => {
     created_at: now,
     updated_at: now,
   }
+  const external = {
+    ...builtin,
+    id: 'external-mcp-1',
+    name: 'api-hub',
+    builtin_key: null,
+    url: 'https://api.example.com/mcp',
+    tool_manifest: builtin.tool_manifest.slice(0, 2),
+    last_test_message: '连接成功，发现 2 个工具',
+  }
   await page.route('**/api/v1/**', route => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/v1/models') return json(route, [])
@@ -115,20 +123,19 @@ test('超级助手一键添加平台内置 MinIO MCP', async ({ page }) => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/v2/super-assistant/conversations') return json(route, [])
     if (path === '/api/v2/super-assistant/skills') return json(route, [])
-    if (path === '/api/v2/super-assistant/mcp-servers/platform-minio') {
-      installed = true
-      return json(route, builtin)
-    }
-    if (path === '/api/v2/super-assistant/mcp-servers') return json(route, installed ? [builtin] : [])
+    if (path === '/api/v2/super-assistant/mcp-servers') return json(route, [builtin, external])
     return route.fulfill({ status: 404, body: '{}' })
   })
 
   await page.goto('/#/super-assistant')
   await page.getByRole('button', { name: '打开助手配置' }).click()
   await page.getByRole('button', { name: /^MCP/ }).click()
-  await page.getByRole('button', { name: '添加平台 MinIO' }).click()
 
-  await expect(page.getByText('platform_minio')).toBeVisible()
-  await expect(page.getByText('13 tools')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'MinIO 已添加' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'MCP 1' })).toBeVisible()
+  await expect(page.getByText('api-hub', { exact: true })).toBeVisible()
+  await expect(page.getByText('2 tools', { exact: true })).toBeVisible()
+  await expect(page.getByText('platform_minio', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /平台 MinIO/ })).toHaveCount(0)
+  await expect(page.getByText('MCP Servers', { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/保存后测试连接/)).toHaveCount(0)
 })

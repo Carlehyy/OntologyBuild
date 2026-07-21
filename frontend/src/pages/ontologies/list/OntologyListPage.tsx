@@ -387,20 +387,22 @@ function OntologyCard({
       </div>
 
       <footer className="mt-auto flex min-h-11 items-center gap-0.5 border-t border-slate-100 px-4 py-1.5">
-        <button
-          type="button"
-          onClick={onEdit}
-          className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
-        >
-          <Pencil size={12} /> 编辑
-        </button>
-        <button
-          type="button"
-          onClick={onView}
-          className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
-        >
-          <Search size={12} /> 查看
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+          >
+            <Pencil size={12} /> 编辑
+          </button>
+          <button
+            type="button"
+            onClick={onView}
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+          >
+            <Search size={12} /> 查看
+          </button>
+        </div>
         <span className="ml-auto shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400" title={`创建时间：${new Date(item.created_at).toLocaleString('zh-CN')}`}>
           {formatChangedAt(item.created_at)}
         </span>

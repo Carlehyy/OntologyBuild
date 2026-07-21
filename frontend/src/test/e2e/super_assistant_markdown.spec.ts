@@ -180,3 +180,31 @@ test('消息输入框默认获得焦点并展示绿色边框', async ({ page }) 
   await expect(page.getByRole('textbox', { name: '向超级助手发送消息' })).toBeFocused()
   await expect(page.getByTestId('super-assistant-composer')).toHaveCSS('border-color', 'rgb(20, 184, 166)')
 })
+
+test('历史会话与消息跳转浮层和相邻区域保留间距', async ({ page }) => {
+  await mockSuperAssistant(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/super-assistant')
+
+  const historyButton = page.getByRole('button', { name: '查看会话记录' })
+  await historyButton.click()
+  const historyPopover = page.getByRole('dialog', { name: '历史会话' })
+  const pageHeader = historyButton.locator('xpath=ancestor::header[1]')
+  const [historyBox, headerBox] = await Promise.all([
+    historyPopover.boundingBox(),
+    pageHeader.boundingBox(),
+  ])
+  expect(historyBox).not.toBeNull()
+  expect(headerBox).not.toBeNull()
+  expect(historyBox!.y - (headerBox!.y + headerBox!.height)).toBeGreaterThanOrEqual(4)
+
+  await page.mouse.click(400, 400)
+  await page.getByRole('button', { name: '查看我发送的消息' }).click()
+  const [messageHistoryBox, composerBox] = await Promise.all([
+    page.getByTestId('super-assistant-message-history').boundingBox(),
+    page.getByTestId('super-assistant-composer').boundingBox(),
+  ])
+  expect(messageHistoryBox).not.toBeNull()
+  expect(composerBox).not.toBeNull()
+  expect(composerBox!.y - (messageHistoryBox!.y + messageHistoryBox!.height)).toBeGreaterThanOrEqual(10)
+})

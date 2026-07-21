@@ -22,20 +22,32 @@ const sessionDetail = (id: string, title: string) => ({
   canvas,
   completeness: { counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0 }, gaps: [] },
   readiness,
-  messages: id === 's1' ? [{
-    id: 'm1', role: 'assistant', createdAt: '2026-07-12T00:00:00Z',
-    content: '下方是业务示意图：\n\n![业务示意图](/mock-image.svg)',
-    steps: [{
-      tool: 'show_diagram', arguments: { kind: 'state' }, summary: '展示状态图', durationMs: 1,
-      diagram: { kind: 'state', title: '工单状态图', mermaid: diagram, warnings: [] },
-    }],
-  }] : [],
+  messages: id === 's1' ? [
+    {
+      id: 'u1', role: 'user', createdAt: '2026-07-12T00:00:00Z',
+      content: '请展示工单状态流程', steps: [],
+    },
+    {
+      id: 'm1', role: 'assistant', createdAt: '2026-07-12T00:00:01Z',
+      content: '下方是业务示意图：\n\n![业务示意图](/mock-image.svg)',
+      steps: [{
+        tool: 'show_diagram', arguments: { kind: 'state' }, summary: '展示状态图', durationMs: 1,
+        diagram: { kind: 'state', title: '工单状态图', mermaid: diagram, warnings: [] },
+      }],
+    },
+  ] : [],
 })
 
 const readiness = {
   ready: false, stage: '阶段0 · 定边界', gatesPassed: 2, gatesTotal: 9,
   blockingCount: 2, advisoryCount: 0, openQuestions: { blocking: 0, advisory: 0 },
   gates: [],
+}
+
+const requirementsDocument = {
+  id: 'doc-1', sessionId: 's1', title: '工单业务 · 需求文档 v2', version: 2,
+  createdAt: '2026-07-12T00:00:00Z',
+  contentMd: '# 工单业务 · 需求文档 v2\n\n## 背景与目标\n\n梳理工单处理流程。',
 }
 
 const htmlAttachment = {
@@ -112,6 +124,12 @@ async function mockExplore(page: Page) {
     if (path === '/api/v2/exploration/sessions/s2') return ok(sessionDetail('s2', '第二个业务会话'))
     if (path === '/api/v2/exploration/sessions/s1/attachments') {
       return ok([htmlAttachment, textAttachment, archivedTextAttachment, binaryAttachment])
+    }
+    if (path === '/api/v2/exploration/sessions/s1/documents') {
+      return ok([requirementsDocument])
+    }
+    if (path === '/api/v2/exploration/documents/doc-1') {
+      return ok(requirementsDocument)
     }
     if (path === '/api/v2/exploration/sessions/s1/attachments/html-1/preview') {
       return ok({
@@ -191,7 +209,7 @@ test.describe('业务探索图表与图片交互', () => {
   })
 
   test('业务画布弹窗和 Markdown 图片使用同一套自适应交互', async ({ page }) => {
-    await page.getByRole('button', { name: '图表' }).click()
+    await page.getByRole('button', { name: '业务流程' }).click()
     await page.getByRole('button', { name: '状态图', exact: true }).click()
     await expect(page.getByTestId('canvas-diagram-title')).toHaveText('工单状态图')
     await page.waitForTimeout(300)
@@ -261,14 +279,14 @@ test.describe('业务探索图表与图片交互', () => {
     await expect(objectSection).toHaveAttribute('aria-expanded', 'true')
     await expect(objectCard).toBeVisible()
 
-    await page.getByRole('button', { name: '查看会话记录' }).click()
+    await page.getByRole('button', { name: '查看历史会话' }).click()
     await page.getByRole('button', { name: /^第二个业务会话/ }).click()
     await expect(objectSection).toHaveAttribute('aria-expanded', 'false')
     await expect(objectCard).toBeHidden()
   })
 
   test('文件清单中的 HTML 使用隔离网页预览并保留源码编辑', async ({ page }) => {
-    await page.getByRole('button', { name: '查看文件清单' }).click()
+    await page.getByRole('button', { name: '查看会话文件' }).click()
 
     const iframe = page.getByTestId('html-file-preview')
     await expect(iframe).toBeVisible()
@@ -305,7 +323,7 @@ test.describe('业务探索图表与图片交互', () => {
   })
 
   test('文件树默认折叠并显示直属数量，复制仅对文本文件开放', async ({ page }) => {
-    await page.getByRole('button', { name: '查看文件清单' }).click()
+    await page.getByRole('button', { name: '查看会话文件' }).click()
 
     const notesDirectory = page.getByRole('button', { name: 'notes，下一级 2 项' })
     const uploadsDirectory = page.getByRole('button', { name: 'uploads，下一级 1 项' })
@@ -337,7 +355,7 @@ test.describe('业务探索图表与图片交互', () => {
   })
 
   test('文件清单只能通过右上角关闭按钮关闭', async ({ page }) => {
-    await page.getByRole('button', { name: '查看文件清单' }).click()
+    await page.getByRole('button', { name: '查看会话文件' }).click()
     const drawer = page.getByTestId('workspace-drawer')
     await expect(drawer).toBeVisible()
 
@@ -348,5 +366,53 @@ test.describe('业务探索图表与图片交互', () => {
 
     await page.getByRole('button', { name: '关闭文件清单' }).click()
     await expect(drawer).toBeHidden()
+  })
+
+  test('四个工作区入口展示明确标签并使用不同状态色', async ({ page }) => {
+    const fileButton = page.getByTestId('workspace-files-button')
+    const historyButton = page.getByTestId('session-history-button')
+    const flowButton = page.getByTestId('business-flow-button')
+    const documentButton = page.getByTestId('requirements-document-button')
+
+    await expect(fileButton).toContainText('会话文件')
+    await expect(historyButton).toContainText('历史会话')
+    await expect(flowButton).toContainText('业务流程')
+    await expect(documentButton).toContainText('需求文档')
+
+    const colors = await Promise.all([fileButton, historyButton, flowButton, documentButton]
+      .map(button => button.evaluate(element => getComputedStyle(element).color)))
+    expect(new Set(colors).size).toBe(4)
+  })
+
+  test('用户消息和助手回复均可一键复制，聊天滚动条使用细样式', async ({ page }) => {
+    const userCopy = page.getByRole('button', { name: '复制用户消息' })
+    const assistantCopy = page.getByRole('button', { name: '复制助手回复' })
+
+    await userCopy.click()
+    await expect(userCopy).toContainText('已复制')
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
+      .toBe('请展示工单状态流程')
+
+    await assistantCopy.click()
+    await expect(assistantCopy).toContainText('已复制')
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
+      .toContain('下方是业务示意图')
+
+    await expect(page.getByTestId('exploration-chat-region')).toHaveCSS('scrollbar-width', 'thin')
+  })
+
+  test('需求文档历史版本与详情标题栏的分割线保持水平对齐', async ({ page }) => {
+    await page.getByRole('button', { name: '查看需求文档' }).click()
+    await expect(page.getByRole('dialog', { name: '需求文档' })).toBeVisible()
+
+    const [historyHeader, detailHeader] = await Promise.all([
+      page.getByTestId('requirements-history-header').boundingBox(),
+      page.getByTestId('requirements-detail-header').boundingBox(),
+    ])
+    expect(historyHeader).not.toBeNull()
+    expect(detailHeader).not.toBeNull()
+    expect(Math.abs(
+      historyHeader!.y + historyHeader!.height - (detailHeader!.y + detailHeader!.height),
+    )).toBeLessThan(1)
   })
 })

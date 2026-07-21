@@ -88,6 +88,9 @@ test('Skill 可从助手配置中停用并重新启用', async ({ page }) => {
   await page.goto('/#/super-assistant')
   await page.getByRole('button', { name: '打开助手配置' }).click()
 
+  await expect(page.getByText('目录型 Skills', { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/ZIP 根目录或唯一外层目录/)).toHaveCount(0)
+
   const disableSwitch = page.getByRole('switch', { name: '停用 Skill research-helper' })
   const fileButton = page.getByRole('button', { name: '文件', exact: true })
   await expect(disableSwitch).toBeChecked()

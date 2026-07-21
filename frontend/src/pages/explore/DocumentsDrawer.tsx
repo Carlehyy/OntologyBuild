@@ -106,7 +106,7 @@ export default function DocumentsDrawer({
       >
         {/* 版本列表 */}
         <div className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
-          <div className="px-4 py-4 border-b border-[var(--color-border)]">
+          <div data-testid="requirements-history-header" className="flex h-16 shrink-0 flex-col justify-center border-b border-[var(--color-border)] px-4">
             <div id="requirements-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">需求文档</div>
             <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">历史版本 · 共 {docs.length} 个</div>
           </div>
@@ -139,7 +139,7 @@ export default function DocumentsDrawer({
 
         {/* 预览 + 操作 */}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--color-border)]">
+          <div data-testid="requirements-detail-header" className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-5">
             <div className="text-xs font-medium text-[var(--color-text-primary)] truncate">
               {doc?.title || '选择一个版本预览'}
             </div>

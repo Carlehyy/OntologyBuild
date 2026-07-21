@@ -312,9 +312,10 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
             onClick={openDiagram}
             disabled={!sessionId || (counts.objects || 0) === 0}
             title={(counts.objects || 0) === 0 ? '画布还没有对象模型' : '从画布确定性生成 ER/流程/时序/状态图（不经 LLM）'}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
+            data-testid="business-flow-button"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[11px] font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
           >
-            <Share2 size={11} /> 图表
+            <Share2 size={13} /> 业务流程
           </button>
           <button
             type="button"
@@ -322,9 +323,11 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
             disabled={!sessionId}
             title="查看需求文档"
             aria-label="查看需求文档"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-40"
+            data-testid="requirements-document-button"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
           >
             <FileText size={13} />
+            <span>需求文档</span>
           </button>
         </div>
       </div>

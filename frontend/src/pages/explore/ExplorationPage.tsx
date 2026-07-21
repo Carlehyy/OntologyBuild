@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Bot, CircleHelp, Compass, Download, ExternalLink, Files, FileText, Globe2, History, List,
+  Bot, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, Globe2, History, List,
   Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -251,6 +251,7 @@ export default function ExplorationPage() {
   const [webSearch, setWebSearch] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
   const [showSessionHistory, setShowSessionHistory] = useState(false)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [deleteSessionTarget, setDeleteSessionTarget] = useState<BxSession | null>(null)
   const [deletingSession, setDeletingSession] = useState(false)
   const [docsOpen, setDocsOpen] = useState(false)
@@ -274,6 +275,19 @@ export default function ExplorationPage() {
       document.getElementById(`explore-msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     })
   }, [])
+
+  const copyMessage = async (message: ChatMsg) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法访问剪贴板')
+      await navigator.clipboard.writeText(message.content)
+      setCopiedMessageId(message.id)
+      window.setTimeout(() => {
+        setCopiedMessageId(current => current === message.id ? null : current)
+      }, 1500)
+    } catch (error: unknown) {
+      toast({ tone: 'error', title: '复制失败', description: errorMessage(error, '请稍后重试。') })
+    }
+  }
 
   // 按真实排版高度（含自动换行）伸展；十行后只让 textarea 内部滚动。
   useLayoutEffect(() => {
@@ -565,11 +579,12 @@ export default function ExplorationPage() {
                 onClick={() => setWorkspaceOpen(true)}
                 disabled={!sid}
                 data-testid="workspace-files-button"
-                title="查看文件清单"
-                aria-label="查看文件清单"
-                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                title="查看会话文件"
+                aria-label="查看会话文件"
+                className="group relative inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 text-[11px] font-medium text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100 hover:text-sky-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <Files size={15} />
+                <span>会话文件</span>
                 {attachments.length > 0 && (
                   <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[9px] font-semibold leading-4 text-white">
                     {attachments.length > 99 ? '99+' : attachments.length}
@@ -580,14 +595,16 @@ export default function ExplorationPage() {
                 <button
                   type="button"
                   onClick={() => setShowSessionHistory(value => !value)}
-                  title="查看会话记录"
-                  aria-label="查看会话记录"
+                  title="查看历史会话"
+                  aria-label="查看历史会话"
                   aria-expanded={showSessionHistory}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showSessionHistory
-                    ? 'border-teal-300 bg-teal-50 text-teal-700'
-                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+                  data-testid="session-history-button"
+                  className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${showSessionHistory
+                    ? 'border-violet-300 bg-violet-100 text-violet-800'
+                    : 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 hover:bg-violet-100 hover:text-violet-800'}`}
                 >
                   <History size={15} />
+                  <span>历史会话</span>
                 </button>
                 {showSessionHistory && (
                   <>
@@ -673,7 +690,7 @@ export default function ExplorationPage() {
           ref={chatScrollRef}
           data-testid="exploration-chat-region"
           onScroll={updateScrollStickiness}
-          className="workspace-topology-surface flex-1 overflow-y-auto px-4 py-4"
+          className="scrollbar-thin workspace-topology-surface flex-1 overflow-y-auto px-4 py-4"
         >
           {timeline.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center gap-4">
@@ -758,11 +775,27 @@ export default function ExplorationPage() {
                   <div className={`min-w-0 max-w-[85%] ${m.role === 'user' ? 'text-right' : ''}`}>
                     {m.role === 'assistant' && <StepTrace steps={m.steps} running={m.streaming} />}
                     {m.content && (
-                      <div className={`inline-block text-left rounded-xl px-3.5 py-2.5 ${m.role === 'user'
-                        ? 'whitespace-pre-wrap break-words bg-[var(--color-nav-bg)] text-white text-sm leading-relaxed'
-                        : 'bg-[var(--color-bg-elevated)] border border-[var(--color-border)]'}`}>
-                        {m.role === 'user' ? m.content : <Md text={m.content} />}
-                      </div>
+                      <>
+                        <div className={`inline-block text-left rounded-xl px-3.5 py-2.5 ${m.role === 'user'
+                          ? 'whitespace-pre-wrap break-words bg-[var(--color-nav-bg)] text-white text-sm leading-relaxed'
+                          : 'bg-[var(--color-bg-elevated)] border border-[var(--color-border)]'}`}>
+                          {m.role === 'user' ? m.content : <Md text={m.content} />}
+                        </div>
+                        <div className={`mt-1 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <button
+                            type="button"
+                            onClick={() => void copyMessage(m)}
+                            title={m.role === 'user' ? '复制用户消息' : '复制助手回复'}
+                            aria-label={m.role === 'user' ? '复制用户消息' : '复制助手回复'}
+                            className={`inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[10px] transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${copiedMessageId === m.id
+                              ? 'bg-teal-50 text-teal-700'
+                              : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+                          >
+                            {copiedMessageId === m.id ? <Check size={12} /> : <Copy size={12} />}
+                            {copiedMessageId === m.id ? '已复制' : '复制'}
+                          </button>
+                        </div>
+                      </>
                     )}
                   </div>
                 </div>

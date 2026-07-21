@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  Bot, Check, ChevronRight, CircleAlert, Copy, Database, FileCode2, FileText, Folder, Gauge,
+  Bot, Check, ChevronRight, CircleAlert, Copy, FileCode2, FileText, Folder, Gauge,
   History, List, Loader2, MessageSquare, Pencil, PlugZap, Plus,
   Save, Send, Settings2, ShieldCheck, Square, Trash2, Upload, User,
   Wrench, X,
@@ -796,10 +796,10 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
   const [editingSkill, setEditingSkill] = useState<SuperSkill | null>(null)
   const [editingMcp, setEditingMcp] = useState<SuperMcpServer | 'new' | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
-  const [installingMinio, setInstallingMinio] = useState(false)
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null)
   const [updatingServerSetting, setUpdatingServerSetting] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
+  const configurableServers = servers.filter(server => server.builtin_key !== 'minio')
 
   const importZip = async (file?: File) => {
     if (!file) return
@@ -864,23 +864,6 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
     catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
   }
 
-  const installPlatformMinio = async () => {
-    setInstallingMinio(true)
-    try {
-      const server = await superAssistantApi.installPlatformMinio()
-      await refreshServers()
-      toast({
-        tone: 'success',
-        title: '平台 MinIO MCP 已添加',
-        description: `已发现 ${server.tool_manifest.length} 个工具，默认执行前确认。`,
-      })
-    } catch (error) {
-      toast({ tone: 'error', title: '无法添加平台 MinIO', description: errorText(error, '请联系管理员先完成 MinIO 配置') })
-    } finally { setInstallingMinio(false) }
-  }
-
-  const platformMinio = servers.find(server => server.builtin_key === 'minio')
-
   return (
     <>
       <aside
@@ -912,16 +895,12 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
             </button>
             <button type="button" onClick={() => setTab('mcp')}
               className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'mcp' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
-              MCP <span className={`ml-1 text-[10px] tabular-nums ${tab === 'mcp' ? 'text-teal-100' : 'text-slate-400'}`}>{servers.length}</span>
+              MCP <span className={`ml-1 text-[10px] tabular-nums ${tab === 'mcp' ? 'text-teal-100' : 'text-slate-400'}`}>{configurableServers.length}</span>
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {tab === 'skills' ? (
             <>
-              <div className="mb-4 min-w-0">
-                <p className="text-xs font-medium text-[var(--color-text-primary)]">目录型 Skills</p>
-                <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">ZIP 根目录或唯一外层目录必须包含 SKILL.md，可继续维护 scripts、references 与 assets。</p>
-              </div>
               <div className="grid gap-3">
                 {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
                 {skills.map(skill => (
@@ -954,13 +933,9 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
             </>
           ) : (
             <>
-              <div className="mb-4 min-w-0">
-                <p className="text-xs font-medium text-[var(--color-text-primary)]">MCP Servers</p>
-                <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">保存后测试连接；只有测试成功并发现的工具才会进入助手工具目录。</p>
-              </div>
               <div className="grid gap-3">
-                {servers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
-                {servers.map(server => (
+                {configurableServers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
+                {configurableServers.map(server => (
                   <article key={server.id} className="rounded-xl border border-[var(--color-border)] p-4 transition-colors hover:border-teal-200">
                     <div className="flex items-start gap-2">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><PlugZap size={16} /></div>
@@ -1010,18 +985,10 @@ function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, ref
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setEditingMcp('new')}
-                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
-                  <Plus size={14} /> 添加 MCP
-                </button>
-                <button type="button" onClick={() => void installPlatformMinio()} disabled={!!platformMinio || installingMinio}
-                  title={platformMinio ? '平台 MinIO 已添加' : '管理员完成 MinIO 配置后可直接接入'}
-                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-sky-400 bg-sky-50/70 px-3 text-xs font-medium text-sky-700 transition-all hover:border-sky-500 hover:bg-sky-100 disabled:cursor-default disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
-                  {installingMinio ? <Loader2 size={14} className="animate-spin" /> : platformMinio ? <Check size={14} /> : <Database size={14} />}
-                  {platformMinio ? 'MinIO 已添加' : '添加平台 MinIO'}
-                </button>
-              </div>
+              <button type="button" onClick={() => setEditingMcp('new')}
+                className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                <Plus size={14} /> 添加 MCP
+              </button>
             )}
             <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
           </footer>
@@ -1318,7 +1285,7 @@ export default function SuperAssistantPage() {
           {showMessageHistory && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
-              <div className="absolute bottom-full right-0 z-30 mb-3 w-72 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
+              <div data-testid="super-assistant-message-history" className="absolute bottom-full right-0 z-30 mb-5 w-72 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
                 <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
                   <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">我发送的消息</span>
                   <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
@@ -1438,6 +1405,7 @@ export default function SuperAssistantPage() {
               }}
               renderItemIcon={() => <MessageSquare size={16} />}
               emptyDescription="新建会话后，可随时回到之前的任务、Skill 调用与 MCP 执行记录。"
+              topOffsetClassName="mt-[22px]"
             />
           </div>
         </header>
