@@ -178,14 +178,16 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [confirmClose, requestClose])
 
-  const columnWidths = useMemo(() => Object.fromEntries(columns.map(column => {
+  const columnMinWidths = useMemo(() => Object.fromEntries(columns.map(column => {
     const metadata = schemaColumns[column]
     const values = [
       columnLabel(metadata, column),
       ...rows.map(row => row.cur[column] ?? ''),
       ...inserts.map(row => row[column] ?? ''),
     ]
-    const width = Math.max(14, ...values.map(value => displayWidth(value) + 4))
+    // 只把内容宽度作为列的下限：少列时由表格均匀吸收剩余空间，
+    // 长文本也不会把单列无限撑宽；列数较多时仍由表格容器提供横向滚动。
+    const width = Math.min(36, Math.max(14, ...values.map(value => displayWidth(value) + 4)))
     return [column, width]
   })), [columns, inserts, rows, schemaColumns])
 
@@ -427,13 +429,17 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-auto px-5 py-3">
+        <div className="min-h-0 flex-1 overflow-hidden px-5 py-3">
           {loading ? (
             <div className="flex h-full items-center justify-center text-xs text-slate-400"><Loader2 size={14} className="mr-2 animate-spin" />正在查询数据…</div>
           ) : !columns.length ? (
             <div className="grid h-full place-items-center text-xs text-slate-400">暂无列结构，请通过“上传新版本”导入表格。</div>
           ) : (
-            <table className="min-w-max border-separate border-spacing-0 text-xs">
+            <div
+              className="h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white"
+              data-testid="dataset-editor-grid"
+            >
+              <table className="w-max min-w-full border-separate border-spacing-0 text-xs">
               <thead className="sticky top-0 z-20">
                 <tr>
                   <th className="sticky left-0 z-30 w-11 border-b border-r border-slate-200 bg-slate-50 px-2 py-2 font-normal text-slate-400">#</th>
@@ -442,7 +448,7 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                     const isPrimaryKey = pkCols.includes(column)
                     const isRequired = isPrimaryKey || metadata?.nullable === false
                     return (
-                      <th key={column} style={{ minWidth: `${columnWidths[column]}ch` }}
+                      <th key={column} style={{ minWidth: `${columnMinWidths[column]}ch` }}
                         className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-left font-medium text-slate-700">
                         <span className="inline-flex flex-wrap items-center gap-1.5 whitespace-nowrap">
                           {columnLabel(metadata, column)}
@@ -472,8 +478,8 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                             onChange={event => setCell(rowIndex, column, event.target.value)}
                             title={validationError || (primaryKey ? '主键值不可修改' : row.cur[column])}
                             aria-invalid={Boolean(validationError)}
-                            style={{ width: `${columnWidths[column]}ch` }}
-                            className={`min-h-9 px-3 py-2 outline-none transition ${
+                            style={{ minWidth: `${columnMinWidths[column]}ch` }}
+                            className={`min-h-9 w-full px-3 py-2 outline-none transition ${
                               validationError
                                 ? 'bg-red-100 text-red-900 ring-2 ring-inset ring-red-300'
                                 : changed
@@ -511,8 +517,8 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                             onChange={event => setInsertCell(rowIndex, column, event.target.value)}
                             title={validationError || row[column]}
                             aria-invalid={Boolean(validationError)}
-                            style={{ width: `${columnWidths[column]}ch` }}
-                            className={`min-h-9 bg-transparent px-3 py-2 text-slate-700 outline-none transition placeholder:text-amber-500/70 focus:bg-teal-50/70 ${validationError ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}
+                            style={{ minWidth: `${columnMinWidths[column]}ch` }}
+                            className={`min-h-9 w-full bg-transparent px-3 py-2 text-slate-700 outline-none transition placeholder:text-amber-500/70 focus:bg-teal-50/70 ${validationError ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}
                           />
                           {validationError && <span className="block bg-red-50 px-3 pb-1.5 text-[10px] text-red-600">{validationError}</span>}
                         </td>
@@ -524,7 +530,8 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
           )}
         </div>
 

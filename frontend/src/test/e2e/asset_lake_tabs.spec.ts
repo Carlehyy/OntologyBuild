@@ -3,9 +3,19 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 async function mockAssetLake(page: Page, fixtures?: {
   curated?: Array<Record<string, unknown>>
   pipelines?: Array<Record<string, unknown>>
+  manual?: Array<Record<string, unknown>>
+  manualPreviews?: Record<string, {
+    columns: string[]
+    rows: Array<Record<string, unknown>>
+    version_no?: number
+    total_rows?: number
+  }>
 }) {
   const curated = fixtures?.curated ?? []
   const pipelines = fixtures?.pipelines ?? []
+  const manual = fixtures?.manual ?? []
+  const manualPreviews = fixtures?.manualPreviews ?? {}
+  const wideCuratedColumns = Array.from({ length: 12 }, (_, index) => `field_${index + 1}`)
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
     localStorage.setItem('auth-store', JSON.stringify({
@@ -51,6 +61,32 @@ async function mockAssetLake(page: Page, fixtures?: {
         previous: {
           version_no: 2,
           dataset_version_id: 'version-2',
+          total: 0,
+          rows: [],
+          offset: 0,
+          limit: 200,
+          has_more: false,
+        },
+        delta: null,
+        review: null,
+      })
+    }
+    if (url.pathname === '/api/v2/curated/ds-reviewed-wide/review-diff') {
+      const row = Object.fromEntries(wideCuratedColumns.map((column, index) => [column, `值 ${index + 1}`]))
+      return ok({
+        pk: ['field_1'],
+        current: {
+          version_no: 3,
+          dataset_version_id: 'version-wide-3',
+          total: 1,
+          rows: [row],
+          offset: 0,
+          limit: 200,
+          has_more: false,
+        },
+        previous: {
+          version_no: 2,
+          dataset_version_id: 'version-wide-2',
           total: 0,
           rows: [],
           offset: 0,
@@ -147,6 +183,19 @@ async function mockAssetLake(page: Page, fixtures?: {
         ],
       })
     }
+    if (url.pathname === '/api/v2/datasets/ds-reviewed-wide/schema') {
+      return ok({
+        dataset_id: 'ds-reviewed-wide',
+        columns: wideCuratedColumns.map((name, index) => ({
+          name,
+          display_name: `字段 ${index + 1}`,
+          type: 'string',
+          nullable: index !== 0,
+          is_primary_key: index === 0,
+          sample_values: [`值 ${index + 1}`],
+        })),
+      })
+    }
     if (url.pathname === '/api/v2/datasets/ds-pending-pk/schema') {
       return ok({
         dataset_id: 'ds-pending-pk',
@@ -171,8 +220,34 @@ async function mockAssetLake(page: Page, fixtures?: {
         ? { items: curated, total: curated.length, page: 1, page_size: 10 }
         : curated)
     }
+    const manualPreviewMatch = url.pathname.match(/^\/api\/v2\/datasets\/([^/]+)\/preview$/)
+    if (manualPreviewMatch && manualPreviews[manualPreviewMatch[1]]) {
+      const preview = manualPreviews[manualPreviewMatch[1]]
+      return ok({
+        dataset_id: manualPreviewMatch[1],
+        version_no: preview.version_no ?? 1,
+        total_rows: preview.total_rows ?? preview.rows.length,
+        columns: preview.columns,
+        rows: preview.rows,
+      })
+    }
+    const manualSchemaMatch = url.pathname.match(/^\/api\/v2\/datasets\/([^/]+)\/schema$/)
+    if (manualSchemaMatch && manualPreviews[manualSchemaMatch[1]]) {
+      const preview = manualPreviews[manualSchemaMatch[1]]
+      return ok({
+        dataset_id: manualSchemaMatch[1],
+        columns: preview.columns.map((name, index) => ({
+          name,
+          display_name: name,
+          type: 'string',
+          nullable: index !== 0,
+          is_primary_key: index === 0,
+          sample_values: preview.rows.map(row => row[name]).slice(0, 3),
+        })),
+      })
+    }
     if (url.pathname === '/api/v2/datasets/overview') {
-      return ok({ items: [], total: 0, page: 1, page_size: 10 })
+      return ok({ items: manual, total: manual.length, page: 1, page_size: 10 })
     }
     if (url.pathname === '/api/v2/pipelines') {
       return ok(url.searchParams.get('paginated') === 'true'
@@ -207,6 +282,101 @@ test('资产湖仅保留两个数据集入口，并复用滑动选中动画', as
   await expect.poll(async () => Number.parseFloat(
     await indicator.evaluate(element => (element as HTMLElement).style.left),
   )).toBeGreaterThan(initialLeft)
+})
+
+test('人工与成品数据表少列铺满可视区，宽表保留容器内横向滚动', async ({ page }) => {
+  const wideManualColumns = Array.from({ length: 18 }, (_, index) => `column_${index + 1}`)
+  const manualItems = [
+    {
+      id: 'manual-compact', name: '两列人工数据', raw_name: '两列人工数据', kind: 'table',
+      primary_key: 'order_id', source: 'manual', connection_name: '', version_count: 2,
+      latest_version_no: 2, rowcount: 2, consumers: [],
+      created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-20T09:00:00Z',
+    },
+    {
+      id: 'manual-wide', name: '多列人工数据', raw_name: '多列人工数据', kind: 'table',
+      primary_key: 'column_1', source: 'manual', connection_name: '', version_count: 1,
+      latest_version_no: 1, rowcount: 1, consumers: [],
+      created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-20T09:00:00Z',
+    },
+  ]
+  const curatedItems = [
+    {
+      id: 'ds-reviewed', name: '两列成品数据', status: 'approved', row_count: 2,
+      quality_score: 0.96, primary_key: 'order_id', producer_pipeline_id: 'pipeline-compact',
+      output_key: 'orders', has_review_evidence: true, updated_at: '2026-07-20T09:00:00Z',
+    },
+    {
+      id: 'ds-reviewed-wide', name: '多列成品数据', status: 'approved', row_count: 1,
+      quality_score: 0.95, primary_key: 'field_1', producer_pipeline_id: 'pipeline-wide',
+      output_key: 'wide_orders', has_review_evidence: true, updated_at: '2026-07-20T09:00:00Z',
+    },
+  ]
+
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await mockAssetLake(page, {
+    manual: manualItems,
+    manualPreviews: {
+      'manual-compact': {
+        columns: ['order_id', 'status'],
+        rows: [
+          { order_id: 'SO-001', status: '已完成' },
+          { order_id: 'SO-002', status: '待发货' },
+        ],
+        version_no: 2,
+      },
+      'manual-wide': {
+        columns: wideManualColumns,
+        rows: [Object.fromEntries(wideManualColumns.map((column, index) => [column, `值 ${index + 1}`]))],
+      },
+    },
+    curated: curatedItems,
+    pipelines: [
+      { id: 'pipeline-compact', name: '精简字段流水线', domain: '零售', status: 'published', target_curated_ids: ['ds-reviewed'] },
+      { id: 'pipeline-wide', name: '宽表流水线', domain: '零售', status: 'published', target_curated_ids: ['ds-reviewed-wide'] },
+    ],
+  })
+  await page.goto('/#/data/structured?tab=raw', { waitUntil: 'domcontentloaded' })
+
+  const compactManualRow = page.getByRole('row').filter({ hasText: '两列人工数据' })
+  await compactManualRow.getByRole('button', { name: '维护数据集 两列人工数据' }).click()
+  let dialog = page.getByRole('dialog', { name: '两列人工数据' })
+  let grid = dialog.getByTestId('dataset-editor-grid')
+  await expect(grid).toBeVisible()
+  await expect.poll(() => grid.evaluate(element => {
+    const table = element.querySelector('table')
+    return table ? Math.abs(table.getBoundingClientRect().width - element.clientWidth) : Number.POSITIVE_INFINITY
+  })).toBeLessThanOrEqual(2)
+  await expect.poll(() => grid.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(2)
+  await dialog.getByRole('button', { name: '关闭数据维护窗口' }).click()
+
+  const wideManualRow = page.getByRole('row').filter({ hasText: '多列人工数据' })
+  await wideManualRow.getByRole('button', { name: '维护数据集 多列人工数据' }).click()
+  dialog = page.getByRole('dialog', { name: '多列人工数据' })
+  grid = dialog.getByTestId('dataset-editor-grid')
+  await expect(grid).toBeVisible()
+  await expect.poll(() => grid.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(200)
+  await dialog.getByRole('button', { name: '关闭数据维护窗口' }).click()
+
+  await page.getByRole('button', { name: '成品数据集' }).click()
+  const compactCuratedRow = page.getByRole('row').filter({ hasText: '两列成品数据' })
+  await compactCuratedRow.getByRole('button', { name: '查看' }).click()
+  dialog = page.getByRole('dialog', { name: '两列成品数据' })
+  grid = dialog.getByTestId('curated-data-grid')
+  await expect(grid).toBeVisible()
+  await expect.poll(() => grid.evaluate(element => {
+    const table = element.querySelector('table')
+    return table ? Math.abs(table.getBoundingClientRect().width - element.clientWidth) : Number.POSITIVE_INFINITY
+  })).toBeLessThanOrEqual(2)
+  await expect.poll(() => grid.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(2)
+  await dialog.getByRole('button', { name: '关闭审核详情' }).click()
+
+  const wideCuratedRow = page.getByRole('row').filter({ hasText: '多列成品数据' })
+  await wideCuratedRow.getByRole('button', { name: '查看' }).click()
+  dialog = page.getByRole('dialog', { name: '多列成品数据' })
+  grid = dialog.getByTestId('curated-data-grid')
+  await expect(grid).toBeVisible()
+  await expect.poll(() => grid.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(200)
 })
 
 test('成品数据集列表与详情按待办语义展示审核状态', async ({ page }) => {

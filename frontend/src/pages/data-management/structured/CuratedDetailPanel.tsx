@@ -155,8 +155,11 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, sche
   const cols = columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)])
   const tint = highlight === 'add' ? 'bg-green-50/40' : highlight === 'del' ? 'bg-red-50/40' : ''
   return (
-    <div className={fillAvailable ? 'h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white' : 'max-w-full overflow-x-auto'}>
-      <table className="w-full min-w-max border-separate border-spacing-0 text-xs">
+    <div
+      className={fillAvailable ? 'h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white' : 'max-w-full overflow-x-auto'}
+      data-testid="curated-data-grid"
+    >
+      <table className="w-max min-w-full border-separate border-spacing-0 text-xs">
         <thead className="sticky top-0 z-20 bg-slate-50">
           <tr>
             <th className="sticky left-0 z-30 w-12 border-b border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-center font-normal text-slate-400">#</th>
@@ -199,8 +202,8 @@ function UpdatedRowsTable({
   const columns = columnsFromRows(allRows, [...primaryKeys, ...Object.keys(schemaColumns)])
 
   return (
-    <div className="max-w-full overflow-x-auto rounded-lg border border-amber-200 bg-white">
-      <table className="w-full min-w-max text-xs">
+    <div className="max-w-full overflow-x-auto rounded-lg border border-amber-200 bg-white" data-testid="curated-updated-grid">
+      <table className="w-max min-w-full text-xs">
         <thead className="sticky top-0 z-10 border-b bg-slate-50">
           <tr>
             <th className="sticky left-0 z-20 min-w-[170px] border-r bg-slate-50 px-3 py-2 text-left font-medium text-slate-500">对比行 / 变更列</th>
