@@ -46,7 +46,7 @@ _DEFAULT_HEADERS = {
 
 def _new_session() -> requests.Session:
     s = requests.Session()
-    tls.configure_session(s)
+    tls.configure_session(s, use_system_trust=True)
     s.headers.update(_DEFAULT_HEADERS)
     return s
 
