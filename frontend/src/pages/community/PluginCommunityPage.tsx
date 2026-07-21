@@ -5,7 +5,6 @@ import {
   CircleAlert,
   Clock3,
   Code2,
-  Database,
   Loader2,
   Pencil,
   PlugZap,
@@ -36,7 +35,6 @@ const transportLabel = (server: SuperMcpServer) => {
 }
 
 const endpointText = (server: SuperMcpServer) => {
-  if (server.builtin_key === 'minio') return '平台内置 MinIO'
   if (server.transport === 'stdio') return [server.command, ...server.args].filter(Boolean).join(' ')
   return server.url
 }
@@ -177,13 +175,12 @@ export default function PluginCommunityPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SuperMcpServer | null>(null)
   const [deleting, setDeleting] = useState(false)
-  const [installingMinio, setInstallingMinio] = useState(false)
   const [manifestTarget, setManifestTarget] = useState<SuperMcpServer | null>(null)
 
   const load = useCallback(async () => {
     try {
       const items = await communityApi.mcpServers()
-      setServers(Array.isArray(items) ? items : [])
+      setServers(Array.isArray(items) ? items.filter(item => !item.builtin_key) : [])
     } catch (error) {
       setServers([])
       toast({ tone: 'error', title: 'MCP 清单加载失败', description: errorText(error, '请检查服务连接后重试。') })
@@ -276,29 +273,12 @@ export default function PluginCommunityPage() {
     }
   }
 
-  const installPlatformMinio = async () => {
-    setInstallingMinio(true)
-    try {
-      const server = await communityApi.installPlatformMinio()
-      await load()
-      toast({ tone: 'success', title: '平台 MinIO MCP 已添加', description: `已发现 ${server.tool_manifest.length} 个工具，默认执行前确认。` })
-    } catch (error) {
-      toast({ tone: 'error', title: '无法添加平台 MinIO', description: errorText(error, '请联系管理员先完成 MinIO 配置。') })
-    } finally {
-      setInstallingMinio(false)
-    }
-  }
-
-  const platformMinio = servers.find(server => server.builtin_key === 'minio')
-
   const renderActions = (server: SuperMcpServer) => (
     <div className="flex items-center justify-end gap-1">
       <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} aria-label={`测试 MCP ${server.name}`} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-wait disabled:opacity-50">
         {testingId === server.id ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Wrench size={14} />} 测试
       </button>
-      {!server.builtin_key && (
-        <button type="button" onClick={() => setEditing(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><Pencil size={14} /></button>
-      )}
+      <button type="button" onClick={() => setEditing(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><Pencil size={14} /></button>
       <button type="button" onClick={() => setDeleteTarget(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"><Trash2 size={14} /></button>
     </div>
   )
@@ -313,10 +293,6 @@ export default function PluginCommunityPage() {
           <p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-500">统一管理个人 MCP 清单。完成连接测试后开放到超级助手，也可随时停用或调整执行确认策略。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => void installPlatformMinio()} disabled={!!platformMinio || installingMinio} title={platformMinio ? '平台 MinIO 已添加' : '管理员完成 MinIO 配置后可直接接入'} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-sky-200 bg-white/80 px-3.5 text-sm font-medium text-sky-700 shadow-sm transition-colors hover:bg-sky-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-not-allowed disabled:opacity-50">
-            {installingMinio ? <Loader2 size={15} className="animate-spin motion-reduce:animate-none" /> : platformMinio ? <CheckCircle2 size={15} /> : <Database size={15} />}
-            {platformMinio ? 'MinIO 已添加' : '添加平台 MinIO'}
-          </button>
           <button type="button" onClick={() => setEditing('new')} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2">
             <Plus size={16} /> 添加 MCP
           </button>
@@ -378,7 +354,7 @@ export default function PluginCommunityPage() {
                   <tr key={server.id} className={`align-middle transition-colors hover:bg-slate-50/80 ${server.enabled ? '' : 'bg-slate-50/30'}`}>
                     <td className="px-4 py-3.5">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${server.builtin_key ? 'bg-violet-50 text-violet-700' : 'bg-sky-50 text-sky-700'}`}><PlugZap size={17} /></span>
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><PlugZap size={17} /></span>
                         <div className="min-w-0"><p className="truncate font-medium text-slate-900" title={server.name}>{server.name}</p><p className="mt-0.5 truncate font-mono text-[11px] text-slate-400" title={endpointText(server)}>{endpointText(server) || '尚未配置地址'}</p></div>
                       </div>
                     </td>
@@ -398,7 +374,7 @@ export default function PluginCommunityPage() {
             {filteredServers.map(server => (
               <article key={server.id} className="rounded-2xl border border-white/80 bg-white/80 p-4 shadow-[0_8px_28px_rgba(15,23,42,0.05)] backdrop-blur-xl">
                 <div className="flex items-start gap-3">
-                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${server.builtin_key ? 'bg-violet-50 text-violet-700' : 'bg-sky-50 text-sky-700'}`}><PlugZap size={17} /></span>
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><PlugZap size={17} /></span>
                   <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold text-slate-900">{server.name}</h2><p className="mt-1 truncate font-mono text-[10px] text-slate-400">{endpointText(server)}</p></div>
                   <TestStatus server={server} />
                 </div>

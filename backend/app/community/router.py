@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
 from app.deps import get_current_user, get_db
+from app.super_assistant.models import SuperAssistantMcpServer
 from app.super_assistant.router import (
     create_mcp_server as create_user_mcp_server,
-    install_platform_minio_mcp as install_user_platform_minio_mcp,
-    list_mcp_servers as list_user_mcp_servers,
     remove_mcp_server as remove_user_mcp_server,
     test_mcp_server as test_user_mcp_server,
     update_mcp_server as update_user_mcp_server,
@@ -24,13 +23,31 @@ from app.super_assistant.schemas import (
 router = APIRouter()
 
 
+def _community_server(
+    db: Session,
+    owner_id: str,
+    server_id: str,
+) -> SuperAssistantMcpServer:
+    item = db.query(SuperAssistantMcpServer).filter(
+        SuperAssistantMcpServer.id == server_id,
+        SuperAssistantMcpServer.owner_id == owner_id,
+        SuperAssistantMcpServer.builtin_key.is_(None),
+    ).first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="MCP Server 不存在")
+    return item
+
+
 @router.get("/mcp-servers", response_model=list[McpServerOut])
 def list_mcp_servers(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List the current user's MCP inventory shared with Super Assistant."""
-    return list_user_mcp_servers(db=db, current_user=current_user)
+    """List user-added MCP servers; platform-internal tools stay out of Community."""
+    return db.query(SuperAssistantMcpServer).filter(
+        SuperAssistantMcpServer.owner_id == current_user.id,
+        SuperAssistantMcpServer.builtin_key.is_(None),
+    ).order_by(SuperAssistantMcpServer.updated_at.desc()).all()
 
 
 @router.post("/mcp-servers", response_model=McpServerOut, status_code=201)
@@ -49,6 +66,7 @@ def update_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _community_server(db, current_user.id, server_id)
     return update_user_mcp_server(
         server_id=server_id,
         body=body,
@@ -63,6 +81,7 @@ def remove_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Response:
+    _community_server(db, current_user.id, server_id)
     return remove_user_mcp_server(
         server_id=server_id,
         db=db,
@@ -76,16 +95,9 @@ async def test_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _community_server(db, current_user.id, server_id)
     return await test_user_mcp_server(
         server_id=server_id,
         db=db,
         current_user=current_user,
     )
-
-
-@router.post("/mcp-servers/platform-minio", response_model=McpServerOut)
-def install_platform_minio_mcp(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return install_user_platform_minio_mcp(db=db, current_user=current_user)

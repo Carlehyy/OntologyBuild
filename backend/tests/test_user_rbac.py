@@ -155,9 +155,9 @@ def test_regular_user_cannot_read_or_change_role_permissions(client, admin_user,
 
 
 def test_plugin_community_has_an_independent_mcp_permission_boundary(
-    client, admin_user, auth_headers,
+    client, admin_user, auth_headers, db,
 ):
-    _create_editor(client, auth_headers)
+    editor = _create_editor(client, auth_headers)
     response = client.put(
         "/api/v1/users/roles/editor/menu-permissions",
         json={"menu_keys": ["community.plugins"]},
@@ -191,12 +191,40 @@ def test_plugin_community_has_an_independent_mcp_permission_boundary(
     assert server["name"] == "community_stdio"
     assert server["enabled"] is False
 
+    from app.super_assistant.models import SuperAssistantMcpServer
+
+    builtin = SuperAssistantMcpServer(
+        owner_id=editor["id"],
+        name="platform_minio",
+        builtin_key="minio",
+        transport="streamable_http",
+        url="builtin://minio",
+        header_names=[],
+        args=[],
+        env_names=[],
+        enabled=True,
+        require_confirmation=True,
+        tool_manifest=[],
+    )
+    db.add(builtin)
+    db.commit()
+    db.refresh(builtin)
+
     listed = client.get(
         "/api/v2/community/mcp-servers",
         headers=editor_headers,
     )
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()] == [server["id"]]
+    assert client.patch(
+        f"/api/v2/community/mcp-servers/{builtin.id}",
+        json={"enabled": False},
+        headers=editor_headers,
+    ).status_code == 404
+    assert client.post(
+        "/api/v2/community/mcp-servers/platform-minio",
+        headers=editor_headers,
+    ).status_code not in {200, 201}
 
     disabled = client.patch(
         f"/api/v2/community/mcp-servers/{server['id']}",

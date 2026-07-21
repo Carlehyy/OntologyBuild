@@ -45,7 +45,15 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
     created_at: now,
     updated_at: now,
   }
-  const servers = () => [server]
+  const builtinMinio = {
+    ...server,
+    id: 'builtin-minio',
+    name: 'platform_minio',
+    builtin_key: 'minio',
+    url: 'builtin://minio',
+    enabled: true,
+  }
+  const servers = () => [builtinMinio, server]
 
   await page.route('**/api/v2/community/**', async route => {
     const request = route.request()
@@ -105,6 +113,8 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await expect(page).toHaveURL(/#\/community\/plugins$/)
   await expect(page.getByRole('heading', { name: '插件社区' })).toBeVisible()
   await expect(page.locator('table').getByText('weather_tools', { exact: true })).toBeVisible()
+  await expect(page.getByText('platform_minio', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '添加平台 MinIO' })).toHaveCount(0)
 
   await page.getByRole('button', { name: '测试 MCP weather_tools' }).click()
   await expect(page.locator('table').getByText('已通过', { exact: true })).toBeVisible()

@@ -34,7 +34,4 @@ export const communityApi = {
   testMcpServer: (id: string) => apiClientV2.post<{ ok: boolean; message: string; tools: McpTool[] }>(
     `/community/mcp-servers/${id}/test`,
   ),
-  installPlatformMinio: () => apiClientV2.post<SuperMcpServer>(
-    '/community/mcp-servers/platform-minio',
-  ),
 }
