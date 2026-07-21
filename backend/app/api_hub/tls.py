@@ -39,13 +39,17 @@ def _uses_windows_system_trust() -> bool:
     return os.name == "nt"
 
 
-def configure_session(session: requests.Session) -> requests.Session:
-    """Apply API-Hub's TLS policy to one outbound requests session."""
+def configure_session(
+    session: requests.Session,
+    *,
+    use_system_trust: bool = False,
+) -> requests.Session:
+    """Apply TLS policy without changing ordinary interface trust semantics."""
     if config.TLS_CA_BUNDLE:
         session.verify = config.TLS_CA_BUNDLE
         return session
 
     session.verify = True
-    if _uses_windows_system_trust():
+    if use_system_trust and _uses_windows_system_trust():
         session.mount("https://", _WindowsSystemTrustAdapter())
     return session
