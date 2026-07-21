@@ -1055,6 +1055,7 @@ export default function SuperAssistantPage() {
   const [titleDraft, setTitleDraft] = useState('')
   const [savingTitle, setSavingTitle] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [modelLoadFailed, setModelLoadFailed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -1068,18 +1069,41 @@ export default function SuperAssistantPage() {
 
   useEffect(() => {
     let alive = true
-    Promise.all([
+    Promise.allSettled([
       superAssistantApi.conversations(),
       modelApi.list(),
       superAssistantApi.skills(),
       superAssistantApi.mcpServers(),
-    ]).then(([conversationRows, modelRows, skillRows, serverRows]) => {
+    ]).then(([conversationResult, modelResult, skillResult, serverResult]) => {
       if (!alive) return
-      setConversations(conversationRows)
-      setModels(modelRows.filter(model => model.config_type === 'llm' && model.enabled !== false))
-      setSkills(skillRows); setServers(serverRows)
-      if (conversationRows[0]) setSelectedId(conversationRows[0].id)
-    }).catch(error => toast({ tone: 'error', title: '超级助手加载失败', description: errorText(error) }))
+      const failures: string[] = []
+
+      if (conversationResult.status === 'fulfilled') {
+        setConversations(conversationResult.value)
+        if (conversationResult.value[0]) setSelectedId(conversationResult.value[0].id)
+      } else {
+        failures.push(`会话：${errorText(conversationResult.reason, '加载失败')}`)
+      }
+      if (modelResult.status === 'fulfilled') {
+        setModels(modelResult.value.filter(model => model.config_type === 'llm' && model.enabled !== false))
+        setModelLoadFailed(false)
+      } else {
+        setModelLoadFailed(true)
+        failures.push(`模型：${errorText(modelResult.reason, '加载失败')}`)
+      }
+      if (skillResult.status === 'fulfilled') setSkills(skillResult.value)
+      else failures.push(`Skills：${errorText(skillResult.reason, '加载失败')}`)
+      if (serverResult.status === 'fulfilled') setServers(serverResult.value)
+      else failures.push(`MCP：${errorText(serverResult.reason, '加载失败')}`)
+
+      if (failures.length) {
+        toast({
+          tone: 'error',
+          title: failures.length === 4 ? '超级助手加载失败' : '超级助手部分功能加载失败',
+          description: failures.join('；'),
+        })
+      }
+    })
       .finally(() => alive && setLoading(false))
     return () => { alive = false }
   }, [toast])
@@ -1235,7 +1259,13 @@ export default function SuperAssistantPage() {
   }
 
   const canSend = input.trim().length > 0 && !running && models.length > 0
-  const placeholder = models.length ? '输入消息；Shift + Enter 换行' : '请先到“模型配置”启用一个文本 LLM'
+  const placeholder = loading
+    ? '正在加载可用模型…'
+    : modelLoadFailed
+      ? '模型列表加载失败，请刷新页面重试'
+      : models.length
+        ? '输入消息；Shift + Enter 换行'
+        : '请先到“模型配置”启用一个文本 LLM'
   const hasMessages = messages.length > 0
 
   const renderComposer = (prominent = false) => (

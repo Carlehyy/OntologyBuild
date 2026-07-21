@@ -18,6 +18,10 @@ depends_on = None
 def upgrade() -> None:
     # Migration 0003 calls Base.metadata.create_all(), so fresh databases may
     # already contain model columns that deployed 0033 databases do not.
+    if not sa_inspect(op.get_bind()).has_table("super_assistant_mcp_servers"):
+        # A later repair migration recreates the complete current table.  Do
+        # not prevent a stamped, partially damaged database from reaching it.
+        return
     existing = {
         column["name"] for column in sa_inspect(op.get_bind()).get_columns("super_assistant_mcp_servers")
     }
@@ -33,6 +37,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not sa_inspect(op.get_bind()).has_table("super_assistant_mcp_servers"):
+        return
     existing = {
         column["name"] for column in sa_inspect(op.get_bind()).get_columns("super_assistant_mcp_servers")
     }

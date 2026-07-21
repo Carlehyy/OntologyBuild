@@ -69,14 +69,15 @@ def upgrade() -> None:
             ["operation", "created_at"], unique=False,
         )
 
-    mcp_columns = {
-        column["name"] for column in sa_inspect(bind).get_columns("super_assistant_mcp_servers")
-    }
-    if "builtin_key" not in mcp_columns:
-        op.add_column(
-            "super_assistant_mcp_servers",
-            sa.Column("builtin_key", sa.String(length=50), nullable=True),
-        )
+    if "super_assistant_mcp_servers" in tables:
+        mcp_columns = {
+            column["name"] for column in sa_inspect(bind).get_columns("super_assistant_mcp_servers")
+        }
+        if "builtin_key" not in mcp_columns:
+            op.add_column(
+                "super_assistant_mcp_servers",
+                sa.Column("builtin_key", sa.String(length=50), nullable=True),
+            )
 
 
 def downgrade() -> None:
