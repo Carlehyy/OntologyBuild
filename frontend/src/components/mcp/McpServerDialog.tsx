@@ -13,13 +13,11 @@ const errorText = (error: any, fallback = '操作失败') =>
 export default function McpServerDialog({
   server,
   client,
-  defaultEnabled = true,
   onClose,
   onSaved,
 }: {
   server?: SuperMcpServer
   client: McpManagementClient
-  defaultEnabled?: boolean
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
@@ -36,8 +34,6 @@ export default function McpServerDialog({
   const [headers, setHeaders] = useState('')
   const [env, setEnv] = useState('')
   const [clientConfig, setClientConfig] = useState('')
-  const [enabled, setEnabled] = useState(server?.enabled ?? defaultEnabled)
-  const [confirmation, setConfirmation] = useState(server?.require_confirmation ?? true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -161,8 +157,6 @@ export default function McpServerDialog({
       if (server) {
         await client.updateMcpServer(server.id, {
           ...connection,
-          enabled,
-          require_confirmation: confirmation,
           ...(parsedHeaders ? { headers: parsedHeaders } : changedTransport && transport === 'stdio' ? { headers: {} } : {}),
           ...(parsedEnv ? { env: parsedEnv } : changedTransport && transport !== 'stdio' ? { env: {} } : {}),
         })
@@ -172,17 +166,15 @@ export default function McpServerDialog({
           ...connection,
           headers: parsedHeaders || {},
           env: parsedEnv || {},
-          enabled,
-          require_confirmation: confirmation,
+          enabled: false,
+          require_confirmation: true,
         })
       }
       await onSaved()
       toast({
         tone: 'success',
         title: server ? 'MCP 配置已更新' : 'MCP Server 已添加',
-        description: enabled
-          ? '配置已保存；建议立即执行连接测试以刷新工具清单。'
-          : '配置已保存为停用状态，请测试通过后再开放。',
+        description: '配置已登记；建议立即执行连接测试以刷新工具清单。',
       })
       onClose()
     } catch (saveError) {
@@ -281,17 +273,6 @@ export default function McpServerDialog({
             </>
           )}
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="flex min-h-12 items-center justify-between rounded-xl border border-slate-200 bg-slate-50/50 px-4 text-xs font-medium text-slate-700">
-              开放到超级助手
-              <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-teal-700" />
-            </label>
-            <label className="flex min-h-12 items-center justify-between rounded-xl border border-slate-200 bg-slate-50/50 px-4 text-xs font-medium text-slate-700">
-              每次工具调用前要求确认
-              <input type="checkbox" checked={confirmation} onChange={event => setConfirmation(event.target.checked)} className="h-4 w-4 accent-teal-700" />
-            </label>
-          </div>
-          {!confirmation && <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">关闭确认会允许模型直接执行该 Server 的所有工具，请仅对完全可信、只读的服务使用。</p>}
           {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">{error}</p>}
         </div>
 

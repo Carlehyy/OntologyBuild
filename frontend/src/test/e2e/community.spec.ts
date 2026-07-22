@@ -24,7 +24,6 @@ async function authenticate(page: Page) {
 
 test('开放社区导航、技能占位页与 MCP 完整生命周期可用', async ({ page }) => {
   await authenticate(page)
-  let patchBodies: Array<Record<string, unknown>> = []
   let createBody: Record<string, unknown> | null = null
   let server = {
     id: 'mcp-1',
@@ -83,7 +82,6 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
     }
     if (path === '/api/v2/community/mcp-servers/mcp-1' && request.method() === 'PATCH') {
       const body = request.postDataJSON() as Record<string, unknown>
-      patchBodies = [...patchBodies, body]
       server = { ...server, ...body }
       return json(route, server)
     }
@@ -115,18 +113,17 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await expect(page.locator('table').getByText('weather_tools', { exact: true })).toBeVisible()
   await expect(page.getByText('platform_minio', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '添加平台 MinIO' })).toHaveCount(0)
+  await expect(page.getByRole('columnheader', { name: '开放状态' })).toHaveCount(0)
+  await expect(page.getByRole('columnheader', { name: '执行策略' })).toHaveCount(0)
 
   await page.getByRole('button', { name: '测试 MCP weather_tools' }).click()
   await expect(page.locator('table').getByText('已通过', { exact: true })).toBeVisible()
-  const openSwitch = page.getByRole('switch', { name: '开放 MCP weather_tools' })
-  await expect(openSwitch).toBeEnabled()
-  await openSwitch.click()
-  await expect(page.getByRole('switch', { name: '停用 MCP weather_tools' })).toBeChecked()
-  await page.getByRole('switch', { name: '停用 MCP weather_tools' }).click()
-  await expect(page.getByRole('switch', { name: '开放 MCP weather_tools' })).not.toBeChecked()
-  expect(patchBodies).toEqual([{ enabled: true }, { enabled: false }])
+  await expect(page.locator('table').getByText('共 1 个', { exact: true })).toBeVisible()
+  await expect(page.getByRole('switch')).toHaveCount(0)
 
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click()
+  await expect(page.getByText('开放到超级助手', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('每次工具调用前要求确认', { exact: true })).toHaveCount(0)
   await page.getByLabel(/名称/).fill('knowledge_search')
   await page.getByLabel(/MCP URL/).fill('https://knowledge.example.com/mcp')
   await page.getByRole('button', { name: '保存' }).click()
