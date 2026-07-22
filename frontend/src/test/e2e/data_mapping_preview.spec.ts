@@ -76,9 +76,18 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await expect(page.getByText('映射结果清单')).toBeVisible()
   await expect(page.getByText('数据血缘详情')).toBeVisible()
   await expect(page.getByText('把本体结构，接到真实数据上')).toHaveCount(0)
+  const filtersBox = await page.locator('.dmo-filters').boundingBox()
+  const searchBox = await page.locator('.dmo-search').boundingBox()
+  expect(filtersBox).not.toBeNull()
+  expect(searchBox).not.toBeNull()
+  expect(filtersBox!.x + filtersBox!.width).toBeLessThanOrEqual(searchBox!.x)
+  expect(Math.abs(filtersBox!.y + filtersBox!.height / 2 - (searchBox!.y + searchBox!.height / 2))).toBeLessThan(2)
+  await expect(page.locator('.dmo-target-cell b').first()).toHaveCSS('font-size', '12px')
+  await expect(page.locator('.dmo-target-cell small').first()).toHaveCSS('font-size', '10px')
   const cardBox = await page.locator('.dmo-card').boundingBox()
   expect(cardBox).not.toBeNull()
   expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1)
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBeTruthy()
 
   await page.getByRole('button', { name: '预览数据源 订单宽表' }).click()
   const dialog = page.getByRole('dialog', { name: '订单宽表' })
@@ -96,4 +105,16 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await expect(dialog.getByText('R21-C1')).toBeVisible()
   await dialog.getByRole('button', { name: '关闭数据预览' }).click()
   await expect(dialog).toHaveCount(0)
+})
+
+test('数据映射按钮进入图谱编辑器使用的映射工作台', async ({ page }) => {
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const mappingButton = page.locator('.dmo-primary-button')
+  await expect(mappingButton).toHaveText('数据映射')
+  await mappingButton.click()
+
+  await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping$/)
+  await expect(page.getByTestId('mapping-workspace')).toBeVisible()
 })

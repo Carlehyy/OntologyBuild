@@ -340,7 +340,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
       return sum + (quality <= 1 ? quality * 100 : quality)
     }, 0) / selectedRow.datasets.filter(dataset => dataset.quality != null).length)
     : null
-  const openConfiguration = () => navigate(`/ontologies/${ontologyId}?tab=versions`)
+  const openMappingWorkspace = () => navigate(`/ontologies/${ontologyId}/graph?view=mapping`)
 
   if (data.isLoading) {
     return <div className="dmo-loading"><Loader2 className="animate-spin" size={20} />正在整理映射状态…</div>
@@ -369,32 +369,34 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           <div><span>实例已产出</span><b>{totalInstances.toLocaleString()}</b><small>对象与关系实例</small></div>
           <div><span>数据资产在用</span><b>{usedDatasetIds.size}<i> / {data.datasets.length}</i></b><small>当前发布版本</small></div>
         </div>
-        <button type="button" className="dmo-primary-button" onClick={openConfiguration}>
-          <Settings2 size={15} />配置映射
+        <button type="button" className="dmo-primary-button" onClick={openMappingWorkspace}>
+          <Settings2 size={15} />数据映射
         </button>
       </header>
 
       <div className="dmo-workspace">
         <main className="dmo-register">
           <div className="dmo-register-head">
-            <div>
+            <div className="dmo-register-title">
               <b>映射结果清单</b>
               <small>从本体出发，检查每个对象与关系是否真正获得了数据</small>
             </div>
-            <label className="dmo-search">
-              <Search size={14} />
-              <input value={mappingSearch} onChange={event => setMappingSearch(event.target.value)} placeholder="搜索本体元素或数据集" />
-            </label>
-          </div>
-          <div className="dmo-filters" aria-label="筛选映射结果">
-            {([
-              ['all', `全部 ${mappingRows.length}`],
-              ['issue', `待处理 ${issueRows.length}`],
-              ['object', `对象 ${objectRows.length}`],
-              ['relation', `关系 ${relationRows.length}`],
-            ] as Array<[MappingFilter, string]>).map(([value, label]) => (
-              <button type="button" key={value} data-active={mappingFilter === value} onClick={() => setMappingFilter(value)}>{label}</button>
-            ))}
+            <div className="dmo-register-actions">
+              <div className="dmo-filters" aria-label="筛选映射结果">
+                {([
+                  ['all', `全部 ${mappingRows.length}`],
+                  ['issue', `待处理 ${issueRows.length}`],
+                  ['object', `对象 ${objectRows.length}`],
+                  ['relation', `关系 ${relationRows.length}`],
+                ] as Array<[MappingFilter, string]>).map(([value, label]) => (
+                  <button type="button" key={value} data-active={mappingFilter === value} onClick={() => setMappingFilter(value)}>{label}</button>
+                ))}
+              </div>
+              <label className="dmo-search">
+                <Search size={14} />
+                <input value={mappingSearch} onChange={event => setMappingSearch(event.target.value)} placeholder="搜索本体元素或数据集" />
+              </label>
+            </div>
           </div>
           <div className="dmo-table-head" aria-hidden="true">
             <span>本体元素</span><span>真实数据来源</span><span>字段连接</span><span>实例产出</span><span>当前状态</span><i />
@@ -437,7 +439,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         <aside className="dmo-inspector" aria-label="选中映射的数据血缘详情">
           <div className="dmo-inspector-head">
             <div><b>数据血缘详情</b><small>数据如何进入当前本体元素</small></div>
-            <button type="button" onClick={openConfiguration} aria-label="配置当前映射"><Settings2 size={15} /></button>
+            <button type="button" onClick={openMappingWorkspace} aria-label="配置当前映射"><Settings2 size={15} /></button>
           </div>
           {selectedRow ? (
             <div className="dmo-inspector-body">
@@ -506,7 +508,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
               {selectedRow.status !== 'ready' && (
                 <section className="dmo-next-step">
                   <div><b>下一步</b><small>创建或打开草稿版本，补齐这条数据链路后再发布。</small></div>
-                  <button type="button" onClick={openConfiguration}>去配置<ArrowRight size={13} /></button>
+                  <button type="button" onClick={openMappingWorkspace}>去配置<ArrowRight size={13} /></button>
                 </section>
               )}
             </div>
