@@ -24,6 +24,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useOntologyStore } from '../../store/ontologyStore';
 import { ForceGraph } from './ForceGraph';
+import { writeTextToClipboard } from '@/utils/clipboard';
 
 type TabType = 'overview' | 'visual' | 'schema' | 'cypher' | 'analytics' | 'export';
 
@@ -382,7 +383,7 @@ ORDER BY relationships DESC`,
   }, [graphSchema]);
 
   const copyToClipboard = async (text: string, id: string) => {
-    await navigator.clipboard.writeText(text);
+    await writeTextToClipboard(text);
     setCopiedText(id);
     setTimeout(() => setCopiedText(null), 2000);
   };

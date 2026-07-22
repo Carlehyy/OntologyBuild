@@ -52,4 +52,14 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/utils/clipboard.ts', 'src/test/**'],
+    rules: {
+      'no-restricted-syntax': ['error', {
+        selector: "MemberExpression[object.name='navigator'][property.name='clipboard']",
+        message: 'Use writeTextToClipboard from @/utils/clipboard so copying also works on HTTP deployments.',
+      }],
+    },
+  },
 ])

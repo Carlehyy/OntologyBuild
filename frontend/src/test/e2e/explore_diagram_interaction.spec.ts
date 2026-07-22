@@ -93,10 +93,19 @@ async function mockExplore(page: Page) {
       state: { token: 'e2e-token', user: { id: 'u1', username: 'tester', role: 'admin' } },
       version: 0,
     }))
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: async (text: string) => sessionStorage.setItem('last-copied-text', text) },
-    })
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    const originalExecCommand = Document.prototype.execCommand
+    Document.prototype.execCommand = function execCommand(commandId: string) {
+      if (commandId.toLowerCase() === 'copy') {
+        const active = document.activeElement
+        const copied = active instanceof HTMLTextAreaElement
+          ? active.value.slice(active.selectionStart, active.selectionEnd)
+          : window.getSelection()?.toString() || ''
+        sessionStorage.setItem('last-copied-text', copied)
+        return Boolean(copied)
+      }
+      return originalExecCommand?.call(this, commandId) ?? false
+    }
   })
   await page.route('**/mock-image.svg', route => route.fulfill({
     status: 200,
@@ -197,6 +206,24 @@ test.describe('业务探索图表与图片交互', () => {
     await mockExplore(page)
     await page.goto('/#/explore', { waitUntil: 'domcontentloaded' })
     await expect(page.getByTestId('diagram-thumbnail')).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('HTTP 环境下消息和图表源码可降级复制，全局提示固定在右下角', async ({ page }) => {
+    const toastViewport = page.locator('[aria-live="polite"][aria-atomic="false"]')
+    await expect(toastViewport).toHaveClass(/bottom-5/)
+    await expect(toastViewport).not.toHaveClass(/top-20/)
+
+    const messageCopy = page.getByRole('button', { name: '复制用户消息' })
+    await messageCopy.click()
+    await expect(messageCopy).toContainText('已复制')
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
+      .toBe('请展示工单状态流程')
+
+    await page.getByRole('button', { name: '业务流程' }).click()
+    await page.getByRole('button', { name: '状态图', exact: true }).click()
+    await page.getByRole('button', { name: '复制源码', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
+      .toBe(diagram)
   })
 
   test('聊天图表支持完整预览、滚轮缩放和拖拽移动', async ({ page }) => {

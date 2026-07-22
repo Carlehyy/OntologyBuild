@@ -27,7 +27,7 @@ const responseInterface = {
 }
 
 test('Clipboard API 不可用时仍可复制接口响应', async ({ page }) => {
-  await page.addInitScript(({ instrumentFallback }) => {
+  await page.addInitScript(() => {
     localStorage.setItem('token', 'admin-token')
     localStorage.setItem('auth-store', JSON.stringify({
       state: {
@@ -42,21 +42,7 @@ test('Clipboard API 不可用时仍可复制接口响应', async ({ page }) => {
       },
       version: 0,
     }))
-    if (!instrumentFallback) return
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
-    const originalExecCommand = Document.prototype.execCommand
-    Document.prototype.execCommand = function execCommand(commandId: string) {
-      if (commandId.toLowerCase() === 'copy') {
-        const active = document.activeElement
-        const copied = active instanceof HTMLTextAreaElement
-          ? active.value.slice(active.selectionStart, active.selectionEnd)
-          : window.getSelection()?.toString() || ''
-        sessionStorage.setItem('fallback-copied-text', copied)
-        return Boolean(copied)
-      }
-      return originalExecCommand?.call(this, commandId) ?? false
-    }
-  }, { instrumentFallback: !realHttp })
+  })
 
   await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
   await page.route('**/api/api-hub/**', async route => {
@@ -120,6 +106,22 @@ test('Clipboard API 不可用时仍可复制接口响应', async ({ page }) => {
       secure: window.isSecureContext,
       clipboardAvailable: Boolean(navigator.clipboard?.writeText),
     }))).toEqual({ secure: false, clipboardAvailable: false })
+  } else {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+      const originalExecCommand = Document.prototype.execCommand
+      Document.prototype.execCommand = function execCommand(commandId: string) {
+        if (commandId.toLowerCase() === 'copy') {
+          const active = document.activeElement
+          const copied = active instanceof HTMLTextAreaElement
+            ? active.value.slice(active.selectionStart, active.selectionEnd)
+            : window.getSelection()?.toString() || ''
+          sessionStorage.setItem('fallback-copied-text', copied)
+          return Boolean(copied)
+        }
+        return originalExecCommand?.call(this, commandId) ?? false
+      }
+    })
   }
   await expect(page.getByText('HTTP 响应复制测试').first()).toBeVisible()
   await page.getByRole('button', { name: '调用', exact: true }).click()

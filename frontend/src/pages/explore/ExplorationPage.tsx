@@ -19,6 +19,7 @@ import { modelApi } from '@/api/ontologies'
 import MermaidBlock from '@/components/MermaidBlock'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import Md from './Md'
 import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
@@ -278,8 +279,7 @@ export default function ExplorationPage() {
 
   const copyMessage = async (message: ChatMsg) => {
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法访问剪贴板')
-      await navigator.clipboard.writeText(message.content)
+      await writeTextToClipboard(message.content)
       setCopiedMessageId(message.id)
       window.setTimeout(() => {
         setCopiedMessageId(current => current === message.id ? null : current)

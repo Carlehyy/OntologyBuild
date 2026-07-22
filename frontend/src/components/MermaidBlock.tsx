@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Copy, Download, Maximize2, X } from 'lucide-react'
 import InteractiveViewport from './InteractiveViewport'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 /**
  * Mermaid 渲染块：对话内使用有界缩略槽，完整图放到预览层；SVG 与源码都可下载。
@@ -149,7 +150,7 @@ export default function MermaidBlock({ chart, title = '业务建模图', warning
             <div className="flex shrink-0 items-center gap-1">
               {compact && <button data-testid="diagram-preview-button" onClick={() => setPreview(true)} title="完整预览" className="rounded p-1 text-slate-500 hover:bg-white hover:text-teal-700"><Maximize2 size={13} /></button>}
               <button onClick={downloadSvg} title="下载 SVG" className="rounded p-1 text-slate-500 hover:bg-white hover:text-teal-700"><Download size={13} /></button>
-              <button onClick={() => void navigator.clipboard.writeText(chart)} title="复制 Mermaid 源码" className="rounded p-1 text-slate-500 hover:bg-white hover:text-teal-700"><Copy size={13} /></button>
+              <button onClick={() => void writeTextToClipboard(chart).catch(() => undefined)} title="复制 Mermaid 源码" className="rounded p-1 text-slate-500 hover:bg-white hover:text-teal-700"><Copy size={13} /></button>
             </div>
           </div>
           {compact ? thumbnail : interactiveDiagram(false)}

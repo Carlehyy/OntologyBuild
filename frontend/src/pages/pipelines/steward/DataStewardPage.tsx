@@ -32,6 +32,7 @@ import type { Pipeline } from '@/api/v2/pipelines'
 import type { ModelConfig } from '@/types/ontology'
 import { useToast } from '@/components/ui/Toast'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import PipelineEditWizard from '../PipelineEditWizard'
 import { ReactFlow, ReactFlowProvider, Background, type Node, type Edge } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -2516,7 +2517,7 @@ function BrowserModal({ conversationId, mode, onMinimize, onRestore, onClose }: 
                   <p className="text-[11px] font-medium text-teal-800">配对令牌只显示这一次</p>
                   <ol className="mt-1 list-decimal space-y-1 pl-4 text-[10px] leading-5 text-teal-700"><li>安装 Node.js 22+，下载助手脚本</li><li>在脚本目录运行下面命令，Chrome/Edge 会使用独立资料目录启动</li></ol>
                   <div className="mt-2 flex gap-2"><button onClick={() => void downloadBrowserCompanion()} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm">下载助手</button>
-                    <button onClick={() => void navigator.clipboard.writeText(companionCommand)} className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm"><Copy size={10} />复制命令</button></div>
+                    <button onClick={() => void writeTextToClipboard(companionCommand).catch(() => undefined)} className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm"><Copy size={10} />复制命令</button></div>
                   <code className="mt-2 block max-h-16 overflow-auto break-all rounded-lg bg-white/80 p-2 text-[9px] leading-4 text-teal-800">{companionCommand}</code>
                 </div>
               )}

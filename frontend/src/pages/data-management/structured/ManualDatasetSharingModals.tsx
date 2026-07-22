@@ -7,6 +7,7 @@ import manualSharingApi, {
   type ChangeStatus, type ManualChange, type ManualShare, type SharePermission,
 } from '@/api/v2/manual-sharing'
 import type { DatasetOverviewItem } from '@/api/v2/datasets'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 const messageOf = (error: unknown, fallback: string) => {
   const e = error as { detail?: string | { message?: string }; message?: string }
@@ -17,36 +18,6 @@ const messageOf = (error: unknown, fallback: string) => {
 
 const fmt = (iso?: string | null) => iso ? new Date(iso).toLocaleString('zh-CN') : '长期有效'
 const shareUrl = (token: string) => `${window.location.origin}${window.location.pathname}#/share/manual/${encodeURIComponent(token)}`
-
-/** Clipboard API may be unavailable or denied on HTTP/private-network deployments. */
-const copyText = async (value: string) => {
-  let clipboardError: unknown
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value)
-      return
-    } catch (error) {
-      clipboardError = error
-    }
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = value
-  textarea.readOnly = true
-  textarea.setAttribute('aria-hidden', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  textarea.setSelectionRange(0, value.length)
-  try {
-    if (!document.execCommand('copy')) throw clipboardError || new Error('copy command failed')
-  } finally {
-    textarea.remove()
-  }
-}
 
 export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOverviewItem; onClose: () => void }) {
   const [permission, setPermission] = useState<SharePermission>('view')
@@ -79,7 +50,7 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
 
   const copy = async () => {
     try {
-      await copyText(link)
+      await writeTextToClipboard(link)
       setError('')
       setCopied(true); window.setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -90,7 +61,7 @@ export function ManualShareModal({ dataset, onClose }: { dataset: DatasetOvervie
   const copyExisting = async (share: ManualShare) => {
     if (!share.token) return
     try {
-      await copyText(shareUrl(share.token))
+      await writeTextToClipboard(shareUrl(share.token))
       setError('')
       setCopiedShareId(share.id)
       window.setTimeout(() => setCopiedShareId(current => current === share.id ? '' : current), 1500)

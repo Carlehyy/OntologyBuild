@@ -22,6 +22,7 @@ import {
 import { useToast } from '@/components/ui/Toast'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import type { ModelConfig } from '@/types/ontology'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 
 const errorText = (error: any, fallback = '操作失败') =>
@@ -136,7 +137,7 @@ function MarkdownCodeBlock({ children }: { children: React.ReactNode }) {
   const source = markdownText(childProps?.children ?? children).replace(/\n$/, '')
 
   const copy = () => {
-    navigator.clipboard?.writeText(source).then(() => {
+    writeTextToClipboard(source).then(() => {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1400)
     }).catch(() => undefined)

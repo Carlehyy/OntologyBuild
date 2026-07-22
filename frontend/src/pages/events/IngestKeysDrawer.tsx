@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { eventsApi, type IngestKey, type IngestKeyListResp } from '@/api/events'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 const KEY_PAGE_SIZE = 5
 
@@ -26,9 +27,10 @@ function CopyBtn({ text, small }: { text: string; small?: boolean }) {
     <button
       type="button"
       onClick={() => {
-        void navigator.clipboard?.writeText(text)
-        setDone(true)
-        window.setTimeout(() => setDone(false), 1500)
+        void writeTextToClipboard(text).then(() => {
+          setDone(true)
+          window.setTimeout(() => setDone(false), 1500)
+        }).catch(() => setDone(false))
       }}
       className={`inline-flex items-center gap-1 rounded-md text-emerald-700 transition-colors hover:text-emerald-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 ${small ? 'text-xs' : 'text-sm'}`}
     >

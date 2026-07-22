@@ -25,6 +25,7 @@ import { LoadingState } from '@/components/ui/LoadingState'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import { ontologyApi, modelApi } from '@/api/ontologies'
 import { useAuthStore } from '@/stores/authStore'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import {
   agentApi, streamAgentChat,
   type AgentCapabilities, type AgentStep, type AgentCitation, type AgentProposal,
@@ -174,7 +175,7 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       onClick={e => {
         e.stopPropagation()
-        navigator.clipboard?.writeText(text).then(() => {
+        writeTextToClipboard(text).then(() => {
           setCopied(true)
           setTimeout(() => setCopied(false), 1200)
         }).catch(() => {})

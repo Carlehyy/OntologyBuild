@@ -8,6 +8,7 @@ import {
   type Completeness, type DiagramKind, type Readiness,
 } from '@/api/exploration'
 import MermaidBlock from '@/components/MermaidBlock'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import ElementDetailModal from './ElementDetailModal'
 
 type CanvasKey = 'objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'scenarios'
@@ -440,7 +441,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
               <div className="flex items-center gap-2 shrink-0">
                 {dgMermaid && (
                   <button
-                    onClick={() => { void navigator.clipboard.writeText(dgMermaid) }}
+                    onClick={() => { void writeTextToClipboard(dgMermaid).catch(() => undefined) }}
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
                   >
                     <Copy size={12} /> 复制源码

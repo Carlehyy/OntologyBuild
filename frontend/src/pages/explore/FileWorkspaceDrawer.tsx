@@ -6,6 +6,7 @@ import {
 import {
   explorationApi, type BxAttachment, type BxWorkspacePreview, type BxWorkspaceText,
 } from '@/api/exploration'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import Md from './Md'
 
 const formatSize = (n: number) => n < 1024 ? `${n} B`
@@ -183,8 +184,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
     if (!editor) return
     setError('')
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法访问剪贴板')
-      await navigator.clipboard.writeText(draft)
+      await writeTextToClipboard(draft)
       setCopied(true)
     } catch (e) {
       setError(errorText(e, '文件内容复制失败'))

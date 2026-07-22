@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 
 import { settingsApi, type MinioConfig } from '@/api/ontologies'
+import { writeTextToClipboard } from '@/utils/clipboard'
 
 
 const errorText = (error: any) => error?.detail || error?.message || '操作失败'
@@ -116,9 +117,14 @@ export default function MinioSettingsPanel() {
   }
 
   const copyConfig = async () => {
-    await navigator.clipboard.writeText(mcpClientConfig)
-    setMessage('MCP 客户端配置已复制')
-    setMessageOk(true)
+    try {
+      await writeTextToClipboard(mcpClientConfig)
+      setMessage('MCP 客户端配置已复制')
+      setMessageOk(true)
+    } catch (error) {
+      setMessage(errorText(error))
+      setMessageOk(false)
+    }
   }
 
   if (loading) return <div className="flex min-h-48 items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>
