@@ -307,8 +307,24 @@ class StorageService:
         return bucket, key
 
 
-# 单例实例 (供 FastAPI 依赖注入使用)
+# 管理员配置的对象存储与部署环境自带的历史数据集对象存储必须保持两个
+# 独立身份。管理员 MinIO 服务于文件资产、HTTP 管理接口和 MCP；环境端点仅
+# 用于兼容读取迁移前已经写入对象存储的数据集版本。
 _storage_service: StorageService | None = None
+_environment_storage_service: StorageService | None = None
+
+
+def get_environment_storage_service() -> StorageService:
+    """Return the deployment-configured object store without consulting DB config.
+
+    New tabular dataset versions no longer write here.  The explicit accessor is
+    retained for legacy dataset reads so changing the administrator-managed MinIO
+    endpoint cannot strand versions created before that change.
+    """
+    global _environment_storage_service
+    if _environment_storage_service is None:
+        _environment_storage_service = StorageService()
+    return _environment_storage_service
 
 
 def get_storage_service() -> StorageService:
@@ -352,14 +368,15 @@ def get_storage_service() -> StorageService:
                     logger.warning("Managed MinIO configuration is unusable: %s", exc)
                     _storage_service = StorageService.unavailable()
         if _storage_service is None:
-            _storage_service = StorageService()
+            _storage_service = get_environment_storage_service()
     return _storage_service
 
 
 def reset_storage_service() -> None:
     """Drop the cached client after an administrator changes configuration."""
     global _storage_service
-    if _storage_service is not None:
+    if (_storage_service is not None
+            and _storage_service is not _environment_storage_service):
         client = getattr(_storage_service, "_client", None)
         http = getattr(client, "_http", None)
         clear = getattr(http, "clear", None)

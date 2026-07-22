@@ -137,12 +137,14 @@ export default function MinioSettingsPanel() {
           <h3 className="text-sm font-semibold">MinIO 对象存储</h3>
           {config?.connected && <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[11px] text-emerald-700"><CheckCircle2 size={12} /> 已连接</span>}
         </div>
-        <p className="mb-5 text-xs leading-5 text-gray-500">配置将同时驱动平台底层对象存储、管理员 HTTP 管理接口和 MinIO MCP。凭据加密保存且不会回显。</p>
+        <p className="mb-5 text-xs leading-5 text-gray-500">
+          配置用于流水线文件、非结构化附件等文件型对象，以及管理员 HTTP 接口和 MinIO MCP。结构化、半结构化和成品数据始终保存在平台数据库，不受此配置影响。凭据加密保存且不会回显。
+        </p>
 
         <div className="space-y-4">
           <label className="flex items-center gap-2 text-sm text-gray-700">
             <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-blue-600" />
-            启用管理员配置的 MinIO 作为平台对象存储
+            启用管理员配置的 MinIO 作为平台文件对象存储
           </label>
 
           <div className="grid gap-4 sm:grid-cols-[1fr_130px]">

@@ -192,6 +192,7 @@ def _source_runtime_route(source: dict, transform_route: str | None, default_rou
 
 def _find_dataset_for_file(db, filename: str):
     from app.models.v2.dataset import Dataset, DatasetVersion
+    from app.data_channel.datasets.service import version_has_content
 
     stem = Path(filename).stem
     candidates = db.query(Dataset).filter(
@@ -201,7 +202,7 @@ def _find_dataset_for_file(db, filename: str):
         ver = db.query(DatasetVersion).filter(
             DatasetVersion.dataset_id == candidate.id
         ).order_by(DatasetVersion.version_no.desc()).first()
-        if ver and ((ver.rowcount or 0) > 0 or ver.storage_uri):
+        if ver and ((ver.rowcount or 0) > 0 or version_has_content(ver)):
             return candidate
     return candidates[0] if candidates else None
 
@@ -259,12 +260,13 @@ def _collect_sources(db, pl, connector_ids: set[str] | None = None) -> list[dict
 
 def _load_source_rows(db, svc, source: dict) -> list[dict]:
     from app.models.v2.dataset import DatasetVersion
+    from app.data_channel.datasets.service import version_has_content
     from app.config import settings
 
     ver = db.query(DatasetVersion).filter(
         DatasetVersion.dataset_id == source["dataset_id"]
     ).order_by(DatasetVersion.version_no.desc()).first()
-    if not ver or not ver.storage_uri:
+    if not version_has_content(ver):
         return []
     source["dataset_version_id"] = ver.id
     source["version_no"] = ver.version_no
@@ -278,11 +280,13 @@ def _load_source_rows(db, svc, source: dict) -> list[dict]:
             "已拒绝执行，避免进程 OOM。请拆分资产或启用流式执行器。"
         )
     if source["route"] == "C":
-        raw = svc._storage.get_object(ver.storage_uri)
+        raw = svc.load_version_bytes(source["dataset_id"], ver.version_no)
+        if raw is None:
+            return []
         return [{
             "filename": source["filename"],
             "content": raw,
-            "storage_uri": ver.storage_uri,
+            "storage_uri": ver.storage_uri or f"db://dataset-versions/{ver.id}",
             "source_dataset_id": source["dataset_id"],
         }]
     # Production execution must be complete and fail closed.  preview() is a

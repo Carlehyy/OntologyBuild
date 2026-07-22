@@ -16,6 +16,7 @@ CRITICAL_SCHEMA_TABLES = (
     "super_assistant_mcp_servers",
     "minio_config",
     "minio_operation_audits",
+    "v2_dataset_versions",
 )
 
 _DEVELOPMENT_COLUMN_REPAIRS = (
@@ -49,6 +50,21 @@ _DEVELOPMENT_COLUMN_REPAIRS = (
         "ALTER TABLE super_assistant_mcp_servers "
         "ADD COLUMN builtin_key VARCHAR(50)",
     ),
+    (
+        "v2_dataset_versions",
+        "data_blob",
+        {
+            "postgresql": (
+                "ALTER TABLE v2_dataset_versions ADD COLUMN data_blob BYTEA"),
+            "default": (
+                "ALTER TABLE v2_dataset_versions ADD COLUMN data_blob BLOB"),
+        },
+    ),
+    (
+        "v2_dataset_versions",
+        "data_size",
+        "ALTER TABLE v2_dataset_versions ADD COLUMN data_size BIGINT",
+    ),
 )
 
 
@@ -59,7 +75,7 @@ def repair_development_schema(connection: Connection) -> list[str]:
     repaired: list[str] = []
 
     columns_by_table: dict[str, set[str]] = {}
-    for table_name, column_name, statement in _DEVELOPMENT_COLUMN_REPAIRS:
+    for table_name, column_name, statement_spec in _DEVELOPMENT_COLUMN_REPAIRS:
         if table_name not in tables:
             continue
         columns = columns_by_table.setdefault(
@@ -71,6 +87,12 @@ def repair_development_schema(connection: Connection) -> list[str]:
         )
         if column_name in columns:
             continue
+        statement = (
+            statement_spec.get(
+                connection.dialect.name, statement_spec["default"])
+            if isinstance(statement_spec, dict)
+            else statement_spec
+        )
         connection.execute(text(statement))
         connection.commit()
         columns.add(column_name)

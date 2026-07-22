@@ -33,6 +33,7 @@ from app.models.sentinel import Sentinel, SentinelMatchState
 from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.curated import CuratedReview
+from app.data_channel.datasets.service import version_has_content
 from app.ontologies.formal_modeling import schemas as FS
 from app.ontologies.formal_modeling.validation import validate_model
 from app.ontologies.access import ontology_access_guard
@@ -504,10 +505,10 @@ def _validate_production_mappings(db: Session, ontology_id: str,
                 f"Mapping「{label}」绑定的数据集没有可发布版本",
                 item_id=mid, name=label, field="curatedDatasetId"))
             continue
-        if not latest.storage_uri or not latest.checksum:
+        if not version_has_content(latest) or not latest.checksum:
             errors.append(_gate_error(
                 "mapping_dataset_version_unverifiable", "mapping",
-                f"Mapping「{label}」的数据版本缺少 storage_uri/checksum",
+                f"Mapping「{label}」的数据版本缺少数据载荷/checksum",
                 item_id=mid, name=label, field="curatedDatasetId"))
         if dataset.latest_version_id != latest.id:
             errors.append(_gate_error(
@@ -587,10 +588,10 @@ def _validate_production_mappings(db: Session, ontology_id: str,
                     f"LinkMapping「{label}」的 {role} 数据集没有版本",
                     item_id=lid, name=label, field=f"{role}DatasetId"))
                 continue
-            if not latest.storage_uri or not latest.checksum:
+            if not version_has_content(latest) or not latest.checksum:
                 errors.append(_gate_error(
                     "link_mapping_version_unverifiable", "linkMapping",
-                    f"LinkMapping「{label}」的 {role} 版本缺少 storage_uri/checksum",
+                    f"LinkMapping「{label}」的 {role} 版本缺少数据载荷/checksum",
                     item_id=lid, name=label, field=f"{role}DatasetId"))
             if dataset.kind == "curated":
                 review = db.query(CuratedReview).filter(

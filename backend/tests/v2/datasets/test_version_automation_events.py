@@ -71,14 +71,17 @@ def test_version_and_event_commit_together(db):
     assert event.attempts == 0
 
 
-def test_storage_failure_does_not_leave_phantom_event(db):
+def test_managed_minio_failure_does_not_block_database_version_event(db):
     service, storage, dataset = _manual_service(db)
     storage.fail_put = True
 
-    with pytest.raises(ConnectionError, match="storage unavailable"):
-        service.create_version(dataset.id, b"id,name\n1,A\n", rowcount=1)
+    version = service.create_version(
+        dataset.id, b"id,name\n1,A\n", rowcount=1)
 
-    assert db.query(DatasetVersionEvent).count() == 0
+    assert version.storage_uri is None
+    assert version.data_blob == b"id,name\n1,A\n"
+    event = db.query(DatasetVersionEvent).one()
+    assert event.dataset_version_id == version.id
 
 
 def test_superseded_events_are_coalesced_to_latest_snapshot(db):

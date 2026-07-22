@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.auth.models import User
+from app.data_channel.datasets.models import DatasetVersion
 from app.settings.object_storage.models import MinioConfig, MinioOperationAudit
 from app.shared.database import Base
 from app.shared.schema_compat import (
@@ -21,6 +22,7 @@ def test_legacy_development_database_repairs_mcp_columns(tmp_path):
         SuperAssistantMcpServer.__table__,
         MinioConfig.__table__,
         MinioOperationAudit.__table__,
+        DatasetVersion.__table__,
     ])
 
     # Reproduce a database created before the 0034 transport expansion and the
@@ -76,3 +78,37 @@ def test_legacy_development_database_repairs_mcp_columns(tmp_path):
         db.commit()
         saved = db.query(SuperAssistantMcpServer).one()
         assert saved.builtin_key is None
+
+
+def test_legacy_development_database_repairs_dataset_payload_columns(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-dataset.db'}")
+    Base.metadata.create_all(bind=engine, tables=[
+        User.__table__,
+        SuperAssistantMcpServer.__table__,
+        MinioConfig.__table__,
+        MinioOperationAudit.__table__,
+        DatasetVersion.__table__,
+    ])
+    with engine.begin() as connection:
+        connection.execute(text(
+            "ALTER TABLE v2_dataset_versions DROP COLUMN data_blob"))
+        connection.execute(text(
+            "ALTER TABLE v2_dataset_versions DROP COLUMN data_size"))
+
+    with engine.connect() as connection:
+        with pytest.raises(RuntimeError, match=(
+            r"v2_dataset_versions\.data_blob.*data_size.*alembic upgrade head"
+        )):
+            assert_critical_schema(connection, Base.metadata)
+
+        assert repair_development_schema(connection) == [
+            "v2_dataset_versions.data_blob",
+            "v2_dataset_versions.data_size",
+        ]
+        assert_critical_schema(connection, Base.metadata)
+
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("v2_dataset_versions")
+    }
+    assert {"data_blob", "data_size"} <= columns

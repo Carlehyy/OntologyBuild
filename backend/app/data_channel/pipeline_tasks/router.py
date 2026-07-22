@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import uuid
 
 from app.deps import get_current_user, get_db
+from app.data_channel.datasets.service import version_has_content
 from app.data_channel.pipeline_tasks.models import PipelineTask
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
@@ -321,7 +322,8 @@ def selectable_pipelines(db: Session = Depends(get_db)):
             latest = db.query(DatasetVersion).filter(
                 DatasetVersion.dataset_id == cid
             ).order_by(DatasetVersion.version_no.desc()).first()
-            has_data = bool(latest and (latest.storage_uri or (latest.rowcount or 0) > 0))
+            has_data = bool(latest and (
+                version_has_content(latest) or (latest.rowcount or 0) > 0))
             if not has_data:
                 continue
             schema = dict(ds.schema_json or {})

@@ -96,7 +96,9 @@ def _seed_dataset_with_all_object_kinds(db, storage: FakeStorage, kind: str):
     ))
     db.commit()
     return dataset, version, {
-        version.storage_uri, media_uri, ocr_uri, pipeline_file_uri,
+        uri for uri in (
+            version.storage_uri, media_uri, ocr_uri, pipeline_file_uri,
+        ) if uri
     }
 
 
@@ -142,7 +144,9 @@ def test_storage_failure_keeps_retryable_outbox_after_metadata_commit(
 
     fake_storage.fail_deletes = False
     result = drain_storage_deletion_outbox(db, fake_storage)
-    assert result == {"deleted": 4, "failed": 0, "deferred": 0}
+    assert result == {
+        "deleted": len(uris), "failed": 0, "deferred": 0,
+    }
     assert db.query(StorageDeletionOutbox).count() == 0
     assert not (uris & set(fake_storage.objects))
 
@@ -152,7 +156,7 @@ def test_enqueue_participates_in_callers_transaction(db, fake_storage):
         db, fake_storage, "structured")
 
     enqueue_dataset_storage_deletions(db, dataset.id)
-    assert db.query(StorageDeletionOutbox).count() == 4
+    assert db.query(StorageDeletionOutbox).count() == len(_uris)
     # 模拟后续元数据删除失败：调用方 rollback 必须同时撤销 outbox。
     db.rollback()
 
@@ -187,3 +191,28 @@ def test_drain_defers_uri_still_referenced_by_an_asset(db, fake_storage):
     queued = db.query(StorageDeletionOutbox).one()
     assert queued.attempts == 0
     assert "仍被资产元数据引用" in (queued.last_error or "")
+
+
+def test_legacy_dataset_deletion_cleans_internal_and_managed_minio(
+    db, monkeypatch,
+):
+    """Regression-era dataset keys may exist in either MinIO endpoint."""
+    from app.data_channel.datasets import service
+
+    internal = FakeStorage()
+    managed = FakeStorage()
+    uri = "s3://raw-datasets/datasets/legacy/object.bin"
+    internal.objects[uri] = b"old"
+    managed.objects[uri] = b"regression-era-copy"
+    monkeypatch.setattr(
+        service, "get_environment_storage_service", lambda: internal)
+    monkeypatch.setattr(service, "get_storage_service", lambda: managed)
+    db.add(StorageDeletionOutbox(storage_uri=uri))
+    db.commit()
+
+    result = drain_storage_deletion_outbox(db)
+
+    assert result == {"deleted": 1, "failed": 0, "deferred": 0}
+    assert uri in internal.deleted
+    assert uri in managed.deleted
+    assert db.query(StorageDeletionOutbox).count() == 0

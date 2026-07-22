@@ -13,7 +13,11 @@ from sqlalchemy.orm import Session
 from app.models.v2.dataset import (
     Dataset, DatasetVersion, DatasetVersionEvent, StorageDeletionOutbox,
 )
-from app.services.storage_service import StorageService, get_storage_service
+from app.services.storage_service import (
+    StorageService,
+    get_environment_storage_service,
+    get_storage_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,23 @@ class DatasetReadError(RuntimeError):
     与「数据集还没有数据」（返回空列表）严格区分：合并基座等场景把读失败
     当空列表处理，会让 append/upsert 把湖中存量折叠成本次增量。
     """
+
+
+def dataset_kind_uses_database(kind: str | None) -> bool:
+    """Whether a dataset version belongs in the platform database.
+
+    Only genuinely unstructured source files stay in object storage.  Tabular,
+    semi-structured and curated lake snapshots are transactional database data;
+    administrator MinIO configuration must never redirect them.
+    """
+    return str(kind or "").strip().lower() != "unstructured"
+
+
+def version_has_content(version: DatasetVersion | None) -> bool:
+    """Return payload presence without materializing a deferred database blob."""
+    return bool(version and (
+        version.data_size is not None or bool(version.storage_uri)
+    ))
 
 
 class TabularParseError(ValueError):
@@ -467,6 +488,36 @@ def _storage_uri_is_referenced(db: Session, storage_uri: str) -> bool:
     ).first() is not None
 
 
+def _deletion_storage_candidates(
+    storage_uri: str, storage: StorageService | None,
+) -> list[StorageService]:
+    """Resolve the store(s) that may own an outbox object.
+
+    File assets are always managed-MinIO objects.  A historical dataset object
+    can predate or postdate the configurable-MinIO regression and therefore may
+    exist in either endpoint; delete it from both before acknowledging the task.
+    An explicit storage override preserves deterministic test/caller behavior.
+    """
+    if storage is not None:
+        candidates = [storage]
+    elif storage_uri.startswith("s3://raw-datasets/datasets/"):
+        candidates = [
+            get_environment_storage_service(),
+            get_storage_service(),
+        ]
+    else:
+        candidates = [get_storage_service()]
+
+    unique: list[StorageService] = []
+    seen: set[int] = set()
+    for candidate in candidates:
+        if id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        unique.append(candidate)
+    return unique
+
+
 def drain_storage_deletion_outbox(
     db: Session,
     storage: StorageService | None = None,
@@ -494,8 +545,6 @@ def drain_storage_deletion_outbox(
         return result
     if not entries:
         return result
-    storage = storage or get_storage_service()
-
     for entry in entries:
         storage_uri = entry.storage_uri
         try:
@@ -506,17 +555,21 @@ def drain_storage_deletion_outbox(
                 result["deferred"] += 1
                 continue
 
-            try:
-                storage.delete_object(storage_uri)
-            except Exception as exc:
+            failures: list[str] = []
+            for candidate in _deletion_storage_candidates(storage_uri, storage):
+                try:
+                    candidate.delete_object(storage_uri)
+                except Exception as exc:
+                    failures.append(f"{type(exc).__name__}: {exc}")
+            if failures:
                 entry.attempts = int(entry.attempts or 0) + 1
-                entry.last_error = f"{type(exc).__name__}: {exc}"[:2000]
+                entry.last_error = "; ".join(failures)[:2000]
                 entry.updated_at = datetime.now(timezone.utc)
                 db.commit()
                 result["failed"] += 1
                 logger.warning(
                     "对象存储删除失败，已保留 outbox 任务（attempt=%s, uri=%s）",
-                    entry.attempts, storage_uri, exc_info=True)
+                    entry.attempts, storage_uri)
                 continue
 
             db.delete(entry)
@@ -531,9 +584,48 @@ def drain_storage_deletion_outbox(
 
 
 class DatasetService:
-    def __init__(self, db: Session, storage: StorageService | None = None):
+    def __init__(
+        self,
+        db: Session,
+        storage: StorageService | None = None,
+        *,
+        legacy_storages: list[StorageService] | None = None,
+    ):
         self._db = db
-        self._storage = storage or get_storage_service()
+        # ``storage`` remains the injection point used by file-backed datasets
+        # and tests.  It is intentionally lazy in production so database-backed
+        # dataset reads/writes do not depend on MinIO availability.
+        self._storage_override = storage
+        self._legacy_storages_override = legacy_storages
+
+    def _object_storage(self) -> StorageService:
+        """Managed MinIO used only for genuine file payloads."""
+        return self._storage_override or get_storage_service()
+
+    def _legacy_storage_candidates(self) -> list[StorageService]:
+        """Stores that may contain a pre-database DatasetVersion.
+
+        Versions created before configurable MinIO used the deployment endpoint;
+        versions created during the regression may live in managed MinIO.  Try
+        both, in that order, and de-duplicate the common no-managed-config case.
+        """
+        if self._legacy_storages_override is not None:
+            candidates = list(self._legacy_storages_override)
+        elif self._storage_override is not None:
+            candidates = [self._storage_override]
+        else:
+            candidates = [
+                get_environment_storage_service(),
+                get_storage_service(),
+            ]
+        unique: list[StorageService] = []
+        seen: set[int] = set()
+        for candidate in candidates:
+            if id(candidate) in seen:
+                continue
+            seen.add(id(candidate))
+            unique.append(candidate)
+        return unique
 
     def create_dataset(self, name: str, kind: str, connection_id: str | None = None,
                        schema_json: dict | None = None, *,
@@ -563,15 +655,14 @@ class DatasetService:
     def create_version(self, dataset_id: str, data: bytes, rowcount: int | None = None,
                        *, schema_json: dict | None = None,
                        _lock_held: bool = False) -> DatasetVersion:
-        """将数据存入对象存储并原子发布为 DatasetVersion。
+        """原子发布 DatasetVersion。
 
-        对象键使用预生成的 version UUID，而不是可竞争的 ``version_no``。旧实现
-        中两个并发写者会先后覆盖同一个 ``vN/data.bin``，数据库唯一约束虽然能
-        拒绝其中一条元数据，却无法撤销已经发生的对象覆盖。
+        结构化、半结构化和成品数据把完整版本载荷与版本元数据放在同一个数据库
+        事务中；只有非结构化文件继续写入管理员配置的 MinIO。这样文件存储配置
+        变化不会再改变数据流水线与资产湖之间的持久化位置。
 
         ``_lock_held`` 仅供已经覆盖完整读改写临界区的调用方使用；普通调用一律
-        通过数据库锁串行化版本号分配。对象存储与数据库无法组成单一事务，因此
-        对象键不可复用是避免失败重试破坏已提交版本的最后一道硬保证。
+        通过数据库锁串行化版本号分配。
         """
         if not _lock_held:
             from app.data_channel.datasets.lock import dataset_write_lock
@@ -593,6 +684,7 @@ class DatasetService:
 
         # 新版本存完整 SHA-256；load_all_rows 同时兼容历史 16 位校验和。
         checksum = hashlib.sha256(data).hexdigest()
+        database_backed = dataset_kind_uses_database(ds.kind)
         ver: DatasetVersion | None = None
         # 版本号 = 查最大值+1，并发写会撞唯一约束 (dataset_id, version_no)——
         # 撞了就重算重试，而不是静默产生重复版本号
@@ -602,23 +694,27 @@ class DatasetService:
             ).order_by(DatasetVersion.version_no.desc()).first()
             version_no = (last_ver.version_no + 1) if last_ver else 1
 
-            # UUID 对象键与版本号分配解耦：即使数据库提交失败/重试，也绝不覆盖
-            # 另一个已提交版本的内容。
             version_id = str(uuid.uuid4())
-            key = f"datasets/{dataset_id}/objects/{version_id}.bin"
-            try:
-                uri = self._storage.put_bytes("raw-datasets", key, data)
-            except Exception:
-                # 首版本允许 Dataset 与 Version 同事务创建；对象写失败时必须
-                # 回滚尚未提交的 Dataset，不能在湖里留下无版本空壳。
-                self._db.rollback()
-                raise
+            uri: str | None = None
+            if not database_backed:
+                # 非结构化文件仍使用不可变 UUID key；失败重试不会覆盖已提交版本。
+                key = f"datasets/{dataset_id}/objects/{version_id}.bin"
+                try:
+                    uri = self._object_storage().put_bytes(
+                        "raw-datasets", key, data)
+                except Exception:
+                    # 首版本允许 Dataset 与 Version 同事务创建；对象写失败时必须
+                    # 回滚尚未提交的 Dataset，不能在湖里留下无版本空壳。
+                    self._db.rollback()
+                    raise
 
             ver = DatasetVersion(
                 id=version_id,
                 dataset_id=dataset_id,
                 version_no=version_no,
                 rowcount=rowcount,
+                data_blob=data if database_backed else None,
+                data_size=len(data) if database_backed else None,
                 storage_uri=uri,
                 checksum=checksum,
             )
@@ -641,18 +737,22 @@ class DatasetService:
                 break
             except IntegrityError:
                 self._db.rollback()
-                try:
-                    self._storage.delete_object(uri)
-                except Exception:
-                    logger.warning("清理未提交版本对象失败: %s", uri, exc_info=True)
+                if uri:
+                    try:
+                        self._object_storage().delete_object(uri)
+                    except Exception:
+                        logger.warning(
+                            "清理未提交版本对象失败: %s", uri, exc_info=True)
                 if attempt == 2:
                     raise
             except Exception:
                 self._db.rollback()
-                try:
-                    self._storage.delete_object(uri)
-                except Exception:
-                    logger.warning("清理未提交版本对象失败: %s", uri, exc_info=True)
+                if uri:
+                    try:
+                        self._object_storage().delete_object(uri)
+                    except Exception:
+                        logger.warning(
+                            "清理未提交版本对象失败: %s", uri, exc_info=True)
                 raise
         self._db.refresh(ver)
         self._prune_versions_best_effort(dataset_id)
@@ -737,7 +837,8 @@ class DatasetService:
             removed += 1
         if removed:
             self._db.commit()
-            drain_storage_deletion_outbox(self._db, self._storage)
+            drain_storage_deletion_outbox(
+                self._db, storage=self._storage_override)
             logger.info(f"数据集 {dataset_id} 版本保留清理：删除 {removed} 个旧版本（保留最近 {keep} 个）")
 
     def get_dataset(self, dataset_id: str) -> Dataset | None:
@@ -761,6 +862,44 @@ class DatasetService:
             return q.order_by(DatasetVersion.version_no.desc()).first()
         return q.filter(DatasetVersion.version_no == version_no).first()
 
+    def load_version_bytes(
+        self, dataset_id: str, version_no: int | None = None,
+    ) -> bytes | None:
+        """Strictly load one immutable version from DB or legacy object storage."""
+        ver = self._resolve_version(dataset_id, version_no)
+        if ver is None:
+            return None
+
+        if ver.data_blob is not None:
+            raw = bytes(ver.data_blob)
+            if not self._checksum_matches(raw, ver.checksum):
+                raise DatasetReadError(
+                    f"数据集 {dataset_id} v{ver.version_no} 校验和不匹配"
+                    "（平台数据库）：版本内容可能已损坏")
+            return raw
+        elif ver.storage_uri:
+            failures: list[str] = []
+            for index, storage in enumerate(
+                self._legacy_storage_candidates(), start=1,
+            ):
+                try:
+                    raw = storage.get_object(ver.storage_uri)
+                except Exception as exc:
+                    failures.append(f"{type(exc).__name__}: {exc}")
+                    continue
+                if self._checksum_matches(raw, ver.checksum):
+                    return raw
+                # The same legacy URI can exist in both endpoints.  A stale or
+                # overwritten copy must not mask a valid copy in the next one.
+                failures.append(f"候选存储 {index} 的对象校验和不匹配")
+
+            details = "; ".join(failures) or "没有可用的历史对象存储"
+            raise DatasetReadError(
+                f"数据集 {dataset_id} v{ver.version_no} 历史存储对象读取失败"
+                f"（{ver.storage_uri}）：{details}")
+        else:
+            return None
+
     def load_all_rows(self, dataset_id: str, version_no: int | None = None) -> list[dict]:
         """严格全量读：不设行数上限，读失败硬报错（DatasetReadError）。
 
@@ -769,18 +908,9 @@ class DatasetService:
         数据集尚无版本/内容为空 → 返回 []（这是合法状态，不是错误）。
         """
         ver = self._resolve_version(dataset_id, version_no)
-        if not ver or not ver.storage_uri:
+        if not version_has_content(ver):
             return []
-        try:
-            raw = self._storage.get_object(ver.storage_uri)
-        except Exception as e:
-            raise DatasetReadError(
-                f"数据集 {dataset_id} v{ver.version_no} 存储对象读取失败"
-                f"（{ver.storage_uri}）：{e}") from e
-        if not self._checksum_matches(raw, ver.checksum):
-            raise DatasetReadError(
-                f"数据集 {dataset_id} v{ver.version_no} 校验和不匹配"
-                f"（{ver.storage_uri}）：对象内容可能已损坏或被覆盖")
+        raw = self.load_version_bytes(dataset_id, ver.version_no)
         if not raw:
             return []
         try:
@@ -801,13 +931,11 @@ class DatasetService:
         场景（如合并基座）用 load_all_rows()。
         """
         ver = self._resolve_version(dataset_id, version_no)
-        if not ver or not ver.storage_uri:
+        if not version_has_content(ver):
             return []
         try:
-            raw = self._storage.get_object(ver.storage_uri)
-            if not self._checksum_matches(raw, ver.checksum):
-                # preview 保持历史容错契约：损坏对象不向 UI 冒充可用数据，
-                # 但也不把展示请求升级成 5xx。生产消费方必须走 load_all_rows。
+            raw = self.load_version_bytes(dataset_id, ver.version_no)
+            if not raw:
                 return []
             return _parse_stored_rows(raw, limit=limit, offset=offset)
         except Exception:

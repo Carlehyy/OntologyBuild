@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
-    String, DateTime, JSON, Integer, BigInteger, ForeignKey, Text, Index, text,
+    String, DateTime, JSON, Integer, BigInteger, ForeignKey, Text, Index,
+    LargeBinary, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
@@ -67,7 +68,17 @@ class DatasetVersion(Base):
     dataset_id: Mapped[str] = mapped_column(String, ForeignKey("v2_datasets.id", ondelete="CASCADE"), nullable=False)
     version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     rowcount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)  # MinIO s3://bucket/key
+    # 结构化/半结构化/成品数据的权威快照直接保存在平台数据库中。storage_uri
+    # 仅用于非结构化文件和迁移前的历史数据集版本，不能再被管理员 MinIO 配置
+    # 隐式重定向。
+    # Deferred loading keeps dataset listings/version metadata queries from
+    # materializing full snapshots; readers fetch it only for the selected version.
+    data_blob: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, deferred=True)
+    # Keep payload presence/size queryable without loading the deferred bytea.
+    # NULL identifies pre-migration versions; zero is a valid empty payload.
+    data_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 

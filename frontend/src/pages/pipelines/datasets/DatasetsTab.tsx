@@ -18,7 +18,7 @@ interface Version {
   id: string
   version_no: number
   rowcount: number | null
-  storage_uri: string
+  storage_uri: string | null
 }
 
 type SubTab = 'schema' | 'preview' | 'versions'
@@ -240,7 +240,9 @@ export default function DatasetsTab() {
                             <div key={v.id} className="flex items-center gap-3 text-xs bg-white border rounded-lg px-3 py-2">
                               <span className="text-gray-500 font-medium">v{v.version_no}</span>
                               <span className="text-gray-700">{v.rowcount != null ? `${v.rowcount} 行` : '行数未知'}</span>
-                              <span className="text-gray-400 truncate">{v.storage_uri}</span>
+                              <span className="text-gray-400 truncate">
+                                {v.storage_uri ?? '平台数据库'}
+                              </span>
                             </div>
                           ))
                         }

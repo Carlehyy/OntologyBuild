@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.data_channel.datasets.models import (
     Dataset, DatasetVersion, DatasetVersionEvent,
 )
+from app.data_channel.datasets.service import version_has_content
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,8 @@ def manual_dataset_automation_eligibility(
         return False, "manual dataset has no primary-key contract"
     if version is None:
         return False, "dataset version is missing"
-    if not version.storage_uri or not version.checksum:
-        return False, "dataset version has no verifiable storage/checksum lineage"
+    if not version_has_content(version) or not version.checksum:
+        return False, "dataset version has no verifiable payload/checksum lineage"
     return True, "eligible"
 
 

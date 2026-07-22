@@ -52,7 +52,8 @@ export interface DatasetVersionItem {
   id: string
   version_no: number
   rowcount: number | null
-  storage_uri: string
+  /** 表格数据存于平台数据库时为 null；文件/历史版本才有对象 URI */
+  storage_uri: string | null
 }
 
 export interface DatasetSchemaColumn {

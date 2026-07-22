@@ -75,6 +75,8 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         c["name"] for c in inspector.get_columns("v2_curated_reviews")}
     assert {"producer_pipeline_id", "output_key", "source_resource"} <= {
         c["name"] for c in inspector.get_columns("v2_datasets")}
+    assert {"data_blob", "data_size"} <= {
+        c["name"] for c in inspector.get_columns("v2_dataset_versions")}
     assert {"id", "storage_uri", "attempts", "last_error", "created_at", "updated_at"} <= {
         c["name"] for c in inspector.get_columns("v2_storage_deletion_outbox")}
     assert {

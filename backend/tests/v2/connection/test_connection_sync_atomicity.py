@@ -54,7 +54,7 @@ class _Storage:
         self.objects.pop(uri, None)
 
 
-def test_first_connection_sync_does_not_leave_dataset_shell_on_storage_failure(
+def test_connection_sync_uses_database_when_managed_minio_is_unavailable(
     db, monkeypatch,
 ):
     connection = Connection(
@@ -71,12 +71,16 @@ def test_first_connection_sync_does_not_leave_dataset_shell_on_storage_failure(
         lambda: _FailingStorage(),
     )
 
-    with pytest.raises(ConnectionError, match="object store unavailable"):
-        sync_connection(connection.id, db=db)
+    result = sync_connection(connection.id, db=db)
 
-    assert db.query(Dataset).filter(
+    assert result["status"] == "ok"
+    dataset = db.query(Dataset).filter(
         Dataset.source_connection_id == connection.id
-    ).count() == 0
+    ).one()
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset.id).one()
+    assert version.storage_uri is None
+    assert version.data_size == len(version.data_blob)
 
 
 def test_connection_resources_have_independent_dataset_identity_and_retry_is_idempotent(

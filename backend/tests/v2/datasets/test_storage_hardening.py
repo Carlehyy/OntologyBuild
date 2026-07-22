@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
@@ -23,6 +25,7 @@ from app.data_channel.datasets.service import (
     TabularParseError,
     _parse_stored_rows,
     stored_columns,
+    version_has_content,
 )
 from app.data_channel.file_assets.models import PipelineFileAsset
 from app.data_channel.pipeline_tasks.merge import load_latest_rows
@@ -71,6 +74,23 @@ def _csv_bytes(rows: list[dict]) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return buf.getvalue().encode("utf-8")
+
+
+def _seed_legacy_version(db, dataset, storage, raw: bytes) -> DatasetVersion:
+    """Create a pre-database version whose bytes live in object storage."""
+    version = DatasetVersion(
+        dataset_id=dataset.id,
+        version_no=1,
+        rowcount=1,
+        storage_uri=storage.put_bytes(
+            "raw-datasets", f"datasets/{dataset.id}/v1/data.bin", raw),
+        checksum=hashlib.sha256(raw).hexdigest(),
+    )
+    db.add(version)
+    db.flush()
+    dataset.latest_version_id = version.id
+    db.commit()
+    return version
 
 
 @pytest.fixture
@@ -128,9 +148,9 @@ def test_json_upload_rowcount_is_recorded_for_pipeline_validation():
     assert _estimate_rowcount(b'{"id": 1}', "json") == 1
 
 
-def test_load_all_rows_raises_on_storage_failure(svc, storage):
+def test_load_all_rows_raises_on_storage_failure(db, svc, storage):
     ds = svc.create_dataset("读失败", "structured")
-    svc.create_version(ds.id, _csv_bytes([{"a": "1"}]), rowcount=1)
+    _seed_legacy_version(db, ds, storage, _csv_bytes([{"a": "1"}]))
     storage.objects.clear()  # 模拟对象丢失/存储不可用
     with pytest.raises(DatasetReadError):
         svc.load_all_rows(ds.id)
@@ -139,17 +159,21 @@ def test_load_all_rows_raises_on_storage_failure(svc, storage):
 def test_merge_base_propagates_read_failure(db, svc, storage, monkeypatch):
     """合并基座读失败必须抛错——静默空基座会让湖被本次增量覆盖。"""
     ds = svc.create_dataset("合并基座", "curated")
-    svc.create_version(ds.id, _csv_bytes([{"a": "1"}]), rowcount=1)
+    _seed_legacy_version(db, ds, storage, _csv_bytes([{"a": "1"}]))
     storage.objects.clear()
     # load_latest_rows 内部自建 DatasetService，注入同一个 FakeStorage
     monkeypatch.setattr("app.data_channel.datasets.service.get_storage_service", lambda: storage)
+    monkeypatch.setattr(
+        "app.data_channel.datasets.service.get_environment_storage_service",
+        lambda: storage,
+    )
     with pytest.raises(DatasetReadError):
         load_latest_rows(db, ds.id)
 
 
-def test_preview_stays_lenient_for_ui(svc, storage):
+def test_preview_stays_lenient_for_ui(db, svc, storage):
     ds = svc.create_dataset("预览容错", "structured")
-    svc.create_version(ds.id, _csv_bytes([{"a": "1"}]), rowcount=1)
+    _seed_legacy_version(db, ds, storage, _csv_bytes([{"a": "1"}]))
     storage.objects.clear()
     assert svc.preview(ds.id, None) == []  # UI 展示路径保持容错语义
 
@@ -162,22 +186,83 @@ def test_checksum_covers_full_content(svc):
     assert v1.checksum != v2.checksum
 
 
-def test_version_objects_use_immutable_unique_keys(svc):
-    """数据库版本号竞争/重试不能再覆盖已提交版本的对象。"""
-    ds = svc.create_dataset("不可变对象键", "structured")
+@pytest.mark.parametrize("kind", ["structured", "semi", "curated"])
+def test_tabular_versions_are_database_backed(svc, storage, kind):
+    """数据资产版本必须落平台数据库，不能写入管理员 MinIO。"""
+    ds = svc.create_dataset(f"数据库版本-{kind}", kind)
     v1 = svc.create_version(ds.id, _csv_bytes([{"id": "1"}]))
     v2 = svc.create_version(ds.id, _csv_bytes([{"id": "2"}]))
 
-    assert v1.storage_uri != v2.storage_uri
-    assert f"/objects/{v1.id}.bin" in v1.storage_uri
-    assert f"/objects/{v2.id}.bin" in v2.storage_uri
-    assert "/v1/data.bin" not in v1.storage_uri
+    assert v1.storage_uri is None and v2.storage_uri is None
+    assert v1.data_blob == _csv_bytes([{"id": "1"}])
+    assert v2.data_blob == _csv_bytes([{"id": "2"}])
+    assert v1.data_size == len(v1.data_blob)
+    assert v2.data_size == len(v2.data_blob)
+    assert storage.objects == {}
+
+
+def test_database_payload_stays_deferred_during_version_listing(db, svc):
+    ds = svc.create_dataset("延迟载荷", "curated")
+    svc.create_version(ds.id, _csv_bytes([{"id": "1"}]))
+    dataset_id = ds.id
+    db.expunge_all()
+
+    listed = svc.list_versions(dataset_id)
+
+    assert "data_blob" in inspect(listed[0]).unloaded
+    assert version_has_content(listed[0]) is True
+    assert "data_blob" in inspect(listed[0]).unloaded
+
+
+def test_first_database_version_is_atomic_on_commit_failure(
+    db, svc, monkeypatch,
+):
+    ds = svc.create_dataset(
+        "数据库事务回滚", "structured", commit=False)
+    dataset_id = ds.id
+
+    def fail_commit():
+        raise RuntimeError("database commit unavailable")
+
+    monkeypatch.setattr(db, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="database commit unavailable"):
+        svc.create_version(
+            dataset_id, _csv_bytes([{"id": "1"}]), _lock_held=True)
+
+    assert db.query(DatasetVersion).filter_by(dataset_id=dataset_id).count() == 0
+    assert svc.get_dataset(dataset_id) is None
+
+
+def test_legacy_versions_fall_back_from_internal_to_managed_minio(db):
+    internal = FakeStorage()
+    managed = FakeStorage()
+    svc = DatasetService(
+        db, storage=managed, legacy_storages=[internal, managed])
+    ds = svc.create_dataset("切换期间历史版本", "curated")
+    raw = _csv_bytes([{"id": "1", "value": "external"}])
+    version = _seed_legacy_version(db, ds, managed, raw)
+    # A stale object under the same URI in the original endpoint must not mask
+    # the valid regression-era copy in managed MinIO.
+    internal.objects[version.storage_uri] = b"stale"
+
+    assert svc.load_all_rows(ds.id) == [{"id": "1", "value": "external"}]
+
+
+def test_unstructured_versions_remain_in_minio(svc, storage):
+    ds = svc.create_dataset("文件版本", "unstructured")
+    version = svc.create_version(ds.id, b"%PDF-test")
+
+    assert version.data_blob is None
+    assert version.data_size is None
+    assert version.storage_uri in storage.objects
+    assert f"/objects/{version.id}.bin" in version.storage_uri
 
 
 def test_checksum_mismatch_is_strict_failure_but_preview_is_lenient(svc, storage):
     ds = svc.create_dataset("对象篡改", "structured")
     ver = svc.create_version(ds.id, _csv_bytes([{"id": "1", "value": "safe"}]))
-    storage.objects[ver.storage_uri] = _csv_bytes([{"id": "1", "value": "tampered"}])
+    ver.data_blob = _csv_bytes([{"id": "1", "value": "tampered"}])
+    svc._db.commit()
 
     with pytest.raises(DatasetReadError, match="校验和不匹配"):
         svc.load_all_rows(ds.id)
@@ -206,7 +291,7 @@ def test_retention_prunes_old_snapshots(svc, storage, monkeypatch):
 
     versions = svc.list_versions(ds.id)
     assert [v.version_no for v in versions] == [3, 4, 5]
-    assert len(storage.deleted) == 2  # v1、v2 的对象已从存储删除
+    assert storage.deleted == []  # 数据库存储随版本行一起删除，不产生 MinIO 清理
     assert svc.get_dataset(ds.id).latest_version_id == versions[-1].id
     # 最新版本内容完好
     assert svc.load_all_rows(ds.id) == [{"n": "4"}]
