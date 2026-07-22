@@ -122,7 +122,11 @@ function AnimatedSegmentedControl<T extends string | number>({
   onChange: (value: T) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [indicator, setIndicator] = useState({ left: 0, width: 0 })
+  // Do not animate the default selection in from a zero-width placeholder when
+  // the structure tab first mounts. Mounting the indicator only after its first
+  // measurement paints L1 / Browse as selected immediately, while the existing
+  // CSS transition still animates every subsequent value change.
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
 
   const measure = useCallback(() => {
     const container = containerRef.current
@@ -145,11 +149,13 @@ function AnimatedSegmentedControl<T extends string | number>({
 
   return (
     <div ref={containerRef} className="relative flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5" aria-label={label}>
-      <span
-        aria-hidden="true"
-        className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out motion-reduce:transition-none"
-        style={{ left: indicator.left, width: indicator.width }}
-      />
+      {indicator && (
+        <span
+          aria-hidden="true"
+          className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out motion-reduce:transition-none"
+          style={{ left: indicator.left, width: indicator.width }}
+        />
+      )}
       {items.map(item => {
         const active = item.value === value
         const Icon = item.icon

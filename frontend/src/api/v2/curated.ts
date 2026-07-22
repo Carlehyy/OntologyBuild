@@ -26,8 +26,13 @@ export interface CuratedDatasetPage {
 export interface CuratedPreview {
   dataset_id: string
   name: string
-  rows: Record<string, string>[]
+  rows: Record<string, unknown>[]
   count: number
+  columns?: string[]
+  total_rows?: number
+  offset?: number
+  limit?: number
+  has_more?: boolean
   error?: string
 }
 
@@ -92,8 +97,8 @@ const curatedApi = {
     params: { ...params, paginated: true },
   }),
   get: (id: string) => apiClientV2.get<CuratedDataset>(`/curated/${id}`),
-  preview: (id: string, limit = 200) =>
-    apiClientV2.get<CuratedPreview>(`/curated/${id}/preview?limit=${limit}`),
+  preview: (id: string, limit = 200, offset = 0) =>
+    apiClientV2.get<CuratedPreview>(`/curated/${id}/preview`, { params: { limit, offset } }),
   /** 审批三视角：变化量 / 上一版全量 / 本次全量 */
   reviewDiff: (id: string, limit = 200, offset = 0, reviewId?: string) =>
     apiClientV2.get<ReviewDiff>(`/curated/${id}/review-diff`, {

@@ -129,6 +129,27 @@ def test_review_full_views_are_explicitly_paginated(api, auth_headers, db):
     }
 
 
+def test_curated_preview_supports_explicit_pagination(api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[
+        {"id": "1", "name": "a"},
+        {"id": "2", "name": "b"},
+        {"id": "3", "name": "c"},
+    ]])
+
+    response = api.get(
+        f"/api/v2/curated/{ds_id}/preview?limit=1&offset=1",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json().get("data", response.json())
+    assert payload["rows"] == [{"id": "2", "name": "b"}]
+    assert payload["columns"] == ["id", "name"]
+    assert payload["total_rows"] == 3
+    assert payload["offset"] == 1
+    assert payload["limit"] == 1
+    assert payload["has_more"] is True
+
+
 def test_curated_export_is_full_and_includes_approved_edits(api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [[
         {"id": "1", "name": "审核前"},

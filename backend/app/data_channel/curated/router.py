@@ -265,9 +265,13 @@ def get_curated(dataset_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{dataset_id}/preview")
-def preview_curated(dataset_id: str, limit: int = 100, db: Session = Depends(get_db)):
-    """数据预览 — 从 v2_datasets 存储读取实际数据行"""
-    from app.services.v2.dataset_service import DatasetService
+def preview_curated(
+    dataset_id: str,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """数据预览 — 读取已审核行级编辑后的实际数据，并支持 offset/limit 分页。"""
     from app.models.v2.dataset import Dataset as Ds2
 
     d2 = db.query(Ds2).filter(Ds2.id == dataset_id, Ds2.kind == "curated").first()
@@ -277,9 +281,29 @@ def preview_curated(dataset_id: str, limit: int = 100, db: Session = Depends(get
 
     # 读最新版本数据（叠加行级审核编辑——预览必须与出口数据一致）
     try:
-        from app.data_channel.curated.review_service import load_rows_with_edits
-        rows = load_rows_with_edits(db, dataset_id, limit=limit)
-        return {"dataset_id": dataset_id, "name": name, "rows": rows, "count": len(rows)}
+        from app.data_channel.curated.review_service import load_all_rows_with_edits
+        all_rows = load_all_rows_with_edits(db, dataset_id)
+        total_rows = len(all_rows)
+        rows = all_rows[offset:offset + limit]
+        schema_columns = (d2.schema_json or {}).get("columns") or []
+        columns = [
+            str(item.get("name") or "") if isinstance(item, dict) else str(item)
+            for item in schema_columns
+        ]
+        columns = [column for column in columns if column]
+        if not columns and all_rows:
+            columns = list(all_rows[0].keys())
+        return {
+            "dataset_id": dataset_id,
+            "name": name,
+            "rows": rows,
+            "count": len(rows),
+            "columns": columns,
+            "total_rows": total_rows,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + len(rows) < total_rows,
+        }
     except Exception as e:
         raise HTTPException(502, f"成品数据读取失败：{e}")
 
