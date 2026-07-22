@@ -570,7 +570,7 @@ def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
     )
     assert backup_response.status_code == 200
     payload = backup_response.json()
-    assert payload["version"] == 5
+    assert payload["version"] == 6
     assert "proxy_keys" not in payload
     assert key["secret"] not in backup_response.text
     exported = next(item for item in payload["interfaces"] if item["name"] == "Echo")

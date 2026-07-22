@@ -72,6 +72,10 @@ PROXY_MAX_REQUEST_BYTES = max(
 
 MCP_TOKEN = _env("API_HUB_MCP_TOKEN", _env("MCP_TOKEN"))
 SYSTEM_MCP_TOKEN = _env("API_HUB_SYSTEM_MCP_TOKEN", _env("SYSTEM_MCP_TOKEN"))
+# n8n only needs invocation authority.  Keep it separate from the system MCP
+# management token; fall back during upgrades so existing deployments keep
+# working until they rotate to API_HUB_INTERNAL_PROXY_TOKEN.
+INTERNAL_PROXY_TOKEN = _env("API_HUB_INTERNAL_PROXY_TOKEN") or SYSTEM_MCP_TOKEN
 MCP_PATH = "/api-hub/mcp"
 SYSTEM_MCP_PATH = "/api-hub/mcp/system"
 MCP_SERVER_NAME = _env("API_HUB_MCP_SERVER_NAME", _env("MCP_SERVER_NAME", "api-hub"))

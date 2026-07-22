@@ -624,6 +624,9 @@ app.include_router(
 # n8n service-to-service calls use API_HUB_SYSTEM_MCP_TOKEN and only reach
 # interfaces explicitly added to the open list.
 app.include_router(api_hub_proxy.router)
+# n8n invocation authority is separate from the system management MCP token;
+# the endpoint also pins interface revisions and validates dynamic parameters.
+app.include_router(api_hub_proxy.internal_router)
 # Ordinary HTTP consumers use per-caller proxy keys and stable /proxy/<slug> URLs.
 app.include_router(api_hub_http_proxy.public_router)
 asset_lake_guard = [Depends(asset_lake_access_guard), *data_guard]

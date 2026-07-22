@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     steward_browser_allow_private_networks: bool = True
     # URL used inside generated n8n workflows to reach this backend.
     steward_proxy_base_url: str = "http://backend:8000/api-hub/proxy"
+    steward_internal_proxy_base_url: str = "http://backend:8000/api-hub/internal/interfaces"
+    # Header Auth credential already configured in n8n.  The data steward only
+    # stores its id/name reference in workflow JSON, never the secret value.
+    steward_proxy_credential_name: str = "API Hub Internal Proxy"
 
     max_upload_mb: int = 200
     allowed_upload_extensions: str = "csv,xlsx,xls,json,xml,pdf,docx,doc,pptx,ppt,md,txt"

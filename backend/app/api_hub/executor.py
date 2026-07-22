@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -50,6 +52,7 @@ class RequestFile:
 class RequestOverrides:
     """一次调用允许覆盖的请求值和审计上下文。"""
 
+    path_params: list[tuple[str, str]] | None = None
     query_params: list[tuple[str, str]] | None = None
     headers: list[tuple[str, str]] | None = None
     body: Any = _UNSET
@@ -131,6 +134,23 @@ def _merge_headers(defaults, overrides) -> dict[str, str]:
     return headers
 
 
+_PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}")
+
+
+def _resolve_url(url: str, path_params) -> str:
+    supplied = {key: value for key, value in _kv_pairs(path_params)}
+    required = set(_PATH_PARAMETER_RE.findall(url))
+    missing = sorted(required - supplied.keys())
+    if missing:
+        raise ValueError("缺少 Path 参数：" + ", ".join(missing))
+    unknown = sorted(supplied.keys() - required)
+    if unknown:
+        raise ValueError("URL 中不存在这些 Path 参数：" + ", ".join(unknown))
+    return _PATH_PARAMETER_RE.sub(
+        lambda match: quote(supplied[match.group(1)], safe=""), url
+    )
+
+
 def _pop_header(headers: dict[str, str], name: str) -> str | None:
     target = name.lower()
     for key in list(headers):
@@ -190,6 +210,7 @@ def _build_kwargs(
     use_w3: bool,
     session: requests.Session,
 ) -> tuple[dict, dict]:
+    resolved_url = _resolve_url(iface.get("url") or "", overrides.path_params)
     query = _merge_query(iface.get("query_params", []), overrides.query_params)
     headers = _merge_headers(iface.get("headers", []), overrides.headers)
     kwargs: dict[str, Any] = {
@@ -287,7 +308,7 @@ def _build_kwargs(
     kwargs["headers"] = headers or None
     snapshot = {
         "method": iface.get("method"),
-        "url": iface.get("url") or "",
+        "url": resolved_url,
         "query_params": [
             {"key": key, "value": str(value)}
             for key, value in query
@@ -401,10 +422,17 @@ def run_interface(
         _save_run(iface, result, overrides, None)
         return result
 
-    kwargs, snapshot = _build_kwargs(iface, overrides, use_w3=use_w3, session=session)
+    try:
+        kwargs, snapshot = _build_kwargs(iface, overrides, use_w3=use_w3, session=session)
+        request_url = snapshot["url"]
+    except ValueError as exc:
+        result["error"] = str(exc)
+        result["error_type"] = "configuration"
+        _save_run(iface, result, overrides, None)
+        return result
     start = time.perf_counter()
     try:
-        resp = request_with_safe_redirects(session, method, url, **kwargs)
+        resp = request_with_safe_redirects(session, method, request_url, **kwargs)
         if use_w3 and _looks_expired(resp):
             status = credential.refresh()
             if status.get("last_result") == "success":
@@ -413,8 +441,9 @@ def run_interface(
                     kwargs, snapshot = _build_kwargs(
                         iface, overrides, use_w3=use_w3, session=session2
                     )
+                    request_url = snapshot["url"]
                     resp = request_with_safe_redirects(
-                        session2, method, url, **kwargs
+                        session2, method, request_url, **kwargs
                     )
                     result["relogin"] = True
                 else:

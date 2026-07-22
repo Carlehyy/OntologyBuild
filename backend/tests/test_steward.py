@@ -260,6 +260,202 @@ def test_selected_target_rejects_pipeline_that_is_no_longer_orchestrable(
         resolve_selected_target(db, draft_record.id)
 
 
+def test_data_steward_api_hub_management_is_permissioned_and_revision_safe(
+        db, tmp_path, monkeypatch):
+    from app.api_hub import config as hub_config, db as hub_db
+    from app.api_hub.routers.interfaces import InterfaceIn, KV, create_interface
+
+    monkeypatch.setattr(hub_config, "DB_PATH", tmp_path / "agent-api-hub.db")
+    hub_db.init_db()
+    denied = ToolRunner(db, "user-1", "conv-1")
+    assert "没有" in denied.run("list_proxy_interfaces", {})["error"]
+
+    # A secret configured outside the model is redacted on every Agent read.
+    secret = create_interface(InterfaceIn(
+        name="带密钥接口",
+        url="https://service.example/private",
+        headers=[KV(key="Authorization", value="Bearer server-secret")],
+    ))
+    runner = ToolRunner(
+        db, "user-1", "conv-1", api_hub_allowed=True,
+    )
+    detail = runner.run("get_proxy_interface", {"interface_id": secret["id"]})
+    encoded = json.dumps(detail, ensure_ascii=False)
+    assert "server-secret" not in encoded
+    assert detail["interface"]["headers"][0]["sensitive"] is True
+
+    body_secret = create_interface(InterfaceIn(
+        name="带 Body 密钥接口",
+        url="https://service.example/private-body",
+        body_type="json",
+        body_content='{"password":"server-body-secret"}',
+    ))
+    body_detail = runner.run("get_proxy_interface", {"interface_id": body_secret["id"]})
+    assert body_detail["interface"]["bodyContent"] is None
+    assert "server-body-secret" not in json.dumps(body_detail, ensure_ascii=False)
+
+    rejected_parameter_secret = runner.run("create_proxy_interface", {
+        "name": "参数密钥不得进入模型",
+        "url": "https://service.example/private",
+        "parameters": [{
+            "name": "access_token", "location": "body", "sensitive": True,
+            "dynamic": False, "default": "must-not-enter-model",
+        }],
+    })
+    assert "敏感参数默认值" in rejected_parameter_secret["error"]
+
+    rejected_url_secret = runner.run("create_proxy_interface", {
+        "name": "URL 密钥不得进入模型",
+        "url": "https://service.example/private?access_token=must-not-enter-model",
+    })
+    assert "URL 查询串含敏感字段" in rejected_url_secret["error"]
+    rejected_body_secret = runner.run("create_proxy_interface", {
+        "name": "Body 密钥不得进入模型",
+        "url": "https://service.example/private",
+        "method": "POST",
+        "body_type": "json",
+        "body_content": '{"password":"must-not-enter-model"}',
+    })
+    assert "请求 Body 含敏感字段" in rejected_body_secret["error"]
+
+    created = runner.run("create_proxy_interface", {
+        "name": "订单分页",
+        "url": "https://service.example/orders",
+        "query_params": {"page": "1"},
+        "parameters": [{
+            "name": "page", "location": "query", "value_type": "integer",
+            "required": False, "dynamic": True,
+        }],
+    })
+    assert "error" not in created, created
+    assert created["interface"]["configRevision"] == 1
+    assert created["interface"]["exposure"] == {
+        "openMcp": False, "httpPublished": False,
+    }
+    changed = runner.run("update_proxy_interface", {
+        "interface_id": created["interface"]["id"],
+        "expected_revision": 1,
+        "changes": {"description": "供 n8n 分页取数"},
+    })
+    assert changed["interface"]["configRevision"] == 2
+    stale = runner.run("update_proxy_interface", {
+        "interface_id": created["interface"]["id"],
+        "expected_revision": 1,
+        "changes": {"description": "过期修改"},
+    })
+    assert "当前 revision=2" in stale["error"]
+
+    rejected_secret = runner.run("update_proxy_interface", {
+        "interface_id": created["interface"]["id"],
+        "expected_revision": 2,
+        "changes": {"headers": {"X-API-Key": "must-not-enter-model"}},
+    })
+    assert "敏感字段" in rejected_secret["error"]
+
+
+def test_data_steward_compiles_revision_pinned_api_hub_node(
+        db, fake_n8n, draft_record, tmp_path, monkeypatch):
+    from app.api_hub import config as hub_config, db as hub_db
+
+    monkeypatch.setattr(hub_config, "DB_PATH", tmp_path / "orchestrate-api-hub.db")
+    hub_db.init_db()
+    fake_n8n.credentials = [{
+        "id": "header-auth-1",
+        "name": "API Hub Internal Proxy",
+        "type": "httpHeaderAuth",
+    }]
+    runner = ToolRunner(
+        db, "user-1", "conv-1", api_hub_allowed=True,
+    )
+    created = runner.run("create_proxy_interface", {
+        "name": "订单分页",
+        "url": "https://service.example/orders",
+        "query_params": {"page": "1"},
+        "parameters": [{
+            "name": "page", "location": "query", "value_type": "integer",
+            "dynamic": True,
+        }],
+    })
+    interface_id = created["interface"]["id"]
+    result = runner.run("orchestrate_proxy_interface", {
+        "record_id": draft_record.id,
+        "interface_id": interface_id,
+        "after_node_name": "Webhook",
+        "query_bindings": {"page": "={{ $json.page }}"},
+    })
+    assert "error" not in result, result
+    workflow = fake_n8n.get_workflow(draft_record.n8n_workflow_id)
+    proxy_node = next(
+        node for node in workflow["nodes"]
+        if node["name"] == "接口代理 · 订单分页"
+    )
+    encoded = json.dumps(proxy_node, ensure_ascii=False)
+    assert "/api-hub/internal/interfaces/" in proxy_node["parameters"]["url"]
+    body_parameters = {
+        item["name"]: item["value"]
+        for item in proxy_node["parameters"]["bodyParameters"]["parameters"]
+    }
+    assert body_parameters["interface_revision"] == 1
+    assert body_parameters["query.page"] == "={{ $json.page }}"
+    assert proxy_node["credentials"]["httpHeaderAuth"]["id"] == "header-auth-1"
+    assert "Bearer" not in encoded
+    assert workflow["connections"]["Webhook"]["main"][0][0]["node"] == proxy_node["name"]
+    assert workflow["connections"][proxy_node["name"]]["main"][0][0]["node"] == "整理字段"
+    assert runner.run("check_workflow", {"record_id": draft_record.id})["ok"] is True
+
+
+def test_data_steward_rejects_undeclared_or_sensitive_runtime_body(
+        db, tmp_path, monkeypatch):
+    from app.api_hub import config as hub_config, db as hub_db
+    from app.api_hub import executor as api_hub_executor
+
+    monkeypatch.setattr(hub_config, "DB_PATH", tmp_path / "body-contract-api-hub.db")
+    hub_db.init_db()
+    runner = ToolRunner(db, "user-1", "conv-1", api_hub_allowed=True)
+    monkeypatch.setattr(api_hub_executor, "run_interface", lambda *_args, **_kwargs: {
+        "run_id": 1, "ok": True, "status_code": 200, "elapsed_ms": 1,
+        "content_type": "application/json",
+        "response_body": '{"ok":true,"authorization":"Bearer runtime-secret"}',
+        "error": None, "relogin": False,
+    })
+    created = runner.run("create_proxy_interface", {
+        "name": "受控写入",
+        "url": "https://service.example/orders",
+        "method": "POST",
+        "body_type": "json",
+        "parameters": [{
+            "name": "order.id", "location": "body", "dynamic": True,
+        }, {
+            "name": "order.secret", "location": "body", "dynamic": False,
+            "sensitive": True,
+        }],
+    })
+    interface_id = created["interface"]["id"]
+
+    allowed = runner.run("call_proxy_interface", {
+        "interface_id": interface_id,
+        "body": {"order": {"id": "A-1"}},
+        "confirm_side_effect": True,
+    })
+    # The executor is stubbed: this assertion specifically covers the contract
+    # gate before a network request is allowed.
+    assert "interface" in allowed
+    assert "runtime-secret" not in allowed["run"]["responseBody"]
+    assert '"authorization": "***"' in allowed["run"]["responseBody"]
+    rejected_unknown = runner.run("call_proxy_interface", {
+        "interface_id": interface_id,
+        "body": {"order": {"id": "A-1", "extra": "unknown"}},
+        "confirm_side_effect": True,
+    })
+    assert "未声明可动态覆盖的 body 参数" in rejected_unknown["error"]
+    rejected_sensitive = runner.run("call_proxy_interface", {
+        "interface_id": interface_id,
+        "body": {"order": {"id": "A-1", "secret": "hidden"}},
+        "confirm_side_effect": True,
+    })
+    assert "禁止动态覆盖" in rejected_sensitive["error"]
+
+
 VALIDATED_COLUMNS = [
     {
         "source_key": "currency",

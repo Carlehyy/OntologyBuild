@@ -17,6 +17,7 @@ def hub_client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
     monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
     monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
+    monkeypatch.setattr(config, "INTERNAL_PROXY_TOKEN", "internal-proxy-test-token")
     monkeypatch.setattr(
         config,
         "W3_LOGIN_ALLOWED_HOSTS",
@@ -30,6 +31,7 @@ def hub_client(tmp_path, monkeypatch):
     app.include_router(backup.router)
     app.include_router(mcp.router)
     app.include_router(proxy.router)
+    app.include_router(proxy.internal_router)
     app.include_router(http_proxy.admin_router)
     app.include_router(http_proxy.public_router)
     return TestClient(app)
@@ -96,6 +98,83 @@ def test_interface_crud_group_and_auth_boundary(hub_client):
         assert TestClient(platform_app).get("/api/api-hub/interfaces").status_code == 200
     finally:
         platform_app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_internal_n8n_proxy_validates_dynamic_parameters_and_revision(
+    hub_client, monkeypatch,
+):
+    observed = {}
+
+    def fake_request(session, method, url, **kwargs):
+        observed.update({"method": method, "url": url, "kwargs": kwargs})
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps({"ok": True}).encode()
+        response.encoding = "utf-8"
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    item = hub_client.post(
+        "/interfaces",
+        json=_interface(
+            name="订单明细",
+            method="POST",
+            url="https://service.example/orders/{order_id}",
+            open_enabled=False,
+            body_type="json",
+            body_content='{"include":false}',
+            query_params=[{"key": "page", "value": "1"}],
+            headers=[{"key": "X-Tenant", "value": "default"}],
+            parameter_schema=[
+                {"name": "order_id", "location": "path", "required": True},
+                {"name": "page", "location": "query"},
+                {"name": "X-Tenant", "location": "header"},
+                {"name": "include", "location": "body", "value_type": "boolean"},
+            ],
+        ),
+    ).json()
+    assert item["config_revision"] == 1
+
+    called = hub_client.post(
+        f"/api-hub/internal/interfaces/{item['id']}/invoke",
+        headers={"Authorization": "Bearer internal-proxy-test-token"},
+        json={
+            "interface_revision": 1,
+            "path.order_id": "A/B",
+            "query.page": 3,
+            "headers.X-Tenant": "cn-01",
+            "body.include": True,
+        },
+    )
+    assert called.status_code == 200
+    assert observed["method"] == "POST"
+    assert observed["url"] == "https://service.example/orders/A%2FB"
+    assert observed["kwargs"]["params"] == [("page", "3")]
+    assert observed["kwargs"]["headers"]["X-Tenant"] == "cn-01"
+    assert json.loads(observed["kwargs"]["data"]) == {"include": True}
+
+    changed = hub_client.put(
+        f"/interfaces/{item['id']}",
+        json=_interface(
+            name="订单明细 v2",
+            method="POST",
+            url="https://service.example/orders/{order_id}",
+            body_type="json",
+            parameter_schema=[
+                {"name": "order_id", "location": "path", "required": True},
+            ],
+        ),
+    ).json()
+    assert changed["config_revision"] == 2
+    stale = hub_client.post(
+        f"/api-hub/internal/interfaces/{item['id']}/invoke",
+        headers={"Authorization": "Bearer internal-proxy-test-token"},
+        json={"interface_revision": 1, "path": {"order_id": "A100"}},
+    )
+    assert stale.status_code == 409
+    assert "revision=1" in stale.json()["detail"]
 
 
 def test_interface_move_reorders_within_and_across_groups(hub_client):

@@ -54,7 +54,7 @@
 - **人工登录接管** — 数据管家页的“实时浏览器”弹窗展示同一 CDP 会话画面；账号密码由用户直接输入，Agent 不读取、不代填密码框
 - **三类浏览器来源** — 每个会话可独立选择平台 Docker 浏览器、管理员配置的加密远程 CDP，或用户电脑上的浏览器助手；切换来源不会影响其他会话
 - **接口与分页发现** — 记录同会话浏览器的 XHR/fetch/文件响应，脱敏展示认证头，并识别 page/offset/cursor 等分页模式及返回结构
-- **授权下载与接口代理** — 在浏览器登录态下重放已捕获的 GET 文件请求；内网接口可登记到接口代理，由 n8n 通过受令牌保护的 `/api-hub/proxy/{id}` 间接调用
+- **接口代理托管与编排** — 在浏览器登录态下发现接口，或由数据管家新建、编辑、试调接口草稿；参数契约支持 Path、Query、业务 Header 与 Body。接口可按固定 revision 编排进未发布 n8n 流水线，由受令牌保护的 `/api-hub/internal/interfaces/{id}/invoke` 调用，接口变更不会让已发布流水线静默漂移
 - **普通 HTTP 接口发布** — 已登记接口可发布为稳定的 `/proxy/{公开路径}`；调用方使用独立密钥，平台按配置开放 Query、业务 Header 和 Body，并可一键复制完整 cURL 调用示例
 - **受治理的 n8n 编排** — 数据管家仍只新建和编排未发布、未启用的工作流；试跑、字段封版、发布与启用继续由流水线编辑向导把关
 
@@ -131,7 +131,9 @@ Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 S
 
 手动启动时如需数据管家的实时浏览器，还要准备一个开放 CDP 的 Chromium，并设置
 `STEWARD_BROWSER_CDP_URL`（默认 `http://localhost:9222`）。生产环境应同时配置
-`API_HUB_SYSTEM_MCP_TOKEN`，在 n8n 中以 Header Auth 凭据保存该令牌；不要把令牌直接写入工作流 JSON。
+`API_HUB_INTERNAL_PROXY_TOKEN`，并在 n8n 中创建名为 `API Hub Internal Proxy` 的 Header Auth
+凭据（`Authorization: Bearer <token>`）；不要把令牌直接写入工作流 JSON。系统管理 MCP 另用
+`API_HUB_SYSTEM_MCP_TOKEN`。旧部署未配置独立内部令牌时会暂时回退到系统令牌，建议尽快完成拆分和轮换。
 接口代理中登记的接口可直接调用任意 HTTP/HTTPS 目标，无需额外配置出站域名白名单。内网自签 CA
 应通过 `API_HUB_TLS_CA_BUNDLE` 指定信任链，平台不会关闭 TLS 证书校验。MCP 令牌留空时对应入口保持禁用；
 从外部生产域名访问 MCP 时，还需同步配置 `API_HUB_MCP_ALLOWED_HOSTS` 和
@@ -180,6 +182,21 @@ python scripts/steward_proxy_live_e2e.py \
 
 脚本通过终端隐藏输入 n8n API Key，使用短期随机代理令牌和临时公网隧道；结束时会停用并删除
 临时 n8n 工作流、代理数据库与隧道。运行环境需要 Node.js/npm，以便临时执行 localtunnel。
+
+验收完整“真实 LLM → 数据管家托管/试调接口 → 固定 revision 编排 → 真实 n8n 执行”链路：
+
+```bash
+cd backend
+python scripts/steward_api_hub_live_e2e.py \
+  --n8n-api-url https://n8n.example.com/api/v1 \
+  --llm-api-base https://api.deepseek.com \
+  --models deepseek-v4-pro deepseek-v4-flash \
+  --agent-model deepseek-v4-pro
+```
+
+LLM 与 n8n 密钥只从隐藏输入或 `LLM_API_KEY` / `N8N_API_KEY` 环境变量读取。脚本创建短期
+Header Auth 凭据、接口、流水线与公网隧道，验证直接调用和 n8n 动态 Path/Query/Header 传参，
+并在结束时停用、删除全部远端临时资源。
 
 生产环境的 n8n 地址策略要求 HTTPS；仅开发验收允许访问公网 HTTP n8n 地址。
 

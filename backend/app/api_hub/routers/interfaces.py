@@ -2,7 +2,7 @@ import json
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import Any, List, Literal
 from urllib.parse import urlsplit
 
 import anyio
@@ -56,6 +56,38 @@ class FileField(BaseModel):
     multiple: bool = False
 
 
+class InterfaceParameter(BaseModel):
+    """Machine-readable contract used by Agents and n8n bindings.
+
+    Saved request values remain the source of defaults.  This schema describes
+    which values callers may provide dynamically without exposing credentials.
+    """
+
+    name: str
+    location: Literal["path", "query", "header", "body"]
+    value_type: Literal["string", "integer", "number", "boolean", "object", "array"] = "string"
+    required: bool = False
+    default: Any = None
+    description: str = ""
+    sensitive: bool = False
+    dynamic: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def validate_parameter_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value or len(value) > 500 or "\r" in value or "\n" in value:
+            raise ValueError("接口参数名无效")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def validate_parameter_description(cls, value: str) -> str:
+        if len(value) > 2000:
+            raise ValueError("接口参数说明不能超过 2000 个字符")
+        return value
+
+
 class InterfaceIn(BaseModel):
     name: str = "未命名接口"
     description: str = ""
@@ -76,6 +108,7 @@ class InterfaceIn(BaseModel):
     proxy_header_keys: List[str] = Field(default_factory=list)
     proxy_body_enabled: bool = False
     proxy_body_keys: List[str] = Field(default_factory=list)
+    parameter_schema: List[InterfaceParameter] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -176,6 +209,23 @@ class InterfaceIn(BaseModel):
             item.accept = item.accept.strip()
             if marker:
                 seen.add(marker)
+        return value
+
+    @field_validator("parameter_schema")
+    @classmethod
+    def validate_parameter_schema(
+        cls, value: List[InterfaceParameter]
+    ) -> List[InterfaceParameter]:
+        if len(value) > 200:
+            raise ValueError("接口参数定义不能超过 200 个")
+        seen = set()
+        for item in value:
+            marker = (item.location, item.name.lower() if item.location == "header" else item.name)
+            if marker in seen:
+                raise ValueError(f"接口参数定义重复：{item.location}.{item.name}")
+            if item.sensitive and item.dynamic:
+                raise ValueError(f"敏感参数不能开放动态覆盖：{item.location}.{item.name}")
+            seen.add(marker)
         return value
 
 
@@ -327,6 +377,10 @@ def _row_to_dict(row) -> dict:
         "proxy_header_keys": _load_json_list(row["proxy_header_keys"]),
         "proxy_body_enabled": bool(row["proxy_body_enabled"]),
         "proxy_body_keys": _load_json_list(row["proxy_body_keys"]),
+        "parameter_schema": _load_json_list(row["parameter_schema"]),
+        "config_revision": int(row["config_revision"]),
+        "created_by": row["created_by"],
+        "updated_by": row["updated_by"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -361,8 +415,8 @@ def create_interface(body: InterfaceIn):
         cur = conn.execute(
             "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
             "body_type, body_content, file_fields, use_w3, mcp_enabled, open_enabled, http_enabled, proxy_slug, "
-            "proxy_query_keys, proxy_header_keys, proxy_body_enabled, proxy_body_keys, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "proxy_query_keys, proxy_header_keys, proxy_body_enabled, proxy_body_keys, parameter_schema, "
+            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 body.name, body.description, body.group_name, body.method.upper(), body.url,
                 _dump_kv(body.query_params), _dump_kv(body.headers),
@@ -374,6 +428,7 @@ def create_interface(body: InterfaceIn):
                 json.dumps(header_keys, ensure_ascii=False),
                 1 if body.proxy_body_enabled else 0,
                 json.dumps(body_keys, ensure_ascii=False),
+                json.dumps([item.model_dump(mode="json") for item in body.parameter_schema], ensure_ascii=False),
                 now, now,
             ),
         )
@@ -497,7 +552,8 @@ def update_interface(iid: int, body: InterfaceIn):
             "UPDATE interfaces SET name=?, description=?, group_name=?, method=?, url=?, query_params=?, "
             "headers=?, body_type=?, body_content=?, file_fields=?, use_w3=?, mcp_enabled=?, open_enabled=?, "
             "http_enabled=?, proxy_slug=?, proxy_query_keys=?, proxy_header_keys=?, "
-            "proxy_body_enabled=?, proxy_body_keys=?, updated_at=? WHERE id=?",
+            "proxy_body_enabled=?, proxy_body_keys=?, parameter_schema=?, "
+            "config_revision=config_revision+1, updated_at=? WHERE id=?",
             (
                 body.name, body.description, body.group_name, body.method.upper(), body.url,
                 _dump_kv(body.query_params), _dump_kv(body.headers),
@@ -509,6 +565,7 @@ def update_interface(iid: int, body: InterfaceIn):
                 json.dumps(header_keys, ensure_ascii=False),
                 1 if body.proxy_body_enabled else 0,
                 json.dumps(body_keys, ensure_ascii=False),
+                json.dumps([item.model_dump(mode="json") for item in body.parameter_schema], ensure_ascii=False),
                 now, iid,
             ),
         )

@@ -27,6 +27,8 @@ from app.data_channel.steward.models import (
 )
 from app.data_channel.steward.node_catalog import catalog_digest
 from app.data_channel.steward.toolkit import TOOL_DEFS, ToolRunner
+from app.data_channel.steward.toolkit import API_HUB_TOOL_NAMES
+from app.auth.permissions import user_has_menu_access
 from app.exploration.web_search import WEB_SEARCH_TOOL, WebSearchError, search_web
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,7 @@ def _system_prompt(
     db: Session,
     conversation_id: str | None = None,
     web_search_enabled: bool = False,
+    api_hub_allowed: bool = False,
 ) -> str:
     records = (db.query(N8nPipeline)
                .filter(N8nPipeline.status != STATUS_ARCHIVED)
@@ -83,6 +86,15 @@ def _system_prompt(
         inventory = "当前还没有受管流水线。"
 
     file_context = workspace.context_block(conversation_id) if conversation_id else ""
+    if api_hub_allowed:
+        api_hub_context = """
+5. 你拥有当前用户授权的接口代理管理能力。可 list/get/create/update 接口草稿并直接试调；创建或大改前先展示设计并确认。敏感 Header/Query 永不回显，密钥只能在接口管理界面、W3 登录态或浏览器捕获流程中安全配置。POST/PUT/PATCH/DELETE 试调必须先说明副作用并取得明确确认。
+6. 将接口编排进 n8n 时，先 get_proxy_interface 和 get_workflow，再用 orchestrate_proxy_interface。该工具生成固定 interface revision、引用 n8n Header Auth 凭据的内部代理节点；绝不能把代理令牌、真实登录 Cookie 或目标认证密钥写进 workflow JSON。接口更新后须重新编排并由用户重新发布流水线。
+""".strip()
+    else:
+        api_hub_context = (
+            "5. 当前用户没有接口管理权限，不得尝试登记、读取、修改、调用或编排接口代理中的接口。"
+        )
 
     return f"""你是 OntoPrompt 平台的「数据管家」——在当前会话隔离空间内读取资料、操作同会话浏览器、识别页面数据接口，并把可靠的数据链编排成 n8n 流水线。
 
@@ -91,7 +103,7 @@ def _system_prompt(
 2. Word/PPT/Excel/PDF/Markdown 等先用 list_session_files / read_session_file 读取；用户要求产出或修改文件时，用 create_session_file / edit_session_file 保存到当前会话。只有用户明确要求删除时才能用 delete_session_file。系统提示末尾也会提供已解析的会话文件摘要和其中发现的网址。
 3. 普通网址优先 browser_open。实时浏览器是用户与数据管家的共享协作界面：用户仅打开大窗口或画中画旁观时，你必须继续操作；只有用户正在输入或点击“暂停管家，我来处理”时才等待。若需要登录，请用户在大窗口点击该按钮后手动输入账号密码，完成后点击“继续交给数据管家”；无需关闭实时浏览器。绝不向用户索要密码，也不使用 browser_type 填密码。
 4. 查页面数据来源时，用 browser_network_requests 比较 XHR/fetch，核对响应样例、字段结构与 pagination。不要只凭 URL 名称猜接口。捕获到的附件、图片、音视频用 download_captured_file 保存；页面 `<img>`、data:/blob: 或未形成网络 capture 的资源，先 browser_page_resources 找到目标元素 index，再用 browser_save_resource。需要点无文字下载控件时用 browser_click_element，并核对 downloadedFiles，不能仅凭“点击了”声称下载成功。
-5. 内网授权接口需要稳定复用时，用 register_proxy_interface 登记到接口代理，再让 n8n 调 proxyUrl。只有确需复用当前浏览器认证时才 include_auth；公司 W3 接口优先 use_w3。
+{api_hub_context}
 
 # 本回合联网检索
 {_web_search_prompt(web_search_enabled)}
@@ -217,6 +229,22 @@ def _summarize(name: str, result: dict) -> str:
     if name == "register_proxy_interface":
         iface = result.get("interface") or {}
         return f"已登记代理接口「{iface.get('name', '')}」#{iface.get('id', '')}"
+    if name == "list_proxy_interfaces":
+        return f"接口代理 {result.get('count', 0)} 个接口"
+    if name == "get_proxy_interface":
+        iface = result.get("interface") or {}
+        return f"接口「{iface.get('name', '')}」· revision {iface.get('configRevision', '')}"
+    if name in {"create_proxy_interface", "update_proxy_interface"}:
+        iface = result.get("interface") or {}
+        verb = "新建" if name == "create_proxy_interface" else "更新"
+        return f"已{verb}接口「{iface.get('name', '')}」· revision {iface.get('configRevision', '')}"
+    if name == "call_proxy_interface":
+        iface = result.get("interface") or {}
+        run = result.get("run") or {}
+        return f"调用「{iface.get('name', '')}」· HTTP {run.get('statusCode')} · {run.get('elapsedMs')}ms"
+    if name == "orchestrate_proxy_interface":
+        binding = result.get("interfaceBinding") or {}
+        return f"已将接口「{binding.get('interfaceName', '')}」编排为节点「{binding.get('nodeName', '')}」"
     return "完成"
 
 
@@ -306,7 +334,12 @@ def _run(db: Session, user, question: str,
 
     messages: list[dict] = [{
         "role": "system",
-        "content": _system_prompt(db, conv.id, web_search_enabled=web_search),
+        "content": _system_prompt(
+            db,
+            conv.id,
+            web_search_enabled=web_search,
+            api_hub_allowed=user_has_menu_access(db, user, "api_hub.interfaces"),
+        ),
     }]
     for m in history:
         if m.role in ("user", "assistant") and (m.content or "").strip():
@@ -325,8 +358,14 @@ def _run(db: Session, user, question: str,
         })
     messages.append({"role": "user", "content": question})
 
-    runner = ToolRunner(db, user_id, conv.id)
-    tools = TOOL_DEFS + ([WEB_SEARCH_TOOL] if web_search else [])
+    api_hub_allowed = user_has_menu_access(db, user, "api_hub.interfaces")
+    runner = ToolRunner(
+        db, user_id, conv.id, api_hub_allowed=api_hub_allowed,
+    )
+    tools = [
+        tool for tool in TOOL_DEFS
+        if api_hub_allowed or tool.get("name") not in API_HUB_TOOL_NAMES
+    ] + ([WEB_SEARCH_TOOL] if web_search else [])
     steps: list[dict] = []
     usage_total = {"inputTokens": 0, "outputTokens": 0}
     answer: Optional[str] = None
