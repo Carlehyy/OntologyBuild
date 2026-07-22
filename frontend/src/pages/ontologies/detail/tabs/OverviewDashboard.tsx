@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
-  ArrowRight, Check, CheckCircle2, ChevronRight, CircleAlert, Clock3,
-  Database, GitBranch, Loader2, PackageCheck, ShieldCheck,
-  Sparkles, X,
+  Activity, CheckCircle2, ChevronRight, CircleAlert, Clock3, Database,
+  GitBranch, Loader2, ShieldCheck, Sparkles, Workflow,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
@@ -36,20 +35,6 @@ interface Overview {
   facts: { total: number; byKind: Record<string, number> }
 }
 
-interface PendingLog {
-  id: string
-  actionId: string
-  actionName: string | null
-  objectTypeName: string | null
-  objectInstanceId: string | null
-  objectInstanceLabel: string | null
-  parameters: Record<string, unknown>
-  actorId: string | null
-  triggerSource: 'sentinel' | 'manual' | 'system' | null
-  ontologyVersion: string | null
-  executedAt: string
-}
-
 interface FactRow {
   id: string
   subjectLabel: string
@@ -73,10 +58,6 @@ const SOURCE_LABEL: Record<string, string> = {
   manual: '手工录入', pipeline: '管道灌入', collector: '采集器', import: '批量导入', action: '动作生成',
 }
 
-const TRIGGER_LABEL: Record<string, string> = {
-  sentinel: '哨兵命中', manual: '人工发起', system: '系统触发',
-}
-
 const formatDateTime = (iso?: string | null, compact = false) => {
   if (!iso) return '—'
   const value = new Date(iso)
@@ -96,11 +77,6 @@ const formatValue = (value: unknown, max = 30) => {
   if (value === null || value === undefined) return '∅'
   const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
   return text.length > max ? `${text.slice(0, max)}…` : text
-}
-
-const firstParameter = (parameters: Record<string, unknown>) => {
-  const first = Object.entries(parameters ?? {})[0]
-  return first ? `${first[0]} = ${formatValue(first[1], 18)}` : '无需额外参数'
 }
 
 function NetworkMark() {
@@ -127,120 +103,11 @@ function PanelTitle({ title, sub, action }: { title: string; sub?: string; actio
   )
 }
 
-function ApprovalPipeline({
-  pending, selected, busy, message, onSelect, onDecide, onViewAll,
-}: {
-  pending: PendingLog[]
-  selected: PendingLog | null
-  busy: string | null
-  message: { ok: boolean; text: string } | null
-  onSelect: (item: PendingLog) => void
-  onDecide: (item: PendingLog, decision: 'approved' | 'rejected') => void
-  onViewAll: () => void
-}) {
-  return (
-    <section className="overview-panel approval-pipeline" aria-labelledby="approval-title">
-      <PanelTitle
-        title="待审批流水线"
-        sub="动作包裹到达人工闸口，批准或拒绝都会写入事实流"
-        action={<button className="overview-link-button" onClick={onViewAll}>查看全部审批 <ChevronRight size={15} /></button>}
-      />
-      <div className="approval-summary" aria-live="polite">
-        <span className={pending.length ? 'approval-count is-active' : 'approval-count'}>{pending.length}</span>
-        <span>{pending.length ? '件待处理' : '当前没有待审批动作'}</span>
-      </div>
-
-      <div className={`approval-workbench ${pending.length === 0 ? 'is-empty' : ''}`}>
-        <div className="approval-belt" aria-label="待审批动作包裹">
-          <div className="belt-rail belt-rail-top" />
-          <div className="belt-items">
-            {pending.slice(0, 3).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`approval-package ${selected?.id === item.id ? 'is-selected' : ''}`}
-                onClick={() => onSelect(item)}
-                aria-pressed={selected?.id === item.id}
-              >
-                <span className="package-tape" aria-hidden="true" />
-                <span className="package-name">{item.actionName || '未命名动作'}</span>
-                <span className="package-target">{item.objectInstanceLabel || item.objectTypeName || '未绑定业务对象'}</span>
-                <span className="package-parameter">{firstParameter(item.parameters)}</span>
-                <span className="package-source">{TRIGGER_LABEL[item.triggerSource || 'system']} · {formatDateTime(item.executedAt, true)}</span>
-                <span className="package-version">{item.ontologyVersion || '版本未记录'}</span>
-              </button>
-            ))}
-            {pending.length === 0 && (
-              <div className="approval-empty-package">
-                <PackageCheck size={28} />
-                <span>流水线已清空</span>
-                <small>新的审批请求会自动送达这里</small>
-              </div>
-            )}
-          </div>
-          <div className="belt-rollers" aria-hidden="true">
-            {Array.from({ length: 13 }, (_, index) => <span key={index} />)}
-          </div>
-          <div className="belt-direction" aria-hidden="true">
-            <ArrowRight size={15} /><ArrowRight size={15} /><ArrowRight size={15} />
-          </div>
-        </div>
-
-        <div className="approval-gate" aria-hidden="true">
-          <div className="gate-beacon" />
-          <div className="gate-frame"><span /></div>
-          <strong>人工审批闸口</strong>
-        </div>
-
-        <div className="approval-inspector">
-          <div className="inspector-heading">
-            <span><ShieldCheck size={17} /> 当前包裹</span>
-            {selected && <span className="inspector-sequence">#{selected.id.slice(0, 6).toUpperCase()}</span>}
-          </div>
-          {selected ? (
-            <>
-              <h3>{selected.actionName || '未命名动作'}</h3>
-              <dl>
-                <div><dt>业务对象</dt><dd>{selected.objectInstanceLabel || selected.objectTypeName || '未绑定'}</dd></div>
-                <div><dt>动作参数</dt><dd>{firstParameter(selected.parameters)}</dd></div>
-                <div><dt>触发方式</dt><dd>{TRIGGER_LABEL[selected.triggerSource || 'system']}</dd></div>
-                <div><dt>本体版本</dt><dd>{selected.ontologyVersion || '未记录'}</dd></div>
-              </dl>
-              <div className="inspector-actions">
-                <button className="approve-button" disabled={busy === selected.id} onClick={() => onDecide(selected, 'approved')}>
-                  {busy === selected.id ? <Loader2 size={16} className="spin" /> : <Check size={16} />} 批准并执行
-                </button>
-                <button className="reject-button" disabled={busy === selected.id} onClick={() => onDecide(selected, 'rejected')}>
-                  <X size={16} /> 拒绝
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="inspector-empty"><CheckCircle2 size={32} /><strong>审批已处理完毕</strong><span>当前没有等待人工决策的动作</span></div>
-          )}
-          {message && <p className={`approval-message ${message.ok ? 'is-success' : 'is-error'}`}>{message.text}</p>}
-        </div>
-
-        <div className="approval-routes" aria-hidden="true">
-          <span className="route-line route-approved" />
-          <div><Check size={14} /> 执行并留痕</div>
-          <span className="route-line route-rejected" />
-          <div><X size={14} /> 拒绝并留痕</div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
 export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   ontologyId: string
   ontology: OntologyDetail
   onGoGroup: (group: string) => void
 }) {
-  const queryClient = useQueryClient()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [runtimeRange, setRuntimeRange] = useState<[number, number]>([0, 6])
 
   const overviewQuery = useQuery<Overview>({
@@ -254,52 +121,10 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
       `/formal/ontologies/${ontologyId}/facts/recent?limit=8&current_release_only=true`) as Promise<FactRow[]>,
     refetchInterval: 30000,
   })
-  const pendingQuery = useQuery<PendingLog[]>({
-    queryKey: ['overview-pending', ontologyId],
-    queryFn: () => apiClientV2.get(
-      `/formal/ontologies/${ontologyId}/pending-actions?current_release_only=true`) as Promise<PendingLog[]>,
-    refetchInterval: 15000,
-  })
-
-  const pending = pendingQuery.data ?? []
   const runtimeDayCount = overviewQuery.data?.runtime.daily7d?.length || 7
-  useEffect(() => {
-    if (pending.length === 0) {
-      setSelectedId(null)
-      return
-    }
-    if (!selectedId || !pending.some(item => item.id === selectedId)) setSelectedId(pending[0].id)
-  }, [pending, selectedId])
   useEffect(() => {
     setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
   }, [ontologyId, runtimeDayCount])
-  const selected = pending.find(item => item.id === selectedId) ?? pending[0] ?? null
-
-  const refreshOverview = () => {
-    queryClient.invalidateQueries({ queryKey: ['overview-pending', ontologyId] })
-    queryClient.invalidateQueries({ queryKey: ['formal-overview', ontologyId] })
-    queryClient.invalidateQueries({ queryKey: ['recent-facts', ontologyId] })
-    queryClient.invalidateQueries({ queryKey: ['gov-facts', ontologyId] })
-    queryClient.invalidateQueries({ queryKey: ['gov-autonomy', ontologyId] })
-  }
-
-  const decide = async (item: PendingLog, decision: 'approved' | 'rejected') => {
-    setBusy(item.id)
-    setMessage(null)
-    try {
-      const result = await apiClientV2.post<any>(
-        `/formal/ontologies/${ontologyId}/action-logs/${item.id}/decide`, { decision })
-      const executionFailed = decision === 'approved' && result?.executionLog?.status === 'failed'
-      setMessage(executionFailed
-        ? { ok: false, text: '审批已留痕，但动作执行失败；请到运行记录查看原因。' }
-        : { ok: true, text: decision === 'approved' ? '已批准并执行，决策已进入事实流。' : '已拒绝，决策已进入事实流。' })
-      refreshOverview()
-    } catch (error: any) {
-      setMessage({ ok: false, text: error?.detail?.message || error?.detail || error?.message || '审批失败，请稍后重试。' })
-    } finally {
-      setBusy(null)
-    }
-  }
 
   if (overviewQuery.isLoading || !overviewQuery.data) {
     return <div className="overview-loading"><Loader2 className="spin" size={20} /> 正在读取当前发布投影…</div>
@@ -310,27 +135,10 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
 
   const ov = overviewQuery.data
   const facts = factsQuery.data ?? []
-  const modelParts = [
-    { label: '对象实体', value: ov.model.objectTypes, color: '#3b82f6' },
-    { label: '实体关系', value: ov.model.linkTypes, color: '#0ba78f' },
-    { label: '动作', value: ov.model.actions, color: '#7c63db' },
-    { label: '函数', value: ov.model.functions, color: '#b5bfcb' },
-    { label: '哨兵', value: ov.model.sentinels.total, color: '#ffad3d' },
-  ]
-  const modelTotal = modelParts.reduce((sum, item) => sum + item.value, 0)
-  let modelCursor = 0
-  const modelGradient = modelParts.map(item => {
-    const start = modelCursor
-    modelCursor += modelTotal ? (item.value / modelTotal) * 100 : 0
-    return `${item.color} ${start}% ${modelCursor}%`
-  }).join(', ')
-
   const factParts = Object.entries(ov.facts.byKind)
     .filter(([, value]) => value > 0)
     .sort(([a], [b]) => (FACT_META[a] ? 0 : 1) - (FACT_META[b] ? 0 : 1))
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
-  const sourceTotal = Math.max(ov.data.instances, 1)
-  const boundPct = ov.data.mappings.total ? Math.round((ov.data.mappings.bound / ov.data.mappings.total) * 100) : 0
   const runtimeDays = ov.runtime.daily7d?.length ? ov.runtime.daily7d : Array.from({ length: 7 }, (_, index) => {
     const date = new Date()
     date.setDate(date.getDate() - (6 - index))
@@ -355,10 +163,12 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     success: summary.success + day.actionRuns.success,
     failed: summary.failed + day.actionRuns.failed,
   }), { fired: 0, error: 0, success: 0, failed: 0 })
-  const maxRuntime = Math.max(
-    selectedRuntime.fired, selectedRuntime.error,
-    selectedRuntime.success, selectedRuntime.failed, 1,
-  )
+  const maxDailyRuntime = Math.max(...runtimeDays.flatMap(day => [
+    day.firings.fired + day.firings.error,
+    day.actionRuns.success + day.actionRuns.failed,
+  ]), 1)
+  const selectedRuntimeTotal = selectedRuntime.fired + selectedRuntime.error
+    + selectedRuntime.success + selectedRuntime.failed
   const runtimeStartLabel = formatRuntimeDay(runtimeDays[runtimeRangeStart].date)
   const runtimeEndLabel = formatRuntimeDay(runtimeDays[runtimeRangeEnd].date)
   const runtimeRangeLabel = runtimeRangeStart === runtimeRangeEnd
@@ -426,60 +236,78 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           </button>
         </section>
 
-        <ApprovalPipeline
-          pending={pending}
-          selected={selected}
-          busy={busy}
-          message={message}
-          onSelect={item => { setSelectedId(item.id); setMessage(null) }}
-          onDecide={decide}
-          onViewAll={() => onGoGroup('governance')}
-        />
-      </div>
-
-      <div className="overview-row overview-row-model">
-        <section className="overview-panel model-composition">
-          <PanelTitle title="模型资产构成" sub="当前发布版本" />
-          <div className="model-composition-body">
-            <div className="overview-donut" style={{ background: modelTotal ? `conic-gradient(${modelGradient})` : '#eef2f6' }}>
-              <div><strong>{modelTotal}</strong><span>项模型资产</span></div>
-            </div>
-            <div className="model-legend">
-              <div className="legend-head"><span>类型</span><span>数量</span></div>
-              {modelParts.map(item => (
-                <div key={item.label}><span><i style={{ background: item.color }} />{item.label}</span><strong>{item.value}</strong></div>
-              ))}
-            </div>
-          </div>
-        </section>
-
         <section className="overview-panel runtime-summary">
           <PanelTitle title="近 7 日运行汇总" sub={`${runtimeRangeLabel} · ${selectedRuntimeDays.length} 日聚合`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>} />
-          <div className="runtime-chart">
-            <div className="runtime-group">
-              <span className="runtime-group-name">哨兵评估</span>
-              {[
-                ['命中', selectedRuntime.fired, 'teal'], ['错误', selectedRuntime.error, 'slate'],
-              ].map(([label, value, tone]) => (
-                <div className="runtime-bar-item" key={String(label)}>
-                  <span className="runtime-value">{value}</span>
-                  <span className={`runtime-bar tone-${tone}`} style={{ height: `${Math.max((Number(value) / maxRuntime) * 82, Number(value) ? 12 : 2)}px` }} />
-                  <strong>{label}</strong>
-                </div>
-              ))}
+          <div className="runtime-highlights">
+            <article className="runtime-highlight runtime-highlight--sentinel">
+              <span className="runtime-highlight-icon"><Activity size={17} /></span>
+              <div className="runtime-highlight-total">
+                <span>哨兵评估</span>
+                <strong>{selectedRuntime.fired + selectedRuntime.error}<small>次</small></strong>
+              </div>
+              <dl>
+                <div><dt><i className="tone-teal" />命中</dt><dd>{selectedRuntime.fired}</dd></div>
+                <div><dt><i className="tone-coral" />错误</dt><dd>{selectedRuntime.error}</dd></div>
+              </dl>
+            </article>
+            <article className="runtime-highlight runtime-highlight--action">
+              <span className="runtime-highlight-icon"><Workflow size={17} /></span>
+              <div className="runtime-highlight-total">
+                <span>动作执行</span>
+                <strong>{selectedRuntime.success + selectedRuntime.failed}<small>次</small></strong>
+              </div>
+              <dl>
+                <div><dt><i className="tone-blue" />成功</dt><dd>{selectedRuntime.success}</dd></div>
+                <div><dt><i className="tone-amber" />失败</dt><dd>{selectedRuntime.failed}</dd></div>
+              </dl>
+            </article>
+          </div>
+
+          <div className="runtime-trend">
+            <div className="runtime-trend-heading">
+              <span>每日运行趋势</span>
+              <div className="runtime-trend-legend" aria-hidden="true">
+                <span><i className="tone-teal" />哨兵</span>
+                <span><i className="tone-blue" />动作</span>
+                <span><i className="tone-issue" />异常</span>
+              </div>
             </div>
-            <div className="runtime-divider" />
-            <div className="runtime-group">
-              <span className="runtime-group-name">动作执行</span>
-              {[
-                ['成功', selectedRuntime.success, 'blue'], ['失败', selectedRuntime.failed, 'slate'],
-              ].map(([label, value, tone]) => (
-                <div className="runtime-bar-item" key={String(label)}>
-                  <span className="runtime-value">{value}</span>
-                  <span className={`runtime-bar tone-${tone}`} style={{ height: `${Math.max((Number(value) / maxRuntime) * 82, Number(value) ? 12 : 2)}px` }} />
-                  <strong>{label}</strong>
+            <div className={`runtime-daily-chart ${selectedRuntimeTotal === 0 ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabel} 每日运行趋势`}>
+              <span className="runtime-gridline runtime-gridline--top" aria-hidden="true" />
+              <span className="runtime-gridline runtime-gridline--mid" aria-hidden="true" />
+              {runtimeDays.map((day, index) => {
+                const inRange = index >= runtimeRangeStart && index <= runtimeRangeEnd
+                const sentinelTotal = day.firings.fired + day.firings.error
+                const actionTotal = day.actionRuns.success + day.actionRuns.failed
+                return (
+                  <div className={`runtime-day ${inRange ? 'is-selected' : ''}`} key={day.date}>
+                    <div className="runtime-day-bars">
+                      <span
+                        className="runtime-day-stack runtime-day-stack--sentinel"
+                        title={`${formatRuntimeDay(day.date)}：哨兵命中 ${day.firings.fired}，错误 ${day.firings.error}`}
+                      >
+                        <i style={{ height: `${Math.max(day.firings.fired / maxDailyRuntime * 68, day.firings.fired ? 5 : 2)}px` }} />
+                        <b style={{ height: `${Math.max(day.firings.error / maxDailyRuntime * 68, day.firings.error ? 5 : 2)}px` }} />
+                      </span>
+                      <span
+                        className="runtime-day-stack runtime-day-stack--action"
+                        title={`${formatRuntimeDay(day.date)}：动作成功 ${day.actionRuns.success}，失败 ${day.actionRuns.failed}`}
+                      >
+                        <i style={{ height: `${Math.max(day.actionRuns.success / maxDailyRuntime * 68, day.actionRuns.success ? 5 : 2)}px` }} />
+                        <b style={{ height: `${Math.max(day.actionRuns.failed / maxDailyRuntime * 68, day.actionRuns.failed ? 5 : 2)}px` }} />
+                      </span>
+                    </div>
+                    <time dateTime={day.date}>{formatRuntimeDay(day.date)}</time>
+                    <span className="runtime-day-total">{sentinelTotal + actionTotal || '—'}</span>
+                  </div>
+                )
+              })}
+              {selectedRuntimeTotal === 0 && (
+                <div className="runtime-empty-note">
+                  <Sparkles size={17} />
+                  <span>所选时段暂无运行记录<small>运行开始后将按日呈现命中、执行与异常趋势</small></span>
                 </div>
-              ))}
+              )}
             </div>
           </div>
           <div className="runtime-range" aria-label="运行汇总时间范围">
@@ -530,48 +358,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
         </section>
       </div>
 
-      <div className="overview-row overview-row-data">
-        <section className="overview-panel instance-distribution">
-          <PanelTitle title="实例分布与来源" sub="当前发布投影" action={<button className="overview-link-button" onClick={() => onGoGroup('data')}>查看实例数据 <ChevronRight size={15} /></button>} />
-          <div className="instance-body">
-            <div className="type-bars">
-              <h3>实例按类型分布</h3>
-              {(ov.data.topTypes.length ? ov.data.topTypes.slice(0, 4) : [{ id: 'empty', name: '暂无实例类型', count: 0 }]).map(item => {
-                const max = Math.max(...ov.data.topTypes.map(type => type.count), 1)
-                return <div className="horizontal-stat" key={item.id}><span title={item.name}>{item.name}</span><i><b style={{ width: `${(item.count / max) * 100}%` }} /></i><strong>{item.count}</strong></div>
-              })}
-            </div>
-            <div className="source-share">
-              <h3>实例来源（按数量占比）</h3>
-              <div className="source-stack">
-                {sourceEntries.length ? sourceEntries.map(([source, count], index) => (
-                  <span key={source} className={`source-${index % 4}`} style={{ width: `${(count / sourceTotal) * 100}%` }}>{count >= sourceTotal * .12 ? `${count} (${Math.round(count / sourceTotal * 100)}%)` : ''}</span>
-                )) : <span className="source-empty" style={{ width: '100%' }}>暂无数据</span>}
-              </div>
-              <div className="source-legend">{sourceEntries.map(([source, count], index) => <span key={source}><i className={`source-${index % 4}`} />{SOURCE_LABEL[source] || source} {count}</span>)}</div>
-            </div>
-          </div>
-        </section>
-
-        <section className="overview-panel mapping-status">
-          <PanelTitle title="映射状态" sub="当前生效映射" action={<button className="overview-link-button" onClick={() => onGoGroup('data-mapping')}>查看数据映射 <ChevronRight size={15} /></button>} />
-          <div className="mapping-body">
-            <div className="mapping-ring" style={{ '--mapping-pct': `${boundPct * 3.6}deg` } as React.CSSProperties}>
-              <div><strong>{ov.data.mappings.bound} / {ov.data.mappings.total}</strong><span>已显式绑定</span></div>
-            </div>
-            <div className="mapping-legend">
-              <div><span><i className="map-bound" />显式绑定</span><strong>{ov.data.mappings.bound}</strong></div>
-              <div><span><i className="map-name" />名称匹配</span><strong>{ov.data.mappings.nameMatch}</strong></div>
-              <div><span><i className="map-auto" />数据自建</span><strong>{ov.data.mappings.autoCreate}</strong></div>
-              <p className={ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? 'is-good' : 'is-warning'}>
-                {ov.data.mappings.total === 0 ? <Database size={17} /> : ov.data.mappings.bound === ov.data.mappings.total ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}
-                {ov.data.mappings.total === 0 ? '暂无生效映射' : ov.data.mappings.bound === ov.data.mappings.total ? '所有映射均已绑定现有对象实体' : '仍有映射需要人工确认'}
-              </p>
-            </div>
-          </div>
-        </section>
-      </div>
-
       <div className="overview-row overview-row-facts">
         <section className="overview-panel fact-composition">
           <PanelTitle title="事实类型构成" sub={`累计事实 ${ov.facts.total}`} />
@@ -612,6 +398,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           )}
         </section>
       </div>
+
     </main>
   )
 }
