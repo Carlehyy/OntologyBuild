@@ -276,7 +276,7 @@ export default function McpServerDialog({
           {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">{error}</p>}
         </div>
 
-        <footer className="flex shrink-0 justify-end gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:px-6">
+        <footer className="flex shrink-0 justify-center gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:px-6">
           <button type="button" onClick={onClose} className="min-h-10 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">取消</button>
           <button type="button" onClick={save} disabled={busy || !name.trim() || (transport === 'stdio' ? !command.trim() : !url.trim())} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45">
             {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} 保存
