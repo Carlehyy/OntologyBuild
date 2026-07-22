@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live n8n -> API Hub proxy -> AI HOT cursor-pagination acceptance test.
+"""Live n8n -> revision-pinned API Hub proxy -> AI HOT acceptance test.
 
 The test creates a temporary API Hub database, ephemeral proxy bearer token and
 localtunnel endpoint.  It then creates and activates a uniquely named n8n
@@ -90,14 +90,18 @@ def _workflow(proxy_url: str, proxy_token: str, name: str, webhook_path: str) ->
         "typeVersion": 4.2,
         "position": [280, 300],
         "parameters": {
+            "method": "POST",
             "url": proxy_url,
-            "sendQuery": True,
-            "queryParameters": {"parameters": [
-                {"name": "mode", "value": "all"},
-                {"name": "take", "value": "2"},
-            ]},
             "sendHeaders": True,
             "headerParameters": headers,
+            "sendBody": True,
+            "contentType": "json",
+            "specifyBody": "keypair",
+            "bodyParameters": {"parameters": [
+                {"name": "interface_revision", "value": 1},
+                {"name": "query.mode", "value": "all"},
+                {"name": "query.take", "value": "2"},
+            ]},
             "options": {},
         },
     }
@@ -108,15 +112,19 @@ def _workflow(proxy_url: str, proxy_token: str, name: str, webhook_path: str) ->
         "typeVersion": 4.2,
         "position": [560, 300],
         "parameters": {
+            "method": "POST",
             "url": proxy_url,
-            "sendQuery": True,
-            "queryParameters": {"parameters": [
-                {"name": "mode", "value": "all"},
-                {"name": "take", "value": "2"},
-                {"name": "cursor", "value": "={{ $json.nextCursor }}"},
-            ]},
             "sendHeaders": True,
             "headerParameters": headers,
+            "sendBody": True,
+            "contentType": "json",
+            "specifyBody": "keypair",
+            "bodyParameters": {"parameters": [
+                {"name": "interface_revision", "value": 1},
+                {"name": "query.mode", "value": "all"},
+                {"name": "query.take", "value": "2"},
+                {"name": "query.cursor", "value": "={{ $json.nextCursor }}"},
+            ]},
             "options": {},
         },
     }
@@ -161,11 +169,12 @@ def main() -> int:
     proxy_token = secrets.token_urlsafe(36)
     os.environ["API_HUB_DATA_DIR"] = str(temp_root / "api-hub")
     os.environ["API_HUB_SYSTEM_MCP_TOKEN"] = proxy_token
+    os.environ["API_HUB_INTERNAL_PROXY_TOKEN"] = proxy_token
 
     backend_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(backend_root))
     from app.api_hub import db as api_hub_db
-    from app.api_hub.routers.proxy import router as proxy_router
+    from app.api_hub.routers.proxy import internal_router as proxy_router
     from app.data_channel.steward.runner import trigger_and_collect
     from app.settings.workflows.n8n_client import N8nClient
 
@@ -174,14 +183,20 @@ def main() -> int:
     with api_hub_db.get_conn() as conn:
         cursor = conn.execute(
             "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-            "body_type, body_content, use_w3, mcp_enabled, open_enabled, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "body_type, body_content, use_w3, mcp_enabled, open_enabled, parameter_schema, "
+            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "AI HOT live proxy E2E", "Temporary legal public API acceptance test",
                 "数据管家测试", "GET", AIHOT_URL,
                 json.dumps([{"key": "mode", "value": "all"}, {"key": "take", "value": "2"}]),
                 json.dumps([{"key": "User-Agent", "value": AIHOT_USER_AGENT}]),
-                "none", "", 0, 0, 1, now, now,
+                "none", "", 0, 0, 0,
+                json.dumps([
+                    {"name": "mode", "location": "query", "value_type": "string", "dynamic": True},
+                    {"name": "take", "location": "query", "value_type": "integer", "dynamic": True},
+                    {"name": "cursor", "location": "query", "value_type": "string", "dynamic": True},
+                ]),
+                now, now,
             ),
         )
         interface_id = int(cursor.lastrowid)
@@ -209,10 +224,13 @@ def main() -> int:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         public_root = _read_tunnel_url(tunnel)
-        proxy_url = f"{public_root}/api-hub/proxy/{interface_id}"
-        public_response = requests.get(
+        proxy_url = f"{public_root}/api-hub/internal/interfaces/{interface_id}/invoke"
+        public_response = requests.post(
             proxy_url,
-            params={"mode": "all", "take": "2"},
+            json={
+                "interface_revision": 1,
+                "query": {"mode": "all", "take": "2"},
+            },
             headers={
                 "Authorization": f"Bearer {proxy_token}",
                 "Bypass-Tunnel-Reminder": "true",
@@ -261,6 +279,26 @@ def main() -> int:
         report["ok"] = True
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
+        if client is not None and workflow_id:
+            try:
+                executions = client.list_executions(
+                    workflow_id=workflow_id, limit=3, include_data=True
+                )
+                if executions:
+                    detail = client.get_execution(
+                        str(executions[0]["id"]), include_data=True
+                    )
+                    result_data = (detail.get("data") or {}).get("resultData") or {}
+                    error = result_data.get("error") or {}
+                    report["n8nDebug"] = {
+                        "status": detail.get("status"),
+                        "lastNodeExecuted": result_data.get("lastNodeExecuted"),
+                        "errorMessage": error.get("message"),
+                        "errorDescription": error.get("description"),
+                        "errorNode": (error.get("node") or {}).get("name"),
+                    }
+            except Exception as debug_exc:
+                report["n8nDebug"] = {"error": str(debug_exc)}
     finally:
         if workflow_id:
             try:

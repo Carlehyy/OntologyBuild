@@ -374,6 +374,7 @@ def test_register_proxy_interface_uses_capture_without_leaking_auth(
     cid = str(uuid.uuid4())
     monkeypatch.setattr(api_hub_config, "DB_PATH", steward_workspace / "api-hub.db")
     monkeypatch.setattr(api_hub_config, "SYSTEM_MCP_TOKEN", "system-token")
+    monkeypatch.setattr(api_hub_config, "INTERNAL_PROXY_TOKEN", "internal-token")
     api_hub_db.init_db()
     workspace.append_capture(cid, {
         "id": "cap-1", "method": "GET",
@@ -384,7 +385,9 @@ def test_register_proxy_interface_uses_capture_without_leaking_auth(
         },
         "requestBody": None,
     })
-    runner = ToolRunner(None, user_id="u1", conversation_id=cid)
+    runner = ToolRunner(
+        None, user_id="u1", conversation_id=cid, api_hub_allowed=True,
+    )
     result = runner.run("register_proxy_interface", {
         "capture_id": "cap-1", "name": "订单接口", "include_auth": True,
     })
@@ -397,7 +400,10 @@ def test_register_proxy_interface_uses_capture_without_leaking_auth(
     headers = json.loads(row["headers"])
     assert {item["key"] for item in headers} == {"Accept", "Authorization"}
     assert row["url"] == "https://service.example/api/orders"
+    assert row["open_enabled"] == 0
+    assert row["created_by"] == "u1"
     assert json.loads(row["query_params"])[0] == {"key": "page", "value": "1"}
+    assert result["proxyUrl"].endswith(f"/{row['id']}/invoke")
 
 
 def test_live_browser_ticket_is_single_use():

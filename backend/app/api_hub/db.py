@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS interfaces (
     proxy_header_keys TEXT NOT NULL DEFAULT '[]',
     proxy_body_enabled INTEGER NOT NULL DEFAULT 0,
     proxy_body_keys TEXT NOT NULL DEFAULT '[]',
+    parameter_schema TEXT NOT NULL DEFAULT '[]', -- JSON: [{name,location,type,...}]
+    config_revision INTEGER NOT NULL DEFAULT 1,
+    created_by      TEXT    NOT NULL DEFAULT '',
+    updated_by      TEXT    NOT NULL DEFAULT '',
     sort_order    INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL,
     updated_at    TEXT    NOT NULL
@@ -135,6 +139,22 @@ def _migrate(conn) -> None:
     if "file_fields" not in cols:
         conn.execute(
             "ALTER TABLE interfaces ADD COLUMN file_fields TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "parameter_schema" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN parameter_schema TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "config_revision" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 1"
+        )
+    if "created_by" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN created_by TEXT NOT NULL DEFAULT ''"
+        )
+    if "updated_by" not in cols:
+        conn.execute(
+            "ALTER TABLE interfaces ADD COLUMN updated_by TEXT NOT NULL DEFAULT ''"
         )
 
     run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)").fetchall()}

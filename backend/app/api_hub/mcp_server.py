@@ -354,6 +354,11 @@ async def sys_list_tools() -> list[types.Tool]:
                     "body_type": {"type": "string", "description": "Body 类型：none/json/form/raw，默认 none。"},
                     "body_content": {"type": "string", "description": "Body 内容。"},
                     "use_w3": {"type": "boolean", "description": "是否启用 W3 登录，默认 false。"},
+                    "parameters": {
+                        "type": "array",
+                        "description": "可选的动态参数契约（name/location/value_type/required/dynamic/sensitive）。",
+                        "items": {"type": "object"},
+                    },
                 },
                 "required": ["name", "url"],
             },
@@ -375,6 +380,7 @@ async def sys_list_tools() -> list[types.Tool]:
                     "body_type": {"type": "string"},
                     "body_content": {"type": "string"},
                     "use_w3": {"type": "boolean"},
+                    "parameters": {"type": "array", "items": {"type": "object"}},
                 },
                 "required": ["id"],
             },
@@ -466,6 +472,7 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
             use_w3=args.get("use_w3", False),
             query_params=[KV(key=str(k), value=str(v)) for k, v in qp.items()],
             headers=[KV(key=str(k), value=str(v)) for k, v in hd.items()],
+            parameter_schema=args.get("parameters") or [],
         )
         text = json.dumps(_create_interface(body), ensure_ascii=False, indent=2)
         return [types.TextContent(type="text", text=text)]
@@ -494,6 +501,8 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
                 {"key": str(key), "value": str(value)}
                 for key, value in (args["headers"] or {}).items()
             ]
+        if "parameters" in args:
+            merged["parameter_schema"] = args.get("parameters") or []
         updated = _update_interface(iid, InterfaceIn(**merged))
         text = json.dumps(updated, ensure_ascii=False, indent=2)
         return [types.TextContent(type="text", text=text)]

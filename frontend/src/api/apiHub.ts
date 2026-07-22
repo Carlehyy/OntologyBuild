@@ -16,6 +16,16 @@ http.interceptors.response.use(
 
 export interface KV { key: string; value: string }
 export interface FileField { key: string; accept: string; multiple: boolean }
+export interface InterfaceParameter {
+  name: string
+  location: 'path' | 'query' | 'header' | 'body'
+  value_type: 'string' | 'integer' | 'number' | 'boolean' | 'object' | 'array'
+  required: boolean
+  default: unknown
+  description: string
+  sensitive: boolean
+  dynamic: boolean
+}
 
 export interface HubInterface {
   id: number | null
@@ -38,6 +48,10 @@ export interface HubInterface {
   proxy_header_keys: string[]
   proxy_body_enabled: boolean
   proxy_body_keys: string[]
+  parameter_schema: InterfaceParameter[]
+  config_revision?: number
+  created_by?: string
+  updated_by?: string
   created_at?: string
   updated_at?: string
 }
@@ -280,6 +294,7 @@ export function emptyHubInterface(): HubInterface {
     proxy_header_keys: [],
     proxy_body_enabled: false,
     proxy_body_keys: [],
+    parameter_schema: [],
   }
 }
 

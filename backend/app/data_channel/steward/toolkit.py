@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import re
 import uuid
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
@@ -34,7 +36,8 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.api_hub import config as api_hub_config, db as api_hub_db
+from app.api_hub import agent_service as api_hub_agent
+from app.api_hub import config as api_hub_config, db as api_hub_db, executor as api_hub_executor
 from app.settings.workflows.n8n_client import N8nApiError, N8nClient
 from app.data_channel.steward import browser_sources, file_tools, service, workspace
 from app.data_channel.steward.browser_runtime import (
@@ -385,7 +388,118 @@ TOOL_DEFS: list[dict] = [
             "required": ["capture_id", "name"],
         },
     },
+    {
+        "name": "list_proxy_interfaces",
+        "description": "列出当前用户有权管理的接口代理接口。托管、编辑、调用或编排接口前先用它定位 interface_id。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "按名称、说明、URL、方法或分组过滤"},
+                "group": {"type": "string", "description": "可选分组名"},
+            },
+        },
+    },
+    {
+        "name": "get_proxy_interface",
+        "description": "读取一个接口的完整托管配置、动态参数契约和 revision。敏感参数值始终隐藏；编辑或编排前必须先读取。",
+        "parameters": {
+            "type": "object",
+            "properties": {"interface_id": {"type": "integer"}},
+            "required": ["interface_id"],
+        },
+    },
+    {
+        "name": "create_proxy_interface",
+        "description": "新建一个内部接口草稿。不会自动开放 MCP 或发布 HTTP 地址；敏感 Header 必须在接口管理界面配置，不能交给模型。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "url": {"type": "string", "description": "HTTP/HTTPS 绝对 URL；Path 参数用 {name} 占位"},
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]},
+                "group": {"type": "string"},
+                "description": {"type": "string"},
+                "query_params": {"type": "object", "additionalProperties": {}},
+                "headers": {"type": "object", "additionalProperties": {}},
+                "body_type": {"type": "string", "enum": ["none", "json", "form", "multipart", "raw"]},
+                "body_content": {"type": "string"},
+                "use_w3": {"type": "boolean"},
+                "parameters": {
+                    "type": "array",
+                    "description": "动态参数契约：name/location(path|query|header|body)/value_type/required/default/description/dynamic/sensitive",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["name", "url"],
+        },
+    },
+    {
+        "name": "update_proxy_interface",
+        "description": "按字段修改接口并产生新 revision。必须传 get_proxy_interface 刚读取的 expected_revision；未提及的字段和隐藏密钥保持不变。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "interface_id": {"type": "integer"},
+                "expected_revision": {"type": "integer"},
+                "changes": {
+                    "type": "object",
+                    "description": "可改 name/url/method/group/description/query_params/headers/body_type/body_content/use_w3/parameters；删除参数用 remove_query_params/remove_headers",
+                },
+            },
+            "required": ["interface_id", "expected_revision", "changes"],
+        },
+    },
+    {
+        "name": "call_proxy_interface",
+        "description": "直接试调一个托管接口。支持动态 path/query/header/body 和当前会话 multipart 文件；POST/PUT/PATCH/DELETE 必须先向用户确认副作用并传 confirm_side_effect=true。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "interface_id": {"type": "integer"},
+                "path": {"type": "object", "additionalProperties": {}},
+                "query": {"type": "object", "additionalProperties": {}},
+                "headers": {"type": "object", "additionalProperties": {}},
+                "body": {},
+                "files": {
+                    "type": "array",
+                    "description": "multipart 文件：field + 当前会话 artifact_id",
+                    "items": {"type": "object", "properties": {"field": {"type": "string"}, "artifact_id": {"type": "string"}}},
+                },
+                "confirm_side_effect": {"type": "boolean"},
+            },
+            "required": ["interface_id"],
+        },
+    },
+    {
+        "name": "orchestrate_proxy_interface",
+        "description": "把接口代理中的接口作为受管 HTTP Request 节点插入一条未发布且未启用的 n8n 流水线。节点固定接口 revision，只引用 n8n Header Auth 凭据，不写入密钥。先 get_workflow 和 get_proxy_interface，再确认参数映射。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_id": {"type": "string"},
+                "interface_id": {"type": "integer"},
+                "after_node_name": {"type": "string", "description": "插入到哪个现有节点之后；默认 Webhook"},
+                "node_name": {"type": "string"},
+                "credential_name": {"type": "string", "description": "n8n Header Auth 凭据名；默认平台配置 API Hub Internal Proxy"},
+                "path_bindings": {"type": "object", "additionalProperties": {}},
+                "query_bindings": {"type": "object", "additionalProperties": {}},
+                "header_bindings": {"type": "object", "additionalProperties": {}},
+                "body_binding": {},
+            },
+            "required": ["record_id", "interface_id"],
+        },
+    },
 ]
+
+API_HUB_TOOL_NAMES = {
+    "register_proxy_interface",
+    "list_proxy_interfaces",
+    "get_proxy_interface",
+    "create_proxy_interface",
+    "update_proxy_interface",
+    "call_proxy_interface",
+    "orchestrate_proxy_interface",
+}
 
 _PROBE_BODY_CAP = 200_000       # 读取响应体的字节上限
 _PROBE_TEXT_SAMPLE = 2500       # HTML/文本回给 LLM 的样本长度
@@ -567,13 +681,80 @@ def _execution_brief(e: dict) -> dict:
     }
 
 
+_N8N_EXPRESSION = re.compile(r"^=\{\{\s*(.*?)\s*\}\}$", re.DOTALL)
+_N8N_EXPRESSION_BLOCKED = re.compile(
+    r"(?:\bprocess\b|\brequire\s*\(|\bconstructor\b|\bglobalThis\b|\$env\b|[;`])"
+)
+
+
+def _validate_n8n_binding(value: Any) -> None:
+    """Reject dangerous expressions while keeping n8n's JSON-field syntax.
+
+    A single expression that constructs the complete object looks attractive
+    but fails with ``invalid syntax`` on supported real n8n versions.  The
+    compiler therefore places each validated expression in its own body field.
+    """
+    if isinstance(value, str):
+        matched = _N8N_EXPRESSION.fullmatch(value.strip())
+        if matched:
+            expression = matched.group(1).strip()
+            if (
+                not expression
+                or len(expression) > 1000
+                or _N8N_EXPRESSION_BLOCKED.search(expression)
+            ):
+                raise StewardError("n8n 参数表达式包含不允许的内容。")
+        elif value.lstrip().startswith("={{"):
+            raise StewardError("n8n 参数表达式格式无效，必须完整写成 ={{ ... }}。")
+    if isinstance(value, dict):
+        for item in value.values():
+            _validate_n8n_binding(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_n8n_binding(item)
+
+
+def _proxy_body_parameters(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten the proxy envelope into n8n's expression-safe key/value mode.
+
+    The real n8n version used by the platform evaluates expressions reliably in
+    individual body-parameter values, but not inside JSON text; whole-object
+    expressions also fail parsing.  The internal proxy inflates these dotted
+    keys back into path/query/header/body structures.
+    """
+    parameters: list[dict[str, Any]] = []
+
+    def append(name: str, value: Any) -> None:
+        _validate_n8n_binding(value)
+        if isinstance(value, dict):
+            for child_name, child in value.items():
+                append(f"{name}.{child_name}", child)
+            return
+        if isinstance(value, list):
+            # Literal arrays are safe in key/value mode; dynamic arrays should
+            # bind the whole body through one expression instead.
+            if any(isinstance(item, (dict, list)) for item in value):
+                raise StewardError("n8n 代理参数暂不支持嵌套数组，请先在 Code/Set 节点整理。")
+        parameters.append({"name": name, "value": value})
+
+    append("interface_revision", payload["interface_revision"])
+    for section in ("path", "query", "headers"):
+        for name, value in (payload.get(section) or {}).items():
+            append(f"{section}.{name}", value)
+    if "body" in payload:
+        append("body", payload["body"])
+    return parameters
+
+
 class ToolRunner:
     """一次对话回合的工具执行器 — 记录触达的流水线，供前端刷新受管流水线面板。"""
 
-    def __init__(self, db: Session, user_id: str | None, conversation_id: str | None):
+    def __init__(self, db: Session, user_id: str | None, conversation_id: str | None,
+                 *, api_hub_allowed: bool = False):
         self.db = db
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.api_hub_allowed = bool(api_hub_allowed)
         self.touched_pipeline_ids: list[str] = []
         self._client: N8nClient | None = None
 
@@ -587,6 +768,10 @@ class ToolRunner:
         if record_id not in self.touched_pipeline_ids:
             self.touched_pipeline_ids.append(record_id)
 
+    def _require_api_hub(self) -> None:
+        if not self.api_hub_allowed:
+            raise StewardError("当前用户没有「接口代理 → 接口管理」权限，数据管家不能托管或调用接口。")
+
     def run(self, name: str, args: dict) -> dict:
         handler = getattr(self, f"tool_{name}", None)
         if handler is None:
@@ -598,6 +783,8 @@ class ToolRunner:
         except N8nApiError as e:
             return {"error": f"n8n API 错误 (HTTP {e.status_code}): {e.message}"}
         except (workspace.WorkspaceError, BrowserRuntimeError) as e:
+            return {"error": str(e)}
+        except api_hub_agent.AgentInterfaceError as e:
             return {"error": str(e)}
         except TypeError as e:
             return {"error": f"参数不合法: {e}"}
@@ -818,10 +1005,284 @@ class ToolRunner:
         row = browser_manager.download(self._conversation(), capture_id, actor="agent")
         return {"file": row, "notice": "文件已保存到当前会话，可在会话文件面板查看并随会话一键打包。"}
 
+    # ── 接口代理托管与调用 ────────────────────────────────────────
+
+    def tool_list_proxy_interfaces(self, keyword: str | None = None,
+                                   group: str | None = None) -> dict:
+        self._require_api_hub()
+        return api_hub_agent.list_interfaces_for_agent(keyword=keyword, group=group)
+
+    def tool_get_proxy_interface(self, interface_id: int) -> dict:
+        self._require_api_hub()
+        return api_hub_agent.get_interface_for_agent(int(interface_id))
+
+    def tool_create_proxy_interface(
+        self, name: str, url: str, method: str = "GET",
+        group: str | None = None, description: str | None = None,
+        query_params: dict | list | None = None,
+        headers: dict | list | None = None,
+        body_type: str | None = None, body_content: str | None = None,
+        use_w3: bool | None = None, parameters: list[dict] | None = None,
+    ) -> dict:
+        self._require_api_hub()
+        return api_hub_agent.create_interface_for_agent(
+            actor_user_id=self.user_id,
+            name=name,
+            url=url,
+            method=method,
+            group=group or "",
+            description=description or "",
+            query_params=query_params,
+            headers=headers,
+            body_type=body_type or "none",
+            body_content=body_content or "",
+            use_w3=bool(use_w3),
+            parameters=parameters,
+        )
+
+    def tool_update_proxy_interface(
+        self, interface_id: int, expected_revision: int, changes: dict,
+    ) -> dict:
+        self._require_api_hub()
+        if not isinstance(changes, dict) or not changes:
+            raise StewardError("changes 必须包含至少一个要修改的字段。")
+        return api_hub_agent.update_interface_for_agent(
+            iid=int(interface_id),
+            actor_user_id=self.user_id,
+            expected_revision=int(expected_revision),
+            changes=changes,
+        )
+
+    def tool_call_proxy_interface(
+        self, interface_id: int,
+        path: dict | list | None = None,
+        query: dict | list | None = None,
+        headers: dict | list | None = None,
+        body: Any = None,
+        files: list[dict] | None = None,
+        confirm_side_effect: bool | None = None,
+    ) -> dict:
+        self._require_api_hub()
+        interface = api_hub_agent.load_interface(int(interface_id))
+        if interface["method"] not in {"GET", "HEAD", "OPTIONS"} and not confirm_side_effect:
+            raise StewardError(
+                f"接口使用 {interface['method']}，可能产生业务写入。请先向用户展示目标和参数，"
+                "获得明确确认后再传 confirm_side_effect=true 调用。"
+            )
+
+        with ExitStack() as stack:
+            runtime_files: list[api_hub_executor.RequestFile] | None = None
+            if files is not None:
+                runtime_files = []
+                configured = {
+                    str(item.get("key")): item
+                    for item in interface.get("file_fields") or []
+                    if item.get("key")
+                }
+                counts: dict[str, int] = {}
+                for item in files:
+                    if not isinstance(item, dict):
+                        raise StewardError("files 必须是 field/artifact_id 对象数组。")
+                    field = str(item.get("field") or "").strip()
+                    artifact_id = str(item.get("artifact_id") or "").strip()
+                    definition = configured.get(field)
+                    if definition is None:
+                        raise StewardError(f"接口未配置 multipart 文件字段：{field or '(空)'}")
+                    counts[field] = counts.get(field, 0) + 1
+                    if counts[field] > 1 and not definition.get("multiple"):
+                        raise StewardError(f"文件字段 {field} 不允许多文件。")
+                    artifact, file_path = workspace.require_file(self._conversation(), artifact_id)
+                    stream = stack.enter_context(open(file_path, "rb"))
+                    runtime_files.append(api_hub_executor.RequestFile(
+                        field_name=field,
+                        filename=artifact.get("filename") or file_path.name,
+                        stream=stream,
+                        content_type=artifact.get("mimeType") or artifact.get("mime_type")
+                        or mimetypes.guess_type(file_path.name)[0] or "application/octet-stream",
+                        size=file_path.stat().st_size,
+                    ))
+            return api_hub_agent.call_interface_for_agent(
+                iid=int(interface_id),
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                files=runtime_files,
+            )
+
+    def tool_orchestrate_proxy_interface(
+        self, record_id: str, interface_id: int,
+        after_node_name: str | None = None, node_name: str | None = None,
+        credential_name: str | None = None,
+        path_bindings: dict | list | None = None,
+        query_bindings: dict | list | None = None,
+        header_bindings: dict | list | None = None,
+        body_binding: Any = None,
+    ) -> dict:
+        self._require_api_hub()
+        rec = service.require_record(self.db, record_id)
+        service.require_orchestrable(self.db, rec, self.client)
+        interface = api_hub_agent.load_interface(int(interface_id))
+
+        # Validate every dynamic key before compiling it into workflow JSON.
+        path_pairs = api_hub_agent.validate_runtime_pairs(interface, "path", path_bindings)
+        query_pairs = api_hub_agent.validate_runtime_pairs(interface, "query", query_bindings)
+        header_pairs = api_hub_agent.validate_runtime_pairs(interface, "header", header_bindings)
+        body_fields = api_hub_agent.validate_runtime_body(
+            interface, body_binding, allow_n8n_expression=True,
+        ) if body_binding is not None else set()
+        binding_maps = {
+            "path": {item["key"]: item["value"] for item in path_pairs},
+            "query": {item["key"]: item["value"] for item in query_pairs},
+            "header": {item["key"]: item["value"] for item in header_pairs},
+            "body": {name: True for name in body_fields},
+        }
+        configured_defaults = {
+            "query": {str(item.get("key")) for item in interface.get("query_params") or [] if item.get("key")},
+            "header": {str(item.get("key")) for item in interface.get("headers") or [] if item.get("key")},
+            "path": set(),
+            "body": set(),
+        }
+        if interface.get("body_content") and body_binding is None:
+            # A saved request body is the governed default. Runtime bindings
+            # only have to cover required fields that are not already saved.
+            configured_defaults["body"] = {
+                str(item.get("name"))
+                for item in interface.get("parameter_schema") or []
+                if item.get("location") == "body" and item.get("name")
+            }
+        missing_required = []
+        for parameter in interface.get("parameter_schema") or []:
+            location = str(parameter.get("location") or "")
+            name = str(parameter.get("name") or "")
+            if (
+                parameter.get("required")
+                and parameter.get("dynamic", True)
+                and name not in binding_maps.get(location, {})
+                and name not in configured_defaults.get(location, set())
+            ):
+                missing_required.append(f"{location}.{name}")
+        if missing_required:
+            raise StewardError("缺少必填的 n8n 动态参数绑定：" + ", ".join(missing_required))
+        if body_binding is not None and (interface.get("body_type") or "none") == "none":
+            raise StewardError("该接口未配置请求 Body，不能添加 body_binding。")
+
+        desired_credential = (credential_name or settings.steward_proxy_credential_name).strip()
+        try:
+            available_credentials = self.client.list_credentials(limit=250)
+        except Exception as exc:  # noqa: BLE001
+            raise StewardError(f"无法读取 n8n 凭据元信息：{exc}") from exc
+        credential = next(
+            (item for item in available_credentials
+             if str(item.get("name") or "") == desired_credential),
+            None,
+        )
+        if credential is None:
+            raise StewardError(
+                f"n8n 中没有名为「{desired_credential}」的 Header Auth 凭据。"
+                "请先在 n8n 安全配置 Authorization: Bearer <API_HUB_INTERNAL_PROXY_TOKEN>，"
+                "数据管家不会把令牌写进工作流。"
+            )
+
+        workflow = self.client.get_workflow(rec.n8n_workflow_id)
+        nodes = json.loads(json.dumps(workflow.get("nodes") or []))
+        connections = json.loads(json.dumps(workflow.get("connections") or {}))
+        names = {str(node.get("name") or "") for node in nodes}
+        webhook = next(
+            (node for node in nodes if node.get("type") == "n8n-nodes-base.webhook"),
+            None,
+        )
+        after_name = (after_node_name or (webhook or {}).get("name") or "").strip()
+        after_node = next((node for node in nodes if node.get("name") == after_name), None)
+        if after_node is None:
+            raise StewardError(f"工作流中不存在插入起点节点：{after_name or '(空)'}")
+        requested_name = (node_name or f"接口代理 · {interface['name']}").strip()
+        if not requested_name:
+            raise StewardError("node_name 不能为空。")
+        if requested_name in names:
+            raise StewardError(f"工作流中已存在同名节点：{requested_name}")
+        interface_marker = f"api-hub-interface:{interface['id']}@{interface['config_revision']}"
+        if any(interface_marker in str(node.get("notes") or "") for node in nodes):
+            raise StewardError("该接口 revision 已经编排进当前工作流，不能重复插入。")
+
+        payload: dict[str, Any] = {
+            "interface_revision": int(interface.get("config_revision") or 1),
+        }
+        if binding_maps["path"]:
+            payload["path"] = binding_maps["path"]
+        if binding_maps["query"]:
+            payload["query"] = binding_maps["query"]
+        if binding_maps["header"]:
+            payload["headers"] = binding_maps["header"]
+        if body_binding is not None:
+            payload["body"] = body_binding
+
+        position = after_node.get("position") or [0, 0]
+        proxy_node = {
+            "id": str(uuid.uuid4()),
+            "name": requested_name,
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [int(position[0]) + 280, int(position[1])],
+            "parameters": {
+                "method": "POST",
+                "url": f"{settings.steward_internal_proxy_base_url.rstrip('/')}/{interface['id']}/invoke",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpHeaderAuth",
+                "sendBody": True,
+                "contentType": "json",
+                "specifyBody": "keypair",
+                "bodyParameters": {"parameters": _proxy_body_parameters(payload)},
+                "options": {},
+            },
+            "credentials": {
+                "httpHeaderAuth": {
+                    "id": str(credential.get("id") or ""),
+                    "name": desired_credential,
+                }
+            },
+            "notesInFlow": True,
+            "notes": (
+                f"{interface_marker}\n由数据管家编排；接口配置变化后需重新绑定并重新发布流水线。"
+            ),
+        }
+        nodes.append(proxy_node)
+        previous = ((connections.get(after_name) or {}).get("main") or [[]])
+        first_output = previous[0] if previous else []
+        connections[after_name] = {
+            "main": [[{"node": requested_name, "type": "main", "index": 0}]]
+        }
+        connections[requested_name] = {"main": [first_output]}
+
+        updated = self.tool_update_workflow(
+            record_id=record_id,
+            nodes=nodes,
+            connections=connections,
+            settings=workflow.get("settings") or {},
+        )
+        if updated.get("error"):
+            return updated
+        return {
+            **updated,
+            "interfaceBinding": {
+                "interfaceId": interface["id"],
+                "interfaceName": interface["name"],
+                "configRevision": interface.get("config_revision") or 1,
+                "nodeName": requested_name,
+                "afterNodeName": after_name,
+                "credentialName": desired_credential,
+                "dynamicParameters": {
+                    key: sorted(value.keys()) for key, value in binding_maps.items() if value
+                },
+            },
+            "notice": "接口代理节点已插入未发布工作流；请继续体检和试运行，最后由用户在编辑向导发布。",
+        }
+
     def tool_register_proxy_interface(self, capture_id: str, name: str,
                                       description: str | None = None,
                                       use_w3: bool | None = None,
                                       include_auth: bool | None = None) -> dict:
+        self._require_api_hub()
         capture = workspace.require_capture(self._conversation(), capture_id)
         split = urlsplit(capture["url"])
         base_url = urlunsplit((split.scheme, split.netloc, split.path, "", ""))
@@ -843,22 +1304,41 @@ class ToolRunner:
         if body_content:
             body_type = "json" if "json" in content_type else ("form" if "form" in content_type else "raw")
 
+        parameter_schema = [
+            {
+                "name": item["key"],
+                "location": "query",
+                "value_type": "string",
+                "required": False,
+                "default": item["value"],
+                "description": "由浏览器捕获的查询参数，可在试调或 n8n 中动态覆盖",
+                "sensitive": bool(_SENSITIVE_OUTPUT_KEY.search(item["key"])),
+                "dynamic": not bool(_SENSITIVE_OUTPUT_KEY.search(item["key"])),
+            }
+            for item in query_params
+        ]
+
         now = datetime.now(timezone.utc).isoformat()
         with api_hub_db.get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-                "body_type, body_content, use_w3, mcp_enabled, open_enabled, created_at, updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "body_type, body_content, use_w3, mcp_enabled, open_enabled, parameter_schema, "
+                "created_by, updated_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name.strip()[:200] or "浏览器发现接口",
                     (description or f"数据管家会话 {self._conversation()[:8]} 从页面网络请求发现").strip(),
                     "数据管家发现", str(capture.get("method") or "GET").upper(), base_url,
                     json.dumps(query_params, ensure_ascii=False), json.dumps(headers, ensure_ascii=False),
-                    body_type, body_content, 1 if use_w3 else 0, 0, 1, now, now,
+                    body_type, body_content, 1 if use_w3 else 0, 0, 0,
+                    json.dumps(parameter_schema, ensure_ascii=False),
+                    str(self.user_id or ""), str(self.user_id or ""), now, now,
                 ),
             )
             interface_id = int(cur.lastrowid)
-        proxy_url = f"{settings.steward_proxy_base_url.rstrip('/')}/{interface_id}"
+        proxy_url = (
+            f"{settings.steward_internal_proxy_base_url.rstrip('/')}/"
+            f"{interface_id}/invoke"
+        )
         return {
             "interface": {
                 "id": interface_id, "name": name.strip(), "method": capture.get("method"),
@@ -869,11 +1349,18 @@ class ToolRunner:
             "proxyUrl": proxy_url,
             "n8n": {
                 "method": "POST",
-                "body": {"query": {"page": "={{ $json.page }}"}, "body": None},
-                "credential": "Header Auth: Authorization = Bearer <API_HUB_SYSTEM_MCP_TOKEN>",
+                "body": {
+                    "interface_revision": 1,
+                    "query": {item["key"]: f"={{ $json.{item['key']} }}" for item in query_params},
+                },
+                "credential": (
+                    f"Header Auth「{settings.steward_proxy_credential_name}」: "
+                    "Authorization = Bearer <API_HUB_INTERNAL_PROXY_TOKEN>"
+                ),
             },
-            "warning": None if api_hub_config.SYSTEM_MCP_TOKEN else (
-                "接口已登记，但 API_HUB_SYSTEM_MCP_TOKEN 尚未配置；配置后 n8n 才能调用代理。"),
+            "notice": "接口已登记为内部草稿，未自动加入开放 MCP 清单。",
+            "warning": None if api_hub_config.INTERNAL_PROXY_TOKEN else (
+                "接口已登记，但 API_HUB_INTERNAL_PROXY_TOKEN 尚未配置；配置后 n8n 才能调用代理。"),
         }
 
     # ── 写入（治理规则内嵌） ──────────────────────────────────────
