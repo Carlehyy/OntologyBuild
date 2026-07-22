@@ -156,6 +156,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
   const [gateIssues, setGateIssues] = useState<Array<{ message: string; kind?: string; field?: string }>>([])
   const [gateVersionId, setGateVersionId] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
 
   const treeQuery = useQuery({
     queryKey: ['version-tree', ontologyId],
@@ -359,6 +360,9 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
               {editing ? (
                 <>
                   <Button size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
+                  <Button variant="outline" size="sm" onClick={() => openMapping(node)}>
+                    <Database size={14} /> 数据映射
+                  </Button>
                   <Button variant="outline" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
                     转为试跑态
                   </Button>
@@ -366,6 +370,9 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
               ) : trial ? (
                 <>
                   <Button variant="outline" size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
+                  <Button variant="outline" size="sm" onClick={() => openMapping(node)}>
+                    <Database size={14} /> 数据映射
+                  </Button>
                   <Button size="sm" onClick={() => {
                     promote.reset()
                     createRepairDraft.reset()
@@ -373,42 +380,65 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                   }}>转为发布态</Button>
                 </>
               ) : (
-                <Button variant="outline" size="sm" onClick={() => openVersion(node)}>
-                  打开编辑器
-                </Button>
+                <>
+                  <Button variant="outline" size="sm" onClick={() => openVersion(node)}>
+                    打开编辑器
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => openMapping(node)}>
+                    <Database size={14} /> 数据映射
+                  </Button>
+                </>
               )}
 
-              <details className="group/menu relative">
-                <summary
-                  role="button"
-                  className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden"
+              <div className="relative">
+                <button
+                  type="button"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                   aria-label={`${node.version_number} 更多操作`}
+                  aria-haspopup="true"
+                  aria-expanded={openMenuId === node.id}
+                  aria-controls={`version-actions-${node.id}`}
                   title="更多操作"
+                  onClick={() => setOpenMenuId(current => current === node.id ? null : node.id)}
                 >
                   <MoreHorizontal size={16} />
-                </summary>
-                <div className="absolute right-0 top-9 z-30 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg shadow-slate-200/70">
-                  {editing && (
-                    <button type="button" className={menuItemClass} onClick={() => openMapping(node)}>
-                      <Database size={13} /> 配置映射
+                </button>
+                {openMenuId === node.id && (
+                  <div
+                    id={`version-actions-${node.id}`}
+                    className="absolute right-0 top-9 z-30 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg shadow-slate-200/70"
+                  >
+                    {editing && (
+                      <button type="button" className={menuItemClass} onClick={() => {
+                        setOpenMenuId(null)
+                        openMapping(node)
+                      }}>
+                        <Database size={13} /> 配置映射
+                      </button>
+                    )}
+                    <button type="button" className={menuItemClass} onClick={() => {
+                      setOpenMenuId(null)
+                      setSource(node)
+                    }}>
+                      <Plus size={13} /> 创建新版本
                     </button>
-                  )}
-                  <button type="button" className={menuItemClass} onClick={() => setSource(node)}>
-                    <Plus size={13} /> 创建新版本
-                  </button>
-                  {deletableStage && (
-                    <button
-                      type="button"
-                      className={menuItemClass}
-                      disabled={!isLeaf}
-                      title={!isLeaf ? '该版本下仍有分支，只有叶子节点可以删除' : undefined}
-                      onClick={() => setDeleteTarget(node)}
-                    >
-                      <Trash2 size={13} /> {isLeaf ? '删除此分支' : '删除此分支（非叶子）'}
-                    </button>
-                  )}
-                </div>
-              </details>
+                    {deletableStage && (
+                      <button
+                        type="button"
+                        className={menuItemClass}
+                        disabled={!isLeaf}
+                        title={!isLeaf ? '该版本下仍有分支，只有叶子节点可以删除' : undefined}
+                        onClick={() => {
+                          setOpenMenuId(null)
+                          setDeleteTarget(node)
+                        }}
+                      >
+                        <Trash2 size={13} /> {isLeaf ? '删除此分支' : '删除此分支（非叶子）'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </article>

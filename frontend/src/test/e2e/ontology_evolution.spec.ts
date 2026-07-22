@@ -231,7 +231,17 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(draftRow).toContainText('草稿态')
   await expect(draftRow).not.toContainText('真实湖数据隔离试跑')
   await expect(draftRow.getByRole('button', { name: '打开编辑器' })).toBeVisible()
+  await expect(draftRow.getByRole('button', { name: '数据映射' })).toBeVisible()
   await expect(draftRow.getByRole('button', { name: 'v0.1 更多操作' })).toBeVisible()
+
+  // 版本操作菜单互斥展开：切换到另一个版本时，前一个菜单必须立即收起。
+  const releaseRow = page.getByTestId('version-node-v0')
+  await releaseRow.getByRole('button', { name: 'v0 更多操作' }).click()
+  await expect(releaseRow.getByRole('button', { name: '创建新版本' })).toBeVisible()
+  await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
+  await expect(releaseRow.getByRole('button', { name: '创建新版本' })).toHaveCount(0)
+  await expect(draftRow.getByRole('button', { name: '创建新版本' })).toBeVisible()
+  await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
 
   // 草稿 → 试跑是后端硬门禁：任意实体或存储属性未映射时必须失败，
   // 并在弹窗内给出可执行的修复入口，不能只靠按钮状态假装受控。
@@ -250,8 +260,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('version-node-v0.2')).toHaveCount(0)
 
   // 草稿映射快照使用 camelCase DTO；工作台必须完整回显，不能误判为空后覆盖。
-  await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
-  await draftRow.getByRole('button', { name: '配置映射' }).click()
+  await draftRow.getByRole('button', { name: '数据映射' }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}&view=mapping`))
   const mappingWorkspaceBox = await page.getByTestId('mapping-workspace').boundingBox()
   const tutorialCardBox = await page.locator('.dmc-tutorial-card').boundingBox()
