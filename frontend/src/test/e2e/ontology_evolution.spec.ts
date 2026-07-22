@@ -647,6 +647,12 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect(pendingAction.status).toBe('pending')
   await page.goto(`/#/ontologies/${ontology.id}`)
   await expect(page.getByRole('heading', { name: '本体概况' })).toBeVisible()
+  const profile = page.locator('.ontology-profile')
+  await expect(profile.locator('.profile-meta')).toContainText('当前发布')
+  await expect(profile.locator('.profile-meta')).toContainText('更新时间')
+  await expect(profile.locator('.profile-meta')).not.toContainText('创建时间')
+  await expect(profile.getByTestId('version-evolution-card')).toBeVisible()
+  await expect(profile.getByRole('button', { name: '播放' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '近 7 日运行汇总' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '事实类型构成' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '最近发生了什么' })).toBeVisible()
@@ -655,11 +661,15 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByRole('heading', { name: '实例分布与来源' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '映射状态' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '健康检查' })).toHaveCount(0)
-  const profileBox = await page.locator('.ontology-profile').boundingBox()
+  const profileBox = await profile.boundingBox()
   const kpiBox = await page.locator('.kpi-rail').boundingBox()
   const runtimeBox = await page.locator('.runtime-summary').boundingBox()
   const factBox = await page.locator('.fact-composition').boundingBox()
   const recentFactBox = await page.locator('.recent-facts').boundingBox()
+  const overviewShellSize = await page.locator('.ontology-overview-shell').evaluate(element => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
   expect(profileBox).not.toBeNull()
   expect(kpiBox).not.toBeNull()
   expect(runtimeBox).not.toBeNull()
@@ -672,6 +682,9 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect(Math.abs(factBox!.y - recentFactBox!.y)).toBeLessThan(2)
   expect(kpiBox!.height).toBeLessThan(300)
   expect(factBox!.height).toBeLessThan(270)
+  if ((page.viewportSize()?.width || 0) > 1470) {
+    expect(overviewShellSize.scrollHeight - overviewShellSize.clientHeight).toBeLessThan(3)
+  }
   const runtimeSummary = page.locator('.runtime-summary')
   const runtimeStart = runtimeSummary.getByLabel('运行汇总开始日期')
   const runtimeEnd = runtimeSummary.getByLabel('运行汇总结束日期')

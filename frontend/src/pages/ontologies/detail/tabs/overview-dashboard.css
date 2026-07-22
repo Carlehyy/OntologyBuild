@@ -14,6 +14,8 @@
   font-variant-numeric: tabular-nums;
 }
 
+.ontology-overview-shell { overflow: auto; }
+
 .overview-panel {
   min-width: 0;
   border: 1px solid var(--ov-border);
@@ -137,7 +139,114 @@
 .profile-meta div { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; }
 .profile-meta dt { color: #8a96a8; font-size: 11px; }
 .profile-meta dd { overflow: hidden; margin: 0; color: #40506a; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.profile-reserved { min-height: 64px; flex: 1 1 96px; margin-top: 18px; border-top: 1px solid #edf1f5; }
+.profile-meta--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.profile-meta--compact div { grid-template-columns: auto minmax(0, 1fr); gap: 9px; }
+.profile-meta--compact div + div { padding-left: 18px; border-left: 1px solid #edf1f5; }
+.profile-evolution { min-height: 222px; flex: 1 1 222px; margin-top: 17px; padding-top: 13px; border-top: 1px solid #edf1f5; }
+
+.version-evolution-card {
+  display: flex;
+  height: 100%;
+  min-height: 222px;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+.evolution-header {
+  display: flex;
+  min-height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 5px;
+}
+
+.evolution-title { display: flex; min-width: 0; align-items: center; gap: 7px; color: #5a697c; font-size: 11px; font-weight: 650; letter-spacing: .01em; white-space: nowrap; }
+.evolution-title > i { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: #44a694; }
+.evolution-legend { display: flex; min-width: 0; align-items: center; gap: 8px; color: #8a97a6; font-size: 8px; white-space: nowrap; }
+.evolution-legend span { display: inline-flex; align-items: center; gap: 3px; }
+.evolution-legend i { width: 7px; height: 7px; border-radius: 50%; }
+.evolution-legend .is-draft { border: 1.5px dashed #93a4b6; background: white; }
+.evolution-legend .is-trial { background: #f2aa43; box-shadow: 0 0 0 3px rgba(242,170,67,.11); }
+.evolution-legend .is-release { background: #16a085; box-shadow: 0 0 0 3px rgba(22,160,133,.1); }
+
+.evolution-canvas {
+  position: relative;
+  min-height: 157px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border-radius: 7px;
+  background-color: rgba(246,250,250,.62);
+  background-image: radial-gradient(rgba(101,135,143,.11) .7px, transparent .7px);
+  background-size: 17px 17px;
+  cursor: grab;
+  touch-action: none;
+}
+.evolution-canvas:active { cursor: grabbing; }
+.evolution-canvas > svg { display: block; width: 100%; height: 100%; }
+.evolution-viewport { transition: transform .55s cubic-bezier(.4,0,.2,1); }
+.evolution-canvas.is-direct .evolution-viewport { transition: none; }
+.evolution-edge { fill: none; opacity: 1; stroke-width: 2; vector-effect: non-scaling-stroke; animation: evolution-edge-in .45s ease both; transition: opacity .35s ease; }
+.evolution-edge.is-branch { stroke: #e2a348; }
+.evolution-edge.is-main { stroke: #159a83; stroke-width: 2.5; }
+.evolution-edge.is-merge { stroke: #4dbba5; stroke-width: 1.6; stroke-dasharray: 5 4; }
+.evolution-edge.is-dimmed, .evolution-node.is-dimmed { opacity: .14; }
+.evolution-node { opacity: 1; cursor: pointer; outline: none; transform-box: fill-box; transform-origin: center; animation: evolution-node-in .46s cubic-bezier(.34,1.56,.64,1) both; transition: opacity .35s ease; }
+.evolution-node-core, .evolution-node-halo { vector-effect: non-scaling-stroke; transition: fill .25s ease, stroke .25s ease, filter .25s ease; }
+.evolution-node-halo { fill: none; }
+.evolution-node.is-draft .evolution-node-core { fill: #fff; stroke: #91a2b4; stroke-width: 1.7; stroke-dasharray: 3.5 3; }
+.evolution-node.is-trial .evolution-node-core { fill: #fff7e9; stroke: #e9a039; stroke-width: 2; }
+.evolution-node.is-trial .evolution-node-halo { stroke: rgba(233,160,57,.28); stroke-width: 1.3; }
+.evolution-node.is-release .evolution-node-core { fill: #eaf8f4; stroke: #159b83; stroke-width: 2.2; }
+.evolution-node.is-release .evolution-node-halo { stroke: rgba(21,155,131,.28); stroke-width: 1.5; }
+.evolution-node.is-current .evolution-node-core { fill: #dcf5ef; filter: drop-shadow(0 3px 5px rgba(21,155,131,.2)); }
+.evolution-node.is-current .evolution-node-halo { animation: evolution-pulse 1.8s ease-out infinite; }
+.evolution-node.is-selected .evolution-node-core, .evolution-node:focus-visible .evolution-node-core { filter: drop-shadow(0 0 4px rgba(45,120,220,.55)); stroke: #3478ee; }
+.evolution-node-label { fill: #526276; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; font-weight: 700; text-anchor: middle; }
+.evolution-main-tag { fill: #108a76; font-size: 7px; font-weight: 700; letter-spacing: .08em; text-anchor: middle; }
+.is-low-detail .evolution-node-label, .is-low-detail .evolution-main-tag { display: none; }
+
+.evolution-minimap { position: absolute; top: 6px; left: 6px; width: 102px; height: 44px; overflow: hidden; border: 1px solid rgba(144,168,174,.24); border-radius: 6px; background: rgba(255,255,255,.54); cursor: crosshair; backdrop-filter: blur(4px); }
+.evolution-minimap:focus-visible { outline: 2px solid rgba(52,120,238,.5); outline-offset: 2px; }
+.evolution-minimap svg { width: 100%; height: 100%; }
+.mini-edge { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.mini-edge.is-branch { stroke: rgba(226,163,72,.72); }.mini-edge.is-main, .mini-edge.is-merge { stroke: rgba(21,154,131,.78); }
+.mini-edge.is-merge { stroke-dasharray: 2 2; }
+.mini-node.is-draft { fill: #9babb9; }.mini-node.is-trial { fill: #eaa23e; }.mini-node.is-release { fill: #169b83; }
+.mini-viewport { fill: rgba(52,120,238,.08); stroke: #4b83dd; stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+.evolution-zoom-controls { position: absolute; top: 6px; right: 6px; display: flex; flex-direction: column; gap: 2px; }
+.evolution-zoom-controls button, .evolution-footer button { display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; background: transparent; color: #7c8998; cursor: pointer; transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
+.evolution-zoom-controls button { width: 22px; height: 22px; border-radius: 5px; background: rgba(255,255,255,.5); }
+.evolution-zoom-controls button:hover, .evolution-footer button:hover { border-color: rgba(151,199,190,.35); background: rgba(235,247,244,.72); color: #208979; }
+.evolution-zoom-controls button:active, .evolution-footer button:active { transform: translateY(1px); }
+.evolution-zoom-controls button:focus-visible, .evolution-footer button:focus-visible { outline: 2px solid rgba(52,120,238,.5); outline-offset: 1px; }
+.evolution-status { position: absolute; bottom: 6px; left: 7px; max-width: calc(100% - 135px); overflow: hidden; color: #5d9389; font-size: 8px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.evolution-hint { position: absolute; right: 7px; bottom: 7px; color: #a4aebb; font-size: 7.5px; pointer-events: none; }
+
+.evolution-footer { display: flex; min-height: 36px; flex: 0 0 36px; align-items: center; gap: 2px; padding: 5px 1px 0; }
+.evolution-footer button { min-width: 25px; height: 25px; gap: 3px; border-radius: 6px; padding: 0 5px; font-size: 8.5px; font-weight: 600; white-space: nowrap; }
+.evolution-footer .evolution-play-button { min-width: 47px; color: #178978; }
+.evolution-footer .evolution-play-button:hover { color: #0d7767; }
+.evolution-footer button.is-active { background: rgba(229,244,240,.74); color: #208979; }
+.evolution-progress { height: 4px; flex: 1 1 auto; overflow: hidden; margin-left: 2px; border-radius: 999px; background: #dfe9e8; }
+.evolution-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #4e88df, #18a58f); transition: width .35s ease; }
+.evolution-step-label { min-width: 34px; color: #8594a5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; text-align: right; }
+
+.version-evolution-card.is-loading { justify-content: center; gap: 12px; padding: 14px; }
+.evolution-skeleton-line, .evolution-skeleton-canvas { border-radius: 7px; background: linear-gradient(90deg, #eef4f3 25%, #f8fbfa 50%, #eef4f3 75%); background-size: 200% 100%; animation: evolution-skeleton 1.5s infinite; }
+.evolution-skeleton-line { width: 44%; height: 12px; }.evolution-skeleton-canvas { height: 150px; }
+.evolution-empty { min-height: 180px; flex-direction: row; align-items: center; justify-content: center; gap: 12px; padding: 18px; color: #738497; }
+.evolution-empty > svg { width: 34px; height: 34px; overflow: visible; fill: white; stroke: #74a99f; stroke-width: 1.8; }
+.evolution-empty strong { display: block; color: #526276; font-size: 11px; }.evolution-empty span { display: block; margin-top: 3px; font-size: 9px; }
+
+@keyframes evolution-node-in { from { opacity: 0; transform: scale(.2); } to { opacity: 1; transform: scale(1); } }
+@keyframes evolution-edge-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes evolution-pulse { from { opacity: .75; transform: scale(1); transform-origin: center; transform-box: fill-box; } to { opacity: 0; transform: scale(1.9); transform-origin: center; transform-box: fill-box; } }
+@keyframes evolution-skeleton { to { background-position: -200% 0; } }
 
 .kpi-rail {
   display: grid;
@@ -277,6 +386,62 @@
   .recent-row { grid-template-columns: 14px 42px minmax(80px,.7fr) minmax(70px,1fr) 9px minmax(80px,1.2fr) 62px 92px; gap: 5px; }
 }
 
+@media (min-width: 1251px) {
+  .onto-glass-root--overview { gap: 12px; }
+  .onto-glass-root--overview > .onto-glass-header { padding-top: 12px; padding-bottom: 12px; }
+  .ontology-overview-shell { overflow: hidden; }
+  .ontology-overview-shell .overview-dashboard {
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr) clamp(172px, 21vh, 204px);
+  }
+  .ontology-overview-shell .overview-hero-grid,
+  .ontology-overview-shell .overview-row-facts,
+  .ontology-overview-shell .overview-row-facts > .overview-panel { min-height: 0; }
+  .ontology-overview-shell .overview-row-facts > .overview-panel { overflow: hidden; }
+  .ontology-overview-shell .recent-facts { display: flex; flex-direction: column; }
+  .ontology-overview-shell .recent-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .ontology-overview-shell .recent-empty { min-height: 112px; flex: 1; }
+}
+
+@media (min-width: 1251px) and (max-height: 980px) {
+  .ontology-profile { padding: 14px 20px 13px; }
+  .profile-heading { gap: 14px; margin-top: 12px; }
+  .profile-mark { width: 58px; height: 58px; flex-basis: 58px; }
+  .overview-network-mark { width: 43px; height: 43px; }
+  .profile-heading h1 { margin-bottom: 6px; font-size: 18px; }
+  .profile-description { margin: 12px 0 10px; line-height: 1.58; }
+  .profile-meta { margin-top: 8px; padding-top: 11px; }
+  .profile-evolution { min-height: 176px; flex-basis: 176px; margin-top: 10px; padding-top: 8px; }
+  .version-evolution-card { min-height: 176px; }
+  .evolution-canvas { min-height: 112px; }
+
+  .kpi-cell { padding: 13px 17px 11px; }
+  .kpi-cell strong { min-height: 36px; margin-top: 7px; font-size: 29px; }
+  .kpi-cell p { min-height: 25px; margin-bottom: 4px; }
+  .kpi-status { min-height: 20px; }
+
+  .runtime-summary, .fact-composition, .recent-facts { padding: 14px 18px; }
+  .runtime-highlights { gap: 8px; margin-top: 7px; }
+  .runtime-highlight { grid-template-columns: 32px minmax(58px,.7fr) minmax(100px,1fr); gap: 8px; padding: 7px 10px; }
+  .runtime-highlight-icon { width: 32px; height: 32px; }
+  .runtime-highlight-total strong { font-size: 20px; }
+  .runtime-trend { margin-top: 7px; padding: 6px 10px 5px; }
+  .runtime-daily-chart { height: 94px; }
+  .runtime-day { grid-template-rows: 57px 17px 15px; }
+  .runtime-day-bars { height: 56px; padding-top: 5px; }
+  .runtime-day-stack { max-height: 50px; }
+  .runtime-empty-note { top: 25px; padding: 6px 10px; }
+  .runtime-range { margin-top: 6px; }
+  .runtime-range-control { height: 20px; margin-top: 1px; }
+  .runtime-range-track { top: 8px; }
+
+  .fact-stack { height: 42px; margin-top: 10px; }
+  .fact-legend-row { margin-top: 9px; }
+  .recent-list { margin-top: 4px; }
+  .recent-row { min-height: 27px; }
+}
+
 @media (max-width: 1250px) {
   .overview-hero-grid { grid-template-columns: 1fr; grid-template-rows: auto; }
   .ontology-profile, .kpi-rail, .overview-hero-grid > .runtime-summary { grid-column: 1; grid-row: auto; }
@@ -284,7 +449,7 @@
   .profile-heading { margin-top: 18px; }
   .profile-description { margin: 18px 0; }
   .profile-meta { margin-top: 0; padding: 13px 0 0; }
-  .profile-reserved { min-height: 48px; flex-basis: 48px; margin-top: 16px; }
+  .profile-evolution { min-height: 222px; flex-basis: 222px; }
   .overview-row-facts { grid-template-columns: 1fr; }
 }
 
@@ -304,7 +469,14 @@
   .profile-heading h1 { font-size: 20px; }
   .profile-description { margin: 12px 0; }
   .profile-meta { width: 100%; padding: 12px 0; }
-  .profile-reserved { min-height: 32px; flex-basis: 32px; margin-top: 12px; }
+  .profile-meta--compact { grid-template-columns: 1fr; gap: 9px; }
+  .profile-meta--compact div + div { padding-left: 0; border-left: 0; }
+  .profile-evolution { min-height: 218px; flex-basis: 218px; margin-top: 12px; padding-top: 10px; }
+  .evolution-hint { display: none; }
+  .evolution-status { max-width: calc(100% - 16px); }
+  .evolution-footer button { padding: 0 5px; }
+  .evolution-footer button:not(.evolution-play-button) { font-size: 0; }
+  .evolution-footer button:not(.evolution-play-button) svg { width: 13px; height: 13px; }
   .kpi-rail { grid-template-columns: 1fr; }
   .kpi-cell { border-right: 0; border-bottom: 1px solid var(--ov-border); }
   .kpi-cell:last-child { border-bottom: 0; }
@@ -324,6 +496,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .kpi-cell { transition: none; }
-  .spin { animation: none; }
+  .kpi-cell, .evolution-viewport, .evolution-edge, .evolution-node, .evolution-progress i { transition: none; }
+  .spin, .evolution-node.is-current .evolution-node-halo, .evolution-skeleton-line, .evolution-skeleton-canvas { animation: none; }
 }

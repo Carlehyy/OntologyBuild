@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
+import VersionEvolutionCard from './VersionEvolutionCard'
 import './overview-dashboard.css'
 
 interface Overview {
@@ -189,12 +190,13 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             </div>
           </div>
           <p className="profile-description">{ontology.description || '暂无本体描述。可在本体管理中补充业务范围与使用说明。'}</p>
-          <dl className="profile-meta">
+          <dl className="profile-meta profile-meta--compact">
             <div><dt>当前发布</dt><dd>{ov.release.version}</dd></div>
-            <div><dt>创建时间</dt><dd>{formatDateTime(ontology.created_at)}</dd></div>
             <div><dt>更新时间</dt><dd>{formatDateTime(ontology.updated_at)}</dd></div>
           </dl>
-          <div className="profile-reserved" aria-hidden="true" />
+          <div className="profile-evolution">
+            <VersionEvolutionCard ontologyId={ontologyId} />
+          </div>
         </section>
 
         <section className="overview-panel kpi-rail" aria-label="关键指标">

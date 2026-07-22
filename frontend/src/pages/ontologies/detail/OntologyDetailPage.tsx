@@ -121,7 +121,9 @@ export default function OntologyDetailPage() {
 
   return (
     <div className={`onto-glass-root flex h-full min-h-0 flex-col gap-4 overflow-hidden ${
-      activeGroup === 'data' || activeGroup === 'design' ? 'onto-glass-root--flat' : ''
+      activeGroup === 'overview'
+        ? 'onto-glass-root--overview'
+        : activeGroup === 'data' || activeGroup === 'design' ? 'onto-glass-root--flat' : ''
     }`}>
       {/* ═══ 功能导航与低频操作 ═══ */}
       <div data-testid="ontology-detail-header" className="onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4">
@@ -208,7 +210,7 @@ export default function OntologyDetailPage() {
 
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (
-        <div className="onto-glass-in min-h-0 flex-1 overflow-auto">
+        <div className="ontology-overview-shell onto-glass-in min-h-0 flex-1">
           <OverviewDashboard ontologyId={id!} ontology={ontology} onGoGroup={selectGroup} />
         </div>
       ) : activeGroup === 'design' ? (
