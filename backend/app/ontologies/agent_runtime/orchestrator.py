@@ -83,6 +83,7 @@ def _system_prompt(scope) -> str:
 6. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
 7. 用户询问某字段拟议变化会波及哪些对象时，先用 analyze_change_impact 展示直接/间接关系可达范围。它是只读模拟，不代表确定业务因果；除非工具返回了受治理的因果规则，否则必须称为“关联范围”，不得声称这些对象一定会改变。
 8. 管理哨兵时，只能管理来源为 assistant_dynamic 的动态哨兵。发布版本内置哨兵只读且绝不能生成其编辑、启停或删除提案。所有动态哨兵变更必须先用 propose_dynamic_sentinel_change 生成提案，等待用户在界面确认；创建后默认停用，必须通过当前发布版全量试跑才能启用。
+9. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
 
 {_CHARTS_GUIDE}
 {extra_block}"""
@@ -113,6 +114,9 @@ def _summarize(name: str, result: dict) -> str:
         return f"{result.get('instance', '')} 的 {len(result.get('facts', []))} 条事实"
     if name == "list_actions":
         return f"{len(result.get('actions', []))} 个可用动作"
+    if name == "run_decision_simulation":
+        return (f"决策推演完成：{result.get('perspectiveCount', 0)} 个视角，"
+                f"建议「{result.get('recommendedOption') or '待复核'}」")
     if name == "list_dynamic_sentinels":
         return f"{len(result.get('sentinels', []))} 个助手动态哨兵"
     if name == "propose_dynamic_sentinel_change":
@@ -314,7 +318,12 @@ def _run(db: Session, ontology_id: str, user, question: str,
             messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": question})
 
-    runner = ToolRunner(db, scope)
+    runner = ToolRunner(db, scope, decision_context={
+        "conversation_id": conv.id,
+        "created_by": user_id,
+        "model_config_id": getattr(cfg, "id", None),
+        "call_kwargs": call_kwargs,
+    })
     steps: list[dict] = []
     usage_total = {"inputTokens": 0, "outputTokens": 0}
     answer: Optional[str] = None

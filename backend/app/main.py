@@ -87,6 +87,7 @@ def _seed_db():
         from app.models.sentinel import Sentinel, SentinelFiring, Notification, SentinelMatchState  # noqa: F401
         # 本体智能体 (授权边界内的 agent 运行时)
         from app.ontologies.agent_runtime.models import AgentProfile, AgentConversation, AgentMessage  # noqa: F401
+        from app.ontologies.decision_simulation.models import DecisionSimulationRun  # noqa: F401
         # 业务探索 (对话式业务建模：画布/文档/本体草稿/会话附件)
         from app.exploration.models import (  # noqa: F401
             ExplorationSession, ExplorationMessage, ExplorationDocument, ExplorationDraft,
@@ -672,6 +673,13 @@ app.include_router(formal_router.router, prefix="/api/v2/formal/ontologies", tag
 # 本体智能体 — 授权边界内的 LLM agent（对象/链接/事实/动作是它的全部世界）
 from app.ontologies.agent_runtime import router as agent_runtime_router
 app.include_router(agent_runtime_router.router, prefix="/api/v2/formal/ontologies", tags=["ontology-agent"], dependencies=agent_guard)
+from app.ontologies.decision_simulation import router as decision_simulation_router
+app.include_router(
+    decision_simulation_router.router,
+    prefix="/api/v2/formal/ontologies",
+    tags=["ontology-decision-simulation"],
+    dependencies=agent_guard,
+)
 # 业务探索 — 对话式业务建模：六类模型画布 → 需求文档 → 本体草稿（人审落地）
 from app.exploration import router as exploration_router
 app.include_router(exploration_router.router, prefix="/api/v2/exploration", tags=["exploration"], dependencies=explore_guard)

@@ -396,6 +396,148 @@ export interface AnalysisReportRun {
   completedAt: string | null
 }
 
+export interface DecisionAlternative {
+  id: string
+  label: string
+  description?: string
+}
+
+export interface DecisionObjective {
+  id: string
+  label: string
+  weight: number
+}
+
+export interface DecisionOptionEvaluation {
+  optionId: string
+  label: string
+  meanScore: number
+  robustScore: number
+  minScore: number
+  maxScore: number
+  disagreement: number
+  perspectiveCount: number
+  objectiveScores: Record<string, number>
+  rank: number
+}
+
+export interface DecisionPerspective {
+  id: string
+  name: string
+  mission: string
+  stance: string
+  keyFindings: string[]
+  challenges: string[]
+  evidenceCoverage: number
+  optionAssessments: {
+    optionId: string
+    scores: Record<string, number>
+    rationale: string
+    evidenceRefs: string[]
+    assumptions: string[]
+    risks: string[]
+  }[]
+  scenarioOutlooks: {
+    name: string
+    trigger: string
+    impacts: Record<string, string>
+    earlySignals: string[]
+  }[]
+}
+
+export interface DecisionSimulationSummary {
+  id: string
+  ontologyId: string
+  ontologyReleaseId: string | null
+  conversationId: string | null
+  title: string
+  question: string
+  status: 'running' | 'succeeded' | 'failed'
+  modelName: string | null
+  recommendedOption: string | null
+  robustScore: number | null
+  perspectiveCount: number
+  diagnostics: Record<string, unknown>
+  errorMessage: string | null
+  startedAt: string
+  completedAt: string | null
+}
+
+export interface DecisionSimulationRun {
+  id: string
+  ontologyId: string
+  ontologyReleaseId: string | null
+  conversationId: string | null
+  createdBy: string
+  modelConfigId: string | null
+  modelName: string | null
+  title: string
+  question: string
+  status: 'running' | 'succeeded' | 'failed'
+  specification: {
+    title?: string
+    decision?: string
+    horizon?: string
+    alternatives?: DecisionAlternative[]
+    objectives?: DecisionObjective[]
+    constraints?: string[]
+    uncertainties?: string[]
+    dataQuestions?: string[]
+  }
+  snapshot: {
+    ontologyName?: string
+    releaseId?: string | null
+    capturedAt?: string
+    isolation?: string
+    checksum?: string
+    coverage?: {
+      instanceCount?: number
+      profiledCount?: number
+      sampledCount?: number
+      objectTypeCount?: number
+      linkTypeCount?: number
+      sentinelFiringCount?: number
+    }
+  }
+  perspectives: DecisionPerspective[]
+  evaluation: {
+    method?: { name?: string; formula?: string; probability?: boolean }
+    options?: DecisionOptionEvaluation[]
+    objectives?: DecisionObjective[]
+    disagreementLevel?: 'low' | 'medium' | 'high'
+    maxDisagreement?: number
+    evidenceCoverage?: number
+  }
+  recommendation: {
+    recommendedOptionId?: string
+    recommendedOption?: string
+    robustScore?: number
+    summary?: string
+    rationale?: string[]
+    tradeoffs?: string[]
+    noRegretActions?: string[]
+    earlySignals?: string[]
+    stopConditions?: string[]
+    confidenceBand?: 'weak' | 'moderate' | 'strong'
+    nature?: string
+    disclaimer?: string
+  }
+  diagnostics: {
+    phase?: string
+    perspectiveCurrent?: string | null
+    perspectiveCompleted?: number
+    perspectiveTotal?: number
+    perspectiveFailures?: { perspectiveId: string; message: string }[]
+    warnings?: string[]
+    engineVersion?: string
+    isolation?: string
+    usage?: { inputTokens?: number; outputTokens?: number }
+  }
+  errorMessage: string | null
+  startedAt: string
+  completedAt: string | null
+}
+
 // ---------- REST ----------
 
 const base = (oid: string) => `/formal/ontologies/${oid}/agent`
@@ -502,6 +644,21 @@ export const agentApi = {
     apiClientV2.get<AnalysisReportRun[]>(`${base(oid)}/report-templates/${templateId}/runs`),
   reportRun: (oid: string, runId: string) =>
     apiClientV2.get<AnalysisReportRun>(`${base(oid)}/report-runs/${runId}`),
+  decisionSimulations: (oid: string, params?: {
+    releaseId?: string | null; conversationId?: string | null; limit?: number
+  }) => apiClientV2.get<DecisionSimulationSummary[]>(`${base(oid)}/decision-simulations`, {
+    params: {
+      release_id: params?.releaseId || undefined,
+      conversation_id: params?.conversationId || undefined,
+      limit: params?.limit,
+    },
+  }),
+  decisionSimulation: (oid: string, runId: string) =>
+    apiClientV2.get<DecisionSimulationRun>(`${base(oid)}/decision-simulations/${runId}`),
+  createDecisionSimulation: (oid: string, body: {
+    question: string; alternatives?: string[]; horizon?: string | null;
+    conversationId?: string | null; modelId?: string | null; releaseId?: string | null
+  }) => apiClientV2.post<DecisionSimulationRun>(`${base(oid)}/decision-simulations`, body),
 }
 
 export function reportHtmlUrl(oid: string, runId: string): string {

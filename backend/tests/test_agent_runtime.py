@@ -841,3 +841,128 @@ def test_property_scope_guard(client, auth_headers, modeled_ontology, db):
                                                "group_by": "状态"})
     assert {g["group"]: g["value"] for g in grouped["groups"]} == {"pending": 1, "paid": 1}
     assert grouped["partial"] is False and grouped["scanned"] == 2
+
+
+# ---------------------------------------------------------------- 决策推演
+
+
+def test_decision_simulation_repairs_only_json_syntax():
+    from app.ontologies.decision_simulation.service import _json_object
+
+    assert _json_object('```json\n{"title":"方案比较" "items":[1,2]}\n```') == {
+        "title": "方案比较", "items": [1, 2],
+    }
+
+
+def test_decision_simulation_tool_is_isolated_auditable_and_queryable(
+        client, auth_headers, modeled_ontology, db, admin_user, monkeypatch):
+    """多视角推演只写独立运行记录，不改变本体对象，并能由工作台 API 回放。"""
+    oid = modeled_ontology["id"]
+
+    def fake_chat(call_kwargs, messages, tools):
+        system = messages[0]["content"]
+        if "场景编译器" in system:
+            content = {
+                "title": "订单处理策略推演",
+                "horizon": "未来两周",
+                "alternatives": [
+                    {"label": "维持现状", "description": "不改变当前处理方式"},
+                    {"label": "提前分流", "description": "提前处理可能积压的订单"},
+                ],
+                "objectives": [
+                    {"id": "outcome", "label": "处理效果", "weight": 0.5},
+                    {"id": "risk", "label": "风险可控", "weight": 0.5},
+                ],
+                "constraints": ["不能直接修改真实订单"],
+                "uncertainties": ["未来订单量未知"],
+                "dataQuestions": [],
+            }
+        elif "决策委员会的记录员" in system:
+            content = {
+                "summary": "当前快照下可优先小范围验证提前分流。",
+                "rationale": ["保守综合分更高，但仍存在数据缺口。"],
+                "tradeoffs": ["会增加短期操作成本"],
+                "noRegretActions": ["先选择少量订单进行可回滚试行"],
+                "earlySignals": ["待处理订单数量连续上升"],
+                "stopConditions": ["错误率超过现状基线时停止"],
+            }
+        else:
+            risk_role = "风险挑战视角" in system
+            content = {
+                "stance": "谨慎支持提前分流" if not risk_role else "需先控制执行风险",
+                "keyFindings": ["当前有订单实例可作为基线"],
+                "challenges": ["当前快照不能证明未来需求"],
+                "optionAssessments": [
+                    {
+                        "optionId": "option_1",
+                        "scores": {"outcome": 55 if not risk_role else 72,
+                                   "risk": 70 if not risk_role else 80},
+                        "rationale": "不增加执行动作，但可能延续积压。",
+                        "evidenceRefs": ["订单/状态"],
+                        "assumptions": ["未来结构与当前近似"],
+                        "risks": ["响应不足"],
+                    },
+                    {
+                        "optionId": "option_2",
+                        "scores": {"outcome": 82 if not risk_role else 68,
+                                   "risk": 72 if not risk_role else 60},
+                        "rationale": "可能改善处理效果，但需要受控试行。",
+                        "evidenceRefs": ["订单/状态", "订单/金额"],
+                        "assumptions": ["分流资源可用"],
+                        "risks": ["短期操作成本"],
+                    },
+                ],
+                "scenarioOutlooks": [{
+                    "name": "需求上行情景",
+                    "trigger": "待处理订单持续增加",
+                    "impacts": {"option_1": "积压风险扩大", "option_2": "有机会缓冲积压"},
+                    "earlySignals": ["待处理订单数量连续上升"],
+                }],
+            }
+        return {"content": json.dumps(content, ensure_ascii=False),
+                "tool_calls": [], "usage": {"inputTokens": 10, "outputTokens": 20}}
+
+    from app.ontologies.agent_runtime import llm_bridge
+    from app.ontologies.agent_runtime.boundary import build_scope
+    from app.ontologies.agent_runtime.toolkit import ToolRunner
+    from app.ontologies.decision_simulation.models import DecisionSimulationRun
+    from app.models.ontology_formal import ObjectInstance
+
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+    _, _, scope = build_scope(db, oid)
+    before = dict(db.query(ObjectInstance).filter(ObjectInstance.id == "inst-o1").one().properties)
+    runner = ToolRunner(db, scope, decision_context={
+        "created_by": admin_user.id,
+        "conversation_id": None,
+        "model_config_id": "fake-config",
+        "call_kwargs": {"model": "fake-decision-model", "provider": "openai"},
+    })
+
+    result = runner.run("run_decision_simulation", {
+        "question": "推演未来两周订单处理应该维持现状还是提前分流",
+        "alternatives": ["维持现状", "提前分流"],
+        "horizon": "未来两周",
+    })
+
+    assert result["kind"] == "decision_simulation"
+    assert result["status"] == "succeeded"
+    assert result["perspectiveCount"] == 4
+    assert result["recommendedOption"] == "提前分流"
+    run = db.query(DecisionSimulationRun).filter(
+        DecisionSimulationRun.id == result["runId"]).one()
+    assert run.snapshot["isolation"] == "read_only_release_snapshot"
+    assert len(run.snapshot["checksum"]) == 64
+    assert run.evaluation["method"]["probability"] is False
+    assert run.recommendation["nature"] == "exploratory_decision_support"
+    assert run.diagnostics["usage"] == {"inputTokens": 60, "outputTokens": 120}
+    assert db.query(ObjectInstance).filter(
+        ObjectInstance.id == "inst-o1").one().properties == before
+
+    listed = client.get(
+        f"{_fo(oid)}/agent/decision-simulations", headers=auth_headers)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["data"][0]["id"] == run.id
+    detail = client.get(
+        f"{_fo(oid)}/agent/decision-simulations/{run.id}", headers=auth_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["recommendation"]["recommendedOption"] == "提前分流"

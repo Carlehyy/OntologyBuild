@@ -20,6 +20,7 @@ import {
   FunctionSquare, Minus, Maximize2, KeyRound, X, Download, ExternalLink,
   ChevronRight, Copy, Check, List, ArrowLeftRight, FileText, Workflow,
   BellRing,
+  Scale,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
@@ -46,6 +47,7 @@ import type {
 import { objectTypeIconGlyph } from '../../palantir-graph/utils/objectTypeIcon'
 
 const InstanceKnowledgeGraph = lazy(() => import('./InstanceKnowledgeGraph'))
+const DecisionSimulationView = lazy(() => import('./DecisionSimulationView'))
 
 interface ChatMsg {
   id: string
@@ -165,6 +167,7 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   list_actions: { label: '查看动作', icon: ListChecks },
   list_dynamic_sentinels: { label: '查看动态哨兵', icon: BellRing },
   propose_dynamic_sentinel_change: { label: '校验哨兵提案', icon: BellRing },
+  run_decision_simulation: { label: '决策推演', icon: Scale },
   propose_action: { label: '预演提案', icon: FlaskConical },
 }
 
@@ -1169,7 +1172,7 @@ export default function AgentWorkbenchPage() {
   const releasedOntologyList = useMemo(
     () => ontologyList.filter((item: any) => !!item.current_release_id), [ontologyList])
   const [oid, setOid] = useState('')
-  const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data' | 'trace'>('ontology')
+  const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data' | 'decision' | 'trace'>('ontology')
 
   useEffect(() => {
     if (releasedOntologyList.length === 0) {
@@ -1245,6 +1248,7 @@ export default function AgentWorkbenchPage() {
   const [showHistory, setShowHistory] = useState(false)
   const [showJump, setShowJump] = useState(false)
   const [graphSignal, setGraphSignal] = useState<GraphAssistantSignal | null>(null)
+  const [decisionRunId, setDecisionRunId] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -1269,6 +1273,7 @@ export default function AgentWorkbenchPage() {
     setShowHistory(false)
     setShowJump(false)
     setGraphSignal(null)
+    setDecisionRunId(null)
   }, [])
   useEffect(() => { resetChat() }, [oid, releaseId, resetChat])
 
@@ -1280,14 +1285,23 @@ export default function AgentWorkbenchPage() {
     }))
     setConversationId(cid)
     setMessages(restoredMessages)
+    setDecisionRunId(null)
+    setGraphSignal(null)
     const lastVisual = [...restoredMessages].reverse().find(message =>
       message.role === 'assistant' && (message.citations.length > 0 || message.steps.some(step => {
         const kind = (step.result as any)?.kind
-        return kind === 'path' || kind === 'impact'
+        return kind === 'path' || kind === 'impact' || kind === 'decision_simulation'
       })))
     if (lastVisual) {
-      setWorkspaceView('data')
-      setGraphSignal({ sequence: Date.now(), steps: lastVisual.steps, citations: lastVisual.citations })
+      const lastDecision = [...lastVisual.steps].reverse().find(step =>
+        (step.result as any)?.kind === 'decision_simulation')
+      if (lastDecision) {
+        setDecisionRunId(String((lastDecision.result as any)?.runId || '') || null)
+        setWorkspaceView('decision')
+      } else {
+        setWorkspaceView('data')
+        setGraphSignal({ sequence: Date.now(), steps: lastVisual.steps, citations: lastVisual.citations })
+      }
     }
     setShowHistory(false)
   }
@@ -1303,6 +1317,9 @@ export default function AgentWorkbenchPage() {
     if (!question || busy || !oid) return
     setInput('')
     setBusy(true)
+    if (/(决策推演|推演.{0,24}(方案|策略|未来|决策)|(?:方案|策略).{0,24}(比较|推演))/.test(question)) {
+      setWorkspaceView('decision')
+    }
 
     setMessages(prev => [...prev, {
       id: nextId(), role: 'user', content: question, steps: [], citations: [], proposals: [],
@@ -1327,7 +1344,10 @@ export default function AgentWorkbenchPage() {
           turnSteps.push(typedStep)
           patch(m => ({ steps: [...m.steps, typedStep] }))
           const kind = (typedStep.result as any)?.kind
-          if (kind === 'path' || kind === 'impact') {
+          if (kind === 'decision_simulation') {
+            setDecisionRunId(String((typedStep.result as any)?.runId || '') || null)
+            setWorkspaceView('decision')
+          } else if (kind === 'path' || kind === 'impact') {
             setWorkspaceView('data')
             setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: [] })
           }
@@ -1354,6 +1374,7 @@ export default function AgentWorkbenchPage() {
       '“' + first + '”有哪些实例？',
       '帮我寻找两个具体实例之间的关系路径',
       '分析一个字段拟议变化的直接和间接关联范围',
+      '推演一项未来决策，比较可选方案、关键风险和早期信号',
     ] : []
   }, [caps])
 
@@ -1376,11 +1397,11 @@ export default function AgentWorkbenchPage() {
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sky-50 text-sky-600">
-                  {workspaceView === 'trace' ? <Workflow size={16} /> : <Network size={16} />}
+                  {workspaceView === 'trace' ? <Workflow size={16} /> : workspaceView === 'decision' ? <Scale size={16} /> : <Network size={16} />}
                 </div>
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                    {workspaceView === 'ontology' ? '本体拓扑图' : workspaceView === 'data' ? '数据推演图谱' : 'Agent调用链'}
+                    {workspaceView === 'ontology' ? '本体拓扑图' : workspaceView === 'data' ? '数据推演图谱' : workspaceView === 'decision' ? '决策推演' : 'Agent调用链'}
                   </h3>
                   <p className={`truncate text-[11px] ${workspaceView === 'ontology' && syncStatus === 'error' ? 'text-red-500' : 'text-[var(--color-text-tertiary)]'}`}>
                     {workspaceView === 'ontology' && syncStatus === 'error'
@@ -1389,6 +1410,8 @@ export default function AgentWorkbenchPage() {
                         ? `${selectedOntology?.name || '未选择本体'} · 只读展示对象类型与关系`
                         : workspaceView === 'data'
                           ? `${selectedOntology?.name || '未选择本体'} · 实例、路径与拟议变更联动`
+                          : workspaceView === 'decision'
+                            ? `${selectedOntology?.name || '未选择本体'} · 隔离快照、多视角与方案比较`
                           : `${selectedOntology?.name || '未选择本体'} · 当前会话工具调用可审计、可复盘`}
                   </p>
                 </div>
@@ -1413,6 +1436,7 @@ export default function AgentWorkbenchPage() {
                   {([
                     { id: 'ontology', label: '本体拓扑图', icon: Network },
                     { id: 'data', label: '数据推演图谱', icon: ArrowLeftRight },
+                    { id: 'decision', label: '决策推演', icon: Scale },
                     { id: 'trace', label: 'Agent调用链', icon: Workflow },
                   ] as const).map(item => (
                     <button
@@ -1436,7 +1460,21 @@ export default function AgentWorkbenchPage() {
           </div>
 
           <div className="workspace-topology-surface relative min-h-0 flex-1 overflow-hidden">
-            {workspaceView === 'trace' ? (
+            {workspaceView === 'decision' ? (
+              <Suspense fallback={(
+                <div className="flex h-full items-center justify-center gap-2 bg-slate-50 text-xs text-slate-500">
+                  <Loader2 size={14} className="animate-spin text-teal-600" />正在加载决策推演工作台…
+                </div>
+              )}>
+                <DecisionSimulationView
+                  oid={oid}
+                  releaseId={releaseId}
+                  conversationId={conversationId}
+                  activeRunId={decisionRunId}
+                  running={busy}
+                />
+              </Suspense>
+            ) : workspaceView === 'trace' ? (
               <AgentCallChainView
                 messages={messages}
                 conversationId={conversationId}

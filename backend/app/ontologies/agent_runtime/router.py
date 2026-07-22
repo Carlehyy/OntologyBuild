@@ -677,6 +677,10 @@ def delete_conversation(ontology_id: str, conversation_id: str,
                         db: Session = Depends(get_db),
                         current_user=Depends(get_current_user)):
     conv = _require_conversation(db, ontology_id, conversation_id, current_user)
+    # 推演运行记录是会话内产物；删除会话时同步清理，避免留下不可见孤儿记录。
+    from app.ontologies.decision_simulation.models import DecisionSimulationRun
+    db.query(DecisionSimulationRun).filter(
+        DecisionSimulationRun.conversation_id == conv.id).delete()
     db.query(AgentMessage).filter(AgentMessage.conversation_id == conv.id).delete()
     db.delete(conv)
     db.commit()

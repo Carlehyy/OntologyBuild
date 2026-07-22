@@ -15,6 +15,7 @@
   aggregate_objects  分组计数 / 求和 / 均值 / 最值
   get_object_history 实例的事实流（谁、何时、为何改的 — 溯源问答）
   list_actions       授权范围内的动作及参数说明
+  run_decision_simulation 隔离快照上的多视角决策推演（只写推演运行记录）
   propose_action     动作预演（引擎 dry-run：校验 + 模拟效果，不落实际变更）
 """
 from __future__ import annotations
@@ -239,6 +240,25 @@ TOOL_DEFS: list[dict] = [
         }
     },
     {
+        "name": "run_decision_simulation",
+        "description": "在当前发布版本和授权范围的冻结快照上运行独立决策推演。用户说‘推演未来/比较方案/辅助决策/如果…怎么办’时使用。引擎会让多个独立角色提出可能性，再由确定性评分比较方案；结果不是概率或因果证明，也不会执行动作或写回真实对象。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "要辅助决定的完整问题，需包含目标或待比较的选择"},
+                "alternatives": {
+                    "type": "array",
+                    "description": "可选，用户已明确的 2-6 个互斥方案；未明确时由场景编译器生成包含维持现状的候选方案",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 6,
+                },
+                "horizon": {"type": "string", "description": "可选，推演时间范围或决策窗口"},
+            },
+            "required": ["question"],
+        },
+    },
+    {
         "name": "propose_action",
         "description": "对某动作做预演（dry-run）：跑完整校验并模拟全部效果，但不落任何实际变更。这是 agent 唯一的'写'入口——预演结果会作为提案展示给用户，由用户决定是否真实执行。需要修改数据时必须用本工具，禁止假装已经执行。",
         "parameters": {
@@ -392,9 +412,11 @@ class ToolRunner:
     """把 scope 装进闭包，给 orchestrator 一个统一的 run(name, args) 入口。
     顺带收集引用（citations）——回答里出现过的实例都可追溯。"""
 
-    def __init__(self, db: Session, scope: AgentScope):
+    def __init__(self, db: Session, scope: AgentScope, *,
+                 decision_context: Optional[dict] = None):
         self.db = db
         self.scope = scope
+        self.decision_context = decision_context or {}
         self.citations: list[dict] = []
         self.proposals: list[dict] = []
         self._cited: set[str] = set()
@@ -796,6 +818,26 @@ class ToolRunner:
                 ],
             })
         return {"actions": items}
+
+    def _tool_run_decision_simulation(self, args: dict) -> dict:
+        context = self.decision_context
+        if not context.get("call_kwargs"):
+            raise ToolError("当前调用缺少决策推演模型上下文，请重新发起对话")
+        if not context.get("created_by"):
+            raise ToolError("当前用户不可审计，无法创建决策推演记录")
+        from app.ontologies.decision_simulation.service import compact_tool_result, execute
+        run = execute(
+            self.db,
+            self.scope,
+            question=args.get("question") or "",
+            alternatives=args.get("alternatives") if isinstance(args.get("alternatives"), list) else [],
+            horizon=args.get("horizon"),
+            conversation_id=context.get("conversation_id"),
+            created_by=context["created_by"],
+            call_kwargs=context["call_kwargs"],
+            model_config_id=context.get("model_config_id"),
+        )
+        return compact_tool_result(run)
 
     def _tool_list_dynamic_sentinels(self, args: dict) -> dict:
         if self.scope.release is None:
