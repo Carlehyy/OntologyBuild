@@ -48,14 +48,10 @@ def _estimate_rowcount(content: bytes, ext: str) -> int | None:
     try:
         if ext == "csv":
             return max(0, content.count(b"\n") - 1)
-        if ext in ("xlsx", "xls") and content[:2] == b"PK":
-            import io
-            import openpyxl
-            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-            ws = wb.active
-            n = max(0, (ws.max_row or 1) - 1)
-            wb.close()
-            return n
+        if ext in ("xlsx", "xls"):
+            # 与正式导入共用格式嗅探和空白行语义；同时覆盖旧版 OLE/BIFF XLS。
+            from app.data_channel.datasets.service import _parse_stored_rows
+            return len(_parse_stored_rows(content, limit=None))
         if ext == "json":
             import json
             parsed = json.loads(content.decode("utf-8-sig"))
@@ -132,9 +128,9 @@ async def upload_dataset(
         from app.data_channel.datasets.service import _parse_stored_rows, stored_columns
         try:
             rows = _parse_stored_rows(content, limit=None)
+            physical_columns = stored_columns(content)
         except Exception as exc:
             raise HTTPException(400, f"表格解析失败：{exc}")
-        physical_columns = stored_columns(content)
         expected_columns = schema["columns"]
         if physical_columns != expected_columns:
             raise HTTPException(
@@ -336,8 +332,15 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
     schema = dict(ds.schema_json or {})
     declared_pk = str(schema.get("primary_key") or "").strip()
     full_rows: list[dict] | None = None
+    tabular_ext = ext in ("csv", "xlsx", "xls", "json")
+    if not tabular_ext and (declared_pk or schema.get("columns")):
+        raise HTTPException(
+            400, "已定义字段契约的数据集只支持上传 CSV、XLSX、XLS 或 JSON 数据文件")
     from app.data_channel.datasets.service import stored_columns
-    physical_columns = stored_columns(content)
+    try:
+        physical_columns = stored_columns(content) if tabular_ext else []
+    except Exception as exc:
+        raise HTTPException(400, f"表格解析失败：{exc}")
     if declared_pk or schema.get("columns"):
         from app.data_channel.datasets.service import _parse_stored_rows
         try:

@@ -17,7 +17,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
 from app.data_channel.datasets.router import _estimate_rowcount
-from app.data_channel.datasets.service import DatasetReadError, DatasetService, _parse_stored_rows
+from app.data_channel.datasets.service import (
+    DatasetReadError,
+    DatasetService,
+    TabularParseError,
+    _parse_stored_rows,
+    stored_columns,
+)
 from app.data_channel.file_assets.models import PipelineFileAsset
 from app.data_channel.pipeline_tasks.merge import load_latest_rows
 from app.models.v2.dataset import DatasetVersion, DatasetWriteLock, MediaItem
@@ -96,6 +102,25 @@ def test_parse_stored_rows_supports_uncapped_limit():
     rows = [{"id": str(i)} for i in range(50)]
     assert len(_parse_stored_rows(_csv_bytes(rows), limit=None)) == 50
     assert len(_parse_stored_rows(_csv_bytes(rows), limit=10)) == 10
+
+
+def test_csv_parser_supports_old_mac_newlines_and_quoted_multiline_cells():
+    raw = 'id,note\rA1,"第一行\n第二行"\rA2,正常\r'.encode("utf-8")
+
+    rows = _parse_stored_rows(raw, limit=None)
+
+    assert stored_columns(raw) == ["id", "note"]
+    assert rows == [
+        {"id": "A1", "note": "第一行\n第二行"},
+        {"id": "A2", "note": "正常"},
+    ]
+
+
+def test_corrupt_xlsx_reports_excel_error_instead_of_csv_newline_error():
+    with pytest.raises(TabularParseError, match="Excel 工作簿解析失败") as caught:
+        _parse_stored_rows(b"PK\x03\x04not-an-xlsx\rwith-binary-data", limit=None)
+
+    assert "new-line character" not in str(caught.value)
 
 
 def test_json_upload_rowcount_is_recorded_for_pipeline_validation():

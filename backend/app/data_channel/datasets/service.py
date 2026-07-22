@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -22,6 +23,14 @@ class DatasetReadError(RuntimeError):
 
     与「数据集还没有数据」（返回空列表）严格区分：合并基座等场景把读失败
     当空列表处理，会让 append/upsert 把湖中存量折叠成本次增量。
+    """
+
+
+class TabularParseError(ValueError):
+    """上传的表格无法可靠解析。
+
+    调用方可把该异常安全地返回为 4xx；不要在 Excel 解析失败后继续把二进制
+    内容当 CSV 猜测，否则真正原因会被 ``csv.Error`` 的换行提示覆盖。
     """
 
 
@@ -129,6 +138,212 @@ def _parse_parquet_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[
     return out
 
 
+_OLE_COMPOUND_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_HYPERLINK_FORMULA = re.compile(
+    r'^\s*=?(?:_xlfn\.)?HYPERLINK\(\s*"((?:[^"]|"")*)"\s*[,;]\s*'
+    r'"((?:[^"]|"")*)"\s*\)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _formula_fallback(value) -> str:
+    """为没有缓存计算结果的公式提供不丢数据的文本回退。
+
+    openpyxl 不负责计算公式。Excel 正常保存的工作簿通常带缓存值；若缓存缺失，
+    HYPERLINK 优先提取用户可见的显示文本，其他公式保留表达式供后续排查。
+    """
+    formula = "" if value is None else str(value)
+    match = _HYPERLINK_FORMULA.fullmatch(formula)
+    if match:
+        url, label = (part.replace('""', '"') for part in match.groups())
+        return label or url
+    return formula
+
+
+def _row_is_empty(values: list) -> bool:
+    return all(value is None or value == "" for value in values)
+
+
+def _headers_from_row(values: list) -> list[str]:
+    headers: list[str] = []
+    for index, value in enumerate(values):
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        text = "" if value is None else str(value).strip()
+        headers.append(text or f"col_{index}")
+    return headers
+
+
+def _collect_sheet_rows(row_iter, *, limit: int | None,
+                        offset: int = 0) -> tuple[list[str], list[dict]]:
+    """把工作表行流转成表头和记录，并忽略纯空白行。"""
+    headers: list[str] = []
+    rows: list[dict] = []
+    data_index = 0
+    for raw_values in row_iter:
+        values = list(raw_values)
+        if _row_is_empty(values):
+            continue
+        if not headers:
+            headers = _headers_from_row(values)
+            if limit is not None and limit <= 0:
+                break
+            continue
+        if data_index < offset:
+            data_index += 1
+            continue
+        data_index += 1
+        rows.append({
+            header: values[index] if index < len(values) and values[index] is not None else ""
+            for index, header in enumerate(headers)
+        })
+        if limit is not None and len(rows) >= limit:
+            break
+    return headers, rows
+
+
+def _xlsx_table(raw: bytes, *, limit: int | None,
+                offset: int = 0) -> tuple[list[str], list[dict]]:
+    """读取 OOXML Excel；数据值优先，公式无缓存时保留可理解的回退值。"""
+    import io
+    import openpyxl
+
+    values_wb = None
+    formulas_wb = None
+    try:
+        values_wb = openpyxl.load_workbook(
+            io.BytesIO(raw), read_only=True, data_only=True, keep_links=False)
+        if not values_wb.worksheets:
+            raise TabularParseError("Excel 工作簿中没有可读取的工作表")
+        values_ws = values_wb.worksheets[0]
+
+        # limit=0 只读取列名，无需为公式回退再打开一次工作簿。
+        formulas_ws = None
+        if limit != 0:
+            formulas_wb = openpyxl.load_workbook(
+                io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
+            formulas_ws = formulas_wb.worksheets[0]
+
+        formula_rows = iter(formulas_ws.iter_rows()) if formulas_ws is not None else None
+
+        def _rows():
+            for value_row in values_ws.iter_rows():
+                formula_row = next(formula_rows, ()) if formula_rows is not None else ()
+                width = max(len(value_row), len(formula_row))
+                values = []
+                for index in range(width):
+                    cached = value_row[index].value if index < len(value_row) else None
+                    formula_cell = formula_row[index] if index < len(formula_row) else None
+                    if (cached is None and formula_cell is not None
+                            and formula_cell.data_type == "f"):
+                        cached = _formula_fallback(formula_cell.value)
+                    values.append(cached)
+                yield values
+
+        return _collect_sheet_rows(_rows(), limit=limit, offset=offset)
+    except TabularParseError:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        raise TabularParseError(
+            "Excel 工作簿解析失败；文件可能已损坏、已加密，或实际格式不是 XLSX"
+            f"（{detail}）") from exc
+    finally:
+        if formulas_wb is not None:
+            formulas_wb.close()
+        if values_wb is not None:
+            values_wb.close()
+
+
+def _xls_cell_value(book, cell):
+    import xlrd
+
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+        return ""
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        return xlrd.xldate_as_datetime(cell.value, book.datemode)
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return bool(cell.value)
+    if cell.ctype == xlrd.XL_CELL_ERROR:
+        return xlrd.error_text_from_code.get(cell.value, f"#ERROR({cell.value})")
+    return cell.value
+
+
+def _xls_table(raw: bytes, *, limit: int | None,
+               offset: int = 0) -> tuple[list[str], list[dict]]:
+    """读取 OLE/BIFF 旧版 XLS；xlrd 返回公式的已缓存计算结果。"""
+    try:
+        import xlrd
+
+        workbook = xlrd.open_workbook(file_contents=raw, on_demand=True)
+        try:
+            if workbook.nsheets < 1:
+                raise TabularParseError("Excel 工作簿中没有可读取的工作表")
+            sheet = workbook.sheet_by_index(0)
+            row_iter = (
+                [_xls_cell_value(workbook, sheet.cell(row_index, column_index))
+                 for column_index in range(sheet.ncols)]
+                for row_index in range(sheet.nrows)
+            )
+            return _collect_sheet_rows(row_iter, limit=limit, offset=offset)
+        finally:
+            workbook.release_resources()
+    except TabularParseError:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        raise TabularParseError(
+            "旧版 Excel 工作簿解析失败；文件可能已损坏、已加密，或实际格式不是 XLS"
+            f"（{detail}）") from exc
+
+
+def _decode_table_text(raw: bytes) -> str:
+    """解码常见 Excel/中文环境导出的 CSV，拒绝静默替换坏字节。"""
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    for encoding in ("utf-8", "gb18030"):
+        try:
+            text = raw.decode(encoding)
+            if "\x00" in text:
+                continue
+            return text
+        except UnicodeDecodeError:
+            continue
+    raise TabularParseError(
+        "CSV 文本编码无法识别；请另存为 UTF-8 CSV，或直接上传 XLSX/XLS 文件")
+
+
+def _csv_table(text: str, *, limit: int | None,
+               offset: int = 0) -> tuple[list[str], list[dict]]:
+    """读取 CSV/TSV；newline='' 同时兼容 CRLF、LF 与旧式 CR 换行。"""
+    import csv
+    import io
+
+    stream = io.StringIO(text, newline="")
+    sample = text[:65536]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|") if sample else csv.excel
+    except csv.Error:
+        dialect = csv.excel
+    try:
+        reader = csv.reader(stream, dialect=dialect)
+        return _collect_sheet_rows(reader, limit=limit, offset=offset)
+    except csv.Error as exc:
+        raise TabularParseError(
+            f"CSV 解析失败（第 {reader.line_num} 行附近）：{exc}") from exc
+
+
+def _json_rows(text: str, *, limit: int | None, offset: int = 0) -> list[dict]:
+    data = json.loads(text)
+    if isinstance(data, list):
+        return data[offset:] if limit is None else data[offset:offset + limit]
+    if isinstance(data, dict):
+        return [data] if offset == 0 and (limit is None or limit > 0) else []
+    return []
+
+
 def _parse_stored_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[dict]:
     """把存储对象解析成行列表（Parquet / JSON / Excel / CSV 自动检测）。
 
@@ -137,63 +352,26 @@ def _parse_stored_rows(raw: bytes, limit: int | None, offset: int = 0) -> list[d
     支持滚动窗口内的多格式共存（湖版本随流水线运行逐步自然迁移到 Parquet）。
     """
     offset = max(0, offset)
+    if not raw:
+        return []
 
     # Parquet（列存，魔数 PAR1）：必须在 UTF-8 解码之前判定，避免把大二进制
     # 整份 decode 成文本。
     if raw[:4] == b"PAR1":
         return _parse_parquet_rows(raw, limit, offset)
 
-    text = raw.decode("utf-8", errors="replace").lstrip("﻿")
+    # OOXML（XLSX）和 OLE/BIFF（XLS）必须先于文本解码识别。解析失败时直接
+    # 报 Excel 的原始语义，绝不再把二进制内容回退为 CSV。
+    if raw[:2] == b"PK":
+        return _xlsx_table(raw, limit=limit, offset=offset)[1]
+    if raw.startswith(_OLE_COMPOUND_SIGNATURE):
+        return _xls_table(raw, limit=limit, offset=offset)[1]
 
-    # 检测是否 JSON
+    text = _decode_table_text(raw)
     stripped = text.lstrip()
     if stripped.startswith("[") or stripped.startswith("{"):
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data[offset:] if limit is None else data[offset:offset + limit]
-        elif isinstance(data, dict):
-            return [data] if offset == 0 else []
-        return []
-
-    # 检测是否 Excel (xlsx) 二进制格式
-    if raw[:2] == b"PK":
-        try:
-            import openpyxl, io
-            wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-            ws = wb.active
-            rows_list = []
-            headers = []
-            data_idx = -1  # 数据行序号（不含表头）
-            for ri, row in enumerate(ws.iter_rows(values_only=True)):
-                if ri == 0:
-                    headers = [str(c) if c is not None else f"col_{i}" for i, c in enumerate(row)]
-                    continue
-                data_idx += 1
-                if data_idx < offset:
-                    continue
-                row_dict = {}
-                for i, val in enumerate(row):
-                    if i < len(headers):
-                        row_dict[headers[i]] = val if val is not None else ""
-                rows_list.append(row_dict)
-                if limit is not None and len(rows_list) >= limit:
-                    break
-            wb.close()
-            return rows_list
-        except Exception:
-            pass
-
-    # 默认 CSV
-    import csv, io
-    reader = csv.DictReader(io.StringIO(text))
-    rows = []
-    for i, row in enumerate(reader):
-        if i < offset:
-            continue
-        if limit is not None and len(rows) >= limit:
-            break
-        rows.append(dict(row))
-    return rows
+        return _json_rows(text, limit=limit, offset=offset)
+    return _csv_table(text, limit=limit, offset=offset)[1]
 
 
 def stored_columns(raw: bytes) -> list[str]:
@@ -207,18 +385,12 @@ def stored_columns(raw: bytes) -> list[str]:
         import pyarrow.parquet as pq
         return [str(name) for name in pq.read_schema(_io.BytesIO(raw)).names]
     if raw[:2] == b"PK":
-        try:
-            import io as _io
-            import openpyxl
-            wb = openpyxl.load_workbook(_io.BytesIO(raw), read_only=True, data_only=True)
-            try:
-                first = next(wb.active.iter_rows(values_only=True), ())
-                return [str(v) if v is not None else f"col_{i}" for i, v in enumerate(first)]
-            finally:
-                wb.close()
-        except Exception:
-            return []
-    text = raw.decode("utf-8", errors="replace").lstrip("﻿")
+        return _xlsx_table(raw, limit=0)[0]
+    if raw.startswith(_OLE_COMPOUND_SIGNATURE):
+        return _xls_table(raw, limit=0)[0]
+    if not raw:
+        return []
+    text = _decode_table_text(raw)
     stripped = text.lstrip()
     if stripped.startswith("[") or stripped.startswith("{"):
         try:
@@ -228,11 +400,9 @@ def stored_columns(raw: bytes) -> list[str]:
             if isinstance(parsed, list):
                 first = next((row for row in parsed if isinstance(row, dict)), None)
                 return [str(k) for k in first.keys()] if first else []
-        except Exception:
-            return []
-    import csv
-    import io
-    return [str(name) for name in (csv.DictReader(io.StringIO(text)).fieldnames or [])]
+        except json.JSONDecodeError as exc:
+            raise TabularParseError(f"JSON 解析失败：{exc}") from exc
+    return _csv_table(text, limit=0)[0]
 
 
 def enqueue_storage_deletions(db: Session, storage_uris: list[str]) -> list[str]:

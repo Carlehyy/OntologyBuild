@@ -168,6 +168,110 @@ def test_configured_upload_creates_first_version_with_field_contract(api, auth_h
     assert columns["quantity"]["type"] == "integer"
 
 
+def test_configured_xlsx_upload_uses_first_sheet_and_hyperlink_display_text(
+    api, auth_headers,
+):
+    """与前端保持首工作表语义；公式无缓存时仍能导入 HYPERLINK 显示文本。"""
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    data_sheet = workbook.active
+    data_sheet.title = "待导入"
+    data_sheet.append(["工单号", "说明", "数量"])
+    data_sheet.append([
+        '=HYPERLINK("https://12345.huawei.com/itsmnext/#/serviceDesk/viewSkillOrder/'
+        'PM26072236369","PM26072236369")',
+        "第一行\n第二行",
+        3,
+    ])
+    other_sheet = workbook.create_sheet("当前打开但不导入")
+    other_sheet.append(["错误表头"])
+    other_sheet.append(["不应被导入"])
+    workbook.active = 1
+    content = io.BytesIO()
+    workbook.save(content)
+    workbook.close()
+
+    payload = {
+        "name": "公式工单导入",
+        "columns": [
+            {"name": "工单号", "type": "string", "nullable": False},
+            {"name": "说明", "type": "string", "nullable": True},
+            {"name": "数量", "type": "integer", "nullable": True},
+        ],
+        "primary_key": "工单号",
+    }
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": (
+            "公式工单.xlsx",
+            io.BytesIO(content.getvalue()),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    result = response.json()["data"]
+    assert result["rowcount"] == 1
+    preview = api.get(
+        f"/api/v2/datasets/{result['id']}/preview", headers=auth_headers).json()
+    assert preview["columns"] == ["工单号", "说明", "数量"]
+    assert preview["rows"] == [{
+        "工单号": "PM26072236369",
+        "说明": "第一行\n第二行",
+        "数量": 3,
+    }]
+
+
+def test_configured_upload_accepts_cr_only_csv_newlines(api, auth_headers):
+    payload = {
+        "name": "旧式换行 CSV",
+        "columns": [
+            {"name": "id", "type": "string", "nullable": False},
+            {"name": "name", "type": "string", "nullable": True},
+        ],
+        "primary_key": "id",
+    }
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": (
+            "old-mac.csv",
+            io.BytesIO("id,name\rA1,泵机\rA2,阀门\r".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["rowcount"] == 2
+
+
+def test_configured_upload_reports_real_xlsx_parse_error(api, auth_headers):
+    payload = {
+        "name": "损坏表格",
+        "columns": [{"name": "id", "type": "string"}],
+        "primary_key": "",
+    }
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": (
+            "broken.xlsx",
+            io.BytesIO(b"PK\x03\x04not-an-xlsx\rwith-binary-data"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    detail = str(response.json()["detail"])
+    assert "Excel 工作簿解析失败" in detail
+    assert "new-line character" not in detail
+
+
 @pytest.mark.parametrize("content, expected", [
     ("id,name,quantity\nA1,,10\n", "非空列「name」"),
     ("id,name,quantity\nA1,泵机,很多\n", "类型校验未通过"),
