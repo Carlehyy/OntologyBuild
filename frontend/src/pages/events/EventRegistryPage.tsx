@@ -28,7 +28,7 @@ function fmt(iso: string | null | undefined): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return '—'
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 // ─── 数据 hooks ──────────────────────────────────────────
@@ -262,15 +262,17 @@ export default function EventRegistryPage() {
           <MetricCard label="今日新增" value={stats?.today ?? 0} sub="实时更新" />
         </div>
 
-        {/* 级别分布环 */}
-        <div className={`${PANEL} flex min-h-[156px] items-center gap-5 overflow-hidden px-5 py-3 lg:col-span-4 xl:col-span-3`}>
-            <div className="relative h-[108px] w-[108px] shrink-0">
+        {/* 级别分布环：大屏下收紧卡片，为趋势图让出更多横向空间。 */}
+        <div className={`${PANEL} flex min-h-[156px] flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-3 2xl:col-span-2`}>
+          <div className="mb-1 shrink-0 text-sm font-medium text-slate-700">事件级别分布</div>
+          <div className="flex min-h-0 flex-1 items-center gap-3">
+            <div className="relative h-[88px] w-[88px] shrink-0 lg:h-[96px] lg:w-[96px] 2xl:h-[84px] 2xl:w-[84px]">
               <div className="w-full h-full overflow-hidden rounded-full">
                 <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} notMerge />
               </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-xl font-semibold text-slate-800 tabular-nums leading-none">{severityOption._centerTotal as number}</span>
-                <span className="mt-1 text-xs text-slate-400">合计</span>
+                <span className="text-lg font-semibold text-slate-800 tabular-nums leading-none">{severityOption._centerTotal as number}</span>
+                <span className="mt-0.5 text-[11px] text-slate-400">合计</span>
               </div>
             </div>
             <div className="grid min-w-0 flex-1 grid-cols-1 gap-y-1">
@@ -281,16 +283,17 @@ export default function EventRegistryPage() {
                 return (
                   <div key={k} className="flex items-center gap-1.5 min-w-0">
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colors[i], boxShadow: `0 0 5px ${colors[i]}66` }} />
-                    <span className="truncate text-xs text-slate-500">{labels[k]}</span>
+                    <span className="shrink-0 whitespace-nowrap text-xs text-slate-500">{labels[k]}</span>
                     <span className="ml-auto text-sm font-semibold tabular-nums text-slate-700">{v}</span>
                   </div>
                 )
               })}
             </div>
           </div>
+        </div>
 
         {/* 7日趋势 */}
-        <div className={`${PANEL} flex min-h-[156px] min-w-0 flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-5`}>
+        <div className={`${PANEL} flex min-h-[156px] min-w-0 flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-5 2xl:col-span-6`}>
             <div className="flex items-center justify-between mb-1 shrink-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-medium text-slate-700">近 7 日事件趋势</span>
