@@ -14,6 +14,9 @@ const ICON_ALIASES: Record<string, string> = {
   phone: '📱',
   computer: '🖥️',
   target: '🎯',
+  radar: '📡',
+  'alert-triangle': '⚠️',
+  'triangle-alert': '⚠️',
 };
 
 const EMOJI_PATTERN = /^\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*$/u;

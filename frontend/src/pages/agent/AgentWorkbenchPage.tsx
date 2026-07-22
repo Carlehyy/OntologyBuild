@@ -8,6 +8,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import dagre from '@dagrejs/dagre'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -41,6 +42,7 @@ import type {
   ObjectType,
   OntologyFunction,
 } from '../../palantir-graph/types/ontology'
+import { objectTypeIconGlyph } from '../../palantir-graph/utils/objectTypeIcon'
 
 const InstanceKnowledgeGraph = lazy(() => import('./InstanceKnowledgeGraph'))
 
@@ -447,7 +449,11 @@ const NETWORK_PALETTE = [
 
 const trimLabel = (text: string, max = 16) => text.length > max ? `${text.slice(0, max - 1)}…` : text
 const NETWORK_CARD_WIDTH = 316
-const NETWORK_CARD_HEIGHT = 276
+const NETWORK_CARD_HEIGHT = 368
+const NETWORK_NODE_GAP = 104
+const NETWORK_RANK_GAP = 164
+const NETWORK_MARGIN_X = 96
+const NETWORK_MARGIN_Y = 96
 
 function edgeAnchor(from: { x: number; y: number }, to: { x: number; y: number }) {
   const dx = to.x - from.x
@@ -481,8 +487,8 @@ function OntologyNetworkView({
   oid: string
 }) {
   const navigate = useNavigate()
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [viewport, setViewport] = useState({ zoom: 1, pan: { x: 0, y: 0 } })
+  const { zoom, pan } = viewport
   const svgRef = useRef<SVGSVGElement>(null)
   const dragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
@@ -537,51 +543,64 @@ function OntologyNetworkView({
       const degreeDiff = (degreeByObject.get(b.id) || 0) - (degreeByObject.get(a.id) || 0)
       return degreeDiff || itemLabel(a).localeCompare(itemLabel(b))
     })
-    const hub = sortedObjects.length > 6 ? sortedObjects[0] : null
-    const ringObjects = hub ? sortedObjects.slice(1) : sortedObjects
-    const totalObjects = sortedObjects.length
-    const ringSize = totalObjects <= 4 ? 4 : 8
-    const ringCount = Math.max(1, Math.ceil(Math.max(1, ringObjects.length) / ringSize))
-    const width = totalObjects <= 1
-      ? 820
-      : totalObjects <= 4
-        ? 980
-        : 1280 + Math.max(0, ringCount - 1) * 340
-    const height = totalObjects <= 1
-      ? 540
-      : totalObjects <= 4
-        ? 640
-        : 780 + Math.max(0, ringCount - 1) * 240
+    const layout = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}))
+    layout.setGraph({
+      rankdir: 'TB',
+      ranker: 'network-simplex',
+      nodesep: NETWORK_NODE_GAP,
+      ranksep: NETWORK_RANK_GAP,
+      marginx: NETWORK_MARGIN_X,
+      marginy: NETWORK_MARGIN_Y,
+    })
+    sortedObjects.forEach(objectType => {
+      layout.setNode(objectType.id, { width: NETWORK_CARD_WIDTH, height: NETWORK_CARD_HEIGHT })
+    })
+    linkTypes.forEach(link => {
+      if (layout.hasNode(link.sourceObjectTypeId) && layout.hasNode(link.targetObjectTypeId)) {
+        layout.setEdge(link.sourceObjectTypeId, link.targetObjectTypeId)
+      }
+    })
+    dagre.layout(layout)
+
+    const layoutMeta = layout.graph() as { width?: number; height?: number }
+    const layoutWidth = Math.max(Number(layoutMeta.width) || 0, NETWORK_CARD_WIDTH + NETWORK_MARGIN_X * 2)
+    const layoutHeight = Math.max(Number(layoutMeta.height) || 0, NETWORK_CARD_HEIGHT + NETWORK_MARGIN_Y * 2)
+    const width = Math.max(820, layoutWidth)
+    const height = Math.max(640, layoutHeight)
+    const offsetX = (width - layoutWidth) / 2
+    const offsetY = (height - layoutHeight) / 2
     const cx = width / 2
     const cy = height / 2
     const positions = new Map<string, { x: number; y: number; colorIndex: number }>()
-
-    if (hub) positions.set(hub.id, { x: cx, y: cy, colorIndex: 0 })
-
-    if (!hub && ringObjects.length === 1) {
-      positions.set(ringObjects[0].id, { x: cx, y: cy, colorIndex: 0 })
-    } else {
-      ringObjects.forEach((objectType, index) => {
-        const ring = Math.floor(index / ringSize)
-        const start = ring * ringSize
-        const countInRing = Math.min(ringSize, ringObjects.length - start)
-        const angle = -Math.PI / 2 + ((index - start) / countInRing) * Math.PI * 2
-        const rx = (totalObjects <= 4 ? 300 : 430) + ring * 190
-        const ry = (totalObjects <= 4 ? 190 : 260) + ring * 120
-        positions.set(objectType.id, {
-          x: cx + Math.cos(angle) * rx,
-          y: cy + Math.sin(angle) * ry,
-          colorIndex: (hub ? index + 1 : index) % NETWORK_PALETTE.length,
-        })
+    sortedObjects.forEach((objectType, index) => {
+      const node = layout.node(objectType.id)
+      positions.set(objectType.id, {
+        x: (node?.x ?? layoutWidth / 2) + offsetX,
+        y: (node?.y ?? layoutHeight / 2) + offsetY,
+        colorIndex: index % NETWORK_PALETTE.length,
       })
-    }
+    })
 
     return { width, height, cx, cy, positions }
-  }, [degreeByObject, objectTypes])
+  }, [degreeByObject, linkTypes, objectTypes])
 
   const objectById = useMemo(() => new Map(objectTypes.map(o => [o.id, o])), [objectTypes])
+  const graphSignature = useMemo(
+    () => `${objectTypes.map(item => item.id).sort().join(',')}|${linkTypes.map(item => item.id).sort().join(',')}`,
+    [linkTypes, objectTypes],
+  )
   const zoomPercent = Math.round(zoom * 100)
-  const setZoomLevel = (next: number) => setZoom(clamp(Number(next.toFixed(2)), 0.2, 1.8))
+  const setZoomLevel = (next: number) => {
+    const nextZoom = clamp(Number(next.toFixed(2)), 0.2, 1.8)
+    setViewport(current => ({ ...current, zoom: nextZoom }))
+  }
+  const resetViewport = useCallback(() => {
+    setViewport({ zoom: 1, pan: { x: 0, y: 0 } })
+  }, [])
+
+  useEffect(() => {
+    resetViewport()
+  }, [graphSignature, resetViewport])
 
   useEffect(() => {
     const svg = svgRef.current
@@ -589,15 +608,31 @@ function OntologyNetworkView({
 
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
-      setZoom(current => {
-        const next = current + (event.deltaY > 0 ? -0.05 : 0.05)
-        return clamp(Number(next.toFixed(2)), 0.2, 1.8)
+      const screenMatrix = svg.getScreenCTM()
+      if (!screenMatrix) return
+      const cursor = svg.createSVGPoint()
+      cursor.x = event.clientX
+      cursor.y = event.clientY
+      const point = cursor.matrixTransform(screenMatrix.inverse())
+
+      setViewport(current => {
+        const factor = Math.exp(-event.deltaY * 0.0012)
+        const nextZoom = clamp(Number((current.zoom * factor).toFixed(3)), 0.2, 1.8)
+        if (nextZoom === current.zoom) return current
+        const ratio = nextZoom / current.zoom
+        return {
+          zoom: nextZoom,
+          pan: {
+            x: point.x - graph.cx - ratio * (point.x - current.pan.x - graph.cx),
+            y: point.y - graph.cy - ratio * (point.y - current.pan.y - graph.cy),
+          },
+        }
       })
     }
 
     svg.addEventListener('wheel', onWheel, { passive: false })
     return () => svg.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [graph.cx, graph.cy])
 
   if (objectTypes.length === 0) {
     return (
@@ -650,7 +685,7 @@ function OntologyNetworkView({
         >
           <Minus size={14} />
         </button>
-        <div className="min-w-12 border-x border-slate-100 px-2 text-center text-[11px] font-semibold text-slate-600">
+        <div data-testid="ontology-zoom-level" className="min-w-12 border-x border-slate-100 px-2 text-center text-[11px] font-semibold tabular-nums text-slate-600">
           {zoomPercent}%
         </div>
         <button
@@ -664,7 +699,7 @@ function OntologyNetworkView({
         </button>
         <button
           type="button"
-          onClick={() => setZoom(1)}
+          onClick={resetViewport}
           className="flex h-8 w-8 items-center justify-center border-l border-slate-100 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
           title="重置视图"
           aria-label="重置网络图视图"
@@ -673,25 +708,44 @@ function OntologyNetworkView({
         </button>
       </div>
 
+      <div className="pointer-events-none absolute bottom-6 left-4 z-10 hidden items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/80 px-2.5 py-1.5 text-[10px] font-medium text-slate-500 shadow-sm backdrop-blur lg:flex">
+        滚轮缩放 · 按住拖拽 · 双击复位
+      </div>
+
       <svg
         ref={svgRef}
-        className="relative z-0 h-full w-full cursor-grab active:cursor-grabbing"
+        className="relative z-0 h-full w-full touch-none cursor-grab select-none active:cursor-grabbing"
         viewBox={`0 0 ${graph.width} ${graph.height}`}
         role="img"
         aria-label="本体拓扑图"
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
+          if (e.button !== 0 || (e.target as Element).closest('button, input, select, textarea, a')) return
+          e.preventDefault()
+          e.currentTarget.setPointerCapture(e.pointerId)
           dragging.current = true
           lastPos.current = { x: e.clientX, y: e.clientY }
         }}
-        onMouseMove={(e) => {
+        onPointerMove={(e) => {
           if (!dragging.current) return
-          const dx = e.clientX - lastPos.current.x
-          const dy = e.clientY - lastPos.current.y
+          const screenMatrix = e.currentTarget.getScreenCTM()
+          const screenScale = screenMatrix ? Math.hypot(screenMatrix.a, screenMatrix.b) : 1
+          const dx = (e.clientX - lastPos.current.x) / Math.max(screenScale, 0.001)
+          const dy = (e.clientY - lastPos.current.y) / Math.max(screenScale, 0.001)
           lastPos.current = { x: e.clientX, y: e.clientY }
-          setPan(p => ({ x: p.x + dx, y: p.y + dy }))
+          setViewport(current => ({
+            ...current,
+            pan: { x: current.pan.x + dx, y: current.pan.y + dy },
+          }))
         }}
-        onMouseUp={() => { dragging.current = false }}
-        onMouseLeave={() => { dragging.current = false }}
+        onPointerUp={(e) => {
+          dragging.current = false
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+        }}
+        onPointerCancel={() => { dragging.current = false }}
+        onDoubleClick={(e) => {
+          if ((e.target as Element).closest('button, input, select, textarea, a')) return
+          resetViewport()
+        }}
       >
         <defs>
           <pattern id="ontology-grid" width="56" height="56" patternUnits="userSpaceOnUse">
@@ -705,7 +759,7 @@ function OntologyNetworkView({
           </filter>
         </defs>
         <rect width={graph.width} height={graph.height} fill="url(#ontology-grid)" opacity="0.55" />
-        <g transform={`translate(${pan.x} ${pan.y}) translate(${graph.cx} ${graph.cy}) scale(${zoom}) translate(${-graph.cx} ${-graph.cy})`}>
+        <g data-testid="ontology-network-viewport" transform={`translate(${pan.x} ${pan.y}) translate(${graph.cx} ${graph.cy}) scale(${zoom}) translate(${-graph.cx} ${-graph.cy})`}>
           {linkTypes.map((link, index) => {
             const source = graph.positions.get(link.sourceObjectTypeId)
             const target = graph.positions.get(link.targetObjectTypeId)
@@ -759,6 +813,7 @@ function OntologyNetworkView({
             const position = graph.positions.get(objectType.id)
             if (!position) return null
             const palette = NETWORK_PALETTE[position.colorIndex]
+            const iconGlyph = objectTypeIconGlyph(objectType.icon)
             const degree = degreeByObject.get(objectType.id) || 0
             const instances = instancesCount(objectType.id)
             const visibleProperties = objectType.properties.slice(0, 4)
@@ -776,7 +831,9 @@ function OntologyNetworkView({
                 className="overflow-visible"
               >
                 <div
-                  className="flex flex-col rounded-[18px] border bg-white shadow-[0_18px_42px_rgba(15,23,42,0.12)] backdrop-blur transition-transform duration-200 hover:-translate-y-0.5"
+                  data-testid="ontology-network-node"
+                  data-object-type-id={objectType.id}
+                  className="flex h-full flex-col overflow-hidden rounded-[18px] border bg-white shadow-[0_18px_42px_rgba(15,23,42,0.12)] backdrop-blur transition-transform duration-200 hover:-translate-y-0.5"
                   style={{ borderColor: palette.stroke, background: `linear-gradient(145deg, ${palette.fill} 0%, rgba(255,255,255,0.98) 58%, #ffffff 100%)` }}
                   title={`${itemLabel(objectType)} · ${objectType.properties.length} 属性 · ${degree} 关系`}
                 >
@@ -788,7 +845,7 @@ function OntologyNetworkView({
                       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white shadow-sm"
                       style={{ backgroundColor: objectType.color || palette.accent }}
                     >
-                      {objectType.icon ? <span className="text-lg">{objectType.icon}</span> : <Boxes size={18} />}
+                      <span aria-hidden="true" data-testid="ontology-network-node-icon" className="text-[19px] leading-none">{iconGlyph}</span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center justify-between gap-2">

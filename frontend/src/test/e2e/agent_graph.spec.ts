@@ -44,6 +44,7 @@ test('assistant data graph supports progressive depth, paths, impact preview and
       objectTypes: [
         {
           id: 'ot-device-' + suffix, name: 'Device', displayName: '设备',
+          icon: 'radar',
           primaryKey: 'device_no', positionX: 0, positionY: 0,
           properties: [
             { id: 'dp1', name: 'device_no', displayName: '设备编号', type: 'string', required: true },
@@ -52,6 +53,7 @@ test('assistant data graph supports progressive depth, paths, impact preview and
         },
         {
           id: 'ot-task-' + suffix, name: 'Task', displayName: '生产任务',
+          icon: 'alert-triangle',
           primaryKey: 'task_no', positionX: 0, positionY: 0,
           properties: [
             { id: 'tp1', name: 'task_no', displayName: '任务编号', type: 'string', required: true },
@@ -60,6 +62,7 @@ test('assistant data graph supports progressive depth, paths, impact preview and
         },
         {
           id: 'ot-order-' + suffix, name: 'WorkOrder', displayName: '工单',
+          icon: 'building',
           primaryKey: 'order_no', positionX: 0, positionY: 0,
           properties: [
             { id: 'op1', name: 'order_no', displayName: '工单号', type: 'string', required: true },
@@ -112,6 +115,46 @@ test('assistant data graph supports progressive depth, paths, impact preview and
     await page.goto('/#/agent')
     await page.getByLabel('选择本体').selectOption(ontology.id)
     await expect(page.getByRole('heading', { name: '本体拓扑图' })).toBeVisible()
+    const topologyNodes = page.getByTestId('ontology-network-node')
+    await expect(topologyNodes).toHaveCount(3)
+    await expect(page.getByText('radar', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('alert-triangle', { exact: true })).toHaveCount(0)
+    const topologyBoxes = await topologyNodes.evaluateAll(nodes => nodes.map(node => {
+      const rect = node.getBoundingClientRect()
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+    }))
+    for (let i = 0; i < topologyBoxes.length; i += 1) {
+      for (let j = i + 1; j < topologyBoxes.length; j += 1) {
+        const a = topologyBoxes[i]
+        const b = topologyBoxes[j]
+        const overlaps = a.left < b.right - 1 && a.right > b.left + 1
+          && a.top < b.bottom - 1 && a.bottom > b.top + 1
+        expect(overlaps, `topology nodes ${i} and ${j} should not overlap`).toBeFalsy()
+      }
+    }
+
+    const topologySvg = page.getByRole('img', { name: '本体拓扑图' })
+    const zoomLevel = page.getByTestId('ontology-zoom-level')
+    const networkViewport = page.getByTestId('ontology-network-viewport')
+    const graphBox = await topologySvg.boundingBox()
+    expect(graphBox).not.toBeNull()
+    if (!graphBox) throw new Error('topology SVG must have a visible bounding box')
+
+    await page.mouse.move(graphBox.x + graphBox.width / 2, graphBox.y + graphBox.height / 2)
+    await page.mouse.wheel(0, -240)
+    await expect(zoomLevel).not.toHaveText('100%')
+
+    const transformBeforeDrag = await networkViewport.getAttribute('transform')
+    await page.mouse.move(graphBox.x + 32, graphBox.y + graphBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(graphBox.x + 92, graphBox.y + graphBox.height / 2 + 44, { steps: 4 })
+    await page.mouse.up()
+    await expect(networkViewport).not.toHaveAttribute('transform', transformBeforeDrag || '')
+
+    await page.mouse.dblclick(graphBox.x + 32, graphBox.y + graphBox.height / 2)
+    await expect(zoomLevel).toHaveText('100%')
+    await expect(networkViewport).toHaveAttribute('transform', /^translate\(0 0\)/)
+
     await page.getByTestId('workspace-view-toggle').click()
     await expect(page.getByRole('heading', { name: '数据推演图谱' })).toBeVisible()
     await expect(page.getByTestId('instance-knowledge-graph')).toBeVisible()
