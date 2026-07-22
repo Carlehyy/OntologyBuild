@@ -11,22 +11,31 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = [], recentRuns: Mock
     }))
   })
 
-  const historyItems = Array.from({ length: 24 }, (_, index) => ({
-    id: `run-${String(index + 1).padStart(2, '0')}`,
-    status: index % 3 === 0 ? 'failed' : 'success',
-    trigger_type: index % 2 === 0 ? 'manual' : 'scheduled',
-    started_at: `2026-07-${String(18 - Math.floor(index / 3)).padStart(2, '0')}T02:00:00Z`,
-    finished_at: `2026-07-${String(18 - Math.floor(index / 3)).padStart(2, '0')}T02:00:05Z`,
-    rows_in: 10,
-    rows_out: 9,
-    lake_rows: 18,
-    write_mode: index % 2 === 0 ? 'overwrite' : 'append',
-    skipped_outputs: [],
-    curated_dataset_ids: ['dataset-orders'],
-    lake_impact: { added: 2, updated: 1, deleted: 0 },
-    config_snapshot: null,
-    error_message: index % 3 === 0 ? '测试执行失败' : '',
-  }))
+  const historyItems = Array.from({ length: 24 }, (_, index) => {
+    const startedAt = `2026-07-${String(18 - Math.floor(index / 3)).padStart(2, '0')}T02:00:00Z`
+    const isOrdersTask = index % 2 === 0
+    return {
+      id: `run-${String(index + 1).padStart(2, '0')}`,
+      task_id: isOrdersTask ? 'task-orders' : 'task-refunds',
+      task_name: isOrdersTask ? '订单每日入湖' : '退货数据入湖',
+      pipeline_id: 'pipeline-orders',
+      pipeline_name: '订单标准化流水线',
+      status: index % 3 === 0 ? 'failed' : 'success',
+      trigger_type: index % 2 === 0 ? 'manual' : 'scheduled',
+      created_at: startedAt,
+      started_at: startedAt,
+      finished_at: startedAt.replace('02:00:00Z', '02:00:05Z'),
+      rows_in: 10,
+      rows_out: 9,
+      lake_rows: 18,
+      write_mode: index % 2 === 0 ? 'overwrite' : 'append',
+      skipped_outputs: [],
+      curated_dataset_ids: ['dataset-orders'],
+      lake_impact: { added: 2, updated: 1, deleted: 0 },
+      config_snapshot: null,
+      error_message: index % 3 === 0 ? '测试执行失败：目标数据集暂时不可用，请稍后重试' : '',
+    }
+  })
 
   await page.route('**/api/**', async (route: Route) => {
     const url = new URL(route.request().url())
@@ -39,6 +48,30 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = [], recentRuns: Mock
 
     if (url.pathname === '/api/v2/pipeline-tasks') {
       return ok({ total: tasks.length, items: tasks, page: 1, page_size: 10 })
+    }
+    if (url.pathname === '/api/v2/pipeline-tasks/histories') {
+      const status = url.searchParams.get('status')
+      const triggerType = url.searchParams.get('trigger_type')
+      const pipelineId = url.searchParams.get('pipeline_id')
+      const search = (url.searchParams.get('search') || '').toLowerCase()
+      const createdFrom = url.searchParams.get('created_from')
+      const createdTo = url.searchParams.get('created_to')
+      const pageNo = Number(url.searchParams.get('page') || 1)
+      const pageSize = Number(url.searchParams.get('page_size') || 10)
+      const filtered = historyItems.filter(run =>
+        (!status || run.status === status)
+        && (!triggerType || run.trigger_type === triggerType)
+        && (!pipelineId || run.pipeline_id === pipelineId)
+        && (!search || `${run.task_name} ${run.pipeline_name}`.toLowerCase().includes(search))
+        && (!createdFrom || new Date(run.created_at) >= new Date(createdFrom))
+        && (!createdTo || new Date(run.created_at) <= new Date(createdTo)),
+      )
+      return ok({
+        total: filtered.length,
+        items: filtered.slice((pageNo - 1) * pageSize, pageNo * pageSize),
+        page: pageNo,
+        page_size: pageSize,
+      })
     }
     if (url.pathname === '/api/v2/pipeline-tasks/task-orders/histories') {
       const status = url.searchParams.get('status')
@@ -85,17 +118,23 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = [], recentRuns: Mock
         today_runs: 0, today_errors: 0, total_runs: 0, total_errors: 0,
         trend_7d: [
           { date: '2026-07-12', runs: 0, errors: 0 },
-          { date: '2026-07-13', runs: 0, errors: 0 },
-          { date: '2026-07-14', runs: 0, errors: 0 },
-          { date: '2026-07-15', runs: 0, errors: 0 },
-          { date: '2026-07-16', runs: 0, errors: 0 },
-          { date: '2026-07-17', runs: 0, errors: 0 },
-          { date: '2026-07-18', runs: 0, errors: 0 },
+          { date: '2026-07-13', runs: 2, errors: 0 },
+          { date: '2026-07-14', runs: 3, errors: 1 },
+          { date: '2026-07-15', runs: 4, errors: 0 },
+          { date: '2026-07-16', runs: 2, errors: 2 },
+          { date: '2026-07-17', runs: 5, errors: 1 },
+          { date: '2026-07-18', runs: 1, errors: 0 },
         ],
         recent_runs: recentRuns,
       })
     }
-    if (url.pathname === '/api/v2/pipeline-tasks/pipeline-options') return ok({ items: [] })
+    if (url.pathname === '/api/v2/pipeline-tasks/pipeline-options') {
+      return ok({
+        items: tasks.length > 0
+          ? [{ id: 'pipeline-orders', name: '订单标准化流水线', task_count: tasks.length }]
+          : [],
+      })
+    }
     if (url.pathname === '/api/v2/pipeline-tasks/selectable-pipelines') {
       return ok({
         total: 1,
@@ -159,6 +198,9 @@ test('任务池空状态、侧栏比例与新建任务字段契约完整展示',
   const sevenDayChartHeight = sevenDayChartBox?.height ?? 0
   expect(sevenDayChartHeight).toBeGreaterThanOrEqual(200)
   expect(sevenDayChartHeight).toBeLessThanOrEqual(250)
+  await expect(sevenDayChart.getByTestId('trend-success-total')).toHaveText('成功 13')
+  await expect(sevenDayChart.getByTestId('trend-failure-total')).toHaveText('失败 4')
+  await expect(sevenDayChart.getByText('17 次')).toBeVisible()
   expect(sevenDayChartBox?.y ?? 0).toBeLessThan(recentRunCardBox?.y ?? 0)
   const recentRunBottom = (recentRunCardBox?.y ?? 0) + (recentRunCardBox?.height ?? 0)
   const taskListBottom = (taskListPanelBox?.y ?? 0) + (taskListPanelBox?.height ?? 0)
@@ -197,8 +239,118 @@ test('任务池空状态、侧栏比例与新建任务字段契约完整展示',
   await page.screenshot({ path: testInfo.outputPath('task-modal-schema.png'), fullPage: true })
 })
 
+test('全局历史记录弹窗限制尺寸、支持滚动分页与组合筛选', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await mockTaskPool(page, [{
+    id: 'task-orders',
+    name: '订单每日入湖',
+    description: '每天同步订单数据并写入资产湖',
+    pipeline_id: 'pipeline-orders',
+    pipeline_name: '订单标准化流水线',
+    pipeline_status: 'published',
+    pipeline_enabled: true,
+    pipeline_version: 3,
+    write_mode: 'overwrite',
+    primary_key: 'order_id',
+    soft_delete_column: '',
+    skip_empty: true,
+    schedule_type: 'CRON',
+    cron_expression: '0 2 * * *',
+    interval_seconds: 0,
+    enabled: true,
+    status: 'success',
+    last_run_at: '2026-07-18T02:00:00Z',
+    next_run_at: '2026-07-19T02:00:00Z',
+    last_rows: 9,
+    last_error: '',
+    created_at: '2026-07-18T02:00:00Z',
+    updated_at: '2026-07-18T02:00:00Z',
+  }])
+  await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
+
+  const historyButton = page.getByRole('button', { name: '历史记录', exact: true })
+  const createButton = page.getByRole('button', { name: '新建任务', exact: true })
+  await expect(historyButton).toBeVisible()
+  expect((await historyButton.boundingBox())?.x ?? 0).toBeLessThan((await createButton.boundingBox())?.x ?? 0)
+
+  await historyButton.click()
+  const modal = page.getByTestId('all-history-modal')
+  await expect(modal).toBeVisible()
+  await expect(modal.getByRole('heading', { name: '历史记录', exact: true })).toBeVisible()
+  const modalBox = await modal.boundingBox()
+  expect(modalBox?.width ?? 0).toBeLessThanOrEqual(1152)
+  expect(modalBox?.height ?? 0).toBeLessThanOrEqual(760)
+  expect(modalBox?.height ?? 0).toBeGreaterThan(500)
+  await expect(modal.getByText('第 1 / 3 页')).toBeVisible()
+  await expect(modal.getByTestId('global-history-record-run-01')).toBeVisible()
+
+  const secondPageRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories') && url.searchParams.get('page') === '2'
+  })
+  await modal.getByRole('button', { name: '全部执行记录下一页' }).click()
+  await secondPageRequest
+  await expect(modal.getByTestId('global-history-record-run-11')).toBeVisible()
+
+  await modal.getByRole('button', { name: '全部执行记录上一页' }).click()
+  const pageSizeRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories') && url.searchParams.get('page_size') === '20'
+  })
+  await modal.getByLabel('全部历史每页条数').selectOption('20')
+  await pageSizeRequest
+  const historyScroll = modal.getByTestId('all-history-scroll')
+  await expect.poll(() => historyScroll.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
+
+  const failedRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories') && url.searchParams.get('status') === 'failed'
+  })
+  await modal.getByLabel('全部历史执行状态筛选').selectOption('failed')
+  await failedRequest
+  await expect(modal.getByText('显示 1–8 / 8 条记录')).toBeVisible()
+
+  const scheduledRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories')
+      && url.searchParams.get('status') === 'failed'
+      && url.searchParams.get('trigger_type') === 'scheduled'
+  })
+  await modal.getByLabel('全部历史触发方式筛选').selectOption('scheduled')
+  await scheduledRequest
+  await expect(modal.getByText('显示 1–4 / 4 条记录')).toBeVisible()
+
+  const pipelineRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories') && url.searchParams.get('pipeline_id') === 'pipeline-orders'
+  })
+  await modal.getByLabel('历史记录流水线筛选').selectOption('pipeline-orders')
+  await pipelineRequest
+
+  await modal.getByRole('button', { name: '清除筛选' }).click()
+  const searchRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories') && url.searchParams.get('search') === '退货'
+  })
+  await modal.getByLabel('搜索历史任务或流水线').fill('退货')
+  await searchRequest
+  await expect(modal.getByText('显示 1–12 / 12 条记录')).toBeVisible()
+
+  const dateRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/pipeline-tasks/histories') && Boolean(url.searchParams.get('created_from'))
+  })
+  await modal.getByLabel('全部历史开始日期').fill('2026-07-17')
+  await dateRequest
+  await page.screenshot({ path: testInfo.outputPath('global-history-modal.png'), fullPage: true })
+
+  await modal.getByRole('button', { name: '关闭历史记录弹窗' }).click()
+  await expect(modal).toBeHidden()
+})
+
 test('任务表格按优先级拆列、入库策略使用独立颜色并允许横向滚动', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1728, height: 1000 })
+  const longLakeError = 'aw-datasets/datasets/e39030ee-2746-49d5-a9f5-b50a70f88903/objects/9f0bfc4a-c9aa-4039-84d2-f143a0aa736 写入失败：目标数据集不可用'
   const baseTask = {
     id: 'task-orders',
     name: '订单每日入湖',
@@ -236,6 +388,15 @@ test('任务表格按优先级拆列、入库策略使用独立颜色并允许�
       cron_expression: '',
       next_run_at: null,
     },
+    {
+      ...baseTask,
+      id: 'task-orders-failed',
+      name: '订单失败任务',
+      status: 'failed',
+      write_mode: 'upsert',
+      last_rows: 0,
+      last_error: longLakeError,
+    },
   ])
   await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
 
@@ -266,6 +427,11 @@ test('任务表格按优先级拆列、入库策略使用独立颜色并允许�
   const fixedActionsX = (await fixedActions.boundingBox())?.x ?? 0
   await expect(page.locator('[data-write-mode="overwrite"]')).toHaveClass(/emerald/)
   await expect(page.locator('[data-write-mode="append"]')).toHaveClass(/sky/)
+  const lakeError = page.getByTestId('lake-result-error-task-orders-failed')
+  await expect(lakeError).toHaveAttribute('title', longLakeError)
+  await expect(lakeError).toHaveCSS('text-overflow', 'ellipsis')
+  expect(await lakeError.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+  expect((await lakeError.boundingBox())?.width ?? 0).toBeLessThanOrEqual(186)
   expect(await row.evaluate(element => getComputedStyle(element).whiteSpace)).toBe('nowrap')
   await page.screenshot({ path: testInfo.outputPath('task-table-status.png'), fullPage: true })
   await tableScroll.evaluate(element => { element.scrollLeft = element.scrollWidth })

@@ -11,6 +11,7 @@ import {
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineFilterOption, type PipelineTask, type PipelineTaskRecentRun, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import TaskFormModal from './TaskFormModal'
 import HistoryDrawer from './HistoryDrawer'
+import GlobalHistoryModal from './GlobalHistoryModal'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ── 常量 ──────────────────────────────────────────────
@@ -113,6 +114,7 @@ export default function SyncTasksTab() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showForm, setShowForm] = useState(false)
+  const [showGlobalHistory, setShowGlobalHistory] = useState(false)
   const [editingTask, setEditingTask] = useState<PipelineTask | null>(null)
   const [historyTask, setHistoryTask] = useState<PipelineTask | null>(null)
   const [historyRunId, setHistoryRunId] = useState<string | null>(null)
@@ -287,9 +289,11 @@ export default function SyncTasksTab() {
       const [, month, day] = item.date.split('-')
       return `${Number(month)}/${Number(day)}`
     })
-    const series = source.map(item => item.runs)
-    const errors = source.map(item => item.errors)
-    return { days, series, errors, total7d: series.reduce((a, b) => a + b, 0) }
+    const failures = source.map(item => Math.min(Math.max(item.errors, 0), Math.max(item.runs, 0)))
+    const successes = source.map((item, index) => Math.max(item.runs - failures[index], 0))
+    const successTotal = successes.reduce((a, b) => a + b, 0)
+    const failureTotal = failures.reduce((a, b) => a + b, 0)
+    return { days, successes, failures, successTotal, failureTotal, total7d: successTotal + failureTotal }
   }, [stats])
 
   // ECharts: 环形状态分布 - 固定尺寸容器、禁用 tooltip 防止溢出
@@ -317,7 +321,7 @@ export default function SyncTasksTab() {
     }
   }, [stats])
 
-  // ECharts: 近七日真实执行趋势
+  // ECharts: 近七日成功/失败堆叠趋势，每根柱体高度仍表示当日总执行次数
   const miniTrendOption = useMemo(() => ({
     grid: { left: 24, right: 6, top: 14, bottom: 24 },
     xAxis: {
@@ -334,14 +338,14 @@ export default function SyncTasksTab() {
     tooltip: { trigger: 'axis', confine: true },
     series: [
       {
-        name: '执行', type: 'bar', data: trendData.series, barMaxWidth: 18,
-        itemStyle: { color: '#0D9488', borderRadius: [4, 4, 0, 0] },
+        name: '成功', type: 'bar', stack: 'executions', data: trendData.successes, barMaxWidth: 18,
+        itemStyle: { color: '#10B981', borderRadius: [4, 4, 0, 0] },
+        emphasis: { focus: 'series' },
       },
       {
-        name: '异常', type: 'line', smooth: true, symbol: 'circle', symbolSize: 4,
-        data: trendData.errors,
-        lineStyle: { width: 1.5, color: '#F87171' },
-        itemStyle: { color: '#F87171' },
+        name: '失败', type: 'bar', stack: 'executions', data: trendData.failures, barMaxWidth: 18,
+        itemStyle: { color: '#F87171', borderRadius: [4, 4, 0, 0] },
+        emphasis: { focus: 'series' },
       },
     ],
   }), [trendData])
@@ -364,14 +368,24 @@ export default function SyncTasksTab() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleCreate}
-            className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-emerald-700 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
-          >
-            <Plus size={14} />
-            新建任务
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowGlobalHistory(true)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-4 text-xs font-medium text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+            >
+              <History size={14} />
+              历史记录
+            </button>
+            <button
+              type="button"
+              onClick={handleCreate}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-medium text-white shadow-sm transition hover:bg-emerald-700 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+            >
+              <Plus size={14} />
+              新建任务
+            </button>
+          </div>
         </div>
       </div>
 
@@ -565,7 +579,14 @@ export default function SyncTasksTab() {
                               </td>
                               <td data-column="lake-result" className="px-4 py-3 text-center align-middle">
                                 {t.status === 'failed' && t.last_error ? (
-                                  <span className="text-xs text-rose-600">{t.last_error}</span>
+                                  <span
+                                    data-testid={`lake-result-error-${t.id}`}
+                                    className="mx-auto block max-w-[186px] cursor-help truncate text-xs text-rose-600"
+                                    title={t.last_error}
+                                    aria-label={`入湖失败：${t.last_error}`}
+                                  >
+                                    {t.last_error}
+                                  </span>
                                 ) : (
                                   <div className="inline-flex items-center justify-center gap-2">
                                     <span className="text-xs tabular-nums text-slate-500">产出 {t.last_rows ?? 0} 行</span>
@@ -710,6 +731,16 @@ export default function SyncTasksTab() {
               </h3>
               <span className="text-[11px] text-slate-500 tabular-nums">{trendData.total7d} 次</span>
             </div>
+            <div className="flex shrink-0 items-center gap-3 pl-3 text-[10px] text-slate-500" aria-label="近 7 日执行结果图例">
+              <span data-testid="trend-success-total" className="inline-flex items-center gap-1.5 tabular-nums">
+                <span className="h-1.5 w-1.5 rounded-sm bg-emerald-500" aria-hidden="true" />
+                成功 {trendData.successTotal}
+              </span>
+              <span data-testid="trend-failure-total" className="inline-flex items-center gap-1.5 tabular-nums">
+                <span className="h-1.5 w-1.5 rounded-sm bg-red-400" aria-hidden="true" />
+                失败 {trendData.failureTotal}
+              </span>
+            </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <ReactECharts option={miniTrendOption} style={{ height: '100%', width: '100%' }} opts={{ renderer: 'svg' }} notMerge />
             </div>
@@ -734,6 +765,12 @@ export default function SyncTasksTab() {
           initialPipelineId={presetPipelineId}
           onClose={() => { setShowForm(false); setEditingTask(null); setPresetPipelineId(null) }}
           onSaved={handleFormSaved}
+        />
+      )}
+      {showGlobalHistory && (
+        <GlobalHistoryModal
+          pipelineOptions={pipelineOptions}
+          onClose={() => setShowGlobalHistory(false)}
         />
       )}
       {historyTask && (

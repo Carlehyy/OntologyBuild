@@ -17,6 +17,8 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 WRITE_MODES = ("overwrite", "append", "upsert", "append_dedup")
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+HistoryStatus = Literal["pending", "running", "success", "failed", "cancelled"]
+HistoryTriggerType = Literal["manual", "scheduled"]
 
 
 def _now_utc() -> datetime:
@@ -529,6 +531,115 @@ def pipeline_filter_options(db: Session = Depends(get_db)):
     }
 
 
+def _validate_history_query(
+    page: int,
+    page_size: int,
+    created_from: Optional[datetime],
+    created_to: Optional[datetime],
+) -> None:
+    if page < 1:
+        raise HTTPException(400, "page 必须大于等于 1")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(400, "page_size 必须在 1 到 100 之间")
+    if created_from and created_to and _as_utc(created_from) > _as_utc(created_to):
+        raise HTTPException(400, "开始时间不能晚于结束时间")
+
+
+def _apply_history_filters(
+    query,
+    status: Optional[HistoryStatus],
+    trigger_type: Optional[HistoryTriggerType],
+    created_from: Optional[datetime],
+    created_to: Optional[datetime],
+):
+    if status:
+        query = query.filter(PipelineRun.status == status)
+    if trigger_type:
+        trigger_expr = PipelineRun.stats["trigger_type"].as_string()
+        if trigger_type == "manual":
+            query = query.filter(or_(
+                PipelineRun.stats.is_(None),
+                trigger_expr.is_(None),
+                trigger_expr == "manual",
+            ))
+        else:
+            query = query.filter(trigger_expr == trigger_type)
+    if created_from:
+        query = query.filter(PipelineRun.created_at >= _as_utc(created_from).replace(tzinfo=None))
+    if created_to:
+        query = query.filter(PipelineRun.created_at <= _as_utc(created_to).replace(tzinfo=None))
+    return query
+
+
+def _history_item(run: PipelineRun) -> dict:
+    stats = run.stats or {}
+    return {
+        "id": run.id,
+        "status": run.status,
+        "trigger_type": stats.get("trigger_type", "manual"),
+        "created_at": _utc_iso(run.created_at),
+        "started_at": _utc_iso(run.started_at),
+        "finished_at": _utc_iso(run.finished_at),
+        "rows_in": stats.get("rows_in", 0),
+        "rows_out": stats.get("rows_out", 0),
+        "lake_rows": stats.get("lake_rows"),
+        "write_mode": stats.get("write_mode"),
+        "skipped_outputs": stats.get("skipped_outputs"),
+        "curated_dataset_ids": stats.get("curated_dataset_ids", []),
+        "lake_impact": stats.get("lake_impact"),
+        "config_snapshot": stats.get("config_snapshot"),
+        "error_message": run.error_log or "",
+    }
+
+
+@router.get("/histories")
+def list_all_histories(
+    search: Optional[str] = None,
+    pipeline_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    status: Optional[HistoryStatus] = None,
+    trigger_type: Optional[HistoryTriggerType] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+    db: Session = Depends(get_db),
+):
+    """分页查询任务池的全部执行记录，供全局历史弹窗使用。"""
+    _validate_history_query(page, page_size, created_from, created_to)
+    query = (
+        db.query(PipelineRun, PipelineTask, Pipeline)
+        .join(PipelineTask, PipelineTask.id == PipelineRun.task_id)
+        .outerjoin(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+    )
+    keyword = (search or "").strip()
+    if keyword:
+        query = query.filter(or_(
+            PipelineTask.name.ilike(f"%{keyword}%"),
+            Pipeline.name.ilike(f"%{keyword}%"),
+        ))
+    if pipeline_id:
+        query = query.filter(PipelineRun.pipeline_id == pipeline_id)
+    query = _apply_history_filters(
+        query, status, trigger_type, created_from, created_to,
+    )
+    total = query.count()
+    rows = query.order_by(
+        PipelineRun.created_at.desc(),
+        PipelineRun.id.desc(),
+    ).offset((page - 1) * page_size).limit(page_size).all()
+    items = []
+    for run, task, pipeline in rows:
+        item = _history_item(run)
+        item.update({
+            "task_id": task.id,
+            "task_name": task.name,
+            "pipeline_id": run.pipeline_id,
+            "pipeline_name": pipeline.name if pipeline else "(流水线已删除)",
+        })
+        items.append(item)
+    return {"total": total, "items": items, "page": page, "page_size": page_size}
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, db: Session = Depends(get_db)):
     task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()
@@ -611,63 +722,26 @@ def list_histories(
     task_id: str,
     page: int = 1,
     page_size: int = 10,
-    status: Optional[Literal["pending", "running", "success", "failed", "cancelled"]] = None,
-    trigger_type: Optional[Literal["manual", "scheduled"]] = None,
+    status: Optional[HistoryStatus] = None,
+    trigger_type: Optional[HistoryTriggerType] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
     db: Session = Depends(get_db),
 ):
-    if page < 1:
-        raise HTTPException(400, "page 必须大于等于 1")
-    if page_size < 1 or page_size > 100:
-        raise HTTPException(400, "page_size 必须在 1 到 100 之间")
-    if created_from and created_to and _as_utc(created_from) > _as_utc(created_to):
-        raise HTTPException(400, "开始时间不能晚于结束时间")
+    _validate_history_query(page, page_size, created_from, created_to)
     task = db.query(PipelineTask).filter(PipelineTask.id == task_id).first()
     if not task:
         raise HTTPException(404, "PipelineTask not found")
-    q = db.query(PipelineRun).filter(PipelineRun.task_id == task_id)
-    if status:
-        q = q.filter(PipelineRun.status == status)
-    if trigger_type:
-        trigger_expr = PipelineRun.stats["trigger_type"].as_string()
-        if trigger_type == "manual":
-            q = q.filter(or_(
-                PipelineRun.stats.is_(None),
-                trigger_expr.is_(None),
-                trigger_expr == "manual",
-            ))
-        else:
-            q = q.filter(trigger_expr == trigger_type)
-    if created_from:
-        q = q.filter(PipelineRun.created_at >= _as_utc(created_from).replace(tzinfo=None))
-    if created_to:
-        q = q.filter(PipelineRun.created_at <= _as_utc(created_to).replace(tzinfo=None))
+    q = _apply_history_filters(
+        db.query(PipelineRun).filter(PipelineRun.task_id == task_id),
+        status, trigger_type, created_from, created_to,
+    )
     total = q.count()
     runs = q.order_by(
         PipelineRun.created_at.desc(),
         PipelineRun.id.desc(),
     ).offset((page - 1) * page_size).limit(page_size).all()
-    items = []
-    for r in runs:
-        stats = r.stats or {}
-        items.append({
-            "id": r.id,
-            "status": r.status,
-            "trigger_type": stats.get("trigger_type", "manual"),
-            "started_at": _utc_iso(r.started_at),
-            "finished_at": _utc_iso(r.finished_at),
-            "rows_in": stats.get("rows_in", 0),
-            "rows_out": stats.get("rows_out", 0),
-            "lake_rows": stats.get("lake_rows"),
-            "write_mode": stats.get("write_mode"),
-            "skipped_outputs": stats.get("skipped_outputs"),
-            "curated_dataset_ids": stats.get("curated_dataset_ids", []),
-            # 审计速览：资产湖影响计数 + 执行时配置快照（明细走 /audit）
-            "lake_impact": stats.get("lake_impact"),
-            "config_snapshot": stats.get("config_snapshot"),
-            "error_message": r.error_log or "",
-        })
+    items = [_history_item(run) for run in runs]
     return {"total": total, "items": items, "page": page, "page_size": page_size}
 
 

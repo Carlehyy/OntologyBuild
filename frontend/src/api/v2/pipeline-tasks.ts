@@ -58,6 +58,7 @@ export interface PipelineTaskRun {
   id: string
   status: string
   trigger_type: string
+  created_at?: string | null
   started_at: string | null
   finished_at: string | null
   rows_in: number
@@ -80,9 +81,28 @@ export interface PipelineTaskHistoryParams {
   created_to?: string
 }
 
+export interface PipelineTaskGlobalHistoryParams extends PipelineTaskHistoryParams {
+  search?: string
+  pipeline_id?: string
+}
+
+export interface PipelineTaskGlobalRun extends PipelineTaskRun {
+  task_id: string
+  task_name: string
+  pipeline_id: string
+  pipeline_name: string
+}
+
 export interface PipelineTaskHistoryPage {
   total: number
   items: PipelineTaskRun[]
+  page: number
+  page_size: number
+}
+
+export interface PipelineTaskGlobalHistoryPage {
+  total: number
+  items: PipelineTaskGlobalRun[]
   page: number
   page_size: number
 }
@@ -264,6 +284,11 @@ export const pipelineTasksApi = {
 
   histories: (id: string, params: PipelineTaskHistoryParams = {}): Promise<PipelineTaskHistoryPage> =>
     apiClientV2.get(`/pipeline-tasks/${id}/histories`, {
+      params: { page: 1, page_size: 10, ...params },
+    }),
+
+  allHistories: (params: PipelineTaskGlobalHistoryParams = {}): Promise<PipelineTaskGlobalHistoryPage> =>
+    apiClientV2.get('/pipeline-tasks/histories', {
       params: { page: 1, page_size: 10, ...params },
     }),
 

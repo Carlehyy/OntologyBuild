@@ -10,6 +10,7 @@ from app.data_channel.pipeline_tasks.router import (
     PipelineTaskCreate,
     _validate,
     create_task,
+    list_all_histories,
     list_histories,
     list_tasks,
     selectable_pipelines,
@@ -299,6 +300,74 @@ def test_histories_support_filters_and_stable_pagination(db, monkeypatch):
         "run-scheduled-success", "run-manual-failed",
     ]
     assert [item["id"] for item in second_page["items"]] == ["run-legacy-manual"]
+
+
+def test_all_histories_support_global_filters_and_pagination(db, monkeypatch):
+    _published_pipeline(db)
+    monkeypatch.setattr(
+        "app.data_channel.pipeline_tasks.router._refresh_scheduler",
+        lambda _task_id: None,
+    )
+    order_task = create_task(_body(name="订单每日入湖"), db)
+    refund_task = create_task(_body(name="退货数据入湖"), db)
+    db.add_all([
+        PipelineRun(
+            id="global-run-orders",
+            pipeline_id="pipe-contract",
+            task_id=order_task["id"],
+            status="success",
+            stats={"trigger_type": "manual", "rows_out": 18},
+            created_at=datetime(2026, 7, 18, 2, 0),
+            started_at=datetime(2026, 7, 18, 2, 0),
+        ),
+        PipelineRun(
+            id="global-run-refund-failed",
+            pipeline_id="pipe-contract",
+            task_id=refund_task["id"],
+            status="failed",
+            stats={"trigger_type": "scheduled"},
+            error_log="目标数据集不可用",
+            created_at=datetime(2026, 7, 17, 2, 0),
+            started_at=datetime(2026, 7, 17, 2, 0),
+        ),
+        PipelineRun(
+            id="global-run-refund-success",
+            pipeline_id="pipe-contract",
+            task_id=refund_task["id"],
+            status="success",
+            stats={},
+            created_at=datetime(2026, 7, 16, 2, 0),
+            started_at=datetime(2026, 7, 16, 2, 0),
+        ),
+    ])
+    db.commit()
+
+    refund_runs = list_all_histories(search="退货", db=db)
+    assert refund_runs["total"] == 2
+    assert {item["task_name"] for item in refund_runs["items"]} == {"退货数据入湖"}
+    assert all(item["pipeline_name"] == "订单流水线" for item in refund_runs["items"])
+
+    failed_scheduled = list_all_histories(
+        pipeline_id="pipe-contract",
+        status="failed",
+        trigger_type="scheduled",
+        created_from=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        created_to=datetime(2026, 7, 17, 23, 59, 59, tzinfo=timezone.utc),
+        db=db,
+    )
+    assert failed_scheduled["total"] == 1
+    assert failed_scheduled["items"][0]["id"] == "global-run-refund-failed"
+    assert failed_scheduled["items"][0]["error_message"] == "目标数据集不可用"
+
+    first_page = list_all_histories(page=1, page_size=2, db=db)
+    second_page = list_all_histories(page=2, page_size=2, db=db)
+    assert first_page["total"] == 3
+    assert [item["id"] for item in first_page["items"]] == [
+        "global-run-orders", "global-run-refund-failed",
+    ]
+    assert [item["id"] for item in second_page["items"]] == [
+        "global-run-refund-success",
+    ]
 
 
 def test_task_cannot_be_enabled_while_pipeline_is_disabled(db, monkeypatch):
