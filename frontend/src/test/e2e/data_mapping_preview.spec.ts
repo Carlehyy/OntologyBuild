@@ -73,6 +73,13 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  await expect(page.getByText('数据血缘详情')).toBeVisible()
+  await expect(page.getByText('把本体结构，接到真实数据上')).toHaveCount(0)
+  const cardBox = await page.locator('.dmo-card').boundingBox()
+  expect(cardBox).not.toBeNull()
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1)
+
   await page.getByRole('button', { name: '预览数据源 订单宽表' }).click()
   const dialog = page.getByRole('dialog', { name: '订单宽表' })
   await expect(dialog).toBeVisible()

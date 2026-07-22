@@ -123,7 +123,9 @@ export default function OntologyDetailPage() {
     <div className={`onto-glass-root flex h-full min-h-0 flex-col gap-4 overflow-hidden ${
       activeGroup === 'overview'
         ? 'onto-glass-root--overview'
-        : activeGroup === 'data' || activeGroup === 'design' ? 'onto-glass-root--flat' : ''
+        : activeGroup === 'data' || activeGroup === 'design' || activeGroup === 'data-mapping'
+          ? 'onto-glass-root--flat'
+          : ''
     }`}>
       {/* ═══ 功能导航与低频操作 ═══ */}
       <div data-testid="ontology-detail-header" className="onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4">
@@ -218,7 +220,7 @@ export default function OntologyDetailPage() {
           <ModelStructureView ontologyId={id!} />
         </div>
       ) : activeGroup === 'data-mapping' ? (
-        <div className="onto-glass-in min-h-0 flex-1 overflow-auto">
+        <div className="onto-glass-in min-h-0 flex-1 overflow-hidden">
           <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (

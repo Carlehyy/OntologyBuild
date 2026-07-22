@@ -3,63 +3,74 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Background, Controls, Handle, MarkerType, Position, ReactFlow,
-  type Edge, type Node, type NodeProps,
-} from '@xyflow/react'
-import '@xyflow/react/dist/style.css'
-import {
-  AlertCircle, Boxes, ChevronLeft, ChevronRight, CircleDot, Database, Eye,
-  GitBranch, Layers3, Loader2, Settings2, Table2, X,
+  AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
+  ChevronRight, Database, Eye, GitBranch, Link2, Loader2, Search, Settings2,
+  Table2, X,
 } from 'lucide-react'
 import curatedApi from '@/api/v2/curated'
 import datasetsApi from '@/api/v2/datasets'
 import {
-  linkMappingForType, mappingTargetId, userFieldMapping, useMappingData,
-  type MappingDataset, type MappingLinkType, type MappingObjectType,
+  linkMappingForType, mappingTargetId, typesCompatible, userFieldMapping, useMappingData,
+  type MappingDataset,
 } from './mapping-data'
 import './mapping-overview.css'
 
 type TargetSelection = { kind: 'object'; id: string } | { kind: 'relation'; id: string }
-
-function PercentRing({ value, tone = 'teal' }: { value: number; tone?: 'teal' | 'indigo' | 'amber' }) {
-  return (
-    <div className={`dmo-ring dmo-ring--${tone}`} style={{ '--dmo-progress': `${value * 3.6}deg` } as React.CSSProperties}>
-      <strong>{value}%</strong>
-    </div>
-  )
-}
-
-function MiniDonut({ value, label, tone }: { value: number; label: string; tone: 'teal' | 'indigo' | 'amber' }) {
-  return (
-    <div className="dmo-analysis-donut">
-      <PercentRing value={value} tone={tone} />
-      <div><strong>{label}</strong><span>{value === 100 ? '已全部完成' : `仍有 ${100 - value}% 待完善`}</span></div>
-    </div>
-  )
-}
-
-type OverviewFlowNodeData = {
-  kind: 'source' | 'target'
-  title: string
-  subtitle: string
-  targetKind?: TargetSelection['kind']
-}
-type OverviewFlowNode = Node<OverviewFlowNodeData, 'overview'>
-
-function OverviewFlowNodeCard({ data }: NodeProps<OverviewFlowNode>) {
-  const source = data.kind === 'source'
-  return (
-    <div className={`dmo-flow-node ${source ? 'dmo-flow-node--source' : 'dmo-flow-node--target'}`}>
-      {!source && <Handle type="target" position={Position.Left} className="dmo-flow-handle dmo-flow-handle--target" />}
-      {source ? <Database size={16} /> : data.targetKind === 'object' ? <Boxes size={16} /> : <GitBranch size={16} />}
-      <span><b>{data.title}</b><small>{data.subtitle}</small></span>
-      {source && <Handle type="source" position={Position.Right} className="dmo-flow-handle dmo-flow-handle--source" />}
-    </div>
-  )
-}
-
-const OVERVIEW_NODE_TYPES = { overview: OverviewFlowNodeCard }
 const PREVIEW_PAGE_SIZES = [10, 20, 50]
+
+type MappingRowStatus = 'ready' | 'no-data' | 'incomplete' | 'type-risk' | 'unmapped' | 'missing-source'
+type MappingFilter = 'all' | 'issue' | 'object' | 'relation'
+
+interface FieldPair {
+  source: string
+  target: string
+  sourceType?: string
+  targetType?: string
+  compatible?: boolean
+}
+
+interface MappingRow {
+  key: string
+  selection: TargetSelection
+  kind: TargetSelection['kind']
+  name: string
+  technicalName: string
+  datasets: MappingDataset[]
+  datasetIds: string[]
+  mappingExists: boolean
+  mappedFields: number
+  totalFields: number
+  instanceCount: number
+  status: MappingRowStatus
+  fieldPairs: FieldPair[]
+  missingFields: string[]
+}
+
+const STATUS_COPY: Record<MappingRowStatus, { label: string; detail: string }> = {
+  ready: { label: '已连通', detail: '映射完整，且已产出实例数据' },
+  'no-data': { label: '映射后无数据', detail: '配置已发布，但当前还没有实例数据' },
+  incomplete: { label: '字段待补齐', detail: '仍有本体字段没有对应的数据列' },
+  'type-risk': { label: '字段类型风险', detail: '部分来源字段与本体字段类型不一致' },
+  unmapped: { label: '未配置', detail: '本体元素尚未连接任何真实数据' },
+  'missing-source': { label: '数据源不可见', detail: '发布映射引用的数据资产当前不可用' },
+}
+
+function resolveRowStatus(
+  mappingExists: boolean,
+  datasetIds: string[],
+  datasets: MappingDataset[],
+  mappedFields: number,
+  totalFields: number,
+  instanceCount: number,
+  fieldPairs: FieldPair[],
+): MappingRowStatus {
+  if (!mappingExists) return 'unmapped'
+  if (datasetIds.length === 0 || datasets.length !== datasetIds.length) return 'missing-source'
+  if (fieldPairs.some(pair => pair.compatible === false)) return 'type-risk'
+  if (mappedFields < totalFields) return 'incomplete'
+  if (instanceCount === 0) return 'no-data'
+  return 'ready'
+}
 
 function displayPreviewValue(value: unknown) {
   if (value == null || value === '') return '—'
@@ -183,97 +194,13 @@ function DatasetPreviewDialog({ dataset, onClose }: { dataset: MappingDataset; o
   )
 }
 
-function MappingOverviewFlow({
-  datasets, targetKind, targetName, mappedFieldCount,
-}: {
-  datasets: MappingDataset[]
-  targetKind: TargetSelection['kind']
-  targetName: string
-  mappedFieldCount: number
-}) {
-  const nodes = useMemo<OverviewFlowNode[]>(() => {
-    const sourceGap = 92
-    const sourceSpan = (datasets.length - 1) * sourceGap
-    return [
-      ...datasets.map((dataset, index): OverviewFlowNode => ({
-        id: `source:${dataset.id}`,
-        type: 'overview',
-        position: { x: 24, y: index * sourceGap },
-        data: {
-          kind: 'source',
-          title: dataset.name,
-          subtitle: `${dataset.columns.length} 个字段 · ${dataset.rows || 0} 行`,
-        },
-      })),
-      {
-        id: `target:${targetKind}:${targetName}`,
-        type: 'overview',
-        position: { x: 390, y: sourceSpan / 2 },
-        data: {
-          kind: 'target',
-          title: targetName,
-          subtitle: `${targetKind === 'object' ? '对象实体' : '实体关系'} · ${mappedFieldCount} 个字段映射`,
-          targetKind,
-        },
-      },
-    ]
-  }, [datasets, mappedFieldCount, targetKind, targetName])
-
-  const edges = useMemo<Edge[]>(() => datasets.map(dataset => ({
-    id: `mapping:${dataset.id}:${targetKind}:${targetName}`,
-    source: `source:${dataset.id}`,
-    target: `target:${targetKind}:${targetName}`,
-    type: 'smoothstep',
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#6572c5', width: 16, height: 16 },
-    style: { stroke: '#4f91ad', strokeWidth: 1.8 },
-  })), [datasets, targetKind, targetName])
-
-  return (
-    <div className="dmo-flow-canvas" role="region" aria-label="可缩放和平移的映射画布" data-testid="mapping-overview-canvas">
-      <ReactFlow<OverviewFlowNode, Edge>
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={OVERVIEW_NODE_TYPES}
-        fitView
-        fitViewOptions={{ padding: 0.28, maxZoom: 1.15 }}
-        minZoom={0.35}
-        maxZoom={1.8}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        panOnDrag
-        zoomOnScroll
-        zoomOnDoubleClick
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background gap={18} size={1} color="#d9e0e4" />
-        <Controls position="bottom-right" showInteractive={false} />
-        <div className="dmo-canvas-help nodrag nopan">滚轮缩放 · 拖动画布</div>
-      </ReactFlow>
-    </div>
-  )
-}
-
 export default function DataMappingOverview({ ontologyId }: { ontologyId: string }) {
   const navigate = useNavigate()
   const data = useMappingData(ontologyId, true)
   const [selected, setSelected] = useState<TargetSelection | null>(null)
-  const [datasetSearch, setDatasetSearch] = useState('')
-  const [targetKind, setTargetKind] = useState<'object' | 'relation'>('object')
+  const [mappingSearch, setMappingSearch] = useState('')
+  const [mappingFilter, setMappingFilter] = useState<MappingFilter>('all')
   const [previewDataset, setPreviewDataset] = useState<MappingDataset | null>(null)
-
-  const objectMapping = (id: string) => data.mappings.find(mapping => mappingTargetId(mapping) === id)
-  const selectedObject = selected?.kind === 'object' ? data.objectTypes.find(item => item.id === selected.id) : undefined
-  const selectedRelation = selected?.kind === 'relation' ? data.linkTypes.find(item => item.id === selected.id) : undefined
-  const selectedObjectMapping = selectedObject ? objectMapping(selectedObject.id) : undefined
-  const selectedLinkMapping = selectedRelation ? linkMappingForType(selectedRelation, data.linkMappings) : undefined
-  const selectedMappingExists = Boolean(selectedObjectMapping || selectedLinkMapping)
-  const selectedDatasetIds = selectedObjectMapping?.curated_dataset_id
-    ? [selectedObjectMapping.curated_dataset_id]
-    : selectedLinkMapping
-      ? [selectedLinkMapping.edge_dataset_id, selectedLinkMapping.src_dataset_id, selectedLinkMapping.tgt_dataset_id].filter(Boolean) as string[]
-      : []
-  const selectedDatasets = data.datasets.filter(dataset => selectedDatasetIds.includes(dataset.id))
 
   const objectInstanceCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -286,25 +213,134 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     return counts
   }, [data.linkInstances])
 
-  const mappedObjects = data.objectTypes.filter(item => objectMapping(item.id)).length
-  const mappedRelations = data.linkTypes.filter(item => linkMappingForType(item, data.linkMappings)).length
-  const objectCoverage = data.objectTypes.length ? Math.round(mappedObjects / data.objectTypes.length * 100) : 0
-  const relationCoverage = data.linkTypes.length ? Math.round(mappedRelations / data.linkTypes.length * 100) : 0
-  const totalTargetFields = data.objectTypes.reduce((sum, item) => sum + item.properties.filter(prop => prop.source !== 'computed').length, 0)
-    + data.linkTypes.reduce((sum, item) => sum + (item.properties || []).filter(prop => prop.source !== 'computed').length + 2, 0)
-  const mappedFields = data.mappings.reduce((sum, mapping) => sum + Object.keys(userFieldMapping(mapping)).length, 0)
-    + data.linkMappings.reduce((sum, mapping) => sum + Object.keys(mapping.field_mapping || {}).length + 2, 0)
+  const objectRows: MappingRow[] = data.objectTypes.map(item => {
+    const mapping = data.mappings.find(candidate => mappingTargetId(candidate) === item.id)
+    const fieldMapping = userFieldMapping(mapping)
+    const targetFields = item.properties.filter(property => property.source !== 'computed' && !property.computed)
+    const datasetIds = mapping?.curated_dataset_id ? [mapping.curated_dataset_id] : []
+    const datasets = data.datasets.filter(dataset => datasetIds.includes(dataset.id))
+    const fieldPairs = Object.entries(fieldMapping).map(([source, target]): FieldPair => {
+      const sourceField = datasets.flatMap(dataset => dataset.columns).find(column => column.name === source)
+      const targetField = targetFields.find(property => property.id === target || property.name === target)
+      return {
+        source,
+        target: targetField?.displayName || targetField?.name || target,
+        sourceType: sourceField?.type,
+        targetType: targetField?.type,
+        compatible: sourceField && targetField ? typesCompatible(sourceField.type, targetField.type) : undefined,
+      }
+    })
+    const mappedTargets = new Set(Object.values(fieldMapping))
+    const missingFields = targetFields
+      .filter(property => !mappedTargets.has(property.id) && !mappedTargets.has(property.name))
+      .map(property => property.displayName || property.name)
+    const instanceCount = objectInstanceCounts.get(item.id) || 0
+    const mappingExists = Boolean(mapping)
+    return {
+      key: `object:${item.id}`,
+      selection: { kind: 'object', id: item.id },
+      kind: 'object',
+      name: item.displayName || item.name,
+      technicalName: item.name,
+      datasets,
+      datasetIds,
+      mappingExists,
+      mappedFields: fieldPairs.length,
+      totalFields: targetFields.length,
+      instanceCount,
+      status: resolveRowStatus(mappingExists, datasetIds, datasets, fieldPairs.length, targetFields.length, instanceCount, fieldPairs),
+      fieldPairs,
+      missingFields,
+    }
+  })
+
+  const relationRows: MappingRow[] = data.linkTypes.map(item => {
+    const mapping = linkMappingForType(item, data.linkMappings)
+    const targetFields = (item.properties || []).filter(property => property.source !== 'computed' && !property.computed)
+    const datasetIds = [...new Set([
+      mapping?.edge_dataset_id,
+      mapping?.src_dataset_id,
+      mapping?.tgt_dataset_id,
+    ].filter((id): id is string => Boolean(id)))]
+    const datasets = data.datasets.filter(dataset => datasetIds.includes(dataset.id))
+    const fieldPairs: FieldPair[] = []
+    if (mapping?.src_key) fieldPairs.push({ source: mapping.src_key, target: '源对象关联键' })
+    if (mapping?.tgt_key) fieldPairs.push({ source: mapping.tgt_key, target: '目标对象关联键' })
+    for (const [target, source] of Object.entries(mapping?.field_mapping || {})) {
+      const sourceField = datasets.flatMap(dataset => dataset.columns).find(column => column.name === source)
+      const targetField = targetFields.find(property => property.id === target || property.name === target)
+      fieldPairs.push({
+        source,
+        target: targetField?.displayName || targetField?.name || target,
+        sourceType: sourceField?.type,
+        targetType: targetField?.type,
+        compatible: sourceField && targetField ? typesCompatible(sourceField.type, targetField.type) : undefined,
+      })
+    }
+    const mappedTargets = new Set(Object.keys(mapping?.field_mapping || {}))
+    const missingFields = [
+      ...(!mapping?.src_key ? ['源对象关联键'] : []),
+      ...(!mapping?.tgt_key ? ['目标对象关联键'] : []),
+      ...targetFields
+        .filter(property => !mappedTargets.has(property.id) && !mappedTargets.has(property.name))
+        .map(property => property.displayName || property.name),
+    ]
+    const instanceCount = linkInstanceCounts.get(item.id) || 0
+    const mappingExists = Boolean(mapping)
+    const totalFields = targetFields.length + 2
+    return {
+      key: `relation:${item.id}`,
+      selection: { kind: 'relation', id: item.id },
+      kind: 'relation',
+      name: item.displayName || item.name,
+      technicalName: item.name,
+      datasets,
+      datasetIds,
+      mappingExists,
+      mappedFields: fieldPairs.length,
+      totalFields,
+      instanceCount,
+      status: resolveRowStatus(mappingExists, datasetIds, datasets, fieldPairs.length, totalFields, instanceCount, fieldPairs),
+      fieldPairs,
+      missingFields,
+    }
+  })
+
+  const mappingRows = [...objectRows, ...relationRows]
+  const issueRows = mappingRows.filter(row => row.status !== 'ready')
+  const selectedRow = mappingRows.find(row => row.kind === selected?.kind && row.selection.id === selected?.id)
+    || issueRows[0]
+    || mappingRows[0]
+  const normalizedSearch = mappingSearch.trim().toLowerCase()
+  const filteredRows = mappingRows.filter(row => {
+    if (mappingFilter === 'issue' && row.status === 'ready') return false
+    if (mappingFilter === 'object' && row.kind !== 'object') return false
+    if (mappingFilter === 'relation' && row.kind !== 'relation') return false
+    if (!normalizedSearch) return true
+    return [row.name, row.technicalName, ...row.datasets.map(dataset => dataset.name)]
+      .some(value => value.toLowerCase().includes(normalizedSearch))
+  })
+  const totalTargetFields = mappingRows.reduce((sum, row) => sum + row.totalFields, 0)
+  const mappedFields = mappingRows.reduce((sum, row) => sum + row.mappedFields, 0)
   const fieldCoverage = totalTargetFields ? Math.min(100, Math.round(mappedFields / totalTargetFields * 100)) : 0
-  const objectWithData = data.objectTypes.filter(item => (objectInstanceCounts.get(item.id) || 0) > 0).length
-  const relationWithData = data.linkTypes.filter(item => (linkInstanceCounts.get(item.id) || 0) > 0).length
-  const objectCollection = data.objectTypes.length ? Math.round(objectWithData / data.objectTypes.length * 100) : 0
-  const relationCollection = data.linkTypes.length ? Math.round(relationWithData / data.linkTypes.length * 100) : 0
-  const averageQuality = data.datasets.filter(item => item.quality != null).length
-    ? Math.round(data.datasets.filter(item => item.quality != null).reduce((sum, item) => {
-      const quality = Number(item.quality)
+  const readyCount = mappingRows.filter(row => row.status === 'ready').length
+  const totalInstances = mappingRows.reduce((sum, row) => sum + row.instanceCount, 0)
+  const usedDatasetIds = new Set(mappingRows.flatMap(row => row.datasets.map(dataset => dataset.id)))
+  const issueSummary = [
+    { status: 'unmapped', label: '未配置' },
+    { status: 'missing-source', label: '数据源不可见' },
+    { status: 'type-risk', label: '类型风险' },
+    { status: 'incomplete', label: '字段待补齐' },
+    { status: 'no-data', label: '未产出数据' },
+  ].map(item => ({ ...item, count: mappingRows.filter(row => row.status === item.status).length }))
+    .filter(item => item.count > 0)
+  const selectedQuality = selectedRow?.datasets.filter(dataset => dataset.quality != null).length
+    ? Math.round(selectedRow.datasets.filter(dataset => dataset.quality != null).reduce((sum, dataset) => {
+      const quality = Number(dataset.quality)
       return sum + (quality <= 1 ? quality * 100 : quality)
-    }, 0) / data.datasets.filter(item => item.quality != null).length)
-    : fieldCoverage
+    }, 0) / selectedRow.datasets.filter(dataset => dataset.quality != null).length)
+    : null
+  const openConfiguration = () => navigate(`/ontologies/${ontologyId}?tab=versions`)
 
   if (data.isLoading) {
     return <div className="dmo-loading"><Loader2 className="animate-spin" size={20} />正在整理映射状态…</div>
@@ -313,95 +349,170 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     return <div className="dmo-loading dmo-loading--error"><AlertCircle size={20} />映射状态加载失败，请稍后重试。</div>
   }
 
-  const targetItems: Array<MappingObjectType | MappingLinkType> = targetKind === 'object' ? data.objectTypes : data.linkTypes
-  const filteredDatasets = data.datasets.filter(item => item.name.toLowerCase().includes(datasetSearch.toLowerCase()))
-  const displayTarget = (item: MappingObjectType | MappingLinkType) => item.displayName || item.name
-
   return (
     <section className="dmo-card">
-      <header className="dmo-hero">
-        <div>
-          <div className="dmo-eyebrow"><Layers3 size={13} /> DATA MAPPING</div>
-          <h2>把本体结构，接到真实数据上</h2>
-          <p>查看当前最新发布快照中的映射覆盖、字段配置与数据采集结果；所有变更只能在草稿工作台中维护。</p>
+      <header className="dmo-summary">
+        <div className={`dmo-readiness ${issueRows.length === 0 ? 'is-ready' : ''}`}>
+          <span>{issueRows.length === 0 ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}</span>
+          <div>
+            <b>{issueRows.length === 0 ? '当前数据链路可用' : `${issueRows.length} 个本体元素需要处理`}</b>
+            <small>
+              {issueRows.length === 0
+                ? `对象与关系均已连接真实数据，共产出 ${totalInstances.toLocaleString()} 条实例`
+                : issueSummary.map(item => `${item.label} ${item.count}`).join(' · ')}
+            </small>
+          </div>
         </div>
-        <button className="dmo-primary-button" onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>
-          <Settings2 size={15} />在草稿中配置映射
+        <div className="dmo-kpis" aria-label="映射关键指标">
+          <div><span>可用链路</span><b>{readyCount}<i> / {mappingRows.length}</i></b></div>
+          <div><span>字段已连接</span><b>{fieldCoverage}<i>%</i></b><small>{mappedFields} / {totalTargetFields} 个字段</small></div>
+          <div><span>实例已产出</span><b>{totalInstances.toLocaleString()}</b><small>对象与关系实例</small></div>
+          <div><span>数据资产在用</span><b>{usedDatasetIds.size}<i> / {data.datasets.length}</i></b><small>当前发布版本</small></div>
+        </div>
+        <button type="button" className="dmo-primary-button" onClick={openConfiguration}>
+          <Settings2 size={15} />配置映射
         </button>
       </header>
 
       <div className="dmo-workspace">
-        <aside className="dmo-pane dmo-sources">
-          <div className="dmo-pane__head">
-            <div><Database size={15} /><span><b>现有数据源</b><small>已启用的数据资产湖</small></span></div>
-            <em>{data.datasets.length}</em>
-          </div>
-          <label className="dmo-search"><span>⌕</span><input value={datasetSearch} onChange={event => setDatasetSearch(event.target.value)} placeholder="搜索数据集" /></label>
-          <div className="dmo-source-list">
-            {filteredDatasets.map(dataset => {
-              const mappingCount = data.mappings.filter(mapping => mapping.curated_dataset_id === dataset.id).length
-                + data.linkMappings.filter(mapping => [mapping.src_dataset_id, mapping.tgt_dataset_id, mapping.edge_dataset_id].includes(dataset.id)).length
-              return (
-                <div className="dmo-source-item" key={dataset.id}>
-                  <span className={`dmo-source-icon dmo-source-icon--${dataset.source}`}><Table2 size={14} /></span>
-                  <span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows == null ? '暂无行数' : `${dataset.rows.toLocaleString()} 行`}</small></span>
-                  <em data-active={mappingCount > 0}>{mappingCount ? `${mappingCount} 个映射` : '未使用'}</em>
-                  <button type="button" className="dmo-source-preview" onClick={() => setPreviewDataset(dataset)} aria-label={`预览数据源 ${dataset.name}`} title="分页预览数据"><Eye size={13} /></button>
-                </div>
-              )
-            })}
-            {filteredDatasets.length === 0 && <p className="dmo-list-empty">没有匹配的数据集</p>}
-          </div>
-        </aside>
-
-        <main className="dmo-pane dmo-canvas">
-          <div className="dmo-pane__head">
-            <div><CircleDot size={15} /><span><b>映射画布</b><small>选择本体元素查看当前映射</small></span></div>
-            <div className="dmo-segmented">
-              <button data-active={targetKind === 'object'} onClick={() => { setTargetKind('object'); setSelected(null) }}>对象实体</button>
-              <button data-active={targetKind === 'relation'} onClick={() => { setTargetKind('relation'); setSelected(null) }}>实体关系</button>
+        <main className="dmo-register">
+          <div className="dmo-register-head">
+            <div>
+              <b>映射结果清单</b>
+              <small>从本体出发，检查每个对象与关系是否真正获得了数据</small>
             </div>
+            <label className="dmo-search">
+              <Search size={14} />
+              <input value={mappingSearch} onChange={event => setMappingSearch(event.target.value)} placeholder="搜索本体元素或数据集" />
+            </label>
           </div>
-          <div className="dmo-target-strip">
-            {targetItems.map(item => {
-              const mapped = targetKind === 'object'
-                ? Boolean(objectMapping(item.id))
-                : Boolean(linkMappingForType(item as MappingLinkType, data.linkMappings))
-              const isSelected = selected?.kind === targetKind && selected.id === item.id
+          <div className="dmo-filters" aria-label="筛选映射结果">
+            {([
+              ['all', `全部 ${mappingRows.length}`],
+              ['issue', `待处理 ${issueRows.length}`],
+              ['object', `对象 ${objectRows.length}`],
+              ['relation', `关系 ${relationRows.length}`],
+            ] as Array<[MappingFilter, string]>).map(([value, label]) => (
+              <button type="button" key={value} data-active={mappingFilter === value} onClick={() => setMappingFilter(value)}>{label}</button>
+            ))}
+          </div>
+          <div className="dmo-table-head" aria-hidden="true">
+            <span>本体元素</span><span>真实数据来源</span><span>字段连接</span><span>实例产出</span><span>当前状态</span><i />
+          </div>
+          <div className="dmo-row-list">
+            {filteredRows.map(row => {
+              const active = selectedRow?.key === row.key
               return (
-                <button key={item.id} data-selected={isSelected} onClick={() => setSelected({ kind: targetKind, id: item.id })}>
-                  {targetKind === 'object' ? <Boxes size={12} /> : <GitBranch size={12} />}
-                  <span>{displayTarget(item)}</span><i data-mapped={mapped}>{mapped ? '已映射' : '未映射'}</i>
+                <button
+                  type="button"
+                  className="dmo-map-row"
+                  data-selected={active}
+                  key={row.key}
+                  onClick={() => setSelected(row.selection)}
+                  aria-pressed={active}
+                >
+                  <span className="dmo-target-cell">
+                    <i>{row.kind === 'object' ? <Boxes size={15} /> : <GitBranch size={15} />}</i>
+                    <span><b>{row.name}</b><small>{row.kind === 'object' ? '对象实体' : '实体关系'} · {row.technicalName}</small></span>
+                  </span>
+                  <span className="dmo-dataset-cell">
+                    {row.datasets.length > 0
+                      ? <><b>{row.datasets[0].name}</b><small>{row.datasets.length > 1 ? `另有 ${row.datasets.length - 1} 个数据集` : row.datasets[0].sourceLabel}</small></>
+                      : <><b>—</b><small>{row.mappingExists ? '引用资产不可见' : '尚未选择数据集'}</small></>}
+                  </span>
+                  <span className="dmo-field-cell">
+                    <b>{row.mappedFields} / {row.totalFields}</b>
+                    <i><em style={{ width: `${row.totalFields ? Math.min(100, row.mappedFields / row.totalFields * 100) : 100}%` }} /></i>
+                  </span>
+                  <span className="dmo-instance-cell"><b>{row.instanceCount.toLocaleString()}</b><small>条</small></span>
+                  <span className="dmo-status" data-status={row.status}>{row.status === 'ready' && <CheckCircle2 size={12} />}{STATUS_COPY[row.status].label}</span>
+                  <ArrowRight size={14} className="dmo-row-arrow" />
                 </button>
               )
             })}
-          </div>
-          <div className={`dmo-map-stage ${selectedMappingExists && selectedDatasets.length > 0 ? 'is-interactive' : ''}`}>
-            {!selected ? (
-              <div className="dmo-canvas-empty"><Layers3 size={28} /><b>选择一个对象实体或实体关系</b><span>画布将展示当前已建立的数据映射关系</span></div>
-            ) : !selectedMappingExists ? (
-              <div className="dmo-canvas-empty dmo-canvas-empty--warning"><AlertCircle size={28} /><b>尚未建立映射</b><span>先创建草稿，再将数据字段连接到草稿本体属性</span><button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}>创建草稿</button></div>
-            ) : selectedDatasets.length === 0 ? (
-              <div className="dmo-canvas-empty dmo-canvas-empty--warning"><AlertCircle size={28} /><b>发布映射的数据源当前不可见</b><span>映射定义仍保留在当前发布快照中，请检查对应数据资产的可用状态</span></div>
-            ) : (
-              <MappingOverviewFlow
-                key={`${selected.kind}:${selected.id}`}
-                datasets={selectedDatasets}
-                targetKind={selected.kind}
-                targetName={selectedObject?.displayName || selectedObject?.name || selectedRelation?.displayName || selectedRelation?.name || selected.id}
-                mappedFieldCount={selected.kind === 'object' ? Object.keys(userFieldMapping(selectedObjectMapping)).length : Object.keys(selectedLinkMapping?.field_mapping || {}).length + 2}
-              />
-            )}
+            {filteredRows.length === 0 && <div className="dmo-list-empty"><Search size={20} /><span>没有符合条件的映射</span></div>}
           </div>
         </main>
 
-        <aside className="dmo-pane dmo-detail">
-          <div className="dmo-pane__head"><div><Settings2 size={15} /><span><b>映射详情</b><small>映射覆盖与采集状态</small></span></div></div>
-          <div className="dmo-detail-charts" aria-label="映射与采集状态">
-            <div className="dmo-analysis-card"><div className="dmo-analysis-card__title"><span><CircleDot size={14} />映射质量分析</span><em>{averageQuality >= 80 ? '良好' : '待完善'}</em></div><MiniDonut value={fieldCoverage} label="字段覆盖率" tone="teal" /><div className="dmo-legend"><span><i className="teal" />已映射 {mappedFields}</span><span><i />未映射 {Math.max(0, totalTargetFields - mappedFields)}</span></div></div>
-            <div className="dmo-analysis-card"><div className="dmo-analysis-card__title"><span><Boxes size={14} />对象实体采集状态</span><em>{objectWithData}/{data.objectTypes.length} 有数据</em></div><MiniDonut value={objectCollection} label="已有实例数据" tone="indigo" /><div className="dmo-status-bars"><span><b>映射覆盖</b><i><em style={{ width: `${objectCoverage}%` }} /></i><strong>{objectCoverage}%</strong></span><span><b>数据到达</b><i><em style={{ width: `${objectCollection}%` }} /></i><strong>{objectCollection}%</strong></span></div></div>
-            <div className="dmo-analysis-card"><div className="dmo-analysis-card__title"><span><GitBranch size={14} />实体关系采集状态</span><em>{relationWithData}/{data.linkTypes.length} 有数据</em></div><MiniDonut value={relationCollection} label="已有关系数据" tone="amber" /><div className="dmo-status-bars dmo-status-bars--amber"><span><b>映射覆盖</b><i><em style={{ width: `${relationCoverage}%` }} /></i><strong>{relationCoverage}%</strong></span><span><b>数据到达</b><i><em style={{ width: `${relationCollection}%` }} /></i><strong>{relationCollection}%</strong></span></div></div>
+        <aside className="dmo-inspector" aria-label="选中映射的数据血缘详情">
+          <div className="dmo-inspector-head">
+            <div><b>数据血缘详情</b><small>数据如何进入当前本体元素</small></div>
+            <button type="button" onClick={openConfiguration} aria-label="配置当前映射"><Settings2 size={15} /></button>
           </div>
+          {selectedRow ? (
+            <div className="dmo-inspector-body">
+              <section className="dmo-selection-title">
+                <span>{selectedRow.kind === 'object' ? <Boxes size={17} /> : <GitBranch size={17} />}</span>
+                <div><b>{selectedRow.name}</b><small>{selectedRow.kind === 'object' ? '对象实体' : '实体关系'} · {selectedRow.technicalName}</small></div>
+                <em className="dmo-status" data-status={selectedRow.status}>{STATUS_COPY[selectedRow.status].label}</em>
+              </section>
+
+              <section className="dmo-status-note" data-status={selectedRow.status}>
+                {selectedRow.status === 'ready' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+                <div><b>{STATUS_COPY[selectedRow.status].detail}</b><small>{selectedRow.instanceCount.toLocaleString()} 条实例可供实例查询、业务探索与治理规则使用</small></div>
+              </section>
+
+              <section className="dmo-lineage">
+                <h3><Link2 size={14} />数据链路</h3>
+                <div className="dmo-lineage-route">
+                  <span className="dmo-route-sources">
+                    {selectedRow.datasets.length > 0
+                      ? selectedRow.datasets.map(dataset => <i key={dataset.id}><Database size={12} />{dataset.name}</i>)
+                      : <i data-empty="true"><Database size={12} />未连接数据资产</i>}
+                  </span>
+                  <ArrowRight size={15} />
+                  <span className="dmo-route-target">{selectedRow.kind === 'object' ? <Boxes size={12} /> : <GitBranch size={12} />}{selectedRow.name}</span>
+                </div>
+              </section>
+
+              {selectedRow.datasets.length > 0 && (
+                <section className="dmo-source-detail">
+                  <h3>来源数据资产</h3>
+                  {selectedRow.datasets.map(dataset => {
+                    const quality = dataset.quality == null ? null : Math.round(Number(dataset.quality) <= 1 ? Number(dataset.quality) * 100 : Number(dataset.quality))
+                    return (
+                      <div key={dataset.id}>
+                        <span className={`dmo-source-icon dmo-source-icon--${dataset.source}`}><Table2 size={14} /></span>
+                        <span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows == null ? '暂无行数' : `${dataset.rows.toLocaleString()} 行`}{quality == null ? '' : ` · 质量 ${quality}%`}</small></span>
+                        <button type="button" onClick={() => setPreviewDataset(dataset)} aria-label={`预览数据源 ${dataset.name}`}><Eye size={14} />预览</button>
+                      </div>
+                    )
+                  })}
+                  {selectedQuality != null && <p>来源数据平均质量 <b>{selectedQuality}%</b></p>}
+                </section>
+              )}
+
+              <section className="dmo-fields">
+                <h3><span>字段对照</span><em>{selectedRow.mappedFields} / {selectedRow.totalFields}</em></h3>
+                {selectedRow.fieldPairs.length > 0 ? (
+                  <div className="dmo-field-pairs">
+                    {selectedRow.fieldPairs.map((pair, index) => (
+                      <div key={`${pair.source}:${pair.target}:${index}`} data-risk={pair.compatible === false}>
+                        <span><b>{pair.source}</b><small>{pair.sourceType || '来源字段'}</small></span>
+                        <ArrowRight size={13} />
+                        <span><b>{pair.target}</b><small>{pair.targetType || '本体字段'}</small></span>
+                        {pair.compatible === false && <AlertTriangle size={13} />}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="dmo-field-empty">尚无字段连接</div>
+                )}
+                {selectedRow.missingFields.length > 0 && (
+                  <div className="dmo-missing-fields"><b>待连接字段</b><span>{selectedRow.missingFields.map(field => <i key={field}>{field}</i>)}</span></div>
+                )}
+              </section>
+
+              {selectedRow.status !== 'ready' && (
+                <section className="dmo-next-step">
+                  <div><b>下一步</b><small>创建或打开草稿版本，补齐这条数据链路后再发布。</small></div>
+                  <button type="button" onClick={openConfiguration}>去配置<ArrowRight size={13} /></button>
+                </section>
+              )}
+            </div>
+          ) : (
+            <div className="dmo-inspector-empty"><Link2 size={24} /><b>暂无可检查的本体元素</b><span>请先在本体结构中创建对象实体或实体关系</span></div>
+          )}
         </aside>
       </div>
       {previewDataset && <DatasetPreviewDialog key={previewDataset.id} dataset={previewDataset} onClose={() => setPreviewDataset(null)} />}
