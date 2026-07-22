@@ -7,7 +7,6 @@ import {
   Clock3,
   FileClock,
   RefreshCw,
-  RotateCcw,
   Search,
   X,
 } from 'lucide-react'
@@ -150,7 +149,7 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
     setReloadKey(value => value + 1)
   }
 
-  const resetFilters = () => {
+  const clearFilters = () => {
     setDraftFilters(EMPTY_FILTERS)
     setFilters(EMPTY_FILTERS)
     setFilterError('')
@@ -191,72 +190,72 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
           </div>
 
           <form
-            className="mt-4 flex flex-wrap items-center gap-2"
+            data-testid="model-log-filters"
+            className="mt-4"
             onSubmit={event => {
               event.preventDefault()
               applyFilters()
             }}
           >
-            <label className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100">
-              <CalendarDays size={13} className="shrink-0 text-slate-400" />
-              <span className="sr-only">开始时间</span>
-              <input
-                type="datetime-local"
-                aria-label="开始时间"
-                value={draftFilters.start}
-                onChange={event => setDraftFilters(current => ({ ...current, start: event.target.value }))}
-                className="w-[156px] bg-transparent text-[11px] text-slate-600 outline-none"
-              />
-            </label>
-            <span className="text-xs text-slate-300">至</span>
-            <label className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100">
-              <CalendarDays size={13} className="shrink-0 text-slate-400" />
-              <span className="sr-only">结束时间</span>
-              <input
-                type="datetime-local"
-                aria-label="结束时间"
-                value={draftFilters.end}
-                onChange={event => setDraftFilters(current => ({ ...current, end: event.target.value }))}
-                className="w-[156px] bg-transparent text-[11px] text-slate-600 outline-none"
-              />
-            </label>
-            <select
-              aria-label="调用状态"
-              value={draftFilters.status}
-              onChange={event => setDraftFilters(current => ({ ...current, status: event.target.value as LogFilters['status'] }))}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
-            >
-              <option value="">全部状态</option>
-              <option value="success">成功</option>
-              <option value="error">失败</option>
-              <option value="timeout">超时</option>
-            </select>
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-600 px-3.5 text-xs font-medium text-white transition hover:bg-teal-700 active:translate-y-px disabled:opacity-50"
-            >
-              <Search size={13} /> 查询
-            </button>
-            <button
-              type="button"
-              onClick={resetFilters}
-              disabled={loading}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
-            >
-              <RotateCcw size={13} /> 重置
-            </button>
-            <button
-              type="button"
-              onClick={() => setReloadKey(value => value + 1)}
-              disabled={loading}
-              aria-label="刷新调用日志"
-              title="刷新"
-              className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50"
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-            {filterError && <p className="basis-full text-[11px] text-red-600">{filterError}</p>}
+            <div className="flex flex-nowrap items-center gap-2">
+              <div
+                role="group"
+                aria-label="调用时间范围"
+                className="flex h-9 min-w-0 flex-1 items-center rounded-lg border border-slate-200 bg-slate-50/70 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100"
+              >
+                <CalendarDays size={13} className="ml-3 shrink-0 text-slate-400" />
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">开始时间</span>
+                  <input
+                    type="datetime-local"
+                    aria-label="开始时间"
+                    value={draftFilters.start}
+                    onChange={event => setDraftFilters(current => ({ ...current, start: event.target.value }))}
+                    className="w-full min-w-0 bg-transparent px-2 text-[11px] text-slate-600 outline-none"
+                  />
+                </label>
+                <span className="flex h-full shrink-0 items-center border-x border-slate-200 px-2 text-[11px] text-slate-400">至</span>
+                <label className="min-w-0 flex-1">
+                  <span className="sr-only">结束时间</span>
+                  <input
+                    type="datetime-local"
+                    aria-label="结束时间"
+                    value={draftFilters.end}
+                    onChange={event => setDraftFilters(current => ({ ...current, end: event.target.value }))}
+                    className="w-full min-w-0 bg-transparent px-2 text-[11px] text-slate-600 outline-none"
+                  />
+                </label>
+              </div>
+              <select
+                aria-label="调用状态"
+                value={draftFilters.status}
+                onChange={event => setDraftFilters(current => ({ ...current, status: event.target.value as LogFilters['status'] }))}
+                className="h-9 w-24 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+              >
+                <option value="">全部状态</option>
+                <option value="success">成功</option>
+                <option value="error">失败</option>
+                <option value="timeout">超时</option>
+              </select>
+              <button
+                type="submit"
+                disabled={loading}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-600 px-3.5 text-xs font-medium text-white transition hover:bg-teal-700 active:translate-y-px disabled:opacity-50"
+              >
+                <Search size={13} /> 查询
+              </button>
+              <button
+                type="button"
+                onClick={() => setReloadKey(value => value + 1)}
+                disabled={loading}
+                aria-label="刷新调用日志"
+                title="刷新"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+            {filterError && <p className="mt-2 text-[11px] text-red-600">{filterError}</p>}
           </form>
         </header>
 
@@ -293,7 +292,7 @@ export default function ModelDetailDrawer({ model, isOpen, onClose }: ModelDetai
               <p className="mt-4 text-sm font-medium text-slate-700">{filtered ? '没有匹配的调用日志' : '还没有调用日志'}</p>
               <p className="mt-1 text-xs text-slate-400">{filtered ? '请调整时间范围或状态后重新查询' : '真实业务调用产生后会记录在这里'}</p>
               {filtered && (
-                <button type="button" onClick={resetFilters} className="mt-3 text-xs font-medium text-teal-700 hover:underline">清除筛选</button>
+                <button type="button" onClick={clearFilters} className="mt-3 text-xs font-medium text-teal-700 hover:underline">清除筛选</button>
               )}
             </div>
           )}

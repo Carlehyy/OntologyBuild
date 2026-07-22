@@ -78,6 +78,13 @@ async function mockModelsApi(page: Page, initial: Model[] = [model()], initialLo
       version: 0,
     }))
   })
+  await page.route('**/api/v2/inbox/summary', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      data: { openAlertCount: 0, actionableCount: 0, unreadCount: 0, resolvedCount: 0 },
+    }),
+  }))
   await page.route('**/api/v1/**', async (route: Route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -200,6 +207,16 @@ test.describe('模型配置稳定性流程', () => {
     await expect(drawer.getByRole('columnheader', { name: '错误摘要' })).toBeVisible()
     await expect(drawer.getByText('显示 1–20 / 21 条')).toBeVisible()
     await expect(drawer.getByRole('button', { name: /测试/ })).toHaveCount(0)
+    await expect(drawer.getByRole('button', { name: '重置' })).toHaveCount(0)
+
+    const filterControlTops = await Promise.all([
+      drawer.getByRole('group', { name: '调用时间范围' }),
+      drawer.getByLabel('调用状态'),
+      drawer.getByRole('button', { name: '查询' }),
+      drawer.getByRole('button', { name: '刷新调用日志' }),
+    ].map(async locator => (await locator.boundingBox())?.y))
+    const visibleTops = filterControlTops.filter((top): top is number => top !== undefined)
+    expect(Math.max(...visibleTops) - Math.min(...visibleTops)).toBeLessThan(4)
 
     await drawer.getByRole('button', { name: '下一页' }).click()
     await expect(drawer.getByText('显示 21–21 / 21 条')).toBeVisible()
