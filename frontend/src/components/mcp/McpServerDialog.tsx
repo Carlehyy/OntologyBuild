@@ -4,6 +4,10 @@ import { Loader2, X } from 'lucide-react'
 import type { McpManagementClient } from '@/api/community'
 import type { McpTransport, SuperMcpServer } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
+import {
+  parseMcpClientConfig,
+  type ParsedMcpClientServer,
+} from '@/lib/mcpClientConfig'
 
 
 const errorText = (error: any, fallback = '操作失败') =>
@@ -34,6 +38,9 @@ export default function McpServerDialog({
   const [headers, setHeaders] = useState('')
   const [env, setEnv] = useState('')
   const [clientConfig, setClientConfig] = useState('')
+  const [clientConfigOptions, setClientConfigOptions] = useState<ParsedMcpClientServer[]>([])
+  const [selectedClientConfig, setSelectedClientConfig] = useState(0)
+  const [clientConfigMessage, setClientConfigMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -86,50 +93,36 @@ export default function McpServerDialog({
     return parsed as Record<string, string>
   }
 
+  const fillFromClientConfig = (config: ParsedMcpClientServer) => {
+    setName(config.name)
+    setTransport(config.transport)
+    setUrl(config.url)
+    setCommand(config.command)
+    setArgs(JSON.stringify(config.args, null, 2))
+    setHeaders(Object.keys(config.headers).length ? JSON.stringify(config.headers, null, 2) : '')
+    setEnv(Object.keys(config.env).length ? JSON.stringify(config.env, null, 2) : '')
+    setClientConfigMessage([
+      `已填入「${config.name}」，请检查后再保存。`,
+      ...config.warnings,
+    ].join(' '))
+  }
+
   const applyClientConfig = () => {
     setError('')
     try {
-      const parsed = JSON.parse(clientConfig)
-      const collection = parsed?.mcpServers || parsed
-      if (!collection || Array.isArray(collection) || typeof collection !== 'object') {
-        throw new Error('配置必须包含 mcpServers 对象')
+      const parsed = parseMcpClientConfig(clientConfig)
+      setClientConfigOptions(parsed.servers)
+      setSelectedClientConfig(0)
+      fillFromClientConfig(parsed.servers[0])
+      if (parsed.servers.length > 1) {
+        setClientConfigMessage([
+          `已从 ${parsed.sourceLabel} 识别 ${parsed.servers.length} 个 Server，当前填入第 1 个；可在下方切换。`,
+          ...parsed.servers[0].warnings,
+        ].join(' '))
       }
-      const entries = Object.entries(collection)
-      if (entries.length !== 1) throw new Error('请每次粘贴一个 MCP Server 配置')
-      const [configName, raw] = entries[0] as [string, any]
-      if (!raw || Array.isArray(raw) || typeof raw !== 'object') throw new Error('MCP Server 配置无效')
-      if (!server) setName(configName)
-
-      if (raw.command) {
-        const parsedArgs = Array.isArray(raw.args) ? raw.args.map(String) : []
-        const remoteIndex = parsedArgs.findIndex((item: string) => item === 'mcp-remote' || item.startsWith('mcp-remote@'))
-        const remoteUrl = remoteIndex >= 0
-          ? parsedArgs.slice(remoteIndex + 1).find((item: string) => /^https?:\/\//.test(item))
-          : undefined
-        if (/^(?:.*[\\/])?npx(?:\.cmd)?$/i.test(String(raw.command)) && remoteUrl) {
-          setTransport('streamable_http')
-          setUrl(remoteUrl)
-          setCommand('')
-          setArgs('[]')
-        } else {
-          setTransport('stdio')
-          setCommand(String(raw.command))
-          setArgs(JSON.stringify(parsedArgs, null, 2))
-          setUrl('')
-        }
-        setEnv(raw.env ? JSON.stringify(raw.env, null, 2) : '')
-        setHeaders('')
-        return
-      }
-      if (!raw.url) throw new Error('配置需要 command 或 url')
-      const rawTransport = String(raw.transport || 'streamable_http').toLowerCase().replace(/[ -]/g, '_')
-      setTransport(rawTransport === 'sse' ? 'sse' : 'streamable_http')
-      setUrl(String(raw.url))
-      setHeaders(raw.headers ? JSON.stringify(raw.headers, null, 2) : '')
-      setCommand('')
-      setArgs('[]')
-      setEnv('')
     } catch (parseError) {
+      setClientConfigOptions([])
+      setClientConfigMessage('')
       setError(errorText(parseError, '无法解析 MCP 配置'))
     }
   }
@@ -213,7 +206,12 @@ export default function McpServerDialog({
                 <textarea
                   ref={clientConfigRef}
                   value={clientConfig}
-                  onChange={event => setClientConfig(event.target.value)}
+                  onChange={event => {
+                    setClientConfig(event.target.value)
+                    setClientConfigOptions([])
+                    setClientConfigMessage('')
+                    setError('')
+                  }}
                   rows={8}
                   aria-label="MCP 客户端 JSON"
                   placeholder={'{\n  "mcpServers": {\n    "api-hub": {\n      "command": "npx",\n      "args": ["-y", "mcp-remote", "https://example.com/mcp"]\n    }\n  }\n}'}
@@ -222,6 +220,28 @@ export default function McpServerDialog({
                 <button type="button" onClick={applyClientConfig} disabled={!clientConfig.trim()} className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-teal-700 transition-colors hover:border-teal-200 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45">
                   解析并填入下方表单
                 </button>
+                <p className="text-[11px] leading-5 text-slate-500">
+                  兼容 Claude、Cursor、Cline、Windsurf、Gemini、JetBrains、Continue、VS Code 与 Zed 常见 JSON / JSONC 格式。
+                </p>
+                {clientConfigOptions.length > 1 && (
+                  <label className="block text-xs font-medium text-slate-600">
+                    选择要填入的 MCP Server
+                    <select
+                      value={selectedClientConfig}
+                      onChange={event => {
+                        const nextIndex = Number(event.target.value)
+                        setSelectedClientConfig(nextIndex)
+                        fillFromClientConfig(clientConfigOptions[nextIndex])
+                      }}
+                      className="mt-1.5 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+                    >
+                      {clientConfigOptions.map((config, index) => (
+                        <option key={`${config.name}-${index}`} value={index}>{config.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {clientConfigMessage && <p role="status" className="rounded-lg bg-teal-50 px-3 py-2 text-[11px] leading-5 text-teal-800">{clientConfigMessage}</p>}
               </div>
             </details>
           )}

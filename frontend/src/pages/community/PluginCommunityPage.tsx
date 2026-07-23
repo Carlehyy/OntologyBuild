@@ -178,10 +178,10 @@ export default function PluginCommunityPage() {
   )
 
   return (
-    <div className="space-y-4 pb-4">
+    <div className="flex min-h-full flex-col gap-4 md:h-full md:min-h-0">
       <h1 className="sr-only">插件社区</h1>
 
-      <section aria-label="MCP 筛选与操作" className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
+      <section aria-label="MCP 筛选与操作" className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
         <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
@@ -220,11 +220,11 @@ export default function PluginCommunityPage() {
       </section>
 
       {loading ? (
-        <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white">
+        <div className="flex min-h-64 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white">
           <div className="text-center"><Loader2 size={24} className="mx-auto animate-spin text-teal-600 motion-reduce:animate-none" /><p className="mt-3 text-sm text-slate-500">正在加载 MCP 清单...</p></div>
         </div>
       ) : filteredServers.length === 0 ? (
-        <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 p-8 text-center text-slate-400">
+        <div className="flex min-h-64 flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 p-8 text-center text-slate-400">
           <PlugZap size={30} className="text-slate-300" />
           <p className="mt-3 text-sm font-medium text-slate-700">{servers.length ? '没有匹配的 MCP Server' : '暂无 MCP Server'}</p>
           <p className="mt-1 text-xs leading-5 text-slate-400">{servers.length ? '调整搜索词或状态筛选后重试。' : '登记 MCP 配置并完成连接测试后，即可查看其工具清单。'}</p>
@@ -232,37 +232,39 @@ export default function PluginCommunityPage() {
         </div>
       ) : (
         <>
-          <div className="hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] md:block">
-            <table className="w-full min-w-[780px] table-fixed text-sm">
-              <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
-                <tr>
-                  <th className="w-[34%] px-4 py-2.5 text-left text-xs font-medium text-slate-600">MCP Server</th>
-                  <th className="w-[18%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">传输方式</th>
-                  <th className="w-[16%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">工具</th>
-                  <th className="w-[17%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">连接状态</th>
-                  <th className="w-[15%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredServers.map(server => (
-                  <tr key={server.id} className="align-middle transition-colors hover:bg-slate-50/80">
-                    <td className="px-4 py-3">
-                      <div className="min-w-0"><p className="truncate font-medium text-slate-900" title={server.name}>{server.name}</p><p className="mt-0.5 truncate font-mono text-[11px] text-slate-400" title={endpointText(server)}>{endpointText(server) || '尚未配置地址'}</p></div>
-                    </td>
-                    <td className="px-4 py-3 text-center"><span className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">{transportLabel(server)}</span></td>
-                    <td className="px-4 py-3 text-center"><button type="button" onClick={() => setManifestTarget(server)} aria-label={`查看 ${server.name} 的工具清单`} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><Code2 size={13} /> 共 {server.tool_manifest.length} 个</button></td>
-                    <td className="px-4 py-3 text-center"><TestStatus server={server} /></td>
-                    <td className="px-4 py-3">{renderActions(server)}</td>
+          <section aria-label="MCP Server 清单" className="hidden min-h-64 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] md:flex">
+            <div className="min-h-0 flex-1 overflow-auto">
+              <table className="w-full min-w-[780px] table-fixed text-sm">
+                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
+                  <tr>
+                    <th className="w-[34%] px-4 py-2.5 text-left text-xs font-medium text-slate-600">MCP Server</th>
+                    <th className="w-[18%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">传输方式</th>
+                    <th className="w-[16%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">工具</th>
+                    <th className="w-[17%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">连接状态</th>
+                    <th className="w-[15%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">操作</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs tabular-nums text-slate-500">
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredServers.map(server => (
+                    <tr key={server.id} className="align-middle transition-colors hover:bg-slate-50/80">
+                      <td className="px-4 py-3">
+                        <div className="min-w-0"><p className="truncate font-medium text-slate-900" title={server.name}>{server.name}</p><p className="mt-0.5 truncate font-mono text-[11px] text-slate-400" title={endpointText(server)}>{endpointText(server) || '尚未配置地址'}</p></div>
+                      </td>
+                      <td className="px-4 py-3 text-center"><span className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">{transportLabel(server)}</span></td>
+                      <td className="px-4 py-3 text-center"><button type="button" onClick={() => setManifestTarget(server)} aria-label={`查看 ${server.name} 的工具清单`} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><Code2 size={13} /> 共 {server.tool_manifest.length} 个</button></td>
+                      <td className="px-4 py-3 text-center"><TestStatus server={server} /></td>
+                      <td className="px-4 py-3">{renderActions(server)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div data-testid="mcp-server-stats" className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-center text-xs tabular-nums text-slate-500">
               <span>共 {stats.total} 个 MCP Server</span>
               <span><strong className="font-medium text-emerald-700">{stats.healthy}</strong> 个测试通过</span>
               <span><strong className="font-medium text-slate-700">{stats.tools}</strong> 个已发现工具</span>
             </div>
-          </div>
+          </section>
 
           <div className="grid gap-3 md:hidden">
             {filteredServers.map(server => (
@@ -276,7 +278,7 @@ export default function PluginCommunityPage() {
                 <div className="mt-3 flex justify-end border-t border-slate-100 pt-2">{renderActions(server)}</div>
               </article>
             ))}
-            <p className="px-1 text-right text-xs tabular-nums text-slate-400">共 {stats.total} 项 · {stats.healthy} 项测试通过 · {stats.tools} 个工具</p>
+            <p className="px-1 text-center text-xs tabular-nums text-slate-400">共 {stats.total} 项 · {stats.healthy} 项测试通过 · {stats.tools} 个工具</p>
           </div>
         </>
       )}

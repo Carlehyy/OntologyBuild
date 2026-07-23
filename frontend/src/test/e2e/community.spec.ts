@@ -116,6 +116,15 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await expect(page.getByRole('columnheader', { name: '开放状态' })).toHaveCount(0)
   await expect(page.getByRole('columnheader', { name: '执行策略' })).toHaveCount(0)
 
+  const serverList = page.getByRole('region', { name: 'MCP Server 清单' })
+  const serverListBox = await serverList.boundingBox()
+  const viewportHeight = await page.evaluate(() => window.innerHeight)
+  expect(serverListBox).not.toBeNull()
+  expect(serverListBox!.height).toBeGreaterThan(500)
+  expect(viewportHeight - serverListBox!.y - serverListBox!.height).toBeGreaterThanOrEqual(20)
+  expect(viewportHeight - serverListBox!.y - serverListBox!.height).toBeLessThanOrEqual(28)
+  await expect(page.getByTestId('mcp-server-stats')).toHaveCSS('justify-content', 'center')
+
   await page.getByRole('button', { name: '测试 MCP weather_tools' }).click()
   await expect(page.locator('table').getByText('已通过', { exact: true })).toBeVisible()
   await expect(page.locator('table').getByText('共 1 个', { exact: true })).toBeVisible()
@@ -124,6 +133,29 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click()
   await expect(page.getByText('开放到超级助手', { exact: true })).toHaveCount(0)
   await expect(page.getByText('每次工具调用前要求确认', { exact: true })).toHaveCount(0)
+  await page.getByLabel('MCP 客户端 JSON').fill(`{
+    // VS Code mcp.json
+    "servers": {
+      "Remote Docs": {
+        "type": "http",
+        "url": "https://docs.example.com/mcp",
+      },
+      "local-tools": {
+        "type": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+      },
+    },
+  }`)
+  await page.getByRole('button', { name: '解析并填入下方表单' }).click()
+  await expect(page.getByLabel('选择要填入的 MCP Server')).toBeVisible()
+  await expect(page.getByLabel(/名称/)).toHaveValue('Remote-Docs')
+  await expect(page.getByLabel(/传输方式/)).toHaveValue('streamable_http')
+  await expect(page.getByLabel(/MCP URL/)).toHaveValue('https://docs.example.com/mcp')
+  await page.getByLabel('选择要填入的 MCP Server').selectOption('1')
+  await expect(page.getByLabel(/传输方式/)).toHaveValue('stdio')
+  await expect(page.getByLabel(/^command/)).toHaveValue('uvx')
+  await page.getByLabel('选择要填入的 MCP Server').selectOption('0')
   await page.getByLabel(/名称/).fill('knowledge_search')
   await page.getByLabel(/MCP URL/).fill('https://knowledge.example.com/mcp')
   await page.getByRole('button', { name: '保存' }).click()
