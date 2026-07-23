@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Braces, Check, ChevronRight, CirclePlus, Copy, Download, FileCode2, FileUp, Folder, Play,
-  Plus, Search, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2,
+  Plus, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2,
   LoaderCircle,
 } from 'lucide-react'
 import { apiError, apiHub, emptyHubInterface, type HubInterface, type KV, type RunResult } from '@/api/apiHub'
@@ -38,7 +38,6 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [selectedId, setSelectedId] = useState<number | null>(interfaces[0]?.id ?? null)
   const [draft, setDraft] = useState<HubInterface>(() => interfaces[0] ? structuredClone(interfaces[0]) : emptyHubInterface())
   const [baseline, setBaseline] = useState<HubInterface>(() => interfaces[0] ? structuredClone(interfaces[0]) : emptyHubInterface())
-  const [search, setSearch] = useState('')
   const [editorTab, setEditorTab] = useState<'params' | 'headers' | 'body' | 'description'>('params')
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
@@ -93,18 +92,14 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     window.addEventListener('pointerup', onUp)
   }, [sizes])
 
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return query ? interfaces.filter(item => `${item.name} ${item.url} ${item.method} ${item.group_name}`.toLowerCase().includes(query)) : interfaces
-  }, [interfaces, search])
   const grouped = useMemo(() => {
     const groups = new Map<string, HubInterface[]>()
-    filtered.forEach(item => {
+    interfaces.forEach(item => {
       const key = item.group_name || ''
       groups.set(key, [...(groups.get(key) || []), item])
     })
     return [...groups.entries()].sort(([a], [b]) => a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, 'zh-CN'))
-  }, [filtered])
+  }, [interfaces])
   const groupNames = useMemo(() => {
     const names = new Set(extraGroups)
     interfaces.forEach(item => {
@@ -333,7 +328,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       onError('请先保存当前接口的修改，再调整接口顺序')
       return
     }
-    if (!item.id || search.trim()) { event.preventDefault(); return }
+    if (!item.id) { event.preventDefault(); return }
     setDraggingId(item.id)
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData('text/plain', String(item.id))
@@ -369,19 +364,15 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   return (
     <div ref={containerRef} className="scrollbar-none grid h-full min-h-0 overflow-x-auto overflow-y-hidden p-1" style={{ gridTemplateColumns: `minmax(250px, ${sizes[0]}fr) 4px minmax(680px, ${sizes[1]}fr)` }}>
       <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
-        <div className="border-b border-[var(--color-border)] p-3">
-          <div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-semibold">接口清单</h2><p className="text-[10px] text-[var(--color-text-tertiary)]">{interfaces.length} 个已纳管接口</p></div><Button size="sm" onClick={create}><CirclePlus size={13} />新建</Button></div>
-          <label className="flex h-8 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5">
-            <Search size={14} className="text-[var(--color-text-tertiary)]" />
-            <input value={search} onChange={event => setSearch(event.target.value)} placeholder="筛选名称、URL 或分组" className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
-          </label>
+        <div className="flex min-h-16 shrink-0 items-center border-b border-[var(--color-border)] px-3">
+          <div className="flex w-full items-center justify-between"><div><h2 className="text-sm font-semibold">接口清单</h2><p className="text-[10px] text-[var(--color-text-tertiary)]">{interfaces.length} 个已纳管接口</p></div><Button size="sm" onClick={create}><CirclePlus size={13} />新建</Button></div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {!filtered.length ? <EmptyList onCreate={create} /> : grouped.map(([group, items]) => (
+          {!interfaces.length ? <EmptyList onCreate={create} /> : grouped.map(([group, items]) => (
             <div key={group || '__default'} className="mb-3">
               <div
                 onDragOver={event => {
-                  if (!draggingId || search.trim()) return
+                  if (!draggingId) return
                   event.preventDefault()
                   event.dataTransfer.dropEffect = 'move'
                   setDropTarget({ group, index: 0 })
@@ -395,11 +386,11 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                 {items.map((item, index) => (
                   <div
                     key={item.id}
-                    draggable={!search.trim() && !saving}
+                    draggable={!saving}
                     onDragStart={event => startInterfaceDrag(event, item)}
                     onDragEnd={() => { setDraggingId(null); setDropTarget(null) }}
                     onDragOver={event => {
-                      if (!draggingId || draggingId === item.id || search.trim()) return
+                      if (!draggingId || draggingId === item.id) return
                       event.preventDefault()
                       event.dataTransfer.dropEffect = 'move'
                       const rect = event.currentTarget.getBoundingClientRect()
@@ -415,7 +406,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                   >
                     {dropTarget?.group === group && dropTarget.index === index && <span className="pointer-events-none absolute inset-x-1 top-0 h-0.5 rounded-full bg-emerald-500" />}
                     {dropTarget?.group === group && dropTarget.index === index + 1 && <span className="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-emerald-500" />}
-                    <span className={`flex h-8 w-5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)] ${search.trim() ? 'cursor-not-allowed opacity-30' : 'cursor-grab active:cursor-grabbing'}`} title={search.trim() ? '清除筛选后可拖拽排序' : '拖拽调整顺序或移动分组'}><GripVertical size={12} /></span>
+                    <span className="flex h-8 w-5 shrink-0 cursor-grab items-center justify-center text-[var(--color-text-tertiary)] active:cursor-grabbing" title="拖拽调整顺序或移动分组"><GripVertical size={12} /></span>
                     <button type="button" onClick={() => select(item)} className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
                       <span className={`w-12 shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-bold ${methodTone[item.method] || methodTone.HEAD}`}>{item.method}</span>
                       <span className={`min-w-0 flex-1 truncate text-xs ${selectedId === item.id ? 'font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-primary)]'}`}>{item.name}</span>
@@ -437,7 +428,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           ))}
         </div>
-        <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-[var(--color-border)] bg-white/60 p-3">
+        <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem]">
           <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />开放接口</Button>
           <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />调用方</Button>
           <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
@@ -447,7 +438,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       <div onPointerDown={startResize} role="separator" aria-orientation="vertical" aria-label="调整接口清单宽度" className="group flex cursor-col-resize items-center justify-center"><span className="flex h-12 w-3 items-center justify-center rounded-full border border-transparent text-[var(--color-text-tertiary)] transition-colors group-hover:border-teal-200 group-hover:bg-teal-50 group-hover:text-teal-600"><GripVertical size={12} /></span></div>
 
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
+        <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex min-w-[430px] flex-[1_1_430px] items-center gap-2">
             <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-white px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="接口名称" />
             <select value={draft.group_name} onChange={event => changeGroup(event.target.value)} className="h-8 w-40 shrink-0 rounded-md border border-[var(--color-border)] bg-white px-2.5 text-xs outline-none transition-colors hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" title="选择或新增分类">
@@ -537,11 +528,23 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 }
 
 function EmptyList({ onCreate }: { onCreate: () => void }) {
-  return <div className="flex flex-col items-center px-5 py-14 text-center"><Braces size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><p className="text-xs text-[var(--color-text-secondary)]">还没有匹配的接口</p><button onClick={onCreate} className="mt-2 text-xs font-medium text-[var(--color-nav-bg)]">新建一个接口</button></div>
+  return <div className="flex flex-col items-center px-5 py-14 text-center"><Braces size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><p className="text-xs text-[var(--color-text-secondary)]">还没有接口</p><button onClick={onCreate} className="mt-2 text-xs font-medium text-[var(--color-nav-bg)]">新建一个接口</button></div>
 }
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
-  return <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]"><button type="button" aria-label={label} aria-pressed={value} onClick={() => onChange(!value)} className={`relative h-4 w-7 rounded-full transition-colors ${value ? 'bg-[var(--color-nav-bg)]' : 'bg-[var(--color-border-hover)]'}`}><span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${value ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></button>{label}</label>
+  return (
+    <button
+      type="button"
+      aria-pressed={value}
+      onClick={() => onChange(!value)}
+      className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-sm text-[11px] text-[var(--color-text-secondary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+    >
+      <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${value ? 'bg-[var(--color-nav-bg)]' : 'bg-[var(--color-border-hover)]'}`}>
+        <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${value ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+      </span>
+      <span>{label}</span>
+    </button>
+  )
 }
 
 function KVEditor({ value, onChange, keyPlaceholder, valuePlaceholder }: { value: KV[]; onChange: (value: KV[]) => void; keyPlaceholder: string; valuePlaceholder: string }) {
