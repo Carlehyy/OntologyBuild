@@ -120,13 +120,7 @@ export default function OntologyDetailPage() {
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
   return (
-    <div className={`onto-glass-root flex h-full min-h-0 flex-col gap-4 overflow-hidden ${
-      activeGroup === 'overview'
-        ? 'onto-glass-root--overview'
-        : activeGroup === 'data' || activeGroup === 'design' || activeGroup === 'data-mapping'
-          ? 'onto-glass-root--flat'
-          : ''
-    }`}>
+    <div className="onto-glass-root onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       {/* ═══ 功能导航与低频操作 ═══ */}
       <div data-testid="ontology-detail-header" className="onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4">
         <div className="min-w-0 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
@@ -212,23 +206,23 @@ export default function OntologyDetailPage() {
 
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (
-        <div className="ontology-overview-shell onto-glass-in min-h-0 flex-1">
+        <div data-testid="ontology-detail-content" className="ontology-overview-shell onto-glass-in min-h-0 flex-1">
           <OverviewDashboard ontologyId={id!} ontology={ontology} onGoGroup={selectGroup} />
         </div>
       ) : activeGroup === 'design' ? (
-        <div className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
+        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
           <ModelStructureView ontologyId={id!} />
         </div>
       ) : activeGroup === 'data-mapping' ? (
-        <div className="onto-glass-in min-h-0 flex-1 overflow-hidden">
+        <div data-testid="ontology-detail-content" className="onto-glass-in min-h-0 flex-1 overflow-hidden">
           <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
-        <div className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
+        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
           <FormalInstancesView ontologyId={id!} />
         </div>
       ) : (
-        <div className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto p-4">
+        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto p-4">
           <GovernanceTab
             ontologyId={id!}
             currentReleaseId={ontology.current_release_id}

@@ -89,7 +89,7 @@
   box-shadow: var(--glass-shadow);
 }
 
-/* 实例数据页与其余工作区保持同一平面层级，避免导航和目录卡片浮起。 */
+/* 五个详情页签共用同一平面层级，避免切页时导航或内容外壳突然浮起。 */
 .onto-glass-root--flat > .onto-glass-header,
 .onto-glass-root--flat > .onto-glass-card,
 .onto-glass-root--flat > .onto-glass-card:hover {

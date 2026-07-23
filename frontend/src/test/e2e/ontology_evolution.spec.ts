@@ -476,14 +476,30 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByText(/历史发布 v0 · 可查看定义并保存画布布局/)).toBeVisible({ timeout: 20_000 })
 
   // 本体结构页只读展示最新发布快照，但顶部仍提供统一的图谱编辑器入口；
-  // 标签切换不能改变顶部导航或右侧低频操作的位置。
+  // 用户反馈的总览、治理和正常的结构页之间不能改变顶部导航尺寸或表面层级。
   await page.goto(`/#/ontologies/${ontology.id}`)
   const detailHeader = page.getByTestId('ontology-detail-header')
+  const detailContent = page.getByTestId('ontology-detail-content')
   await expect(detailHeader).toBeVisible()
   const headerBeforeStructure = await detailHeader.boundingBox()
   const historyBeforeStructure = await page.getByRole('button', { name: '查看历史版本' }).boundingBox()
   expect(headerBeforeStructure).toBeTruthy()
   expect(historyBeforeStructure).toBeTruthy()
+  await expect(detailHeader).toHaveCSS('box-shadow', 'none')
+  await expect(page.locator('.overview-panel').first()).toHaveCSS('box-shadow', 'none')
+
+  await page.getByRole('button', { name: '治理推演', exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}\\?tab=governance`))
+  expect(await detailHeader.boundingBox()).toEqual(headerBeforeStructure)
+  expect(await page.getByRole('button', { name: '查看历史版本' }).boundingBox()).toEqual(historyBeforeStructure)
+  await expect(detailHeader).toHaveCSS('box-shadow', 'none')
+  await expect(detailContent).toHaveCSS('box-shadow', 'none')
+
+  await page.getByRole('button', { name: '本体总览', exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}$`))
+  expect(await detailHeader.boundingBox()).toEqual(headerBeforeStructure)
+  expect(await page.getByRole('button', { name: '查看历史版本' }).boundingBox()).toEqual(historyBeforeStructure)
+
   await page.getByRole('button', { name: '本体结构', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}\\?tab=design`))
   const headerAfterStructure = await detailHeader.boundingBox()
@@ -492,6 +508,8 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect(historyAfterStructure).toBeTruthy()
   expect(headerAfterStructure).toEqual(headerBeforeStructure)
   expect(historyAfterStructure).toEqual(historyBeforeStructure)
+  await expect(detailHeader).toHaveCSS('box-shadow', 'none')
+  await expect(detailContent).toHaveCSS('box-shadow', 'none')
   await expect(page.getByTestId('current-release-version')).toHaveText('v1')
   await expect(page.getByTestId('published-structure-version')).toHaveText('v1')
   await expect(page.getByTestId('ontology-structure-graph')).toBeVisible()
