@@ -167,14 +167,14 @@ export default function GlobalHistoryModal({
         aria-labelledby="all-history-modal-title"
         className="flex min-h-[min(520px,88vh)] max-h-[min(760px,88vh)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-[0_24px_70px_rgba(6,78,59,0.18)]"
       >
-        <div className="relative shrink-0 border-b border-emerald-100 bg-emerald-50/35 px-6 py-5 text-center">
-          <div className="mx-auto flex w-fit items-center gap-2">
-            <History size={18} className="text-emerald-600" />
+        <div className="relative shrink-0 border-b border-emerald-100 bg-emerald-50/35 px-6 py-5">
+          <div className="flex min-w-0 items-center gap-3 pr-10">
+            <History size={18} className="shrink-0 text-emerald-600" />
             <h3 id="all-history-modal-title" className="text-lg font-semibold text-slate-800">历史记录</h3>
+            <p className="min-w-0 truncate text-xs text-slate-400">
+              汇总展示任务池全部执行记录，可按任务、流水线、状态、触发方式和执行日期筛选
+            </p>
           </div>
-          <p className="mx-auto mt-1 max-w-2xl text-xs text-slate-400">
-            汇总展示任务池全部执行记录，可按任务、流水线、状态、触发方式和执行日期筛选
-          </p>
           <button type="button" onClick={onClose} aria-label="关闭历史记录弹窗" className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-emerald-100 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30">
             <X size={18} />
           </button>
