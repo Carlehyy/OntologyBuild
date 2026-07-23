@@ -70,6 +70,13 @@ const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warn
   },
 }
 
+const VERSION_ACTION_BUTTON = {
+  editor: 'border-violet-200 bg-violet-50 text-violet-700 shadow-sm hover:border-violet-300 hover:bg-violet-100 focus-visible:ring-2 focus-visible:ring-violet-500',
+  mapping: 'border-sky-200 bg-sky-50 text-sky-700 shadow-sm hover:border-sky-300 hover:bg-sky-100 focus-visible:ring-2 focus-visible:ring-sky-500',
+  trial: 'border-amber-700 bg-amber-700 text-white shadow-sm hover:border-amber-800 hover:bg-amber-800 focus-visible:ring-2 focus-visible:ring-amber-500',
+  release: 'border-teal-700 bg-teal-700 text-white shadow-sm hover:border-teal-800 hover:bg-teal-800 focus-visible:ring-2 focus-visible:ring-teal-500',
+} as const
+
 function StageBadge({ stage }: { stage: VersionStage }) {
   const meta = STAGE_META[stage]
   return <Badge variant={meta.badge}>{meta.label}</Badge>
@@ -82,6 +89,7 @@ const PROPERTY_MAPPING_CODES = new Set([
 
 const MAPPING_CODES = new Set([
   ...PROPERTY_MAPPING_CODES,
+  'trial_object_mapping_required',
   'object_type_mapping_required',
   'link_type_mapping_required',
   'mapping_dataset_missing',
@@ -171,13 +179,18 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const children = new Map<string, VersionNode[]>()
     const rootNodes: VersionNode[] = []
     for (const node of nodes) {
-      if (!node.parent_version_id || !known.has(node.parent_version_id)) {
+      // 正式版本由某个试跑分支晋级产生时，演进图优先展示真实因果链：
+      // v0 → v0.1（草稿/试跑）→ v1（发布），而不是把 v1 排在来源分支前面。
+      const visualParentId = node.promoted_from_id && known.has(node.promoted_from_id)
+        ? node.promoted_from_id
+        : node.parent_version_id
+      if (!visualParentId || !known.has(visualParentId)) {
         rootNodes.push(node)
         continue
       }
-      children.set(node.parent_version_id, [...(children.get(node.parent_version_id) || []), node])
+      children.set(visualParentId, [...(children.get(visualParentId) || []), node])
     }
-    // 发布节点优先，视觉上形成连续主干；草稿、试跑和归档节点作为侧枝展开。
+    // 同一来源下发布节点优先形成主干，其余草稿与试跑分支按创建时间展开。
     const sort = (items: VersionNode[]) => [...items].sort((a, b) => {
       if (a.node_kind !== b.node_kind) return a.node_kind === 'release' ? -1 : 1
       return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
@@ -262,7 +275,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       setNotice({
         tone: 'bad',
         text: issues.length > 0
-          ? `暂时不能进入试跑态：仍有 ${issues.length} 项发布就绪条件未满足。`
+          ? `暂时不能进入试跑态：仍有 ${issues.length} 项试跑门禁条件未满足。`
           : errorText(error),
       })
     },
@@ -359,21 +372,25 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
             <div className="flex shrink-0 items-center gap-1.5">
               {editing ? (
                 <>
-                  <Button size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
-                  <Button variant="outline" size="sm" onClick={() => openMapping(node)}>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
+                    打开编辑器
+                  </Button>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
                     <Database size={14} /> 数据映射
                   </Button>
-                  <Button variant="outline" size="sm" loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.trial} loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
                     转为试跑态
                   </Button>
                 </>
               ) : trial ? (
                 <>
-                  <Button variant="outline" size="sm" onClick={() => openVersion(node)}>打开编辑器</Button>
-                  <Button variant="outline" size="sm" onClick={() => openMapping(node)}>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
+                    打开编辑器
+                  </Button>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
                     <Database size={14} /> 数据映射
                   </Button>
-                  <Button size="sm" onClick={() => {
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.release} onClick={() => {
                     promote.reset()
                     createRepairDraft.reset()
                     inspectImpact.mutate(node)
@@ -381,10 +398,10 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 </>
               ) : (
                 <>
-                  <Button variant="outline" size="sm" onClick={() => openVersion(node)}>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
                     打开编辑器
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => openMapping(node)}>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
                     <Database size={14} /> 数据映射
                   </Button>
                 </>
@@ -408,14 +425,6 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                     id={`version-actions-${node.id}`}
                     className="absolute right-0 top-9 z-30 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg shadow-slate-200/70"
                   >
-                    {editing && (
-                      <button type="button" className={menuItemClass} onClick={() => {
-                        setOpenMenuId(null)
-                        openMapping(node)
-                      }}>
-                        <Database size={13} /> 配置映射
-                      </button>
-                    )}
                     <button type="button" className={menuItemClass} onClick={() => {
                       setOpenMenuId(null)
                       setSource(node)
@@ -475,7 +484,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
           <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
           <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[11px] text-white">2</span>试跑态</div>
-            <p className="mt-1.5 text-xs leading-5 text-amber-700">门禁：基线仍为当前发布版、结构与哨兵有效，全部对象、关系及存储属性完成映射；通过后冻结并隔离试跑。</p>
+            <p className="mt-1.5 text-xs leading-5 text-amber-700">门禁：基线仍为当前发布版、结构与哨兵有效，且至少一个对象实体完成数据映射；通过后冻结并隔离试跑。</p>
           </div>
           <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
           <div className="rounded-xl border border-teal-100 bg-teal-50/70 p-3">

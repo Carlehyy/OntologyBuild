@@ -241,14 +241,15 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
   await expect(releaseRow.getByRole('button', { name: '创建新版本' })).toHaveCount(0)
   await expect(draftRow.getByRole('button', { name: '创建新版本' })).toBeVisible()
+  await expect(draftRow.getByRole('button', { name: '配置映射' })).toHaveCount(0)
   await draftRow.getByRole('button', { name: 'v0.1 更多操作' }).click()
 
-  // 草稿 → 试跑是后端硬门禁：任意实体或存储属性未映射时必须失败，
+  // 草稿 → 试跑是后端硬门禁：至少需要一个完成数据映射的对象实体，
   // 并在弹窗内给出可执行的修复入口，不能只靠按钮状态假装受控。
   const incompleteRow = page.getByTestId('version-node-v0.2')
   await incompleteRow.getByRole('button', { name: '转为试跑态' }).click()
   await expect(page.getByRole('alert')).toContainText('草稿尚未满足转为试跑态的硬性条件')
-  await expect(page.getByRole('alert')).toContainText('尚未与数据资产湖建立映射')
+  await expect(page.getByRole('alert')).toContainText('至少需要一个已绑定数据集并完成全部存储属性映射的对象实体')
   await expect(incompleteRow).toContainText('草稿态')
 
   // 未发布叶子分支可以安全删除；确认弹窗必须说明连同隔离数据删除且编号不复用。
@@ -442,6 +443,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '确认发布' }).click()
   await expect(page.getByTestId('version-node-v1')).toContainText('当前发布', { timeout: 20_000 })
   await expect(draftRow).toContainText('已晋级')
+  const evolvedVersionOrder = await page.getByTestId('version-tree')
+    .locator('article[data-testid^="version-node-"]')
+    .evaluateAll(rows => rows.map(row => row.getAttribute('data-testid')?.replace('version-node-', '')))
+  expect(evolvedVersionOrder.slice(0, 3)).toEqual(['v0', 'v0.1', 'v1'])
 
   const releasedTree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
   await api<any>(request, token, 'put', `/api/v2/formal/ontologies/${ontology.id}/agent/profile`, {

@@ -40,7 +40,8 @@ from app.ontologies.access import ontology_access_guard
 from app.ontologies.versions.evolution_service import (
     complete_snapshot, impact_report, materialize_trial, next_draft_number,
     next_release_number, snapshot_hash, snapshot_models, validate_snapshot,
-    validate_release_mapping_contract, workspace_snapshot,
+    validate_release_mapping_contract, validate_trial_mapping_contract,
+    workspace_snapshot,
 )
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
@@ -1492,7 +1493,7 @@ def create_trial_run(
         })
     snap = complete_snapshot(draft.snapshot_formal)
     structural_errors = validate_snapshot(snap)
-    structural_errors.extend(validate_release_mapping_contract(snap))
+    structural_errors.extend(validate_trial_mapping_contract(snap))
     try:
         models = snapshot_models(snap)
         structural_errors.extend(_validate_sentinels(

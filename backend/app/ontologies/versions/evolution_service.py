@@ -271,13 +271,64 @@ def _object_type_for_mapping(mapping: dict, object_types: dict[str, dict]) -> di
                  or item.get("displayName") == entity_class), None)
 
 
+def validate_trial_mapping_contract(snapshot: dict | None) -> list[dict]:
+    """Allow a draft to enter trial once one object has an effective mapping.
+
+    Trial is an isolated validation space, so it deliberately permits unmapped
+    object/link types. Materialization will warn about skipped object types and
+    still fail closed if the selected mapping cannot read data or produce valid
+    instances. Publication continues to use the stricter release contract.
+    """
+    snap = complete_snapshot(snapshot)
+    object_types = {
+        str(item.get("id") or ""): item
+        for item in snap["objectTypes"]
+        if item.get("id")
+    }
+    for mapping in snap["mappings"]:
+        target = _object_type_for_mapping(mapping, object_types)
+        field_mapping = mapping.get("fieldMapping")
+        if target is None or not mapping.get("curatedDatasetId") or not isinstance(field_mapping, dict):
+            continue
+        mapped_properties = {
+            str(target_name)
+            for source_name, target_name in field_mapping.items()
+            if not str(source_name).startswith("__")
+            and isinstance(target_name, str) and target_name
+        }
+        required_properties = {
+            str(prop["name"])
+            for prop in (target.get("properties") or [])
+            if isinstance(prop, dict)
+            and prop.get("name")
+            and prop.get("source") != "computed"
+            and not prop.get("computed")
+        }
+        primary_key = target.get("primaryKey")
+        primary_property = next((
+            prop for prop in (target.get("properties") or [])
+            if isinstance(prop, dict)
+            and primary_key
+            and (prop.get("id") == primary_key or prop.get("name") == primary_key)
+        ), None)
+        if primary_property and primary_property.get("name"):
+            required_properties.add(str(primary_property["name"]))
+        if required_properties and required_properties.issubset(mapped_properties):
+            return []
+    return [{
+        "code": "trial_object_mapping_required", "kind": "mapping",
+        "id": "", "name": "",
+        "message": "草稿至少需要一个已绑定数据集并完成全部存储属性映射的对象实体，才能进入试跑态",
+        "field": "mapping",
+    }]
+
+
 def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
-    """Require a complete lake mapping before a draft may enter trial.
+    """Require a complete lake mapping before a trial may be published.
 
     Every object/link type needs a mapping and every persisted property must be
     covered. Computed properties are deliberately excluded because their value
-    comes from ontology logic rather than a lake column. This gate is
-    snapshot-only so trial entry and promotion enforce the exact same contract.
+    comes from ontology logic rather than a lake column.
     """
     snap = complete_snapshot(snapshot)
     errors: list[dict] = []
@@ -367,7 +418,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
                 "id": object_type_id, "name": label(object_type),
                 "message": (
                     f"ObjectType「{label(object_type)}」尚未与数据资产湖建立映射，"
-                    "不能进入试跑态"
+                    "不能转为发布态"
                 ),
                 "field": "mapping",
             })
@@ -375,7 +426,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             errors.append({
                 "code": "object_type_primary_key_required", "kind": "objectType",
                 "id": object_type_id, "name": label(object_type),
-                "message": f"ObjectType「{label(object_type)}」未设置主键，不能进入试跑态",
+                "message": f"ObjectType「{label(object_type)}」未设置主键，不能转为发布态",
                 "field": "primaryKey",
             })
 
@@ -469,7 +520,7 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
                 "id": link_type_id, "name": label(link_type),
                 "message": (
                     f"LinkType「{label(link_type)}」尚未与数据资产湖建立映射，"
-                    "不能进入试跑态"
+                    "不能转为发布态"
                 ),
                 "field": "mapping",
             })

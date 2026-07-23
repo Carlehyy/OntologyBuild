@@ -16,6 +16,7 @@ from app.models.ontology_version import (
 from app.models.v2.mapping import OntologyMapping
 from app.ontologies.versions.evolution_service import (
     impact_report, snapshot_hash, validate_release_mapping_contract,
+    validate_trial_mapping_contract,
 )
 
 
@@ -340,6 +341,11 @@ def test_release_mapping_contract_requires_every_type_and_stored_property():
     assert "mapping_property_missing" in codes
     assert "object_type_mapping_required" in codes
     assert "link_type_mapping_required" in codes
+    assert {
+        item["code"] for item in validate_trial_mapping_contract(snapshot)
+    } == {"trial_object_mapping_required"}
+    snapshot["mappings"][0]["fieldMapping"]["name"] = "name"
+    assert validate_trial_mapping_contract(snapshot) == []
 
     structure_only = dict(snapshot)
     structure_only["mappings"] = []
@@ -350,8 +356,10 @@ def test_release_mapping_contract_requires_every_type_and_stored_property():
     assert structure_codes == {
         "object_type_mapping_required", "link_type_mapping_required",
     }
+    assert {
+        item["code"] for item in validate_trial_mapping_contract(structure_only)
+    } == {"trial_object_mapping_required"}
 
-    snapshot["mappings"][0]["fieldMapping"]["name"] = "name"
     snapshot["mappings"].append({
         "id": "map-customer", "curatedDatasetId": "customers",
         "entityClass": "Customer", "targetObjectTypeId": "ot-customer",
@@ -385,7 +393,67 @@ def test_structure_only_draft_cannot_enter_trial(
     detail = trial.json()["detail"]
     assert detail["code"] == "publish_validation_failed"
     assert {item["code"] for item in detail["errors"]} == {
-        "object_type_mapping_required",
+        "trial_object_mapping_required",
+    }
+
+
+def test_one_mapped_object_can_enter_trial_with_other_types_unmapped(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    draft = _draft(client, auth_headers, oid, _root(
+        client, auth_headers, oid)["id"])
+    workspace = _workspace(draft)
+    workspace["objectTypes"].append({
+        "id": "ot-customer", "name": "Customer", "displayName": "客户",
+        "primaryKey": "customer-id", "positionX": 360, "positionY": 20,
+        "properties": [{
+            "id": "customer-id", "name": "id", "displayName": "客户编号",
+            "type": "string", "required": True,
+        }],
+    })
+    workspace["linkTypes"].append({
+        "id": "lt-owner", "name": "owned_by", "displayName": "所属客户",
+        "sourceObjectTypeId": "ot-order",
+        "targetObjectTypeId": "ot-customer",
+        "cardinality": "many-to-one",
+        "properties": [],
+    })
+    saved = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers, json=workspace,
+    )
+    assert saved.status_code == 200, saved.text
+    revision = saved.json()["data"]["revision"]
+    mapped = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace/mappings",
+        headers=auth_headers, json={
+            "baseRevision": revision,
+            "mappings": [{
+                "id": "mapping-order", "curatedDatasetId": "dataset-orders",
+                "entityClass": "Order", "targetObjectTypeId": "ot-order",
+                "fieldMapping": {
+                    "id": "id", "name": "name", "__primary_key__": "id",
+                },
+                "status": "draft", "confidence": 1,
+            }],
+            "linkMappings": [], "sentinels": [],
+        },
+    )
+    assert mapped.status_code == 200, mapped.text
+
+    trial = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert trial.status_code == 201, trial.text
+    run = trial.json()["data"]
+    assert run["status"] == "passed"
+    assert run["result"]["counts"] == {
+        "objects": 2, "links": 0, "facts": 4, "datasets": 1,
+    }
+    assert {item["code"] for item in run["result"]["warnings"]} == {
+        "object_type_unmapped",
     }
 
 
