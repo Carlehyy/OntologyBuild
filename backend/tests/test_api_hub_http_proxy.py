@@ -628,6 +628,7 @@ def test_auto_publication_and_one_click_package_keep_sensitive_body_defaults(pro
     package = package_response.json()
     assert package["path"] == "/proxy/echo"
     assert package["secret"].startswith("hub_")
+    assert package["body_enabled"] is True
     assert "password" not in package["body_template"]
     assert package["editable_body_keys"] == published["proxy_body_keys"]
 
@@ -668,6 +669,74 @@ def test_auto_publication_and_one_click_package_keep_sensitive_body_defaults(pro
     generated = next(item for item in listed_keys if item["id"] == package["key_id"])
     assert generated["scope_all"] is False
     assert generated["interface_ids"] == [iface["id"]]
+
+
+def test_raw_body_package_is_explicit_and_disabled_multipart_is_omitted(proxy_env):
+    client = proxy_env["client"]
+    raw_interface = _interface(
+        client,
+        proxy_env["upstream_url"],
+        name="Raw Echo",
+        method="POST",
+        proxy_slug="raw-echo",
+        query_params=[],
+        proxy_query_keys=[],
+        headers=[{"key": "Content-Type", "value": "text/plain; charset=utf-8"}],
+        proxy_header_keys=[],
+        body_type="raw",
+        body_content="platform default",
+        proxy_body_enabled=True,
+        proxy_body_keys=[],
+    )
+
+    package_response = client.post(f"/proxy/packages/{raw_interface['id']}")
+    assert package_response.status_code == 200, package_response.text
+    package = package_response.json()
+    assert package["body_type"] == "raw"
+    assert package["body_enabled"] is True
+    assert package["body_template"] == ""
+    assert package["editable_body_keys"] == []
+
+    response = client.post(
+        "/proxy/raw-echo",
+        headers={
+            config.PROXY_KEY_HEADER: package["secret"],
+            "Content-Type": "application/octet-stream",
+        },
+        content=b"caller raw body",
+    )
+    assert response.status_code == 200, response.text
+    echoed = response.json()
+    assert echoed["body"] == "caller raw body"
+    echoed_headers = {key.lower(): value for key, value in echoed["headers"].items()}
+    assert echoed_headers["content-type"].startswith("text/plain")
+
+    multipart_interface = _interface(
+        client,
+        proxy_env["upstream_url"],
+        name="Disabled Multipart",
+        method="POST",
+        proxy_slug="disabled-multipart",
+        query_params=[],
+        proxy_query_keys=[],
+        body_type="multipart",
+        body_content="note=platform default",
+        file_fields=[
+            {"key": "file", "accept": "text/plain", "multiple": False}
+        ],
+        proxy_body_enabled=False,
+        proxy_body_keys=[],
+    )
+    disabled_package_response = client.post(
+        f"/proxy/packages/{multipart_interface['id']}"
+    )
+    assert (
+        disabled_package_response.status_code == 200
+    ), disabled_package_response.text
+    disabled_package = disabled_package_response.json()
+    assert disabled_package["body_enabled"] is False
+    assert disabled_package["multipart_fields"] == []
+    assert disabled_package["file_fields"] == []
 
 
 def _free_port() -> int:

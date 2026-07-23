@@ -212,6 +212,7 @@ export interface ForwardingPackage {
   query_params: KV[]
   header_params: KV[]
   body_type: HubInterface['body_type']
+  body_enabled: boolean
   body_template: string
   editable_body_keys: string[]
   multipart_fields: KV[]

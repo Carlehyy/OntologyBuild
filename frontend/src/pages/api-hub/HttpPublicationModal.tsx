@@ -208,7 +208,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
               <div className="mt-3 flex items-center justify-between gap-4 text-[10px] text-slate-500"><span>完整凭证只在这次生成结果中展示；之后可以单独撤销。</span><button type="button" onClick={() => void copy(code, 'inline-code')} className="shrink-0 rounded px-2 py-1 font-semibold text-teal-700 hover:bg-teal-50">{copied === 'inline-code' ? '已复制' : '复制代码'}</button></div>
             </div>
 
-            {(callPackage.query_params.length > 0 || callPackage.header_params.length > 0 || callPackage.editable_body_keys.length > 0) && (
+            {editableLabels(callPackage).length > 0 && (
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <span className="mr-1 text-[10px] font-semibold text-slate-500">调用方可修改</span>
                 {editableLabels(callPackage).map(label => <span key={label} className="rounded-full border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] text-slate-700">{label}</span>)}
@@ -362,6 +362,7 @@ function editableLabels(value: ForwardingPackage) {
     ...value.query_params.map(item => item.key),
     ...value.header_params.map(item => item.key),
     ...value.editable_body_keys.map(bodyKeyLabel),
+    ...(value.body_enabled && value.body_type === 'raw' ? ['Raw Body（整段）'] : []),
   ])]
 }
 
@@ -384,22 +385,25 @@ function curlCode(value: ForwardingPackage, endpoint: string, queryEntries: read
   const query = queryEntries.length
     ? `?${queryEntries.map(([key, item]) => `${encodeURIComponent(key)}=${item}`).join('&')}`
     : ''
+  const body = forwardingBody(value)
   const lines = [`curl -X ${value.method} ${shellQuote(endpoint + query)}`, `  -H ${shellQuote(`${value.key_header}: ${value.secret}`)}`]
   headerEntries.forEach(([key, item]) => lines.push(`  -H ${shellQuote(`${key}: ${item}`)}`))
-  if (value.body_type === 'multipart') {
+  if (value.body_enabled && value.body_type === 'multipart') {
     value.multipart_fields.forEach(item => lines.push(`  -F ${shellQuote(`${item.key}=${item.value}`)}`))
     value.file_fields.forEach(field => lines.push(`  -F ${shellQuote(`${field.key}=@/path/to/file`)}`))
-  } else if (value.body_template) {
-    const contentType = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
-    lines.push(`  -H ${shellQuote(`Content-Type: ${contentType}`)}`)
-    lines.push(`  --data-raw ${shellQuote(value.body_template)}`)
+  } else if (body) {
+    const contentType = forwardingContentType(value.body_type)
+    if (contentType) lines.push(`  -H ${shellQuote(`Content-Type: ${contentType}`)}`)
+    lines.push(`  ${value.body_type === 'raw' ? '--data-binary' : '--data-raw'} ${shellQuote(body)}`)
   }
   return lines.join(' \\\n')
 }
 
 function pythonCode(value: ForwardingPackage, endpoint: string, queryEntries: readonly (readonly [string, string])[], headerEntries: readonly (readonly [string, string])[]) {
   const headers = Object.fromEntries([[value.key_header, value.secret], ...headerEntries])
-  if (value.body_template && value.body_type !== 'multipart') headers['Content-Type'] = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
+  const body = forwardingBody(value)
+  const contentType = forwardingContentType(value.body_type)
+  if (body && contentType) headers['Content-Type'] = contentType
   const parts = [
     'import requests',
     '',
@@ -407,27 +411,29 @@ function pythonCode(value: ForwardingPackage, endpoint: string, queryEntries: re
     `params = ${JSON.stringify(Object.fromEntries(queryEntries), null, 2)}`,
     `headers = ${JSON.stringify(headers, null, 2)}`,
   ]
-  if (value.body_type === 'multipart') {
+  if (value.body_enabled && value.body_type === 'multipart') {
     parts.push(`data = ${JSON.stringify(Object.fromEntries(value.multipart_fields.map(item => [item.key, item.value])), null, 2)}`)
     parts.push('files = [')
     value.file_fields.forEach(field => parts.push(`    (${JSON.stringify(field.key)}, ("YOUR_FILENAME", open("/path/to/file", "rb"), "application/octet-stream")),`))
     parts.push(']')
-  } else if (value.body_template) parts.push(`body = ${JSON.stringify(value.body_template)}`)
-  const requestPayload = value.body_type === 'multipart' ? ', data=data, files=files' : value.body_template ? ', data=body' : ''
+  } else if (body) parts.push(`body = ${JSON.stringify(body)}`)
+  const requestPayload = value.body_enabled && value.body_type === 'multipart' ? ', data=data, files=files' : body ? ', data=body' : ''
   parts.push('', `response = requests.request(${JSON.stringify(value.method)}, url, params=params, headers=headers${requestPayload})`, 'response.raise_for_status()', 'print(response.text)')
   return parts.join('\n')
 }
 
 function javascriptCode(value: ForwardingPackage, endpoint: string, queryEntries: readonly (readonly [string, string])[], headerEntries: readonly (readonly [string, string])[]) {
   const headers = Object.fromEntries([[value.key_header, value.secret], ...headerEntries])
-  if (value.body_template && value.body_type !== 'multipart') headers['Content-Type'] = value.body_type === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'
+  const body = forwardingBody(value)
+  const contentType = forwardingContentType(value.body_type)
+  if (body && contentType) headers['Content-Type'] = contentType
   const parts = [
     `const url = new URL(${JSON.stringify(endpoint)});`,
     `const params = ${JSON.stringify(Object.fromEntries(queryEntries), null, 2)};`,
     'Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));',
     '',
   ]
-  if (value.body_type === 'multipart') {
+  if (value.body_enabled && value.body_type === 'multipart') {
     parts.push('const form = new FormData();')
     value.multipart_fields.forEach(item => parts.push(`form.append(${JSON.stringify(item.key)}, ${JSON.stringify(item.value)});`))
     value.file_fields.forEach((field, index) => {
@@ -444,10 +450,22 @@ function javascriptCode(value: ForwardingPackage, endpoint: string, queryEntries
     `  method: ${JSON.stringify(value.method)},`,
     `  headers: ${JSON.stringify(headers, null, 2).replaceAll('\n', '\n  ')},`,
   )
-  if (value.body_type === 'multipart') parts.push('  body: form,')
-  else if (value.body_template) parts.push(`  body: ${JSON.stringify(value.body_template)},`)
+  if (value.body_enabled && value.body_type === 'multipart') parts.push('  body: form,')
+  else if (body) parts.push(`  body: ${JSON.stringify(body)},`)
   parts.push('});', 'if (!response.ok) throw new Error(`HTTP ${response.status}`);', 'console.log(await response.text());')
   return parts.join('\n')
+}
+
+function forwardingBody(value: ForwardingPackage) {
+  if (!value.body_enabled || value.body_type === 'multipart') return ''
+  if (value.body_type === 'raw') return 'YOUR_REQUEST_BODY'
+  return value.body_template
+}
+
+function forwardingContentType(bodyType: ForwardingPackage['body_type']) {
+  if (bodyType === 'json') return 'application/json'
+  if (bodyType === 'form') return 'application/x-www-form-urlencoded'
+  return ''
 }
 
 function shellQuote(value: string) {

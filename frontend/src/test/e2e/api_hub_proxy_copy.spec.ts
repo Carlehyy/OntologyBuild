@@ -39,11 +39,47 @@ const forwardingPackage = {
   query_params: [{ key: 'page', value: '1' }],
   header_params: [{ key: 'X-Trace-ID', value: '' }],
   body_type: 'json',
+  body_enabled: true,
   body_template: '{\n  "productId": 1001\n}',
   editable_body_keys: ['/productId'],
   multipart_fields: [],
   file_fields: [],
   generated_at: '2026-07-18T10:00:00Z',
+}
+
+const rawInterface = {
+  ...publishedInterface,
+  id: 8,
+  name: '发送原始报文',
+  description: '转发纯文本报文',
+  url: 'https://vendor.example/v1/raw',
+  query_params: [],
+  headers: [{ key: 'Content-Type', value: 'text/plain; charset=utf-8' }],
+  body_type: 'raw',
+  body_content: '平台保存的默认报文',
+  proxy_slug: 'raw-message',
+  proxy_query_keys: [],
+  proxy_header_keys: [],
+  proxy_body_enabled: true,
+  proxy_body_keys: [],
+}
+
+const rawForwardingPackage = {
+  key_id: 22,
+  key_name: '发送原始报文 · 调用包',
+  secret: 'hub_raw_secret',
+  path: '/proxy/raw-message',
+  key_header: 'X-API-Hub-Key',
+  method: 'POST',
+  query_params: [],
+  header_params: [],
+  body_type: 'raw',
+  body_enabled: true,
+  body_template: '',
+  editable_body_keys: [],
+  multipart_fields: [],
+  file_fields: [],
+  generated_at: '2026-07-18T10:05:00Z',
 }
 
 test('已转发接口可一键复制完整且不泄露平台敏感配置的调用示例', async ({ page, context }) => {
@@ -69,19 +105,31 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
     const request = route.request()
     const path = new URL(request.url()).pathname
     if (request.method() === 'GET' && path === '/api/api-hub/interfaces') {
-      await route.fulfill({ json: [publishedInterface] })
+      await route.fulfill({ json: [publishedInterface, rawInterface] })
       return
     }
     if (request.method() === 'GET' && path === '/api/api-hub/interfaces/7') {
       await route.fulfill({ json: publishedInterface })
       return
     }
+    if (request.method() === 'GET' && path === '/api/api-hub/interfaces/8') {
+      await route.fulfill({ json: rawInterface })
+      return
+    }
     if (request.method() === 'PUT' && path === '/api/api-hub/interfaces/7/http-publication') {
       await route.fulfill({ json: publishedInterface })
       return
     }
+    if (request.method() === 'PUT' && path === '/api/api-hub/interfaces/8/http-publication') {
+      await route.fulfill({ json: rawInterface })
+      return
+    }
     if (request.method() === 'POST' && path === '/api/api-hub/proxy/packages/7') {
       await route.fulfill({ json: forwardingPackage })
+      return
+    }
+    if (request.method() === 'POST' && path === '/api/api-hub/proxy/packages/8') {
+      await route.fulfill({ json: rawForwardingPackage })
       return
     }
     if (request.method() === 'GET' && path === '/api/api-hub/credential/status') {
@@ -140,4 +188,18 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
   expect(copied).not.toContain('real-header-secret')
   expect(copied).not.toContain('password')
   expect(copied).not.toContain('private')
+
+  await page.getByRole('button', { name: '发送原始报文：查看已生成的转发' }).click()
+  const rawDialog = page.getByRole('dialog', { name: /转发调用 · 发送原始报文/ })
+  await rawDialog.getByRole('button', { name: '保存并生成调用包' }).click()
+  const rawExample = rawDialog.locator('pre')
+  await expect(rawExample).toContainText("--data-binary 'YOUR_REQUEST_BODY'")
+  await expect(rawDialog.getByText('Raw Body（整段）')).toBeVisible()
+
+  await rawDialog.getByRole('button', { name: 'Python' }).click()
+  await expect(rawExample).toContainText('body = "YOUR_REQUEST_BODY"')
+  await expect(rawExample).toContainText('data=body')
+
+  await rawDialog.getByRole('button', { name: 'JavaScript' }).click()
+  await expect(rawExample).toContainText('body: "YOUR_REQUEST_BODY"')
 })

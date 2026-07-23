@@ -279,10 +279,19 @@ def create_proxy_package(interface_id: int):
             for key in interface.get("proxy_header_keys") or []
         ],
         "body_type": interface.get("body_type") or "none",
+        "body_enabled": bool(interface.get("proxy_body_enabled")),
         "body_template": publication.body_template(interface),
         "editable_body_keys": interface.get("proxy_body_keys") or [],
-        "multipart_fields": publication.multipart_text_fields(interface),
-        "file_fields": publication.multipart_file_fields(interface),
+        "multipart_fields": (
+            publication.multipart_text_fields(interface)
+            if interface.get("proxy_body_enabled")
+            else []
+        ),
+        "file_fields": (
+            publication.multipart_file_fields(interface)
+            if interface.get("proxy_body_enabled")
+            else []
+        ),
         "generated_at": generated_at.isoformat(),
     }
 
