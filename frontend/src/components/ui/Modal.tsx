@@ -13,7 +13,10 @@ interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
   headerIcon?: React.ReactNode
   panelClassName?: string
+  backdropClassName?: string
+  headerClassName?: string
   contentClassName?: string
+  footerClassName?: string
 }
 
 const sizeMap = {
@@ -35,7 +38,10 @@ export function Modal({
   size = 'md',
   headerIcon,
   panelClassName,
+  backdropClassName,
+  headerClassName,
   contentClassName,
+  footerClassName,
 }: ModalProps) {
   const titleId = React.useId()
   const descriptionId = React.useId()
@@ -54,7 +60,10 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4">
       <div
-        className="absolute inset-0 bg-slate-950/30 backdrop-blur-[2px] animate-fade-in"
+        className={cn(
+          'absolute inset-0 bg-slate-950/30 backdrop-blur-[2px] animate-fade-in',
+          backdropClassName,
+        )}
         onClick={onClose}
         aria-hidden="true"
       />
@@ -79,7 +88,10 @@ export function Modal({
         </button>
 
         {(title || description) && (
-          <header className="flex shrink-0 items-start gap-3 px-6 pb-3 pt-5 pr-14">
+          <header className={cn(
+            'flex shrink-0 items-start gap-3 px-6 pb-3 pt-5 pr-14',
+            headerClassName,
+          )}>
             {headerIcon && (
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
                 {headerIcon}
@@ -106,7 +118,10 @@ export function Modal({
           contentClassName,
         )}>{children}</div>
         {footer && (
-          <footer className="flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-6 py-4">
+          <footer className={cn(
+            'flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-6 py-4',
+            footerClassName,
+          )}>
             {footer}
           </footer>
         )}

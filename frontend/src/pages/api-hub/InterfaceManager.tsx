@@ -51,7 +51,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [includeLogin, setIncludeLogin] = useState(false)
   const [cookieLoading, setCookieLoading] = useState(false)
   const [cookieMessage, setCookieMessage] = useState('')
-  const [callExampleCopied, setCallExampleCopied] = useState(false)
+  const [callExampleCopyState, setCallExampleCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
   const [openInterfaces, setOpenInterfaces] = useState(false)
@@ -263,21 +263,36 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     finally { setSaving(false) }
   }
 
-  const showCallExample = () => {
+  const showCallExample = async () => {
     try {
       buildCallExample(draft, '')
       setCallExampleDraft(structuredClone(draft))
       setCallExampleCookie('')
       setIncludeLogin(false)
       setCookieMessage('')
-      setCallExampleCopied(false)
+      setCallExampleCopyState('idle')
     } catch {
       onError('请先填写有效的绝对 URL，再查看调用示例')
+      return
+    }
+
+    if (!draft.use_w3) return
+    setCookieLoading(true)
+    try {
+      const value = await apiHub.credentialCookieHeader()
+      setCallExampleCookie(value.cookie || '')
+      if (!value.cookie) {
+        setCookieMessage('当前没有可用的 W3 登录态，请先在“授权配置”中刷新登录。')
+      }
+    } catch (error) {
+      setCookieMessage(apiError(error))
+    } finally {
+      setCookieLoading(false)
     }
   }
 
   const toggleExampleLogin = async (checked: boolean) => {
-    setCallExampleCopied(false)
+    setCallExampleCopyState('idle')
     if (!checked) { setIncludeLogin(false); return }
     if (callExampleCookie) { setIncludeLogin(true); return }
     setCookieLoading(true)
@@ -295,6 +310,15 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       setIncludeLogin(false)
       setCookieMessage(apiError(error))
     } finally { setCookieLoading(false) }
+  }
+
+  const copyCallExample = async () => {
+    try {
+      await writeTextToClipboard(callExample)
+      setCallExampleCopyState('copied')
+    } catch {
+      setCallExampleCopyState('failed')
+    }
   }
 
   const moveInterface = async (targetGroup: string, rawTargetIndex: number) => {
@@ -454,7 +478,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
             {draft.id && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />转发调用</Button>}
             {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的转发调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? '转发调用示例复制成功' : ''}</span></Button>}
-            <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={showCallExample}><FileCode2 size={14} />调用示例</Button>
+            <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => void showCallExample()}><FileCode2 size={14} />调用示例</Button>
           </div>
         </div>
 
@@ -506,17 +530,47 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {newGroupError && <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{newGroupError}</div>}
         </div>
       </Modal>
-      <Modal open={Boolean(callExampleDraft)} onClose={() => setCallExampleDraft(null)} title="调用示例" description="命令已根据当前编辑器草稿生成，可复制到终端运行或导入 Postman。" size="2xl" footer={<><Button variant="outline" onClick={() => setCallExampleDraft(null)}>关闭</Button><Button onClick={async () => { await writeTextToClipboard(callExample); setCallExampleCopied(true) }}><Copy size={14} />{callExampleCopied ? '已复制' : '复制命令'}</Button></>}>
-        <div className="space-y-4">
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100 shadow-inner">{callExample}</pre>
+      <Modal
+        open={Boolean(callExampleDraft)}
+        onClose={() => setCallExampleDraft(null)}
+        title="导出 cURL"
+        size="2xl"
+        panelClassName="max-w-[600px] border-slate-200 bg-white shadow-[0_24px_56px_-16px_rgba(13,148,136,0.22),0_12px_28px_-12px_rgba(15,23,42,0.2)]"
+        backdropClassName="bg-[#111e1c]/45 backdrop-blur-md"
+        headerClassName="border-b border-slate-100 bg-gradient-to-b from-white to-slate-50/70 px-6 pb-4 pt-5"
+        contentClassName="px-6 pb-5 pt-5"
+        footerClassName="justify-center border-slate-100 bg-gradient-to-t from-slate-50/80 to-white px-6 pb-5 pt-4"
+        footer={(
+          <>
+            <Button variant="outline" className="min-w-24 bg-white" onClick={() => setCallExampleDraft(null)}>关闭</Button>
+            <Button
+              className={`min-w-24 shadow-sm ${callExampleCopyState === 'failed' ? 'bg-red-600 hover:bg-red-700' : ''}`}
+              onClick={() => void copyCallExample()}
+            >
+              {callExampleCopyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}
+              {callExampleCopyState === 'copied' ? '已复制' : callExampleCopyState === 'failed' ? '重试复制' : '复制'}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-3.5">
+          <div className="rounded-r-lg border-l-[3px] border-teal-600 bg-teal-50/80 px-3.5 py-2.5 text-xs leading-5 text-slate-600">
+            复制到终端直接运行，CMD / PowerShell / bash 通用。
+          </div>
+          <pre aria-label="cURL 命令" className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-[10px] border border-slate-200 bg-slate-50 px-4 py-3.5 font-mono text-[12.5px] leading-[1.7] text-slate-700">{callExample}</pre>
           {callExampleDraft?.use_w3 && (
-            <label className={`flex items-start gap-3 rounded-lg border px-3.5 py-3 transition-colors ${includeLogin ? 'border-amber-200 bg-amber-50' : 'border-[var(--color-border)] bg-slate-50'}`}>
-              <input type="checkbox" checked={includeLogin} disabled={cookieLoading} onChange={event => void toggleExampleLogin(event.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-600" />
-              <span className="min-w-0 text-xs leading-5 text-slate-600"><b className="font-semibold text-slate-800">包含当前 W3 登录 Cookie</b><br />用于在终端或 Postman 复用登录态；Cookie 属于敏感信息且会过期，请勿转发给无关人员。</span>
-              {cookieLoading && <LoaderCircle size={15} className="mt-0.5 shrink-0 animate-spin text-emerald-600" />}
+            <label className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs leading-5 transition-colors ${includeLogin ? 'border-teal-200 bg-teal-50/70' : 'border-slate-200 bg-white hover:border-teal-200 hover:bg-teal-50/50'}`}>
+              <input type="checkbox" checked={includeLogin} disabled={cookieLoading || !callExampleCookie} onChange={event => void toggleExampleLogin(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600" />
+              <span className="min-w-0 text-slate-600">
+                包含当前登录 Cookie（用于在 Postman 复用登录态，<b className="font-semibold text-amber-600">会过期</b>）
+              </span>
+              {cookieLoading && <LoaderCircle size={15} aria-label="正在读取登录态" className="ml-auto mt-0.5 shrink-0 animate-spin text-teal-600" />}
             </label>
           )}
-          {cookieMessage && <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">{cookieMessage}</div>}
+          {cookieMessage && <div role="status" className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">{cookieMessage}</div>}
+          <span className="sr-only" role="status" aria-live="polite">
+            {callExampleCopyState === 'copied' ? 'cURL 命令已复制' : callExampleCopyState === 'failed' ? '复制失败，请重试' : ''}
+          </span>
         </div>
       </Modal>
       <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reloadOpenState} onError={onError} />
