@@ -312,7 +312,7 @@ export default function StructuredDataPage() {
       <div className="flex-1 min-h-0">
         <div key={activeTab} className="h-full animate-lake-tab-in">
           {activeTab === 'curated'
-            ? <CuratedView />
+            ? <CuratedView focusDatasetId={focusDatasetId} />
             : <RawDatasetsView focusDatasetId={focusDatasetId} source="manual" />}
         </div>
       </div>
@@ -321,7 +321,7 @@ export default function StructuredDataPage() {
 }
 
 /** 成品数据集（Curated）视图：流水线 × 产物 关联表 */
-function CuratedView() {
+function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -453,6 +453,37 @@ function CuratedView() {
       return true
     })
   }, [allRows, normalizedPipelineFilter, taskPipelineId, statusFilter])
+
+  useEffect(() => {
+    if (!focusDatasetId || loading) return
+    const target = allRows.find(row => row.curatedId === focusDatasetId)
+    if (target) {
+      setPanelRow(current => current?.curatedId === target.curatedId ? current : target)
+      return
+    }
+
+    let active = true
+    curatedApi.get(focusDatasetId)
+      .then(dataset => {
+        if (!active) return
+        const pipeline = pipelines.find(item => item.id === dataset.producer_pipeline_id)
+        setPanelRow({
+          pipelineId: pipeline?.id ?? dataset.producer_pipeline_id ?? '',
+          pipelineName: pipeline?.name ?? '—',
+          domain: pipeline?.domain || '通用',
+          curatedId: dataset.id,
+          curatedName: dataset.name,
+          curatedStatus: dataset.status || 'pending_review',
+          rowCount: dataset.row_count ?? null,
+          quality: dataset.quality_score ?? null,
+          updatedAt: dataset.updated_at ?? null,
+        })
+      })
+      .catch(error => {
+        if (active) setActionError(errorText(error, '无法打开指定的成品数据集'))
+      })
+    return () => { active = false }
+  }, [allRows, focusDatasetId, loading, pipelines])
 
   const clearFilters = () => {
     changePipelineFilter('')

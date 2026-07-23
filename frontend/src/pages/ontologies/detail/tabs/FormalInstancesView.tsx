@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link as RouterLink } from 'react-router-dom'
 import {
   AlertCircle,
+  ArrowUpRight,
   Box,
   Boxes,
   ChevronLeft,
@@ -706,6 +708,14 @@ const DATASET_KIND_LABEL: Record<string, string> = {
   unstructured: '非结构化数据集',
 }
 
+function datasetLakeHref(dataset: AssociatedDataset) {
+  const params = new URLSearchParams({
+    tab: dataset.kind === 'curated' ? 'curated' : 'raw',
+    dataset: dataset.id,
+  })
+  return `/data/structured?${params.toString()}`
+}
+
 function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[] }) {
   const [open, setOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -779,6 +789,17 @@ function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[]
                         ))}
                       </span>
                     </span>
+                    {dataset.available && (
+                      <RouterLink
+                        to={datasetLakeHref(dataset)}
+                        onClick={() => setOpen(false)}
+                        aria-label={`在数据资产湖中查看${dataset.name}`}
+                        title={`在数据资产湖中查看“${dataset.name}”`}
+                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 active:scale-[0.96]"
+                      >
+                        <ArrowUpRight size={14} />
+                      </RouterLink>
+                    )}
                   </div>
                 ))}
               </div>
@@ -965,6 +986,13 @@ function EndpointCell({ endpoint }: { endpoint?: EndpointSummary | null }) {
 function FullValue({ value }: { value: unknown }) {
   if (value === null || value === undefined || value === '') {
     return <span className="text-slate-300">—</span>
+  }
+  if (Array.isArray(value)) {
+    return (
+      <pre className="m-0 whitespace-nowrap font-mono text-[11px] leading-5 text-slate-600">
+        {JSON.stringify(value)}
+      </pre>
+    )
   }
   if (typeof value === 'object') {
     return (

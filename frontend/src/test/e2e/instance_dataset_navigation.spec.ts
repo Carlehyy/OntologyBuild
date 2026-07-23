@@ -1,0 +1,133 @@
+import { expect, test, type Page, type Route } from '@playwright/test'
+
+async function mockInstanceDatasetNavigation(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'e2e-token')
+    localStorage.setItem('auth-store', JSON.stringify({
+      state: { token: 'e2e-token', user: { id: 'u1', username: 'tester', role: 'admin' } },
+      version: 0,
+    }))
+  })
+
+  await page.route('**/api/**', async (route: Route) => {
+    const url = new URL(route.request().url())
+    if (!url.pathname.startsWith('/api/')) return route.continue()
+    const ok = (data: unknown) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data, message: 'ok' }),
+    })
+
+    if (url.pathname === '/api/v1/ontologies/ontology-products') {
+      return ok({
+        id: 'ontology-products',
+        name: '商品本体',
+        domain: '电商',
+        description: '商品主数据',
+        version: 'v1',
+        current_release_id: 'release-v1',
+        current_release_version: 'v1',
+        status: 'published',
+        entity_count: 1,
+        relation_count: 0,
+        action_count: 0,
+        sentinel_count: 0,
+        created_by: 'tester',
+        created_at: '2026-07-23T00:00:00Z',
+        updated_at: '2026-07-23T00:00:00Z',
+      })
+    }
+    if (url.pathname.endsWith('/instance-browser/catalog')) {
+      return ok({
+        release: { id: 'release-v1', version: 'v1' },
+        objectTypes: [{
+          id: 'object-product',
+          name: 'item',
+          displayName: '商品',
+          description: '电商商品',
+          primaryKey: 'item_id',
+          properties: [
+            { id: 'item-id', name: 'item_id', displayName: '商品ID', type: 'string', required: true },
+            { id: 'images', name: 'images', displayName: '图片', type: 'array', required: true },
+          ],
+          instanceCount: 1,
+          associatedDatasets: [{
+            id: 'dataset-products',
+            name: '电商本体_商品',
+            kind: 'curated',
+            roles: ['实体数据'],
+            available: true,
+          }],
+        }],
+        linkTypes: [],
+        legacyProjection: {
+          objectInstances: 0,
+          linkInstances: 0,
+          total: 0,
+          canAdopt: false,
+          recommendedAction: 'none',
+          blockingReasons: [],
+        },
+      })
+    }
+    if (url.pathname.endsWith('/instance-browser/objects')) {
+      return ok({
+        release: { id: 'release-v1', version: 'v1' },
+        items: [{
+          id: 'product-1',
+          objectTypeId: 'object-product',
+          properties: {
+            item_id: 'ITEM-1001',
+            images: ['https://example.com/images/item-1001.jpg'],
+          },
+          computed: {},
+          createdAt: '2026-07-23T00:00:00Z',
+          updatedAt: '2026-07-23T00:00:00Z',
+        }],
+        total: 1,
+        page: 1,
+        pageSize: 20,
+      })
+    }
+    if (url.pathname === '/api/v2/curated') {
+      const dataset = {
+        id: 'dataset-products',
+        name: '电商本体_商品',
+        status: 'approved',
+        row_count: 1,
+        quality_score: 0.98,
+        primary_key: 'item_id',
+        producer_pipeline_id: null,
+        output_key: null,
+        has_review_evidence: true,
+        updated_at: '2026-07-23T00:00:00Z',
+      }
+      return ok(url.searchParams.get('paginated') === 'true'
+        ? { items: [dataset], total: 1, page: 1, page_size: 10 }
+        : [dataset])
+    }
+    if (url.pathname === '/api/v2/datasets/overview') {
+      return ok({ items: [], total: 0, page: 1, page_size: 10 })
+    }
+    if (url.pathname === '/api/v2/pipelines') return ok([])
+    if (url.pathname === '/api/v2/pipeline-tasks') return ok({ items: [], total: 0 })
+    return ok([])
+  })
+}
+
+test('实例数据中的关联数据集可跳转到资产湖并定位成品数据集', async ({ page }) => {
+  await mockInstanceDatasetNavigation(page)
+  await page.goto('/#/ontologies/ontology-products?tab=data', { waitUntil: 'domcontentloaded' })
+
+  const imageArray = page.getByText('["https://example.com/images/item-1001.jpg"]', { exact: true })
+  await expect(imageArray).toBeVisible()
+  await expect(imageArray).toHaveCSS('white-space', 'nowrap')
+  await expect.poll(() => imageArray.evaluate(element => element.getBoundingClientRect().height))
+    .toBeLessThanOrEqual(21)
+
+  await page.getByRole('button', { name: '关联1个数据集' }).click()
+  await page.getByRole('link', { name: '在数据资产湖中查看电商本体_商品' }).click()
+
+  await expect(page).toHaveURL(/#\/data\/structured\?tab=curated&dataset=dataset-products/)
+  await expect(page.getByRole('dialog', { name: '电商本体_商品' })).toBeVisible()
+})
