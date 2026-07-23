@@ -5,9 +5,13 @@ import {
   Archive,
   CheckCircle2,
   ChevronRight,
+  CircleSlash2,
+  Clock3,
   Inbox,
   Loader2,
+  MailOpen,
   RefreshCw,
+  Workflow,
 } from 'lucide-react'
 
 import { inboxApi, type InboxDelivery } from '@/api/inbox'
@@ -22,6 +26,13 @@ function formatRelativeTime(value: string): string {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
   if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)} 天前`
   return new Date(value).toLocaleDateString('zh-CN')
+}
+
+function formatExactTime(value: string): string {
+  const date = new Date(value)
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString('zh-CN', { hour12: false })
+    : value
 }
 
 export default function InboxPopover({
@@ -101,46 +112,54 @@ export default function InboxPopover({
         <section
           id="global-inbox-popover"
           aria-label="收件箱消息"
-          className="fixed left-3 right-3 top-[58px] z-50 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)] sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[420px]"
+          className="fixed left-3 right-3 top-[58px] z-50 origin-top-right overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_18px_50px_rgba(30,64,62,0.14)] animate-slide-up motion-reduce:animate-none sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[448px]"
         >
-          <header className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
+          <header className="flex min-h-[72px] items-center gap-3 border-b border-slate-100 px-4 py-3.5">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-slate-800">收件箱</h2>
+                <h2 className="text-[15px] font-semibold tracking-tight text-slate-900">收件箱</h2>
                 {openCount > 0 && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-medium text-rose-700">
-                    <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-                    {openCount} 个任务故障待恢复
+                  <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-1 text-[11px] font-medium tabular-nums text-rose-700">
+                    <AlertTriangle size={11} aria-hidden="true" />
+                    {openCount} 项待恢复
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-[11px] text-slate-400">
-                阅读不会关闭告警，任务恢复后会自动解决
+              <p className="mt-1 text-xs leading-4 text-slate-500">
+                阅读仅表示已知晓；任务成功后，故障会自动恢复
               </p>
             </div>
             <button
               type="button"
               onClick={() => void list.refetch()}
               disabled={list.isFetching}
-              className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 disabled:opacity-50"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-slate-400 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="刷新收件箱"
             >
-              <RefreshCw size={15} className={list.isFetching ? 'animate-spin' : ''} />
+              <RefreshCw size={16} className={list.isFetching ? 'animate-spin motion-reduce:animate-none' : ''} />
             </button>
           </header>
 
-          <div className="max-h-[min(520px,calc(100vh-150px))] overflow-y-auto">
+          <div className="scrollbar-thin max-h-[min(520px,calc(100dvh-190px))] overflow-y-auto">
             {list.isLoading ? (
-              <div className="space-y-3 p-4" aria-label="正在加载收件箱">
+              <div className="space-y-2.5 p-3" aria-label="正在加载收件箱">
                 {[0, 1, 2].map(index => (
-                  <div key={index} className="h-[76px] animate-pulse rounded-lg bg-slate-100" />
+                  <div key={index} className="grid grid-cols-[40px_minmax(0,1fr)] gap-3 rounded-xl px-3 py-4">
+                    <span className="h-10 w-10 animate-pulse rounded-xl bg-slate-100 motion-reduce:animate-none" />
+                    <span className="space-y-2">
+                      <span className="block h-4 w-28 animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
+                      <span className="block h-4 w-4/5 animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
+                      <span className="block h-3 w-full animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
+                    </span>
+                  </div>
                 ))}
               </div>
             ) : list.isError ? (
               <div role="alert" className="flex flex-col items-center px-5 py-10 text-center">
                 <AlertTriangle size={24} className="mb-2 text-rose-500" />
                 <p className="text-sm font-medium text-slate-700">收件箱加载失败</p>
-                <button type="button" onClick={() => void list.refetch()} className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg bg-slate-100 px-3 text-xs text-slate-700 hover:bg-slate-200">
+                <p className="mt-1 text-xs text-slate-500">请检查网络后重新加载</p>
+                <button type="button" onClick={() => void list.refetch()} className="mt-3 inline-flex h-11 items-center gap-1.5 rounded-lg bg-slate-100 px-3.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40">
                   <RefreshCw size={13} />重新加载
                 </button>
               </div>
@@ -153,51 +172,16 @@ export default function InboxPopover({
                 <p className="mt-1 text-xs text-slate-400">数据任务执行失败时会在这里提醒你</p>
               </div>
             ) : (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100" role="list">
                 {items.map(item => (
-                  <article key={item.id} className={`group px-4 py-3 transition-colors hover:bg-slate-50 ${item.deliveryState === 'unread' ? 'bg-rose-50/25' : ''}`}>
-                    <div className="flex items-start gap-3">
-                      <span className={`relative mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${item.businessState === 'open' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                        {item.businessState === 'open' ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
-                        {item.deliveryState === 'unread' && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border-2 border-white bg-rose-500" />}
-                      </span>
-                      <button type="button" onClick={() => void handleOpen(item)} className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30">
-                        <div className="flex items-center gap-2">
-                          <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800" title={item.title}>{item.title}</p>
-                          <time className="shrink-0 text-[10px] text-slate-400">{formatRelativeTime(item.lastOccurredAt)}</time>
-                        </div>
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{item.summary}</p>
-                        <div className="mt-1.5 flex items-center gap-2 text-[10px] text-slate-400">
-                          <span>{item.safeContext.pipelineName || '数据任务池'}</span>
-                          {item.occurrenceCount > 1 && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-rose-600">连续失败 {item.occurrenceCount} 次</span>}
-                          {item.businessState === 'resolved' && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">已恢复</span>}
-                        </div>
-                      </button>
-                      <ChevronRight size={15} className="mt-2 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
-                    </div>
-                    <div className="mt-2 flex min-h-8 items-center justify-end gap-2 pl-11">
-                      {item.deliveryState === 'unread' && (
-                        <button
-                          type="button"
-                          disabled={stateMutation.isPending}
-                          onClick={() => stateMutation.mutate({ id: item.id, state: 'read' })}
-                          className="h-8 rounded-lg px-2.5 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
-                        >
-                          标为已读
-                        </button>
-                      )}
-                      {item.canArchive && (
-                        <button
-                          type="button"
-                          disabled={stateMutation.isPending}
-                          onClick={() => stateMutation.mutate({ id: item.id, state: 'archived' })}
-                          className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
-                        >
-                          <Archive size={12} />归档
-                        </button>
-                      )}
-                    </div>
-                  </article>
+                  <InboxPopoverItem
+                    key={item.id}
+                    item={item}
+                    busy={stateMutation.isPending}
+                    onOpen={() => void handleOpen(item)}
+                    onMarkRead={() => stateMutation.mutate({ id: item.id, state: 'read' })}
+                    onArchive={() => stateMutation.mutate({ id: item.id, state: 'archived' })}
+                  />
                 ))}
               </div>
             )}
@@ -206,17 +190,172 @@ export default function InboxPopover({
           <button
             type="button"
             onClick={() => { onOpenChange(false); onNavigate('/inbox') }}
-            className="flex h-11 w-full items-center justify-center gap-1 border-t border-slate-100 text-xs font-medium text-teal-700 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/30"
+            className="group flex h-12 w-full items-center justify-between border-t border-slate-100 px-4 text-xs font-medium text-teal-700 transition-colors duration-200 hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/40"
           >
-            查看全部消息 <ChevronRight size={13} />
+            <span>查看全部消息</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 transition-colors group-hover:text-teal-700">
+              进入收件箱
+              <ChevronRight size={14} className="transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
+            </span>
           </button>
           {stateMutation.isPending && (
-            <div className="absolute inset-x-0 bottom-11 flex justify-center" aria-live="polite">
-              <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-[10px] text-white shadow-lg"><Loader2 size={10} className="animate-spin" />正在更新</span>
+            <div className="pointer-events-none absolute inset-x-0 bottom-12 flex justify-center" aria-live="polite">
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-1.5 text-[11px] text-white shadow-lg"><Loader2 size={11} className="animate-spin motion-reduce:animate-none" />正在更新</span>
             </div>
           )}
         </section>
       )}
     </>
+  )
+}
+
+function InboxPopoverItem({
+  item,
+  busy,
+  onOpen,
+  onMarkRead,
+  onArchive,
+}: {
+  item: InboxDelivery
+  busy: boolean
+  onOpen: () => void
+  onMarkRead: () => void
+  onArchive: () => void
+}) {
+  const isOpen = item.businessState === 'open'
+  const isResolved = item.businessState === 'resolved'
+  const sourceName = String(
+    item.safeContext.pipelineName
+      || item.safeContext.taskName
+      || item.resource.label
+      || '数据任务池',
+  )
+  const stateLabel = isOpen
+    ? '待恢复'
+    : isResolved
+      ? '已恢复'
+      : item.businessState === 'cancelled'
+        ? '已取消'
+        : '已过期'
+  const stateTone = isOpen
+    ? 'bg-rose-50 text-rose-700'
+    : isResolved
+      ? 'bg-emerald-50 text-emerald-700'
+      : 'bg-slate-100 text-slate-600'
+  const iconTone = isOpen
+    ? 'bg-rose-50 text-rose-600'
+    : isResolved
+      ? 'bg-emerald-50 text-emerald-600'
+      : 'bg-slate-100 text-slate-500'
+
+  return (
+    <article
+      role="listitem"
+      className={`group relative transition-colors duration-200 hover:bg-slate-50/80 ${
+        item.deliveryState === 'unread' ? 'bg-teal-50/30' : 'bg-white'
+      }`}
+    >
+      {item.deliveryState === 'unread' && (
+        <span className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-teal-600" aria-hidden="true" />
+      )}
+
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`打开消息：${item.title}`}
+        className="grid w-full grid-cols-[40px_minmax(0,1fr)] gap-3 px-4 pb-2 pt-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/40"
+      >
+        <span className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-xl ${iconTone}`}>
+          {isOpen
+            ? <AlertTriangle size={18} aria-hidden="true" />
+            : isResolved
+              ? <CheckCircle2 size={18} aria-hidden="true" />
+              : item.businessState === 'cancelled'
+                ? <CircleSlash2 size={18} aria-hidden="true" />
+                : <Clock3 size={18} aria-hidden="true" />}
+          {item.deliveryState === 'unread' && (
+            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-teal-600" aria-hidden="true" />
+          )}
+        </span>
+
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className={`inline-flex h-6 shrink-0 items-center rounded-md px-2 text-[11px] font-medium ${stateTone}`}>
+                {stateLabel}
+              </span>
+              {item.deliveryState === 'unread' && (
+                <span className="shrink-0 text-[11px] font-medium text-teal-700">未读</span>
+              )}
+              {item.occurrenceCount > 1 && (
+                <span className="truncate rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium tabular-nums text-amber-700">
+                  连续失败 {item.occurrenceCount} 次
+                </span>
+              )}
+            </span>
+            <time
+              dateTime={item.lastOccurredAt}
+              title={formatExactTime(item.lastOccurredAt)}
+              className="shrink-0 text-[11px] tabular-nums text-slate-400"
+            >
+              {formatRelativeTime(item.lastOccurredAt)}
+            </time>
+          </span>
+
+          <span className="mt-1.5 flex min-w-0 items-start gap-1.5">
+            <span className="line-clamp-2 min-w-0 flex-1 text-[14px] font-semibold leading-5 text-slate-800" title={item.title}>
+              {item.title}
+            </span>
+            <ChevronRight
+              size={15}
+              className="mt-0.5 shrink-0 text-slate-300 transition-[transform,color] duration-200 group-hover:translate-x-0.5 group-hover:text-slate-500 motion-reduce:transform-none"
+              aria-hidden="true"
+            />
+          </span>
+          <span className="mt-1 line-clamp-2 text-xs leading-[18px] text-slate-500" title={item.summary}>
+            {item.summary}
+          </span>
+        </span>
+      </button>
+
+      <footer className="grid grid-cols-[40px_minmax(0,1fr)] gap-3 px-4 pb-3">
+        <span aria-hidden="true" />
+        <span className="flex min-w-0 items-center justify-between gap-2">
+          <span
+            className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500"
+            title={sourceName}
+          >
+            <Workflow size={13} className="shrink-0 text-slate-400" aria-hidden="true" />
+            <span className="truncate">{sourceName}</span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1">
+            {item.deliveryState === 'unread' && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onMarkRead}
+                className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium text-slate-500 transition-colors duration-200 hover:bg-white hover:text-slate-800 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={`将“${item.title}”标为已读`}
+              >
+                <MailOpen size={13} aria-hidden="true" />
+                设为已读
+              </button>
+            )}
+            {item.canArchive && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onArchive}
+                className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium text-slate-500 transition-colors duration-200 hover:bg-white hover:text-slate-800 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={`归档“${item.title}”`}
+              >
+                <Archive size={13} aria-hidden="true" />
+                归档
+              </button>
+            )}
+          </span>
+        </span>
+      </footer>
+    </article>
   )
 }
