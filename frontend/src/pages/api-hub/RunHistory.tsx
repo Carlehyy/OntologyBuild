@@ -971,7 +971,7 @@ function RunDetailDrawer({
                 <p className="mt-1 text-xs text-red-500">{error}</p>
               </div>
             ) : (
-              <pre className="h-full min-h-[280px] overflow-auto whitespace-pre-wrap break-all rounded-xl bg-slate-950 p-4 font-mono text-[11px] leading-5 text-slate-200 shadow-inner">
+              <pre className="h-full min-h-[280px] overflow-auto whitespace-pre-wrap break-all rounded-xl border border-slate-200 bg-slate-50 p-4 font-mono text-[11px] leading-5 text-slate-700 shadow-inner">
                 {activeValue}
               </pre>
             )}
