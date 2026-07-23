@@ -1,4 +1,4 @@
-"""文件上传 Connector — 基于 MinIO"""
+"""文件上传 Connector — MinIO 优先、持久化本地存储降级。"""
 from __future__ import annotations
 
 import mimetypes
@@ -29,7 +29,7 @@ class FileConnector(ConnectorBase):
             return False
 
     def list_resources(self) -> list[str]:
-        """MinIO prefix 下的文件 URI 列表"""
+        """对象存储 prefix 下的文件 URI 列表。"""
         return self._storage.list_prefix(self.BUCKET, self._prefix)
 
     def pull_sample(self, resource: str, limit: int = 100) -> list[dict]:
@@ -41,7 +41,7 @@ class FileConnector(ConnectorBase):
         return self._storage.get_object(resource)
 
     def upload_file(self, filename: str, data: bytes, content_type: str = "") -> str:
-        """上传文件到 MinIO 并返回 URI"""
+        """上传文件并返回标识实际后端的 URI。"""
         if not content_type:
             content_type, _ = mimetypes.guess_type(filename)
             content_type = content_type or "application/octet-stream"

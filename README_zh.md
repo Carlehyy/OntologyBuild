@@ -128,6 +128,12 @@ npm run dev
 ```
 
 Neo4j / MinIO / ChromaDB / Redis 均为可选——缺失时系统自动使用 SQLite 图谱回退、本地文件存储与同步管道执行。
+本地对象使用 `local://` URI，MinIO 对象使用 `s3://` URI；MinIO 恢复后既有本地附件不会被误读。
+生产环境须将 `STORAGE_LOCAL_DIR` 指向 API 与 worker 共用的持久卷（生产 Compose 默认为
+`/uploads/object-storage`），部署细节见 [DEPLOY.md](./DEPLOY.md)。
+附件公网地址与 n8n 上传网关独立：`PIPELINE_FILE_PUBLIC_APP_BASE_URL` 用于登录下载的
+Hash 深链，`PIPELINE_FILE_PUBLIC_API_BASE_URL` 用于匿名分享 API。生产环境须将两者配置为
+其他电脑浏览器可访问的 HTTP(S) origin（推荐 HTTPS，且不包含路径、账号、查询参数或片段）。
 
 手动启动时如需数据管家的实时浏览器，还要准备一个开放 CDP 的 Chromium，并设置
 `STEWARD_BROWSER_CDP_URL`（默认 `http://localhost:9222`）。生产环境应同时配置

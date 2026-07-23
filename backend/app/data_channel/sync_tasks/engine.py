@@ -357,10 +357,15 @@ def _execute_sync_task_legacy(task_id: str, trigger_type: str = "MANUAL") -> dic
             resources = connector.list_resources()
             resource = resources[0] if resources else ""
 
-        # 文件 Connector：将文件名解析为完整的 S3 URI。
+        # 文件 Connector：将文件名解析为完整的对象存储 URI。
+        # s3:// 表示 MinIO，local:// 表示持久化本地降级卷。
         # 找不到时抛错走统一失败路径——直接 return 会把已 commit 的
         # RUNNING 状态永久留在任务与历史上
-        if conn.kind == "file" and resource and not resource.startswith("s3://"):
+        if (
+            conn.kind == "file"
+            and resource
+            and not resource.startswith(("s3://", "local://"))
+        ):
             resources = connector.list_resources()
             found = False
             for r in resources:

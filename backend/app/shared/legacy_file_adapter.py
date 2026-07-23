@@ -1,7 +1,4 @@
-"""
-v1 本地文件存储 ↔ MinIO 兼容适配器。
-用于将 v1 代码存储在本地路径的文件同步到 MinIO。
-"""
+"""v1 本地文件到当前对象存储后端的兼容适配器。"""
 from __future__ import annotations
 
 import os
@@ -12,7 +9,7 @@ from app.services.storage_service import StorageService, get_storage_service
 
 
 class LegacyFileAdapter:
-    """将 v1 本地 uploads/ 文件复制到 MinIO media 桶。"""
+    """将 v1 本地 uploads/ 文件复制到 media 桶。"""
 
     BUCKET = "media"
 
@@ -21,7 +18,7 @@ class LegacyFileAdapter:
 
     def upload_from_local(self, local_path: str, key_prefix: str = "legacy") -> str:
         """
-        将本地文件上传到 MinIO 并返回 URI。
+        将本地文件上传到当前可用存储并返回 URI。
         key: {key_prefix}/{filename}
         """
         path = Path(local_path)

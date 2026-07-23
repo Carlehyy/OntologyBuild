@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Bot,
   Eye,
@@ -18,6 +18,13 @@ import './login.css'
 type LoginForm = {
   username: string
   password: string
+}
+
+function safeReturnTo(value: unknown): string {
+  if (typeof value !== 'string') return '/'
+  const path = value.trim()
+  if (!path.startsWith('/') || path.startsWith('//') || path.startsWith('/login')) return '/'
+  return path
 }
 
 function OntologyMark({ size = 30 }: { size?: number }) {
@@ -66,6 +73,7 @@ export default function LoginPage() {
   const { register, handleSubmit } = useForm<LoginForm>()
   const setAuth = useAuthStore(state => state.setAuth)
   const navigate = useNavigate()
+  const location = useLocation()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
@@ -78,7 +86,9 @@ export default function LoginPage() {
       localStorage.setItem('token', res.access_token)
       const profile = await authApi.profile() as any
       setAuth(profile, res.access_token)
-      navigate('/')
+      const routeState = location.state as { returnTo?: unknown } | null
+      const queryReturnTo = new URLSearchParams(location.search).get('returnTo')
+      navigate(safeReturnTo(routeState?.returnTo ?? queryReturnTo), { replace: true })
     } catch (e: any) {
       localStorage.removeItem('token')
       setError(e?.response?.data?.detail || '登录失败，请检查用户名和密码')

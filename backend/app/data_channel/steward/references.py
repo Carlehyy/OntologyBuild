@@ -33,7 +33,7 @@ CODE_REF = """Code 节点（n8n-nodes-base.code, typeVersion 2）：
 返回契约：末节点若是 Code，必须吐“一行一个 item、json 里字段为标量或平台 FileRef”的结构。不要把 n8n binary 放进末节点。"""
 
 
-FILE_REF_REF = """平台受管附件（n8n → 平台文件网关 → 私有 MinIO）：
+FILE_REF_REF = """平台受管附件（n8n → 平台文件网关 → 平台存储）：
 - 每次平台触发 Webhook 时都会在 `$node["Webhook"].json.body.file_gateway` 注入：
   `upload_url`、短时 `token`、`invocation_id`、`max_bytes`。不要把 token 写死进 workflow。
 - 下载源附件的 HTTP Request 把 Response Format 设为 File，二进制字段建议统一叫 `data`。
@@ -48,10 +48,16 @@ FILE_REF_REF = """平台受管附件（n8n → 平台文件网关 → 私有 Min
   id、流水线、本次执行、大小、哈希并重写为可信元数据。禁止输出 storage_uri、MinIO 凭据、
   预签名 URL、base64 或 n8n binary。
 - FileRef 形状：`{"$type":"file_ref","id":"…","name":"报告.pdf","size":123,
-  "content_type":"application/pdf","sha256":"…","download_url":"/api/v2/file-assets/…/download"}`。
-  download_url 是平台鉴权地址，不是公开链接；预览附件默认 24 小时过期，正式入湖附件随数据集版本管理。
-- 文件名只用于展示；平台会去路径、去控制字符并作为元数据保存。MinIO object key 始终由平台生成。
-- 上传成功但未出现在末节点 JSON 的文件会被当作孤儿清理；所以不要在上传后丢掉 file_ref。"""
+  "content_type":"application/pdf","sha256":"…",
+  "download_url":"/api/v2/file-assets/…/download",
+  "authenticated_url":"https://平台/#/file-assets/…/download",
+  "share_url":"https://平台/api/public/file-assets/随机令牌/download"}`。
+  download_url 是受保护 API；authenticated_url 可在浏览器中先登录再下载；share_url 是长期
+  匿名平台网关地址，不自动过期，但平台管理员可以立即吊销或重新生成。不要把底层存储地址当分享地址。
+- 上传中的临时附件仍按保留期清理；只有成功出现在末节点最终输出中的 FileRef 才会解除临时过期，
+  并随流水线产物/数据集版本生命周期管理。上传成功但未被引用的孤儿文件仍会删除。
+- 文件名只用于展示；平台会去路径、去控制字符并作为元数据保存。底层使用 MinIO 时 object key
+  始终由平台生成；未配置 MinIO 时可由平台文件存储降级实现承载，FileRef 契约不变。"""
 
 
 # ── 可复用骨架（nodes/connections 可直接抄，改 url/query/字段即可） ──

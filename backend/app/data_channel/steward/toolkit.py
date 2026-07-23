@@ -29,7 +29,7 @@ import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -38,6 +38,11 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.api_hub import agent_service as api_hub_agent
 from app.api_hub import config as api_hub_config, db as api_hub_db, executor as api_hub_executor
+from app.data_channel.file_assets.service import (
+    authenticated_download_url,
+    platform_public_api_origin,
+    public_share_url,
+)
 from app.settings.workflows.n8n_client import N8nApiError, N8nClient
 from app.data_channel.steward import browser_sources, file_tools, service, workspace
 from app.data_channel.steward.browser_runtime import (
@@ -58,6 +63,7 @@ _SENSITIVE_OUTPUT_KEY = re.compile(
     r"(?:pass(?:word)?|secret|token|authorization|cookie|api[-_]?key|credential|private[-_]?key)",
     re.IGNORECASE,
 )
+_SHARE_TOKEN = re.compile(r"^[A-Za-z0-9_-]{40,200}$")
 
 
 TOOL_DEFS: list[dict] = [
@@ -575,6 +581,43 @@ def _contains_file_ref(value: Any) -> bool:
     return False
 
 
+def _safe_share_url(value: Any) -> str | None:
+    """Keep only this platform's canonical anonymous-download URL."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        candidate = urlsplit(value)
+        expected = urlsplit(platform_public_api_origin())
+    except (TypeError, ValueError):
+        return None
+    if (
+        candidate.scheme != expected.scheme
+        or candidate.netloc != expected.netloc
+        or candidate.username is not None
+        or candidate.password is not None
+        or candidate.query
+        or candidate.fragment
+    ):
+        return None
+    parts = candidate.path.split("/")
+    if (
+        len(parts) != 7
+        or parts[:4] != ["", "api", "public", "file-assets"]
+        or parts[5:] != ["download", ""]
+    ):
+        # Canonical paths have no trailing slash, yielding six path segments.
+        if (
+            len(parts) != 6
+            or parts[:4] != ["", "api", "public", "file-assets"]
+            or parts[5] != "download"
+        ):
+            return None
+    token = unquote(parts[4])
+    if not _SHARE_TOKEN.fullmatch(token):
+        return None
+    return public_share_url(token)
+
+
 def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
     """Return a bounded, JSON-safe preview value without leaking credential-shaped fields."""
     if _SENSITIVE_OUTPUT_KEY.search(key):
@@ -594,7 +637,7 @@ def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
             # The route is reconstructed instead of trusting n8n output.  The
             # runner already scope-validates fresh executions; this also keeps
             # inspect_runs previews from turning an arbitrary URL into a link.
-            return {
+            safe_ref = {
                 "$type": "file_ref",
                 "id": asset_id,
                 "name": name,
@@ -602,7 +645,10 @@ def _safe_output_value(value: Any, key: str = "", depth: int = 0) -> Any:
                 "content_type": str(value.get("content_type") or "application/octet-stream")[:200],
                 "sha256": str(value.get("sha256") or "")[:64],
                 "download_url": f"/api/v2/file-assets/{asset_id}/download",
+                "authenticated_url": authenticated_download_url(asset_id),
+                "share_url": _safe_share_url(value.get("share_url")),
             }
+            return safe_ref
     if depth >= 3:
         return "[嵌套内容已折叠]"
     if isinstance(value, dict):

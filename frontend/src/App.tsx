@@ -19,6 +19,7 @@ import PipelinesLayout from '@/pages/pipelines/PipelinesLayout'
 import PipelineListPage from '@/pages/pipelines/PipelineListPage'
 import PipelineBuilderPage from '@/pages/pipelines/builder/PipelineBuilderPage'
 import DataStewardPage from '@/pages/pipelines/steward/DataStewardPage'
+import FileAssetDownloadPage from '@/pages/pipelines/FileAssetDownloadPage'
 import ConnectionsTab from '@/pages/pipelines/connections/ConnectionsTab'
 import DatasetsTab from '@/pages/pipelines/datasets/DatasetsTab'
 import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
@@ -45,6 +46,27 @@ const qc = new QueryClient({
 
 let lastAuthorizedPath: string | null = null
 
+function loginDestination(pathname: string, search: string): string {
+  const returnTo = `${pathname}${search}`
+  return `/login?returnTo=${encodeURIComponent(returnTo)}`
+}
+
+function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
+  const token = useAuthStore(s => s.token)
+  const user = useAuthStore(s => s.user)
+  const location = useLocation()
+  if (!token || !user) {
+    return (
+      <Navigate
+        to={loginDestination(location.pathname, location.search)}
+        replace
+        state={{ returnTo: `${location.pathname}${location.search}` }}
+      />
+    )
+  }
+  return children
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.token)
   const user = useAuthStore(s => s.user)
@@ -53,7 +75,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (authorized) lastAuthorizedPath = location.pathname
   }, [authorized, location.pathname])
-  if (!token || !user) return <Navigate to="/login" replace />
+  if (!token || !user) {
+    return (
+      <Navigate
+        to={loginDestination(location.pathname, location.search)}
+        replace
+        state={{ returnTo: `${location.pathname}${location.search}` }}
+      />
+    )
+  }
   if (!authorized) {
     const returnTo = lastAuthorizedPath && canAccessPath(user, lastAuthorizedPath)
       ? lastAuthorizedPath
@@ -83,6 +113,10 @@ export default function App() {
           <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/share/manual/:token" element={<PublicManualDatasetPage />} />
+          <Route
+            path="/file-assets/:assetId/download"
+            element={<AuthenticatedRoute><FileAssetDownloadPage /></AuthenticatedRoute>}
+          />
           <Route path="/" element={<HomeRedirect />} />
           <Route path="/no-access" element={<ProtectedRoute><NoAssignedPagesPage /></ProtectedRoute>} />
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />

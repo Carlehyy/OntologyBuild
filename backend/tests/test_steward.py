@@ -10,11 +10,15 @@
   4. runner 行数据规整：webhook 响应体 / 执行末节点 items → list[dict]
 """
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 
+from app.data_channel.file_assets.models import PipelineFileAsset
+from app.data_channel.file_assets.service import public_share_url
 from app.data_channel.steward import service
 from app.data_channel.steward.models import N8nPipeline, StewardMessage
 from app.data_channel.steward.runner import (
@@ -28,6 +32,46 @@ from app.data_channel.steward.service import StewardError
 from app.data_channel.steward.toolkit import ToolRunner, _execution_table_preview
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 from app.settings.workflows.n8n_client import N8nClient
+
+
+def _arrange_referenced_preview_asset(db, rec, monkeypatch):
+    invocation_id = "preview-files-failure"
+    token = "f" * 43
+    asset = PipelineFileAsset(
+        id="preview-failure-asset",
+        pipeline_id=rec.pipeline_id,
+        workflow_id=rec.n8n_workflow_id,
+        invocation_id=invocation_id,
+        owner_id=rec.created_by,
+        purpose="preview",
+        status="ready",
+        idempotency_key="preview-failure",
+        original_name="failure.txt",
+        object_key="pipeline-files/failure.txt",
+        storage_uri="local://media/pipeline-files/failure.txt",
+        size=7,
+        content_type="text/plain",
+        sha256="a" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    db.add(asset)
+    db.commit()
+    monkeypatch.setattr(
+        "app.data_channel.steward.runner.uuid",
+        SimpleNamespace(uuid4=lambda: invocation_id),
+    )
+    monkeypatch.setattr(
+        "app.data_channel.file_assets.service.secrets.token_urlsafe",
+        lambda _bytes: token,
+    )
+    monkeypatch.setattr(
+        "app.data_channel.steward.runner.trigger_and_collect",
+        lambda *_args, **_kwargs: (
+            [{"attachment": {"$type": "file_ref", "id": asset.id}}],
+            {"execution_status": "success"},
+        ),
+    )
+    return asset, public_share_url(token)
 
 
 def test_steward_intent_router_does_not_default_every_turn_to_overview():
@@ -909,10 +953,14 @@ def test_publish_fixes_expected_columns_from_wizard_preview(
     assert pl.definition["n8n"]["expected_columns"] == ["currency", "rate"]
 
 
-def test_preview_deactivation_failure_is_explicit(db, fake_n8n, draft_record, monkeypatch):
+def test_preview_deactivation_failure_is_explicit(
+    client, db, fake_n8n, draft_record, monkeypatch,
+):
     from app.data_channel.steward.runner import collect_test_rows
 
     monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+    asset, share_url = _arrange_referenced_preview_asset(
+        db, draft_record, monkeypatch)
     monkeypatch.setattr(
         fake_n8n,
         "deactivate_workflow",
@@ -924,6 +972,71 @@ def test_preview_deactivation_failure_is_explicit(db, fake_n8n, draft_record, mo
 
     assert "恢复 n8n 草稿" in str(error.value)
     assert fake_n8n.workflows[draft_record.n8n_workflow_id]["active"] is True
+    db.expire_all()
+    failed = db.query(PipelineFileAsset).filter(
+        PipelineFileAsset.id == asset.id).one()
+    assert failed.status == "deleted"
+    assert failed.storage_uri is None
+    assert failed.share_token_hash is None
+    assert client.get(urlsplit(share_url).path).status_code == 404
+
+
+def test_preview_final_snapshot_failure_abandons_referenced_files(
+    client, db, fake_n8n, draft_record, monkeypatch,
+):
+    from app.data_channel.steward.runner import collect_test_rows
+
+    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+    asset, share_url = _arrange_referenced_preview_asset(
+        db, draft_record, monkeypatch)
+    real_get = fake_n8n.get_workflow
+    get_count = 0
+
+    def fail_final_get(workflow_id):
+        nonlocal get_count
+        get_count += 1
+        if get_count >= 2:
+            raise RuntimeError("final snapshot unavailable")
+        return real_get(workflow_id)
+
+    monkeypatch.setattr(fake_n8n, "get_workflow", fail_final_get)
+    with pytest.raises(service.StewardError, match="无法读取 n8n 工作流状态"):
+        collect_test_rows(db, draft_record)
+
+    db.expire_all()
+    failed = db.query(PipelineFileAsset).filter(
+        PipelineFileAsset.id == asset.id).one()
+    assert failed.status == "deleted"
+    assert failed.storage_uri is None
+    assert failed.share_token_hash is None
+    assert client.get(urlsplit(share_url).path).status_code == 404
+
+
+def test_preview_publish_evidence_failure_abandons_referenced_files(
+    client, db, fake_n8n, draft_record, monkeypatch,
+):
+    from app.data_channel.steward.runner import collect_test_rows
+
+    monkeypatch.setattr("app.data_channel.steward.runner.time.sleep", lambda *_: None)
+    asset, share_url = _arrange_referenced_preview_asset(
+        db, draft_record, monkeypatch)
+    monkeypatch.setattr(
+        service,
+        "workflow_validation_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            service.StewardError("evidence unavailable")),
+    )
+
+    with pytest.raises(service.StewardError, match="evidence unavailable"):
+        collect_test_rows(db, draft_record, require_publish_evidence=True)
+
+    db.expire_all()
+    failed = db.query(PipelineFileAsset).filter(
+        PipelineFileAsset.id == asset.id).one()
+    assert failed.status == "deleted"
+    assert failed.storage_uri is None
+    assert failed.share_token_hash is None
+    assert client.get(urlsplit(share_url).path).status_code == 404
 
 
 def test_published_is_sealed_for_steward_edit(
@@ -1576,6 +1689,8 @@ def test_execution_preview_preserves_nested_file_refs_for_download_buttons():
             "content_type": "text/plain",
             "sha256": "a" * 64,
             "download_url": "https://untrusted.example/file",
+            "authenticated_url": "https://untrusted.example/login-download",
+            "share_url": "https://untrusted.example/public-download",
         }],
         "metadata": {"status": "ok", "access_token": "secret"},
     }}])
@@ -1587,7 +1702,25 @@ def test_execution_preview_preserves_nested_file_refs_for_download_buttons():
     assert file_ref["name"] == "README.md"
     assert file_ref["download_url"] == (
         "/api/v2/file-assets/c124ae83-0348-4e84-9f87-4c88bb137ae4/download")
+    assert file_ref["authenticated_url"].endswith(
+        "/#/file-assets/c124ae83-0348-4e84-9f87-4c88bb137ae4/download")
+    assert file_ref["share_url"] is None
     assert preview["rows"][0]["metadata"]["access_token"] == "[已隐藏]"
+
+
+def test_execution_preview_preserves_only_canonical_platform_share_url():
+    token = "a" * 43
+    trusted_url = public_share_url(token)
+    preview = _execution_table_preview([{"json": {
+        "attachment": {
+            "$type": "file_ref",
+            "id": "asset-1",
+            "name": "report.pdf",
+            "size": 10,
+            "share_url": trusted_url,
+        },
+    }}])
+    assert preview["rows"][0]["attachment"]["share_url"] == trusted_url
 
 
 def test_execute_pipeline_triggers_fresh_draft_run_and_restores_state(

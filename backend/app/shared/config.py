@@ -1,3 +1,7 @@
+import ipaddress
+from pathlib import Path
+from urllib.parse import urlsplit
+
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -99,9 +103,9 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_use_ssl: bool = False
-    # Development/test convenience only.  Production must fail closed when the
-    # shared object store is unavailable; per-container local files are not a
-    # durable or shared substitute for MinIO.
+    # MinIO remains preferred.  When enabled, local fallback must point to a
+    # durable shared volume in production (the production Compose default is
+    # /uploads/object-storage, mounted by both backend and Celery).
     storage_local_fallback: bool = True
     # Relative paths are resolved against the backend project root.
     storage_local_dir: str = "storage"
@@ -111,6 +115,11 @@ class Settings(BaseSettings):
     # gateway instead.  The URL must be reachable from the n8n runtime (the
     # Docker service name is the production-compose default).
     pipeline_file_gateway_base_url: str = "http://backend:8000/api/v2/file-transfer"
+    # Browser-visible origins are intentionally independent from the n8n file
+    # gateway: n8n may use a private network address while people opening a
+    # FileRef need public frontend and API addresses.
+    pipeline_file_public_app_base_url: str = "http://localhost:5173"
+    pipeline_file_public_api_base_url: str = "http://localhost:8000"
     pipeline_file_upload_token_minutes: int = 15
     pipeline_file_max_upload_mb: int = 100
     pipeline_file_preview_retention_hours: int = 24
@@ -168,7 +177,70 @@ def production_config_errors(current: Settings) -> list[str]:
     if "*" in origins:
         _insecure.append("CORS_ALLOWED_ORIGINS")
     if current.storage_local_fallback:
-        _insecure.append("STORAGE_LOCAL_FALLBACK=false")
+        raw_local_dir = str(current.storage_local_dir or "").strip()
+        local_dir = Path(raw_local_dir).expanduser()
+        if not raw_local_dir or not local_dir.is_absolute():
+            _insecure.append(
+                "STORAGE_LOCAL_DIR must be an absolute persistent path "
+                "when STORAGE_LOCAL_FALLBACK=true"
+            )
+        else:
+            resolved = local_dir.resolve()
+            temporary_roots = {
+                Path("/tmp"),
+                Path("/var/tmp"),
+                Path("/private/tmp"),
+            }
+            if resolved == Path("/") or any(
+                resolved == root or root in resolved.parents
+                for root in temporary_roots
+            ):
+                _insecure.append(
+                    "STORAGE_LOCAL_DIR must use a persistent non-temporary volume"
+                )
+    for key, value in (
+        ("PIPELINE_FILE_PUBLIC_APP_BASE_URL",
+         current.pipeline_file_public_app_base_url),
+        ("PIPELINE_FILE_PUBLIC_API_BASE_URL",
+         current.pipeline_file_public_api_base_url),
+    ):
+        raw = str(value or "").strip()
+        try:
+            parsed = urlsplit(raw)
+            hostname = parsed.hostname
+            # Accessing ``port`` also validates malformed/non-numeric ports.
+            parsed.port
+        except ValueError:
+            parsed = None
+            hostname = None
+        invalid = (
+            parsed is None
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or bool(parsed.query)
+            or bool(parsed.fragment)
+            or parsed.path not in {"", "/"}
+            or any(character.isspace() for character in raw)
+        )
+        if invalid:
+            _insecure.append(
+                f"{key} must be an absolute HTTP(S) origin without credentials, "
+                "path, query, or fragment"
+            )
+            continue
+        is_local = hostname.lower() in {"localhost", "backend"}
+        try:
+            address = ipaddress.ip_address(hostname)
+            is_local = is_local or address.is_loopback or address.is_unspecified
+        except ValueError:
+            pass
+        if is_local:
+            _insecure.append(
+                f"{key} must use a browser-reachable public host in production"
+            )
     if current.allow_public_registration:
         _insecure.append("ALLOW_PUBLIC_REGISTRATION=false")
     return _insecure

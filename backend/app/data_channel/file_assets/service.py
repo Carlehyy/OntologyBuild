@@ -5,12 +5,13 @@ import base64
 import hashlib
 import logging
 import re
+import secrets
 import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, BinaryIO
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from jose import JWTError, jwt
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,7 @@ from app.data_channel.datasets.models import StorageDeletionOutbox
 from app.data_channel.file_assets.models import PipelineFileAsset
 from app.data_channel.pipelines.models import Pipeline
 from app.data_channel.steward.models import N8nPipeline
+from app.shared.encryption import decrypt, encrypt
 from app.shared.storage import StorageService, get_storage_service
 
 
@@ -162,6 +164,113 @@ def gateway_context(
     }
 
 
+def _browser_public_origin(base_url: str, *, setting_name: str) -> str:
+    """Validate and normalize one browser-visible HTTP(S) origin."""
+    base_url = str(base_url or "").strip()
+    parsed = urlsplit(base_url)
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise FileAssetError(
+            f"{setting_name} 不是有效的浏览器 HTTP(S) origin") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise FileAssetError(
+            f"{setting_name} 必须是无账号、路径、查询参数和片段的 HTTP(S) origin")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def platform_public_app_origin() -> str:
+    return _browser_public_origin(
+        settings.pipeline_file_public_app_base_url,
+        setting_name="PIPELINE_FILE_PUBLIC_APP_BASE_URL",
+    )
+
+
+def platform_public_api_origin() -> str:
+    return _browser_public_origin(
+        settings.pipeline_file_public_api_base_url,
+        setting_name="PIPELINE_FILE_PUBLIC_API_BASE_URL",
+    )
+
+
+def authenticated_download_url(asset_id: str) -> str:
+    asset_path = quote(str(asset_id), safe="")
+    return f"{platform_public_app_origin()}/#/file-assets/{asset_path}/download"
+
+
+def _hash_share_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def recover_share_token(asset: PipelineFileAsset) -> str | None:
+    """Recover an active token while detecting damaged or mismatched ciphertext."""
+    if (
+        not asset.share_token_hash
+        or not asset.share_token_encrypted
+        or asset.share_revoked_at is not None
+    ):
+        return None
+    try:
+        token = decrypt(asset.share_token_encrypted)
+    except Exception:  # noqa: BLE001
+        logger.warning("无法解密附件 %s 的匿名分享令牌", asset.id)
+        return None
+    if not secrets.compare_digest(_hash_share_token(token), asset.share_token_hash):
+        logger.warning("附件 %s 的匿名分享令牌密文与摘要不匹配", asset.id)
+        return None
+    return token
+
+
+def public_share_url(token: str) -> str:
+    token_path = quote(token, safe="")
+    return (
+        f"{platform_public_api_origin()}/api/public/file-assets/"
+        f"{token_path}/download"
+    )
+
+
+def issue_share_token(
+    asset: PipelineFileAsset, *, regenerate: bool = False,
+) -> tuple[str, bool]:
+    """Ensure or rotate one non-expiring, revocable anonymous share token.
+
+    Returns ``(token, created)``.  Calling without ``regenerate`` is idempotent
+    for an active, recoverable token.  Revoked, legacy, or damaged records get
+    a fresh token.
+    """
+    if not regenerate:
+        existing = recover_share_token(asset)
+        if existing is not None:
+            return existing, False
+    token = secrets.token_urlsafe(32)
+    assign_share_token(asset, token)
+    return token, True
+
+
+def assign_share_token(asset: PipelineFileAsset, token: str) -> None:
+    """Assign an internally generated token that must match a canonical FileRef."""
+    asset.share_token_hash = _hash_share_token(token)
+    asset.share_token_encrypted = encrypt(token)
+    asset.share_created_at = _now()
+    asset.share_revoked_at = None
+
+
+def revoke_share_token(asset: PipelineFileAsset) -> bool:
+    if not asset.share_token_hash or asset.share_revoked_at is not None:
+        return False
+    asset.share_revoked_at = _now()
+    return True
+
+
 def verify_upload_scope(db: Session, claims: dict[str, Any]) -> None:
     pipeline_id = str(claims["pipeline_id"])
     workflow_id = str(claims["workflow_id"])
@@ -196,7 +305,10 @@ def inspect_upload(stream: BinaryIO) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def canonical_file_ref(asset: PipelineFileAsset) -> dict[str, Any]:
+def canonical_file_ref(
+    asset: PipelineFileAsset, *, include_share: bool = True,
+) -> dict[str, Any]:
+    token = recover_share_token(asset) if include_share else None
     return {
         "$type": FILE_REF_TYPE,
         "id": asset.id,
@@ -205,6 +317,8 @@ def canonical_file_ref(asset: PipelineFileAsset) -> dict[str, Any]:
         "content_type": asset.content_type,
         "sha256": asset.sha256,
         "download_url": f"/api/v2/file-assets/{asset.id}/download",
+        "authenticated_url": authenticated_download_url(asset.id),
+        "share_url": public_share_url(token) if token else None,
     }
 
 
@@ -293,8 +407,8 @@ def store_upload(
         sha256=sha256,
         expires_at=_expiry_for(purpose),
     )
-    db.add(asset)
     try:
+        db.add(asset)
         db.commit()
         db.refresh(asset)
         return asset
@@ -358,6 +472,12 @@ def validate_and_canonicalize_refs(
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
             if expires_at <= _now():
                 raise FileAssetError(f"file_ref {asset.id} 已过期，请重新执行流水线")
+    # Only a fully validated terminal output receives an anonymous token.
+    # These assignments remain in the caller's transaction: preview paths
+    # commit them only after remote restoration/snapshot checks, while failed
+    # paths roll back before abandoning the invocation.
+    for asset in assets:
+        issue_share_token(asset)
 
     def replace(value: Any) -> Any:
         if isinstance(value, dict):
@@ -390,6 +510,7 @@ def _delete_assets(db: Session, assets: list[PipelineFileAsset]) -> int:
 def reconcile_invocation(
     db: Session, *, pipeline_id: str, invocation_id: str,
     referenced_ids: list[str], commit: bool = True,
+    pin_referenced: bool = False,
 ) -> int:
     referenced = set(referenced_ids)
     assets = db.query(PipelineFileAsset).filter(
@@ -397,6 +518,15 @@ def reconcile_invocation(
         PipelineFileAsset.invocation_id == invocation_id,
         PipelineFileAsset.status == "ready",
     ).all()
+    found = {asset.id for asset in assets}
+    if pin_referenced and referenced - found:
+        raise FileAssetError(
+            "最终确认附件时 file_ref 已失效，请重新执行流水线")
+    if pin_referenced:
+        for asset in assets:
+            if asset.id in referenced:
+                issue_share_token(asset)
+                asset.expires_at = None
     changed = _delete_assets(db, [asset for asset in assets if asset.id not in referenced])
     if commit:
         db.commit()
@@ -410,6 +540,7 @@ def reconcile_invocation(
 def commit_invocation(
     db: Session, *, pipeline_id: str, invocation_id: str,
     referenced_ids: list[str], dataset_version_id: str | None,
+    share_tokens: dict[str, str] | None = None,
 ) -> None:
     referenced = set(referenced_ids)
     assets = db.query(PipelineFileAsset).filter(
@@ -423,6 +554,10 @@ def commit_invocation(
     now = _now()
     for asset in assets:
         if asset.id in referenced:
+            if share_tokens and asset.id in share_tokens:
+                assign_share_token(asset, share_tokens[asset.id])
+            else:
+                issue_share_token(asset)
             asset.status = "committed"
             asset.dataset_version_id = dataset_version_id
             asset.expires_at = None

@@ -17,7 +17,7 @@ class DocumentToMarkdownStep(PipelineStep):
       strategy: "markitdown" | "ocr" | "vlm" (默认: "markitdown")
       model_id: str — VLM 策略使用的模型 ID (vlm 策略必填)
 
-    input: data 的每个 row 形如 {"storage_uri": "s3://...", "filename": "..."}
+    input: data 的每个 row 形如 {"storage_uri": "s3://..."/"local://...", "filename": "..."}
     output: 每个 row 增加 "markdown_text" 字段
     """
 

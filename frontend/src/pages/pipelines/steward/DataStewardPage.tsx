@@ -21,16 +21,18 @@ import {
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
-  downloadBrowserCompanion, downloadPipelineFile, downloadStewardConversation, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
+  downloadBrowserCompanion, downloadStewardConversation, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
   type BrowserCapture, type BrowserCollaborationState, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep, type StewardTablePreview,
 } from '@/api/steward'
+import { pipelineFileRefsIn } from '@/api/fileAssets'
 import { modelApi } from '@/api/ontologies'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import type { ModelConfig } from '@/types/ontology'
 import { useToast } from '@/components/ui/Toast'
+import FileRefActions from '@/components/pipelines/FileRefActions'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import PipelineEditWizard from '../PipelineEditWizard'
@@ -150,45 +152,7 @@ function Md({ text }: { text: string }) {
   )
 }
 
-type PipelineFileRef = {
-  $type: 'file_ref'
-  id: string
-  name: string
-  size: number
-  download_url: string
-}
-
-function isPipelineFileRef(value: unknown): value is PipelineFileRef {
-  if (!value || typeof value !== 'object') return false
-  const item = value as Partial<PipelineFileRef>
-  return item.$type === 'file_ref' && typeof item.id === 'string'
-    && typeof item.name === 'string' && typeof item.download_url === 'string'
-}
-
-function pipelineFileRefsIn(value: unknown, refs: PipelineFileRef[] = [], seen = new Set<string>()): PipelineFileRef[] {
-  if (isPipelineFileRef(value)) {
-    if (!seen.has(value.id)) {
-      refs.push(value)
-      seen.add(value.id)
-    }
-  } else if (Array.isArray(value)) {
-    value.forEach(item => pipelineFileRefsIn(item, refs, seen))
-  } else if (value && typeof value === 'object') {
-    Object.values(value as Record<string, unknown>).forEach(item => pipelineFileRefsIn(item, refs, seen))
-  }
-  return refs
-}
-
-function previewBytes(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return '未知大小'
-  if (size < 1024) return `${size} B`
-  if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 ** 2).toFixed(1)} MB`
-}
-
 function PreviewCell({ value }: { value: unknown }) {
-  const { toast } = useToast()
-  const [downloading, setDownloading] = useState<Set<string>>(new Set())
   if (value === null || value === undefined || value === '') {
     return <span className="text-slate-300">空</span>
   }
@@ -198,38 +162,8 @@ function PreviewCell({ value }: { value: unknown }) {
   const fileRefs = pipelineFileRefsIn(value)
   if (fileRefs.length > 0) {
     return (
-      <div className="flex max-w-[320px] flex-wrap gap-1.5">
-        {fileRefs.slice(0, 6).map(ref => {
-          const loading = downloading.has(ref.id)
-          return (
-            <button
-              key={ref.id}
-              type="button"
-              disabled={loading}
-              onClick={() => {
-                setDownloading(current => new Set(current).add(ref.id))
-                void downloadPipelineFile(ref.download_url, ref.name)
-                  .catch(() => toast({
-                    tone: 'error',
-                    title: '附件下载失败',
-                    description: '附件可能已过期或当前无权访问。',
-                  }))
-                  .finally(() => setDownloading(current => {
-                    const next = new Set(current)
-                    next.delete(ref.id)
-                    return next
-                  }))
-              }}
-              title={`${ref.name} · ${previewBytes(ref.size)}`}
-              className="inline-flex max-w-[280px] items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-800 hover:bg-teal-100 disabled:cursor-wait disabled:opacity-60"
-            >
-              <Paperclip size={11} className="shrink-0" />
-              <span className="truncate">{ref.name}</span>
-              <span className="shrink-0 text-[9px] font-normal text-teal-600">{previewBytes(ref.size)}</span>
-              {loading ? <Loader2 size={10} className="shrink-0 animate-spin" /> : <Download size={10} className="shrink-0" />}
-            </button>
-          )
-        })}
+      <div className="flex max-w-[320px] flex-col gap-1.5">
+        {fileRefs.slice(0, 6).map(ref => <FileRefActions key={ref.id} file={ref} />)}
         {fileRefs.length > 6 && <span className="self-center text-[10px] text-slate-500">另有 {fileRefs.length - 6} 个附件</span>}
       </div>
     )

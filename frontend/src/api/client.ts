@@ -38,7 +38,11 @@ function createApiClient(version: string): ApiClient {
       const isUnauthenticated = status === 401 || (status === 403 && /not authenticated|unauthenticated/i.test(String(detail)))
       if (isUnauthenticated) {
         localStorage.removeItem('token')
-        window.location.href = '/#/login'
+        const currentRoute = window.location.hash.replace(/^#/, '') || '/'
+        const loginRoute = currentRoute.startsWith('/login')
+          ? '/#/login'
+          : `/#/login?returnTo=${encodeURIComponent(currentRoute)}`
+        window.location.href = loginRoute
       }
       return Promise.reject(err.response?.data ?? err)
     }

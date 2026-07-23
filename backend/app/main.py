@@ -10,6 +10,7 @@ v1 兼容：/api/v1/* 路由全部保留
 import asyncio
 import hmac
 import json
+import tempfile
 import urllib.request
 
 from fastapi import FastAPI, Depends, HTTPException
@@ -647,6 +648,11 @@ app.include_router(
     tags=["v2-pipeline-file-assets"],
     dependencies=[*asset_lake_guard, *pipeline_guard],
 )
+app.include_router(
+    pipeline_file_assets.public_router,
+    prefix="/api/public/file-assets",
+    tags=["public-pipeline-file-assets"],
+)
 app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph"], dependencies=ontology_guard)
 app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"], dependencies=ontology_guard)
 app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"], dependencies=asset_lake_guard)
@@ -725,6 +731,7 @@ def health(db: Session = Depends(get_db)):
         "redis": "unknown",
         "neo4j": "unknown",
         "minio": "unknown",
+        "object_storage": "unknown",
         "chroma": "unknown",
         "browser": "unknown",
         "sentinel_scheduler": "unknown",
@@ -788,8 +795,24 @@ def health(db: Session = Depends(get_db)):
             minio_endpoint = f"{scheme}://{minio_endpoint}"
         _probe_http_service(f"{minio_endpoint}/minio/health/live")
         checks["minio"] = "ok"
+        checks["object_storage"] = "minio"
     except Exception:
         checks["minio"] = "unavailable"
+        if settings.storage_local_fallback:
+            try:
+                from app.shared.storage import StorageService
+
+                local_base = StorageService._configured_local_base()
+                local_base.mkdir(parents=True, exist_ok=True)
+                # os.access is unreliable for root; a same-directory temp file
+                # verifies that the mounted fallback is actually writable.
+                with tempfile.NamedTemporaryFile(dir=local_base):
+                    pass
+                checks["object_storage"] = "local"
+            except Exception:
+                checks["object_storage"] = "unavailable"
+        else:
+            checks["object_storage"] = "unavailable"
 
     # ChromaDB check.  Do not instantiate chromadb.HttpClient here: Chroma
     # 0.5.x does not expose deterministic client shutdown and repeated health
@@ -846,6 +869,11 @@ def health(db: Session = Depends(get_db)):
         "ontology_projection",
     )
     unavailable = [name for name in service_keys if checks[name] != "ok"]
+    # MinIO is optional when the configured durable fallback is writable.
+    # Keep ``minio=unavailable`` for observability without making deployment
+    # readiness depend on an intentionally absent service.
+    if checks["object_storage"] == "local":
+        unavailable = [name for name in unavailable if name != "minio"]
     strict = settings.environment == "production"
     checks["status"] = "ok" if not unavailable else ("error" if strict else "degraded")
     checks["unavailable"] = unavailable

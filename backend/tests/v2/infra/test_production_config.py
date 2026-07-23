@@ -7,6 +7,7 @@ import stat
 import subprocess
 
 import pytest
+import yaml
 
 from app.shared.config import Settings, production_config_errors
 from app.settings.workflows.n8n_client import enforce_n8n_url_policy
@@ -27,6 +28,8 @@ def _production_settings(**updates):
         "minio_access_key": "ontology-minio",
         "minio_secret_key": "strong-minio-password",
         "storage_local_fallback": False,
+        "pipeline_file_public_app_base_url": "https://platform.example.com",
+        "pipeline_file_public_api_base_url": "https://api.example.com",
         "allow_public_registration": False,
     }
     values.update(updates)
@@ -51,6 +54,68 @@ def test_wildcard_cors_remains_blocked_but_empty_is_same_origin():
     errors = production_config_errors(
         _production_settings(cors_allowed_origins="*"))
     assert "CORS_ALLOWED_ORIGINS" in errors
+
+
+def test_production_rejects_non_public_or_malformed_file_link_origins():
+    defaults = production_config_errors(_production_settings(
+        pipeline_file_public_app_base_url="http://localhost:5173",
+        pipeline_file_public_api_base_url="http://127.0.0.1:8000",
+    ))
+    malformed = production_config_errors(_production_settings(
+        pipeline_file_public_app_base_url="https://user@example.com",
+        pipeline_file_public_api_base_url="https://api.example.com/files?x=1",
+    ))
+    with_path = production_config_errors(_production_settings(
+        pipeline_file_public_app_base_url="https://platform.example.com/app",
+    ))
+
+    assert sum("browser-reachable public host" in error
+               for error in defaults) == 2
+    assert any("APP_BASE_URL must be an absolute" in error
+               for error in malformed)
+    assert any("API_BASE_URL must be an absolute" in error
+               for error in malformed)
+    assert any("APP_BASE_URL must be an absolute" in error
+               for error in with_path)
+
+
+def test_production_allows_fallback_on_absolute_persistent_volume():
+    errors = production_config_errors(_production_settings(
+        storage_local_fallback=True,
+        storage_local_dir="/uploads/object-storage",
+    ))
+    assert not any("STORAGE_LOCAL" in error for error in errors)
+
+
+def test_production_rejects_relative_or_temporary_fallback_paths():
+    relative = production_config_errors(_production_settings(
+        storage_local_fallback=True,
+        storage_local_dir="storage",
+    ))
+    temporary = production_config_errors(_production_settings(
+        storage_local_fallback=True,
+        storage_local_dir="/tmp/object-storage",
+    ))
+    assert any("absolute persistent path" in error for error in relative)
+    assert any("persistent non-temporary volume" in error for error in temporary)
+
+
+def test_production_compose_shares_fallback_without_minio_startup_dependency():
+    compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+    backend = compose["services"]["backend"]
+    worker = compose["services"]["celery_worker"]
+
+    assert "minio" not in backend["depends_on"]
+    assert backend["environment"]["STORAGE_LOCAL_FALLBACK"] == "true"
+    assert worker["environment"]["STORAGE_LOCAL_FALLBACK"] == "true"
+    assert backend["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
+    assert worker["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
+    assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in backend["environment"]
+    assert "PIPELINE_FILE_PUBLIC_API_BASE_URL" in backend["environment"]
+    assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in worker["environment"]
+    assert "PIPELINE_FILE_PUBLIC_API_BASE_URL" in worker["environment"]
+    assert "uploads:/uploads" in backend["volumes"]
+    assert "uploads:/uploads" in worker["volumes"]
 
 
 def test_public_plain_http_n8n_is_rejected_in_production():
@@ -139,9 +204,15 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
     assert generated["NEO4J_AUTH"] == f"neo4j/{generated['NEO4J_PASSWORD']}"
     assert generated["MINIO_ACCESS_KEY"] != "minioadmin"
     assert generated["MINIO_SECRET_KEY"] != "minioadmin"
+    assert generated["STORAGE_LOCAL_FALLBACK"] == "true"
+    assert generated["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
     assert generated["STRICT_PRODUCTION_CONFIG"] == "false"
     assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
         "http://127.0.0.1:80/api/v2/file-transfer")
+    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
+        "http://127.0.0.1:80")
+    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
+        "http://127.0.0.1:80")
     assert generated["SECRET_KEY"] not in result.stdout
     assert stat.S_IMODE(generated_path.stat().st_mode) == 0o600
 
@@ -156,8 +227,14 @@ def test_existing_example_env_warns_but_does_not_block_deploy(tmp_path):
     assert "warning: SECRET_KEY" in result.stdout
     assert "production environment validation succeeded" in result.stdout
     generated = _read_env(tmp_path / ".env")
+    assert generated["STORAGE_LOCAL_FALLBACK"] == "true"
+    assert generated["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
     assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
         "http://127.0.0.1:80/api/v2/file-transfer")
+    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
+        "http://127.0.0.1:80")
+    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
+        "http://127.0.0.1:80")
 
 
 def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path):
@@ -171,6 +248,10 @@ def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path)
     generated = _read_env(tmp_path / ".env")
     assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
         "https://platform.example.com/api/v2/file-transfer")
+    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
+        "https://platform.example.com")
+    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
+        "https://platform.example.com")
 
 
 def test_deploy_preserves_explicit_pipeline_file_gateway(tmp_path):
@@ -187,3 +268,69 @@ def test_deploy_preserves_explicit_pipeline_file_gateway(tmp_path):
     generated = _read_env(tmp_path / ".env")
     assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
         "https://platform.example.com/api/v2/file-transfer")
+
+
+def test_deploy_preserves_explicit_public_file_origins(tmp_path):
+    content = (ROOT / ".env.example").read_text()
+    content = content.replace(
+        "PIPELINE_FILE_PUBLIC_APP_BASE_URL=http://localhost:5173",
+        "PIPELINE_FILE_PUBLIC_APP_BASE_URL=https://app.example.com",
+    ).replace(
+        "PIPELINE_FILE_PUBLIC_API_BASE_URL=http://localhost:8000",
+        "PIPELINE_FILE_PUBLIC_API_BASE_URL=https://files.example.com",
+    )
+    (tmp_path / ".env.example").write_text(content)
+    (tmp_path / ".env").write_text(content)
+
+    result = _run_deploy_validation(
+        tmp_path, health_url="https://platform.example.com/")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
+        "https://app.example.com")
+    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
+        "https://files.example.com")
+
+
+def test_deploy_rejects_malformed_public_file_origin(tmp_path):
+    content = (ROOT / ".env.example").read_text().replace(
+        "PIPELINE_FILE_PUBLIC_API_BASE_URL=http://localhost:8000",
+        "PIPELINE_FILE_PUBLIC_API_BASE_URL=https://user@example.com/files?x=1",
+    )
+    (tmp_path / ".env.example").write_text(content)
+    (tmp_path / ".env").write_text(content)
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    assert "PIPELINE_FILE_PUBLIC_API_BASE_URL must be an absolute" in result.stdout
+
+
+def test_deploy_rejects_custom_relative_storage_fallback_path(tmp_path):
+    content = (ROOT / ".env.example").read_text().replace(
+        "STORAGE_LOCAL_DIR=storage",
+        "STORAGE_LOCAL_DIR=relative/object-storage",
+    )
+    (tmp_path / ".env.example").write_text(content)
+    (tmp_path / ".env").write_text(content)
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    assert "STORAGE_LOCAL_DIR must be an absolute persistent path" in result.stdout
+
+
+def test_deploy_normalizes_custom_absolute_storage_path_to_shared_volume(tmp_path):
+    content = (ROOT / ".env.example").read_text().replace(
+        "STORAGE_LOCAL_DIR=storage",
+        "STORAGE_LOCAL_DIR=/var/lib/private-object-storage",
+    )
+    (tmp_path / ".env.example").write_text(content)
+    (tmp_path / ".env").write_text(content)
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _read_env(tmp_path / ".env")["STORAGE_LOCAL_DIR"] == (
+        "/uploads/object-storage")

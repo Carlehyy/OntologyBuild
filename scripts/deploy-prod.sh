@@ -132,7 +132,8 @@ bootstrap_production_env() {
   set_env_value NEO4J_AUTH "neo4j/${neo4j_password}"
   set_env_value MINIO_ACCESS_KEY "$minio_access"
   set_env_value MINIO_SECRET_KEY "$minio_secret"
-  set_env_value STORAGE_LOCAL_FALLBACK false
+  set_env_value STORAGE_LOCAL_FALLBACK true
+  set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
   set_env_value ALLOW_PUBLIC_REGISTRATION false
   set_env_value API_HUB_SYSTEM_MCP_TOKEN "$(random_hex 32)"
   set_env_value STRICT_PRODUCTION_CONFIG false
@@ -153,6 +154,29 @@ env_value() {
     END { gsub(/\r$/, "", value); print value }
   ' .env
 }
+configure_storage_fallback() {
+  local current
+  current="$(env_value STORAGE_LOCAL_DIR)"
+  case "$current" in
+    ""|storage|./storage)
+      set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
+      log "configured STORAGE_LOCAL_DIR on the shared persistent uploads volume"
+      ;;
+    /uploads/object-storage) ;;
+    /*)
+      set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
+      log "normalized STORAGE_LOCAL_DIR to the production Compose shared volume"
+      ;;
+    *)
+      log "STORAGE_LOCAL_DIR must be an absolute persistent path in production"
+      exit 1
+      ;;
+  esac
+  # The production containers share the uploads volume, so fallback is durable
+  # and is safe to enable even when MinIO is temporarily or permanently absent.
+  set_env_value STORAGE_LOCAL_FALLBACK true
+}
+configure_storage_fallback
 configure_pipeline_file_gateway() {
   local current default_url public_url
   current="$(env_value PIPELINE_FILE_GATEWAY_BASE_URL)"
@@ -175,6 +199,42 @@ configure_pipeline_file_gateway() {
   esac
 }
 configure_pipeline_file_gateway
+validate_pipeline_file_public_base() {
+  local key="$1"
+  local value="$2"
+  local port
+  if [[ ! "$value" =~ ^https?://(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(:([0-9]{1,5}))?/?$ ]]; then
+    log "$key must be an absolute HTTP(S) origin without credentials, path, query, or fragment"
+    exit 1
+  fi
+  port="${BASH_REMATCH[3]:-}"
+  if [ -n "$port" ] && (( 10#$port > 65535 )); then
+    log "$key contains an invalid TCP port"
+    exit 1
+  fi
+  case "$value" in
+    http://*)
+      log "warning: $key uses plain HTTP; configure HTTPS before sharing attachment links"
+      ;;
+  esac
+}
+configure_pipeline_file_public_base() {
+  local key="$1"
+  local old_default="$2"
+  local current public_base
+  current="$(env_value "$key")"
+  public_base="${HEALTH_URL%/}"
+  if [ -z "$current" ] || [ "$current" = "$old_default" ]; then
+    set_env_value "$key" "$public_base"
+    current="$public_base"
+    log "configured $key from the deployment health URL"
+  fi
+  validate_pipeline_file_public_base "$key" "$current"
+}
+configure_pipeline_file_public_base \
+  PIPELINE_FILE_PUBLIC_APP_BASE_URL http://localhost:5173
+configure_pipeline_file_public_base \
+  PIPELINE_FILE_PUBLIC_API_BASE_URL http://localhost:8000
 require_secret() {
   local key="$1"
   local value

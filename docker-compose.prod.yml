@@ -90,7 +90,11 @@ services:
       # .env files therefore do not need a breaking CORS migration.
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
-      STORAGE_LOCAL_FALLBACK: "false"
+      # Both API and worker mount the same persistent uploads volume. Keep the
+      # production fallback fixed below it so an old server .env cannot point
+      # object storage back at an ephemeral container-relative directory.
+      STORAGE_LOCAL_FALLBACK: "true"
+      STORAGE_LOCAL_DIR: /uploads/object-storage
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -113,14 +117,14 @@ services:
       STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
       STEWARD_INTERNAL_PROXY_BASE_URL: http://backend:8000/api-hub/internal/interfaces
       PIPELINE_FILE_GATEWAY_BASE_URL: ${PIPELINE_FILE_GATEWAY_BASE_URL:-http://backend:8000/api/v2/file-transfer}
+      PIPELINE_FILE_PUBLIC_APP_BASE_URL: ${PIPELINE_FILE_PUBLIC_APP_BASE_URL:-http://localhost:5173}
+      PIPELINE_FILE_PUBLIC_API_BASE_URL: ${PIPELINE_FILE_PUBLIC_API_BASE_URL:-http://localhost:8000}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
       neo4j:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       chromadb:
         condition: service_healthy
@@ -156,7 +160,8 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
-      STORAGE_LOCAL_FALLBACK: "false"
+      STORAGE_LOCAL_FALLBACK: "true"
+      STORAGE_LOCAL_DIR: /uploads/object-storage
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -165,6 +170,8 @@ services:
       CHROMA_HOST: ${CHROMA_HOST:-chromadb}
       CHROMA_PORT: "8000"
       UPLOADS_DIR: ${UPLOADS_DIR:-/uploads}
+      PIPELINE_FILE_PUBLIC_APP_BASE_URL: ${PIPELINE_FILE_PUBLIC_APP_BASE_URL:-http://localhost:5173}
+      PIPELINE_FILE_PUBLIC_API_BASE_URL: ${PIPELINE_FILE_PUBLIC_API_BASE_URL:-http://localhost:8000}
     depends_on:
       backend:
         condition: service_healthy

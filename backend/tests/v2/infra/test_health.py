@@ -45,7 +45,7 @@ def test_health_all_service_keys_present():
     response = client.get("/health")
     data = response.json()
     for key in (
-        "db", "redis", "neo4j", "minio", "chroma", "browser",
+        "db", "redis", "neo4j", "minio", "object_storage", "chroma", "browser",
         "sentinel_scheduler", "data_scheduler",
         "ontology_projection",
     ):
@@ -65,6 +65,15 @@ def test_health_service_states_are_valid():
         assert data[key] in VALID_SERVICE_STATES, (
             f"{key} has unexpected state: {data[key]}"
         )
+    assert data["object_storage"] in ("minio", "local", "unavailable", "unknown")
+
+
+def test_minio_outage_uses_writable_local_storage_readiness():
+    response = client.get("/health")
+    data = response.json()
+    if data["minio"] == "unavailable":
+        assert data["object_storage"] == "local"
+        assert "minio" not in data["unavailable"]
 
 
 def test_health_status_reflects_dependencies():

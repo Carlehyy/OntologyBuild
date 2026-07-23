@@ -83,6 +83,14 @@ curl http://localhost:8000/health/live
 SQL 搜索与同步任务执行。需要数据管家的实时浏览器时,仍须额外准备开放 CDP 的 Chromium 并配置
 `STEWARD_BROWSER_CDP_URL`;需要 LLM 能力时,还须配置对应提供商的 API Key。
 
+对象存储降级会返回 `local://` URI，与 MinIO 的 `s3://` URI 明确区分；MinIO 恢复不会改变
+既有对象的读取位置。生产环境必须把 `STORAGE_LOCAL_DIR` 配置到 API 与 worker 共享的持久卷
+（生产 Compose 默认 `/uploads/object-storage`），详见 [DEPLOY.md](./DEPLOY.md)。
+附件链接的浏览器入口不复用 n8n 网关地址：生产环境应分别配置
+`PIPELINE_FILE_PUBLIC_APP_BASE_URL`（登录下载 Hash 深链）和
+`PIPELINE_FILE_PUBLIC_API_BASE_URL`（匿名分享 API）为浏览器公网可达的 HTTP(S) origin。
+推荐 HTTPS，且不要包含路径、账号、查询参数或片段。
+
 > 无 Docker 的源码部署 + 公网隧道预览,见 [DEPLOY.md](./DEPLOY.md)。
 
 ---

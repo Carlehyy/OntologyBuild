@@ -52,11 +52,15 @@ MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=<替换>
 MINIO_SECRET_KEY=<替换>
 MINIO_USE_SSL=false
+STORAGE_LOCAL_FALLBACK=true
+STORAGE_LOCAL_DIR=/绝对路径/ontobuild-object-storage
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
 ```
 
-> 当前配置使用 **SQLite** 替代 PostgreSQL。Neo4j / ChromaDB / MinIO 为可选项，未运行时仅对应高级功能不可用，不影响基础功能。
+> 当前配置使用 **SQLite** 替代 PostgreSQL。Neo4j / ChromaDB / MinIO 为可选项。
+> MinIO 未运行时，附件与数据产物写入 `STORAGE_LOCAL_DIR`；源码部署应把它设为
+> 绝对路径并纳入磁盘备份，不能使用 `/tmp`。
 
 ### 2.3 创建上传目录并启动
 
@@ -228,8 +232,42 @@ n8n 必须能够访问服务器 `.env` 中的文件网关地址：
 
 ```text
 PIPELINE_FILE_GATEWAY_BASE_URL=https://平台域名/api/v2/file-transfer
+PIPELINE_FILE_PUBLIC_APP_BASE_URL=https://平台域名
+PIPELINE_FILE_PUBLIC_API_BASE_URL=https://平台域名
 ```
 
 自动部署会在该变量缺失或仍为 `http://backend:8000/...` 默认值时，根据
 `DEPLOY_HEALTH_URL` 自动写入可达地址。若 n8n 不在平台 Docker 网络中，不能继续使用
 `backend` 服务名。公网文件传输必须配置 HTTPS；HTTP 仅适合临时验收。
+
+这三个地址职责不同：`PIPELINE_FILE_GATEWAY_BASE_URL` 仅供 n8n 上传产物；
+`PIPELINE_FILE_PUBLIC_APP_BASE_URL` 用于生成“先登录、再继续下载”的前端 Hash 深链；
+`PIPELINE_FILE_PUBLIC_API_BASE_URL` 用于生成匿名分享 API。后两项必须是其他电脑浏览器
+可访问的 HTTP(S) origin，不要包含路径、账号、查询参数或 `#` 片段。它们可以使用不同
+域名，例如前端为 `https://platform.example.com`、API 为
+`https://api.example.com`，但相应反向代理和 CORS 也必须放行。
+
+部署脚本会在后两项为空或仍为本地开发默认值时，将它们设置为去掉尾部 `/` 的
+`DEPLOY_HEALTH_URL`；显式公网配置不会被覆盖。公网分享建议始终使用 HTTPS，HTTP 只适合
+当前 IP 验收或受控内网。
+
+MinIO 可用时新对象返回 `s3://bucket/key`，不可用时返回
+`local://bucket/key`。两者都是平台内部存储标识；对外下载仍统一经过平台的鉴权下载或
+匿名分享接口。`docker-compose.prod.yml` 将 API 与 Celery 的本地对象目录统一指向
+`/uploads/object-storage`，并挂载同一个 `uploads` 持久卷，因此 MinIO 恢复后既有
+`local://` 附件仍可读取。
+
+生产栈默认仍会启动 MinIO。明确不接入 MinIO 时，可以只启动其余服务：
+
+```bash
+docker compose -f docker-compose.prod.yml up -d \
+  db redis neo4j chromadb browser backend celery_worker frontend
+```
+
+后端不再以 MinIO 健康状态作为启动前提。若自行编排容器，必须同时为 backend 和
+celery_worker 挂载同一持久卷到 `/uploads`，并保持：
+
+```ini
+STORAGE_LOCAL_FALLBACK=true
+STORAGE_LOCAL_DIR=/uploads/object-storage
+```

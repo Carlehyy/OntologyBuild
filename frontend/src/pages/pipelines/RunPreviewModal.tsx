@@ -1,41 +1,13 @@
 import { useEffect, useState } from 'react'
 import {
   X, Loader2, CheckCircle2, XCircle, Table2, ArrowRight,
-  FlaskConical, RefreshCw, Paperclip, Download,
+  FlaskConical, RefreshCw,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult } from '@/api/v2/pipelines'
+import { pipelineFileRefsIn } from '@/api/fileAssets'
+import FileRefActions from '@/components/pipelines/FileRefActions'
 import { useToast } from '@/components/ui/Toast'
-
-type FileRef = {
-  $type: 'file_ref'
-  id: string
-  name: string
-  size: number
-  content_type?: string
-  sha256?: string
-  download_url: string
-}
-
-function isFileRef(value: unknown): value is FileRef {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<FileRef>
-  return candidate.$type === 'file_ref'
-    && typeof candidate.id === 'string'
-    && typeof candidate.name === 'string'
-    && typeof candidate.download_url === 'string'
-}
-
-function fileRefsIn(value: unknown, refs: FileRef[] = []): FileRef[] {
-  if (isFileRef(value)) {
-    refs.push(value)
-  } else if (Array.isArray(value)) {
-    value.forEach(item => fileRefsIn(item, refs))
-  } else if (value && typeof value === 'object') {
-    Object.values(value as Record<string, unknown>).forEach(item => fileRefsIn(item, refs))
-  }
-  return refs
-}
 
 function displayValue(value: unknown): string {
   if (value == null) return ''
@@ -43,18 +15,6 @@ function displayValue(value: unknown): string {
     try { return JSON.stringify(value) } catch { return String(value) }
   }
   return String(value)
-}
-
-function formatBytes(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return '未知大小'
-  if (size < 1024) return `${size} B`
-  if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 ** 2).toFixed(1)} MB`
-}
-
-function runtimeUrl(path: string): string {
-  const base = (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) || ''
-  return path.startsWith('/') ? `${String(base).replace(/\/$/, '')}${path}` : path
 }
 
 /**
@@ -69,35 +29,6 @@ export default function RunPreviewModal({ pipeline, onClose }: {
   const [phase, setPhase] = useState<'running' | 'preview' | 'error'>('running')
   const [result, setResult] = useState<DryRunResult | null>(null)
   const [error, setError] = useState('')
-  const [downloading, setDownloading] = useState<Set<string>>(new Set())
-
-  const downloadFile = async (ref: FileRef) => {
-    setDownloading(current => new Set(current).add(ref.id))
-    try {
-      const token = localStorage.getItem('token') || ''
-      const response = await fetch(runtimeUrl(ref.download_url), {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const blob = await response.blob()
-      const objectUrl = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = objectUrl
-      anchor.download = ref.name
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(objectUrl)
-    } catch {
-      toast({ tone: 'error', title: '附件下载失败', description: '附件可能已过期或当前无权访问。' })
-    } finally {
-      setDownloading(current => {
-        const next = new Set(current)
-        next.delete(ref.id)
-        return next
-      })
-    }
-  }
 
   const runPreview = async () => {
     setPhase('running')
@@ -218,24 +149,10 @@ export default function RunPreviewModal({ pipeline, onClose }: {
                             <tr key={rowIndex} className="hover:bg-slate-50/70">
                               {output.columns.slice(0, 12).map(column => (
                                 <td key={column} className="max-w-[220px] px-3 py-2 text-slate-700">
-                                  {fileRefsIn(row[column]).length > 0 ? (
-                                    <div className="flex max-w-[210px] flex-col items-start gap-1">
-                                      {fileRefsIn(row[column]).slice(0, 4).map(ref => (
-                                        <button
-                                          key={ref.id}
-                                          type="button"
-                                          onClick={() => void downloadFile(ref)}
-                                          disabled={downloading.has(ref.id)}
-                                          title={`${ref.name} · ${formatBytes(ref.size)}`}
-                                          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-left text-[11px] font-medium text-teal-800 transition hover:border-teal-300 hover:bg-teal-100 disabled:cursor-wait disabled:opacity-60"
-                                        >
-                                          <Paperclip size={11} className="shrink-0" />
-                                          <span className="truncate">{ref.name}</span>
-                                          <span className="shrink-0 text-[9px] font-normal text-teal-600">{formatBytes(ref.size)}</span>
-                                          {downloading.has(ref.id)
-                                            ? <Loader2 size={10} className="shrink-0 animate-spin" />
-                                            : <Download size={10} className="shrink-0" />}
-                                        </button>
+                                  {pipelineFileRefsIn(row[column]).length > 0 ? (
+                                    <div className="flex max-w-[300px] flex-col items-start gap-1">
+                                      {pipelineFileRefsIn(row[column]).slice(0, 4).map(ref => (
+                                        <FileRefActions key={ref.id} file={ref} />
                                       ))}
                                     </div>
                                   ) : (

@@ -77,23 +77,49 @@ def _scrub_runtime_file_context(value: Any, gateway_token: str) -> Any:
 def _validate_file_refs(db: Session, rows: list[dict], *, pipeline_id: str,
                         invocation_id: str,
                         gateway_token: str) -> tuple[list[dict], list[str]]:
-    from app.data_channel.file_assets.service import (
-        reconcile_invocation,
-        validate_and_canonicalize_refs,
-    )
+    from app.data_channel.file_assets.service import validate_and_canonicalize_refs
 
     safe_rows = _scrub_runtime_file_context(rows, gateway_token)
-    canonical, asset_ids = validate_and_canonicalize_refs(
+    return validate_and_canonicalize_refs(
         db, safe_rows, pipeline_id=pipeline_id, invocation_id=invocation_id)
-    # Anything uploaded in this invocation but omitted from the terminal JSON
-    # is an orphan, not an implicit output.
+
+
+def _finalize_preview_file_invocation(
+    db: Session, *, pipeline_id: str, invocation_id: str,
+    referenced_ids: list[str],
+) -> None:
+    """Pin a fully validated preview and remove its upload orphans atomically."""
+    from app.data_channel.file_assets.service import reconcile_invocation
+
     reconcile_invocation(
         db,
         pipeline_id=pipeline_id,
         invocation_id=invocation_id,
-        referenced_ids=asset_ids,
+        referenced_ids=referenced_ids,
+        pin_referenced=True,
     )
-    return canonical, asset_ids
+
+
+def _recover_validated_share_tokens(
+    db: Session, asset_ids: list[str],
+) -> dict[str, str]:
+    """Capture exact FileRef bearer tokens before a formal run rolls them back."""
+    if not asset_ids:
+        return {}
+    from app.data_channel.file_assets.models import PipelineFileAsset
+    from app.data_channel.file_assets.service import recover_share_token
+
+    assets = db.query(PipelineFileAsset).filter(
+        PipelineFileAsset.id.in_(asset_ids)).all()
+    by_id = {asset.id: asset for asset in assets}
+    tokens: dict[str, str] = {}
+    for asset_id in asset_ids:
+        token = recover_share_token(by_id[asset_id]) if asset_id in by_id else None
+        if token is None:
+            raise StewardError(
+                f"file_ref {asset_id} 未能生成可信匿名分享令牌，请重新执行流水线")
+        tokens[asset_id] = token
+    return tokens
 
 
 def _abandon_file_invocation(db: Session, *, pipeline_id: str,
@@ -327,58 +353,66 @@ def collect_n8n_rows(db: Session, pl, payload: dict | None = None) -> tuple[list
     invocation_id = str(uuid.uuid4())
     wait_seconds = int(((pl.definition or {}).get("n8n") or {}).get("wait_seconds") or _DEFAULT_WAIT)
     from app.data_channel.datasets.lock import dataset_write_lock
-    with dataset_write_lock(
-        f"n8n::{workflow_id}", bind=db.get_bind(),
-        wait_timeout=float(wait_seconds) + 10,
-        stale_after=float(wait_seconds) + 60,
-    ):
-        _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(
-            db, pl, client, require_active=False)
-        before = client.get_workflow(workflow_id)
-        was_active = bool(before.get("active"))
-        if not was_active:
-            try:
-                activated = service.set_remote_active_for_preview(
-                    rec, client, enabled=True)
-                service.resolve_published_runtime_release(
-                    pl, rec, activated, require_active=True)
-                time.sleep(1.5)
-            except Exception as exc:  # noqa: BLE001
-                raise StewardError(f"为执行预览临时启用已发布工作流失败：{exc}") from exc
-        try:
-            runtime_payload = _runtime_payload(
-                pipeline_id=pl.id,
-                workflow_id=workflow_id,
-                invocation_id=invocation_id,
-                purpose="preview",
-                owner_id=rec.created_by,
-                payload=payload or {"source": "ontoprompt-dry-run"},
-            )
-            rows, exec_meta = trigger_and_collect(
-                client, workflow_id, webhook_path,
-                payload=runtime_payload,
-                wait_seconds=wait_seconds,
-                expected_output_node=output_node_name)
-            rows, asset_ids = _validate_file_refs(
-                db, rows, pipeline_id=pl.id, invocation_id=invocation_id,
-                gateway_token=runtime_payload["file_gateway"]["token"])
-            exec_meta["file_invocation_id"] = invocation_id
-            exec_meta["file_asset_ids"] = asset_ids
-        except Exception:
-            _abandon_file_invocation(
-                db, pipeline_id=pl.id, invocation_id=invocation_id)
-            raise
-        finally:
+    try:
+        with dataset_write_lock(
+            f"n8n::{workflow_id}", bind=db.get_bind(),
+            wait_timeout=float(wait_seconds) + 10,
+            stale_after=float(wait_seconds) + 60,
+        ):
+            _rec, workflow_id, webhook_path, output_node_name = _resolve_n8n_context(
+                db, pl, client, require_active=False)
+            before = client.get_workflow(workflow_id)
+            was_active = bool(before.get("active"))
             if not was_active:
                 try:
-                    service.set_remote_active_for_preview(
-                        rec, client, enabled=False)
+                    activated = service.set_remote_active_for_preview(
+                        rec, client, enabled=True)
+                    service.resolve_published_runtime_release(
+                        pl, rec, activated, require_active=True)
+                    time.sleep(1.5)
                 except Exception as exc:  # noqa: BLE001
                     raise StewardError(
-                        f"执行预览结束，但恢复已发布流水线的停用状态失败：{exc}。"
-                        "请立即在 n8n 中停用并核对平台启用开关。") from exc
-    if exec_meta.get("error"):
-        raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
+                        f"为执行预览临时启用已发布工作流失败：{exc}") from exc
+            try:
+                runtime_payload = _runtime_payload(
+                    pipeline_id=pl.id,
+                    workflow_id=workflow_id,
+                    invocation_id=invocation_id,
+                    purpose="preview",
+                    owner_id=rec.created_by,
+                    payload=payload or {"source": "ontoprompt-dry-run"},
+                )
+                rows, exec_meta = trigger_and_collect(
+                    client, workflow_id, webhook_path,
+                    payload=runtime_payload,
+                    wait_seconds=wait_seconds,
+                    expected_output_node=output_node_name)
+                rows, asset_ids = _validate_file_refs(
+                    db, rows, pipeline_id=pl.id, invocation_id=invocation_id,
+                    gateway_token=runtime_payload["file_gateway"]["token"])
+                exec_meta["file_invocation_id"] = invocation_id
+                exec_meta["file_asset_ids"] = asset_ids
+            finally:
+                if not was_active:
+                    try:
+                        service.set_remote_active_for_preview(
+                            rec, client, enabled=False)
+                    except Exception as exc:  # noqa: BLE001
+                        raise StewardError(
+                            f"执行预览结束，但恢复已发布流水线的停用状态失败：{exc}。"
+                            "请立即在 n8n 中停用并核对平台启用开关。") from exc
+            if exec_meta.get("error"):
+                raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
+            _finalize_preview_file_invocation(
+                db,
+                pipeline_id=pl.id,
+                invocation_id=invocation_id,
+                referenced_ids=asset_ids,
+            )
+    except Exception:
+        _abandon_file_invocation(
+            db, pipeline_id=pl.id, invocation_id=invocation_id)
+        raise
     return rows, exec_meta
 
 
@@ -393,7 +427,10 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
     """
     from app.data_channel.pipelines.external_runner import run_external_pipeline
 
+    pending_share_tokens: dict[str, str] = {}
+
     def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
+        nonlocal pending_share_tokens
         client = service.get_n8n_client(db_)
         rec = service.record_for_pipeline(db_, pl_)
         if rec is None:
@@ -424,6 +461,12 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
             rows, asset_ids = _validate_file_refs(
                 db_, rows, pipeline_id=pl_.id, invocation_id=run.id,
                 gateway_token=runtime_payload["file_gateway"]["token"])
+            pending_share_tokens = _recover_validated_share_tokens(db_, asset_ids)
+            # Dataset version creation commits internally.  Keep anonymous
+            # tokens out of the database until commit_invocation finalizes the
+            # successful run; the exact plaintext tokens remain only in this
+            # in-process closure so persisted FileRef URLs stay valid.
+            db_.rollback()
             exec_meta["file_invocation_id"] = run.id
             exec_meta["file_asset_ids"] = asset_ids
         if exec_meta.get("error"):
@@ -440,6 +483,7 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
             invocation_id=run.id,
             referenced_ids=exec_meta.get("file_asset_ids") or [],
             dataset_version_id=dataset_version_id,
+            share_tokens=pending_share_tokens,
         )
 
     run_external_pipeline(
@@ -474,81 +518,89 @@ def collect_test_rows(db: Session, rec: N8nPipeline, payload: dict | None = None
     # 锁必须覆盖 GET active → 临时 activate → 触发 → 恢复 deactivate → 最终 GET。
     # 只锁 trigger 会让并发 publish 在中途启用成功，随后本预览按旧 was_active
     # 把正式 workflow 错误停用，形成平台 enabled / 远端 inactive 的裂脑。
-    with dataset_write_lock(
-        f"n8n::{rec.n8n_workflow_id}", bind=db.get_bind(),
-        wait_timeout=float(wait_seconds) + 10,
-        stale_after=float(wait_seconds) + 60,
-    ):
-        workflow = client.get_workflow(rec.n8n_workflow_id)
-        managed_contract = service.validate_managed_workflow_contract(workflow)
-        initial_snapshot_hash = service.canonical_json_hash(
-            N8nClient.sanitize_workflow(workflow))
-        webhook_path = managed_contract["webhook_path"]
-        output_node_name = managed_contract["output_node_name"]
+    try:
+        with dataset_write_lock(
+            f"n8n::{rec.n8n_workflow_id}", bind=db.get_bind(),
+            wait_timeout=float(wait_seconds) + 10,
+            stale_after=float(wait_seconds) + 60,
+        ):
+            workflow = client.get_workflow(rec.n8n_workflow_id)
+            managed_contract = service.validate_managed_workflow_contract(workflow)
+            initial_snapshot_hash = service.canonical_json_hash(
+                N8nClient.sanitize_workflow(workflow))
+            webhook_path = managed_contract["webhook_path"]
+            output_node_name = managed_contract["output_node_name"]
 
-        was_active = bool(workflow.get("active"))
-        if not was_active:
-            try:
-                client.activate_workflow(rec.n8n_workflow_id)
-            except Exception as exc:  # noqa: BLE001
-                raise StewardError(f"临时激活失败：{exc}") from exc
-            # webhook 注册非即时，稍等再触发
-            time.sleep(1.5)
-        try:
-            runtime_payload = _runtime_payload(
-                pipeline_id=rec.pipeline_id,
-                workflow_id=rec.n8n_workflow_id,
-                invocation_id=invocation_id,
-                purpose="preview",
-                owner_id=rec.created_by,
-                payload=payload or {"source": "ontoprompt-test"},
-            )
-            rows, exec_meta = trigger_and_collect(
-                client, rec.n8n_workflow_id, webhook_path,
-                payload=runtime_payload,
-                wait_seconds=wait_seconds,
-                expected_output_node=output_node_name)
-            rows, asset_ids = _validate_file_refs(
-                db, rows, pipeline_id=rec.pipeline_id,
-                invocation_id=invocation_id,
-                gateway_token=runtime_payload["file_gateway"]["token"])
-            exec_meta["file_invocation_id"] = invocation_id
-            exec_meta["file_asset_ids"] = asset_ids
-        except Exception:
-            _abandon_file_invocation(
-                db, pipeline_id=rec.pipeline_id,
-                invocation_id=invocation_id)
-            raise
-        finally:
+            was_active = bool(workflow.get("active"))
             if not was_active:
                 try:
-                    client.deactivate_workflow(rec.n8n_workflow_id)
+                    client.activate_workflow(rec.n8n_workflow_id)
                 except Exception as exc:  # noqa: BLE001
-                    raise StewardError(
-                        f"执行预览结束，但恢复 n8n 草稿的停用状态失败：{exc}。"
-                        "为避免未发布工作流继续对外生效，请立即在 n8n 中停用后再继续。") from exc
-        try:
-            final_workflow = client.get_workflow(rec.n8n_workflow_id)
-        except Exception as exc:  # noqa: BLE001
-            raise StewardError(f"执行预览后无法读取 n8n 工作流状态：{exc}") from exc
-        final_snapshot = N8nClient.sanitize_workflow(final_workflow)
-        final_snapshot_hash = service.canonical_json_hash(final_snapshot)
-        if final_snapshot_hash != initial_snapshot_hash:
-            raise StewardError(
-                "n8n 工作流在执行预览期间发生编排变化，无法确认本次输出对应同一编排。"
-                "请确认无人同时编辑后重新执行预览。")
-        workflow_evidence = None
-        try:
-            # 即使调用方只要求查看预览，也尽可能生成后续发布所需的证据，
-            # 让标准 n8n 环境保持原有“一次预览即可继续发布”的流程。
-            workflow_evidence = service.workflow_validation_evidence(
-                final_workflow, context="执行预览后")
-        except StewardError as exc:
-            if require_publish_evidence:
-                raise
-            # 某些 n8n 公共 API 版本不返回 activeVersionId。数据已经成功执行
-            # 时仍返回预览，但明确标记发布凭证不可用，由字段校验步骤继续阻断发布。
-            exec_meta["publish_evidence_error"] = str(exc)
+                    raise StewardError(f"临时激活失败：{exc}") from exc
+                # webhook 注册非即时，稍等再触发
+                time.sleep(1.5)
+            try:
+                runtime_payload = _runtime_payload(
+                    pipeline_id=rec.pipeline_id,
+                    workflow_id=rec.n8n_workflow_id,
+                    invocation_id=invocation_id,
+                    purpose="preview",
+                    owner_id=rec.created_by,
+                    payload=payload or {"source": "ontoprompt-test"},
+                )
+                rows, exec_meta = trigger_and_collect(
+                    client, rec.n8n_workflow_id, webhook_path,
+                    payload=runtime_payload,
+                    wait_seconds=wait_seconds,
+                    expected_output_node=output_node_name)
+                rows, asset_ids = _validate_file_refs(
+                    db, rows, pipeline_id=rec.pipeline_id,
+                    invocation_id=invocation_id,
+                    gateway_token=runtime_payload["file_gateway"]["token"])
+                exec_meta["file_invocation_id"] = invocation_id
+                exec_meta["file_asset_ids"] = asset_ids
+            finally:
+                if not was_active:
+                    try:
+                        client.deactivate_workflow(rec.n8n_workflow_id)
+                    except Exception as exc:  # noqa: BLE001
+                        raise StewardError(
+                            f"执行预览结束，但恢复 n8n 草稿的停用状态失败：{exc}。"
+                            "为避免未发布工作流继续对外生效，请立即在 n8n 中停用后再继续。") from exc
+            if exec_meta.get("error"):
+                raise StewardError(f"n8n 执行失败：{exec_meta['error']}")
+            try:
+                final_workflow = client.get_workflow(rec.n8n_workflow_id)
+            except Exception as exc:  # noqa: BLE001
+                raise StewardError(f"执行预览后无法读取 n8n 工作流状态：{exc}") from exc
+            final_snapshot = N8nClient.sanitize_workflow(final_workflow)
+            final_snapshot_hash = service.canonical_json_hash(final_snapshot)
+            if final_snapshot_hash != initial_snapshot_hash:
+                raise StewardError(
+                    "n8n 工作流在执行预览期间发生编排变化，无法确认本次输出对应同一编排。"
+                    "请确认无人同时编辑后重新执行预览。")
+            workflow_evidence = None
+            try:
+                # 即使调用方只要求查看预览，也尽可能生成后续发布所需的证据，
+                # 让标准 n8n 环境保持原有“一次预览即可继续发布”的流程。
+                workflow_evidence = service.workflow_validation_evidence(
+                    final_workflow, context="执行预览后")
+            except StewardError as exc:
+                if require_publish_evidence:
+                    raise
+                # 某些 n8n 公共 API 版本不返回 activeVersionId。数据已经成功执行
+                # 时仍返回预览，但明确标记发布凭证不可用，由字段校验步骤继续阻断发布。
+                exec_meta["publish_evidence_error"] = str(exc)
+            _finalize_preview_file_invocation(
+                db,
+                pipeline_id=rec.pipeline_id,
+                invocation_id=invocation_id,
+                referenced_ids=asset_ids,
+            )
+    except Exception:
+        _abandon_file_invocation(
+            db, pipeline_id=rec.pipeline_id, invocation_id=invocation_id)
+        raise
     rec.workflow_snapshot = final_snapshot
     exec_meta["workflow_snapshot_hash"] = final_snapshot_hash
     if workflow_evidence is not None:

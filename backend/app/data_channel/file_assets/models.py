@@ -21,8 +21,8 @@ class PipelineFileAsset(Base):
     """Private object uploaded during one managed n8n invocation.
 
     ``storage_uri`` and ``object_key`` are deliberately internal.  Workflow
-    output and browser clients only receive an opaque FileRef id plus the
-    authenticated platform download route.
+    output and browser clients only receive an opaque FileRef id plus platform
+    gateway URLs; they never receive the underlying MinIO/local-storage path.
     """
 
     __tablename__ = "v2_pipeline_file_assets"
@@ -36,6 +36,11 @@ class PipelineFileAsset(Base):
             "status", "expires_at", "created_at",
         ),
         Index("ix_pipeline_file_assets_dataset_version", "dataset_version_id"),
+        Index(
+            "uq_pipeline_file_assets_share_token_hash",
+            "share_token_hash",
+            unique=True,
+        ),
         CheckConstraint(
             "purpose IN ('preview','run')",
             name="ck_pipeline_file_assets_purpose",
@@ -72,6 +77,16 @@ class PipelineFileAsset(Base):
     content_type: Mapped[str] = mapped_column(String(200), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Public tokens never expire automatically, but can be rotated or revoked
+    # immediately.  The digest is the anonymous lookup key; the encrypted copy
+    # lets an authenticated user copy an existing link again without storing
+    # the bearer token as plaintext.
+    share_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    share_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    share_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    share_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

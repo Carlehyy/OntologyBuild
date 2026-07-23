@@ -89,6 +89,30 @@ _DEVELOPMENT_COLUMN_REPAIRS = (
         "data_size",
         "ALTER TABLE v2_dataset_versions ADD COLUMN data_size BIGINT",
     ),
+    (
+        "v2_pipeline_file_assets",
+        "share_token_hash",
+        "ALTER TABLE v2_pipeline_file_assets "
+        "ADD COLUMN share_token_hash VARCHAR(64)",
+    ),
+    (
+        "v2_pipeline_file_assets",
+        "share_token_encrypted",
+        "ALTER TABLE v2_pipeline_file_assets "
+        "ADD COLUMN share_token_encrypted TEXT",
+    ),
+    (
+        "v2_pipeline_file_assets",
+        "share_created_at",
+        "ALTER TABLE v2_pipeline_file_assets "
+        "ADD COLUMN share_created_at TIMESTAMP",
+    ),
+    (
+        "v2_pipeline_file_assets",
+        "share_revoked_at",
+        "ALTER TABLE v2_pipeline_file_assets "
+        "ADD COLUMN share_revoked_at TIMESTAMP",
+    ),
 )
 
 
