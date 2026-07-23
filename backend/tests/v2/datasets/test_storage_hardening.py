@@ -136,9 +136,31 @@ def test_csv_parser_supports_old_mac_newlines_and_quoted_multiline_cells():
     ]
 
 
+def test_legacy_xls_parser_preserves_integer_cells_and_rowcount(legacy_xls_bytes):
+    assert legacy_xls_bytes.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+    assert stored_columns(legacy_xls_bytes) == ["id", "quantity", "note"]
+
+    rows = _parse_stored_rows(legacy_xls_bytes, limit=None)
+
+    assert rows == [
+        {"id": "A1", "quantity": 3, "note": "第一行\n第二行"},
+        {"id": "A2", "quantity": 5, "note": "正常"},
+    ]
+    assert all(type(row["quantity"]) is int for row in rows)
+    assert _estimate_rowcount(legacy_xls_bytes, "xls") == 2
+
+
 def test_corrupt_xlsx_reports_excel_error_instead_of_csv_newline_error():
     with pytest.raises(TabularParseError, match="Excel 工作簿解析失败") as caught:
         _parse_stored_rows(b"PK\x03\x04not-an-xlsx\rwith-binary-data", limit=None)
+
+    assert "new-line character" not in str(caught.value)
+
+
+def test_corrupt_xls_reports_excel_error_instead_of_csv_newline_error():
+    raw = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1not-an-xls\rwith-binary-data"
+    with pytest.raises(TabularParseError, match="旧版 Excel 工作簿解析失败") as caught:
+        _parse_stored_rows(raw, limit=None)
 
     assert "new-line character" not in str(caught.value)
 

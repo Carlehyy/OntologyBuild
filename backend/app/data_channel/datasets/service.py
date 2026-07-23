@@ -281,6 +281,13 @@ def _xls_cell_value(book, cell):
 
     if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
         return ""
+    if cell.ctype == xlrd.XL_CELL_NUMBER:
+        # BIFF does not distinguish integer and floating-point storage: xlrd
+        # exposes every numeric cell as float.  Normalize whole values so an
+        # Excel cell displayed as ``3`` matches the integer contract inferred
+        # by the browser instead of being rejected later as the string ``3.0``.
+        value = cell.value
+        return int(value) if isinstance(value, float) and value.is_integer() else value
     if cell.ctype == xlrd.XL_CELL_DATE:
         return xlrd.xldate_as_datetime(cell.value, book.datemode)
     if cell.ctype == xlrd.XL_CELL_BOOLEAN:

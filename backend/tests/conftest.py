@@ -1,6 +1,8 @@
 import atexit
+import base64
 import os
 import tempfile
+from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -82,3 +84,14 @@ def auth_headers(admin_token):
 def ontology(client, auth_headers, db):
     r = client.post("/api/v1/ontologies", json={"name": "测试本体", "domain": "供应链"}, headers=auth_headers)
     return r.json()["data"]
+
+
+@pytest.fixture
+def legacy_xls_bytes():
+    """真实 OLE/BIFF8 工作簿：整数、单元格内换行及第二工作表。"""
+    fixture = (
+        Path(__file__).resolve().parent
+        / "v2" / "fixtures" / "legacy_integer_multiline.xls.b64"
+    )
+    encoded = fixture.read_text(encoding="ascii").strip()
+    return base64.b64decode(encoded, validate=True)

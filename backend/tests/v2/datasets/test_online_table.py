@@ -225,6 +225,41 @@ def test_configured_xlsx_upload_uses_first_sheet_and_hyperlink_display_text(
     }]
 
 
+def test_configured_xls_upload_accepts_integer_cells(
+    api, auth_headers, legacy_xls_bytes,
+):
+    payload = {
+        "name": "旧版工单导入",
+        "columns": [
+            {"name": "id", "type": "string", "nullable": False},
+            {"name": "quantity", "type": "integer", "nullable": True},
+            {"name": "note", "type": "string", "nullable": True},
+        ],
+        "primary_key": "id",
+    }
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": (
+            "legacy.xls",
+            io.BytesIO(legacy_xls_bytes),
+            "application/vnd.ms-excel",
+        )},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    result = response.json()["data"]
+    assert result["rowcount"] == 2
+    preview = api.get(
+        f"/api/v2/datasets/{result['id']}/preview", headers=auth_headers).json()
+    assert preview["columns"] == ["id", "quantity", "note"]
+    assert preview["rows"] == [
+        {"id": "A1", "quantity": 3, "note": "第一行\n第二行"},
+        {"id": "A2", "quantity": 5, "note": "正常"},
+    ]
+
+
 def test_configured_upload_accepts_cr_only_csv_newlines(api, auth_headers):
     payload = {
         "name": "旧式换行 CSV",
