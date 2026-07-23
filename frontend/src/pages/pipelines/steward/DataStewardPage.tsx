@@ -21,7 +21,7 @@ import {
   User, Workflow, X, Zap, Wifi, WifiOff,
 } from 'lucide-react'
 import {
-  downloadBrowserCompanion, downloadPipelineFile, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
+  downloadBrowserCompanion, downloadPipelineFile, downloadStewardConversation, downloadStewardFile, getStewardFileBlob, stewardApi, streamStewardChat,
   type BrowserCapture, type BrowserCollaborationState, type BrowserSource, type StewardArtifact,
   type StewardConversationDTO, type StewardPipeline, type StewardPipelineDetail,
   type StewardStatus, type StewardStep, type StewardTablePreview,
@@ -356,12 +356,14 @@ function StepTrace({ steps, running }: { steps: StewardStep[]; running?: boolean
 
 export default function DataStewardPage() {
   const [searchParams] = useSearchParams()
+  const { toast } = useToast()
 
   const [status, setStatus] = useState<StewardStatus | null>(null)
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<StewardConversationDTO[]>([])
   const [showHistory, setShowHistory] = useState(false)
+  const [exportingConversationId, setExportingConversationId] = useState<string | null>(null)
   const [showFiles, setShowFiles] = useState(false)
   const [browserDisplay, setBrowserDisplay] = useState<BrowserDisplayMode>('closed')
   const [input, setInput] = useState('')
@@ -589,6 +591,29 @@ export default function DataStewardPage() {
       if (cid === conversationId) resetChat()
       loadConversations()
     } catch { /* 忽略 */ }
+  }
+
+  const exportConversation = async (cid: string) => {
+    if (exportingConversationId) return
+    const conversation = conversations.find(item => item.id === cid)
+    if (!conversation) return
+    setExportingConversationId(cid)
+    try {
+      const payload = await downloadStewardConversation(cid, conversation.title)
+      toast({
+        tone: 'success',
+        title: '会话 JSON 已导出',
+        description: `已保存 ${payload.conversation.messageCount} 条完整消息及执行轨迹。`,
+      })
+    } catch (error: unknown) {
+      toast({
+        tone: 'error',
+        title: '会话导出失败',
+        description: errorText(error, '无法读取完整会话，请稍后重试。'),
+      })
+    } finally {
+      setExportingConversationId(null)
+    }
   }
 
   const pickFiles = () => fileInputRef.current?.click()
@@ -831,6 +856,8 @@ export default function DataStewardPage() {
                   onClose={() => setShowHistory(false)}
                   onCreate={resetChat}
                   onSelect={loadConversation}
+                  onExport={exportConversation}
+                  exportingId={exportingConversationId}
                   onDelete={removeConversation}
                   renderItemIcon={() => <Sparkles size={16} />}
                   emptyDescription="新建会话后，可随时回到之前的数据采集与流水线编排过程。"

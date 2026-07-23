@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.data_channel.steward import service
-from app.data_channel.steward.models import N8nPipeline
+from app.data_channel.steward.models import N8nPipeline, StewardMessage
 from app.data_channel.steward.runner import (
     _extract_execution_rows,
     _scrub_runtime_file_context,
@@ -72,6 +72,64 @@ def test_chat_request_forwards_explicit_target(
     assert captured["conversation_id"] == "conv-existing"
     assert captured["target_record_id"] == "record-selected"
     assert captured["web_search"] is False
+
+
+def test_conversation_export_returns_every_message_and_audit_field(
+        client, auth_headers, db):
+    created = client.post(
+        "/api/v2/steward/conversations",
+        headers=auth_headers,
+        json={"title": "完整审计会话"},
+    )
+    assert created.status_code == 201
+    conversation = created.json()["data"]
+
+    messages = [
+        StewardMessage(
+            conversation_id=conversation["id"],
+            role="assistant" if index % 2 else "user",
+            content=f"message-{index}",
+            steps=[{
+                "tool": "list_pipelines",
+                "arguments": {"page": index},
+                "summary": f"step-{index}",
+                "durationMs": index,
+            }] if index % 2 else [],
+            touched_pipeline_ids=[f"pipeline-{index}"] if index % 2 else [],
+            model="audit-model" if index % 2 else None,
+            token_usage={"inputTokens": index, "outputTokens": 1} if index % 2 else None,
+        )
+        for index in range(205)
+    ]
+    db.add_all(messages)
+    db.commit()
+
+    detail = client.get(
+        f"/api/v2/steward/conversations/{conversation['id']}",
+        headers=auth_headers,
+    )
+    assert detail.status_code == 200
+    assert len(detail.json()["data"]["messages"]) == 200
+
+    exported = client.get(
+        f"/api/v2/steward/conversations/{conversation['id']}/export",
+        headers=auth_headers,
+    )
+    assert exported.status_code == 200
+    payload = exported.json()["data"]
+    assert payload["format"] == "openontology.data-steward.conversation"
+    assert payload["version"] == 1
+    assert payload["conversation"]["messageCount"] == 205
+    assert len(payload["conversation"]["messages"]) == 205
+    assert payload["conversation"]["messages"][-1]["content"] == "message-204"
+    assistant = next(
+        message for message in payload["conversation"]["messages"]
+        if message["content"] == "message-203"
+    )
+    assert assistant["steps"][0]["arguments"] == {"page": 203}
+    assert assistant["touchedPipelineIds"] == ["pipeline-203"]
+    assert assistant["model"] == "audit-model"
+    assert assistant["tokenUsage"] == {"inputTokens": 203, "outputTokens": 1}
 
 
 # ── 假 n8n 客户端 ──────────────────────────────────────────────────

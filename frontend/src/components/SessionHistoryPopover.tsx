@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { History, Plus, Trash2 } from 'lucide-react'
+import { Download, History, Loader2, Plus, Trash2 } from 'lucide-react'
 
 export interface SessionHistoryItem {
   id: string
@@ -14,6 +14,8 @@ interface SessionHistoryPopoverProps<T extends SessionHistoryItem> {
   onClose: () => void
   onCreate: () => void | Promise<void>
   onSelect: (id: string) => void | Promise<void>
+  onExport?: (id: string) => void | Promise<void>
+  exportingId?: string | null
   onDelete?: (id: string) => void | Promise<void>
   renderItemIcon: (item: T) => ReactNode
   emptyDescription: string
@@ -38,6 +40,8 @@ export default function SessionHistoryPopover<T extends SessionHistoryItem>({
   onClose,
   onCreate,
   onSelect,
+  onExport,
+  exportingId,
   onDelete,
   renderItemIcon,
   emptyDescription,
@@ -85,6 +89,7 @@ export default function SessionHistoryPopover<T extends SessionHistoryItem>({
                 return (
                   <div
                     key={item.id}
+                    data-session-history-item={item.id}
                     className={`group flex items-center gap-2.5 px-4 py-2 transition-colors ${current
                       ? 'bg-teal-50/70'
                       : 'hover:bg-[var(--color-bg-hover)]'}`}
@@ -113,24 +118,40 @@ export default function SessionHistoryPopover<T extends SessionHistoryItem>({
                           {formatSessionTime(item.updatedAt)}
                         </span>
                       </span>
+                    </button>
+
+                    <span className="flex shrink-0 items-center gap-1">
+                      {onExport && (
+                        <button
+                          type="button"
+                          disabled={exportingId === item.id}
+                          onClick={() => void onExport(item.id)}
+                          title={`导出会话 ${title} 的完整 JSON`}
+                          aria-label={`导出会话 ${title} 的完整 JSON`}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 opacity-100 transition-all hover:bg-sky-50 hover:text-sky-600 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                        >
+                          {exportingId === item.id
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <Download size={14} />}
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button
+                          type="button"
+                          onClick={() => void onDelete(item.id)}
+                          title={`删除会话 ${title}`}
+                          aria-label={`删除会话 ${title}`}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 opacity-100 transition-all hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                       {current && (
                         <span className="rounded-md bg-white/80 px-2 py-1 text-[10px] font-medium text-teal-700">
                           当前
                         </span>
                       )}
-                    </button>
-
-                    {onDelete && (
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(item.id)}
-                        title={`删除会话 ${title}`}
-                        aria-label={`删除会话 ${title}`}
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 opacity-100 transition-all hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
+                    </span>
                   </div>
                 )
               })}

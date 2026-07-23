@@ -78,6 +78,7 @@ export interface StewardMessageDTO {
   steps: StewardStep[]
   touchedPipelineIds: string[]
   model?: string | null
+  tokenUsage?: Record<string, unknown> | null
   createdAt: string
 }
 
@@ -88,6 +89,16 @@ export interface StewardConversationDTO {
   createdAt: string
   updatedAt: string
   messages?: StewardMessageDTO[]
+}
+
+export interface StewardConversationExport {
+  format: 'openontology.data-steward.conversation'
+  version: 1
+  exportedAt: string
+  conversation: StewardConversationDTO & {
+    messageCount: number
+    messages: StewardMessageDTO[]
+  }
 }
 
 export type BrowserSourceType = 'managed' | 'remote_cdp' | 'companion'
@@ -167,6 +178,8 @@ export const stewardApi = {
   conversations: () => apiClientV2.get<StewardConversationDTO[]>('/steward/conversations'),
   conversation: (cid: string) =>
     apiClientV2.get<StewardConversationDTO>(`/steward/conversations/${cid}`),
+  exportConversation: (cid: string) =>
+    apiClientV2.get<StewardConversationExport>(`/steward/conversations/${cid}/export`),
   deleteConversation: (cid: string) =>
     apiClientV2.delete(`/steward/conversations/${cid}`),
   createConversation: (title = '新对话') =>
@@ -237,6 +250,38 @@ export async function downloadBrowserCompanion(): Promise<void> {
   anchor.click()
   anchor.remove()
   URL.revokeObjectURL(url)
+}
+
+function safeJsonFilenamePart(value: string): string {
+  const withoutControlCharacters = Array.from(
+    value.trim(),
+    character => character.charCodeAt(0) < 32 ? '-' : character,
+  ).join('')
+  return withoutControlCharacters
+    .replace(/[<>:"/\\|?*]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80) || '数据管家会话'
+}
+
+export async function downloadStewardConversation(
+  cid: string,
+  title: string,
+): Promise<StewardConversationExport> {
+  const payload = await stewardApi.exportConversation(cid)
+  const blob = new Blob(
+    [`${JSON.stringify(payload, null, 2)}\n`],
+    { type: 'application/json;charset=utf-8' },
+  )
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${safeJsonFilenamePart(title)}-${cid.slice(0, 8)}.json`
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+  return payload
 }
 
 export async function downloadStewardFile(

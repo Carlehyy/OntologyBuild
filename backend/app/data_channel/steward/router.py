@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -160,7 +161,7 @@ def _conv_out(c: StewardConversation) -> dict:
 def _msg_out(m: StewardMessage) -> dict:
     return {"id": m.id, "role": m.role, "content": m.content or "",
             "steps": m.steps or [], "touchedPipelineIds": m.touched_pipeline_ids or [],
-            "model": m.model,
+            "model": m.model, "tokenUsage": m.token_usage,
             "createdAt": m.created_at.isoformat() if m.created_at else None}
 
 
@@ -208,6 +209,27 @@ def get_conversation(conversation_id: str, db: Session = Depends(get_db),
                 .order_by(StewardMessage.created_at.asc())
                 .limit(200).all())
     return _ok({**_conv_out(conv), "messages": [_msg_out(m) for m in messages]})
+
+
+@router.get("/conversations/{conversation_id}/export")
+def export_conversation(conversation_id: str, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    """导出完整会话审计记录；与界面详情不同，此处不截断消息数量。"""
+    conv = _require_conversation(db, conversation_id, current_user)
+    messages = (db.query(StewardMessage)
+                .filter(StewardMessage.conversation_id == conv.id)
+                .order_by(StewardMessage.created_at.asc(), StewardMessage.id.asc())
+                .all())
+    return _ok({
+        "format": "openontology.data-steward.conversation",
+        "version": 1,
+        "exportedAt": datetime.now(timezone.utc).isoformat(),
+        "conversation": {
+            **_conv_out(conv),
+            "messageCount": len(messages),
+            "messages": [_msg_out(message) for message in messages],
+        },
+    })
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
