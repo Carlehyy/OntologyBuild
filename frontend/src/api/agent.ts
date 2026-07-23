@@ -57,6 +57,8 @@ export interface AgentStep {
   durationMs: number
   /** 工具原始输出（后端截断后下发），用于「展开查看工具输出」 */
   result?: unknown
+  /** 完整审计结果存在时，对应的页面轻量展示值（仅导出文件包含） */
+  displayResult?: unknown
   error?: string
 }
 
@@ -166,15 +168,52 @@ export interface AgentMessageDTO {
   citations: AgentCitation[]
   proposals: AgentProposal[]
   model?: string | null
+  tokenUsage?: { inputTokens?: number; outputTokens?: number } | null
   createdAt: string
 }
 
 export interface AgentConversationDTO {
   id: string
   title: string
+  ontologyReleaseId?: string | null
   createdAt: string
   updatedAt: string
   messages?: AgentMessageDTO[]
+}
+
+export interface AgentConversationExport {
+  schemaVersion: 'openontology.agent-conversation.v1'
+  exportedAt: string
+  ontology: {
+    id: string
+    name: string
+    domain: string
+    version: string
+  }
+  conversation: {
+    id: string
+    ontologyId: string
+    ontologyReleaseId: string | null
+    userId: string | null
+    title: string
+    createdAt: string
+    updatedAt: string
+  }
+  messages: AgentMessageDTO[]
+  decisionSimulations: DecisionSimulationRun[]
+  summary: {
+    messageCount: number
+    userMessageCount: number
+    assistantMessageCount: number
+    toolStepCount: number
+    decisionSimulationCount: number
+    tokenUsage: { inputTokens: number; outputTokens: number }
+    contentCompleteness: {
+      messageHistory: 'complete'
+      toolResults: 'complete' | 'contains_legacy_truncation'
+      legacyTruncatedToolResultCount: number
+    }
+  }
 }
 
 export type AgentEvent =
@@ -591,6 +630,8 @@ export const agentApi = {
   }),
   conversation: (oid: string, cid: string) =>
     apiClientV2.get<AgentConversationDTO>(`${base(oid)}/conversations/${cid}`),
+  exportConversation: (oid: string, cid: string) =>
+    apiClientV2.get<AgentConversationExport>(`${base(oid)}/conversations/${cid}/export`),
   deleteConversation: (oid: string, cid: string) =>
     apiClientV2.delete(`${base(oid)}/conversations/${cid}`),
   executeProposal: (oid: string, body: { actionId: string; parameters: Record<string, unknown>; targetInstanceId?: string | null; releaseId?: string | null }) =>

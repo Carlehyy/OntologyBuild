@@ -7,6 +7,7 @@
   POST   /agent/chat               对话（默认 SSE 流式；stream=false 同步返回）
   GET    /agent/conversations      当前用户在该本体下的会话列表
   GET    /agent/conversations/{id} 会话详情（含完整轨迹，审计视图）
+  GET    /agent/conversations/{id}/export 完整会话 JSON（不限制消息条数）
   DELETE /agent/conversations/{id}
   POST   /agent/execute-proposal   用户确认后真实执行提案（经动作引擎，HITL 闸门有效）
 """
@@ -657,6 +658,19 @@ def _require_conversation(db: Session, ontology_id: str, conversation_id: str,
     return conv
 
 
+def _message_out(message: AgentMessage, *, display_only: bool = False) -> dict:
+    data = S.MessageOut.model_validate(message).model_dump(by_alias=True)
+    if display_only:
+        display_steps = []
+        for raw_step in data["steps"]:
+            step = dict(raw_step)
+            if "displayResult" in step:
+                step["result"] = step.pop("displayResult")
+            display_steps.append(step)
+        data["steps"] = display_steps
+    return data
+
+
 @router.get("/{ontology_id}/agent/conversations/{conversation_id}")
 def get_conversation(ontology_id: str, conversation_id: str,
                      db: Session = Depends(get_db),
@@ -668,7 +682,95 @@ def get_conversation(ontology_id: str, conversation_id: str,
                 .limit(200).all())
     return _ok({
         **S.ConversationOut.model_validate(conv).model_dump(by_alias=True),
-        "messages": [S.MessageOut.model_validate(m).model_dump(by_alias=True) for m in messages],
+        "messages": [_message_out(message, display_only=True) for message in messages],
+    })
+
+
+@router.get("/{ontology_id}/agent/conversations/{conversation_id}/export")
+def export_conversation(ontology_id: str, conversation_id: str,
+                        db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    """导出会话的完整持久化内容；历史 UI 的 200 条回放上限不适用于此接口。"""
+    ontology = _require_ontology(db, ontology_id)
+    conv = _require_conversation(db, ontology_id, conversation_id, current_user)
+    messages = (db.query(AgentMessage)
+                .filter(AgentMessage.conversation_id == conv.id)
+                .order_by(AgentMessage.created_at.asc(), AgentMessage.id.asc())
+                .all())
+
+    from app.ontologies.decision_simulation import schemas as DecisionSchemas
+    from app.ontologies.decision_simulation.models import DecisionSimulationRun
+
+    decision_runs = (db.query(DecisionSimulationRun)
+                     .filter(DecisionSimulationRun.conversation_id == conv.id)
+                     .order_by(DecisionSimulationRun.started_at.asc(),
+                               DecisionSimulationRun.id.asc())
+                     .all())
+    message_rows = [_message_out(message) for message in messages]
+    legacy_truncated = sum(
+        1
+        for message in message_rows
+        for step in message.get("steps", [])
+        if "displayResult" not in step
+        and isinstance(step.get("result"), dict)
+        and step["result"].get("_truncated") is True
+    )
+    tool_steps = sum(len(message.get("steps", [])) for message in message_rows)
+    input_tokens = sum(
+        int((message.get("tokenUsage") or {}).get("inputTokens") or 0)
+        for message in message_rows
+    )
+    output_tokens = sum(
+        int((message.get("tokenUsage") or {}).get("outputTokens") or 0)
+        for message in message_rows
+    )
+
+    return _ok({
+        "schemaVersion": "openontology.agent-conversation.v1",
+        "exportedAt": datetime.now(timezone.utc),
+        "ontology": {
+            "id": ontology.id,
+            "name": ontology.name,
+            "domain": ontology.domain,
+            "version": ontology.version,
+        },
+        "conversation": {
+            "id": conv.id,
+            "ontologyId": conv.ontology_id,
+            "ontologyReleaseId": conv.ontology_release_id,
+            "userId": conv.user_id,
+            "title": conv.title,
+            "createdAt": conv.created_at,
+            "updatedAt": conv.updated_at,
+        },
+        "messages": message_rows,
+        "decisionSimulations": [
+            DecisionSchemas.DecisionSimulationOut
+            .model_validate(run, from_attributes=True)
+            .model_dump(by_alias=True)
+            for run in decision_runs
+        ],
+        "summary": {
+            "messageCount": len(message_rows),
+            "userMessageCount": sum(
+                message.get("role") == "user" for message in message_rows),
+            "assistantMessageCount": sum(
+                message.get("role") == "assistant" for message in message_rows),
+            "toolStepCount": tool_steps,
+            "decisionSimulationCount": len(decision_runs),
+            "tokenUsage": {
+                "inputTokens": input_tokens,
+                "outputTokens": output_tokens,
+            },
+            "contentCompleteness": {
+                "messageHistory": "complete",
+                "toolResults": (
+                    "complete" if legacy_truncated == 0
+                    else "contains_legacy_truncation"
+                ),
+                "legacyTruncatedToolResultCount": legacy_truncated,
+            },
+        },
     })
 
 

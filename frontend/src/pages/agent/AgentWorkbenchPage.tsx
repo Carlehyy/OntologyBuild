@@ -23,6 +23,7 @@ import {
   Scale,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
+import { useToast } from '@/components/ui/Toast'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import { ontologyApi, modelApi } from '@/api/ontologies'
 import { useAuthStore } from '@/stores/authStore'
@@ -66,6 +67,30 @@ const nextId = () => `m-${Date.now()}-${_mid++}`
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 const itemLabel = (item: { displayName?: string; name?: string }) => item.displayName || item.name || '未命名'
 const selectArrow = "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")"
+
+function safeExportFilename(title: string, conversationId: string): string {
+  const invalidFilenameChars = '<>:"/\\|?*'
+  const normalizedTitle = Array.from(title, character =>
+    invalidFilenameChars.includes(character) || character.charCodeAt(0) < 32 ? '_' : character,
+  ).join('')
+  const safeTitle = normalizedTitle
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || '未命名会话'
+  return `${safeTitle}-${conversationId.slice(0, 8)}.json`
+}
+
+function downloadJson(value: unknown, filename: string): void {
+  const blob = new Blob([JSON.stringify(value, null, 2)], {
+    type: 'application/json;charset=utf-8',
+  })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
 
 function useAssistantLayout() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1158,6 +1183,7 @@ function OntologyNetworkView({
 export default function AgentWorkbenchPage() {
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const navigate = useNavigate()
+  const { toast } = useToast()
   const { containerRef, sizes, startResize } = useAssistantLayout()
 
   // -- 本体 / 模型选择 --
@@ -1246,6 +1272,7 @@ export default function AgentWorkbenchPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sentinelDrawerOpen, setSentinelDrawerOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [exportingConversationId, setExportingConversationId] = useState<string | null>(null)
   const [showJump, setShowJump] = useState(false)
   const [graphSignal, setGraphSignal] = useState<GraphAssistantSignal | null>(null)
   const [decisionRunId, setDecisionRunId] = useState<string | null>(null)
@@ -1310,6 +1337,31 @@ export default function AgentWorkbenchPage() {
     await agentApi.deleteConversation(oid, cid)
     if (cid === conversationId) resetChat()
     refetchConversations()
+  }
+
+  const exportConversation = async (cid: string) => {
+    if (!oid || exportingConversationId) return
+    setExportingConversationId(cid)
+    try {
+      const data = await agentApi.exportConversation(oid, cid)
+      downloadJson(data, safeExportFilename(data.conversation.title, cid))
+      const legacyCount = data.summary.contentCompleteness.legacyTruncatedToolResultCount
+      toast({
+        tone: legacyCount > 0 ? 'warning' : 'success',
+        title: '会话记录已导出',
+        description: legacyCount > 0
+          ? `JSON 已包含全部消息；其中 ${legacyCount} 个旧工具结果在历史存储时已截断，文件内已标注。`
+          : `已导出 ${data.summary.messageCount} 条消息和 ${data.summary.toolStepCount} 个工具步骤。`,
+      })
+    } catch (cause: any) {
+      toast({
+        tone: 'error',
+        title: '会话导出失败',
+        description: cause?.detail || cause?.message || '请稍后重试。',
+      })
+    } finally {
+      setExportingConversationId(null)
+    }
   }
 
   const send = useCallback(async (text?: string) => {
@@ -1604,7 +1656,9 @@ export default function AgentWorkbenchPage() {
                     onClose={() => setShowHistory(false)}
                     onCreate={resetChat}
                     onSelect={loadConversation}
+                    onExport={exportConversation}
                     onDelete={removeConversation}
+                    exportingId={exportingConversationId}
                     renderItemIcon={() => <Bot size={16} />}
                     emptyDescription="开始对话后，可随时回到之前的查询、分析与行动提案。"
                   />

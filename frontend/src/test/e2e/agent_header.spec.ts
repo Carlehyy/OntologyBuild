@@ -1,8 +1,16 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
 const now = '2026-07-19T08:00:00+00:00'
+const conversation = {
+  id: '12345678-1234-4321-8765-123456789abc',
+  title: '推演一项未来决策',
+  ontologyReleaseId: 'release-1',
+  createdAt: now,
+  updatedAt: now,
+}
 
-async function mockAgentHeader(page: Page) {
+async function mockAgentHeader(page: Page, options: { withConversation?: boolean } = {}) {
   let dynamicEnabled = false
   let trialComplete = false
   await page.addInitScript(() => {
@@ -98,7 +106,46 @@ async function mockAgentHeader(page: Page) {
       defaultModelId: null,
       updatedAt: now,
     })
-    if (path === '/api/v2/formal/ontologies/ontology-1/agent/conversations') return json(route, [])
+    if (path === `/api/v2/formal/ontologies/ontology-1/agent/conversations/${conversation.id}/export`) {
+      return json(route, {
+        schemaVersion: 'openontology.agent-conversation.v1',
+        exportedAt: now,
+        ontology: { id: 'ontology-1', name: '供应链本体', domain: '供应链', version: 'v1' },
+        conversation: {
+          ...conversation,
+          ontologyId: 'ontology-1',
+          userId: 'admin',
+        },
+        messages: [{
+          id: 'message-1',
+          role: 'user',
+          content: '请比较未来方案',
+          steps: [],
+          citations: [],
+          proposals: [],
+          model: null,
+          tokenUsage: null,
+          createdAt: now,
+        }],
+        decisionSimulations: [],
+        summary: {
+          messageCount: 1,
+          userMessageCount: 1,
+          assistantMessageCount: 0,
+          toolStepCount: 0,
+          decisionSimulationCount: 0,
+          tokenUsage: { inputTokens: 0, outputTokens: 0 },
+          contentCompleteness: {
+            messageHistory: 'complete',
+            toolResults: 'complete',
+            legacyTruncatedToolResultCount: 0,
+          },
+        },
+      })
+    }
+    if (path === '/api/v2/formal/ontologies/ontology-1/agent/conversations') {
+      return json(route, options.withConversation ? [conversation] : [])
+    }
     if (path === '/api/v2/formal/ontologies/ontology-1/agent/decision-simulations') return json(route, [{
       id: 'decision-run-1', ontologyId: 'ontology-1', ontologyReleaseId: 'release-1',
       conversationId: null, title: '补货策略推演', question: '未来两周应该维持现状还是提前补货',
@@ -212,6 +259,42 @@ test('智能助手顶栏只保留有色历史会话入口', async ({ page }) => 
   await expect(page.getByRole('dialog', { name: '历史会话' })).toBeVisible()
   await expect(page.getByRole('button', { name: '新建' })).toBeVisible()
   await expect(historyButton).toHaveCSS('background-color', 'rgb(204, 251, 241)')
+})
+
+test('历史会话可从删除按钮左侧导出完整 JSON', async ({ page }) => {
+  await mockAgentHeader(page, { withConversation: true })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+  await page.getByLabel('选择本体').selectOption('ontology-1')
+  await page.getByTestId('agent-session-history-button').click()
+
+  const dialog = page.getByRole('dialog', { name: '历史会话' })
+  const exportButton = dialog.getByRole('button', {
+    name: `导出会话 ${conversation.title} 的完整 JSON`,
+  })
+  const deleteButton = dialog.getByRole('button', { name: `删除会话 ${conversation.title}` })
+  await expect(exportButton).toBeVisible()
+  await expect(deleteButton).toBeVisible()
+
+  const exportBox = await exportButton.boundingBox()
+  const deleteBox = await deleteButton.boundingBox()
+  expect(exportBox).not.toBeNull()
+  expect(deleteBox).not.toBeNull()
+  expect(exportBox!.x).toBeLessThan(deleteBox!.x)
+
+  const downloadPromise = page.waitForEvent('download')
+  await exportButton.click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('推演一项未来决策-12345678.json')
+
+  const downloadPath = await download.path()
+  expect(downloadPath).not.toBeNull()
+  const payload = JSON.parse(await readFile(downloadPath!, 'utf8'))
+  expect(payload.schemaVersion).toBe('openontology.agent-conversation.v1')
+  expect(payload.conversation.id).toBe(conversation.id)
+  expect(payload.messages).toHaveLength(1)
+  expect(payload.messages[0].content).toBe('请比较未来方案')
+  await expect(page.getByText('会话记录已导出')).toBeVisible()
 })
 
 test('智能对话与本体拓扑图沿用业务场景画布背景', async ({ page }) => {

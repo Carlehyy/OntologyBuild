@@ -13,7 +13,7 @@ import pytest
 
 
 def test_large_visual_tool_result_keeps_structured_graph():
-    from app.ontologies.agent_runtime.orchestrator import _display_result
+    from app.ontologies.agent_runtime.orchestrator import _audit_result, _display_result
 
     nodes = [{
         "id": f"instance:i-{index}",
@@ -55,6 +55,12 @@ def test_large_visual_tool_result_keeps_structured_graph():
     assert "properties" not in displayed["edges"][0]
     assert "steps" not in displayed["impacts"][0]["path"]
     assert len(json.dumps(displayed, ensure_ascii=False)) <= 18000
+
+    audited = _audit_result(result)
+    assert len(audited["nodes"]) == 120
+    assert len(audited["edges"]) == 119
+    assert audited["nodes"][0]["preview"][0]["value"] == "x" * 300
+    assert audited["impacts"][0]["path"]["steps"][0]["blob"] == "z" * 300
 
 
 def test_agent_stream_can_close_without_yielding_after_generator_exit(monkeypatch):
@@ -521,8 +527,67 @@ def test_chat_turn_with_fake_llm(client, auth_headers, modeled_ontology, db,
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[1]["steps"][0]["tool"] == "search_objects"
 
+    r = client.get(
+        f"{_fo(oid)}/agent/conversations/{conv_id}/export",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    exported = r.json()["data"]
+    assert exported["schemaVersion"] == "openontology.agent-conversation.v1"
+    assert exported["conversation"]["id"] == conv_id
+    assert exported["ontology"]["id"] == oid
+    assert [message["role"] for message in exported["messages"]] == ["user", "assistant"]
+    assert exported["messages"][1]["steps"][0]["tool"] == "search_objects"
+    assert exported["messages"][1]["model"] == "fake-model"
+    assert exported["messages"][1]["tokenUsage"]["outputTokens"] == 13
+    assert exported["summary"]["messageCount"] == 2
+    assert exported["summary"]["toolStepCount"] == 1
+    assert exported["summary"]["contentCompleteness"]["messageHistory"] == "complete"
+
     r = client.get(f"{_fo(oid)}/agent/conversations", headers=auth_headers)
     assert any(c["id"] == conv_id for c in r.json()["data"])
+
+
+def test_conversation_export_is_not_limited_to_history_replay_window(
+    client, auth_headers, modeled_ontology, db, admin_user,
+):
+    from app.ontologies.agent_runtime.models import AgentConversation, AgentMessage
+
+    conversation = AgentConversation(
+        ontology_id=modeled_ontology["id"],
+        user_id=admin_user.id,
+        title="超长审计会话",
+    )
+    db.add(conversation)
+    db.flush()
+    db.add_all([
+        AgentMessage(
+            id=f"message-{index:03d}",
+            conversation_id=conversation.id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"消息 {index}",
+        )
+        for index in range(205)
+    ])
+    db.commit()
+
+    detail = client.get(
+        f"{_fo(modeled_ontology['id'])}/agent/conversations/{conversation.id}",
+        headers=auth_headers,
+    )
+    assert detail.status_code == 200
+    assert len(detail.json()["data"]["messages"]) == 200
+
+    exported = client.get(
+        f"{_fo(modeled_ontology['id'])}/agent/conversations/{conversation.id}/export",
+        headers=auth_headers,
+    )
+    assert exported.status_code == 200, exported.text
+    payload = exported.json()["data"]
+    assert len(payload["messages"]) == 205
+    assert payload["summary"]["messageCount"] == 205
+    assert payload["messages"][0]["content"] == "消息 0"
+    assert payload["messages"][-1]["content"] == "消息 204"
 
 
 def test_chat_without_model_config(client, auth_headers, modeled_ontology):

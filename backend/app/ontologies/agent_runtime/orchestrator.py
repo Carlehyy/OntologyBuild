@@ -12,8 +12,8 @@ proposals / token 用量）持久化为 AgentMessage —— 审计与回放的�
   {"type": "error",  "message"}
   {"type": "done"}
 
-step.result 是工具原始输出（过大自动截断），供前端「展开查看工具输入/输出」；
-它随 steps 一起持久化，历史消息回放时同样可查。
+step.result 是适合前端展示的工具输出（过大自动截断）；持久化时 result 保存完整
+审计结果，displayResult 仅在需要截断展示时保存，兼顾完整导出与历史回放性能。
 """
 from __future__ import annotations
 
@@ -212,7 +212,7 @@ def _graph_display_result(result: dict) -> dict:
 
 
 def _display_result(result: dict):
-    """给前端「查看工具输出」用的结果；过大则截断，避免消息体与 DB 膨胀。"""
+    """给前端「查看工具输出」用的结果；过大则截断，避免 SSE 与页面膨胀。"""
     try:
         payload = json.dumps(result, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001
@@ -226,6 +226,14 @@ def _display_result(result: dict):
         "_note": f"结果较大（约 {len(payload)} 字符），此处仅展示前 {_RESULT_DISPLAY_CAP} 字符预览。",
         "preview": payload[:_RESULT_DISPLAY_CAP],
     }
+
+
+def _audit_result(result: dict):
+    """把完整工具结果规范化为 JSON，供持久化与后续审计导出。"""
+    try:
+        return json.loads(json.dumps(result, ensure_ascii=False, default=str))
+    except Exception:  # noqa: BLE001
+        return {"_serializationError": "工具结果无法序列化"}
 
 
 def _history_digest(older: list) -> Optional[str]:
@@ -359,12 +367,16 @@ def _run(db: Session, ontology_id: str, user, question: str,
                 result = {"error": f"工具内部错误: {e}"}
             duration = int((time.time() - started) * 1000)
 
+            display_result = _display_result(result)
             step = {"tool": tc["name"], "arguments": tc.get("arguments") or {},
                     "summary": _summarize(tc["name"], result), "durationMs": duration,
-                    "result": _display_result(result)}
+                    "result": display_result}
             if "error" in result:
                 step["error"] = result["error"]
-            steps.append(step)
+            audit_step = {**step, "result": _audit_result(result)}
+            if display_result is not result:
+                audit_step["displayResult"] = display_result
+            steps.append(audit_step)
             yield {"type": "step", **step}
 
             payload = json.dumps(result, ensure_ascii=False, default=str)
