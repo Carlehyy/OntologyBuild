@@ -348,13 +348,12 @@
 .dmc-preview-panel {
   position: absolute;
   z-index: 12;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-height: 272px;
-  border: 0;
-  border-top: 1px solid #cedbdd;
-  border-radius: 0;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  max-height: min(272px,calc(100% - 24px));
+  border: 1px solid #cedbdd;
+  border-radius: 10px;
   overflow: hidden;
   color: #52606c;
   background: rgba(255,255,255,.985);
@@ -410,7 +409,8 @@
 .dmc-tutorial-card > footer > span { display: flex; gap: 5px; }
 .dmc-tutorial-card > footer > span button { height: 31px; padding: 0 10px; border: 0; border-radius: 8px; color: #77848f; background: transparent; font-size: 11px; }
 .dmc-tutorial-card > footer > span button:hover { background: #f2f5f5; }
-.dmc-tutorial-card > footer .dmc-tutorial-next { padding: 0 13px; display: flex; align-items: center; gap: 5px; color: #fff; background: linear-gradient(135deg,#7380cf,#5f6cc0); box-shadow: 0 5px 12px rgba(101,114,197,.18); font-weight: 700; }
+.dmc-tutorial-card > footer .dmc-tutorial-next { padding: 0 13px; display: flex; align-items: center; gap: 5px; color: #fff; background: linear-gradient(135deg,#7380cf,#5f6cc0); box-shadow: 0 5px 12px rgba(101,114,197,.18); font-weight: 700; transition: background .15s ease, box-shadow .15s ease, transform .15s ease; }
+.dmc-tutorial-card > footer > span .dmc-tutorial-next:hover { color: #fff; background: linear-gradient(135deg,#6876ca,#5361b6); box-shadow: 0 7px 15px rgba(83,97,182,.28); transform: translateY(-1px); }
 
 @media (max-width:1150px) {
   .dmc-workbench { grid-template-columns: 224px minmax(380px,1fr) 240px; }

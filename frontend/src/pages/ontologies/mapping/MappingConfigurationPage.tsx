@@ -564,17 +564,31 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   }
   const clearConnectionFocus = () => { setFocusedNodeId(null); setFocusedEdgeId(null); setHoveredEdgeId(null) }
   const clearCanvas = () => { if (editable && nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null); clearConnectionFocus() } }
-  const leaveWorkspace = () => {
-    if (dirty && !window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')) return
-    if (graphWorkspace) {
-      navigate(versionId
-        ? `/ontologies/${ontologyId}/graph?versionId=${encodeURIComponent(versionId)}`
-        : `/ontologies/${ontologyId}/graph`)
+  const confirmLeavingWorkspace = () => (
+    !dirty || window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')
+  )
+  const modelStructurePath = versionId
+    ? `/ontologies/${ontologyId}/graph?versionId=${encodeURIComponent(versionId)}`
+    : `/ontologies/${ontologyId}/graph`
+  const mappingOverviewPath = versionId
+    ? `/ontologies/${ontologyId}?tab=versions`
+    : `/ontologies/${ontologyId}?tab=data-mapping`
+  const returnToPreviousPage = () => {
+    if (!confirmLeavingWorkspace()) return
+    const historyIndex = window.history.state?.idx
+    if (typeof historyIndex === 'number' && historyIndex > 0) {
+      navigate(-1)
       return
     }
-    navigate(versionId
-      ? `/ontologies/${ontologyId}?tab=versions`
-      : `/ontologies/${ontologyId}?tab=data-mapping`)
+    navigate(graphWorkspace ? modelStructurePath : mappingOverviewPath)
+  }
+  const leaveWorkspace = () => {
+    if (!confirmLeavingWorkspace()) return
+    if (graphWorkspace) {
+      navigate(modelStructurePath)
+      return
+    }
+    navigate(mappingOverviewPath)
   }
   const closeTutorial = () => { localStorage.setItem(`mapping-tutorial:${ontologyId}`, 'seen'); setTutorialStep(null) }
   const tutorial = [
@@ -594,7 +608,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   return (
     <div className={`dmc-page ${editable ? '' : 'dmc-page--readonly'}`} data-testid="mapping-workspace" data-workspace-mode={data.workspaceMode || 'release'}>
       <header className="dmc-header">
-        <div className="dmc-brand"><button onClick={leaveWorkspace} aria-label={graphWorkspace ? '返回模型结构' : '返回数据映射'}><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
+        <div className="dmc-brand"><button onClick={returnToPreviousPage} aria-label="返回上一页" title="返回上一页"><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
         <label className="dmc-global-search"><Search size={14} /><input placeholder="搜索画布节点、数据集或本体属性…" onChange={event => { setLeftSearch(event.target.value); setRightSearch(event.target.value) }} /></label>
         <div className="dmc-header-actions"><button className="dmc-model-switch" onClick={leaveWorkspace} title="返回模型结构"><Boxes size={15} /><span>模型结构</span></button><button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button>{editable && <button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button>}<span className="dmc-divider" />{editable ? <button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button> : <span className="dmc-readonly-badge"><Eye size={14} />只读快照</span>}</div>
       </header>

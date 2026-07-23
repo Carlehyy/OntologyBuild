@@ -51,6 +51,13 @@ async function mockMappingPreview(page: Page) {
         is_primary_key: index === 0, sample_values: [`值 ${index + 1}`],
       })),
     })
+    if (url.pathname === '/api/v2/datasets/dataset-wide/preview') return ok({
+      columns,
+      total_rows: 2,
+      rows: Array.from({ length: 2 }, (_, rowIndex) => Object.fromEntries(
+        columns.map((column, columnIndex) => [column, `R${rowIndex + 1}-C${columnIndex + 1}`]),
+      )),
+    })
     if (url.pathname === '/api/v2/curated/dataset-wide/preview') {
       const offset = Number(url.searchParams.get('offset') || 0)
       const limit = Number(url.searchParams.get('limit') || 20)
@@ -107,7 +114,7 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await expect(dialog).toHaveCount(0)
 })
 
-test('数据映射按钮进入图谱编辑器使用的映射工作台', async ({ page }) => {
+test('数据映射按钮进入映射工作台，左上角按钮返回上一页', async ({ page }) => {
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
@@ -117,4 +124,33 @@ test('数据映射按钮进入图谱编辑器使用的映射工作台', async ({
 
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping$/)
   await expect(page.getByTestId('mapping-workspace')).toBeVisible()
+  const tutorialNextButton = page.getByRole('button', { name: '下一步' })
+  await expect(tutorialNextButton).toHaveCSS('background-image', /linear-gradient/)
+  await tutorialNextButton.hover()
+  await expect(tutorialNextButton).toHaveCSS('background-image', /linear-gradient/)
+  await expect(tutorialNextButton).toHaveCSS('color', 'rgb(255, 255, 255)')
+  await page.locator('.dmc-tutorial header button').click()
+
+  await page.locator('.dmc-eye').first().click()
+  const previewPanel = page.locator('.dmc-preview-panel')
+  await expect(previewPanel).toBeVisible()
+  await expect(previewPanel).toHaveCSS('bottom', '12px')
+  await expect(previewPanel).toHaveCSS('border-radius', '10px')
+  await expect.poll(async () => {
+    const canvasBox = await page.locator('.dmc-canvas-wrap').boundingBox()
+    const previewBox = await previewPanel.boundingBox()
+    if (!canvasBox || !previewBox) return null
+    return Math.round(canvasBox.y + canvasBox.height - previewBox.y - previewBox.height)
+  }).toBe(12)
+
+  await page.getByRole('button', { name: '返回上一页' }).click()
+  await expect(page).toHaveURL(/\/ontologies\/ontology-preview\?tab=data-mapping$/)
+  await expect(
+    page.getByTestId('ontology-detail-header').getByRole('button', { name: '数据映射', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
+
+  await page.locator('.dmo-primary-button').click()
+  await expect(page.getByTestId('mapping-workspace')).toBeVisible()
+  await page.getByRole('button', { name: '模型结构', exact: true }).click()
+  await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph$/)
 })

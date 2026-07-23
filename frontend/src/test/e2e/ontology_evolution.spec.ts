@@ -298,7 +298,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '清除连线聚焦' }).click()
   await expect(page.getByTestId('mapping-focus-guide')).toContainText('连线追踪')
   await expect(page.locator('.dmc-canvas-stats')).toContainText('字段映射 4')
-  await page.getByRole('button', { name: '返回模型结构' }).first().click()
+  await page.getByRole('button', { name: '模型结构', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}$`))
   await page.goto(`/#/ontologies/${ontology.id}`)
   await page.getByRole('button', { name: '查看历史版本' }).click()
