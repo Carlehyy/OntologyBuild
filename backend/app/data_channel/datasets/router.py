@@ -39,6 +39,14 @@ def _check_upload_file(filename: str | None, content: bytes) -> str:
     return ext
 
 
+def _check_manual_import_extension(filename: str | None) -> str:
+    """Validate the lightweight upload metadata before streaming to staging."""
+    ext = (filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in {"csv", "xlsx", "xls"}:
+        raise HTTPException(400, "在线新建表格仅支持 CSV、XLSX 或 XLS 文件")
+    return ext
+
+
 def _estimate_rowcount(content: bytes, ext: str) -> int | None:
     """估算数据行数（CSV/Excel/JSON）。
 
@@ -168,6 +176,76 @@ async def upload_dataset(
     return {"data": {"id": ds.id, "name": ds.name, "kind": ds.kind, "dataset_type": "raw_dataset", "schema_type": "tabular"}}
 
 
+@router.post("/imports", status_code=202)
+async def start_dataset_import(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """Stream one spreadsheet to an isolated directory and queue server parsing."""
+    import aiofiles
+    from app.config import settings
+    from app.data_channel.datasets.import_jobs import (
+        create_import_job, remove_job, source_path, update_manifest, update_status)
+    from app.tasks.v2.dataset_import import inspect_dataset_import
+
+    ext = _check_manual_import_extension(file.filename)
+    manifest = create_import_job(
+        owner_id=current_user.id,
+        filename=file.filename or f"upload.{ext}",
+        extension=ext,
+    )
+    job_id = manifest["job_id"]
+    target = source_path(job_id, ext)
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    total = 0
+    try:
+        async with aiofiles.open(target, "wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        413, f"文件超过大小限制 {settings.max_upload_mb}MB")
+                await output.write(chunk)
+        update_manifest(job_id, file_size=total)
+        status = update_status(
+            job_id, status="queued", file_size=total, error=None)
+        try:
+            inspect_dataset_import.delay(job_id)
+        except Exception as exc:
+            update_status(
+                job_id, status="failed", error=f"后台解析任务提交失败：{exc}")
+            raise HTTPException(503, "后台解析服务暂时不可用，请稍后重试") from exc
+        return {"data": status}
+    except HTTPException:
+        if total > max_bytes:
+            remove_job(job_id)
+        raise
+    except Exception:
+        remove_job(job_id)
+        raise
+    finally:
+        await file.close()
+
+
+@router.get("/imports/{job_id}")
+def get_dataset_import(
+    job_id: str,
+    current_user=Depends(get_current_user),
+):
+    from app.data_channel.datasets.import_jobs import (
+        assert_job_owner, read_status)
+
+    try:
+        assert_job_owner(job_id, current_user.id)
+        return {"data": read_status(job_id)}
+    except FileNotFoundError:
+        raise HTTPException(404, "导入任务不存在或已被清理")
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 class TableColumnDef(BaseModel):
     name: str
     display_name: str = ""
@@ -260,6 +338,44 @@ def _validate_manual_rows(rows: list[dict], schema: dict, *,
             rows, schema.get("columns_typed"), dataset_name=dataset_name)
     except LakeGateError as exc:
         raise HTTPException(400, str(exc))
+
+
+@router.post("/imports/{job_id}/commit", status_code=202)
+def commit_dataset_import_job(
+    job_id: str,
+    body: CreateTableRequest,
+    current_user=Depends(get_current_user),
+):
+    from app.data_channel.datasets.import_jobs import (
+        assert_job_owner, read_status, update_status, write_metadata)
+    from app.tasks.v2.dataset_import import commit_dataset_import
+
+    try:
+        assert_job_owner(job_id, current_user.id)
+        status = read_status(job_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "导入任务不存在或已被清理")
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    if status.get("status") != "ready":
+        raise HTTPException(
+            409, f"导入任务当前状态为 {status.get('status') or 'unknown'}，不能提交")
+
+    # Validate the small field contract synchronously; full-file validation stays
+    # in Celery and therefore never blocks the API worker.
+    _build_manual_schema(body, origin="upload")
+    write_metadata(job_id, body.model_dump())
+    queued = update_status(job_id, status="import_queued", error=None)
+    try:
+        commit_dataset_import.delay(job_id)
+    except Exception as exc:
+        update_status(
+            job_id, status="ready", error=f"后台导入任务提交失败：{exc}")
+        raise HTTPException(503, "后台导入服务暂时不可用，请稍后重试") from exc
+    return {"data": queued}
 
 
 @router.post("/create-table", status_code=201)

@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2, ChevronLeft, ChevronRight, Eye, FileSpreadsheet,
   KeyRound, Loader2, Plus, Table2, Trash2, Upload, X, XCircle,
 } from 'lucide-react'
-import datasetsApi, { FIELD_TYPE_LABELS, type CreateTableResult } from '@/api/v2/datasets'
+import datasetsApi, {
+  FIELD_TYPE_LABELS,
+  type CreateTableResult,
+  type DatasetImportJob,
+  type DatasetImportStatus,
+} from '@/api/v2/datasets'
 import { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 
 const PREVIEW_PAGE_SIZES = [20, 50, 100, 200] as const
@@ -32,31 +36,6 @@ const cellText = (value: unknown) => {
   return String(value)
 }
 
-const inferValueType = (value: string) => {
-  const text = value.trim()
-  if (!text) return null
-  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(text) || /^\d{8}$/.test(text)) return 'timestamp'
-  if (['true', 'false', 'yes', 'no', '1', '0'].includes(text.toLowerCase())) return 'boolean'
-  if (/^[+-]?[\d,]+$/.test(text)) return 'integer'
-  if (Number.isFinite(Number(text.replaceAll(',', '')))) return 'float'
-  try {
-    const parsed = JSON.parse(text)
-    if (parsed && typeof parsed === 'object') return 'json'
-  } catch { /* 普通文本 */ }
-  return 'string'
-}
-
-const inferColumnType = (rows: string[][], columnIndex: number) => {
-  const votes: Record<string, number> = {}
-  rows.slice(0, 50).forEach(row => {
-    const type = inferValueType(row[columnIndex] ?? '')
-    if (type) votes[type] = (votes[type] ?? 0) + 1
-  })
-  const entries = Object.entries(votes)
-  if (!entries.length) return 'string'
-  return entries.sort((left, right) => right[1] - left[1])[0][0]
-}
-
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -74,7 +53,10 @@ export default function CreateTableModal({ onClose, onCreated }: {
   const [name, setName] = useState('')
   const [columns, setColumns] = useState<ColDraft[]>([])
   const [rows, setRows] = useState<string[][]>([])
+  const [rowCount, setRowCount] = useState(0)
   const [sheetName, setSheetName] = useState('')
+  const [importJobId, setImportJobId] = useState('')
+  const [importStatus, setImportStatus] = useState<DatasetImportStatus | null>(null)
   const [parsing, setParsing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -98,57 +80,94 @@ export default function CreateTableModal({ onClose, onCreated }: {
     previewPage * previewPageSize,
   ), [previewPage, previewPageSize, rows])
 
-  const parseFile = async (selected: File): Promise<boolean> => {
-    setParsing(true)
-    setError('')
-    setNotice('')
-    try {
-      const workbook = XLSX.read(await selected.arrayBuffer(), { type: 'array' })
-      const firstSheetName = workbook.SheetNames[0]
-      if (!firstSheetName) throw new Error('表格中没有可读取的工作表')
-      const matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheetName], {
-        header: 1,
-        defval: '',
-        raw: false,
-        blankrows: false,
-      })
-      if (!matrix.length) throw new Error('表格为空，请至少保留一行列名')
-      const identifiers = (matrix[0] ?? []).map(cellText).map(value => value.trim())
-      if (!identifiers.length || identifiers.every(identifier => !identifier)) {
-        throw new Error('未识别到列名，请把第一行设置为表头')
-      }
-      const blankIndex = identifiers.findIndex(identifier => !identifier)
-      if (blankIndex >= 0) throw new Error(`第 ${blankIndex + 1} 列的列名为空，请先补全表头`)
-      const duplicate = identifiers.find((identifier, index) => identifiers.indexOf(identifier) !== index)
-      if (duplicate) throw new Error(`列名「${duplicate}」重复，请先修改表格表头`)
-
-      const parsedRows = matrix.slice(1).map(raw => identifiers.map((_, index) => cellText(raw[index])))
-      setFile(selected)
-      setBlankMode(false)
-      setName(withoutExtension(selected.name))
-      setRows(parsedRows)
-      setSheetName(firstSheetName)
-      setColumns(identifiers.map((identifier, index) => ({
-        name: identifier,
-        displayName: identifier,
-        type: inferColumnType(parsedRows, index),
+  const applyImportJob = useCallback((job: DatasetImportJob) => {
+    setImportStatus(job.status)
+    if (job.status === 'ready') {
+      const nextColumns = job.columns ?? []
+      setColumns(nextColumns.map(column => ({
+        name: column.name,
+        displayName: column.name,
+        type: column.type || 'string',
         pk: false,
         nullable: true,
       })))
+      setRows((job.preview_rows ?? []).map(row =>
+        nextColumns.map(column => cellText(row[column.name]))))
+      setRowCount(job.rowcount ?? 0)
+      setSheetName(job.sheet_name || '第一个工作表')
       setPreviewPage(1)
       setPreviewOpen(false)
-      if (workbook.SheetNames.length > 1) {
-        setNotice(`检测到 ${workbook.SheetNames.length} 个工作表，本次仅导入第一个工作表「${firstSheetName}」`)
+      setParsing(false)
+      setSubmitting(false)
+      setNotice(`后端已解析第一个工作表「${job.sheet_name || '第一个工作表'}」，共 ${job.rowcount ?? 0} 行`)
+      return
+    }
+    if (job.status === 'completed' && job.result) {
+      setParsing(false)
+      setSubmitting(false)
+      onCreated(job.result)
+      return
+    }
+    if (job.status === 'failed') {
+      setParsing(false)
+      setSubmitting(false)
+      setError(job.error || '表格解析失败')
+    }
+  }, [onCreated])
+
+  useEffect(() => {
+    if (!importJobId || !['queued', 'parsing', 'import_queued', 'importing'].includes(importStatus ?? '')) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const job = await datasetsApi.importStatus(importJobId)
+        if (!cancelled) applyImportJob(job)
+      } catch (pollError) {
+        if (!cancelled) {
+          const detail = (pollError as { detail?: string; message?: string })?.detail
+          setParsing(false)
+          setSubmitting(false)
+          setError(detail || '无法查询后台导入进度，请稍后重试')
+        }
       }
+    }
+    const timer = window.setInterval(() => { void poll() }, 1200)
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [applyImportJob, importJobId, importStatus])
+
+  const uploadForServerParsing = async (selected: File): Promise<boolean> => {
+    setParsing(true)
+    setError('')
+    setNotice('')
+    setFile(selected)
+    setBlankMode(false)
+    setName(withoutExtension(selected.name))
+    setRows([])
+    setRowCount(0)
+    setColumns([])
+    setSheetName('')
+    setImportJobId('')
+    setImportStatus('uploading')
+    try {
+      const job = await datasetsApi.startImport(selected)
+      setImportJobId(job.job_id)
+      applyImportJob(job)
       return true
     } catch (parseError) {
       setFile(null)
       setRows([])
+      setRowCount(0)
       setColumns([])
-      setError(parseError instanceof Error ? parseError.message : '表格解析失败')
-      return false
-    } finally {
+      setImportJobId('')
+      setImportStatus(null)
+      const detail = (parseError as { detail?: string; message?: string })?.detail
+      setError(detail || (parseError instanceof Error ? parseError.message : '表格上传失败'))
       setParsing(false)
+      return false
     }
   }
 
@@ -165,7 +184,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
     const ignoredMessage = incoming.length > 1
       ? `一次只能保留一个表格，已选用「${accepted[0].name}」，其余 ${incoming.length - 1} 个文件已忽略`
       : ''
-    void parseFile(accepted[0]).then(success => {
+    void uploadForServerParsing(accepted[0]).then(success => {
       if (success && ignoredMessage) setNotice(ignoredMessage)
     })
   }
@@ -173,9 +192,14 @@ export default function CreateTableModal({ onClose, onCreated }: {
   const removeFile = () => {
     setFile(null)
     setRows([])
+    setRowCount(0)
     setColumns([])
     setName('')
     setSheetName('')
+    setImportJobId('')
+    setImportStatus(null)
+    setParsing(false)
+    setSubmitting(false)
     setPreviewOpen(false)
     setNotice('')
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -196,6 +220,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
   const validate = () => {
     if (!file && !blankMode) return '请上传一个表格，或选择直接定义空表'
+    if (file && importStatus !== 'ready') return '请等待后端完成表格解析'
     if (!name.trim()) return '请填写数据集名称'
     const configured = columns.filter(column => column.name.trim())
     if (!configured.length) return '至少需要定义一列'
@@ -226,9 +251,13 @@ export default function CreateTableModal({ onClose, onCreated }: {
     setError('')
     try {
       const result = file
-        ? await datasetsApi.uploadConfigured(file, payload)
+        ? await datasetsApi.commitImport(importJobId, payload)
         : await datasetsApi.createTable(payload)
-      onCreated(result)
+      if (file) {
+        applyImportJob(result as DatasetImportJob)
+      } else {
+        onCreated(result as CreateTableResult)
+      }
     } catch (submitError) {
       const detail = (submitError as { detail?: string; message?: string })?.detail
       setError(detail || '创建失败，请检查字段设置后重试')
@@ -264,7 +293,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
             {file ? (
               <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3">
                 <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-100 text-emerald-700"><FileSpreadsheet size={18} /></span>
-                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-800">{file.name}</p><p className="mt-0.5 text-[11px] text-slate-400">{formatBytes(file.size)} · 工作表「{sheetName}」 · {columns.length} 列 · {rows.length} 行</p></div>
+                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-800">{file.name}</p><p className="mt-0.5 text-[11px] text-slate-400">{formatBytes(file.size)}{sheetName ? ` · 工作表「${sheetName}」 · ${columns.length} 列 · ${rowCount} 行` : ' · 正在等待后端解析'}</p></div>
                 <button type="button" onClick={() => fileInputRef.current?.click()} className="text-xs font-medium text-teal-700 hover:text-teal-900">替换</button>
                 <button type="button" onClick={removeFile} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600" aria-label="移除当前表格"><Trash2 size={14} /></button>
               </div>
@@ -276,7 +305,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                 className={`flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${dragging ? 'border-teal-400 bg-teal-50' : 'border-slate-300 bg-slate-50/50 hover:border-teal-300 hover:bg-teal-50/40'}`}
                 onClick={() => fileInputRef.current?.click()}>
                 {parsing ? <Loader2 size={20} className="mb-2 animate-spin text-teal-700" /> : <Upload size={20} className="mb-2 text-teal-700" />}
-                <p className="text-sm font-medium text-slate-700">{parsing ? '正在解析表格…' : '拖入表格，或点击选择文件'}</p>
+                <p className="text-sm font-medium text-slate-700">{parsing ? '正在上传并等待后端解析…' : '拖入表格，或点击选择文件'}</p>
                 <p className="mt-1 text-[11px] text-slate-400">同时选择多个文件时只保留第一个，其余文件自动忽略</p>
               </div>
             )}
@@ -321,7 +350,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
               {file && (
                 <section className="px-5 py-4">
-                  <button type="button" onClick={() => setPreviewOpen(current => !current)} className="inline-flex h-8 items-center gap-1.5 text-xs font-medium text-teal-700 hover:text-teal-900"><Eye size={13} />{previewOpen ? '收起数据预览' : `查看全部数据（${rows.length} 行）`}</button>
+                  <button type="button" onClick={() => setPreviewOpen(current => !current)} disabled={!rows.length} className="inline-flex h-8 items-center gap-1.5 text-xs font-medium text-teal-700 hover:text-teal-900 disabled:opacity-40"><Eye size={13} />{previewOpen ? '收起数据样例' : `查看数据样例（前 ${rows.length} 行）`}</button>
                   {previewOpen && <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
                     <div className="max-h-72 overflow-auto"><table className="min-w-max text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50"><tr><th className="px-3 py-2 text-left font-medium text-slate-400">#</th>{columns.map(column => <th key={column.name} className="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600">{column.displayName && column.displayName !== column.name ? `${column.displayName}（${column.name}）` : column.name}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{previewRows.map((row, rowIndex) => <tr key={`${previewPage}-${rowIndex}`} className="hover:bg-slate-50/60"><td className="px-3 py-2 tabular-nums text-slate-300">{(previewPage - 1) * previewPageSize + rowIndex + 1}</td>{columns.map((column, columnIndex) => <td key={column.name} className="whitespace-nowrap px-3 py-2 text-slate-600" title={row[columnIndex]}>{row[columnIndex]}</td>)}</tr>)}</tbody></table></div>
                     <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-xs text-slate-500"><label className="flex items-center gap-1">每页<select value={previewPageSize} onChange={event => { setPreviewPageSize(Number(event.target.value)); setPreviewPage(1) }} className="h-7 rounded-md border border-slate-200 bg-white px-1.5 outline-none">{PREVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select>条</label><button type="button" onClick={() => setPreviewPage(page => Math.max(1, page - 1))} disabled={previewPage <= 1} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronLeft size={12} /></button><span className="min-w-20 text-center tabular-nums">{previewPage} / {previewPages}</span><button type="button" onClick={() => setPreviewPage(page => Math.min(previewPages, page + 1))} disabled={previewPage >= previewPages} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronRight size={12} /></button></div>

@@ -92,6 +92,29 @@ export interface CreateTableResult {
   source: 'upload' | 'manual'
 }
 
+export type DatasetImportStatus =
+  | 'uploading'
+  | 'queued'
+  | 'parsing'
+  | 'ready'
+  | 'import_queued'
+  | 'importing'
+  | 'completed'
+  | 'failed'
+
+export interface DatasetImportJob {
+  job_id: string
+  status: DatasetImportStatus
+  filename: string
+  file_size: number
+  sheet_name?: string
+  rowcount?: number
+  columns?: { name: string; type: string }[]
+  preview_rows?: Record<string, unknown>[]
+  result?: CreateTableResult
+  error?: string | null
+}
+
 export interface UploadVersionResult {
   dataset_id: string
   dataset_name: string
@@ -145,6 +168,25 @@ const datasetsApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+
+  /** 在线建表专用：浏览器只上传文件，首工作表由 Celery 在后端异步解析 */
+  startImport: (file: File): Promise<DatasetImportJob> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return apiClientV2.post('/datasets/imports', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  importStatus: (jobId: string): Promise<DatasetImportJob> =>
+    apiClientV2.get(`/datasets/imports/${jobId}`),
+
+  /** 字段确认后异步完成全量契约校验与现有 DatasetVersion 持久化 */
+  commitImport: (
+    jobId: string,
+    payload: { name: string; columns: CreateTableColumn[]; primary_key?: string },
+  ): Promise<DatasetImportJob> =>
+    apiClientV2.post(`/datasets/imports/${jobId}/commit`, payload),
 
   /** 给已有数据集上传新版本（数据集 ID 不变，流水线绑定不受影响） */
   uploadVersion: (datasetId: string, file: File): Promise<UploadVersionResult> => {

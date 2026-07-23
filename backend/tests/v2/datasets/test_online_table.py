@@ -260,6 +260,107 @@ def test_configured_xls_upload_accepts_integer_cells(
     ]
 
 
+def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_change(
+    api, auth_headers, db, monkeypatch, tmp_path,
+):
+    """在线建表只上传文件；解析和最终发布都由后台任务完成。"""
+    import openpyxl
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database as database_module
+    from app.config import settings
+    from app.tasks.v2 import dataset_import as import_tasks
+
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(
+        import_tasks.inspect_dataset_import,
+        "delay",
+        lambda job_id: import_tasks.inspect_dataset_import.run(job_id),
+    )
+    task_session = sessionmaker(bind=db.get_bind())
+    monkeypatch.setattr(database_module, "SessionLocal", task_session)
+    monkeypatch.setattr(
+        import_tasks.commit_dataset_import,
+        "delay",
+        lambda job_id: import_tasks.commit_dataset_import.run(job_id),
+    )
+
+    workbook = openpyxl.Workbook()
+    first = workbook.active
+    first.title = "默认首表"
+    first.append(["id", "name", "quantity"])
+    first.append(["A1", "泵机", 10])
+    second = workbook.create_sheet("不导入")
+    second.append(["wrong"])
+    second.append(["SHOULD-NOT-IMPORT"])
+    workbook.active = 1
+    content = io.BytesIO()
+    workbook.save(content)
+    workbook.close()
+
+    started = api.post(
+        "/api/v2/datasets/imports",
+        files={"file": (
+            "设备台账.xlsx",
+            io.BytesIO(content.getvalue()),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )},
+        headers=auth_headers,
+    )
+    assert started.status_code == 202, started.text
+    job = started.json()["data"]
+    assert job["status"] == "queued"
+    inspected = api.get(
+        f"/api/v2/datasets/imports/{job['job_id']}",
+        headers=auth_headers,
+    )
+    assert inspected.status_code == 200
+    job = inspected.json()["data"]
+    assert job["status"] == "ready"
+    assert job["sheet_name"] == "默认首表"
+    assert job["rowcount"] == 1
+    assert [column["name"] for column in job["columns"]] == [
+        "id", "name", "quantity"]
+    assert job["preview_rows"] == [{"id": "A1", "name": "泵机", "quantity": 10}]
+
+    job_dir = tmp_path / "uploads" / "dataset-imports" / job["job_id"]
+    assert (job_dir / "source.xlsx").read_bytes() == content.getvalue()
+    assert (job_dir / "manifest.json").is_file()
+    assert (job_dir / "status.json").is_file()
+
+    committed = api.post(
+        f"/api/v2/datasets/imports/{job['job_id']}/commit",
+        json={
+            "name": "设备台账异步导入",
+            "columns": [
+                {"name": "id", "type": "string", "nullable": False},
+                {"name": "name", "type": "string", "nullable": False},
+                {"name": "quantity", "type": "integer", "nullable": True},
+            ],
+            "primary_key": "id",
+        },
+        headers=auth_headers,
+    )
+    assert committed.status_code == 202, committed.text
+
+    completed = api.get(
+        f"/api/v2/datasets/imports/{job['job_id']}",
+        headers=auth_headers,
+    )
+    assert completed.status_code == 200
+    result = completed.json()["data"]
+    assert result["status"] == "completed"
+    assert result["result"]["rowcount"] == 1
+    assert result["result"]["source"] == "upload"
+
+    preview = api.get(
+        f"/api/v2/datasets/{result['result']['id']}/preview",
+        headers=auth_headers,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["rows"] == [{"id": "A1", "name": "泵机", "quantity": 10}]
+
+
 def test_configured_upload_accepts_cr_only_csv_newlines(api, auth_headers):
     payload = {
         "name": "旧式换行 CSV",
