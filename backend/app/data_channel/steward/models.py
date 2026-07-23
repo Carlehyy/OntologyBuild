@@ -17,7 +17,9 @@ LLM 在授权工具边界内创建/编辑 n8n workflow。**数据管家负责创
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text
+from sqlalchemy import (
+    Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -115,6 +117,15 @@ class StewardConversation(Base):
     browser_source_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("v2_steward_browser_sources.id", ondelete="SET NULL"),
         nullable=True, index=True)
+
+    # 完整消息仍保留在 v2_steward_messages；以下字段只描述“本轮送给模型的上下文视图”。
+    # summary 覆盖最早的 N 条消息，working_memory 保存由服务端确认的实体 id、
+    # 最近工具观察等可校验状态。权限与生命周期规则始终来自 system prompt，
+    # 不允许由摘要或 working_memory 覆盖。
+    context_summary: Mapped[str] = mapped_column(Text, default="")
+    summary_message_count: Mapped[int] = mapped_column(Integer, default=0)
+    working_memory: Mapped[dict] = mapped_column(JSON, default=dict)
+    context_stats: Mapped[dict] = mapped_column(JSON, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

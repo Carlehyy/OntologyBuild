@@ -240,6 +240,11 @@ TOOL_DEFS: list[dict] = [
             "type": "object",
             "properties": {
                 "artifact_id": {"type": "string"},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "从第几个字符开始读取，默认 0；长文件按返回的 next_offset 继续分页",
+                },
                 "max_chars": {"type": "integer", "description": "最多返回字符数，默认 30000"},
             },
             "required": ["artifact_id"],
@@ -932,12 +937,25 @@ class ToolRunner:
         return {"files": rows, "count": len(rows),
                 "note": "所有路径均限制在当前会话；浏览器登录态和内部捕获日志不会出现在文件清单或打包结果中。"}
 
-    def tool_read_session_file(self, artifact_id: str, max_chars: int | None = None) -> dict:
+    def tool_read_session_file(
+        self,
+        artifact_id: str,
+        max_chars: int | None = None,
+        offset: int | None = None,
+    ) -> dict:
         cid = self._conversation()
         row, _ = workspace.require_file(cid, artifact_id)
-        text = workspace.extracted_text(cid, artifact_id, max_chars or 30_000)
+        start = max(0, int(offset or 0))
+        limit = max(1, min(int(max_chars or 30_000), 30_000))
+        text = workspace.extracted_text(
+            cid, artifact_id, limit, offset=start)
+        total = int(row.get("extractedChars") or 0)
+        next_offset = start + len(text)
+        truncated = next_offset < total
         return {"file": row, "content": text,
-                "truncated": len(text) >= (max_chars or 30_000),
+                "offset": start,
+                "next_offset": next_offset if truncated else None,
+                "truncated": truncated,
                 "note": None if text else "该文件没有可用的文本解析结果；仍可作为原文件下载。"}
 
     def tool_create_session_file(self, filename: str, content: str,

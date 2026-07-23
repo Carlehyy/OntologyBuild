@@ -14,12 +14,25 @@ Moonshot 等国内主流服务都兼容 OpenAI tools 协议，走 openai 分支�
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
 
 class LLMError(Exception):
     """LLM 调用失败 — 配置错误 / 网络 / provider 不支持工具调用等。"""
+
+
+_SECRET_ERROR = re.compile(
+    r"(?i)(?:bearer\s+[A-Za-z0-9._~+/=-]{10,}|"
+    r"(?:sk|api|token|secret)[-_][A-Za-z0-9._~+/=-]{10,})"
+)
+
+
+def _safe_error_message(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _SECRET_ERROR.sub("***", str(value))[:2_000]
 
 
 def _failure_status(exc: Exception) -> str:
@@ -52,7 +65,10 @@ def chat(call_kwargs: dict, messages: list[dict], tools: list[dict]) -> dict[str
         try:
             latency_ms = int((time.monotonic() - started) * 1000)
             if model_config_id:
-                _record_call(model_config_id, model_name, provider, status, latency_ms, error_msg)
+                _record_call(
+                    model_config_id, model_name, provider, status, latency_ms,
+                    _safe_error_message(error_msg),
+                )
         except Exception:
             pass  # 统计记录失败不影响主流程
 

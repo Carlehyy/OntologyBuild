@@ -64,6 +64,14 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         "inbox_outbox_events",
     }
     assert required <= set(inspector.get_table_names())
+    assert {
+        "context_summary",
+        "summary_message_count",
+        "working_memory",
+        "context_stats",
+    } <= {
+        c["name"] for c in inspector.get_columns("v2_steward_conversations")
+    }
     assert "task_id" in {c["name"] for c in inspector.get_columns("v2_pipeline_runs")}
     assert "created_by" in {
         c["name"] for c in inspector.get_columns("v2_pipeline_tasks")

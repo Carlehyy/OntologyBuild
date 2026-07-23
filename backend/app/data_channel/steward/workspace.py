@@ -274,29 +274,134 @@ def delete_file(conversation_id: str, artifact_id: str) -> None:
         _write_manifest(conversation_id, [item for item in rows if item.get("id") != artifact_id])
 
 
-def extracted_text(conversation_id: str, artifact_id: str, cap: int = 40_000) -> str:
+def extracted_text(
+    conversation_id: str,
+    artifact_id: str,
+    cap: int = 40_000,
+    *,
+    offset: int = 0,
+) -> str:
     require_file(conversation_id, artifact_id)
     path = _within(conversation_id, f".meta/extracted/{artifact_id}.md")
     if not path.exists():
         return ""
-    return path.read_text("utf-8", errors="replace")[: max(1, min(cap, _TEXT_CAP))]
+    start = max(0, int(offset or 0))
+    limit = max(1, min(cap, _TEXT_CAP))
+    return path.read_text("utf-8", errors="replace")[start:start + limit]
 
 
-def context_block(conversation_id: str, total_cap: int = 50_000) -> str:
-    parts: list[str] = []
-    remaining = total_cap
-    for row in list_files(conversation_id):
+def _context_terms(query: str | None) -> list[str]:
+    raw = (query or "").lower()
+    terms = re.findall(r"[a-z0-9_.-]{2,}|[\u4e00-\u9fff]{2,}", raw)
+    expanded: list[str] = []
+    for term in terms:
+        expanded.append(term)
+        if "\u4e00" <= term[0] <= "\u9fff" and len(term) > 6:
+            expanded.extend(term[index:index + 2] for index in range(0, len(term) - 1, 2))
+    return list(dict.fromkeys(expanded))[:20]
+
+
+def _relevant_excerpt(text: str, terms: list[str], cap: int) -> str:
+    if len(text) <= cap:
+        return text
+    if not terms:
+        head = max(1, int(cap * 0.7))
+        tail = max(1, cap - head)
+        return (
+            text[:head]
+            + f"\n…（中段省略 {len(text) - cap} 字符；可用 read_session_file 点名读取）…\n"
+            + text[-tail:]
+        )
+
+    lowered = text.lower()
+    matches = sorted({
+        index
+        for term in terms
+        for index in [lowered.find(term)]
+        if index >= 0
+    })
+    if not matches:
+        return _relevant_excerpt(text, [], cap)
+
+    # Keep a small document header for orientation, then windows around the
+    # earliest distinct matches. This avoids the oldest files/first characters
+    # permanently consuming the entire model context.
+    header_cap = min(800, cap // 4)
+    parts = [text[:header_cap]]
+    remaining = cap - header_cap
+    for index in matches[:6]:
         if remaining <= 0:
             break
-        text = extracted_text(conversation_id, row["id"], min(12_000, remaining))
-        url_note = "\n发现网址：" + "、".join(row.get("urls") or []) if row.get("urls") else ""
-        if text or url_note:
-            body = text + url_note
-            parts.append(f"## 会话文件：{row['filename']}\n{body}")
-            remaining -= len(body)
-    if not parts:
+        window = min(2_000, remaining)
+        start = max(0, index - window // 3)
+        end = min(len(text), start + window)
+        parts.append(text[start:end])
+        remaining -= end - start
+    return (
+        "\n…（相关片段）…\n".join(parts)
+        + "\n…（文件已按当前问题提取相关片段；完整文本可用 read_session_file 读取）"
+    )
+
+
+def context_block(
+    conversation_id: str,
+    total_cap: int = 50_000,
+    *,
+    query: str | None = None,
+) -> str:
+    """Build a query-aware file context with an explicit catalog and omissions."""
+    total_cap = max(0, int(total_cap or 0))
+    rows = list_files(conversation_id)
+    if not rows or total_cap <= 0:
         return ""
-    return "# 当前会话文件（只能在本会话使用）\n" + "\n\n".join(parts)
+
+    terms = _context_terms(query)
+    candidates: list[tuple[int, str, dict, str]] = []
+    for row in rows:
+        text = extracted_text(conversation_id, row["id"], _TEXT_CAP)
+        haystack = f"{row.get('filename', '')}\n{text}".lower()
+        score = sum(min(8, haystack.count(term)) for term in terms)
+        created_at = str(row.get("createdAt") or "")
+        candidates.append((score, created_at, row, text))
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    catalog_lines = [
+        (
+            f"- {row.get('filename')}（artifact_id={row.get('id')}，"
+            f"解析 {row.get('extractedChars', 0)} 字符，来源={row.get('source') or 'unknown'}）"
+        )
+        for _, _, row, _ in candidates
+    ]
+    catalog = "# 当前会话文件目录（只能在本会话使用）\n" + "\n".join(catalog_lines)
+    catalog_budget = min(total_cap, max(120, total_cap // 5))
+    catalog = catalog[:catalog_budget]
+    remaining = max(0, total_cap - len(catalog))
+
+    parts: list[str] = []
+    included = 0
+    for _, _, row, text in candidates:
+        if remaining <= 200:
+            break
+        url_note = "\n发现网址：" + "、".join(row.get("urls") or []) if row.get("urls") else ""
+        if not text and not url_note:
+            continue
+        cap = min(12_000, remaining)
+        excerpt = _relevant_excerpt(text, terms, max(1, cap - len(url_note)))
+        body = excerpt + url_note
+        parts.append(f"## 会话文件相关片段：{row['filename']}\n{body}")
+        remaining -= len(body)
+        included += 1
+
+    omitted = max(0, len(candidates) - included)
+    suffix = (
+        f"\n\n（另有 {omitted} 个文件未展开；目录中的 artifact_id 可交给 "
+        "read_session_file 按需读取。）"
+        if omitted else ""
+    )
+    block = catalog + ("\n\n" + "\n\n".join(parts) if parts else "") + suffix
+    # ``total_cap`` is a hard model-view boundary. Headers and omission notes
+    # are part of the same budget, so enforce it once more on the final block.
+    return block[:total_cap]
 
 
 def archive_path(conversation_id: str) -> Path:

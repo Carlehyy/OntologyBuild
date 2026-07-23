@@ -21,6 +21,30 @@ CRITICAL_SCHEMA_TABLES = (
 
 _DEVELOPMENT_COLUMN_REPAIRS = (
     (
+        "v2_steward_conversations",
+        "context_summary",
+        "ALTER TABLE v2_steward_conversations "
+        "ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''",
+    ),
+    (
+        "v2_steward_conversations",
+        "summary_message_count",
+        "ALTER TABLE v2_steward_conversations "
+        "ADD COLUMN summary_message_count INTEGER NOT NULL DEFAULT 0",
+    ),
+    (
+        "v2_steward_conversations",
+        "working_memory",
+        "ALTER TABLE v2_steward_conversations "
+        "ADD COLUMN working_memory JSON NOT NULL DEFAULT '{}'",
+    ),
+    (
+        "v2_steward_conversations",
+        "context_stats",
+        "ALTER TABLE v2_steward_conversations "
+        "ADD COLUMN context_stats JSON NOT NULL DEFAULT '{}'",
+    ),
+    (
         "super_assistant_mcp_servers",
         "command",
         "ALTER TABLE super_assistant_mcp_servers "
