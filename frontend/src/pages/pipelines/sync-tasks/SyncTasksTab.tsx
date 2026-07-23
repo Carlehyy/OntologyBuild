@@ -724,22 +724,23 @@ export default function SyncTasksTab() {
           </div>
 
           <div data-testid="seven-day-chart" className={`${PANEL} flex h-[clamp(208px,22vh,240px)] shrink-0 flex-col p-4`}>
-            <div className="mb-1 flex items-center justify-between">
+            <div data-testid="seven-day-header" className="mb-1 flex shrink-0 items-center justify-between gap-3">
               <h3 className="flex items-center gap-2 text-xs font-semibold text-slate-700">
                 <span className="h-1.5 w-1.5 rounded-full bg-teal-600" />
                 近 7 日执行
               </h3>
-              <span className="text-[11px] text-slate-500 tabular-nums">{trendData.total7d} 次</span>
-            </div>
-            <div className="flex shrink-0 items-center gap-3 pl-3 text-[10px] text-slate-500" aria-label="近 7 日执行结果图例">
-              <span data-testid="trend-success-total" className="inline-flex items-center gap-1.5 tabular-nums">
-                <span className="h-1.5 w-1.5 rounded-sm bg-emerald-500" aria-hidden="true" />
-                成功 {trendData.successTotal}
-              </span>
-              <span data-testid="trend-failure-total" className="inline-flex items-center gap-1.5 tabular-nums">
-                <span className="h-1.5 w-1.5 rounded-sm bg-red-400" aria-hidden="true" />
-                失败 {trendData.failureTotal}
-              </span>
+              <div className="flex shrink-0 items-center gap-2.5 whitespace-nowrap text-[10px] text-slate-500" aria-label="近 7 日执行结果汇总">
+                <span data-testid="trend-success-total" className="inline-flex items-center gap-1.5 tabular-nums">
+                  <span className="h-1.5 w-1.5 rounded-sm bg-emerald-500" aria-hidden="true" />
+                  成功 {trendData.successTotal}
+                </span>
+                <span data-testid="trend-failure-total" className="inline-flex items-center gap-1.5 tabular-nums">
+                  <span className="h-1.5 w-1.5 rounded-sm bg-red-400" aria-hidden="true" />
+                  失败 {trendData.failureTotal}
+                </span>
+                <span className="h-3 w-px bg-slate-200" aria-hidden="true" />
+                <span className="text-[11px] tabular-nums">{trendData.total7d} 次</span>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <ReactECharts option={miniTrendOption} style={{ height: '100%', width: '100%' }} opts={{ renderer: 'svg' }} notMerge />

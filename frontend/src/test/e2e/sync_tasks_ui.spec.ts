@@ -198,9 +198,10 @@ test('任务池空状态、侧栏比例与新建任务字段契约完整展示',
   const sevenDayChartHeight = sevenDayChartBox?.height ?? 0
   expect(sevenDayChartHeight).toBeGreaterThanOrEqual(200)
   expect(sevenDayChartHeight).toBeLessThanOrEqual(250)
-  await expect(sevenDayChart.getByTestId('trend-success-total')).toHaveText('成功 13')
-  await expect(sevenDayChart.getByTestId('trend-failure-total')).toHaveText('失败 4')
-  await expect(sevenDayChart.getByText('17 次')).toBeVisible()
+  const sevenDayHeader = sevenDayChart.getByTestId('seven-day-header')
+  await expect(sevenDayHeader.getByTestId('trend-success-total')).toHaveText('成功 13')
+  await expect(sevenDayHeader.getByTestId('trend-failure-total')).toHaveText('失败 4')
+  await expect(sevenDayHeader.getByText('17 次')).toBeVisible()
   expect(sevenDayChartBox?.y ?? 0).toBeLessThan(recentRunCardBox?.y ?? 0)
   const recentRunBottom = (recentRunCardBox?.y ?? 0) + (recentRunCardBox?.height ?? 0)
   const taskListBottom = (taskListPanelBox?.y ?? 0) + (taskListPanelBox?.height ?? 0)
