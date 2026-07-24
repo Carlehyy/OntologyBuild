@@ -95,6 +95,137 @@ async function verifyReadonlyGraphInspection(page: Page, objectTypeId: string) {
   await expect(page.getByRole('button', { name: /保存全部更改/ })).toHaveCount(0)
 }
 
+test('failed trial result escapes the evolution modal and loading does not wait for tree refresh', async ({ page, request }) => {
+  const token = await login(page)
+  const suffix = Date.now().toString(36)
+  const ontology = await api<any>(request, token, 'post', '/api/v1/ontologies', {
+    name: `试跑失败交互-${suffix}`, domain: '质量验证', description: '嵌套弹窗与加载态回归',
+  })
+  const tree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
+  const root = tree.versions.find((item: any) => item.version_number === 'v0')
+  const firstDraft = await api<any>(
+    request, token, 'post',
+    `/api/v2/ontologies/${ontology.id}/versions/${root.id}/drafts`,
+    { versionLabel: '失败结果分支' },
+  )
+  await api<any>(
+    request, token, 'post',
+    `/api/v2/ontologies/${ontology.id}/versions/${root.id}/drafts`,
+    { versionLabel: '并行按钮分支' },
+  )
+
+  let holdTreeRefresh = false
+  let releaseTreeRefresh: (() => void) | undefined
+  await page.route(`**/api/v2/ontologies/${ontology.id}/version-tree`, async route => {
+    if (!holdTreeRefresh) {
+      await route.continue()
+      return
+    }
+    await new Promise<void>(resolve => {
+      releaseTreeRefresh = resolve
+    })
+    await route.continue()
+  })
+  await page.route(
+    `**/api/v2/ontologies/${ontology.id}/versions/${firstDraft.id}/trial-runs`,
+    async route => {
+      await new Promise(resolve => setTimeout(resolve, 250))
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            id: `trial-failed-${suffix}`,
+            status: 'failed',
+            result: {
+              counts: { objects: 0, links: 0, facts: 0, datasets: 0 },
+              actionsExecuted: 0,
+              sideEffects: 'blocked',
+              errors: [
+                {
+                  code: 'mapping_source_unavailable',
+                  kind: 'mapping',
+                  id: 'mapping-orders',
+                  name: '订单',
+                  message: '数据集 dataset-orders v1 历史存储对象读取失败（s3://raw-datasets/orders.bin）：部署环境存储、管理员对象存储：FileNotFoundError: Object not found',
+                },
+                {
+                  code: 'mapping_source_unavailable',
+                  kind: 'mapping',
+                  id: 'mapping-customers',
+                  name: '客户',
+                  message: '数据集 dataset-customers v1 历史存储对象读取失败（s3://raw-datasets/customers.bin）：部署环境存储、管理员对象存储：FileNotFoundError: Object not found',
+                },
+              ],
+              warnings: [
+                {
+                  code: 'object_type_unmapped',
+                  kind: 'objectType',
+                  id: 'ot-order',
+                  name: '订单',
+                  message: '该对象类型没有数据映射，试跑中不会产生实例',
+                },
+                {
+                  code: 'object_type_unmapped',
+                  kind: 'objectType',
+                  id: 'ot-customer',
+                  name: '客户',
+                  message: '该对象类型没有数据映射，试跑中不会产生实例',
+                },
+              ],
+            },
+          },
+        }),
+      })
+    },
+  )
+
+  await page.goto(`/#/ontologies/${ontology.id}`)
+  await page.getByRole('button', { name: '查看历史版本' }).click()
+  const evolutionDialog = page.getByRole('dialog', { name: '本体版本演进' })
+  const firstButton = page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为试跑态' })
+  const secondButton = page.getByTestId('version-node-v0.2').getByRole('button', { name: '转为试跑态' })
+
+  holdTreeRefresh = true
+  await firstButton.click()
+  await expect(firstButton.locator('.animate-spin')).toHaveCount(1)
+  await expect(secondButton.locator('.animate-spin')).toHaveCount(0)
+  await expect(secondButton).toBeDisabled()
+
+  const trialDialog = page.getByRole('dialog', { name: '隔离试跑结果' })
+  await expect(trialDialog).toBeVisible()
+  // 结果已经返回，但版本树刷新仍被测试主动挂起；按钮必须立即结束 loading。
+  await expect(firstButton.locator('.animate-spin')).toHaveCount(0)
+  await expect.poll(() => Boolean(releaseTreeRefresh)).toBe(true)
+
+  // 子弹窗必须 Portal 到 body，不能再成为父 dialog 的后代而被 overflow 裁切。
+  const nestedInParent = await trialDialog.evaluate(
+    dialog => Boolean(dialog.parentElement?.closest('[role="dialog"]')),
+  )
+  expect(nestedInParent).toBe(false)
+  const viewport = page.viewportSize()
+  expect(viewport).toBeTruthy()
+  await expect.poll(async () => {
+    const dialogBox = await trialDialog.boundingBox()
+    return Boolean(
+      dialogBox
+      && dialogBox.y >= 16
+      && dialogBox.y + dialogBox.height <= viewport!.height - 16,
+    )
+  }).toBe(true)
+
+  await expect(trialDialog.getByTestId('trial-errors')).toContainText('阻止试跑的错误（2）')
+  await expect(trialDialog.getByTestId('trial-errors')).toContainText('dataset-orders')
+  await expect(trialDialog.getByTestId('trial-errors')).toContainText('dataset-customers')
+  await expect(trialDialog.getByTestId('trial-warnings')).toContainText('普通警告（2）')
+  await expect(trialDialog.getByTestId('trial-warnings')).toContainText('2 个对象实体尚未配置数据映射（订单、客户）')
+  await expect(trialDialog.getByText('该对象类型没有数据映射，试跑中不会产生实例')).toHaveCount(0)
+
+  await trialDialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(evolutionDialog).toBeVisible()
+  releaseTreeRefresh?.()
+})
+
 test('complete branch → real-data trial → reviewed release works in the browser', async ({ page, request }) => {
   test.setTimeout(90_000)
   const token = await login(page)
