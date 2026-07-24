@@ -455,6 +455,13 @@ def test_one_mapped_object_can_enter_trial_with_other_types_unmapped(
     assert {item["code"] for item in run["result"]["warnings"]} == {
         "object_type_unmapped",
     }
+    assert run["result"]["warnings"] == [{
+        "code": "object_type_unmapped",
+        "kind": "objectType",
+        "id": "ot-customer",
+        "name": "客户",
+        "message": "该对象类型没有数据映射，试跑中不会产生实例",
+    }]
 
 
 def test_version_tree_uses_complete_snapshots_and_dependency_numbering(
