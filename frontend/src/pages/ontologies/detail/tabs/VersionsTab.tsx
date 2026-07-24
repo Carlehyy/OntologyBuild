@@ -15,6 +15,7 @@ import {
   ontologyVersionApi,
   type OntologyImpactReport,
   type OntologyReleaseGateIssue,
+  type OntologyTrialIssue,
   type OntologyTrialRun as Trial,
   type OntologyVersionNode as VersionNode,
 } from '@/api/v2/ontology-versions'
@@ -152,6 +153,34 @@ function concisePromotionError(error: any) {
   return typeof detail === 'string' ? detail : detail?.message || error?.message || '发布失败，请重新检查后再试。'
 }
 
+function uniqueTrialIssues(issues: OntologyTrialIssue[] = []) {
+  const seen = new Set<string>()
+  return issues.filter(issue => {
+    const key = [issue.code, issue.kind, issue.id, issue.name, issue.message].join(':')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function summarizeTrialWarnings(issues: OntologyTrialIssue[] = []) {
+  const unique = uniqueTrialIssues(issues)
+  const unmapped = unique.filter(issue => issue.code === 'object_type_unmapped')
+  const others = unique.filter(issue => issue.code !== 'object_type_unmapped')
+  const counts = new Map<string, { issue: OntologyTrialIssue; count: number }>()
+  others.forEach(issue => {
+    const key = [issue.code, issue.name, issue.message].join(':')
+    const current = counts.get(key)
+    counts.set(key, current
+      ? { ...current, count: current.count + 1 }
+      : { issue, count: 1 })
+  })
+  return {
+    unmapped,
+    others: [...counts.values()],
+  }
+}
+
 export default function VersionsTab({ ontologyId, onClose }: { ontologyId: string; onClose?: () => void }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -259,14 +288,21 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
   const runTrial = useMutation({
     mutationFn: (node: VersionNode) => ontologyVersionApi.runTrial(ontologyId, node.id),
-    onSuccess: async run => {
-      await refresh()
+    onMutate: node => {
+      setNotice({
+        tone: 'good',
+        text: `${node.version_number} 正在执行隔离试跑：固定数据版本、读取映射数据并验证本体约束。`,
+      })
+    },
+    onSuccess: run => {
       setGateIssues([])
       setGateVersionId(null)
       setTrialDetail(run)
       setNotice(run.status === 'passed'
         ? { tone: 'good', text: '草稿已进入试跑态：快照冻结，真实数据仅写入隔离空间。' }
         : { tone: 'bad', text: '试跑未通过，请根据错误修正结构或映射。' })
+      // 结果先展示，版本树在后台刷新；不能让刷新网络耗时继续占用按钮 loading。
+      void refresh()
     },
     onError: (error, node) => {
       const issues = errorIssues(error)
@@ -378,7 +414,14 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                   <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
                     <Database size={14} /> 数据映射
                   </Button>
-                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.trial} loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={VERSION_ACTION_BUTTON.trial}
+                    loading={runTrial.isPending && runTrial.variables?.id === node.id}
+                    disabled={runTrial.isPending}
+                    onClick={() => runTrial.mutate(node)}
+                  >
                     转为试跑态
                   </Button>
                 </>
@@ -568,20 +611,45 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
               }}>打开试跑图谱</Button>
             )}
           </>}>
-          <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {Object.entries(trialDetail.result?.counts || {}).map(([key, value]) => (
-                <div key={key} className="rounded-lg border bg-gray-50 p-3"><b className="block text-lg">{String(value)}</b><span className="text-xs text-gray-500">{key}</span></div>
-              ))}
+          {(() => {
+            const errors = uniqueTrialIssues(trialDetail.result?.errors)
+            const warnings = summarizeTrialWarnings(trialDetail.result?.warnings)
+            const unmappedNames = warnings.unmapped.map(item => item.name || item.id).filter(Boolean)
+            return <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {Object.entries(trialDetail.result?.counts || {}).map(([key, value]) => (
+                  <div key={key} className="rounded-lg border bg-gray-50 p-3"><b className="block text-lg">{String(value)}</b><span className="text-xs text-gray-500">{key}</span></div>
+                ))}
+              </div>
+              <p className="flex items-center gap-2 text-emerald-700"><ShieldCheck size={16} /> 外部动作执行数：{trialDetail.result?.actionsExecuted ?? 0}；副作用：已阻断</p>
+              {errors.length > 0 && <section data-testid="trial-errors" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
+                <h4 className="mb-2 font-semibold">阻止试跑的错误（{errors.length}）</h4>
+                <div className="space-y-2">
+                  {errors.map((item, index) => (
+                    <p key={`${item.code || 'error'}:${item.id || index}`}>
+                      • {item.name ? `${item.name}：` : ''}{item.message}
+                    </p>
+                  ))}
+                </div>
+              </section>}
+              {(warnings.unmapped.length > 0 || warnings.others.length > 0) && <section data-testid="trial-warnings" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                <h4 className="mb-2 font-semibold">普通警告（{warnings.unmapped.length + warnings.others.reduce((sum, item) => sum + item.count, 0)}）</h4>
+                <div className="space-y-2">
+                  {warnings.unmapped.length > 0 && (
+                    <p>
+                      • {warnings.unmapped.length} 个对象实体尚未配置数据映射
+                      {unmappedNames.length > 0 ? `（${unmappedNames.join('、')}）` : ''}，试跑不会生成对应实例。
+                    </p>
+                  )}
+                  {warnings.others.map(({ issue, count }, index) => (
+                    <p key={`${issue.code || 'warning'}:${issue.id || index}`}>
+                      • {issue.name ? `${issue.name}：` : ''}{issue.message}{count > 1 ? `（重复 ${count} 次）` : ''}
+                    </p>
+                  ))}
+                </div>
+              </section>}
             </div>
-            <p className="flex items-center gap-2 text-emerald-700"><ShieldCheck size={16} /> 外部动作执行数：{trialDetail.result?.actionsExecuted ?? 0}；副作用：已阻断</p>
-            {(trialDetail.result?.errors || []).length > 0 && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
-              {(trialDetail.result?.errors || []).map((item, index) => <p key={index}>• {item.message}</p>)}
-            </div>}
-            {(trialDetail.result?.warnings || []).length > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
-              {(trialDetail.result?.warnings || []).map((item, index) => <p key={index}>• {item.message}</p>)}
-            </div>}
-          </div>
+          })()}
         </Modal>
       )}
 
