@@ -609,30 +609,41 @@ class DatasetService:
         """Managed MinIO used only for genuine file payloads."""
         return self._storage_override or get_storage_service()
 
-    def _legacy_storage_candidates(self) -> list[StorageService]:
+    def _legacy_storage_attempts(self) -> list[tuple[str, StorageService]]:
         """Stores that may contain a pre-database DatasetVersion.
 
         Versions created before configurable MinIO used the deployment endpoint;
         versions created during the regression may live in managed MinIO.  Try
-        both, in that order, and de-duplicate the common no-managed-config case.
+        both, in that order, and retain human-readable identities for failures.
         """
         if self._legacy_storages_override is not None:
-            candidates = list(self._legacy_storages_override)
+            candidates = [
+                (f"候选历史存储 {index}", storage)
+                for index, storage in enumerate(
+                    self._legacy_storages_override, start=1)
+            ]
         elif self._storage_override is not None:
-            candidates = [self._storage_override]
+            candidates = [("指定对象存储", self._storage_override)]
         else:
             candidates = [
-                get_environment_storage_service(),
-                get_storage_service(),
+                ("部署环境存储", get_environment_storage_service()),
+                ("管理员对象存储", get_storage_service()),
             ]
-        unique: list[StorageService] = []
-        seen: set[int] = set()
-        for candidate in candidates:
-            if id(candidate) in seen:
+        unique: list[tuple[str, StorageService]] = []
+        positions: dict[int, int] = {}
+        for label, candidate in candidates:
+            existing = positions.get(id(candidate))
+            if existing is not None:
+                previous_label, previous = unique[existing]
+                unique[existing] = (f"{previous_label}、{label}", previous)
                 continue
-            seen.add(id(candidate))
-            unique.append(candidate)
+            positions[id(candidate)] = len(unique)
+            unique.append((label, candidate))
         return unique
+
+    def _legacy_storage_candidates(self) -> list[StorageService]:
+        """Compatibility view for callers that only need storage clients."""
+        return [storage for _, storage in self._legacy_storage_attempts()]
 
     def create_dataset(self, name: str, kind: str, connection_id: str | None = None,
                        schema_json: dict | None = None, *,
@@ -885,22 +896,24 @@ class DatasetService:
                     "（平台数据库）：版本内容可能已损坏")
             return raw
         elif ver.storage_uri:
-            failures: list[str] = []
-            for index, storage in enumerate(
-                self._legacy_storage_candidates(), start=1,
-            ):
+            failures: dict[str, list[str]] = {}
+            for label, storage in self._legacy_storage_attempts():
                 try:
                     raw = storage.get_object(ver.storage_uri)
                 except Exception as exc:
-                    failures.append(f"{type(exc).__name__}: {exc}")
+                    message = f"{type(exc).__name__}: {exc}"
+                    failures.setdefault(message, []).append(label)
                     continue
                 if self._checksum_matches(raw, ver.checksum):
                     return raw
                 # The same legacy URI can exist in both endpoints.  A stale or
                 # overwritten copy must not mask a valid copy in the next one.
-                failures.append(f"候选存储 {index} 的对象校验和不匹配")
+                failures.setdefault("对象校验和不匹配", []).append(label)
 
-            details = "; ".join(failures) or "没有可用的历史对象存储"
+            details = "；".join(
+                f"{'、'.join(labels)}：{message}"
+                for message, labels in failures.items()
+            ) or "没有可用的历史对象存储"
             raise DatasetReadError(
                 f"数据集 {dataset_id} v{ver.version_no} 历史存储对象读取失败"
                 f"（{ver.storage_uri}）：{details}")
