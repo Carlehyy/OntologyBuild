@@ -47,6 +47,45 @@ jobs:
         run: npm ci && npm run build
         working-directory: frontend
 
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Ontology evolution browser regression
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_API_URL: http://127.0.0.1:8000
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+        run: |
+          E2E_DB=/tmp/ontologybuild-evolution-e2e.db
+          rm -f "${E2E_DB}"
+          (
+            cd ../backend
+            DATABASE_URL="sqlite:///${E2E_DB}" \
+              uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+              > /tmp/ontologybuild-evolution-backend.log 2>&1
+          ) &
+          BACKEND_PID=$!
+          trap 'kill "${BACKEND_PID}" 2>/dev/null || true; rm -f "${E2E_DB}"' EXIT
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:8000/health/live > /dev/null; then
+              break
+            fi
+            if ! kill -0 "${BACKEND_PID}" 2>/dev/null; then
+              cat /tmp/ontologybuild-evolution-backend.log
+              exit 1
+            fi
+            if [ "${attempt}" -eq 90 ]; then
+              cat /tmp/ontologybuild-evolution-backend.log
+              exit 1
+            fi
+            sleep 1
+          done
+          if ! npx playwright test src/test/e2e/ontology_evolution.spec.ts --project=chromium; then
+            cat /tmp/ontologybuild-evolution-backend.log
+            exit 1
+          fi
+
   deploy:
     needs: verify
     runs-on: ubuntu-latest
