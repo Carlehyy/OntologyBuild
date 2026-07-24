@@ -15,6 +15,7 @@ const PREVIEW_PAGE_SIZES = [20, 50, 100, 200] as const
 const ACCEPTED_EXTENSIONS = ['csv', 'xlsx', 'xls']
 
 interface ColDraft {
+  id: string
   name: string
   displayName: string
   type: string
@@ -22,8 +23,11 @@ interface ColDraft {
   nullable: boolean
 }
 
+const createColumnId = () => globalThis.crypto?.randomUUID?.()
+  ?? `column-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
 const emptyColumn = (): ColDraft => ({
-  name: '', displayName: '', type: 'string', pk: false, nullable: true,
+  id: createColumnId(), name: '', displayName: '', type: 'string', pk: false, nullable: true,
 })
 
 const fileExtension = (file: File) => file.name.split('.').pop()?.toLowerCase() ?? ''
@@ -85,6 +89,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
     if (job.status === 'ready') {
       const nextColumns = job.columns ?? []
       setColumns(nextColumns.map(column => ({
+        id: createColumnId(),
         name: column.name,
         displayName: column.name,
         type: column.type || 'string',
@@ -335,7 +340,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                       {blankMode && <th className="w-12" />}
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100">{columns.map((column, index) => (
-                      <tr key={`${column.name}-${index}`} className="hover:bg-slate-50/60">
+                      <tr key={column.id} className="hover:bg-slate-50/60">
                         <td className="p-1.5"><input value={column.displayName} onChange={event => setColumn(index, { displayName: event.target.value })} placeholder="例如：设备名称" className="h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 outline-none focus:border-teal-500" /></td>
                         <td className="p-1.5"><input value={column.name} readOnly={Boolean(file)} onChange={event => setColumn(index, { name: event.target.value })} placeholder="例如：device_name" title={file ? '上传文件的字段标识来自表头，不可在此修改' : ''} className={`h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 font-mono outline-none focus:border-teal-500 ${file ? 'cursor-not-allowed bg-slate-50 text-slate-500' : ''}`} /></td>
                         <td className="p-1.5"><select value={column.type} onChange={event => setColumn(index, { type: event.target.value })} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 outline-none focus:border-teal-500">{CONTRACT_FIELD_TYPES.map(type => <option key={type} value={type}>{FIELD_TYPE_LABELS[type] ?? type}（{type}）</option>)}</select></td>
