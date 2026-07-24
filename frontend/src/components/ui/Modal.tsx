@@ -1,7 +1,10 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, Info, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from './Button'
+
+const modalStack: symbol[] = []
 
 interface ModalProps {
   open: boolean
@@ -45,20 +48,32 @@ export function Modal({
 }: ModalProps) {
   const titleId = React.useId()
   const descriptionId = React.useId()
+  const modalId = React.useRef(Symbol('modal'))
+  const [stackIndex, setStackIndex] = React.useState(0)
 
   React.useEffect(() => {
     if (!open) return undefined
+    const id = modalId.current
+    modalStack.push(id)
+    setStackIndex(modalStack.length - 1)
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && modalStack.at(-1) === id) onClose()
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      const index = modalStack.lastIndexOf(id)
+      if (index >= 0) modalStack.splice(index, 1)
+    }
   }, [onClose, open])
 
-  if (!open) return null
+  if (!open || typeof document === 'undefined') return null
 
-  return (
-    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4">
+  return createPortal((
+    <div
+      className="fixed inset-0 flex items-center justify-center p-4"
+      style={{ zIndex: `calc(var(--z-modal) + ${stackIndex})` }}
+    >
       <div
         className={cn(
           'absolute inset-0 bg-slate-950/30 backdrop-blur-[2px] animate-fade-in',
@@ -127,7 +142,7 @@ export function Modal({
         )}
       </section>
     </div>
-  )
+  ), document.body)
 }
 
 interface ConfirmModalProps {
