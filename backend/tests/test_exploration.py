@@ -13,6 +13,7 @@
      草稿可重复应用（同名跳过幂等，部分勾选后剩余元素可二次落地）；
      废弃后不可应用；保守合并——同名对象跳过、链接端点可绑定到目标本体既有类型
 """
+import json
 import uuid
 
 import pytest
@@ -1203,6 +1204,109 @@ def test_context_compaction_keeps_recent_messages_and_canvas_authority(db, sessi
     assert "已压缩消息 1-24" in row.context_summary
     assert "当前画布（权威状态" in system
     assert row.context_stats["contextLimit"] == 16_384
+
+
+def test_small_context_budgets_every_provider_call_and_final_summary(
+    client, auth_headers, session, db, admin_user, monkeypatch,
+):
+    """8K 窗口 + 连续 8 个近 6000 字结果：每次调用（含第 9 次总结）都不得超窗。"""
+    from app.models.model_config import ModelConfig
+    from app.exploration import orchestrator as OR
+    from app.exploration.models import ExplorationSession
+    from app.exploration.toolkit import ExplorationToolRunner
+    from app.ontologies.agent_runtime import llm_bridge
+
+    _fake_model_config(db, admin_user)
+    cfg = db.query(ModelConfig).filter_by(name="fake").one()
+    cfg.options = {
+        "max_context_tokens": 8_192,
+        "max_output_tokens": 4_096,
+    }
+    db.commit()
+
+    original_run = ExplorationToolRunner.run
+
+    def huge_tool_result(self, name, arguments):
+        if name == "manage_workspace_file":
+            self.canvas_dirty = False
+            self.last_diagram = None
+            return {
+                "operation": "read",
+                "content": "超长工具事实。" * 1_000,
+                "canvasVersion": self.session.canvas_version,
+                "hasMore": True,
+                "nextOffset": 6_000,
+            }
+        return original_run(self, name, arguments)
+
+    calls: list[int] = []
+    saw_visible_page = {"value": False}
+
+    def fake_chat(call_kwargs, messages, tools):
+        estimated = OR._estimate_tools(tools) + OR._estimate_messages(messages)
+        context_limit = int(call_kwargs["max_context_tokens"])
+        output_limit = int(call_kwargs["max_output_tokens"])
+        input_budget = (
+            context_limit - output_limit - OR._safety_reserve(context_limit))
+        assert context_limit == 8_192
+        assert output_limit == 1_024
+        assert estimated <= input_budget
+        calls.append(estimated)
+        for item in messages:
+            if item.get("role") != "tool":
+                continue
+            payload = json.loads(item["content"])
+            if "content" not in payload:
+                continue
+            assert payload["content"]
+            assert payload["nextOffset"] == (
+                payload["offset"] + len(payload["content"]))
+            saw_visible_page["value"] = True
+        if len(calls) <= 8:
+            return {
+                "content": None,
+                "usage": None,
+                "tool_calls": [{
+                    "id": f"large-{len(calls)}",
+                    "name": "manage_workspace_file",
+                    "arguments": {"action": "list"},
+                }],
+            }
+        assert tools == []
+        return {
+            "content": "已基于预算内的权威检查点完成最终总结。",
+            "tool_calls": [],
+            "usage": None,
+        }
+
+    monkeypatch.setattr(ExplorationToolRunner, "run", huge_tool_result)
+    monkeypatch.setattr(llm_bridge, "chat", fake_chat)
+
+    response = client.post(
+        f"{BASE}/sessions/{session['id']}/chat",
+        headers=auth_headers,
+        json={"message": "连续读取并综合这些资料", "stream": False},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["error"] is None
+    assert data["content"] == "已基于预算内的权威检查点完成最终总结。"
+    assert len(data["steps"]) == 8
+    assert len(calls) == 9
+    assert saw_visible_page["value"] is True
+
+    persisted = db.query(ExplorationSession).filter_by(id=session["id"]).one()
+    stats = persisted.context_stats
+    assert stats["estimatedInputTokens"] <= stats["inputBudget"]
+    assert stats["peakProviderEstimatedInputTokens"] <= stats["inputBudget"]
+
+
+def test_context_smaller_than_supported_minimum_is_rejected_explicitly():
+    from app.exploration import orchestrator as OR
+
+    kwargs = {"max_context_tokens": 4_096, "max_output_tokens": 1_024}
+    with pytest.raises(OR.ExplorationContextBudgetError, match="至少需要 8192"):
+        OR._configure_context_limits(kwargs)
 
 
 # ---------------------------------------------------------------- 对话内出图与账本工具

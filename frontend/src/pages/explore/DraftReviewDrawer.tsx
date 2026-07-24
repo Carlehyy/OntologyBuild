@@ -99,7 +99,21 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
   }
 
   const report = draft.report || { warnings: [], conflicts: [], scenarioCoverage: [], llmRefined: false }
+  const warnings = report.warnings ?? []
+  const conflicts = report.conflicts ?? []
+  const scenarioCoverage = report.scenarioCoverage ?? []
+  const semanticIssues = report.semanticIssues ?? []
+  const semanticFidelity = report.semanticFidelity
+  const sourceDocument = report.sourceDocument
   const gateOverridden = Boolean(report.gateOverride)
+  const semanticOverridden = Boolean(report.semanticOverride)
+  const staleDocumentOverridden = Boolean(report.staleDocumentOverride)
+  // 越权事实已有结构化卡片，避免同一风险再以普通 warning 重复展示。
+  const plainWarnings = warnings.filter(warning => !(
+    (gateOverridden && warning.includes('质量门未通过被显式越权'))
+    || (semanticOverridden && warning.includes('不可无损转换语义被显式越权'))
+    || (staleDocumentOverridden && warning.includes('使用已过期需求文档'))
+  ))
 
   const checkbox = (key: string, conflict?: boolean) => (
     <input
@@ -194,24 +208,94 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
                   </div>
                 </div>
               )}
-              {(report.warnings.length > 0 || report.conflicts.length > 0) && (
+              {sourceDocument && (
+                <div
+                  data-testid="draft-source-document"
+                  className={`rounded-lg border px-3.5 py-2.5 ${staleDocumentOverridden || sourceDocument.isStale
+                    ? 'border-rose-200 bg-rose-50/60'
+                    : 'border-teal-200 bg-teal-50/50'}`}
+                >
+                  <div className={`flex items-center gap-1.5 text-xs font-medium ${staleDocumentOverridden || sourceDocument.isStale
+                    ? 'text-rose-700'
+                    : 'text-teal-700'}`}>
+                    {staleDocumentOverridden || sourceDocument.isStale
+                      ? <ShieldAlert size={13} />
+                      : <ShieldCheck size={13} />}
+                    {staleDocumentOverridden ? '旧文档快照越权生成' : '文档来源快照'}
+                  </div>
+                  <div className={`mt-1 text-[11px] leading-relaxed ${staleDocumentOverridden || sourceDocument.isStale
+                    ? 'text-rose-800/90'
+                    : 'text-teal-800/80'}`}>
+                    来源画布 {sourceDocument.sourceCanvasVersion == null
+                      ? '历史版本（无版本号）'
+                      : `v${sourceDocument.sourceCanvasVersion}`}
+                    {' → '}当前画布 v{sourceDocument.currentCanvasVersion}
+                    {' · '}{sourceDocument.isStale ? '内容已变化' : '内容一致'}
+                    {staleDocumentOverridden && '。草稿固定使用旧快照，必须按当前业务口径重点复核。'}
+                  </div>
+                </div>
+              )}
+              {(semanticFidelity || semanticIssues.length > 0 || semanticOverridden) && (
+                <div
+                  data-testid="draft-semantic-fidelity"
+                  className={`rounded-lg border px-3.5 py-2.5 ${semanticOverridden || (semanticFidelity?.blockingCount ?? 0) > 0
+                    ? 'border-rose-200 bg-rose-50/60'
+                    : 'border-amber-200 bg-amber-50/60'}`}
+                >
+                  <div className={`flex items-center gap-1.5 text-xs font-medium ${semanticOverridden || (semanticFidelity?.blockingCount ?? 0) > 0
+                    ? 'text-rose-700'
+                    : 'text-amber-700'}`}>
+                    <ShieldAlert size={13} />
+                    {semanticOverridden ? '语义保真越权生成' : '语义转换边界'}
+                    {semanticFidelity && (
+                      <span className="font-normal">
+                        （堵门 {semanticFidelity.blockingCount} · 暂不支持 {semanticFidelity.unsupportedCount}
+                        {' · '}{semanticFidelity.readyToApply ? '可进入人审' : '不可无损落地'}）
+                      </span>
+                    )}
+                  </div>
+                  {semanticOverridden && (
+                    <div className="mt-1 text-[11px] leading-relaxed text-rose-800/90">
+                      以下语义只保留了当前模型可表达的部分；应用前必须核对受影响元素及来源画布。
+                    </div>
+                  )}
+                  {semanticIssues.length > 0 && (
+                    <ul className="mt-1.5 max-h-36 space-y-1 overflow-y-auto">
+                      {semanticIssues.slice(0, 12).map((issue, index) => (
+                        <li
+                          key={`${issue.code}-${issue.key || index}`}
+                          className={`text-[11px] leading-relaxed ${issue.severity === 'blocking'
+                            ? 'text-rose-800/90'
+                            : 'text-amber-800/90'}`}
+                        >
+                          · [{issue.severity === 'blocking' ? '堵门' : '暂不支持'}] {issue.message}
+                          {issue.sourceRefs && issue.sourceRefs.length > 0 && (
+                            <span className="text-[10px] opacity-75"> · 来源 {issue.sourceRefs.join('、')}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {(plainWarnings.length > 0 || conflicts.length > 0) && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3.5 py-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 mb-1">
-                    <TriangleAlert size={13} /> 转化报告（{report.warnings.length + report.conflicts.length}）
+                    <TriangleAlert size={13} /> 转化报告（{plainWarnings.length + conflicts.length}）
                   </div>
                   <ul className="space-y-0.5 max-h-36 overflow-y-auto">
-                    {[...report.conflicts, ...report.warnings].map((w, i) => (
+                    {[...conflicts, ...plainWarnings].map((w, i) => (
                       <li key={i} className="text-[11px] leading-relaxed text-amber-800/90">· {w}</li>
                     ))}
                   </ul>
                 </div>
               )}
-              {report.scenarioCoverage.length > 0 && (
+              {scenarioCoverage.length > 0 && (
                 <div className="rounded-lg border border-rose-200 bg-rose-50/50 px-3.5 py-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-rose-700 mb-1">
                     <CircleAlert size={13} /> 场景可表达性检查未通过
                   </div>
-                  {report.scenarioCoverage.map((c, i) => (
+                  {scenarioCoverage.map((c, i) => (
                     <div key={i} className="text-[11px] leading-relaxed text-rose-800/90">
                       · 场景「{c.scenario}」缺少
                       {c.missingObjects.length > 0 && ` 对象: ${c.missingObjects.join('、')}`}

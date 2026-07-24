@@ -101,6 +101,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => new Set(initialDirectoryPaths))
   const knownDirectoryPaths = useRef(new Set(initialDirectoryPaths))
   const [copied, setCopied] = useState(false)
+  const previewRequestRef = useRef(0)
 
   const sorted = useMemo(() => [...files].sort((a, b) =>
     Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt)), [files])
@@ -133,6 +134,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
   }, [copied])
 
   const openFile = useCallback(async (file: BxAttachment) => {
+    const requestId = ++previewRequestRef.current
     setActiveId(file.id)
     setCopied(false)
     setCreating(false)
@@ -144,6 +146,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
     setPreview(null)
     try {
       const content = await explorationApi.attachmentPreview(sessionId, file.id)
+      if (requestId !== previewRequestRef.current) return
       setPreview(content)
       setDraft(content.content)
       if (content.editable) {
@@ -155,9 +158,10 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
         })
       }
     } catch (e) {
+      if (requestId !== previewRequestRef.current) return
       setError(errorText(e, '文件预览失败'))
     } finally {
-      setLoadingId('')
+      if (requestId === previewRequestRef.current) setLoadingId('')
     }
   }, [sessionId])
 
@@ -193,11 +197,14 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
 
   const save = async () => {
     if (!editor || saving) return
+    const targetId = editor.id
+    const requestId = previewRequestRef.current
     setSaving(true); setError('')
     try {
-      const updated = await explorationApi.updateWorkspaceText(sessionId, editor.id, {
+      const updated = await explorationApi.updateWorkspaceText(sessionId, targetId, {
         content: draft, expectedVersion: editor.version,
       })
+      if (requestId !== previewRequestRef.current) return
       onFilesChange(files.map(file => file.id === updated.id ? updated : file))
       setEditor({ ...editor, content: draft, version: updated.version, sha256: updated.sha256 })
       setPreview(current => current ? { ...current, content: draft, version: updated.version } : current)
@@ -238,6 +245,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
   }
 
   const beginCreate = () => {
+    previewRequestRef.current += 1
     setCreating(true)
     setActiveId('')
     setEditor(null)

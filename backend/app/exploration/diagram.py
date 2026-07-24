@@ -186,44 +186,167 @@ def _slabel(x: dict) -> str:
 # ---------------------------------------------------------------- 业务流程图
 
 
-def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]]:
-    """场景步骤 → flowchart；条件步骤必须有显式、可验证的分支目标。"""
-    c = _ensure_canvas(canvas)
-    s = _pick_scenario(c, target)
-    steps = s.get("steps") or []
-    if not steps:
-        raise DiagramError(f"场景「{_slabel(s)}」还没有步骤 —— 先与用户把流程步骤问清楚")
+_CONDITIONAL_STEP_RE = re.compile(
+    r"(?:如果|是否|否则|若(?!干)|条件(?:为|是|满足)|\bif\b|\bwhen\b|[?？])",
+    re.IGNORECASE,
+)
 
-    branches = s.get("branches") or []
+
+def scenario_model_analysis(canvas, target: str | None = None) -> dict:
+    """场景的确定性完整性分析，同时供质量门、流程图和时序图使用。
+
+    场景不是一个“有名字就算存在”的标签，而是端到端验收用例。目标、参与者、
+    步骤、对象/行为引用、预期结果和条件分支缺一块，都不能用它证明本体可表达。
+    """
+    c = _ensure_canvas(canvas)
+    scenario = _pick_scenario(c, target)
+    label = _slabel(scenario)
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    if not str(scenario.get("goal") or "").strip():
+        issues.append("缺少业务目标（goal）")
+    if not str(scenario.get("expected_outcome") or "").strip():
+        issues.append("缺少可验收的预期结果（expected_outcome）")
+
+    steps = scenario.get("steps") or []
+    if not steps:
+        issues.append("没有流程步骤（steps）")
+    else:
+        blank_steps = [str(index) for index, step in enumerate(steps, 1) if not str(step).strip()]
+        if blank_steps:
+            issues.append("存在空白步骤：" + "、".join(blank_steps[:8]))
+
+    actor_lookup = {
+        norm_name(str(value)): actor
+        for actor in c["actors"]
+        for value in (actor.get("name"), actor.get("display_name"), actor.get("id"))
+        if value
+    }
+    entity_lookup = {
+        norm_name(str(value)): entity
+        for entity in (
+            list(c["objects"])
+            + [actor for actor in c["actors"] if (actor.get("kind") or "role") != "system"]
+        )
+        for value in (entity.get("name"), entity.get("display_name"), entity.get("id"))
+        if value
+    }
+    behavior_lookup = {
+        norm_name(str(value)): behavior
+        for behavior in c["behaviors"]
+        for value in (behavior.get("name"), behavior.get("display_name"), behavior.get("id"))
+        if value
+    }
+
+    raw_actors = [str(value) for value in (scenario.get("actors") or []) if str(value).strip()]
+    raw_objects = [str(value) for value in (scenario.get("objects") or []) if str(value).strip()]
+    raw_behaviors = [str(value) for value in (scenario.get("behaviors") or []) if str(value).strip()]
+    if not raw_actors:
+        issues.append("没有参与主体引用（actors）")
+    if not raw_objects:
+        issues.append("没有业务对象引用（objects）")
+    if not raw_behaviors:
+        issues.append("没有业务行为引用（behaviors）")
+
+    unresolved_actors = [value for value in raw_actors if norm_name(value) not in actor_lookup]
+    unresolved_objects = [value for value in raw_objects if norm_name(value) not in entity_lookup]
+    unresolved_behaviors = [value for value in raw_behaviors if norm_name(value) not in behavior_lookup]
+    if unresolved_actors:
+        issues.append("引用未定义主体：" + "、".join(unresolved_actors[:8]))
+    if unresolved_objects:
+        issues.append("引用未定义对象/实体主体：" + "、".join(unresolved_objects[:8]))
+    if unresolved_behaviors:
+        issues.append("引用未定义行为：" + "、".join(unresolved_behaviors[:8]))
+
+    scenario_actor_names = {norm_name(value) for value in raw_actors}
+    scenario_object_names = {norm_name(value) for value in raw_objects}
+    for raw in raw_behaviors:
+        behavior = behavior_lookup.get(norm_name(raw))
+        if behavior is None:
+            continue
+        behavior_label = _slabel(behavior)
+        actor = norm_name(str(behavior.get("actor") or ""))
+        obj = norm_name(str(behavior.get("object") or ""))
+        # 同一实体允许场景/行为分别使用 name 与 display_name，因此通过 lookup
+        # 解析成对象身份后比较，而不是直接比较字符串。
+        actor_entity = actor_lookup.get(actor)
+        actor_aliases = {
+            norm_name(str(value))
+            for value in (
+                (actor_entity or {}).get("name"),
+                (actor_entity or {}).get("display_name"),
+                (actor_entity or {}).get("id"),
+            )
+            if value
+        }
+        object_entity = entity_lookup.get(obj)
+        object_aliases = {
+            norm_name(str(value))
+            for value in (
+                (object_entity or {}).get("name"),
+                (object_entity or {}).get("display_name"),
+                (object_entity or {}).get("id"),
+            )
+            if value
+        }
+        if actor and actor_entity is not None and not (actor_aliases & scenario_actor_names):
+            issues.append(f"行为「{behavior_label}」的执行主体未列入场景 actors")
+        if obj and object_entity is not None and not (object_aliases & scenario_object_names):
+            issues.append(f"行为「{behavior_label}」的作用对象未列入场景 objects")
+
+    branches = scenario.get("branches") or []
     by_source: dict[int, list[dict]] = {}
-    branch_errors: list[str] = []
     for branch in branches:
         source = branch.get("from_step")
         destination = branch.get("to_step")
         condition = str(branch.get("condition") or "").strip()
         if not isinstance(source, int) or source < 1 or source > len(steps):
-            branch_errors.append(f"分支起点 {source} 不在步骤 1..{len(steps)} 范围内")
+            issues.append(f"分支起点 {source} 不在步骤 1..{len(steps)} 范围内")
             continue
-        if destination is not None and (not isinstance(destination, int)
-                                        or destination < 1 or destination > len(steps)):
-            branch_errors.append(f"步骤 {source} 的分支目标 {destination} 不在步骤范围内")
+        if destination is not None and (
+            not isinstance(destination, int) or destination < 1 or destination > len(steps)
+        ):
+            issues.append(f"步骤 {source} 的分支目标 {destination} 不在步骤范围内")
             continue
         if not condition:
-            branch_errors.append(f"步骤 {source} 的分支缺少条件标签")
+            issues.append(f"步骤 {source} 的分支缺少条件标签")
             continue
         by_source.setdefault(source, []).append(branch)
 
-    conditional_steps = [i for i, raw in enumerate(steps, 1)
-                         if any(key in str(raw) for key in ("如果", "若", "是否"))]
-    for index in conditional_steps:
-        count = len(by_source.get(index, []))
-        if count < 2:
-            branch_errors.append(f"条件步骤 {index} 至少需要 2 条显式 branches，当前 {count} 条")
-        conditions = [norm_name(branch.get("condition", "")) for branch in by_source.get(index, [])]
+    conditional_steps = {
+        index for index, raw in enumerate(steps, 1)
+        if _CONDITIONAL_STEP_RE.search(str(raw))
+    } | set(by_source)
+    for index in sorted(conditional_steps):
+        outgoing = by_source.get(index, [])
+        if len(outgoing) < 2:
+            issues.append(f"条件步骤 {index} 至少需要 2 条显式 branches，当前 {len(outgoing)} 条")
+        conditions = [norm_name(str(branch.get("condition") or "")) for branch in outgoing]
         if len(conditions) != len(set(conditions)):
-            branch_errors.append(f"条件步骤 {index} 存在重复分支条件")
-    if branch_errors:
-        raise DiagramError("流程图质量校验未通过：" + "；".join(branch_errors[:8])
+            issues.append(f"条件步骤 {index} 存在重复分支条件")
+
+    return {
+        "scenario": scenario,
+        "label": label,
+        "steps": steps,
+        "branches": branches,
+        "by_source": by_source,
+        "conditional_steps": sorted(conditional_steps),
+        "issues": issues,
+        "warnings": warnings,
+    }
+
+
+def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]]:
+    """场景步骤 → flowchart；条件步骤必须有显式、可验证的分支目标。"""
+    c = _ensure_canvas(canvas)
+    analysis = scenario_model_analysis(c, target)
+    s = analysis["scenario"]
+    steps = analysis["steps"]
+    by_source = analysis["by_source"]
+    if analysis["issues"]:
+        raise DiagramError("流程图质量校验未通过：" + "；".join(analysis["issues"][:8])
                            + "。请让 AI 在场景 branches 中补齐 from_step/to_step/condition 后重试")
 
     # 从第 1 步做可达性检查；被孤立的步骤不能进入平台图表。
@@ -300,7 +423,7 @@ def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]
         else:
             target_node = f"S{index + 1}" if index < len(steps) else "SE"
             lines.append(f"    S{index} --> {target_node}")
-    return "\n".join(lines), _slabel(s), []
+    return "\n".join(lines), _slabel(s), analysis["warnings"]
 
 
 # ---------------------------------------------------------------- 时序图
@@ -309,7 +432,14 @@ def flow_mermaid(canvas, target: str | None = None) -> tuple[str, str, list[str]
 def sequence_mermaid(canvas, target: str | None = None) -> tuple[str, str]:
     """场景 behaviors 顺序 → mermaid sequenceDiagram（主体 →> 对象 : 行为）。"""
     c = _ensure_canvas(canvas)
-    s = _pick_scenario(c, target)
+    analysis = scenario_model_analysis(c, target)
+    s = analysis["scenario"]
+    if analysis["issues"]:
+        raise DiagramError(
+            f"时序图质量校验未通过：场景「{_slabel(s)}」"
+            + "；".join(analysis["issues"][:8])
+            + "。请让 AI 补齐场景目标、引用、步骤、结果与显式分支后重试"
+        )
     beh_by_name = {norm_name(b.get("name", "")): b for b in c["behaviors"]}
     for b in c["behaviors"]:
         if b.get("display_name"):
@@ -395,9 +525,22 @@ def _pick_state_object(canvas: dict, target: str | None) -> tuple[dict, dict]:
         raise DiagramError("画布还没有对象模型")
     if target:
         normalized = norm_name(target)
-        obj = next((item for item in objects
-                    if norm_name(item.get("name", "")) == normalized
-                    or norm_name(item.get("display_name", "")) == normalized), None)
+        # readiness 使用稳定 id 精确定位，避免历史脏数据中的重名/显示名歧义
+        # 让状态分析误选另一个对象。对外仍兼容 name/display_name。
+        obj = next(
+            (item for item in objects if str(item.get("id") or "") == str(target)),
+            None,
+        )
+        if obj is None:
+            matches = [
+                item for item in objects
+                if norm_name(item.get("name", "")) == normalized
+                or norm_name(item.get("display_name", "")) == normalized
+            ]
+            if len(matches) > 1:
+                raise DiagramError(
+                    f"对象「{target}」匹配到多个候选，请使用画布元素 id 精确指定")
+            obj = matches[0] if matches else None
         if obj is None:
             raise DiagramError(f"对象「{target}」不存在")
         attr = _status_attr(obj)

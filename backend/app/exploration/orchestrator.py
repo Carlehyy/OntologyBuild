@@ -17,11 +17,14 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import math
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +34,7 @@ from app.exploration import canvas as C
 from app.exploration import questions as Q
 from app.exploration import readiness as R
 from app.exploration import officecli as O
+from app.exploration.attachment_context import build_attachment_context
 from app.exploration.models import (ExplorationAttachment, ExplorationMessage,
                                     ExplorationSession)
 from app.exploration.skills import ExplorationSkill, exploration_skills
@@ -45,6 +49,7 @@ _MAX_WEB_SEARCHES = 3
 _RECENT_HISTORY_KEEP = 16
 _HISTORY_QUERY_CAP = 1000
 _TOOL_RESULT_CAP = 6000
+_CANONICAL_INLINE_CAP = 24_000
 _DEFAULT_TITLE = "新的业务探索"
 # 附件注入上下文的预算：单文件与总量各自截断，避免撑爆上下文
 _ATTACH_PER_FILE_CAP = 12000
@@ -53,6 +58,20 @@ _DEFAULT_CONTEXT_TOKENS = 64_000
 _DEFAULT_OUTPUT_TOKENS = 4_096
 _COMPACTION_TRIGGER_RATIO = 0.70
 _SUMMARY_CHAR_CAP = 12_000
+_MIN_CANONICAL_INLINE_CAP = 1_000
+_MIN_CONTEXT_TOKENS = 8_192
+
+
+class ExplorationContextBudgetError(ValueError):
+    """当前消息与不可省略的探索协议无法放进所配置模型的上下文窗口。"""
+
+
+@dataclass(frozen=True, slots=True)
+class _HistoryMessageView:
+    """仅用于本次模型调用的裁剪历史，不改写持久化的逐字消息。"""
+
+    role: str
+    content: str
 
 
 def _load_skills() -> dict[str, ExplorationSkill]:
@@ -72,9 +91,22 @@ def _skills_block(skills: dict[str, ExplorationSkill]) -> str:
 {lines}"""
 
 
-def _system_prompt(session: ExplorationSession, skills: dict[str, ExplorationSkill] | None = None,
-                   web_search_enabled: bool = False) -> str:
+def _system_prompt(
+    session: ExplorationSession,
+    skills: dict[str, ExplorationSkill] | None = None,
+    web_search_enabled: bool = False,
+    *,
+    canonical_max_chars: int = _CANONICAL_INLINE_CAP,
+    summary_max_tokens: int | None = None,
+    canvas_summary_max_items: int = 30,
+) -> str:
     rd = R.evaluate(session.canvas)
+    history_summary = session.context_summary or "（尚未触发压缩；使用最近完整消息）"
+    if summary_max_tokens is not None:
+        history_summary = _clip_text_to_tokens(
+            history_summary, max(32, int(summary_max_tokens)),
+            marker="\n…（更早的压缩摘要因本模型窗口较小而省略）…\n",
+        )
     return f"""你是「业务探索」引导师，运行在 OntoPrompt 平台。你的使命：通过对话把用户的业务**彻底澄清** —— 所有关键口径都被定量（明确数值/枚举/边界），没有任何模棱两可或多种理解 —— 并把已确认的知识实时沉淀为六类结构化模型。这些模型最终转化为需求文档与本体（对象类型/链接/动作/激活函数草稿/哨兵草稿），供图谱编辑器直接使用。
 
 # 六类模型的分工
@@ -121,7 +153,7 @@ def _system_prompt(session: ExplorationSession, skills: dict[str, ExplorationSki
 
 # 工作方式
 1. 每回合聚焦 1-2 个堵门问题，循序渐进；不要一次抛出问题清单轰炸用户。
-2. 用户每确认一条信息，立即用 upsert_elements 沉淀 —— 不要攒到最后。同名元素按字段合并；修改列表时仍应带上确认后的完整列表，避免误删。
+2. 用户每确认一条信息，立即用 upsert_elements 沉淀 —— 不要攒到最后。修改已有元素前先核对下方 canonical 快照；若快照 complete=false，或要修改 attributes/relations/inputs/branches，先调用 get_canvas_elements 读取目标元素。结构化子项使用 id 做增量补丁，禁止凭摘要重写整表；只有用户明确要求清空时才传 []，删除单个子项用 _delete=true。
 3. 建议探索顺序（质量门的「当前阶段」已给出）：场景与主体定边界 → 对象与属性/主键 → 关系与基数 → 行为 → 规则与事件定量 → 清账与验收；但跟随用户的表达，不要机械执行。
 4. 概念含糊或互相冲突时先澄清再落库；用户否定的概念用 remove_elements 移除。
 5. name 一律用英文标识符（snake_case 或 PascalCase），中文名放 display_name。
@@ -129,10 +161,20 @@ def _system_prompt(session: ExplorationSession, skills: dict[str, ExplorationSki
 7. 全部质量门通过后，明确告诉用户：「所有堵门问题已清零，可以生成需求文档并转本体草稿了」。
 
 # 已压缩的早期会话
-{session.context_summary or '（尚未触发压缩；使用最近完整消息）'}
+{history_summary}
 
-# 当前画布（权威状态，优先于历史自然语言）
-{C.canvas_summary(session.canvas)}{_skills_block(skills or {})}"""
+# 当前画布（权威状态索引；仅用于定位，不能代替 canonical 字段）
+canvasVersion={session.canvas_version or 0}
+{C.canvas_summary(session.canvas, max_items=max(1, int(canvas_summary_max_items)))}
+
+# 当前画布 canonical 快照（权威状态，优先于历史自然语言）
+{C.canonical_snapshot_json(
+    session.canvas,
+    max_chars=max(_MIN_CANONICAL_INLINE_CAP, int(canonical_max_chars)),
+)}
+若 complete=false，必须使用 get_canvas_elements 按 kind/id 读取相关完整元素；工具返回
+truncated/hasMore=true 时继续分页。每次写工具返回的新 canvasVersion 和 readiness 是后续
+调用的最新基线，不要继续使用旧版本或只依赖历史工具参数。{_skills_block(skills or {})}"""
 
 
 def _web_search_prompt(enabled: bool) -> str:
@@ -146,12 +188,110 @@ def _web_search_prompt(enabled: bool) -> str:
 - 使用搜索结果形成结论时，以 [来源标题](URL) 就近标注；没有可靠结果就明确说明，不得编造。"""
 
 
-def _estimate_tokens(text: str) -> int:
-    """保守估算中英混合 token 数；只用于预算触发，不用于计费。"""
-    value = str(text or "")
+def _estimate_tokens(value: Any) -> int:
+    """保守估算中英混合/JSON token 数；只用于准入预算，不用于计费。"""
+    if not isinstance(value, str):
+        value = json.dumps(
+            value, ensure_ascii=False, default=str, separators=(",", ":"))
     cjk = sum(1 for ch in value if "\u3400" <= ch <= "\u9fff")
     other = len(value) - cjk
-    return cjk + (other + 3) // 4
+    # 中文通常接近一字一 token；JSON、英文和标识符按三字符一 token，
+    # 再加 12% provider/framing 余量，避免原先四字符估算在 schema 上偏乐观。
+    return max(1, math.ceil((cjk + math.ceil(other / 3)) * 1.12))
+
+
+def _estimate_messages(messages: list[dict]) -> int:
+    total = 0
+    for item in messages:
+        total += 8  # role/message provider framing
+        total += _estimate_tokens(item.get("content") or "")
+        for key in ("tool_calls", "name", "tool_call_id"):
+            if item.get(key):
+                total += _estimate_tokens(item[key])
+    return total
+
+
+def _estimate_tools(tools: list[dict]) -> int:
+    if not tools:
+        return 0
+    return _estimate_tokens(tools) + 12 * len(tools)
+
+
+def _clip_text_to_tokens(
+    text: str,
+    max_tokens: int,
+    *,
+    marker: str = "\n…（中段因模型上下文预算省略；完整内容仍保留在会话中）…\n",
+) -> str:
+    """头尾保留地裁剪自然语言块；不用于 canonical JSON 或工具结果。"""
+    value = str(text or "")
+    if max_tokens <= 0:
+        return ""
+    if _estimate_tokens(value) <= max_tokens:
+        return value
+    if _estimate_tokens(marker) >= max_tokens:
+        return ""
+    low, high = 0, len(value)
+    best = marker
+    while low <= high:
+        keep = (low + high) // 2
+        head = int(keep * 0.62)
+        tail = keep - head
+        candidate = value[:head] + marker + (value[-tail:] if tail else "")
+        if _estimate_tokens(candidate) <= max_tokens:
+            best = candidate
+            low = keep + 1
+        else:
+            high = keep - 1
+    return best
+
+
+def _safety_reserve(context_limit: int) -> int:
+    return max(768, min(4_096, int(context_limit) // 16))
+
+
+def _configure_context_limits(call_kwargs: dict) -> tuple[int, int, int]:
+    context_limit = int(
+        call_kwargs.get("max_context_tokens") or _DEFAULT_CONTEXT_TOKENS)
+    if context_limit < _MIN_CONTEXT_TOKENS:
+        raise ExplorationContextBudgetError(
+            f"业务探索至少需要 {_MIN_CONTEXT_TOKENS} tokens 上下文；"
+            f"当前模型配置为 {context_limit}。请提高模型上下文配置或选择更大窗口模型。")
+    requested_output = max(
+        1, int(call_kwargs.get("max_output_tokens") or _DEFAULT_OUTPUT_TOKENS))
+    # 小窗口优先给输入协议与事实留空间；64K 及以上仍保持默认 4K 输出。
+    output_limit = min(requested_output, max(1_024, context_limit // 8))
+    input_budget = context_limit - output_limit - _safety_reserve(context_limit)
+    if input_budget <= 0:
+        raise ExplorationContextBudgetError(
+            f"模型上下文窗口 {context_limit} tokens 无法容纳最小探索请求")
+    call_kwargs["max_context_tokens"] = context_limit
+    call_kwargs["max_output_tokens"] = output_limit
+    return context_limit, output_limit, input_budget
+
+
+def _compact_tool_schemas(tools: list[dict], context_limit: int) -> list[dict]:
+    """8K 小窗口保留全部能力与参数约束，只压缩重复的自然语言描述。"""
+    if context_limit >= 16_384:
+        return tools
+
+    def trim(value: Any, *, top: bool = False) -> Any:
+        if isinstance(value, list):
+            return [trim(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "description":
+                if top:
+                    normalized = " ".join(str(item or "").split())
+                    if normalized:
+                        out[key] = normalized[:180]
+                continue
+            out[key] = trim(item)
+        return out
+
+    return [trim(copy.deepcopy(tool), top=True) for tool in tools]
 
 
 def _compact_history(db: Session, session: ExplorationSession,
@@ -183,7 +323,9 @@ def _compact_history(db: Session, session: ExplorationSession,
 def _prepare_history(db: Session, session: ExplorationSession,
                      call_kwargs: dict, message: str, attachments: str,
                      skills: dict[str, ExplorationSkill],
-                     web_search_enabled: bool = False) -> tuple[str, list[ExplorationMessage]]:
+                     web_search_enabled: bool = False,
+                     tools: list[dict] | None = None
+                     ) -> tuple[str, list[ExplorationMessage | _HistoryMessageView]]:
     summarized = max(0, session.summary_message_count or 0)
     rows = (db.query(ExplorationMessage)
             .filter(ExplorationMessage.session_id == session.id)
@@ -192,66 +334,176 @@ def _prepare_history(db: Session, session: ExplorationSession,
             .limit(_HISTORY_QUERY_CAP).all())
     pending = rows
 
-    context_limit = max(8_192, int(call_kwargs.get("max_context_tokens") or _DEFAULT_CONTEXT_TOKENS))
-    output_limit = min(
-        int(call_kwargs.get("max_output_tokens") or _DEFAULT_OUTPUT_TOKENS),
-        max(1_024, context_limit // 4),
-    )
-    call_kwargs["max_context_tokens"] = context_limit
-    call_kwargs["max_output_tokens"] = output_limit
+    context_limit, output_limit, input_budget = _configure_context_limits(call_kwargs)
+    request_tools = tools if tools is not None else TOOL_DEFS
+    tool_tokens = _estimate_tools(request_tools)
 
-    provisional = _system_prompt(session, skills, web_search_enabled) + attachments + message
-    provisional += "".join((row.content or "") for row in pending)
-    input_budget = max(4_096, context_limit - output_limit - 2_048)
+    provisional_messages = [{
+        "role": "system",
+        "content": _system_prompt(session, skills, web_search_enabled),
+    }]
+    provisional_messages.extend({
+        "role": row.role,
+        "content": row.content or "",
+    } for row in pending if row.role in ("user", "assistant"))
+    provisional_messages.append({"role": "user", "content": message})
+    provisional_tokens = (
+        _estimate_messages(provisional_messages)
+        + _estimate_tokens(attachments or "")
+        + tool_tokens
+    )
     should_compact = (len(pending) > _RECENT_HISTORY_KEEP * 2
-                      or _estimate_tokens(provisional) > int(input_budget * _COMPACTION_TRIGGER_RATIO))
+                      or provisional_tokens > int(
+                          input_budget * _COMPACTION_TRIGGER_RATIO))
     if should_compact and len(pending) > _RECENT_HISTORY_KEEP:
         _compact_history(db, session, pending[:-_RECENT_HISTORY_KEEP])
         pending = pending[-_RECENT_HISTORY_KEEP:]
 
-    sys_content = _system_prompt(session, skills, web_search_enabled)
-    if attachments:
-        sys_content += "\n\n" + attachments
+    # 从完整事实视图逐级降级到合法索引；任何候选都必须先算上 tool schema
+    # 与当前用户消息。权威状态和当前意图永远比旧历史、附件全文优先。
+    prompt_profiles: list[tuple[int, int | None, int]] = [
+        (_CANONICAL_INLINE_CAP, None, 30),
+        (12_000, 2_500, 20),
+        (6_000, 1_200, 12),
+        (3_000, 600, 8),
+        (_MIN_CANONICAL_INLINE_CAP, 256, 5),
+    ]
+    runtime_headroom = min(1_024, max(256, input_budget // 8))
+    initial_target = max(1, input_budget - runtime_headroom)
+    chosen: tuple[str, int, int | None, int] | None = None
+
+    def base_estimate(system_text: str) -> int:
+        return tool_tokens + _estimate_messages([
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": message},
+        ])
+
+    for canonical_cap, summary_cap, canvas_items in prompt_profiles:
+        candidate = _system_prompt(
+            session, skills, web_search_enabled,
+            canonical_max_chars=canonical_cap,
+            summary_max_tokens=summary_cap,
+            canvas_summary_max_items=canvas_items,
+        )
+        if base_estimate(candidate) <= initial_target:
+            chosen = (candidate, canonical_cap, summary_cap, canvas_items)
+            break
+
+    # 若只有不可省略协议已接近窗口，允许动用预留，但仍绝不突破硬输入预算。
+    if chosen is None:
+        canonical_cap, summary_cap, canvas_items = prompt_profiles[-1]
+        candidate = _system_prompt(
+            session, skills, web_search_enabled,
+            canonical_max_chars=canonical_cap,
+            summary_max_tokens=summary_cap,
+            canvas_summary_max_items=canvas_items,
+        )
+        required = base_estimate(candidate)
+        if required > input_budget:
+            raise ExplorationContextBudgetError(
+                "当前消息与业务探索的最小权威画布/工具协议合计约 "
+                f"{required} tokens，超过该模型可用输入预算 {input_budget} tokens"
+                f"（上下文 {context_limit}，已预留输出 {output_limit}）。"
+                "请缩短本条消息、把长材料改为附件，或选择上下文更大的模型。"
+            )
+        chosen = (candidate, canonical_cap, summary_cap, canvas_items)
+        initial_target = input_budget
+        runtime_headroom = 0
+
+    system_base, canonical_cap, summary_cap, canvas_items = chosen
+    sys_content = system_base
+    estimated = base_estimate(sys_content)
+    available = max(0, initial_target - estimated)
+
+    attachment_view = ""
+    if attachments and available > 32:
+        # 当前问题相关的附件证据优先于旧对话；若仍有历史，则最多先占 70%，
+        # 给最近确认保留空间。完整附件始终可通过分页工具继续读取。
+        attachment_budget = available if not pending else max(
+            32, int(available * 0.70))
+        attachment_view = _clip_text_to_tokens(
+            attachments,
+            attachment_budget,
+            marker=(
+                "\n…（附件片段因本模型窗口较小而缩减；完整资料仍可用 "
+                "manage_workspace_file.read 按 offset 分页读取）…\n"
+            ),
+        )
+        if attachment_view:
+            candidate_system = sys_content + "\n\n" + attachment_view
+            if base_estimate(candidate_system) <= initial_target:
+                sys_content = candidate_system
+            else:
+                attachment_view = ""
+
+    selected_reversed: list[ExplorationMessage | _HistoryMessageView] = []
+    current_messages = [
+        {"role": "system", "content": sys_content},
+        {"role": "user", "content": message},
+    ]
+    current_estimate = tool_tokens + _estimate_messages(current_messages)
+    history_budget = max(0, initial_target - current_estimate)
+    for row in reversed(pending):
+        if row.role not in ("user", "assistant") or not (row.content or "").strip():
+            continue
+        full_cost = 8 + _estimate_tokens(row.content or "")
+        if full_cost <= history_budget:
+            selected_reversed.append(row)
+            history_budget -= full_cost
+            continue
+        # 最近一条很长时保留头尾视图，避免反而回放更旧、遗漏最新口径。
+        if not selected_reversed and history_budget > 48:
+            clipped = _clip_text_to_tokens(row.content or "", history_budget - 8)
+            if clipped:
+                selected_reversed.append(_HistoryMessageView(row.role, clipped))
+        break
+    selected = list(reversed(selected_reversed))
+
+    final_messages = [{"role": "system", "content": sys_content}]
+    final_messages.extend({
+        "role": row.role,
+        "content": row.content,
+    } for row in selected)
+    final_messages.append({"role": "user", "content": message})
+    estimated_input = tool_tokens + _estimate_messages(final_messages)
+    if estimated_input > input_budget:
+        # 这是服务端预算不变量；不能把一个已知超窗请求交给 provider 碰运气。
+        raise ExplorationContextBudgetError(
+            f"业务探索请求预算计算失败：预计输入 {estimated_input} tokens，"
+            f"模型输入预算 {input_budget} tokens。请选择上下文更大的模型。")
+
     stats = dict(session.context_stats or {})
     stats.update({
         "contextLimit": context_limit,
         "outputLimit": output_limit,
-        "recentMessages": len(pending),
-        "estimatedInputTokens": _estimate_tokens(
-            sys_content + message + "".join((row.content or "") for row in pending)),
+        "safetyReserve": _safety_reserve(context_limit),
+        "inputBudget": input_budget,
+        "runtimeHeadroom": runtime_headroom,
+        "toolSchemaTokens": tool_tokens,
+        "recentMessages": len(selected),
+        "historyMessagesOmitted": max(0, len(pending) - len(selected)),
+        "attachmentTokens": (
+            _estimate_tokens(attachment_view) if attachment_view else 0),
+        "canonicalInlineCap": canonical_cap,
+        "summaryTokenCap": summary_cap,
+        "canvasSummaryMaxItems": canvas_items,
+        "estimatedInputTokens": estimated_input,
     })
     session.context_stats = stats
     db.commit()
-    return sys_content, pending
+    return sys_content, selected
 
 
-def _attachments_block(db: Session, session_id: str) -> str:
-    """已就绪的会话附件 → 注入引导师上下文的参考资料块（分文件截断 + 总量封顶）。"""
+def _attachments_block(db: Session, session_id: str, query: str = "") -> str:
+    """会话附件 → 来源隔离、按本轮问题检索的参考资料块。"""
     rows = (db.query(ExplorationAttachment)
-            .filter(ExplorationAttachment.session_id == session_id,
-                    ExplorationAttachment.status == "ready")
+            .filter(ExplorationAttachment.session_id == session_id)
             .order_by(ExplorationAttachment.created_at.asc()).all())
-    parts: list[str] = []
-    budget = _ATTACH_TOTAL_CAP
-    for r in rows:
-        text = (r.extracted_text or "").strip()
-        if not text:
-            continue
-        if budget <= 0:
-            parts.append("（其余附件因篇幅限制未展开，可在对话中点名让我聚焦某个文件）")
-            break
-        cap = min(_ATTACH_PER_FILE_CAP, budget)
-        clipped = text[:cap]
-        budget -= len(clipped)
-        suffix = "\n…（该文件内容较长，已截断）" if len(text) > len(clipped) else ""
-        parts.append(f"## 附件：{r.filename}\n{clipped}{suffix}")
-    if not parts:
-        return ""
-    return ("# 用户上传的参考资料（仅本会话可见）\n"
-            "以下是用户为这次业务探索上传的附件，作为澄清业务、沉淀画布的背景依据。"
-            "请主动从中提炼对象/主体/行为/事件/规则/场景，并在对话里与用户确认；"
-            "不要臆造资料中没有的信息，引用要点时注明来源文件名。\n\n"
-            + "\n\n".join(parts))
+    return build_attachment_context(
+        rows, query=query,
+        per_file_cap=_ATTACH_PER_FILE_CAP,
+        total_cap=_ATTACH_TOTAL_CAP,
+    )
 
 
 def _summarize(name: str, result: dict) -> str:
@@ -259,6 +511,11 @@ def _summarize(name: str, result: dict) -> str:
         return str(result["error"])[:120]
     if name == "web_search":
         return f"检索到 {len(result.get('results') or [])} 条公开网页结果"
+    if name == "get_canvas_elements":
+        page = result.get("page") or {}
+        return (f"读取 {page.get('returned', len(result.get('elements') or []))} 个"
+                f"{C.KIND_LABELS.get(result.get('kind', ''), result.get('kind', ''))}"
+                f" canonical 元素（画布 v{result.get('canvasVersion', '?')}）")
     label = C.KIND_LABELS.get(result.get("kind", ""), result.get("kind", ""))
     if name == "upsert_elements":
         s = f"沉淀 {result.get('applied', 0)} 个{label}模型元素"
@@ -292,6 +549,382 @@ def _summarize(name: str, result: dict) -> str:
     if name == "use_skill":
         return f"激活技能「{result.get('displayName', result.get('skill', ''))}」"
     return "完成"
+
+
+def _serialize_tool_result(result: dict, cap: int = _TOOL_RESULT_CAP) -> str:
+    """把工具结果编码为始终合法、显式标记截断的 JSON。
+
+    不能截取 JSON 字符串前缀：那会让下一次 LLM 收到不可解析的半个对象，并且
+    丢失 canvasVersion。超限时返回小型传输信封，模型可据提示缩小查询范围。
+    """
+    # 保留历史工具结果的常规 JSON 空格格式，兼容既有模型/审计快照。
+    payload = json.dumps(result, ensure_ascii=False, default=str)
+    safe_cap = max(128, int(cap))
+    if len(payload) <= safe_cap:
+        return payload
+
+    readiness = result.get("readiness") if isinstance(result.get("readiness"), dict) else {}
+    completeness = result.get("completeness") \
+        if isinstance(result.get("completeness"), dict) else {}
+    page = result.get("page") if isinstance(result.get("page"), dict) else \
+        result.get("canonicalPage") if isinstance(result.get("canonicalPage"), dict) else {}
+    envelope = {
+        "transportTruncated": True,
+        "originalChars": len(payload),
+        "canvasVersion": result.get("canvasVersion"),
+        "kind": result.get("kind"),
+        "resultTruncated": bool(result.get("truncated")),
+        "error": str(result.get("error") or "")[:300] or None,
+        "ids": [str(value) for value in (result.get("ids") or [])[:20]],
+        "page": page,
+        "nestedPages": (result.get("nestedPages") or [])[:5],
+        "readiness": {
+            key: readiness.get(key)
+            for key in ("ready", "stage", "gatesPassed", "gatesTotal",
+                        "blockingCount", "advisoryCount", "openQuestions")
+            if key in readiness
+        },
+        "counts": completeness.get("counts"),
+        "availableKeys": list(result)[:40],
+        "message": (
+            "工具结果超过传输上限，未发送不完整 JSON。读取画布时请用 "
+            "get_canvas_elements 的 ids/fields/nested_field/offset 缩小范围后重试。"
+        ),
+    }
+    encoded = json.dumps(envelope, ensure_ascii=False, default=str, separators=(",", ":"))
+    if len(encoded) <= safe_cap:
+        return encoded
+    # 极小测试上限或异常巨大的分页元数据：仍保留版本与截断事实。
+    minimal = {
+        "transportTruncated": True,
+        "originalChars": len(payload),
+        "canvasVersion": result.get("canvasVersion"),
+        "message": "结果过大；请缩小 get_canvas_elements 查询范围。",
+    }
+    return json.dumps(minimal, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _serialize_tool_result_for_budget(result: dict, max_tokens: int) -> str:
+    """按本轮剩余预算返回合法 JSON；再小也不产生半截 JSON。"""
+    token_cap = max(1, int(max_tokens))
+
+    # 文件/正文分页结果不能只剩“过大”信封，否则模型虽知道有下一页，却一字
+    # 未读。保留从 offset 开始的连续前缀，并把 nextOffset 改成真实可见末尾，
+    # 确保下一次分页不跳过被预算裁掉的正文。
+    content = result.get("content")
+    if isinstance(content, str) and content:
+        offset = max(0, int(result.get("offset") or 0))
+        compact = {
+            key: result.get(key)
+            for key in (
+                "operation", "id", "path", "version", "source", "authority",
+                "availableChars", "originalExtractedChars", "storageTruncated",
+                "notice", "securityNotice",
+            )
+            if result.get(key) is not None
+        }
+        compact.update({
+            "offset": offset,
+            "returnedChars": 0,
+            "hasMore": True,
+            "nextOffset": offset,
+            "content": "",
+            "transportTruncated": True,
+        })
+
+        low, high = 0, len(content)
+        best = ""
+        while low <= high:
+            keep = (low + high) // 2
+            prefix = content[:keep]
+            candidate = dict(compact)
+            candidate.update({
+                "returnedChars": len(prefix),
+                "hasMore": bool(
+                    len(prefix) < len(content) or result.get("hasMore")),
+                "nextOffset": (
+                    offset + len(prefix)
+                    if len(prefix) < len(content) or result.get("hasMore")
+                    else None
+                ),
+                "content": prefix,
+                "transportTruncated": len(prefix) < len(content),
+            })
+            encoded = json.dumps(
+                candidate, ensure_ascii=False, default=str, separators=(",", ":"))
+            if _estimate_tokens(encoded) <= token_cap:
+                best = encoded
+                low = keep + 1
+            else:
+                high = keep - 1
+        if best:
+            return best
+
+    payload = _serialize_tool_result(
+        result,
+        cap=min(_TOOL_RESULT_CAP, max(128, token_cap * 3)),
+    )
+    if _estimate_tokens(payload) <= token_cap:
+        return payload
+
+    minimal = {
+        "transportTruncated": True,
+        "canvasVersion": result.get("canvasVersion"),
+        "kind": result.get("kind"),
+        "error": str(result.get("error") or "")[:80] or None,
+        "message": "结果因上下文预算缩减；请用分页/字段投影重读。",
+    }
+    payload = json.dumps(
+        minimal, ensure_ascii=False, default=str, separators=(",", ":"))
+    if _estimate_tokens(payload) <= token_cap:
+        return payload
+    payload = json.dumps({
+        "transportTruncated": True,
+        "canvasVersion": result.get("canvasVersion"),
+    }, ensure_ascii=False, default=str, separators=(",", ":"))
+    if _estimate_tokens(payload) <= token_cap:
+        return payload
+    return "{}"
+
+
+def _strip_attachment_context(system_content: str) -> str:
+    value = str(system_content or "")
+    starts = [
+        index for marker in (
+            "\n\n# 用户提供的参考资料",
+            "\n\n# AI 工作草稿索引",
+        )
+        if (index := value.find(marker)) >= 0
+    ]
+    return value[:min(starts)] if starts else value
+
+
+def _runtime_checkpoint(
+    session: ExplorationSession,
+    steps: list[dict],
+    *,
+    minimal: bool = False,
+) -> str:
+    readiness = R.evaluate(session.canvas)
+    if minimal:
+        recent = "；".join(
+            str(item.get("summary") or item.get("tool") or "")[:60]
+            for item in steps[-3:]
+        )
+        return (
+            "# 本回合服务端工具检查点（权威，覆盖上方旧画布）\n"
+            f"canvasVersion={session.canvas_version or 0}；质量门 "
+            f"{readiness['gatesPassed']}/{readiness['gatesTotal']}；"
+            f"堵门 {readiness['blockingCount']}。"
+            f"最近步骤：{recent or '无'}。"
+        )
+    payload = {
+        "notice": (
+            "部分较早工具调用因模型窗口预算从本次请求视图省略；"
+            "它们的完整结果仍在服务端审计记录。下列状态是最新权威事实。"
+        ),
+        "canvasVersion": session.canvas_version or 0,
+        "readiness": {
+            key: readiness.get(key)
+            for key in (
+                "ready", "stage", "gatesPassed", "gatesTotal",
+                "blockingCount", "advisoryCount", "openQuestions",
+            )
+        },
+        "canonical": C.canonical_snapshot(
+            session.canvas, max_chars=_MIN_CANONICAL_INLINE_CAP),
+        "recentSteps": [
+            {
+                "tool": item.get("tool"),
+                "summary": str(item.get("summary") or "")[:160],
+                "error": str(item.get("error") or "")[:120] or None,
+            }
+            for item in steps[-5:]
+        ],
+    }
+    return (
+        "# 本回合服务端工具检查点（权威，覆盖上方旧画布）\n"
+        + json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))
+    )
+
+
+def _runtime_chunks(messages: list[dict], start: int) -> list[tuple[bool, list[dict]]]:
+    """把运行期消息分成可整体省略的 tool batch 与不可省略的普通消息。"""
+    chunks: list[tuple[bool, list[dict]]] = []
+    index = max(0, int(start))
+    while index < len(messages):
+        item = messages[index]
+        if item.get("role") == "assistant" and item.get("tool_calls"):
+            group = [item]
+            index += 1
+            while index < len(messages) and messages[index].get("role") == "tool":
+                group.append(messages[index])
+                index += 1
+            chunks.append((True, group))
+            continue
+        chunks.append((False, [item]))
+        index += 1
+    return chunks
+
+
+def _fit_provider_messages(
+    messages: list[dict],
+    tools: list[dict],
+    input_budget: int,
+    *,
+    history_count: int,
+    tool_chain_start: int,
+    session: ExplorationSession,
+    steps: list[dict],
+) -> list[dict]:
+    """为每一次 provider 调用建立预算内视图，并保持 tool call/result 成组。"""
+    prefix = list(messages[:tool_chain_start])
+    if not prefix:
+        raise ExplorationContextBudgetError("业务探索请求缺少 system message")
+    system = dict(prefix[0])
+    history_end = min(len(prefix), 1 + max(0, int(history_count)))
+    history = list(prefix[1:history_end])
+    current = list(prefix[history_end:])
+    chunks = _runtime_chunks(messages, tool_chain_start)
+    tool_group_total = sum(1 for droppable, _ in chunks if droppable)
+    tool_tokens = _estimate_tools(tools)
+
+    def render(
+        history_keep: int,
+        drop_tool_groups: int,
+        *,
+        strip_attachments: bool,
+        checkpoint_minimal: bool = False,
+    ) -> list[dict]:
+        system_view = dict(system)
+        content = str(system_view.get("content") or "")
+        if strip_attachments:
+            content = _strip_attachment_context(content)
+        if drop_tool_groups:
+            content += "\n\n" + _runtime_checkpoint(
+                session, steps, minimal=checkpoint_minimal)
+        system_view["content"] = content
+
+        chain: list[dict] = []
+        seen_tool_groups = 0
+        for droppable, group in chunks:
+            if droppable:
+                seen_tool_groups += 1
+                if seen_tool_groups <= drop_tool_groups:
+                    continue
+            chain.extend(group)
+        kept_history = history[-history_keep:] if history_keep else []
+        return [system_view, *kept_history, *current, *chain]
+
+    def fits(candidate: list[dict]) -> bool:
+        return tool_tokens + _estimate_messages(candidate) <= input_budget
+
+    # 先牺牲旧自然语言历史；工具结果是本回合刚验证的证据，优先保留。
+    for keep in range(len(history), -1, -1):
+        candidate = render(keep, 0, strip_attachments=False)
+        if fits(candidate):
+            return candidate
+
+    # 再用“最新权威状态 + 最近 tool batch”替代较早的完整工具往返。
+    for dropped in range(1, tool_group_total + 1):
+        for minimal in (False, True):
+            candidate = render(
+                0, dropped, strip_attachments=False,
+                checkpoint_minimal=minimal,
+            )
+            if fits(candidate):
+                return candidate
+
+    # 附件原文最后降级；它仍在会话文件空间，可由模型按 offset 重读。
+    for dropped in range(0, tool_group_total + 1):
+        checkpoint_modes = (False, True) if dropped else (False,)
+        for minimal in checkpoint_modes:
+            candidate = render(
+                0, dropped, strip_attachments=True,
+                checkpoint_minimal=minimal,
+            )
+            if fits(candidate):
+                return candidate
+
+    raise ExplorationContextBudgetError(
+        "本回合累计工具证据已超过模型输入预算，且无法在保留当前问题和权威状态的"
+        "前提下安全压缩。请继续下一回合，服务端会从已持久化画布接着处理。")
+
+
+def _tool_budget_fallback(session: ExplorationSession, steps: list[dict]) -> str:
+    """最终总结调用失败时，给出不夸大实际动作的确定性说明。"""
+    writes = {
+        "upsert_elements", "remove_elements", "raise_questions", "resolve_questions",
+    }
+    write_count = sum(
+        1 for step in steps
+        if step.get("tool") in writes and not step.get("error")
+    )
+    errors = sum(1 for step in steps if step.get("error"))
+    readiness = R.evaluate(session.canvas)
+    return (
+        f"本回合工具预算已用尽：共执行 {len(steps)} 个工具步骤，"
+        f"其中 {write_count} 个画布/账本写入成功，{errors} 个步骤失败。"
+        f"当前质量门 {readiness['gatesPassed']}/{readiness['gatesTotal']}，"
+        f"仍有 {readiness['blockingCount']} 项堵门。"
+        "由于最终综合未完成，请继续对话，我会从当前权威画布接着处理；"
+        "以上计数不代表所有工具步骤都是画布修改。"
+    )
+
+
+def _finalize_after_tool_budget(
+    call_kwargs: dict,
+    messages: list[dict],
+    session: ExplorationSession,
+    steps: list[dict],
+    usage_total: dict,
+    *,
+    input_budget: int,
+    history_count: int,
+    tool_chain_start: int,
+) -> str:
+    """工具循环耗尽后，额外预留一次禁用工具的最终综合调用。"""
+    context_limit = int(
+        call_kwargs.get("max_context_tokens") or _DEFAULT_CONTEXT_TOKENS)
+    canonical_cap = (
+        _MIN_CANONICAL_INLINE_CAP if context_limit < 16_384
+        else 6_000 if context_limit < 32_768
+        else _CANONICAL_INLINE_CAP
+    )
+    latest = {
+        "canvasVersion": session.canvas_version or 0,
+        "readiness": R.evaluate(session.canvas),
+        "canonical": C.canonical_snapshot(session.canvas, max_chars=canonical_cap),
+    }
+    final_messages = [*messages, {
+        "role": "user",
+        "content": (
+            "本回合工具调用预算已用尽。现在没有任何工具可用，请基于上面的真实工具结果与"
+            "下方最新权威状态，给用户一段简洁中文总结：区分已成功写入、失败/未完成事项，"
+            "说明当前质量门和下一步最关键的 1-2 个问题；不得声称搜索、读文件或失败调用"
+            "属于画布修改，也不得补造未进入 canonical 的事实。\n"
+            + json.dumps(latest, ensure_ascii=False, default=str)
+        ),
+    }]
+    try:
+        provider_messages = _fit_provider_messages(
+            final_messages, [], input_budget,
+            history_count=history_count,
+            tool_chain_start=tool_chain_start,
+            session=session,
+            steps=steps,
+        )
+        response = llm_bridge.chat(call_kwargs, provider_messages, [])
+    except (llm_bridge.LLMError, ExplorationContextBudgetError):
+        logger.warning("业务探索工具预算耗尽后的最终综合调用失败", exc_info=True)
+        return _tool_budget_fallback(session, steps)
+
+    for key in usage_total:
+        value = (response.get("usage") or {}).get(key)
+        if value:
+            usage_total[key] += value
+    content = str(response.get("content") or "").strip()
+    return content or _tool_budget_fallback(session, steps)
 
 
 def _canvas_event(session: ExplorationSession) -> dict:
@@ -343,11 +976,18 @@ def _run(db: Session, session_id: str, user, message: str,
     tools = TOOL_DEFS + ([OFFICE_TOOL] if O.available() else []) \
         + ([USE_SKILL_TOOL] if skills else []) \
         + ([WEB_SEARCH_TOOL] if web_search else [])
+    context_limit = int(
+        call_kwargs.get("max_context_tokens") or _DEFAULT_CONTEXT_TOKENS)
+    tools = _compact_tool_schemas(tools, context_limit)
 
-    attach_block = _attachments_block(db, session.id)
-    sys_content, history = _prepare_history(
-        db, session, call_kwargs, message, attach_block, skills,
-        web_search_enabled=web_search)
+    attach_block = _attachments_block(db, session.id, message)
+    try:
+        sys_content, history = _prepare_history(
+            db, session, call_kwargs, message, attach_block, skills,
+            web_search_enabled=web_search, tools=tools)
+    except ExplorationContextBudgetError as exc:
+        yield {"type": "error", "message": str(exc)}
+        return
     db.add(ExplorationMessage(session_id=session.id, role="user", content=message))
     db.commit()
     messages: list[dict] = [{"role": "system", "content": sys_content}]
@@ -355,8 +995,17 @@ def _run(db: Session, session_id: str, user, message: str,
         if m.role in ("user", "assistant") and (m.content or "").strip():
             messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": message})
+    history_count = len(messages) - 2
+    tool_chain_start = len(messages)
+    input_budget = (
+        int(call_kwargs["max_context_tokens"])
+        - int(call_kwargs["max_output_tokens"])
+        - _safety_reserve(int(call_kwargs["max_context_tokens"]))
+    )
 
-    runner = ExplorationToolRunner(db, session, skills=skills)
+    runner = ExplorationToolRunner(
+        db, session, skills=skills, user_message=message,
+    )
     steps: list[dict] = []
     web_search_count = 0
     usage_total = {"inputTokens": 0, "outputTokens": 0}
@@ -365,7 +1014,32 @@ def _run(db: Session, session_id: str, user, message: str,
 
     for _ in range(_MAX_STEPS):
         try:
-            resp = llm_bridge.chat(call_kwargs, messages, tools)
+            provider_messages = _fit_provider_messages(
+                messages, tools, input_budget,
+                history_count=history_count,
+                tool_chain_start=tool_chain_start,
+                session=session,
+                steps=steps,
+            )
+            estimated_call = (
+                _estimate_tools(tools) + _estimate_messages(provider_messages))
+            stats = dict(session.context_stats or {})
+            stats["lastProviderEstimatedInputTokens"] = estimated_call
+            stats["peakProviderEstimatedInputTokens"] = max(
+                int(stats.get("peakProviderEstimatedInputTokens") or 0),
+                estimated_call,
+            )
+            session.context_stats = stats
+            resp = llm_bridge.chat(call_kwargs, provider_messages, tools)
+        except ExplorationContextBudgetError as exc:
+            answer = (
+                _tool_budget_fallback(session, steps)
+                if steps else str(exc)
+            )
+            yield {"type": "error", "message": str(exc)}
+            _persist_assistant(
+                db, session, answer, steps, call_kwargs, usage_total)
+            return
         except llm_bridge.LLMError as e:
             yield {"type": "error", "message": str(e)}
             _persist_assistant(db, session, f"[执行中断] {e}", steps, call_kwargs, usage_total)
@@ -441,13 +1115,24 @@ def _run(db: Session, session_id: str, user, message: str,
             if runner.canvas_dirty:
                 yield _canvas_event(session)
 
-            payload = json.dumps(result, ensure_ascii=False, default=str)
-            if len(payload) > _TOOL_RESULT_CAP:
-                payload = payload[:_TOOL_RESULT_CAP] + "…（已截断）"
+            per_result_tokens = max(
+                96,
+                min(
+                    1_800,
+                    input_budget // 16 // max(1, len(resp["tool_calls"])),
+                ),
+            )
+            payload = _serialize_tool_result_for_budget(
+                result, per_result_tokens)
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": payload})
     else:
-        answer = f"本回合已沉淀 {len(steps)} 步画布修改。信息量较大，请继续对话逐项确认。"
+        answer = _finalize_after_tool_budget(
+            call_kwargs, messages, session, steps, usage_total,
+            input_budget=input_budget,
+            history_count=history_count,
+            tool_chain_start=tool_chain_start,
+        )
 
     _persist_assistant(db, session, answer or "", steps, call_kwargs, usage_total)
     yield {"type": "answer", "content": answer, "usage": usage_total}

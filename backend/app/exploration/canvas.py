@@ -15,6 +15,8 @@
 """
 from __future__ import annotations
 
+import copy
+import json
 import re
 import uuid
 from typing import Any, Optional
@@ -65,6 +67,7 @@ class AttributeSpec(_El):
 class RelationSpec(BaseModel):
     model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
                               str_strip_whitespace=True)
+    id: Optional[str] = None
     target: str = Field(min_length=1)    # 目标对象名
     name: Optional[str] = None           # 关系标识（英文）
     display_name: Optional[str] = None   # 关系显示名（如「归属于」）
@@ -139,6 +142,7 @@ class Rule(_El):
 class ScenarioBranch(BaseModel):
     model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
                               str_strip_whitespace=True)
+    id: Optional[str] = None
     from_step: int = Field(ge=1)          # 1-based steps 下标
     to_step: Optional[int] = Field(default=None, ge=1)  # None 表示流程结束
     condition: str = Field(min_length=1)
@@ -181,8 +185,149 @@ def _ensure_canvas(canvas: Any) -> dict:
     return out
 
 
+_NESTED_MODELS: dict[str, dict[str, type[BaseModel]]] = {
+    "object": {"attributes": AttributeSpec, "relations": RelationSpec},
+    "actor": {"attributes": AttributeSpec},
+    "behavior": {"inputs": AttributeSpec},
+    "scenario": {"branches": ScenarioBranch},
+}
+
+
+def _canonical_patch(model: type[BaseModel], raw: dict) -> dict:
+    """把 camel/snake 双写的稀疏补丁统一成模型内部字段名。
+
+    这里故意不先做完整 model_validate：已存在的父/子元素允许仅凭 id
+    修改一个字段，最终合并后的完整对象才接受 Pydantic 校验。
+    """
+    aliases: dict[str, str] = {}
+    for name, field in model.model_fields.items():
+        aliases[name] = name
+        if isinstance(field.alias, str):
+            aliases[field.alias] = name
+    return {aliases[key]: value for key, value in raw.items() if key in aliases}
+
+
+def _child_match_index(items: list[dict], raw: dict, model: type[BaseModel]) -> Optional[int]:
+    child_id = str(raw.get("id") or "").strip()
+    if child_id:
+        for index, item in enumerate(items):
+            if str(item.get("id") or "") == child_id:
+                return index
+
+    if model is AttributeSpec:
+        name = norm_name(str(raw.get("name") or ""))
+        if name:
+            for index, item in enumerate(items):
+                if norm_name(str(item.get("name") or "")) == name:
+                    return index
+    elif model is RelationSpec:
+        name = norm_name(str(raw.get("name") or ""))
+        target = norm_name(str(raw.get("target") or ""))
+        if name:
+            for index, item in enumerate(items):
+                if norm_name(str(item.get("name") or "")) == name:
+                    return index
+        if target:
+            matches = [
+                index for index, item in enumerate(items)
+                if norm_name(str(item.get("target") or "")) == target
+            ]
+            # 同一对象允许多条不同语义关系；只在目标唯一时把 target 当后备键。
+            if len(matches) == 1:
+                return matches[0]
+    elif model is ScenarioBranch:
+        from_step = raw.get("from_step", raw.get("fromStep"))
+        condition = norm_name(str(raw.get("condition") or ""))
+        if from_step is not None and condition:
+            for index, item in enumerate(items):
+                if item.get("from_step") == from_step \
+                        and norm_name(str(item.get("condition") or "")) == condition:
+                    return index
+    return None
+
+
+def _validation_message(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(p) for p in item['loc'])}: {item['msg']}"
+        for item in error.errors()[:3]
+    )
+
+
+def _ensure_child_ids(items: list[dict], model: type[BaseModel]) -> list[dict]:
+    """为支持 id 定位的结构化子项补稳定 id；不改变其余字段。"""
+    if "id" not in model.model_fields:
+        return items
+    out: list[dict] = []
+    for item in items:
+        data = dict(item)
+        data["id"] = data.get("id") or f"sub-{uuid.uuid4().hex[:10]}"
+        out.append(data)
+    return out
+
+
+def _merge_nested_list(existing: list[dict], patches: list[Any],
+                       model: type[BaseModel], field: str) -> tuple[list[dict], list[str]]:
+    """合并结构化子项。
+
+    - 非空列表是按 id（其次自然键）的增量补丁，不会替换未提及子项；
+    - [] 仍是显式清空，兼容历史工具调用；
+    - 子项 ``{"id": "...", "_delete": true}`` 是可审计的显式删除。
+    """
+    if not patches:
+        return [], []
+
+    items = [dict(item) for item in existing if isinstance(item, dict)]
+    errors: list[str] = []
+    for raw in patches:
+        if not isinstance(raw, dict):
+            errors.append(f"{field} 子项必须是对象，收到: {type(raw).__name__}")
+            continue
+        index = _child_match_index(items, raw, model)
+        deleting = raw.get("_delete") is True
+        if deleting:
+            if index is None:
+                identity = raw.get("id") or raw.get("name") or raw.get("target") or "?"
+                errors.append(f"{field} 删除目标「{identity}」不存在")
+            else:
+                items.pop(index)
+            continue
+
+        patch = _canonical_patch(model, raw)
+        try:
+            if index is None:
+                child = model.model_validate(patch).model_dump(exclude_none=True)
+                child = _ensure_child_ids([child], model)[0]
+                items.append(child)
+            else:
+                current = dict(items[index])
+                # 子项中的显式 null 有实际含义（如 branch.to_step=null、清除 enum），
+                # 因此与父元素沿用的“None 不覆盖”策略不同。
+                candidate = {**current, **patch}
+                child = model.model_validate(candidate).model_dump(exclude_none=True)
+                child["id"] = current.get("id") or child.get("id") \
+                    or f"sub-{uuid.uuid4().hex[:10]}"
+                items[index] = child
+        except ValidationError as error:
+            identity = raw.get("id") or raw.get("name") or raw.get("target") or "?"
+            errors.append(f"{field} 子项「{identity}」不合法: {_validation_message(error)}")
+
+    return _ensure_child_ids(items, model), errors
+
+
+def _new_element(model: type[_El], kind: str, raw: dict) -> dict:
+    data = model.model_validate(raw).model_dump(exclude_none=True)
+    data["id"] = data.get("id") or f"el-{uuid.uuid4().hex[:8]}"
+    for field, child_model in _NESTED_MODELS.get(kind, {}).items():
+        data[field] = _ensure_child_ids(
+            [dict(item) for item in (data.get(field) or [])], child_model)
+    return data
+
+
 def upsert_elements(canvas: Any, kind: str, elements: list[dict]) -> tuple[dict, list[str], list[str]]:
     """按 id（其次归一化 name）upsert；返回 (新画布, 生效元素 id 列表, 错误列表)。
+
+    已有元素使用稀疏字段补丁。attributes / relations / inputs / branches
+    使用子项 id（其次自然键）增量合并；只有显式 [] 才清空整表。
 
     始终返回全新 dict —— SQLAlchemy JSON 列必须整体重新赋值才会写库。
     """
@@ -193,51 +338,238 @@ def upsert_elements(canvas: Any, kind: str, elements: list[dict]) -> tuple[dict,
     out = _ensure_canvas(canvas)
     key = KIND_KEYS[kind]
     items: list[dict] = [dict(x) for x in out[key]]
-    by_id = {x.get("id"): i for i, x in enumerate(items) if x.get("id")}
-    by_name = {norm_name(x.get("name", "")): i for i, x in enumerate(items) if x.get("name")}
-
     applied: list[str] = []
     errors: list[str] = []
     for raw in elements or []:
         if not isinstance(raw, dict):
             errors.append(f"元素必须是对象，收到: {type(raw).__name__}")
             continue
-        try:
-            el = model.model_validate(raw)
-        except ValidationError as e:
-            bad = "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
-                            for err in e.errors()[:3])
-            errors.append(f"元素「{raw.get('name', '?')}」不合法: {bad}")
-            continue
+
+        raw_id = str(raw.get("id") or "").strip()
+        raw_name = str(raw.get("name") or "").strip()
         idx = None
-        if el.id and el.id in by_id:
-            idx = by_id[el.id]
-        elif norm_name(el.name) in by_name:
-            idx = by_name[norm_name(el.name)]
+        if raw_id:
+            idx = next((i for i, item in enumerate(items)
+                        if str(item.get("id") or "") == raw_id), None)
+        if idx is None and raw_name:
+            normalized = norm_name(raw_name)
+            idx = next((i for i, item in enumerate(items)
+                        if norm_name(str(item.get("name") or "")) == normalized), None)
+
         if idx is not None:
-            # 字段级合并保护已确认数据：LLM 只修一个字段时，未提供的属性、
-            # 关系等保持原值；显式传 [] 仍可清空列表。
-            patch = el.model_dump(exclude_none=True, exclude_unset=True)
-            data = {**items[idx], **patch}
-            data["id"] = items[idx].get("id") or f"el-{uuid.uuid4().hex[:8]}"
+            current = dict(items[idx])
+            patch = _canonical_patch(model, raw)
+            data = dict(current)
+            nested_errors: list[str] = []
+            for field, value in patch.items():
+                if field in _NESTED_MODELS.get(kind, {}):
+                    if not isinstance(value, list):
+                        nested_errors.append(f"{field}: 必须是数组")
+                        continue
+                    merged, child_errors = _merge_nested_list(
+                        current.get(field) or [], value,
+                        _NESTED_MODELS[kind][field], field)
+                    data[field] = merged
+                    nested_errors.extend(child_errors)
+                elif value is not None:
+                    # 与旧语义一致：父元素显式 null 不擦除已确认值。
+                    data[field] = value
+            if nested_errors:
+                errors.append(
+                    f"元素「{current.get('name', raw_name or raw_id or '?')}」不合法: "
+                    + "; ".join(nested_errors[:3]))
+                continue
+            data["id"] = current.get("id") or raw_id or f"el-{uuid.uuid4().hex[:8]}"
             try:
                 data = model.model_validate(data).model_dump(exclude_none=True)
-            except ValidationError as e:
-                bad = "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
-                                for err in e.errors()[:3])
-                errors.append(f"元素「{el.name}」合并后不合法: {bad}")
+            except ValidationError as error:
+                errors.append(
+                    f"元素「{current.get('name', raw_name or raw_id or '?')}」合并后不合法: "
+                    f"{_validation_message(error)}")
+                continue
+            duplicate = next(
+                (
+                    item for item_index, item in enumerate(items)
+                    if item_index != idx
+                    and norm_name(str(item.get("name") or ""))
+                    == norm_name(str(data.get("name") or ""))
+                ),
+                None,
+            )
+            if duplicate is not None:
+                errors.append(
+                    f"元素「{current.get('name', raw_name or raw_id or '?')}」重命名后与"
+                    f"已有元素「{duplicate.get('name')}」的稳定 name 冲突；"
+                    "请保留唯一英文标识符，不能仅靠 id 制造同名元素")
                 continue
             items[idx] = data
         else:
-            data = el.model_dump(exclude_none=True)
-            data["id"] = el.id or f"el-{uuid.uuid4().hex[:8]}"
-            by_id[data["id"]] = len(items)
-            by_name[norm_name(el.name)] = len(items)
+            if not raw_name:
+                errors.append(
+                    f"元素「{raw_id or '?'}」不合法: 新元素必须提供 name；"
+                    f"未找到 id「{raw_id or '?'}」对应的已有元素")
+                continue
+            try:
+                data = _new_element(model, kind, raw)
+            except ValidationError as error:
+                errors.append(f"元素「{raw_name or '?'}」不合法: {_validation_message(error)}")
+                continue
             items.append(data)
         applied.append(data["id"])
 
     out[key] = items
     return out, applied, errors
+
+
+def canvas_elements_page(canvas: Any, kind: str, ids: Optional[list[str]] = None,
+                         offset: int = 0, limit: int = 10,
+                         fields: Optional[list[str]] = None,
+                         nested_field: Optional[str] = None,
+                         nested_offset: int = 0,
+                         nested_limit: int = 50) -> dict:
+    """读取完整 canonical 元素；支持极大元素的字段/嵌套列表分页。
+
+    默认返回元素的全部字段。只有显式传 fields 或 nested_field 时才投影，
+    且始终保留 id/name 便于下一次安全 patch。
+    """
+    if kind not in KIND_MODELS:
+        raise ValueError(f"未知模型类别: {kind}")
+    c = _ensure_canvas(canvas)
+    source = [copy.deepcopy(item) for item in c[KIND_KEYS[kind]]
+              if isinstance(item, dict)]
+    requested = [str(value).strip() for value in (ids or []) if str(value).strip()]
+    if requested:
+        exact = set(requested)
+        normalized = {norm_name(value) for value in requested}
+        source = [
+            item for item in source
+            if str(item.get("id") or "") in exact
+            or norm_name(str(item.get("name") or "")) in normalized
+            or norm_name(str(item.get("display_name") or "")) in normalized
+        ]
+
+    safe_offset = max(0, int(offset or 0))
+    safe_limit = max(1, min(50, int(limit or 10)))
+    total = len(source)
+    page_items = source[safe_offset:safe_offset + safe_limit]
+
+    allowed_fields = set(KIND_MODELS[kind].model_fields)
+    selected_fields: Optional[list[str]] = None
+    if fields:
+        selected_fields = []
+        for raw_field in fields:
+            field = str(raw_field).strip()
+            snake = next(
+                (name for name, info in KIND_MODELS[kind].model_fields.items()
+                 if field in {name, info.alias}), None)
+            if snake and snake not in selected_fields:
+                selected_fields.append(snake)
+        if not selected_fields:
+            raise ValueError("fields 未包含该模型的合法字段")
+
+    nested_name = str(nested_field or "").strip()
+    if nested_name:
+        nested_name = next(
+            (name for name, info in KIND_MODELS[kind].model_fields.items()
+             if nested_name in {name, info.alias}), "")
+        if not nested_name or nested_name not in allowed_fields:
+            raise ValueError(f"nested_field 不是 {kind} 的合法字段")
+        if nested_name not in _NESTED_MODELS.get(kind, {}):
+            raise ValueError(f"{nested_name} 不是可分页的结构化子项字段")
+
+    nested_pages: list[dict] = []
+    projected: list[dict] = []
+    for item in page_items:
+        if selected_fields is not None:
+            item = {key: value for key, value in item.items()
+                    if key in {"id", "name", nested_name} or key in selected_fields}
+        if nested_name:
+            values = list(item.get(nested_name) or [])
+            start = max(0, int(nested_offset or 0))
+            size = max(1, min(200, int(nested_limit or 50)))
+            item = {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                nested_name: values[start:start + size],
+            }
+            nested_pages.append({
+                "elementId": item.get("id"),
+                "field": nested_name,
+                "offset": start,
+                "limit": size,
+                "returned": len(item[nested_name]),
+                "total": len(values),
+                "hasMore": start + size < len(values),
+                "nextOffset": start + size if start + size < len(values) else None,
+            })
+        projected.append(item)
+
+    has_more = safe_offset + safe_limit < total
+    return {
+        "kind": kind,
+        "elements": projected,
+        "page": {
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "returned": len(projected),
+            "total": total,
+            "hasMore": has_more,
+            "nextOffset": safe_offset + safe_limit if has_more else None,
+        },
+        "nestedPages": nested_pages,
+        "truncated": has_more or any(page["hasMore"] for page in nested_pages),
+    }
+
+
+def canonical_snapshot(canvas: Any, max_chars: int = 24_000) -> dict:
+    """给系统提示使用的合法 JSON 快照；超限时明确降级为索引而非截断 JSON。"""
+    c = copy.deepcopy(_ensure_canvas(canvas))
+    full = {"complete": True, "canvas": c}
+    serialized = json.dumps(full, ensure_ascii=False, separators=(",", ":"), default=str)
+    safe_cap = max(1_000, int(max_chars))
+    if len(serialized) <= safe_cap:
+        return full
+
+    # 降级索引自身也必须有界，避免极端元素数量再次撑爆上下文。
+    index_limit = 50
+    fallback = {
+        "complete": False,
+        "reason": "canonical canvas exceeds inline context budget; use get_canvas_elements",
+        "serializedChars": len(serialized),
+        "counts": {key: len(c[key]) for key in KIND_KEYS.values()},
+        "index": {
+            key: [
+                {"id": str(item.get("id") or "")[:120],
+                 "name": str(item.get("name") or "")[:120],
+                 "display_name": str(item.get("display_name") or "")[:120]}
+                for item in c[key][:index_limit] if isinstance(item, dict)
+            ]
+            for key in KIND_KEYS.values()
+        },
+        "indexTruncated": {
+            key: len(c[key]) > index_limit for key in KIND_KEYS.values()
+        },
+    }
+    fallback_json = json.dumps(
+        fallback, ensure_ascii=False, separators=(",", ":"), default=str)
+    if len(fallback_json) <= safe_cap:
+        return fallback
+    return {
+        "complete": False,
+        "reason": "canonical canvas and index exceed inline context budget; "
+                  "use get_canvas_elements",
+        "serializedChars": len(serialized),
+        "counts": fallback["counts"],
+        "indexOmitted": True,
+    }
+
+
+def canonical_snapshot_json(canvas: Any, max_chars: int = 24_000) -> str:
+    snapshot = canonical_snapshot(canvas, max_chars=max_chars)
+    pretty = json.dumps(snapshot, ensure_ascii=False, indent=2, default=str)
+    if len(pretty) <= max(1_000, int(max_chars)):
+        return pretty
+    return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def remove_elements(canvas: Any, kind: str, ids: list[str]) -> tuple[dict, int, list[str]]:

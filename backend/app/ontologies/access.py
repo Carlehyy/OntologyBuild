@@ -18,6 +18,13 @@ from app.config import settings
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
+def require_ontology_create_access(user) -> None:
+    """Require the same role used by the canonical ontology-create endpoint."""
+    role = str(getattr(user, "role", "") or "")
+    if role not in {"admin", "editor"}:
+        raise HTTPException(403, "Viewer role is read-only")
+
+
 def require_ontology_access(
     db: Session,
     ontology_id: str,

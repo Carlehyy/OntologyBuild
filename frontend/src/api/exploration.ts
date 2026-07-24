@@ -130,6 +130,13 @@ export interface BxDocumentListItem {
   sessionId: string
   title: string
   version: number
+  /** 文档生成时的画布版本；历史文档可能没有该元数据。 */
+  sourceCanvasVersion: number | null
+  sourceCanvasFingerprint: string
+  /** 当前会话画布状态，接口会在读取时实时计算。 */
+  currentCanvasVersion: number
+  currentCanvasFingerprint: string
+  isStale: boolean
   createdAt: string
 }
 
@@ -179,6 +186,16 @@ export interface DraftAction {
   displayName: string
   description?: string
   objectTypeKey?: string | null
+  actorRefs?: {
+    id?: string
+    name: string
+    displayName?: string
+    kind?: string
+    description?: string
+    responsibilities?: string[]
+    keyAttribute?: string | null
+  }[]
+  sourceRefs?: string[]
   parameters: DraftProperty[]
   rules: { name: string; enabled: boolean; config: { errorMessage?: string } }[]
   requiresApproval: boolean
@@ -227,7 +244,34 @@ export interface DraftReport {
   /** 生成时刻的质量门快照；gateOverride=true 表示未就绪被显式越权 */
   readiness?: Pick<Readiness, 'ready' | 'stage' | 'gatesPassed' | 'gatesTotal' | 'blockingCount' | 'advisoryCount'>
   gateOverride?: boolean
+  /** 无法完整映射到运行时模型的语义及其原始画布血缘。 */
+  semanticIssues?: DraftSemanticIssue[]
+  semanticFidelity?: {
+    blockingCount: number
+    unsupportedCount: number
+    readyToApply: boolean
+  }
+  /** 强制生成的审计留痕。 */
+  staleDocumentOverride?: boolean
+  semanticOverride?: boolean
+  sourceDocument?: DocumentSourceState
   validation?: DraftValidation
+}
+
+export interface DraftSemanticIssue {
+  code: string
+  severity: 'blocking' | 'unsupported'
+  message: string
+  key?: string
+  sourceRefs?: string[]
+}
+
+export interface DocumentSourceState {
+  sourceCanvasVersion: number | null
+  sourceCanvasFingerprint: string
+  currentCanvasVersion: number
+  currentCanvasFingerprint: string
+  isStale: boolean
 }
 
 export interface DraftValidationIssue {
@@ -411,20 +455,33 @@ export async function streamExplorationChat(
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sawDone = false
+  const consumeChunk = (chunk: string) => {
+    for (const line of chunk.split('\n')) {
+      if (!line.startsWith('data:')) continue
+      try {
+        const event = JSON.parse(line.slice(5).trim()) as ExploreEvent
+        if (event.type === 'done') sawDone = true
+        onEvent(event)
+      } catch { /* 忽略无法解析的行 */ }
+    }
+  }
   for (;;) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      buffer += decoder.decode()
+      break
+    }
     buffer += decoder.decode(value, { stream: true })
     let idx: number
     while ((idx = buffer.indexOf('\n\n')) >= 0) {
       const chunk = buffer.slice(0, idx)
       buffer = buffer.slice(idx + 2)
-      for (const line of chunk.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        try {
-          onEvent(JSON.parse(line.slice(5).trim()) as ExploreEvent)
-        } catch { /* 忽略无法解析的行 */ }
-      }
+      consumeChunk(chunk)
     }
+  }
+  if (buffer.trim()) consumeChunk(buffer)
+  if (!sawDone && !signal?.aborted) {
+    throw new Error('对话连接在完成前中断，请重试；未完成内容不会写入当前会话')
   }
 }

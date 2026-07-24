@@ -6,6 +6,9 @@
 """
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
 from typing import Optional
 
@@ -20,6 +23,56 @@ from app.exploration.models import ExplorationDocument, ExplorationMessage, Expl
 logger = logging.getLogger(__name__)
 
 _NARRATIVE_FALLBACK = "> （未配置 LLM 或叙述生成失败，此节留待补充。清单章节由业务画布确定性生成，不受影响。）"
+_SOURCE_META_KEY = "_document_source"
+
+
+def canvas_fingerprint(canvas: dict) -> str:
+    """对业务画布做稳定 SHA-256 指纹。
+
+    文档自己的来源元数据不参与哈希，避免快照封装改变业务内容指纹。问题账本等
+    其余画布字段会参与，因此任何影响需求结论的改动都能使旧文档变 stale。
+    """
+    canonical = C._ensure_canvas(canvas)
+    canonical.pop(_SOURCE_META_KEY, None)
+    payload = json.dumps(
+        canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def snapshot_with_source(canvas: dict, canvas_version: int) -> dict:
+    snapshot = copy.deepcopy(C._ensure_canvas(canvas))
+    snapshot[_SOURCE_META_KEY] = {
+        "canvasVersion": int(canvas_version or 0),
+        "canvasFingerprint": canvas_fingerprint(snapshot),
+        "fingerprintAlgorithm": "sha256",
+    }
+    return snapshot
+
+
+def document_source_state(document: ExplorationDocument,
+                          session: ExplorationSession) -> dict:
+    """返回文档来源与当前画布的对比状态；兼容没有元数据的历史文档。
+
+    历史文档无法恢复生成时的 canvasVersion，故返回 None；但其快照仍可现场计算
+    指纹并可靠识别内容是否 stale。
+    """
+    snapshot = document.canvas_snapshot or {}
+    meta = snapshot.get(_SOURCE_META_KEY) if isinstance(snapshot, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+    source_version = meta.get("canvasVersion")
+    try:
+        source_version = int(source_version) if source_version is not None else None
+    except (TypeError, ValueError):
+        source_version = None
+    source_fingerprint = str(meta.get("canvasFingerprint") or canvas_fingerprint(snapshot))
+    current_fingerprint = canvas_fingerprint(session.canvas or {})
+    return {
+        "source_canvas_version": source_version,
+        "source_canvas_fingerprint": source_fingerprint,
+        "current_canvas_version": int(session.canvas_version or 0),
+        "current_canvas_fingerprint": current_fingerprint,
+        "is_stale": source_fingerprint != current_fingerprint,
+    }
 
 
 def _md_escape(v) -> str:
@@ -41,10 +94,30 @@ def _label(x: dict) -> str:
     return f"{dn}（{x.get('name')}）" if dn and dn != x.get("name") else str(x.get("name", ""))
 
 
+def _render_attributes(items: list[dict]) -> str:
+    return _table(
+        ["属性", "显示名", "类型提示", "必填", "枚举", "说明"],
+        [[a.get("name"), a.get("display_name", ""), a.get("type_hint", ""),
+          "是" if a.get("required") else "否",
+          " / ".join(str(v) for v in (a.get("enum") or [])),
+          a.get("notes") or a.get("description") or ""]
+         for a in items],
+    )
+
+
 def _render_actors(items: list[dict]) -> str:
-    return _table(["主体", "类型", "说明", "职责"],
-                  [[_label(a), a.get("kind", ""), a.get("description", ""),
-                    "；".join(a.get("responsibilities") or [])] for a in items])
+    parts = []
+    for actor in items:
+        parts.append(f"### {_label(actor)}\n")
+        parts.append(_table(
+            ["类型", "业务主键", "说明", "职责"],
+            [[actor.get("kind", ""), actor.get("key_attribute") or "未指定",
+              actor.get("description", ""),
+              "；".join(actor.get("responsibilities") or [])]],
+        ))
+        parts.append("**主体属性**\n")
+        parts.append(_render_attributes(actor.get("attributes") or []))
+    return "\n".join(parts) if parts else "（空）\n"
 
 
 def _render_objects(items: list[dict]) -> str:
@@ -54,12 +127,7 @@ def _render_objects(items: list[dict]) -> str:
         if o.get("description"):
             parts.append(o["description"] + "\n")
         parts.append("**属性**（业务主键：" + (o.get("key_attribute") or "未指定") + "）\n")
-        parts.append(_table(
-            ["属性", "显示名", "类型提示", "必填", "说明"],
-            [[a.get("name"), a.get("display_name", ""), a.get("type_hint", ""),
-              "是" if a.get("required") else "",
-              (("枚举: " + "/".join(a["enum"]) + " ") if a.get("enum") else "") + (a.get("notes") or "")]
-             for a in (o.get("attributes") or [])]))
+        parts.append(_render_attributes(o.get("attributes") or []))
         rels = o.get("relations") or []
         if rels:
             parts.append("**关系**\n")
@@ -70,12 +138,20 @@ def _render_objects(items: list[dict]) -> str:
 
 
 def _render_behaviors(items: list[dict]) -> str:
-    return _table(
-        ["行为", "执行主体", "作用对象", "触发", "输入", "结果", "约束", "需审批"],
-        [[_label(b), b.get("actor", ""), b.get("object", ""), b.get("trigger", ""),
-          "，".join(i.get("name", "") for i in (b.get("inputs") or [])),
-          b.get("outcome", ""), "；".join(b.get("constraints") or []),
-          "是" if b.get("needs_approval") else ""] for b in items])
+    parts = []
+    for behavior in items:
+        parts.append(f"### {_label(behavior)}\n")
+        parts.append(_table(
+            ["执行主体", "作用对象", "触发", "结果", "约束", "需审批", "说明"],
+            [[behavior.get("actor", ""), behavior.get("object", ""),
+              behavior.get("trigger", ""), behavior.get("outcome", ""),
+              "；".join(behavior.get("constraints") or []),
+              "是" if behavior.get("needs_approval") else "否",
+              behavior.get("description", "")]],
+        ))
+        parts.append("**输入契约**\n")
+        parts.append(_render_attributes(behavior.get("inputs") or []))
+    return "\n".join(parts) if parts else "（空）\n"
 
 
 def _render_events(items: list[dict]) -> str:
@@ -102,6 +178,21 @@ def _render_scenarios(items: list[dict]) -> str:
         steps = s.get("steps") or []
         if steps:
             parts.append("\n".join(f"{j}. {st}" for j, st in enumerate(steps, 1)) + "\n")
+        branches = s.get("branches") or []
+        if branches:
+            parts.append("**条件分支**\n")
+            parts.append(_table(
+                ["起始步骤", "目标步骤", "条件", "起始内容", "目标内容"],
+                [[branch.get("from_step"), branch.get("to_step") or "结束",
+                  branch.get("condition", ""),
+                  (steps[branch["from_step"] - 1]
+                   if isinstance(branch.get("from_step"), int)
+                   and 1 <= branch["from_step"] <= len(steps) else ""),
+                  (steps[branch["to_step"] - 1]
+                   if isinstance(branch.get("to_step"), int)
+                   and 1 <= branch["to_step"] <= len(steps) else "流程结束")]
+                 for branch in branches],
+            ))
         if s.get("expected_outcome"):
             parts.append(f"**预期结果**：{s['expected_outcome']}\n")
         refs = []
@@ -189,12 +280,16 @@ def _render_readiness(rd: dict) -> str:
 def generate_document(db: Session, session: ExplorationSession,
                       call_kwargs: Optional[dict]) -> ExplorationDocument:
     canvas = C._ensure_canvas(session.canvas)
+    source_fingerprint = canvas_fingerprint(canvas)
+    snapshot = snapshot_with_source(canvas, session.canvas_version)
     rd = R.evaluate(canvas)
     version = 1 + (db.query(ExplorationDocument)
                    .filter(ExplorationDocument.session_id == session.id).count())
     title = f"{session.title} · 需求文档 v{version}"
 
     body = f"""# {title}
+
+> **来源画布**：版本 {int(session.canvas_version or 0)} · SHA-256 `{source_fingerprint}`
 
 {_narrative(db, session, call_kwargs)}
 
@@ -231,7 +326,7 @@ def generate_document(db: Session, session: ExplorationSession,
 {_render_readiness(rd)}
 """
     doc = ExplorationDocument(session_id=session.id, title=title,
-                              content_md=body, canvas_snapshot=canvas, version=version)
+                              content_md=body, canvas_snapshot=snapshot, version=version)
     db.add(doc)
     db.commit()
     db.refresh(doc)

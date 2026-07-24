@@ -30,12 +30,16 @@ from app.config import settings
 from app.deps import get_db, get_current_user
 from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.models.ontology import OntologyProject
+from app.ontologies.access import (
+    require_ontology_access,
+    require_ontology_create_access,
+)
 from app.ontologies.release_context import create_initial_release
 from app.exploration import canvas as C
 from app.exploration import converter, readiness as R, schemas as S
 from app.exploration import workspace as W
 from app.exploration.diagram import DIAGRAM_KINDS, DiagramError, build_diagram
-from app.exploration.document import generate_document
+from app.exploration.document import (document_source_state, generate_document)
 from app.exploration.models import (ExplorationAttachment, ExplorationDocument,
                                     ExplorationDraft, ExplorationMessage,
                                     ExplorationSession)
@@ -86,6 +90,24 @@ def _message_out(message: ExplorationMessage, canvas: dict) -> dict:
             step["error"] = f"历史图表已被质量门拦截：{error}"
             step["summary"] = "历史图表不再满足当前画布的质量要求，请让 AI 修复后重新生成"
     return data
+
+
+def _document_out(document: ExplorationDocument, session: ExplorationSession,
+                  *, list_item: bool = False) -> dict:
+    state = document_source_state(document, session)
+    payload = {
+        "id": document.id,
+        "session_id": document.session_id,
+        "title": document.title,
+        "version": document.version,
+        "created_at": document.created_at,
+        **state,
+    }
+    schema = S.DocumentListItem
+    if not list_item:
+        payload["content_md"] = document.content_md
+        schema = S.DocumentOut
+    return schema.model_validate(payload).model_dump(by_alias=True)
 
 
 # ---------------------------------------------------------------- 会话
@@ -367,7 +389,7 @@ def create_document(session_id: str, body: S.GenerateDocumentRequest,
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     doc = generate_document(db, s, call_kwargs)
-    return _ok(S.DocumentOut.model_validate(doc).model_dump(by_alias=True))
+    return _ok(_document_out(doc, s))
 
 
 @router.get("/sessions/{session_id}/documents")
@@ -377,7 +399,7 @@ def list_documents(session_id: str, db: Session = Depends(get_db),
     rows = (db.query(ExplorationDocument)
             .filter(ExplorationDocument.session_id == s.id)
             .order_by(ExplorationDocument.version.desc()).all())
-    return _ok([S.DocumentListItem.model_validate(d).model_dump(by_alias=True) for d in rows])
+    return _ok([_document_out(d, s, list_item=True) for d in rows])
 
 
 def _require_document(db: Session, document_id: str, current_user) -> ExplorationDocument:
@@ -392,7 +414,8 @@ def _require_document(db: Session, document_id: str, current_user) -> Exploratio
 def get_document(document_id: str, db: Session = Depends(get_db),
                  current_user=Depends(get_current_user)):
     d = _require_document(db, document_id, current_user)
-    return _ok(S.DocumentOut.model_validate(d).model_dump(by_alias=True))
+    s = _require_session(db, d.session_id, current_user)
+    return _ok(_document_out(d, s))
 
 
 # ---------------------------------------------------------------- 本体草稿
@@ -404,6 +427,22 @@ def create_draft(document_id: str, body: S.GenerateDraftRequest,
     """需求文档 → 本体草稿。质量门是准入闸：堵门项未清零时拒绝生成，
     除非 force=true 显式越权（越权事实与未决项写入草稿报告，人审可见）。"""
     d = _require_document(db, document_id, current_user)
+    s = _require_session(db, d.session_id, current_user)
+    source_state = document_source_state(d, s)
+    if source_state["is_stale"] and not body.force:
+        raise HTTPException(409, detail={
+            "code": "stale_document",
+            "message": (
+                "该需求文档对应的画布已发生变化。请从当前画布重新生成文档，"
+                "或显式 force=true 使用旧快照生成并留下越权记录。"),
+            "source": {
+                "sourceCanvasVersion": source_state["source_canvas_version"],
+                "sourceCanvasFingerprint": source_state["source_canvas_fingerprint"],
+                "currentCanvasVersion": source_state["current_canvas_version"],
+                "currentCanvasFingerprint": source_state["current_canvas_fingerprint"],
+                "isStale": True,
+            },
+        })
 
     rd = R.evaluate(d.canvas_snapshot or {})
     if not rd["ready"] and not body.force:
@@ -417,9 +456,8 @@ def create_draft(document_id: str, body: S.GenerateDraftRequest,
 
     existing = None
     if body.target_ontology_id:
-        if not db.query(OntologyProject).filter(
-                OntologyProject.id == body.target_ontology_id).first():
-            raise HTTPException(404, "目标本体不存在")
+        require_ontology_access(
+            db, body.target_ontology_id, current_user, write=True)
         existing = converter.existing_name_sets(db, body.target_ontology_id)
 
     cfg = select_llm_model_config(db, model_id=body.model_id)
@@ -429,6 +467,37 @@ def create_draft(document_id: str, body: S.GenerateDraftRequest,
         raise HTTPException(422, str(e)) from e
     draft_data, report = converter.build_draft(
         d.canvas_snapshot or {}, existing=existing, call_kwargs=call_kwargs)
+    blocking_semantics = [
+        item for item in report.get("semanticIssues", [])
+        if item.get("severity") == "blocking"
+    ]
+    if blocking_semantics and not body.force:
+        raise HTTPException(422, detail={
+            "code": "semantic_conversion_blocked",
+            "message": (
+                f"画布有 {len(blocking_semantics)} 项语义无法无损转换，已拒绝生成可落地草稿。"
+                "请修正目标引用/规则作用域后重新生成，或显式 force=true 越权。"),
+            "semanticIssues": blocking_semantics,
+        })
+
+    report["sourceDocument"] = {
+        "sourceCanvasVersion": source_state["source_canvas_version"],
+        "sourceCanvasFingerprint": source_state["source_canvas_fingerprint"],
+        "currentCanvasVersion": source_state["current_canvas_version"],
+        "currentCanvasFingerprint": source_state["current_canvas_fingerprint"],
+        "isStale": source_state["is_stale"],
+    }
+    if source_state["is_stale"]:
+        report["staleDocumentOverride"] = True
+        report["warnings"] = [
+            "⚠️ 使用已过期需求文档的画布快照强制生成；当前画布与文档来源指纹不一致"
+        ] + report.get("warnings", [])
+    if blocking_semantics:
+        report["semanticOverride"] = True
+        report["warnings"] = [
+            f"⚠️ {len(blocking_semantics)} 项不可无损转换语义被显式越权；"
+            "对应元素仅以可保留部分生成，必须重点人工复核"
+        ] + report.get("warnings", [])
 
     # 质量门结论随草稿留档：人审抽屉与落地审计都能看到生成时刻的门禁状态
     report["readiness"] = {k: rd[k] for k in
@@ -482,6 +551,8 @@ def validate_draft(draft_id: str, body: S.DraftValidationRequest,
     """按最终选择集执行确定性预检；与 apply 使用完全相同的校验函数。"""
     r = _require_draft(db, draft_id, current_user)
     target_id = r.applied_ontology_id or r.target_ontology_id
+    if target_id:
+        require_ontology_access(db, target_id, current_user, write=True)
     existing = converter.existing_name_sets(db, target_id) if target_id else None
     return _ok(converter.validate_draft_selection(
         r.draft or {}, body.selected_keys, existing=existing))
@@ -502,6 +573,11 @@ def apply_draft(draft_id: str, body: S.ApplyDraftRequest,
         raise HTTPException(422, "未勾选任何草稿元素")
 
     validation_target_id = r.applied_ontology_id or r.target_ontology_id
+    if validation_target_id:
+        require_ontology_access(
+            db, validation_target_id, current_user, write=True)
+    else:
+        require_ontology_create_access(current_user)
     validation_existing = (converter.existing_name_sets(db, validation_target_id)
                            if validation_target_id else None)
     validation = converter.validate_draft_selection(

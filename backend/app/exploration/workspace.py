@@ -171,6 +171,13 @@ def read_text(row: ExplorationAttachment) -> str:
 
 def update_text(db: Session, row: ExplorationAttachment, content: str,
                 expected_version: int | None = None, source: str = "agent") -> ExplorationAttachment:
+    """Update bytes while preserving the file's immutable ownership source.
+
+    ``source`` identifies the current editor. Ownership is monotonic: an
+    explicit user save may promote an agent draft to user-owned evidence, while
+    an agent edit can never demote an uploaded/user-owned file into an
+    agent-owned file. Mutation authorization relies on this persisted boundary.
+    """
     if expected_version is not None and row.version != expected_version:
         raise HTTPException(409, detail={
             "code": "workspace_version_conflict",
@@ -188,7 +195,8 @@ def update_text(db: Session, row: ExplorationAttachment, content: str,
     row.file_size = len(encoded)
     row.sha256 = _digest(encoded)
     row.version = (row.version or 0) + 1
-    row.source = source
+    if source == "user" and row.source == "agent":
+        row.source = "user"
     row.extracted_text = content[:STORED_TEXT_CAP]
     row.char_count = len(content)
     row.status = "ready"
@@ -200,7 +208,11 @@ def update_text(db: Session, row: ExplorationAttachment, content: str,
 
 def refresh_binary_metadata(db: Session, row: ExplorationAttachment,
                             source: str = "agent") -> ExplorationAttachment:
-    """OfficeCLI 等受控适配器原地修改文件后，刷新摘要、哈希与版本。"""
+    """Refresh an edited binary while preserving its immutable ownership source.
+
+    ``source`` identifies the current editor for API compatibility only. Office
+    agent edits never demote the attachment's persisted ownership boundary.
+    """
     if not row.file_path or not os.path.isfile(row.file_path):
         raise HTTPException(410, "文件内容已丢失")
     with open(row.file_path, "rb") as handle:
@@ -210,7 +222,6 @@ def refresh_binary_metadata(db: Session, row: ExplorationAttachment,
     row.file_size = len(content)
     row.sha256 = _digest(content)
     row.version = (row.version or 0) + 1
-    row.source = source
     row.extracted_text = extracted[:STORED_TEXT_CAP]
     row.char_count = len(extracted)
     row.status = "ready" if conversion.ok else "failed"

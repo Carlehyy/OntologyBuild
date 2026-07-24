@@ -109,8 +109,67 @@ def test_edit_validates_then_atomically_updates_content_and_version(
     assert result["validation"]["before"] == result["validation"]["after"] == 0
     db.refresh(row)
     assert row.version == 2 and row.status == "ready"
+    assert row.source == "upload"
     assert "修订后的条款" in row.extracted_text
     assert Document(row.file_path).paragraphs[1].text == "修订后的条款"
+
+
+def test_uploaded_office_remains_protected_in_later_turn_after_agent_edit(
+        db, exploration_session, tmp_path, monkeypatch):
+    row = _create_docx(db, exploration_session, tmp_path, monkeypatch)
+    monkeypatch.setattr(O, "executable", lambda: "/fake/officecli")
+
+    def fake_run(command, **_kwargs):
+        operation = command[1]
+        if operation == "validate":
+            return _completed({"success": True, "data": "OpenXML validation passed"})
+        assert operation == "set"
+        candidate = command[2]
+        document = Document(candidate)
+        document.paragraphs[1].text = "用户明确授权的修订"
+        document.save(candidate)
+        return _completed({"success": True, "data": {"updated": 1}})
+
+    monkeypatch.setattr(O.subprocess, "run", fake_run)
+    authorized = ExplorationToolRunner(
+        db, exploration_session,
+        user_message="请编辑文件 rules.docx，把第二段改成已确认条款",
+    )
+    result = authorized.run("manage_office_document", {
+        "operation": "set",
+        "file_id": row.id,
+        "selector": "/document/body/p[2]",
+        "props": {"text": "用户明确授权的修订"},
+        "expected_version": 1,
+    })
+    assert result["updated"] is True and result["version"] == 2
+    db.refresh(row)
+    assert row.source == "upload"
+
+    monkeypatch.setattr(
+        O, "operate",
+        lambda *_args, **_kwargs: pytest.fail("未授权 Office 修改不应到达适配器"),
+    )
+    unauthorized = ExplorationToolRunner(
+        db, exploration_session,
+        user_message="只总结 rules.docx，不要修改或删除任何文件",
+    )
+    blocked_edit = unauthorized.run("manage_office_document", {
+        "operation": "set",
+        "file_id": row.id,
+        "selector": "/document/body/p[2]",
+        "props": {"text": "不应写入"},
+        "expected_version": 2,
+    })
+    assert blocked_edit["confirmationRequired"] is True
+    blocked_delete = unauthorized.run("manage_workspace_file", {
+        "action": "delete",
+        "file_id": row.id,
+    })
+    assert blocked_delete["confirmationRequired"] is True
+    db.refresh(row)
+    assert row.source == "upload" and row.version == 2
+    assert Document(row.file_path).paragraphs[1].text == "用户明确授权的修订"
 
 
 def test_edit_rejects_stale_version_without_calling_officecli(
@@ -195,6 +254,13 @@ def test_agent_tool_exposes_read_edit_contract_and_passes_batch_arguments(
         return {"operation": operation, "updated": True, "version": 3}
 
     monkeypatch.setattr(O, "operate", fake_operate)
+    # 本用例验证参数透传；用 agent 自建文件绕开“修改用户文件需当前消息明确授权”
+    # 这一独立安全门，避免不存在的 office-id 在 dispatch 前被正确拒绝。
+    monkeypatch.setattr(
+        W, "require_file",
+        lambda _db, _session_id, _file_id: SimpleNamespace(
+            id="office-id", source="agent"),
+    )
     runner = ExplorationToolRunner(db, exploration_session)
     edits = [{
         "operation": "replace", "selector": "/document/body",

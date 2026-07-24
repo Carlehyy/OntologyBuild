@@ -49,6 +49,11 @@ class DocumentOut(CamelModel):
     title: str
     content_md: str
     version: int
+    source_canvas_version: Optional[int] = None
+    source_canvas_fingerprint: str
+    current_canvas_version: int
+    current_canvas_fingerprint: str
+    is_stale: bool
     created_at: datetime
 
 
@@ -57,6 +62,11 @@ class DocumentListItem(CamelModel):
     session_id: str
     title: str
     version: int
+    source_canvas_version: Optional[int] = None
+    source_canvas_fingerprint: str
+    current_canvas_version: int
+    current_canvas_fingerprint: str
+    is_stale: bool
     created_at: datetime
 
 

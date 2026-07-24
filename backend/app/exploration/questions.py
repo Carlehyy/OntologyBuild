@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -37,9 +38,61 @@ _VAGUE_TERMS = (
     "若干", "一些", "多次", "数次", "适当", "合理", "必要时", "视情况", "酌情",
     "大概", "大约", "差不多", "可能", "或许", "一般来说", "通常", "正常范围",
     "过高", "过低", "太久", "太多", "太少", "超时",
+    # 未绑定的占位口径。仅出现这些词并不等于给出了规则参数。
+    "阈值", "门槛", "上限", "下限", "规定时间", "一定期限", "满足条件", "符合条件",
+    "待定", "tbd",
 )
 # 数量信号：阿拉伯/全角数字、中文数词（含"两"）、比较/枚举记号
 _QUANT_RE = re.compile(r"[0-9０-９]|[一二两三四五六七八九十百千万亿]|[≥≤><=%％]")
+_NUMBER = r"(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万亿]+)"
+_UNIT = (
+    r"(?:亿元|万元|千元|元|人民币|美元|欧元|%|％|个百分点|"
+    r"毫秒|秒钟|秒|分钟|小时|工作日|自然日|天|日|周|星期|个月|月|季度|年|"
+    r"人|次|个|笔|件|条|份|项|台|家|单)"
+)
+_BOUND_VALUE_RE = re.compile(
+    rf"(?:>=|<=|>|<|=|≥|≤|超过|高于|低于|少于|多于|不低于|不高于|不超过|至少|至多)"
+    rf"\s*{_NUMBER}\s*{_UNIT}?"
+    rf"|{_NUMBER}\s*{_UNIT}?\s*(?:以上|以下|以内|以外|之内|之前|之后|内|前|后|起)"
+    rf"|(?:是指|定义为|明确为|设定为|设为|等于|为)\s*"
+    rf"(?:[^，。；;\n]{{0,18}}?)?(?:>=|<=|>|<|=|≥|≤)?\s*{_NUMBER}\s*{_UNIT}?"
+    rf"|(?:每|每隔)\s*(?:{_NUMBER}\s*)?(?:秒|分钟|小时|天|日|周|星期|月|季度|年)"
+)
+_ABSOLUTE_VAGUE_TERMS = {
+    "不定期", "必要时", "视情况", "酌情", "适当", "合理", "大概", "大约", "差不多",
+    "可能", "或许", "一般来说", "通常", "正常范围", "待定", "tbd",
+}
+_TIME_VAGUE_TERMS = {
+    "及时", "尽快", "定期", "长期", "短期", "频繁", "偶尔", "一段时间", "超时", "太久",
+    "规定时间", "一定期限",
+}
+_MONEY_VAGUE_TERMS = {"大额", "小额"}
+_TIME_UNIT_RE = re.compile(r"(?:毫秒|秒钟|秒|分钟|小时|工作日|自然日|天|日|周|星期|个月|月|季度|年)")
+_MONEY_UNIT_RE = re.compile(r"(?:亿元|万元|千元|元|人民币|美元|欧元|%|％|个百分点)")
+_CURRENCY_UNIT_RE = re.compile(r"(?:亿元|万元|千元|元|人民币|美元|欧元)")
+
+_CARDINALITY_ALIASES = {
+    "one-to-one": {"onetoone", "一对一", "1对1"},
+    "one-to-many": {"onetomany", "一对多", "1对多"},
+    "many-to-one": {"manytoone", "多对一", "多对1"},
+    "many-to-many": {"manytomany", "多对多"},
+}
+_FIELD_ALIASES = {
+    "主键": "key_attribute",
+    "业务主键": "key_attribute",
+    "primarykey": "key_attribute",
+    "key": "key_attribute",
+    "基数": "cardinality",
+    "枚举": "enum",
+    "枚举值": "enum",
+    "状态值": "enum",
+    "执行主体": "actor",
+    "作用对象": "object",
+    "预期结果": "expected_outcome",
+    "结果": "outcome",
+    "来源": "source",
+    "规则表述": "statement",
+}
 
 
 def vague_terms_in(text: str) -> list[str]:
@@ -48,17 +101,105 @@ def vague_terms_in(text: str) -> list[str]:
     return [w for w in _VAGUE_TERMS if w in t]
 
 
-def is_quantified(text: str) -> bool:
-    """结论是否「定量」：没有模糊词，或虽有但同句含数值/比较/枚举信号。
+def _normalized_text(text: str) -> str:
+    return unicodedata.normalize("NFKC", str(text or "")).strip()
 
-    例：「大额指 ≥ 50000 元」→ 定量；「金额较大时需审批」→ 未定量。
+
+def _term_is_bound(text: str, term: str, start: int) -> bool:
+    """判断某个模糊词是否在局部语义中被真正绑定，而非被无关数字“蹭过”。"""
+    if term.lower() in _ABSOLUTE_VAGUE_TERMS:
+        # “通常 ≥ 5 万”仍不是可执行规则；应删除“通常”或明确例外集合。
+        return False
+    window = text[max(0, start - 32): start + len(term) + 48]
+    match = _BOUND_VALUE_RE.search(window)
+    if match is None:
+        return False
+    bound = match.group(0)
+    if term in _TIME_VAGUE_TERMS and not _TIME_UNIT_RE.search(bound):
+        return False
+    if term in _MONEY_VAGUE_TERMS:
+        nearby = window[max(0, match.start() - 12):match.end() + 12]
+        if not _MONEY_UNIT_RE.search(bound) and not re.search(r"金额|价格|货款|额度|费用", nearby):
+            return False
+    return True
+
+
+def is_quantified(text: str) -> bool:
+    """结论是否明确可执行，而不是仅在任意位置出现一个数字。
+
+    例：
+      - 「大额指 ≥ 50000 元」→ 通过
+      - 「大额订单由 2 人审批」→ 不通过（2 是审批人数，不是“大额”定义）
+      - 「金额超过阈值时审批」→ 不通过（阈值仍是占位符）
     """
-    t = (text or "").strip()
+    t = _normalized_text(text)
     if not t:
         return False
-    if not vague_terms_in(t):
+    vague = vague_terms_in(t)
+    if not vague:
         return True
-    return bool(_QUANT_RE.search(t))
+    if not _QUANT_RE.search(t):
+        return False
+    lower = t.lower()
+    return all(
+        _term_is_bound(t, term, match.start())
+        for term in vague
+        for match in re.finditer(re.escape(term.lower()), lower)
+    )
+
+
+def resolution_relevance_issue(question: Any, resolution: str) -> Optional[str]:
+    """检查“数字答非所问”。
+
+    数字本身不是答案：金额问题不能用“2 人审批”销账，时限问题不能用
+    “3 个角色”销账。只对能稳定识别的企业口径类别做严格检查，其他问题
+    保持向后兼容，交给 target/画布一致性检查。
+    """
+    q = question if isinstance(question, dict) else {}
+    answer = _normalized_text(resolution)
+    blob = f"{q.get('question') or ''} {q.get('target') or ''}".lower()
+    question_text = str(q.get("question") or "").lower()
+    has_number = bool(_QUANT_RE.search(answer))
+    amount_question = bool(
+        re.search(
+            r"(?:金额|大额|小额|额度|价格|费用|货款|amount|price|cost)"
+            r".*(?:多少|阈值|门槛|上限|下限|标准|界限|定义|是多少)",
+            question_text,
+        )
+        or re.search(
+            r"(?:多少|阈值|门槛|上限|下限|标准|界限)"
+            r".*(?:金额|大额|小额|额度|价格|费用|货款|amount|price|cost)",
+            question_text,
+        )
+    )
+    if amount_question:
+        if not has_number or not _CURRENCY_UNIT_RE.search(answer):
+            return "问题询问金额/额度口径，结论必须给出货币单位，不能用其他数字代替"
+    percentage_question = bool(
+        re.search(r"(?:比例|百分比|比率|占比|费率).*(?:多少|阈值|门槛|是多少)", question_text)
+    )
+    if percentage_question and (not has_number or not re.search(r"(?:%|％|个百分点)", answer)):
+        return "问题询问比例口径，结论必须给出百分比单位"
+    time_question = bool(
+        re.search(r"几天|多久|多长时间|时限.*(?:多少|多长|多久|是多少)|"
+                  r"期限.*(?:多少|多长|多久|是多少)|时间窗口.*(?:多少|多长|多久|是多少)|"
+                  r"周期.*(?:多少|多长|多久|是多少)|频率.*(?:多少|多久|是多少)",
+                  question_text)
+    )
+    if time_question:
+        if not has_number or not _TIME_UNIT_RE.search(answer):
+            return "问题询问时限/周期口径，结论必须给出明确时间单位，不能用其他数字代替"
+    if re.search(r"几人|多少人|人数.*(?:多少|是多少)|几次|多少次|数量.*(?:多少|是多少)|count", question_text):
+        if not has_number or not re.search(r"(?:人|次|个|笔|件|条|份|项|台|家|单)", answer):
+            return "问题询问人数/次数/数量，结论必须给出匹配的计量单位"
+    if re.search(r"基数|一对一|一对多|多对一|多对多|cardinality", blob):
+        if _cardinality_in(answer) is None:
+            return "问题询问关系基数，结论必须明确为一对一/一对多/多对一/多对多"
+    if re.search(r"有哪些|枚举值|状态清单|enum", blob):
+        choices = [item.strip() for item in re.split(r"[/、,，;；|]", answer) if item.strip()]
+        if len(choices) < 2:
+            return "问题询问枚举清单，结论必须列出至少两个明确选项"
+    return None
 
 
 class Question(BaseModel):
@@ -86,11 +227,296 @@ def get_questions(canvas: Any) -> list[dict]:
     return [dict(x) for x in items] if isinstance(items, list) else []
 
 
+def blocking_liabilities(canvas: Any) -> list[dict]:
+    """仍会堵门的 blocking 条目。
+
+    dismissed 只是“暂缓”，不是业务结论；因此它不会出现在 open_questions，
+    但仍是一项 blocking liability。这个区分保留旧 API 语义，又避免假全绿。
+    """
+    return [
+        q for q in get_questions(canvas)
+        if (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING
+        and q.get("status") != "resolved"
+    ]
+
+
 def open_questions(canvas: Any, kind: Optional[str] = None) -> list[dict]:
     out = [q for q in get_questions(canvas) if q.get("status") == "open"]
     if kind:
         out = [q for q in out if (q.get("kind") or KIND_BLOCKING) == kind]
     return out
+
+
+def _field_norm(value: str) -> str:
+    return re.sub(r"[\s_\-]+", "", str(value or "").strip().lower())
+
+
+def _cardinality_in(text: str) -> Optional[str]:
+    normalized = _field_norm(_normalized_text(text))
+    for canonical, aliases in _CARDINALITY_ALIASES.items():
+        if any(alias in normalized for alias in aliases):
+            return canonical
+    return None
+
+
+def _flatten_text(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [
+            text
+            for key, item in value.items()
+            if key not in {"id", "created_at", "resolved_at"}
+            for text in _flatten_text(item)
+        ]
+    if isinstance(value, list):
+        return [text for item in value for text in _flatten_text(item)]
+    return [str(value)]
+
+
+def _matches_named_item(item: Any, token: str) -> bool:
+    if not isinstance(item, dict):
+        return False
+    wanted = norm_name(token)
+    return wanted in {
+        norm_name(str(item.get(key) or ""))
+        for key in ("id", "name", "display_name", "target")
+    } - {""}
+
+
+def _resolve_child(value: Any, token: str) -> tuple[bool, Any]:
+    """解析 target 路径的一段；同时支持字段名和命名子元素。"""
+    if isinstance(value, dict):
+        requested = _FIELD_ALIASES.get(_field_norm(token), token)
+        requested_norm = _field_norm(requested)
+        direct = [item for key, item in value.items() if _field_norm(key) == requested_norm]
+        if len(direct) == 1:
+            return True, direct[0]
+        candidates = [
+            item
+            for child in value.values()
+            if isinstance(child, list)
+            for item in child
+            if _matches_named_item(item, token)
+        ]
+        if len(candidates) == 1:
+            return True, candidates[0]
+        return False, None
+    if isinstance(value, list):
+        candidates = [item for item in value if _matches_named_item(item, token)]
+        if len(candidates) == 1:
+            return True, candidates[0]
+    return False, None
+
+
+def _find_target_root(canvas: Any, token: str) -> tuple[Optional[dict], Optional[str]]:
+    candidates: list[tuple[dict, str]] = []
+    c = canvas if isinstance(canvas, dict) else {}
+    for key in ("objects", "actors", "behaviors", "events", "rules", "scenarios"):
+        for item in c.get(key) or []:
+            if _matches_named_item(item, token):
+                candidates.append((item, key))
+    if len(candidates) != 1:
+        return None, "不存在" if not candidates else "不唯一"
+    return candidates[0]
+
+
+def _infer_target_value(root: dict, current: Any, question: str) -> tuple[Any, bool]:
+    """问题语义足够明确时，把元素级 target 收窄到实际决策字段。"""
+    blob = str(question or "")
+    if not isinstance(current, dict):
+        return current, True
+    if "主键" in blob and current.get("key_attribute") is not None:
+        return current.get("key_attribute"), True
+    if ("基数" in blob or "几对几" in blob) and current.get("cardinality") is not None:
+        return current.get("cardinality"), True
+    if ("枚举" in blob or "状态" in blob or "有哪些" in blob) and current.get("enum"):
+        return current.get("enum"), True
+    if "执行主体" in blob and current.get("actor") is not None:
+        return current.get("actor"), True
+    if "作用对象" in blob and current.get("object") is not None:
+        return current.get("object"), True
+    if ("预期结果" in blob or "最终结果" in blob) and current.get("expected_outcome") is not None:
+        return current.get("expected_outcome"), True
+    if "来源" in blob and current.get("source") is not None:
+        return current.get("source"), True
+    # 对象级“状态有哪些”可唯一落到一个枚举属性；多个枚举时必须把 target 写细。
+    if "状态" in blob or "枚举" in blob or "有哪些" in blob:
+        enums = [attr.get("enum") for attr in (current.get("attributes") or []) if attr.get("enum")]
+        if len(enums) == 1:
+            return enums[0], True
+    if ("基数" in blob or "几对几" in blob) and len(current.get("relations") or []) == 1:
+        return current["relations"][0].get("cardinality"), True
+    return current, False
+
+
+def _target_resolution(canvas: Any, target: str, question: str) -> tuple[Optional[dict], Any, bool, Optional[str]]:
+    parts = [part.strip() for part in re.split(r"[./]", str(target or "")) if part.strip()]
+    if not parts:
+        return None, None, False, "target 为空"
+    found = _find_target_root(canvas, parts[0])
+    root, root_kind = found
+    if root is None:
+        return None, None, False, f"target 根元素「{parts[0]}」{root_kind}"
+    current: Any = root
+    for token in parts[1:]:
+        ok, current = _resolve_child(current, token)
+        if not ok:
+            return root, None, False, f"target 路径「{target}」无法解析到画布字段"
+    current, direct = _infer_target_value(root, current, question)
+    return root, current, direct, None
+
+
+def _linked_evidence(canvas: Any, root: dict) -> list[str]:
+    """只扩展到与 target 直接相连的规则/行为/场景，避免无关数字造成假一致。"""
+    evidence = _flatten_text(root)
+    aliases = {
+        norm_name(str(root.get(key) or ""))
+        for key in ("name", "display_name", "id")
+    } - {""}
+    c = canvas if isinstance(canvas, dict) else {}
+    related_behaviors: list[dict] = []
+    for behavior in c.get("behaviors") or []:
+        endpoints = {
+            norm_name(str(behavior.get(key) or ""))
+            for key in ("actor", "object", "name", "display_name")
+        } - {""}
+        if aliases & endpoints:
+            related_behaviors.append(behavior)
+            evidence.extend(_flatten_text(behavior))
+    behavior_aliases = {
+        norm_name(str(behavior.get(key) or ""))
+        for behavior in related_behaviors
+        for key in ("name", "display_name", "id")
+    } - {""}
+    for rule in c.get("rules") or []:
+        if norm_name(str(rule.get("applies_to") or "")) in aliases | behavior_aliases:
+            evidence.extend(_flatten_text(rule))
+    for scenario in c.get("scenarios") or []:
+        refs = {
+            norm_name(str(value))
+            for field in ("actors", "objects", "behaviors")
+            for value in (scenario.get(field) or [])
+        }
+        if refs & (aliases | behavior_aliases):
+            evidence.extend(_flatten_text(scenario))
+    return evidence
+
+
+def _quantity_tokens(text: str) -> list[tuple[str, str, str]]:
+    value = _normalized_text(text)
+    replacements = (
+        ("大于等于", ">="), ("不低于", ">="), ("至少", ">="), ("≥", ">="),
+        ("小于等于", "<="), ("不高于", "<="), ("不超过", "<="), ("至多", "<="), ("≤", "<="),
+        ("超过", ">"), ("高于", ">"), ("大于", ">"),
+        ("低于", "<"), ("少于", "<"), ("小于", "<"),
+    )
+    for source, replacement in replacements:
+        value = value.replace(source, replacement)
+    pattern = re.compile(rf"(?P<op>>=|<=|>|<|=)?\s*(?P<num>{_NUMBER})\s*(?P<unit>{_UNIT})?")
+    tokens: list[tuple[str, str, str]] = []
+    for match in pattern.finditer(value):
+        op = match.group("op") or ""
+        tail = value[match.end():match.end() + 3]
+        if not op:
+            if tail.startswith("以上") or tail.startswith("起"):
+                op = ">="
+            elif tail.startswith("以下") or tail.startswith("以内") or tail.startswith("之内"):
+                op = "<="
+        tokens.append((op, match.group("num"), match.group("unit") or ""))
+    return tokens
+
+
+def _value_evidence(canvas: Any, root: dict, value: Any) -> list[str]:
+    evidence = _flatten_text(value)
+    # key_attribute 使用英文 name，用户通常用中文 display_name 回答；两者均是同一证据。
+    if isinstance(value, str) and norm_name(value) == norm_name(str(root.get("key_attribute") or "")):
+        for attr in root.get("attributes") or []:
+            if norm_name(str(attr.get("name") or "")) == norm_name(value):
+                evidence.extend(_flatten_text(attr))
+                break
+    # 引用字段通常保存 canonical name，而用户按 display_name 作答；两者应视为同一值。
+    if isinstance(value, str):
+        c = canvas if isinstance(canvas, dict) else {}
+        for key in ("objects", "actors", "behaviors", "events", "rules", "scenarios"):
+            for item in c.get(key) or []:
+                if _matches_named_item(item, value):
+                    evidence.extend(
+                        str(item.get(field))
+                        for field in ("name", "display_name", "id")
+                        if item.get(field)
+                    )
+    return evidence
+
+
+def _resolution_matches_evidence(resolution: str, evidence: list[str]) -> bool:
+    answer = _normalized_text(resolution)
+    evidence_text = "；".join(_normalized_text(value) for value in evidence if str(value).strip())
+
+    answer_cardinality = _cardinality_in(answer)
+    if answer_cardinality:
+        return _cardinality_in(evidence_text) == answer_cardinality
+
+    quantities = _quantity_tokens(answer)
+    if quantities:
+        available = _quantity_tokens(evidence_text)
+        for answer_op, answer_number, answer_unit in quantities:
+            matches = [
+                (op, number, unit)
+                for op, number, unit in available
+                if number == answer_number
+                and (not answer_unit or not unit or answer_unit == unit)
+                and (not answer_op or not op or answer_op == op)
+            ]
+            if not matches:
+                return False
+        return True
+
+    choices = [item.strip() for item in re.split(r"[/、,，;；|]", answer) if item.strip()]
+    if len(choices) >= 2:
+        compact_evidence = norm_name(evidence_text)
+        return all(norm_name(choice) in compact_evidence for choice in choices)
+
+    compact_answer = norm_name(answer)
+    return bool(compact_answer) and any(
+        compact_answer in norm_name(value) or norm_name(value) in compact_answer
+        for value in evidence
+        if norm_name(value)
+    )
+
+
+def resolved_question_issues(canvas: Any) -> list[str]:
+    """复核已销账 blocking 的答案质量及其是否真正落入 target 画布。"""
+    issues: list[str] = []
+    for q in get_questions(canvas):
+        if (q.get("kind") or KIND_BLOCKING) != KIND_BLOCKING or q.get("status") != "resolved":
+            continue
+        label = str(q.get("question") or "?")
+        resolution = str(q.get("resolution") or "").strip()
+        if not resolution:
+            issues.append(f"已销账问题「{label}」缺少 resolution")
+            continue
+        if not is_quantified(resolution):
+            issues.append(f"已销账问题「{label}」的结论仍未定量或含未绑定口径")
+            continue
+        relevance = resolution_relevance_issue(q, resolution)
+        if relevance:
+            issues.append(f"已销账问题「{label}」答复不匹配：{relevance}")
+            continue
+        target = str(q.get("target") or "").strip()
+        if not target:
+            continue
+        root, value, direct, error = _target_resolution(canvas, target, label)
+        if error:
+            issues.append(f"已销账问题「{label}」的 {error}")
+            continue
+        assert root is not None
+        evidence = _value_evidence(canvas, root, value) if direct else _linked_evidence(canvas, root)
+        if not _resolution_matches_evidence(resolution, evidence):
+            issues.append(
+                f"已销账问题「{label}」的结论「{resolution}」尚未写入 target「{target}」对应画布字段"
+            )
+    return issues
 
 
 def _with_questions(canvas: Any, items: list[dict]) -> dict:
@@ -168,12 +594,18 @@ def resolve_questions(canvas: Any, raw_items: list[dict]) -> tuple[dict, list[di
             errors.append(f"问题「{q.get('question', '')[:40]}」缺少 resolution"
                           f"（{'搁置也要写明原因' if status == 'dismissed' else '请写入定量结论'}）")
             continue
-        if status == "resolved" and (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING \
-                and not is_quantified(resolution):
-            hits = "、".join(vague_terms_in(resolution)[:3])
-            errors.append(f"问题「{q.get('question', '')[:40]}」的结论仍含模糊表述（{hits}）"
-                          f"且没有任何数值/枚举 —— 请追问用户拿到明确数字+单位或枚举值后再销账")
-            continue
+        if status == "resolved" and (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING:
+            if not is_quantified(resolution):
+                hits = "、".join(vague_terms_in(resolution)[:3]) or "未给出明确结论"
+                errors.append(
+                    f"问题「{q.get('question', '')[:40]}」的结论仍未定量或含未绑定口径（{hits}）"
+                    f"—— 请追问用户拿到与问题匹配的数字+单位、明确边界或枚举值后再销账"
+                )
+                continue
+            relevance = resolution_relevance_issue(q, resolution)
+            if relevance:
+                errors.append(f"问题「{q.get('question', '')[:40]}」答复不匹配：{relevance}")
+                continue
         q["status"] = status
         q["resolution"] = resolution
         q["resolved_at"] = _now_iso()
@@ -183,18 +615,31 @@ def resolve_questions(canvas: Any, raw_items: list[dict]) -> tuple[dict, list[di
 
 
 def ledger_summary(canvas: Any, max_items: int = 12) -> str:
-    """开放问题的紧凑摘要，注入探索 agent 系统提示。"""
+    """未清负债的紧凑摘要；dismissed blocking 仍明确显示为堵门。"""
     opens = open_questions(canvas)
-    if not opens:
+    non_open_liabilities = [
+        q for q in blocking_liabilities(canvas)
+        if q.get("status") != "open"
+    ]
+    pending = opens + non_open_liabilities
+    if not pending:
         return "（无开放问题 —— 账本已清）"
-    opens.sort(key=lambda q: 0 if (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING else 1)
+    pending.sort(key=lambda q: (
+        0 if (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING else 1,
+        0 if q.get("status") == "open" else 1,
+    ))
     lines = []
-    for q in opens[:max_items]:
-        tag = "堵门" if (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING else "建议待确认"
+    for q in pending[:max_items]:
+        if q.get("status") == "dismissed":
+            tag = "堵门·已搁置，仍未解决"
+        elif (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING and q.get("status") != "open":
+            tag = f"堵门·非法状态 {q.get('status')!s}"
+        else:
+            tag = "堵门" if (q.get("kind") or KIND_BLOCKING) == KIND_BLOCKING else "建议待确认"
         opt = f"（候选: {' / '.join(str(o) for o in q.get('options') or [])[:80]}）" \
             if q.get("options") else ""
         tgt = f"[{q.get('target')}] " if q.get("target") else ""
         lines.append(f"- ({tag}) {tgt}{q.get('question')}{opt} (id={q.get('id')})")
-    if len(opens) > max_items:
-        lines.append(f"- …共 {len(opens)} 个开放问题")
+    if len(pending) > max_items:
+        lines.append(f"- …共 {len(pending)} 个未清负债")
     return "\n".join(lines)

@@ -96,31 +96,67 @@ def _prop_from_attr(a: dict) -> dict:
     return p
 
 
-def _mk_validation_rule(name: str, statement: str, error_message: str, order: int) -> dict:
+def _mk_validation_rule(name: str, statement: str, error_message: str, order: int,
+                        source_ref: Optional[str] = None) -> dict:
     """规则以 disabled 形式挂载：错误提示与表述保真，条件表达式留待人工形式化。"""
     return {"id": f"rule-{uuid.uuid4().hex[:8]}", "type": "validation",
             "name": f"待形式化: {name}", "description": statement,
             "enabled": False, "order": order,
             "config": {"type": "validation", "condition": "",
-                       "errorMessage": error_message or statement or name}}
+                       "errorMessage": error_message or statement or name},
+            "sourceRefs": [source_ref] if source_ref else []}
 
 
 # ---------------------------------------------------------------- 第 1 步：确定性映射
 
 
-def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
+def _deterministic_draft(canvas: dict, warnings: list[str],
+                         semantic_issues: Optional[list[dict]] = None) -> dict:
     objects: list[dict] = canvas.get("objects") or []
     actors: list[dict] = canvas.get("actors") or []
     behaviors: list[dict] = canvas.get("behaviors") or []
     events: list[dict] = canvas.get("events") or []
     rules: list[dict] = canvas.get("rules") or []
+    issues = semantic_issues if semantic_issues is not None else []
+
+    def issue(code: str, severity: str, message: str, *,
+              key: Optional[str] = None, source_refs: Optional[list[str]] = None) -> None:
+        value = {"code": code, "severity": severity, "message": message,
+                 "sourceRefs": [x for x in (source_refs or []) if x]}
+        if key:
+            value["key"] = key
+        marker = (code, key, tuple(value["sourceRefs"]), message)
+        if not any((x.get("code"), x.get("key"), tuple(x.get("sourceRefs") or []),
+                    x.get("message")) == marker for x in issues):
+            issues.append(value)
+
+    def add_alias(index: dict[str, set[str]], value: Optional[str], key: str) -> None:
+        normalized = norm_name(value or "")
+        if normalized:
+            index.setdefault(normalized, set()).add(key)
+
+    def resolve_alias(index: dict[str, set[str]], value: Optional[str]) -> tuple[Optional[str], str]:
+        keys = index.get(norm_name(value or ""), set())
+        if len(keys) == 1:
+            return next(iter(keys)), "resolved"
+        return None, "ambiguous" if len(keys) > 1 else "missing"
+
+    def unique(values: list[Optional[str]]) -> list[str]:
+        out: list[str] = []
+        for value in values:
+            if value and value not in out:
+                out.append(value)
+        return out
 
     draft_objects: list[dict] = []
-    obj_key_by_name: dict[str, str] = {}
+    obj_by_key: dict[str, dict] = {}
+    entity_aliases: dict[str, set[str]] = {}
+    canonical_object_keys: dict[str, str] = {}
 
     def add_object_type(name: str, display_name: str, description: str,
                         props: list[dict], key_attr: Optional[str],
-                        origin: str, source_ref: Optional[str]) -> None:
+                        origin: str, source_ref: Optional[str],
+                        actor_metadata: Optional[dict] = None) -> str:
         key = f"obj:{norm_name(name)}"
         prop_names = {norm_name(p["name"]) for p in props}
         primary = None
@@ -139,14 +175,21 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
                 warnings.append(f"对象「{name}」的主键属性「{key_attr}」不在属性列表中，已回退为 id")
             else:
                 warnings.append(f"对象「{name}」未指定业务主键，已自动补 id 属性作为主键")
-        draft_objects.append({
+        item = {
             "key": key, "name": _slug(name, f"Object{len(draft_objects) + 1}"),
             "displayName": display_name or name, "description": description or "",
             "color": _COLORS[len(draft_objects) % len(_COLORS)],
             "primaryKey": primary, "properties": props,
             "origin": origin, "sourceRefs": [r for r in [source_ref] if r],
-        })
-        obj_key_by_name[norm_name(name)] = key
+        }
+        if actor_metadata:
+            item["actorMetadata"] = [actor_metadata]
+        draft_objects.append(item)
+        obj_by_key[key] = item
+        canonical_object_keys[norm_name(name)] = key
+        add_alias(entity_aliases, name, key)
+        add_alias(entity_aliases, display_name, key)
+        return key
 
     for o in objects:
         add_object_type(
@@ -155,11 +198,94 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
             [_prop_from_attr(a) for a in (o.get("attributes") or [])],
             o.get("key_attribute"), "object", o.get("id"))
 
-    # 主体 → 参与方对象类型（system 类主体不建模为对象；与对象重名时合并不重复建）
+    actor_aliases: dict[str, set[str]] = {}
+    actor_records: dict[str, dict] = {}
+
+    # 主体 → 参与方对象类型。与对象 canonical name 相同时做可审计合并：
+    # 属性/职责/血缘全部保留；无法无损合并的主键或属性契约形成 blocking issue。
     for a in actors:
+        actor_key = f"actor:{norm_name(a.get('name', ''))}"
+        actor_record = {
+            "id": a.get("id"), "name": a.get("name", ""),
+            "displayName": a.get("display_name") or a.get("name", ""),
+            "kind": a.get("kind") or "role",
+            "description": a.get("description") or "",
+            "responsibilities": list(a.get("responsibilities") or []),
+            "attributes": list(a.get("attributes") or []),
+            "keyAttribute": a.get("key_attribute"),
+        }
+        actor_records[actor_key] = actor_record
+        add_alias(actor_aliases, a.get("name"), actor_key)
+        add_alias(actor_aliases, a.get("display_name"), actor_key)
+
         if (a.get("kind") or "role") == "system":
             continue
-        if norm_name(a.get("name", "")) in obj_key_by_name:
+        same_key = canonical_object_keys.get(norm_name(a.get("name", "")))
+        if same_key:
+            target = obj_by_key[same_key]
+            add_alias(entity_aliases, a.get("name"), same_key)
+            add_alias(entity_aliases, a.get("display_name"), same_key)
+            target["origin"] = "object+actor"
+            target["sourceRefs"] = unique(
+                list(target.get("sourceRefs") or []) + [a.get("id")])
+            target.setdefault("actorMetadata", []).append(actor_record)
+            actor_record["objectTypeKey"] = same_key
+
+            additions = [f"业务主体（{a.get('kind', 'role')}）"]
+            if a.get("description"):
+                additions.append(a["description"])
+            if a.get("responsibilities"):
+                additions.append("职责: " + "；".join(a["responsibilities"]))
+            for text in additions:
+                if text and text not in (target.get("description") or ""):
+                    target["description"] = (
+                        (target.get("description") or "").rstrip("。")
+                        + ("。" if target.get("description") else "") + text)
+
+            props_by_name = {norm_name(p.get("name", "")): p
+                             for p in target.get("properties") or []}
+            for raw_attr in a.get("attributes") or []:
+                incoming = _prop_from_attr(raw_attr)
+                normalized = norm_name(incoming["name"])
+                existing_prop = props_by_name.get(normalized)
+                if not existing_prop:
+                    target["properties"].append(incoming)
+                    props_by_name[normalized] = incoming
+                    continue
+                if existing_prop.get("type") != incoming.get("type"):
+                    issue(
+                        "actor_object_attribute_conflict", "blocking",
+                        f"同名主体/对象「{a.get('name')}」的属性「{raw_attr.get('name')}」"
+                        f"类型冲突（对象={existing_prop.get('type')}，主体={incoming.get('type')}）",
+                        key=same_key, source_refs=[a.get("id")],
+                    )
+                    continue
+                existing_prop["required"] = bool(
+                    existing_prop.get("required") or incoming.get("required"))
+                old_enum = (existing_prop.get("validation") or {}).get("enum")
+                new_enum = (incoming.get("validation") or {}).get("enum")
+                if old_enum and new_enum and old_enum != new_enum:
+                    issue(
+                        "actor_object_enum_conflict", "blocking",
+                        f"同名主体/对象「{a.get('name')}」的属性「{raw_attr.get('name')}」"
+                        "枚举口径不一致",
+                        key=same_key, source_refs=[a.get("id")],
+                    )
+                elif new_enum and not old_enum:
+                    existing_prop["validation"] = {"enum": new_enum}
+
+            actor_pk = norm_name(a.get("key_attribute") or "")
+            object_pk_prop = next(
+                (p for p in target["properties"] if p.get("id") == target.get("primaryKey")), None)
+            object_pk = norm_name((object_pk_prop or {}).get("name", ""))
+            if actor_pk and object_pk and actor_pk != object_pk:
+                issue(
+                    "actor_object_primary_key_conflict", "blocking",
+                    f"同名主体/对象「{a.get('name')}」的主键口径冲突"
+                    f"（对象={object_pk_prop.get('name') if object_pk_prop else '?'}，"
+                    f"主体={a.get('key_attribute')}）",
+                    key=same_key, source_refs=[a.get("id")],
+                )
             warnings.append(f"主体「{a.get('name')}」与同名对象合并（不重复生成对象类型）")
             continue
         desc = f"业务主体（{a.get('kind', 'role')}）。" + (a.get("description") or "")
@@ -170,19 +296,25 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
         if not any(norm_name(p["name"]) == "name" for p in props):
             props.insert(0, {"id": _pid(), "name": "name", "displayName": "名称",
                              "type": "string", "required": True})
-        add_object_type(
+        actor_obj_key = add_object_type(
             a.get("name", ""), a.get("display_name") or a.get("name", ""), desc,
-            props, a.get("key_attribute") or "name", "actor", a.get("id"))
+            props, a.get("key_attribute") or "name", "actor", a.get("id"),
+            actor_metadata=actor_record)
+        actor_record["objectTypeKey"] = actor_obj_key
 
     # 对象关系 → 链接类型
     draft_links: list[dict] = []
     seen_link_names: set[str] = set()
     for o in objects:
-        src_key = obj_key_by_name.get(norm_name(o.get("name", "")))
+        src_key = canonical_object_keys.get(norm_name(o.get("name", "")))
         for r in o.get("relations") or []:
-            tgt_key = obj_key_by_name.get(norm_name(r.get("target", "")))
+            tgt_key, target_status = resolve_alias(entity_aliases, r.get("target"))
             if not src_key or not tgt_key:
-                warnings.append(f"关系「{o.get('name')} → {r.get('target')}」的目标对象未定义，已跳过")
+                reason = "存在多个同名/同显示名候选" if target_status == "ambiguous" else "目标对象未定义"
+                message = f"关系「{o.get('name')} → {r.get('target')}」{reason}，已跳过"
+                warnings.append(message)
+                issue("relation_target_unresolved", "blocking", message,
+                      source_refs=[o.get("id")])
                 continue
             cardinality = (r.get("cardinality") or "").strip().lower()
             if cardinality not in CARDINALITIES:
@@ -191,7 +323,7 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
                                     f"不合法，已回退 one-to-many")
                 cardinality = "one-to-many"
             base = _slug(r.get("name") or "", "") or \
-                f"{_slug(o.get('name', ''), 'src')}_{_slug(r.get('target', ''), 'tgt')}"
+                f"{_slug(o.get('name', ''), 'src')}_{_slug(obj_by_key[tgt_key]['name'], 'tgt')}"
             name = base
             n = 2
             while norm_name(name) in seen_link_names:
@@ -203,44 +335,157 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
                 "displayName": r.get("display_name") or name,
                 "description": r.get("description") or "",
                 "sourceKey": src_key, "targetKey": tgt_key,
-                "sourceName": o.get("name", ""), "targetName": r.get("target", ""),
+                "sourceName": obj_by_key[src_key]["name"],
+                "targetName": obj_by_key[tgt_key]["name"],
                 "cardinality": cardinality,
                 "sourceRefs": [x for x in [o.get("id")] if x],
             })
 
-    # 规则索引：按作用目标（归一化名）分桶
-    rules_by_target: dict[str, list[dict]] = {}
-    for r in rules:
-        rules_by_target.setdefault(norm_name(r.get("applies_to") or ""), []).append(r)
-    events_by_source = {}
-    for e in events:
-        events_by_source.setdefault(norm_name(e.get("source") or ""), []).append(e)
+    behavior_aliases: dict[str, set[str]] = {}
+    behavior_by_key: dict[str, dict] = {}
+    for b in behaviors:
+        key = f"act:{norm_name(b.get('name', ''))}"
+        behavior_by_key[key] = b
+        add_alias(behavior_aliases, b.get("name"), key)
+        add_alias(behavior_aliases, b.get("display_name"), key)
+
+    # 规则目标先统一解析成 behavior/entity，不再由各映射分支各自猜名字。
+    resolved_rules: dict[str, tuple[Optional[str], Optional[str], str]] = {}
+    for index, r in enumerate(rules):
+        rid = str(r.get("id") or f"rule-index-{index}")
+        target = r.get("applies_to") or ""
+        behavior_key, behavior_status = resolve_alias(behavior_aliases, target)
+        entity_key, entity_status = resolve_alias(entity_aliases, target)
+        candidates = [(kind, key) for kind, key in
+                      (("behavior", behavior_key), ("entity", entity_key)) if key]
+        if len(candidates) == 1:
+            kind, key = candidates[0]
+            resolved_rules[rid] = (kind, key, "resolved")
+        elif len(candidates) > 1 or behavior_status == "ambiguous" or entity_status == "ambiguous":
+            resolved_rules[rid] = (None, None, "ambiguous")
+            issue("rule_target_ambiguous", "blocking",
+                  f"规则「{r.get('display_name') or r.get('name')}」的作用目标「{target}」"
+                  "同时命中多个对象/行为，无法无歧义转换",
+                  source_refs=[r.get("id")])
+        else:
+            resolved_rules[rid] = (None, None, "missing")
+            issue("rule_target_unresolved", "blocking",
+                  f"规则「{r.get('display_name') or r.get('name')}」的作用目标"
+                  f"「{target or '未指定'}」未解析",
+                  source_refs=[r.get("id")])
+
+    rules_by_behavior: dict[str, list[dict]] = {}
+    for index, r in enumerate(rules):
+        rid = str(r.get("id") or f"rule-index-{index}")
+        target_kind, target_key, _ = resolved_rules[rid]
+        if target_kind == "behavior" and target_key:
+            rules_by_behavior.setdefault(target_key, []).append(r)
+
+    resolved_events: dict[str, tuple[Optional[str], str]] = {}
+    events_by_behavior: dict[str, list[dict]] = {}
+    for index, e in enumerate(events):
+        eid = str(e.get("id") or f"event-index-{index}")
+        src = (e.get("source") or "").strip()
+        normalized = norm_name(src)
+        if normalized in {"time", "external"}:
+            resolved_events[eid] = (None, normalized)
+            if normalized == "external":
+                issue(
+                    "external_event_binding_unsupported", "unsupported",
+                    f"外部事件「{e.get('display_name') or e.get('name')}」已保留为未绑定哨兵草稿，"
+                    "但当前画布没有外部连接器/监听对象契约，落地后需显式补配触发入口",
+                    source_refs=[e.get("id")],
+                )
+            continue
+        behavior_key, status = resolve_alias(behavior_aliases, src)
+        resolved_events[eid] = (behavior_key, status)
+        if behavior_key:
+            events_by_behavior.setdefault(behavior_key, []).append(e)
+        else:
+            issue("event_source_unresolved", "blocking",
+                  f"事件「{e.get('display_name') or e.get('name')}」的来源「{src or '未指定'}」"
+                  f"{'存在歧义' if status == 'ambiguous' else '未解析到行为'}",
+                  source_refs=[e.get("id")])
 
     # 行为 → 动作类型
     draft_actions: list[dict] = []
     for b in behaviors:
         bname = b.get("name", "")
+        action_key = f"act:{norm_name(bname)}"
         desc_parts = [b.get("description") or ""]
+        actor_refs: list[dict] = []
+        actor_source_refs: list[str] = []
         if b.get("actor"):
-            desc_parts.append(f"执行主体: {b['actor']}")
+            resolved_actor, actor_status = resolve_alias(actor_aliases, b.get("actor"))
+            if resolved_actor:
+                record = dict(actor_records[resolved_actor])
+                actor_refs.append(record)
+                if record.get("id"):
+                    actor_source_refs.append(record["id"])
+                desc_parts.append(
+                    f"执行主体: {record.get('displayName') or record.get('name')}")
+                issue(
+                    "actor_runtime_binding_unsupported", "unsupported",
+                    f"行为「{b.get('display_name') or bname}」的执行主体已保留为 actorRefs 和血缘，"
+                    "但当前正式 ActionType 不支持运行时主体/授权绑定，落地后需在权限模型中补配",
+                    key=action_key, source_refs=[b.get("id"), record.get("id")],
+                )
+            else:
+                # readiness 兼容把对象本身作为执行主体；这里同样保留为 object actorRef。
+                actor_obj_key, object_actor_status = resolve_alias(entity_aliases, b.get("actor"))
+                if actor_obj_key:
+                    actor_item = obj_by_key[actor_obj_key]
+                    actor_refs.append({
+                        "name": actor_item["name"], "displayName": actor_item["displayName"],
+                        "kind": "object", "objectTypeKey": actor_obj_key,
+                    })
+                    desc_parts.append(f"执行主体: {actor_item['displayName']}")
+                    issue(
+                        "actor_runtime_binding_unsupported", "unsupported",
+                        f"行为「{b.get('display_name') or bname}」以对象"
+                        f"「{actor_item['displayName']}」作为执行主体；actorRefs 已保留，"
+                        "但当前正式 ActionType 不支持运行时主体/授权绑定",
+                        key=action_key, source_refs=[b.get("id")],
+                    )
+                else:
+                    status = ("ambiguous" if "ambiguous" in
+                              {actor_status, object_actor_status} else "missing")
+                    issue(
+                        "behavior_actor_unresolved", "blocking",
+                        f"行为「{b.get('display_name') or bname}」的执行主体「{b.get('actor')}」"
+                        f"{'存在歧义' if status == 'ambiguous' else '未解析'}",
+                        key=action_key, source_refs=[b.get("id")],
+                    )
         if b.get("trigger"):
             desc_parts.append(f"触发: {b['trigger']}")
         if b.get("outcome"):
             desc_parts.append(f"结果: {b['outcome']}")
-        for e in events_by_source.get(norm_name(bname), []):
+        event_source_refs: list[str] = []
+        for e in events_by_behavior.get(action_key, []):
             cons = "；".join(e.get("consequences") or [])
             desc_parts.append(f"触发事件「{e.get('display_name') or e.get('name')}」"
                               + (f"（后果: {cons}）" if cons else ""))
+            if e.get("id"):
+                event_source_refs.append(e["id"])
 
-        obj_key = obj_key_by_name.get(norm_name(b.get("object") or ""))
+        obj_key, object_status = resolve_alias(entity_aliases, b.get("object"))
         if b.get("object") and not obj_key:
             warnings.append(f"行为「{bname}」作用的对象「{b.get('object')}」未定义，动作未绑定对象类型")
+            issue(
+                "behavior_object_unresolved", "blocking",
+                f"行为「{b.get('display_name') or bname}」作用对象「{b.get('object')}」"
+                f"{'存在歧义' if object_status == 'ambiguous' else '未解析'}",
+                key=action_key, source_refs=[b.get("id")],
+            )
 
         requires_approval = bool(b.get("needs_approval"))
         action_rules: list[dict] = []
         for i, cst in enumerate(b.get("constraints") or []):
             action_rules.append(_mk_validation_rule(f"约束{i + 1}", cst, cst, len(action_rules)))
-        for r in rules_by_target.get(norm_name(bname), []):
+        rule_source_refs: list[str] = []
+        for r in rules_by_behavior.get(action_key, []):
+            if r.get("id"):
+                rule_source_refs.append(r["id"])
             if (r.get("kind") or "constraint") == "approval":
                 requires_approval = True
                 continue
@@ -248,41 +493,49 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
                 action_rules.append(_mk_validation_rule(
                     r.get("display_name") or r.get("name", "规则"),
                     r.get("statement") or r.get("description") or "",
-                    r.get("error_message") or "", len(action_rules)))
+                    r.get("error_message") or "", len(action_rules), r.get("id")))
         if action_rules:
             warnings.append(f"动作「{bname}」挂载了 {len(action_rules)} 条待形式化规则"
                             f"（disabled，请在编辑器中补条件表达式后启用）")
 
         draft_actions.append({
-            "key": f"act:{norm_name(bname)}",
+            "key": action_key,
             "name": _slug(bname, f"action{len(draft_actions) + 1}"),
             "displayName": b.get("display_name") or bname,
             "description": "。".join(p for p in desc_parts if p),
             "objectTypeKey": obj_key,
+            "objectTypeName": obj_by_key[obj_key]["name"] if obj_key else b.get("object"),
+            "actorRefs": actor_refs,
             "parameters": [{**_prop_from_attr(i2), "id": f"param-{uuid.uuid4().hex[:8]}"}
                            for i2 in (b.get("inputs") or [])],
             "rules": action_rules,
             "requiresApproval": requires_approval,
-            "sourceRefs": [x for x in [b.get("id")] if x],
+            "sourceRefs": unique(
+                [b.get("id")] + actor_source_refs + event_source_refs + rule_source_refs),
         })
 
-    # 作用目标 → 对象 key 解析（直接命中对象；或命中行为则归到行为的作用对象）
-    behavior_object: dict[str, str] = {
-        norm_name(b.get("name", "")): (b.get("object") or "") for b in behaviors}
+    action_by_key = {a["key"]: a for a in draft_actions}
 
-    def resolve_target_obj(target: str) -> Optional[str]:
-        t = norm_name(target or "")
-        if t in obj_key_by_name:
-            return obj_key_by_name[t]
-        if t in behavior_object:
-            return obj_key_by_name.get(norm_name(behavior_object[t]))
+    def resolved_rule_object(index: int, rule: dict) -> Optional[str]:
+        rid = str(rule.get("id") or f"rule-index-{index}")
+        target_kind, target_key, _ = resolved_rules[rid]
+        if target_kind == "entity":
+            return target_key
+        if target_kind == "behavior" and target_key:
+            return action_by_key.get(target_key, {}).get("objectTypeKey")
         return None
 
-    # 派生规则 → 激活函数草稿（enabled=false，条件/函数体留待人工形式化）
+    # 派生规则 + 对象级 constraint/validation → 停用对象函数草稿。
+    # 后者不会伪装成已执行校验，而是完整保留为待形式化的 boolean 函数。
     draft_functions: list[dict] = []
     seen_fn_names: set[str] = set()
-    for r in rules:
-        if (r.get("kind") or "constraint") != "derivation":
+    for index, r in enumerate(rules):
+        kind = r.get("kind") or "constraint"
+        rid = str(r.get("id") or f"rule-index-{index}")
+        target_kind, _, _ = resolved_rules[rid]
+        if kind not in ("derivation", "constraint", "validation"):
+            continue
+        if kind in ("constraint", "validation") and target_kind != "entity":
             continue
         rname = r.get("name", "")
         base = _slug(rname, f"function{len(draft_functions) + 1}")
@@ -291,27 +544,35 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
             fname = f"{base}_{n}"
             n += 1
         seen_fn_names.add(norm_name(fname))
-        obj_key = resolve_target_obj(r.get("applies_to") or "")
+        obj_key = resolved_rule_object(index, r)
         desc = r.get("statement") or r.get("description") or ""
         if r.get("error_message"):
             desc += f"；违规提示: {r['error_message']}"
         if not obj_key:
-            warnings.append(f"派生规则「{rname}」作用的「{r.get('applies_to') or '未指定'}」"
-                            f"未解析到对象，函数草稿未绑定对象类型（落地后请在编辑器中补绑定）")
+            warnings.append(f"规则「{rname}」作用的「{r.get('applies_to') or '未指定'}」"
+                            f"未解析到对象，函数草稿未绑定对象类型")
         draft_functions.append({
             "key": f"fn:{norm_name(fname)}", "name": fname,
-            "displayName": f"待形式化: {r.get('display_name') or rname}",
+            "displayName": (
+                f"待形式化校验: {r.get('display_name') or rname}"
+                if kind in ("constraint", "validation")
+                else f"待形式化: {r.get('display_name') or rname}"),
             "description": desc,
-            # 前端/运行时正式契约不包含 query；即使强制越权也保持 object 草稿且停用。
             "functionType": "object",
-            "language": "expression", "returnType": "string", "body": "",
+            "language": "expression",
+            "returnType": "boolean" if kind in ("constraint", "validation") else "string",
+            "body": "",
             "enabled": False,
             "targetObjectTypeKey": obj_key,
-            "targetObjectTypeName": r.get("applies_to") or "",
+            "targetObjectTypeName": (
+                obj_by_key[obj_key]["name"] if obj_key else r.get("applies_to") or ""),
+            "semanticRole": (
+                "object_validation" if kind in ("constraint", "validation") else "derivation"),
+            "originKind": "rule",
             "sourceRefs": [x for x in [r.get("id")] if x],
         })
     if draft_functions:
-        warnings.append(f"生成 {len(draft_functions)} 个激活函数草稿"
+        warnings.append(f"生成 {len(draft_functions)} 个待形式化函数草稿"
                         f"（enabled=false，请在编辑器中补函数体后启用）")
 
     # 告警规则 + 事件 → 哨兵草稿（muted 影子 + enabled=false，条件留待人工形式化）
@@ -340,11 +601,11 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
             "sourceRefs": [x for x in [source_ref] if x],
         })
 
-    for r in rules:
+    for index, r in enumerate(rules):
         if (r.get("kind") or "constraint") != "alert":
             continue
         tgt = r.get("applies_to") or ""
-        bind_key = resolve_target_obj(tgt)
+        bind_key = resolved_rule_object(index, r)
         if not bind_key:
             warnings.append(f"告警规则「{r.get('name')}」作用的「{tgt or '未指定'}」"
                             f"未解析到对象，哨兵草稿未绑定监听对象（落地后请在编辑器中补绑定）")
@@ -355,14 +616,17 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
                      bind_key, tgt, on_change=True, on_schedule=False, interval=300,
                      origin_kind="rule", source_ref=r.get("id"))
 
-    for e in events:
+    for event_index, e in enumerate(events):
         src = (e.get("source") or "").strip()
         is_time = norm_name(src) == "time"
         bind_key = None
         bind_name = ""
         if src and not is_time and norm_name(src) != "external":
-            bind_name = behavior_object.get(norm_name(src)) or ""
-            bind_key = obj_key_by_name.get(norm_name(bind_name)) if bind_name else None
+            eid = str(e.get("id") or f"event-index-{event_index}")
+            source_behavior_key, _ = resolved_events.get(eid, (None, "missing"))
+            bind_key = (action_by_key.get(source_behavior_key, {}).get("objectTypeKey")
+                        if source_behavior_key else None)
+            bind_name = obj_by_key[bind_key]["name"] if bind_key else ""
             if not bind_key:
                 warnings.append(f"事件「{e.get('name')}」的来源「{src}」未解析到行为的作用对象，"
                                 f"哨兵草稿未绑定监听对象（落地后请在编辑器中补绑定）")
@@ -382,25 +646,32 @@ def _deterministic_draft(canvas: dict, warnings: list[str]) -> dict:
         warnings.append(f"生成 {len(draft_sentinels)} 个哨兵草稿"
                         f"（muted 影子 + 停用，请在编辑器中补条件表达式后发布）")
 
-    # 未挂到任何行为的 constraint/validation/approval 规则 → 报告备注（不再静默丢失）
-    mapped_targets = {norm_name(b.get("name", "")) for b in behaviors}
-    for r in rules:
+    # approval 只能落在 ActionType.requiresApproval。作用于对象时显式 blocking，
+    # 不再以 warning 代替丢失；未解析目标已在统一解析阶段 blocking。
+    for index, r in enumerate(rules):
         kind = r.get("kind") or "constraint"
-        if kind in ("derivation", "alert"):
-            continue  # 已分别转化为函数/哨兵草稿
-        tgt = norm_name(r.get("applies_to") or "")
-        if tgt in mapped_targets:
+        if kind != "approval":
             continue
-        if kind == "approval":
-            warnings.append(f"审批规则「{r.get('name')}」作用于「{r.get('applies_to') or '未指定'}」"
-                            f"未命中任何行为，requiresApproval 未能挂载——请确认作用目标"
-                            f"或落地后在编辑器中手工开启审批")
-        else:
-            warnings.append(f"规则「{r.get('name')}」作用于「{r.get('applies_to') or '未指定'}」，"
-                            f"暂无法映射为动作校验（对象级校验请后续在编辑器中形式化）")
+        rid = str(r.get("id") or f"rule-index-{index}")
+        target_kind, _, status = resolved_rules[rid]
+        if target_kind == "behavior":
+            continue
+        if target_kind == "entity":
+            issue(
+                "object_approval_unsupported", "blocking",
+                f"审批规则「{r.get('display_name') or r.get('name')}」作用于对象"
+                f"「{r.get('applies_to')}」，当前正式模型只支持动作级 requiresApproval；"
+                "请将规则改为作用于具体行为",
+                source_refs=[r.get("id")],
+            )
+        elif status != "resolved":
+            warnings.append(
+                f"审批规则「{r.get('name')}」作用于「{r.get('applies_to') or '未指定'}」"
+                "未命中任何行为，requiresApproval 未能挂载")
 
     return {"objectTypes": draft_objects, "linkTypes": draft_links, "actions": draft_actions,
-            "functions": draft_functions, "sentinels": draft_sentinels}
+            "functions": draft_functions, "sentinels": draft_sentinels,
+            "semanticIssues": issues}
 
 
 # ---------------------------------------------------------------- 第 2 步：LLM 补缺
@@ -607,6 +878,26 @@ def _scenario_coverage(canvas: dict, draft: dict,
     return out
 
 
+def _selected_draft_keys(
+        draft: dict, selected_keys: Optional[list[str]] = None) -> set[str]:
+    """Resolve the one canonical selection set shared by validation and apply.
+
+    Omitting ``selected_keys`` means all non-conflicting items, never every raw
+    item in the draft. A target ontology can change after draft generation, but
+    that must not silently turn a previously excluded conflict into an approved
+    element.
+    """
+    if selected_keys is not None:
+        return {str(key) for key in selected_keys}
+    collections = ("objectTypes", "linkTypes", "actions", "functions", "sentinels")
+    return {
+        str(item["key"])
+        for collection in collections
+        for item in (draft.get(collection) or [])
+        if item.get("key") and not item.get("conflict")
+    }
+
+
 def validate_draft_selection(draft: dict, selected_keys: Optional[list[str]] = None,
                              existing: Optional[dict[str, set[str]]] = None) -> dict:
     """按图谱编辑器正式契约校验一次草稿选择集，不依赖 LLM。
@@ -620,10 +911,8 @@ def validate_draft_selection(draft: dict, selected_keys: Optional[list[str]] = N
     collections = ("objectTypes", "linkTypes", "actions", "functions", "sentinels")
     all_items = [item for coll in collections for item in (draft.get(coll) or [])]
     by_key = {str(item.get("key") or ""): item for item in all_items if item.get("key")}
-    if selected_keys is None:
-        selected = {k for k, item in by_key.items() if not item.get("conflict")}
-    else:
-        selected = {str(k) for k in selected_keys}
+    selected = _selected_draft_keys(draft, selected_keys)
+    if selected_keys is not None:
         for key in sorted(selected - set(by_key)):
             errors.append({"code": "unknown_draft_key", "key": key,
                            "message": f"选择项 {key} 不存在于草稿"})
@@ -699,7 +988,8 @@ def validate_draft_selection(draft: dict, selected_keys: Optional[list[str]] = N
         if item.get("key") not in selected or item.get("conflict"):
             continue
         if not object_dependency_ok(item.get("objectTypeKey"),
-                                    str(item.get("objectTypeKey") or "").split(":", 1)[-1]):
+                                    item.get("objectTypeName")
+                                    or str(item.get("objectTypeKey") or "").split(":", 1)[-1]):
             err("missing_action_object", item, "动作绑定对象未选择且目标本体中不存在", "objectTypeKey")
         for prop in item.get("parameters") or []:
             if prop.get("type") not in PROPERTY_TYPES:
@@ -757,15 +1047,25 @@ def build_draft(canvas: dict, existing: Optional[dict[str, set[str]]] = None,
     LLM 补缺已移除 —— 确定性映射依靠 map_type_hint() 推断属性类型，已足够。"""
     warnings: list[str] = []
     conflicts: list[str] = []
-    draft = _deterministic_draft(canvas, warnings)
+    semantic_issues: list[dict] = []
+    draft = _deterministic_draft(canvas, warnings, semantic_issues)
     refined = False  # LLM 补缺已跳过，确定性映射已满足需求
     _lint(draft, warnings)
     _mark_conflicts(draft, existing, conflicts)
     coverage = _scenario_coverage(canvas, draft, existing)
     validation = validate_draft_selection(draft, existing=existing)
+    blocking_count = sum(1 for item in semantic_issues if item.get("severity") == "blocking")
+    unsupported_count = sum(1 for item in semantic_issues
+                            if item.get("severity") == "unsupported")
     report = {"warnings": warnings, "conflicts": conflicts,
               "scenarioCoverage": coverage, "llmRefined": refined,
-              "validation": validation}
+              "validation": validation,
+              "semanticIssues": semantic_issues,
+              "semanticFidelity": {
+                  "blockingCount": blocking_count,
+                  "unsupportedCount": unsupported_count,
+                  "readyToApply": blocking_count == 0,
+              }}
     return draft, report
 
 
@@ -778,22 +1078,39 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
     lineage（sessionId/documentId/draftId）与元素的 draftKey/sourceRefs 一起
     写入 source 血缘列，落地后可回溯到探索会话与画布卡片。
     """
-    selected = set(selected_keys) if selected_keys is not None else None
+    selected = _selected_draft_keys(draft_data, selected_keys)
 
     def picked(item: dict) -> bool:
-        return selected is None or item["key"] in selected
+        return str(item.get("key") or "") in selected
 
     def src_of(item: dict) -> Optional[dict]:
         if not lineage:
             return None
-        return {"kind": "business_exploration", **lineage,
-                "draftKey": item.get("key"), "sourceRefs": item.get("sourceRefs") or []}
+        source = {"kind": "business_exploration", **lineage,
+                  "draftKey": item.get("key"), "sourceRefs": item.get("sourceRefs") or []}
+        # 正式模型暂时没有主体运行时绑定列；把结构化 actorRefs/主体元数据留在
+        # 血缘中，既不伪装成授权能力，也不让需求语义在落库后消失。
+        for field in ("actorRefs", "actorMetadata", "semanticRole", "originKind"):
+            if item.get(field):
+                source[field] = item[field]
+        return source
 
     existing = existing_name_sets(db, ontology_id)
     existing_obj_ids = {norm_name(x.name): x.id for x in
                         db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id)}
     created = {"objectTypes": 0, "linkTypes": 0, "actions": 0, "functions": 0, "sentinels": 0}
     skipped: list[dict] = []
+    if selected_keys is None:
+        # Preserve the historical/audit-visible skipped report while ensuring
+        # these conflicts never enter the executable selection set.
+        for collection in ("objectTypes", "linkTypes", "actions", "functions", "sentinels"):
+            skipped.extend({
+                "key": item.get("key"),
+                "reason": (
+                    f"草稿元素「{item.get('name') or item.get('displayName') or item.get('key')}」"
+                    "在生成时已标记为目标本体冲突，未纳入默认应用选择"
+                ),
+            } for item in (draft_data.get(collection) or []) if item.get("conflict"))
     key2id: dict[str, str] = {}
 
     base_count = len(existing_obj_ids)
@@ -855,8 +1172,8 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
         obj_id = key2id.get(obj_key) if obj_key else None
         if obj_key and not obj_id:
             # 端点对象是冲突/未勾选项 → 尝试按名字绑到已有对象
-            src_name = obj_key.split(":", 1)[-1]
-            obj_id = existing_obj_ids.get(src_name)
+            src_name = item.get("objectTypeName") or obj_key.split(":", 1)[-1]
+            obj_id = existing_obj_ids.get(norm_name(src_name))
         db.add(ActionType(
             id=str(uuid.uuid4()), ontology_id=ontology_id, name=item["name"],
             display_name=item["displayName"], description=item.get("description"),

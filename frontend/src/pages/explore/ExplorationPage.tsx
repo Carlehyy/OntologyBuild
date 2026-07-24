@@ -268,6 +268,30 @@ export default function ExplorationPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
+  // 异步结果必须归属于发起它的会话。慢模型/慢网络下切换会话时，
+  // 旧 GET、SSE 或附件请求不得覆盖当前会话。
+  const sidRef = useRef('')
+  const sessionRequestRef = useRef(0)
+  const sessionCreationRef = useRef<Promise<string> | null>(null)
+  const sendInFlightRef = useRef(false)
+  const chatGenerationRef = useRef(0)
+  const chatAbortRef = useRef<AbortController | null>(null)
+
+  const selectSession = useCallback((id: string) => {
+    sidRef.current = id
+    setSid(id)
+  }, [])
+
+  const cancelActiveChat = useCallback(() => {
+    chatGenerationRef.current += 1
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
+    setBusy(false)
+  }, [])
+
+  useEffect(() => () => {
+    chatAbortRef.current?.abort()
+  }, [])
 
   const myMessages = useMemo(() => messages.filter(m => m.role === 'user'), [messages])
   const jumpToMessage = useCallback((id: string) => {
@@ -338,22 +362,37 @@ export default function ExplorationPage() {
   }, [timeline])
 
   const loadSession = useCallback(async (id: string) => {
-    setSid(id)
+    const requestId = ++sessionRequestRef.current
+    cancelActiveChat()
+    selectSession(id)
     setShowMessageHistory(false)
     setShowSessionHistory(false)
     setBanner('')
     setAttachError('')
     setAttachments([])
     setUploads([])
-    const detail = await explorationApi.session(id)
-    setMessages((detail.messages || []).map(m => ({
-      id: m.id, role: m.role, content: m.content, steps: m.steps || [], createdAt: m.createdAt,
-    })))
-    setCanvas(detail.canvas)
-    setCompleteness(detail.completeness)
-    setReadiness(detail.readiness)
-    explorationApi.attachments(id).then(setAttachments).catch(() => { /* 非致命 */ })
-  }, [])
+    setMessages([])
+    setCanvas(null)
+    setCompleteness(null)
+    setReadiness(null)
+    try {
+      const [detail, sessionAttachments] = await Promise.all([
+        explorationApi.session(id),
+        explorationApi.attachments(id).catch(() => [] as BxAttachment[]),
+      ])
+      if (requestId !== sessionRequestRef.current || sidRef.current !== id) return
+      setMessages((detail.messages || []).map(m => ({
+        id: m.id, role: m.role, content: m.content, steps: m.steps || [], createdAt: m.createdAt,
+      })))
+      setCanvas(detail.canvas)
+      setCompleteness(detail.completeness)
+      setReadiness(detail.readiness)
+      setAttachments(sessionAttachments)
+    } catch (error: unknown) {
+      if (requestId !== sessionRequestRef.current || sidRef.current !== id) return
+      setBanner(errorMessage(error, '会话加载失败'))
+    }
+  }, [cancelActiveChat, selectSession])
 
   // 首次进入自动选中最近会话
   useEffect(() => {
@@ -363,20 +402,7 @@ export default function ExplorationPage() {
   const newSession = async () => {
     const s = await explorationApi.createSession()
     await refetchSessions()
-    setMessages([])
-    setCanvas(null)
-    setCompleteness(null)
-    setReadiness(null)
-    setAttachments([])
-    setUploads([])
-    setAttachError('')
-    setShowMessageHistory(false)
-    setShowSessionHistory(false)
-    setSid(s.id)
-    const detail = await explorationApi.session(s.id)
-    setCanvas(detail.canvas)
-    setCompleteness(detail.completeness)
-    setReadiness(detail.readiness)
+    await loadSession(s.id)
   }
 
   const removeSession = async (id: string) => {
@@ -384,7 +410,9 @@ export default function ExplorationPage() {
     try {
       await explorationApi.deleteSession(id)
       if (id === sid) {
-        setSid('')
+        cancelActiveChat()
+        sessionRequestRef.current += 1
+        selectSession('')
         setMessages([])
         setCanvas(null)
         setCompleteness(null)
@@ -405,11 +433,24 @@ export default function ExplorationPage() {
 
   // 无会话时懒创建（首条消息 / 首个附件都可能触发）
   const ensureSession = async (): Promise<string> => {
-    if (sid) return sid
-    const s = await explorationApi.createSession()
-    setSid(s.id)
-    refetchSessions()
-    return s.id
+    if (sidRef.current) return sidRef.current
+    // send 与 upload 可能在同一事件轮并发进入。创建请求必须是 single-flight，
+    // 否则两边会各建一个会话，并把消息和附件写到不同 sid。
+    if (sessionCreationRef.current) return sessionCreationRef.current
+    const creation = explorationApi.createSession().then(s => {
+      // 创建等待期间若用户已主动选中其他会话，不再抢回焦点；
+      // 本轮调用统一归属当前选中会话。
+      const targetSid = sidRef.current || s.id
+      if (!sidRef.current) selectSession(s.id)
+      void refetchSessions()
+      return targetSid
+    })
+    sessionCreationRef.current = creation
+    try {
+      return await creation
+    } finally {
+      if (sessionCreationRef.current === creation) sessionCreationRef.current = null
+    }
   }
 
   const pickFiles = () => fileInputRef.current?.click()
@@ -418,14 +459,24 @@ export default function ExplorationPage() {
     if (!files || files.length === 0) return
     setAttachError('')
     const targetSid = await ensureSession()
+    // 本地交互一旦开始，之前同 sid 的 loadSession 快照已过时，不能再覆盖
+    // 新上传的附件列表。
+    sessionRequestRef.current += 1
     for (const file of Array.from(files)) {
       const uid = `up-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
       setUploads(prev => [...prev, { uid, name: file.name, ts: Date.now() }])
       try {
         const att = await explorationApi.uploadAttachment(targetSid, file)
-        setAttachments(prev => [...prev, att])
+        if (sidRef.current === targetSid) {
+          setAttachments(prev => [...prev, att])
+          if (att.status !== 'ready') {
+            setAttachError(`「${file.name}」未能加入模型上下文：${att.error || '内容抽取失败'}`)
+          }
+        }
       } catch (error: unknown) {
-        setAttachError(`「${file.name}」上传失败：${errorMessage(error, '无法读取文件内容')}`)
+        if (sidRef.current === targetSid) {
+          setAttachError(`「${file.name}」上传失败：${errorMessage(error, '无法读取文件内容')}`)
+        }
       } finally {
         setUploads(prev => prev.filter(u => u.uid !== uid))
       }
@@ -434,11 +485,18 @@ export default function ExplorationPage() {
   }
 
   const removeAttachment = async (aid: string) => {
-    if (!sid) return
-    setAttachments(prev => prev.filter(a => a.id !== aid))
+    const targetSid = sidRef.current
+    if (!targetSid) return
     try {
-      await explorationApi.deleteAttachment(sid, aid)
-    } catch { /* 前端已移除，忽略后端错误 */ }
+      await explorationApi.deleteAttachment(targetSid, aid)
+      if (sidRef.current === targetSid) {
+        setAttachments(prev => prev.filter(a => a.id !== aid))
+      }
+    } catch (error: unknown) {
+      if (sidRef.current === targetSid) {
+        setAttachError(`文件删除失败：${errorMessage(error, '请稍后重试')}`)
+      }
+    }
   }
 
   const downloadAttachment = async (att: BxAttachment) => {
@@ -458,50 +516,80 @@ export default function ExplorationPage() {
 
   const send = async (text?: string) => {
     const message = (text ?? input).trim()
-    if (!message || busy) return
-    const targetSid = await ensureSession()
-    setInput('')
+    // React state 要到下一次渲染才更新，busy 不能阻止同一事件轮的双击。
+    // 这个同步互斥必须在第一个 await 之前占用，覆盖创建会话和完整 SSE 生命周期。
+    if (!message || busy || sendInFlightRef.current) return
+    sendInFlightRef.current = true
     setBusy(true)
     setBanner('')
-    const now = new Date().toISOString()
-    setMessages(prev => [...prev,
-      { id: nextId(), role: 'user', content: message, steps: [], createdAt: now },
-      { id: nextId(), role: 'assistant', content: '', steps: [], streaming: true, createdAt: now },
-    ])
-
-    const patchLast = (fn: (m: ChatMsg) => ChatMsg) =>
-      setMessages(prev => prev.map((m, i) => (i === prev.length - 1 ? fn(m) : m)))
 
     try {
-      await streamExplorationChat(targetSid, {
-        message,
-        modelId: modelId || undefined,
-        webSearch,
-      }, e => {
-        if (e.type === 'step') {
-          const step: BxStep = {
-            tool: e.tool, arguments: e.arguments, summary: e.summary,
-            durationMs: e.durationMs, error: e.error, diagram: e.diagram,
-            searchResults: e.searchResults,
+      const targetSid = await ensureSession()
+      // loadSession 的慢 GET 可能仍在飞行；从此刻起它的消息/画布快照已过时。
+      // 递增请求代际，使迟到结果无法覆盖下面即将加入的 user/assistant 消息。
+      sessionRequestRef.current += 1
+      const generation = ++chatGenerationRef.current
+      chatAbortRef.current?.abort()
+      const controller = new AbortController()
+      chatAbortRef.current = controller
+      setInput('')
+      const now = new Date().toISOString()
+      const assistantId = nextId()
+      setMessages(prev => [...prev,
+        { id: nextId(), role: 'user', content: message, steps: [], createdAt: now },
+        { id: assistantId, role: 'assistant', content: '', steps: [], streaming: true, createdAt: now },
+      ])
+
+      const ownsCurrentView = () =>
+        generation === chatGenerationRef.current && sidRef.current === targetSid
+      const patchAssistant = (fn: (m: ChatMsg) => ChatMsg) => {
+        if (!ownsCurrentView()) return
+        setMessages(prev => prev.map(m => m.id === assistantId ? fn(m) : m))
+      }
+
+      try {
+        await streamExplorationChat(targetSid, {
+          message,
+          modelId: modelId || undefined,
+          webSearch,
+        }, e => {
+          if (!ownsCurrentView()) return
+          if (e.type === 'step') {
+            const step: BxStep = {
+              tool: e.tool, arguments: e.arguments, summary: e.summary,
+              durationMs: e.durationMs, error: e.error, diagram: e.diagram,
+              searchResults: e.searchResults,
+            }
+            patchAssistant(m => ({ ...m, steps: [...m.steps, step] }))
+          } else if (e.type === 'canvas') {
+            setCanvas(e.canvas)
+            setCompleteness(e.completeness)
+            setReadiness(e.readiness)
+          } else if (e.type === 'answer') {
+            patchAssistant(m => ({ ...m, content: e.content, streaming: false }))
+          } else if (e.type === 'error') {
+            patchAssistant(m => ({ ...m, content: m.content || `⚠️ ${e.message}`, streaming: false }))
           }
-          patchLast(m => ({ ...m, steps: [...m.steps, step] }))
-        } else if (e.type === 'canvas') {
-          setCanvas(e.canvas)
-          setCompleteness(e.completeness)
-          setReadiness(e.readiness)
-        } else if (e.type === 'answer') {
-          patchLast(m => ({ ...m, content: e.content, streaming: false }))
-        } else if (e.type === 'error') {
-          patchLast(m => ({ ...m, content: m.content || `⚠️ ${e.message}`, streaming: false }))
+        }, controller.signal)
+      } catch (error: unknown) {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          patchAssistant(m => ({ ...m, content: `⚠️ ${errorMessage(error, '请求失败')}`, streaming: false }))
         }
-      })
+      } finally {
+        patchAssistant(m => ({ ...m, streaming: false }))
+        if (ownsCurrentView()) {
+          chatAbortRef.current = null
+          explorationApi.attachments(targetSid).then(value => {
+            if (ownsCurrentView()) setAttachments(value)
+          }).catch(() => { /* 非致命 */ })
+          void refetchSessions()   // 标题可能已更新
+        }
+      }
     } catch (error: unknown) {
-      patchLast(m => ({ ...m, content: `⚠️ ${errorMessage(error, '请求失败')}`, streaming: false }))
+      setBanner(errorMessage(error, '会话创建失败，请重试'))
     } finally {
-      patchLast(m => ({ ...m, streaming: false }))
+      sendInFlightRef.current = false
       setBusy(false)
-      explorationApi.attachments(targetSid).then(setAttachments).catch(() => { /* 非致命 */ })
-      refetchSessions()   // 标题可能已更新
     }
   }
 
@@ -736,7 +824,13 @@ export default function ExplorationPage() {
                       <div className="min-w-0 text-left">
                         <div className="truncate text-sm font-medium text-[var(--color-text-primary)]" title={name}>{name}</div>
                         <div className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-                          {uploading ? '上传中…' : `参考资料 · ${formatSize(item.att.fileSize)} · 仅本会话可见`}
+                          {uploading
+                            ? '上传中…'
+                            : item.att.status === 'failed'
+                              ? `读取失败 · ${item.att.error || '未加入模型上下文'}`
+                              : item.att.source === 'agent'
+                                ? `AI 工作草稿 · ${formatSize(item.att.fileSize)} · 未作为用户事实`
+                                : `已读取 ${item.att.charCount.toLocaleString()} 字 · ${formatSize(item.att.fileSize)} · 仅本会话可见`}
                         </div>
                       </div>
                       {!uploading && (

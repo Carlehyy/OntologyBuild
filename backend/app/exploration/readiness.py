@@ -19,8 +19,15 @@ from typing import Any
 from app.exploration import diagram as D
 from app.exploration.canvas import _ensure_canvas, norm_name
 from app.exploration.converter import CARDINALITIES
-from app.exploration.questions import (KIND_ADVISORY, KIND_BLOCKING, is_quantified,
-                                       open_questions, vague_terms_in)
+from app.exploration.questions import (
+    KIND_ADVISORY,
+    KIND_BLOCKING,
+    blocking_liabilities,
+    is_quantified,
+    open_questions,
+    resolved_question_issues,
+    vague_terms_in,
+)
 
 # 门定义顺序即阶段推进顺序（第一道未过的门 = 当前建议聚焦的阶段）
 _GATE_STAGES = [
@@ -74,6 +81,20 @@ def evaluate(canvas: Any) -> dict:
 
     # -- scope：边界 —— 场景圈定验收范围，主体圈定参与方
     blk, adv = [], []
+    for collection, label in (
+        (objects, "对象"), (actors, "主体"), (behaviors, "行为"),
+        (events, "事件"), (rules, "规则"), (scenarios, "场景"),
+    ):
+        by_name: dict[str, list[str]] = {}
+        for item in collection:
+            normalized = norm_name(str(item.get("name") or ""))
+            if normalized:
+                by_name.setdefault(normalized, []).append(_label(item))
+        for labels in by_name.values():
+            if len(labels) > 1:
+                blk.append(
+                    f"{label}模型存在重复稳定 name：{'、'.join(labels[:4])}；"
+                    "请先合并或重命名，避免引用歧义")
     if not scenarios:
         blk.append("还没有任何场景 —— 场景是草稿可表达性的验收器，先让用户讲一个端到端流程")
     if not actors:
@@ -158,7 +179,12 @@ def evaluate(canvas: Any) -> dict:
     for obj in objects:
         if D._status_attr(obj) is None:
             continue
-        analysis = D.state_model_analysis(c, obj.get("name"))
+        try:
+            analysis = D.state_model_analysis(
+                c, obj.get("id") or obj.get("name"))
+        except D.DiagramError as error:
+            blk.append(f"对象「{_label(obj)}」：生命周期无法安全解析（{error}）")
+            continue
         blk.extend(f"对象「{_label(obj)}」：{issue}" for issue in analysis["issues"])
         adv.extend(f"对象「{_label(obj)}」：{warning}" for warning in analysis["warnings"])
     gate("lifecycles", blk, adv)
@@ -193,37 +219,62 @@ def evaluate(canvas: Any) -> dict:
             adv.append(f"事件「{name}」未说明后果 —— 发生之后业务上要做什么？")
     gate("events", blk, adv)
 
-    # -- questions：账本清零 —— 堵门问题必须全部销账
+    # -- questions：账本清零 —— dismissed 只是暂缓，已销账答案还须与 target 画布一致
     opens_b = open_questions(canvas, KIND_BLOCKING)
     opens_a = open_questions(canvas, KIND_ADVISORY)
-    blk = [f"开放堵门问题：{q.get('question')}" for q in opens_b]
+    liabilities = blocking_liabilities(canvas)
+    blk = []
+    for q in liabilities:
+        if q.get("status") == "dismissed":
+            reason = str(q.get("resolution") or "未说明原因")
+            blk.append(f"堵门问题被搁置但尚未解决：{q.get('question')}（{reason}）")
+        else:
+            blk.append(f"开放堵门问题：{q.get('question')}")
+    blk.extend(resolved_question_issues(canvas))
     adv = [f"AI 建议待确认：{q.get('question')}" for q in opens_a]
     gate("questions", blk, adv)
 
-    # -- coverage：场景是验收器 —— 引用必须可解析；未被任何场景覆盖的元素提示补场景
+    # -- coverage：场景是端到端验收器，不接受只有名字的空壳场景
     blk, adv = [], []
     covered_obj: set[str] = set()
     covered_beh: set[str] = set()
+    object_identity = {
+        norm_name(str(value)): norm_name(str(obj.get("name") or ""))
+        for obj in objects
+        for value in (obj.get("name"), obj.get("display_name"), obj.get("id"))
+        if value
+    }
+    behavior_identity = {
+        norm_name(str(value)): norm_name(str(behavior.get("name") or ""))
+        for behavior in behaviors
+        for value in (behavior.get("name"), behavior.get("display_name"), behavior.get("id"))
+        if value
+    }
     for s in scenarios:
         sname = _label(s)
         for x in s.get("objects") or []:
             if norm_name(x) in entity_names:
-                covered_obj.add(norm_name(x))
-            else:
-                blk.append(f"场景「{sname}」引用的对象「{x}」未定义")
+                canonical = object_identity.get(norm_name(x))
+                if canonical:
+                    covered_obj.add(canonical)
         for x in s.get("behaviors") or []:
             if norm_name(x) in beh_names:
-                covered_beh.add(norm_name(x))
-            else:
-                blk.append(f"场景「{sname}」引用的行为「{x}」未定义")
-        if not (s.get("steps") or []):
-            adv.append(f"场景「{sname}」还没有步骤")
-        else:
+                canonical = behavior_identity.get(norm_name(x))
+                if canonical:
+                    covered_beh.add(canonical)
+        try:
+            analysis = D.scenario_model_analysis(c, s.get("name") or s.get("display_name"))
+        except D.DiagramError as error:
+            blk.append(f"场景「{sname}」无法定位：{error}")
+            continue
+        blk.extend(f"场景「{sname}」：{issue}" for issue in analysis["issues"])
+        # 分支字段合法不等于流程可完成；完整场景继续做可达/可结束检查。
+        if not analysis["issues"]:
             try:
                 D.flow_mermaid(c, s.get("name") or s.get("display_name"))
             except D.DiagramError as error:
                 if "流程图质量校验未通过" in str(error):
-                    blk.append(f"场景「{sname}」的分支结构不完整：{error}")
+                    blk.append(f"场景「{sname}」的流程结构不完整：{error}")
     if scenarios:
         un_obj = [_label(o) for o in objects if norm_name(o.get("name", "")) not in covered_obj]
         un_beh = [_label(b) for b in behaviors if norm_name(b.get("name", "")) not in covered_beh]
@@ -247,7 +298,11 @@ def evaluate(canvas: Any) -> dict:
         "gatesTotal": len(gates),
         "blockingCount": blocking_count,
         "advisoryCount": advisory_count,
-        "openQuestions": {"blocking": len(opens_b), "advisory": len(opens_a)},
+        "openQuestions": {
+            "blocking": len(opens_b),
+            "advisory": len(opens_a),
+            "dismissedBlocking": sum(1 for q in liabilities if q.get("status") == "dismissed"),
+        },
         "gates": gates,
     }
 

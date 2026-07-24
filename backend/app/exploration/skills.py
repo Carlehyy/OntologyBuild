@@ -18,62 +18,29 @@ class ExplorationSkill:
 
 _ER_INSTRUCTIONS = """# ER 图绘制
 
-当用户要求查看/绘制 ER 图（实体关系图）时，从**业务画布的对象模型**推导，在回答中输出一个 mermaid 代码块。
+ER 图必须是**权威业务画布的确定性投影**，不能由模型手写 Mermaid。
 
-## 输出契约
-1. 使用 ```mermaid 围栏代码块，首行 `erDiagram`。
-2. 实体名用画布对象的 name（英文标识符），不要虚构画布中不存在的对象或属性。
-3. 每个实体列出属性：`类型 属性名`，业务主键属性行尾加 `PK`。类型用 string/number/boolean/date/datetime。
-4. 关系用画布对象的 relations 推导，基数映射：
-   - one-to-one → `||--||`
-   - one-to-many → `||--o{`
-   - many-to-one → `}o--||`
-   - many-to-many → `}o--o{`
-5. 关系标签用关系的 display_name（如 `订单 ||--o{ 发票 : 开具`，标签放引号内可用中文）。
-
-## 示例
-```mermaid
-erDiagram
-    Order {
-        string order_no PK
-        number amount
-    }
-    Invoice {
-        string invoice_no PK
-    }
-    Order ||--o{ Invoice : "开具"
-```
-
-画完后用一两句话说明图中关键关系；如果画布对象/关系信息不足，先告知缺什么并建议补充，不要硬画。
+## 执行契约
+1. 先核对画布中的对象、主键、属性、关系端点和基数；不得虚构缺失内容。
+2. 若关系端点或基数不完整，先用画布/澄清工具补齐已确认事实，或登记堵门问题。
+3. 信息足够后调用 `show_diagram`，参数为 `{"kind": "er"}`。工具会统一完成
+   Mermaid（`erDiagram`）生成、引用校验、历史持久化和前端渲染。
+4. 绝不在正文中自行输出 Mermaid 代码块；也不要在 `show_diagram` 报错后绕过质量门手写图。
+5. 工具成功后，用一两句话说明关键关系，并明确请用户核对画布事实是否符合实际。
 """
 
 _FLOW_INSTRUCTIONS = """# 业务流程图绘制
 
-当用户要求查看/绘制业务流程图时，从**业务画布的场景模型与行为模型**推导，在回答中输出一个 mermaid 代码块。
+业务流程图必须是**场景、行为和主体画布的确定性投影**，不能由模型手写 Mermaid。
 
-## 输出契约
-1. 使用 ```mermaid 围栏代码块，首行 `flowchart TD`。
-2. 以某个场景的 steps 为主线；每个步骤一个节点，节点 id 用英文（S1、S2…），节点文字用中文描述。
-3. 有明确执行主体时，用 `subgraph 主体名 ... end` 把该主体执行的节点分入泳道。
-4. 判断/审批点用菱形节点 `{是否通过?}`，分支边标注 `-->|通过|` / `-->|拒绝|`。
-5. 步骤引用的行为用画布行为的 display_name，不要虚构画布中不存在的行为或主体。
-
-## 示例
-```mermaid
-flowchart TD
-    subgraph 业务员
-        S1[创建订单]
-    end
-    subgraph 财务
-        S2[回款核销]
-        S3{金额>10万?}
-    end
-    S1 --> S2 --> S3
-    S3 -->|是| S4[主管审批]
-    S3 -->|否| S5[核销完成]
-```
-
-画完后简述流程要点；场景信息不足时先建议用户补充场景模型。
+## 执行契约
+1. 先核对目标场景的参与主体、步骤、行为引用、分支条件/去向和预期结果。
+2. 场景不完整时，先补齐已确认事实或登记堵门问题，不得用自然语言猜测分支。
+3. 信息足够后调用 `show_diagram`：单场景使用
+   `{"kind": "flow", "target": "<场景 name 或 display_name>"}`；只有一个场景时可省略 target。
+4. 工具会统一生成 `flowchart TD` 泳道/分支、执行引用校验、持久化并交给前端渲染。
+5. 绝不在正文中自行输出 Mermaid 代码块；也不要在工具报错后绕过质量门手写图。
+6. 工具成功后简述主路径和异常分支，并请用户核对是否符合实际执行顺序。
 """
 
 
@@ -81,13 +48,13 @@ _SKILLS = (
     ExplorationSkill(
         name="er_diagram",
         display_name="ER 图绘制",
-        description="用户想看实体关系图/ER 图时使用：从画布对象模型推导，输出 mermaid erDiagram。",
+        description="用户想看实体关系图/ER 图时使用：核对画布后调用 show_diagram 生成确定性投影。",
         instructions=_ER_INSTRUCTIONS,
     ),
     ExplorationSkill(
         name="business_flowchart",
         display_name="业务流程图绘制",
-        description="用户想看业务流程图/泳道图时使用：从画布场景与行为模型推导，输出 mermaid flowchart。",
+        description="用户想看业务流程图/泳道图时使用：核对场景后调用 show_diagram 生成确定性投影。",
         instructions=_FLOW_INSTRUCTIONS,
     ),
 )
