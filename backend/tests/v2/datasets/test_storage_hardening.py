@@ -270,6 +270,25 @@ def test_legacy_versions_fall_back_from_internal_to_managed_minio(db):
     assert svc.load_all_rows(ds.id) == [{"id": "1", "value": "external"}]
 
 
+def test_legacy_missing_object_error_groups_identical_storage_failures(db):
+    internal = FakeStorage()
+    managed = FakeStorage()
+    svc = DatasetService(
+        db, storage=managed, legacy_storages=[internal, managed])
+    ds = svc.create_dataset("历史对象已丢失", "curated")
+    version = _seed_legacy_version(
+        db, ds, internal, _csv_bytes([{"id": "1"}]))
+    internal.objects.clear()
+
+    with pytest.raises(DatasetReadError) as captured:
+        svc.load_all_rows(ds.id)
+
+    message = str(captured.value)
+    assert f"数据集 {ds.id} v1 历史存储对象读取失败" in message
+    assert "候选历史存储 1、候选历史存储 2" in message
+    assert message.count(f"FileNotFoundError: Object not found: {version.storage_uri}") == 1
+
+
 def test_unstructured_versions_remain_in_minio(svc, storage):
     ds = svc.create_dataset("文件版本", "unstructured")
     version = svc.create_version(ds.id, b"%PDF-test")
