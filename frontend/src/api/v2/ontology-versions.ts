@@ -1,12 +1,20 @@
 import { apiClientV2 } from '@/api/client'
 
+export interface OntologyTrialIssue {
+  code?: string
+  kind?: string
+  id?: string
+  name?: string
+  message: string
+}
+
 export interface OntologyTrialRun {
   id: string
   status: 'running' | 'passed' | 'failed' | 'stale'
   result?: {
     counts?: { objects?: number; links?: number; facts?: number; datasets?: number }
-    errors?: Array<{ message: string }>
-    warnings?: Array<{ message: string }>
+    errors?: OntologyTrialIssue[]
+    warnings?: OntologyTrialIssue[]
     actionsExecuted?: number
   }
   impact_hash?: string
