@@ -698,6 +698,11 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
             warnings.append({
                 "code": "object_type_unmapped", "kind": "objectType",
                 "id": object_type.get("id"),
+                "name": (
+                    object_type.get("displayName")
+                    or object_type.get("name")
+                    or object_type.get("id")
+                ),
                 "message": "该对象类型没有数据映射，试跑中不会产生实例",
             })
 
