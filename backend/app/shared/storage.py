@@ -586,24 +586,58 @@ class StorageService:
 
     @staticmethod
     def _parse_uri(uri: str) -> tuple[str, str]:
-        """Parse either supported backend URI into ``(bucket, key)``."""
-        _scheme, bucket, key = StorageService._parse_uri_with_scheme(uri)
+        """Parse either supported backend URI into ``(bucket, key)``.
+
+        This method is also used by a latency-sensitive compatibility path.
+        Keep its common case allocation-light: ``Path.is_absolute`` and
+        repeated helper calls made 100k parses several times slower on CI.
+        Suspicious dot-prefixed segments take the slower split/check branch,
+        while ordinary generated object keys need only constant string scans.
+        """
+        raw = uri if isinstance(uri, str) else str(uri)
+        if raw.startswith("s3://"):
+            path = raw[5:]
+        elif raw.startswith("local://"):
+            path = raw[8:]
+        else:
+            raise ValueError(
+                f"Invalid storage URI: {uri!r}. Expected s3://bucket/key "
+                "or local://bucket/key"
+            )
+
+        bucket, separator, key = path.partition("/")
+        if not separator or not bucket or not key:
+            raise ValueError(f"Invalid storage URI: {uri!r}")
+        if bucket in {".", ".."} or "\\" in bucket:
+            raise ValueError(f"Invalid storage bucket: {bucket!r}")
+        windows_absolute = (
+            len(key) >= 3
+            and key[1] == ":"
+            and key[2] == "/"
+            and key[0].isalpha()
+        )
+        if key[0] == "/" or windows_absolute or "\\" in key or "\x00" in key:
+            raise ValueError(f"Invalid storage object key: {key!r}")
+        if "/." in path and any(
+            part in {".", ".."} for part in key.split("/")
+        ):
+            raise ValueError(f"Invalid storage object key: {key!r}")
         return bucket, key
 
     @staticmethod
     def _parse_uri_with_scheme(uri: str) -> tuple[str, str, str]:
         """Parse ``s3://`` or ``local://`` into ``(scheme, bucket, key)``."""
-        scheme, separator, path = str(uri).partition("://")
-        if separator != "://" or scheme not in {"s3", "local"}:
+        raw = uri if isinstance(uri, str) else str(uri)
+        if raw.startswith("s3://"):
+            scheme = "s3"
+        elif raw.startswith("local://"):
+            scheme = "local"
+        else:
             raise ValueError(
                 f"Invalid storage URI: {uri!r}. Expected s3://bucket/key "
                 "or local://bucket/key"
             )
-        bucket, _, key = path.partition("/")
-        if not bucket or not key:
-            raise ValueError(f"Invalid storage URI: {uri!r}")
-        StorageService._validate_bucket(bucket)
-        StorageService._validate_key(key)
+        bucket, key = StorageService._parse_uri(raw)
         return scheme, bucket, key
 
 

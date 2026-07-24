@@ -110,6 +110,7 @@ def test_parse_uri_missing_key():
         "local://media/../raw-datasets/x",
         r"local://media/folder\file.txt",
         "s3://media/./file.txt",
+        "s3://media/C:/outside.txt",
     ],
 )
 def test_parse_uri_rejects_unsafe_object_keys(uri):
