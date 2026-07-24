@@ -18,9 +18,9 @@ const PALETTE = {
 }
 const PAGE_SIZE = 8
 const STATUS_TABS = [
-  { value: 'active', label: '活跃' },
-  { value: 'archived', label: '已归档' },
-  { value: 'all', label: '全部' },
+  { value: 'active', label: '活跃', icon: Activity },
+  { value: 'archived', label: '已归档', icon: Archive },
+  { value: 'all', label: '全部', icon: Filter },
 ] as const
 
 function fmt(iso: string | null | undefined): string {
@@ -225,28 +225,31 @@ export default function EventRegistryPage() {
                 className="pointer-events-none absolute top-1 h-[calc(100%-8px)] rounded-md bg-emerald-600 shadow-sm transition-all duration-300 ease-out"
                 style={{ left: `${statusIndicator.left}px`, width: `${statusIndicator.width}px` }}
               />
-              {STATUS_TABS.map(tab => (
-                <button
-                  key={tab.value}
-                  type="button"
-                  data-status-value={tab.value}
-                  onClick={() => setStatus(tab.value)}
-                  aria-pressed={status === tab.value}
-                  className={`relative z-10 rounded-md px-4 py-2 font-medium transition-colors duration-200 ${status === tab.value ? 'text-white' : 'text-slate-500 hover:text-emerald-700'}`}
-                >
-                  {tab.value === 'archived' && <Archive className="mr-1 inline h-3.5 w-3.5 -translate-y-px" />}{tab.label}
-                </button>
-              ))}
+              {STATUS_TABS.map(tab => {
+                const StatusIcon = tab.icon
+                return (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    data-status-value={tab.value}
+                    onClick={() => setStatus(tab.value)}
+                    aria-pressed={status === tab.value}
+                    className={`relative z-10 inline-flex items-center gap-1 rounded-md px-4 py-2 font-medium transition-colors duration-200 ${status === tab.value ? 'text-white' : 'text-slate-500 hover:text-emerald-700'}`}
+                  >
+                    <StatusIcon className="h-3.5 w-3.5" />{tab.label}
+                  </button>
+                )
+              })}
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             <button type="button" onClick={() => setKeysOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800">
+              className="inline-flex h-9 w-32 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800">
               <Code2 className="h-4 w-4" />接入管理
-              <span className="ml-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">API</span>
+              <span className="rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold leading-none text-emerald-700">API</span>
             </button>
             <button type="button" onClick={() => { setEditing(null); setFormOpen(true) }}
-              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 active:bg-emerald-800">
+              className="inline-flex h-9 w-32 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 active:bg-emerald-800">
               <Plus className="h-4 w-4" />登记事件
             </button>
           </div>
