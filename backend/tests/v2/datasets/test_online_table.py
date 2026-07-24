@@ -272,6 +272,7 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
     from app.tasks.v2 import dataset_import as import_tasks
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "dataset_import_use_celery", True)
     monkeypatch.setattr(
         import_tasks.inspect_dataset_import,
         "delay",
@@ -601,3 +602,119 @@ def test_online_table_bindable_to_ontology_mapping(api, auth_headers, ontology):
     }, headers=auth_headers)
     assert r.status_code == 200, r.text
     assert r.json()["mapping_id"]
+
+
+def test_async_import_uses_local_background_tasks_without_broker_by_default(
+    api, auth_headers, db, monkeypatch, tmp_path,
+):
+    """A plain Uvicorn install never probes Redis/Celery for spreadsheet imports."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database as database_module
+    from app.config import settings
+    from app.tasks.v2 import dataset_import as import_tasks
+
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(
+        database_module,
+        "SessionLocal",
+        sessionmaker(bind=db.get_bind()),
+    )
+
+    monkeypatch.setattr(settings, "dataset_import_use_celery", False)
+
+    def celery_must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("local mode must not contact the Celery broker")
+
+    monkeypatch.setattr(
+        import_tasks.inspect_dataset_import, "delay", celery_must_not_be_called)
+    monkeypatch.setattr(
+        import_tasks.commit_dataset_import, "delay", celery_must_not_be_called)
+
+    started = api.post(
+        "/api/v2/datasets/imports",
+        files={"file": (
+            "standalone.csv",
+            io.BytesIO("id,name\nA1,泵机\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert started.status_code == 202, started.text
+    queued = started.json()["data"]
+    assert queued["status"] == "queued"
+    assert queued["execution_mode"] == "local"
+
+    inspected = api.get(
+        f"/api/v2/datasets/imports/{queued['job_id']}",
+        headers=auth_headers,
+    )
+    assert inspected.status_code == 200
+    ready = inspected.json()["data"]
+    assert ready["status"] == "ready"
+    assert ready["progress"] == 100
+    assert ready["phase"] == "表格解析完成"
+
+    committed = api.post(
+        f"/api/v2/datasets/imports/{queued['job_id']}/commit",
+        json={
+            "name": "单机降级导入",
+            "columns": [
+                {"name": "id", "type": "string", "nullable": False},
+                {"name": "name", "type": "string", "nullable": True},
+            ],
+            "primary_key": "id",
+        },
+        headers=auth_headers,
+    )
+    assert committed.status_code == 202, committed.text
+    assert committed.json()["data"]["execution_mode"] == "local"
+
+    completed = api.get(
+        f"/api/v2/datasets/imports/{queued['job_id']}",
+        headers=auth_headers,
+    )
+    assert completed.status_code == 200
+    result = completed.json()["data"]
+    assert result["status"] == "completed"
+    assert result["progress"] == 100
+    assert result["result"]["rowcount"] == 1
+
+
+def test_async_import_falls_back_to_local_when_enabled_broker_is_down(
+    api, auth_headers, monkeypatch, tmp_path, caplog,
+):
+    """An opted-in Celery deployment still survives a temporary broker outage."""
+    from app.config import settings
+    from app.tasks.v2 import dataset_import as import_tasks
+
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "dataset_import_use_celery", True)
+
+    def broker_down(*_args, **_kwargs):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(import_tasks.inspect_dataset_import, "delay", broker_down)
+    caplog.set_level("WARNING", logger="app.data_channel.datasets.router")
+
+    started = api.post(
+        "/api/v2/datasets/imports",
+        files={"file": (
+            "broker-fallback.csv",
+            io.BytesIO("id,name\nA1,泵机\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert started.status_code == 202, started.text
+    queued = started.json()["data"]
+    assert queued["execution_mode"] == "local"
+
+    inspected = api.get(
+        f"/api/v2/datasets/imports/{queued['job_id']}",
+        headers=auth_headers,
+    )
+    assert inspected.status_code == 200
+    assert inspected.json()["data"]["status"] == "ready"
+    assert "已降级为 API 进程内后台任务" in caplog.text
+

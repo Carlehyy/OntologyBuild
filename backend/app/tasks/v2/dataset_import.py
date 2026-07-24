@@ -34,11 +34,19 @@ def inspect_dataset_import(job_id: str) -> None:
     from app.data_channel.datasets.service import _parse_stored_rows, stored_columns
 
     try:
-        update_status(job_id, status="parsing", error=None)
+        update_status(
+            job_id,
+            status="parsing",
+            progress=15,
+            phase="正在读取上传文件",
+            error=None,
+        )
         manifest = read_manifest(job_id)
         raw = source_path(job_id, manifest["extension"]).read_bytes()
+        update_status(job_id, progress=35, phase="正在解析全部数据行")
         rows = _parse_stored_rows(raw, limit=None)
         columns = stored_columns(raw)
+        update_status(job_id, progress=85, phase="正在识别字段与生成预览")
         if not columns:
             raise ValueError("表格为空，请至少保留一行列名")
         duplicate = next(
@@ -63,10 +71,17 @@ def inspect_dataset_import(job_id: str) -> None:
                 for column in columns
             ],
             preview_rows=rows[:200],
+            progress=100,
+            phase="表格解析完成",
             error=None,
         )
     except Exception as exc:  # noqa: BLE001 - task failures are reported to the owner
-        update_status(job_id, status="failed", error=str(exc) or type(exc).__name__)
+        update_status(
+            job_id,
+            status="failed",
+            phase="表格解析失败",
+            error=str(exc) or type(exc).__name__,
+        )
 
 
 @celery_app.task(name="app.tasks.v2.dataset_import.commit_dataset_import")
@@ -81,11 +96,18 @@ def commit_dataset_import(job_id: str) -> None:
 
     db = SessionLocal()
     try:
-        update_status(job_id, status="importing", error=None)
+        update_status(
+            job_id,
+            status="importing",
+            progress=15,
+            phase="正在读取字段设置与源文件",
+            error=None,
+        )
         manifest = read_manifest(job_id)
         body = CreateTableRequest.model_validate(read_metadata(job_id))
         name, schema = _build_manual_schema(body, origin="upload")
         raw = source_path(job_id, manifest["extension"]).read_bytes()
+        update_status(job_id, progress=40, phase="正在解析并校验全部数据")
         rows = _parse_stored_rows(raw, limit=None)
         physical_columns = stored_columns(raw)
         expected_columns = schema["columns"]
@@ -95,10 +117,12 @@ def commit_dataset_import(job_id: str) -> None:
                 f"（文件：{physical_columns}；当前设置：{expected_columns}），请重新选择文件"
             )
         _validate_manual_rows(rows, schema, dataset_name=name, scope="上传数据")
+        update_status(job_id, progress=75, phase="数据校验通过，正在创建数据集")
 
         service = DatasetService(db)
         dataset = service.create_dataset(
             name=name, kind="structured", schema_json=schema, commit=False)
+        update_status(job_id, progress=90, phase="正在保存数据集首个版本")
         version = service.create_version(
             dataset.id,
             raw,
@@ -115,14 +139,16 @@ def commit_dataset_import(job_id: str) -> None:
             "version_no": version.version_no,
             "rowcount": len(rows),
             "source": "upload",
-        }, error=None)
+        }, progress=100, phase="数据集创建完成", error=None)
     except Exception as exc:  # noqa: BLE001 - validation details belong in job status
         db.rollback()
         detail = getattr(exc, "detail", None)
         update_status(
             job_id,
             status="failed",
+            phase="数据集创建失败",
             error=str(detail if detail is not None else exc) or type(exc).__name__,
         )
     finally:
         db.close()
+

@@ -46,12 +46,34 @@ const formatBytes = (bytes: number) => {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+const STATUS_PROGRESS: Partial<Record<DatasetImportStatus, number>> = {
+  uploading: 0,
+  queued: 5,
+  parsing: 35,
+  ready: 100,
+  import_queued: 5,
+  importing: 40,
+  completed: 100,
+}
+
+const STATUS_LABELS: Partial<Record<DatasetImportStatus, string>> = {
+  uploading: '正在上传文件',
+  queued: '文件上传完成，等待后台解析',
+  parsing: '后端正在解析全部数据',
+  ready: '表格解析完成',
+  import_queued: '等待后台创建数据集',
+  importing: '正在校验并保存数据集',
+  completed: '数据集创建完成',
+  failed: '处理失败',
+}
+
 /** 统一建表流程：上传一个表格自动识别，或直接定义空表。 */
 export default function CreateTableModal({ onClose, onCreated }: {
   onClose: () => void
   onCreated: (result: CreateTableResult) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const progressStartedAtRef = useRef<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [blankMode, setBlankMode] = useState(false)
   const [name, setName] = useState('')
@@ -61,6 +83,11 @@ export default function CreateTableModal({ onClose, onCreated }: {
   const [sheetName, setSheetName] = useState('')
   const [importJobId, setImportJobId] = useState('')
   const [importStatus, setImportStatus] = useState<DatasetImportStatus | null>(null)
+  const [importPhase, setImportPhase] = useState('')
+  const [progressMode, setProgressMode] = useState<'inspection' | 'import'>('inspection')
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [serverProgress, setServerProgress] = useState(0)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [parsing, setParsing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -78,6 +105,19 @@ export default function CreateTableModal({ onClose, onCreated }: {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose, parsing, submitting])
 
+  useEffect(() => {
+    if (!file || (!parsing && !submitting)) return
+    const tick = () => {
+      const startedAt = progressStartedAtRef.current
+      if (startedAt != null) {
+        setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))
+      }
+    }
+    tick()
+    const timer = window.setInterval(tick, 250)
+    return () => window.clearInterval(timer)
+  }, [file, parsing, submitting])
+
   const previewPages = Math.max(1, Math.ceil(rows.length / previewPageSize))
   const previewRows = useMemo(() => rows.slice(
     (previewPage - 1) * previewPageSize,
@@ -86,7 +126,10 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
   const applyImportJob = useCallback((job: DatasetImportJob) => {
     setImportStatus(job.status)
+    setImportPhase(job.phase || STATUS_LABELS[job.status] || '')
+    setServerProgress(Math.max(0, Math.min(100, job.progress ?? STATUS_PROGRESS[job.status] ?? 0)))
     if (job.status === 'ready') {
+      setUploadProgress(100)
       const nextColumns = job.columns ?? []
       setColumns(nextColumns.map(column => ({
         id: createColumnId(),
@@ -157,8 +200,15 @@ export default function CreateTableModal({ onClose, onCreated }: {
     setSheetName('')
     setImportJobId('')
     setImportStatus('uploading')
+    setImportPhase('正在上传文件')
+    setProgressMode('inspection')
+    setUploadProgress(0)
+    setServerProgress(0)
+    setElapsedSeconds(0)
+    progressStartedAtRef.current = Date.now()
     try {
-      const job = await datasetsApi.startImport(selected)
+      const job = await datasetsApi.startImport(selected, setUploadProgress)
+      setUploadProgress(100)
       setImportJobId(job.job_id)
       applyImportJob(job)
       return true
@@ -169,6 +219,10 @@ export default function CreateTableModal({ onClose, onCreated }: {
       setColumns([])
       setImportJobId('')
       setImportStatus(null)
+      setImportPhase('')
+      setUploadProgress(0)
+      setServerProgress(0)
+      progressStartedAtRef.current = null
       const detail = (parseError as { detail?: string; message?: string })?.detail
       setError(detail || (parseError instanceof Error ? parseError.message : '表格上传失败'))
       setParsing(false)
@@ -203,6 +257,12 @@ export default function CreateTableModal({ onClose, onCreated }: {
     setSheetName('')
     setImportJobId('')
     setImportStatus(null)
+    setImportPhase('')
+    setProgressMode('inspection')
+    setUploadProgress(0)
+    setServerProgress(0)
+    setElapsedSeconds(0)
+    progressStartedAtRef.current = null
     setParsing(false)
     setSubmitting(false)
     setPreviewOpen(false)
@@ -254,6 +314,14 @@ export default function CreateTableModal({ onClose, onCreated }: {
     }
     setSubmitting(true)
     setError('')
+    if (file) {
+      setProgressMode('import')
+      setImportStatus('import_queued')
+      setImportPhase('正在提交导入任务')
+      setServerProgress(0)
+      setElapsedSeconds(0)
+      progressStartedAtRef.current = Date.now()
+    }
     try {
       const result = file
         ? await datasetsApi.commitImport(importJobId, payload)
@@ -271,6 +339,18 @@ export default function CreateTableModal({ onClose, onCreated }: {
   }
 
   const hasSource = Boolean(file || blankMode)
+  const progressPercent = importStatus === 'uploading'
+    ? Math.round(uploadProgress * 0.45)
+    : progressMode === 'inspection'
+      ? Math.min(100, Math.round(45 + serverProgress * 0.55))
+      : serverProgress
+  const progressLabel = importStatus === 'uploading'
+    ? `正在上传文件 ${uploadProgress}%`
+    : importPhase || (importStatus ? STATUS_LABELS[importStatus] : '') || '等待处理'
+  const progressActive = Boolean(
+    importStatus && ['uploading', 'queued', 'parsing', 'import_queued', 'importing'].includes(importStatus),
+  )
+  const progressFailed = importStatus === 'failed'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]">
@@ -296,11 +376,32 @@ export default function CreateTableModal({ onClose, onCreated }: {
             <input ref={fileInputRef} type="file" multiple className="hidden" accept=".csv,.xlsx,.xls"
               onChange={event => { acceptFiles(Array.from(event.target.files ?? [])); event.target.value = '' }} />
             {file ? (
-              <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-100 text-emerald-700"><FileSpreadsheet size={18} /></span>
-                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-800">{file.name}</p><p className="mt-0.5 text-[11px] text-slate-400">{formatBytes(file.size)}{sheetName ? ` · 工作表「${sheetName}」 · ${columns.length} 列 · ${rowCount} 行` : ' · 正在等待后端解析'}</p></div>
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="text-xs font-medium text-teal-700 hover:text-teal-900">替换</button>
-                <button type="button" onClick={removeFile} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600" aria-label="移除当前表格"><Trash2 size={14} /></button>
+              <div>
+                <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-100 text-emerald-700"><FileSpreadsheet size={18} /></span>
+                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-800">{file.name}</p><p className="mt-0.5 text-[11px] text-slate-400">{formatBytes(file.size)}{sheetName ? ` · 工作表「${sheetName}」 · ${columns.length} 列 · ${rowCount} 行` : ' · 正在等待后端解析'}</p></div>
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={parsing || submitting} className="text-xs font-medium text-teal-700 hover:text-teal-900 disabled:opacity-40">替换</button>
+                  <button type="button" onClick={removeFile} disabled={parsing || submitting} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40" aria-label="移除当前表格"><Trash2 size={14} /></button>
+                </div>
+                {importStatus && (
+                  <div className="mt-2 px-1" data-testid="dataset-import-progress">
+                    <div className="mb-1 flex items-center justify-between gap-3 text-[11px]">
+                      <span className={progressFailed ? 'text-red-600' : 'text-slate-500'}>{progressLabel}</span>
+                      <span className="shrink-0 tabular-nums text-slate-400">已耗时 {elapsedSeconds} 秒</span>
+                    </div>
+                    <div className="h-1 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-300 ${progressFailed ? 'bg-red-500' : importStatus === 'ready' || importStatus === 'completed' ? 'bg-emerald-500' : 'bg-teal-600'} ${progressActive ? 'animate-pulse' : ''}`}
+                        style={{ width: `${Math.max(progressFailed ? 100 : 2, progressPercent)}%` }}
+                        role="progressbar"
+                        aria-label="表格导入进度"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={progressPercent}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             ) : blankMode ? (
               <div className="flex items-center gap-3 rounded-xl bg-teal-50/60 px-4 py-3 text-xs text-teal-800"><CheckCircle2 size={15} />已选择直接定义空表，创建后可在“维护数据”中逐行录入。<button type="button" onClick={() => { setBlankMode(false); setColumns([]) }} className="ml-auto font-medium hover:text-teal-950">重新选择</button></div>

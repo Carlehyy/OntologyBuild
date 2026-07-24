@@ -1,6 +1,9 @@
 """v2 Dataset API"""
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
@@ -10,6 +13,7 @@ from app.deps import get_current_user, require_admin
 from app.services.v2.dataset_service import DatasetService
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
+logger = logging.getLogger(__name__)
 
 def get_db():
     db = SessionLocal()
@@ -17,6 +21,37 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _dispatch_dataset_import_task(
+    task,
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    *,
+    operation: str,
+) -> dict:
+    """Dispatch one import task without making optional Celery a hard dependency."""
+    from app.config import settings
+    from app.data_channel.datasets.import_jobs import update_status
+
+    if not settings.dataset_import_use_celery:
+        background_tasks.add_task(task.run, job_id)
+        return update_status(job_id, execution_mode="local")
+
+    try:
+        task.delay(job_id)
+        execution_mode = "celery"
+    except Exception:  # noqa: BLE001 - broker outages must not break local imports
+        logger.warning(
+            "Celery 无法投递数据集%s任务 %s，已降级为 API 进程内后台任务",
+            operation,
+            job_id,
+            exc_info=True,
+        )
+        background_tasks.add_task(task.run, job_id)
+        execution_mode = "local"
+    return update_status(job_id, execution_mode=execution_mode)
+
 
 class DatasetResponse(BaseModel):
     id: str
@@ -178,6 +213,7 @@ async def upload_dataset(
 
 @router.post("/imports", status_code=202)
 async def start_dataset_import(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user=Depends(get_current_user),
 ):
@@ -207,14 +243,20 @@ async def start_dataset_import(
                         413, f"文件超过大小限制 {settings.max_upload_mb}MB")
                 await output.write(chunk)
         update_manifest(job_id, file_size=total)
-        status = update_status(
-            job_id, status="queued", file_size=total, error=None)
-        try:
-            inspect_dataset_import.delay(job_id)
-        except Exception as exc:
-            update_status(
-                job_id, status="failed", error=f"后台解析任务提交失败：{exc}")
-            raise HTTPException(503, "后台解析服务暂时不可用，请稍后重试") from exc
+        update_status(
+            job_id,
+            status="queued",
+            file_size=total,
+            progress=5,
+            phase="文件上传完成，等待后台解析",
+            error=None,
+        )
+        status = _dispatch_dataset_import_task(
+            inspect_dataset_import,
+            job_id,
+            background_tasks,
+            operation="解析",
+        )
         return {"data": status}
     except HTTPException:
         if total > max_bytes:
@@ -344,6 +386,7 @@ def _validate_manual_rows(rows: list[dict], schema: dict, *,
 def commit_dataset_import_job(
     job_id: str,
     body: CreateTableRequest,
+    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
     from app.data_channel.datasets.import_jobs import (
@@ -364,17 +407,23 @@ def commit_dataset_import_job(
         raise HTTPException(
             409, f"导入任务当前状态为 {status.get('status') or 'unknown'}，不能提交")
 
-    # Validate the small field contract synchronously; full-file validation stays
-    # in Celery and therefore never blocks the API worker.
+    # Validate the small field contract synchronously; full-file validation runs
+    # after the response in either the local background runner or Celery.
     _build_manual_schema(body, origin="upload")
     write_metadata(job_id, body.model_dump())
-    queued = update_status(job_id, status="import_queued", error=None)
-    try:
-        commit_dataset_import.delay(job_id)
-    except Exception as exc:
-        update_status(
-            job_id, status="ready", error=f"后台导入任务提交失败：{exc}")
-        raise HTTPException(503, "后台导入服务暂时不可用，请稍后重试") from exc
+    update_status(
+        job_id,
+        status="import_queued",
+        progress=5,
+        phase="字段设置已确认，等待后台导入",
+        error=None,
+    )
+    queued = _dispatch_dataset_import_task(
+        commit_dataset_import,
+        job_id,
+        background_tasks,
+        operation="导入",
+    )
     return {"data": queued}
 
 

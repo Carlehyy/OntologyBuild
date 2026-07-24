@@ -113,6 +113,10 @@ export interface DatasetImportJob {
   preview_rows?: Record<string, unknown>[]
   result?: CreateTableResult
   error?: string | null
+  /** 当前后台阶段的近似进度（0-100）；浏览器上传进度由 onProgress 单独上报 */
+  progress?: number
+  phase?: string
+  execution_mode?: 'celery' | 'local'
 }
 
 export interface UploadVersionResult {
@@ -169,12 +173,20 @@ const datasetsApi = {
     })
   },
 
-  /** 在线建表专用：浏览器只上传文件，首工作表由 Celery 在后端异步解析 */
-  startImport: (file: File): Promise<DatasetImportJob> => {
+  /** 在线建表专用：浏览器只上传文件，首工作表由后端后台任务异步解析 */
+  startImport: (
+    file: File,
+    onProgress?: (percentage: number) => void,
+  ): Promise<DatasetImportJob> => {
     const fd = new FormData()
     fd.append('file', file)
     return apiClientV2.post('/datasets/imports', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: event => {
+        const total = event.total ?? file.size
+        if (!total) return
+        onProgress?.(Math.min(100, Math.round((event.loaded / total) * 100)))
+      },
     })
   },
 

@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "sqlite:////tmp/ontoprompt.db"
     redis_url: str = "redis://localhost:6379/0"
+    # Redis/Celery is optional. Spreadsheet imports run in the API process by
+    # default so a plain Uvicorn installation never waits for a broker timeout.
+    # Set DATASET_IMPORT_USE_CELERY=true only when a worker is deployed.
+    dataset_import_use_celery: bool = False
     secret_key: str = "dev-secret-key"
     encryption_key: str = ""
     cors_allowed_origins: str = "*"
@@ -260,3 +264,4 @@ if settings.environment == "production":
         logging.getLogger(__name__).warning(
             "%s。当前以兼容模式启动；完成服务器 .env 轮换后设置 "
             "STRICT_PRODUCTION_CONFIG=true 可恢复强制门禁。", message)
+
