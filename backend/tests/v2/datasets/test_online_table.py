@@ -273,17 +273,19 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "dataset_import_use_celery", True)
+    inspection_jobs = []
     monkeypatch.setattr(
         import_tasks.inspect_dataset_import,
         "delay",
-        lambda job_id: import_tasks.inspect_dataset_import.run(job_id),
+        lambda job_id: inspection_jobs.append(job_id),
     )
     task_session = sessionmaker(bind=db.get_bind())
     monkeypatch.setattr(database_module, "SessionLocal", task_session)
+    commit_jobs = []
     monkeypatch.setattr(
         import_tasks.commit_dataset_import,
         "delay",
-        lambda job_id: import_tasks.commit_dataset_import.run(job_id),
+        lambda job_id: commit_jobs.append(job_id),
     )
 
     workbook = openpyxl.Workbook()
@@ -311,6 +313,9 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
     assert started.status_code == 202, started.text
     job = started.json()["data"]
     assert job["status"] == "queued"
+    assert inspection_jobs == [job["job_id"]]
+    import_tasks.inspect_dataset_import.run(job["job_id"])
+
     inspected = api.get(
         f"/api/v2/datasets/imports/{job['job_id']}",
         headers=auth_headers,
@@ -343,6 +348,9 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
         headers=auth_headers,
     )
     assert committed.status_code == 202, committed.text
+    assert committed.json()["data"]["status"] == "import_queued"
+    assert commit_jobs == [job["job_id"]]
+    import_tasks.commit_dataset_import.run(job["job_id"])
 
     completed = api.get(
         f"/api/v2/datasets/imports/{job['job_id']}",
