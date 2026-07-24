@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 const API = process.env.PLAYWRIGHT_API_URL || 'http://localhost:8000'
 
@@ -33,6 +33,30 @@ async function verifyWorkspaceStagePosition(page: Page) {
   const bottomGap = viewport!.height - box!.y - box!.height
   expect(bottomGap).toBeGreaterThanOrEqual(20)
   expect(bottomGap).toBeLessThanOrEqual(32)
+}
+
+async function verifyVerticalListScroll(list: Locator) {
+  await expect(list).toHaveCSS('overflow-y', 'auto')
+  const metrics = await list.evaluate(element => {
+    const filler = document.createElement('div')
+    filler.style.height = '2000px'
+    filler.style.flex = 'none'
+    filler.setAttribute('aria-hidden', 'true')
+    element.appendChild(filler)
+    const before = {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    }
+    element.scrollTop = element.scrollHeight
+    const afterScrollTop = element.scrollTop
+    filler.remove()
+    element.scrollTop = 0
+    return { ...before, afterScrollTop }
+  })
+  expect(metrics.clientHeight).toBeGreaterThan(0)
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+  expect(metrics.afterScrollTop).toBeGreaterThan(0)
 }
 
 async function verifyReadonlyGraphInspection(page: Page, objectTypeId: string) {
@@ -299,6 +323,27 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '清除连线聚焦' }).click()
   await expect(page.getByTestId('mapping-focus-guide')).toContainText('连线追踪')
   await expect(page.locator('.dmc-canvas-stats')).toContainText('字段映射 4')
+
+  // 两侧清单都必须在当前工作台高度内独立滚动，不能由内容撑高后被页面裁掉。
+  await verifyVerticalListScroll(page.getByTestId('mapping-assets-list'))
+  await verifyVerticalListScroll(page.getByTestId('mapping-ontology-list'))
+  await page.getByRole('button', { name: /实体关系 1/ }).click()
+  await verifyVerticalListScroll(page.getByTestId('mapping-ontology-list'))
+
+  // 画布和左侧清单共用同一预览开关：同一只眼睛再次点击必须收起。
+  const canvasPreviewButton = mappingDatasetNode.getByTitle('预览数据')
+  await canvasPreviewButton.click()
+  await expect(page.getByTestId('mapping-dataset-preview')).toBeVisible()
+  await canvasPreviewButton.click()
+  await expect(page.getByTestId('mapping-dataset-preview')).toHaveCount(0)
+  const assetPreviewButton = page.getByTestId('mapping-assets-list').locator('.dmc-eye').first()
+  await assetPreviewButton.click()
+  await expect(assetPreviewButton).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('mapping-dataset-preview')).toBeVisible()
+  await assetPreviewButton.click()
+  await expect(assetPreviewButton).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('mapping-dataset-preview')).toHaveCount(0)
+
   await page.getByRole('button', { name: '模型结构', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}$`))
   await page.goto(`/#/ontologies/${ontology.id}`)

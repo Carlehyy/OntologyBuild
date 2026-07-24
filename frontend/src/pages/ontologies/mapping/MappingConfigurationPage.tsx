@@ -167,6 +167,10 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const initialized = useRef(false)
   const editable = data.workspaceEditable === true
 
+  const toggleDatasetPreview = useCallback((datasetId: string) => {
+    setSelectedDatasetId(current => current === datasetId ? null : datasetId)
+  }, [])
+
   const previewQuery = useQuery<PreviewResponse>({
     queryKey: ['mapping-config-preview', selectedDatasetId],
     enabled: Boolean(selectedDatasetId),
@@ -190,10 +194,10 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     if (nodes.some(node => node.id === nodeId)) return
     setNodes(current => [...current, {
       id: nodeId, type: 'dataset', position: position || { x: 60, y: nextLaneY(current, 'dataset') },
-      data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId },
+      data: { kind: 'dataset', dataset, onPreview: toggleDatasetPreview },
     }])
     setDirty(true)
-  }, [editable, nodes, setNodes])
+  }, [editable, nodes, setNodes, toggleDatasetPreview])
 
   const addTargetNode = useCallback((kind: 'object' | 'relation', id: string, position?: { x: number; y: number }) => {
     if (!editable) return
@@ -271,7 +275,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     ;[...usedDatasets].forEach(datasetId => {
       const dataset = datasetById.get(datasetId)
       if (dataset) {
-        const node: MappingNode = { id: `dataset:${dataset.id}`, type: 'dataset', position: { x: 60, y: datasetY }, data: { kind: 'dataset', dataset, onPreview: setSelectedDatasetId } }
+        const node: MappingNode = { id: `dataset:${dataset.id}`, type: 'dataset', position: { x: 60, y: datasetY }, data: { kind: 'dataset', dataset, onPreview: toggleDatasetPreview } }
         datasetPositions.set(dataset.id, node.position)
         nextNodes.push(node); datasetY += estimatedNodeHeight(node) + 36
       }
@@ -306,7 +310,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       nextNodes.push(node); relationY += estimatedNodeHeight(node) + 36
     })
     setNodes(nextNodes); setEdges(nextEdges)
-  }, [data, datasetById, objectById, ontologyId, setEdges, setNodes])
+  }, [data, datasetById, objectById, ontologyId, setEdges, setNodes, toggleDatasetPreview])
 
   useEffect(() => {
     if (!editable || !dirty) return
@@ -620,11 +624,11 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
         <aside className="dmc-sidebar dmc-sidebar--left">
           <div className="dmc-sidebar-title"><Database size={15} /><div><b>数据资产湖</b><small>已启用数据集</small></div><em>{data.datasets.length}</em></div>
           <label className="dmc-side-search"><Search size={13} /><input value={leftSearch} onChange={event => setLeftSearch(event.target.value)} placeholder="搜索数据集或字段" /></label>
-          <div className="dmc-side-list">
+          <div className="dmc-side-list" data-testid="mapping-assets-list">
             {filteredDatasets.map(dataset => {
               const expanded = expandedAssets.has(dataset.id)
               const added = nodes.some(node => node.id === `dataset:${dataset.id}`)
-              return <div className="dmc-asset" key={dataset.id}><div className="dmc-asset-main"><button onClick={() => setExpandedAssets(current => { const next = new Set(current); if (expanded) next.delete(dataset.id); else next.add(dataset.id); return next })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button><span className={`dmc-asset-icon dmc-asset-icon--${dataset.source}`}><Table2 size={13} /></span><span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows ?? 0} 行 · {dataset.columns.length} 字段</small></span><button className="dmc-eye" onClick={() => setSelectedDatasetId(dataset.id)} title="预览数据"><Eye size={12} /></button><button className="dmc-add" disabled={!editable || added} onClick={() => addDatasetNode(dataset)} title={!editable ? '只读快照不可添加节点' : undefined}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>{expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}</div>
+              return <div className="dmc-asset" key={dataset.id}><div className="dmc-asset-main"><button onClick={() => setExpandedAssets(current => { const next = new Set(current); if (expanded) next.delete(dataset.id); else next.add(dataset.id); return next })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button><span className={`dmc-asset-icon dmc-asset-icon--${dataset.source}`}><Table2 size={13} /></span><span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows ?? 0} 行 · {dataset.columns.length} 字段</small></span><button className="dmc-eye" data-active={selectedDatasetId === dataset.id} aria-pressed={selectedDatasetId === dataset.id} onClick={() => toggleDatasetPreview(dataset.id)} title={selectedDatasetId === dataset.id ? '收起预览' : '预览数据'}><Eye size={12} /></button><button className="dmc-add" disabled={!editable || added} onClick={() => addDatasetNode(dataset)} title={!editable ? '只读快照不可添加节点' : undefined}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>{expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}</div>
             })}
           </div>
           <div className="dmc-sidebar-foot"><span><Database size={11} />成品 {data.datasets.filter(item => item.source === 'curated').length}</span><span><Table2 size={11} />人工 {data.datasets.filter(item => item.source === 'manual').length}</span></div>
@@ -668,14 +672,14 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
             <div className="dmc-canvas-stats">节点 <b>{nodes.length}</b><span />字段映射 <b>{edges.length}</b><span />{dirty ? <em>有未保存更改</em> : <i>已与数据库同步</i>}</div>
           </ReactFlow>
 
-          {selectedDatasetId && <section className="dmc-preview-panel"><header><div><Eye size={14} /><span><b>{datasetById.get(selectedDatasetId)?.name}</b><small>实例数据预览 · 仅用于映射核对</small></span></div><button onClick={() => setSelectedDatasetId(null)}><X size={14} /></button></header>{previewQuery.isLoading ? <div className="dmc-preview-loading"><Loader2 className="animate-spin" />正在读取数据…</div> : previewQuery.data?.columns?.length ? <div className="dmc-preview-table"><table><thead><tr>{previewQuery.data.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{previewQuery.data.rows.map((row, index) => <tr key={index}>{previewQuery.data!.columns.map(column => <td key={column} title={String(row[column] ?? '')}>{row[column] == null || row[column] === '' ? '—' : typeof row[column] === 'object' ? JSON.stringify(row[column]) : String(row[column])}</td>)}</tr>)}</tbody></table><p>显示 {previewQuery.data.rows.length} 行 · 共 {previewQuery.data.total_rows?.toLocaleString() || 0} 行</p></div> : <div className="dmc-preview-loading"><AlertCircle />当前数据集暂无可预览数据</div>}</section>}
+          {selectedDatasetId && <section className="dmc-preview-panel" data-testid="mapping-dataset-preview"><header><div><Eye size={14} /><span><b>{datasetById.get(selectedDatasetId)?.name}</b><small>实例数据预览 · 仅用于映射核对</small></span></div><button onClick={() => setSelectedDatasetId(null)} aria-label="关闭数据预览"><X size={14} /></button></header>{previewQuery.isLoading ? <div className="dmc-preview-loading"><Loader2 className="animate-spin" />正在读取数据…</div> : previewQuery.data?.columns?.length ? <div className="dmc-preview-table"><table><thead><tr>{previewQuery.data.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{previewQuery.data.rows.map((row, index) => <tr key={index}>{previewQuery.data!.columns.map(column => <td key={column} title={String(row[column] ?? '')}>{row[column] == null || row[column] === '' ? '—' : typeof row[column] === 'object' ? JSON.stringify(row[column]) : String(row[column])}</td>)}</tr>)}</tbody></table><p>显示 {previewQuery.data.rows.length} 行 · 共 {previewQuery.data.total_rows?.toLocaleString() || 0} 行</p></div> : <div className="dmc-preview-loading"><AlertCircle />当前数据集暂无可预览数据</div>}</section>}
         </main>
 
         <aside className="dmc-sidebar dmc-sidebar--right">
           <div className="dmc-sidebar-title"><Boxes size={15} /><div><b>本体清单</b><small>对象实体与实体关系</small></div><em>{data.objectTypes.length + data.linkTypes.length}</em></div>
           <div className="dmc-kind-tabs"><button data-active={rightKind === 'object'} onClick={() => setRightKind('object')}>对象实体 <span>{data.objectTypes.length}</span></button><button data-active={rightKind === 'relation'} onClick={() => setRightKind('relation')}>实体关系 <span>{data.linkTypes.length}</span></button></div>
           <label className="dmc-side-search"><Search size={13} /><input value={rightSearch} onChange={event => setRightSearch(event.target.value)} placeholder="搜索本体元素或属性" /></label>
-          <div className="dmc-side-list">
+          <div className="dmc-side-list" data-testid="mapping-ontology-list">
             {filteredTargets.map(target => {
               const nodeId = `${rightKind}:${target.id}`
               const added = nodes.some(node => node.id === nodeId)
