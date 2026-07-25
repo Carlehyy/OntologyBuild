@@ -7,15 +7,17 @@ logger = logging.getLogger(__name__)
 
 # 核心索引定义
 INDEXES = [
-    # 按 ontology_id 过滤（所有节点都有此属性）
+    # 按 ontology_id 过滤（所有 Entity 节点都有此属性）
     "CREATE INDEX entity_ontology_id IF NOT EXISTS FOR (n:Entity) ON (n.ontology_id)",
     # 按实体 id 查找（MERGE 主键）
     "CREATE INDEX entity_id IF NOT EXISTS FOR (n:Entity) ON (n.id)",
     # 按名称搜索（关键词查找）
     "CREATE INDEX entity_name_cn IF NOT EXISTS FOR (n:Entity) ON (n.name_cn)",
-    # 通用节点属性索引
-    "CREATE INDEX node_ontology_id IF NOT EXISTS FOR (n) ON (n.ontology_id)",
 ]
+
+# Neo4j 的属性范围索引必须指定节点标签。不能用
+# ``FOR (n) ON (n.ontology_id)`` 创建跨标签属性索引；无标签语法只适用于
+# ``ON EACH labels(n)`` 的 token lookup index，而该索引不会加速属性过滤。
 
 # 约束定义（唯一性）
 CONSTRAINTS = [

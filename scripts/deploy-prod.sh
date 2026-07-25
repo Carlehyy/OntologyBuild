@@ -218,9 +218,10 @@ env_value() {
   ' .env
 }
 redact_compose_logs() {
-  local key value line
+  local key value line tail_lines
   local -a sensitive_values=()
   local -a services=("$@")
+  tail_lines="${COMPOSE_LOG_TAIL:-200}"
   for key in \
     SECRET_KEY ENCRYPTION_KEY FIRST_ADMIN_PASSWORD POSTGRES_PASSWORD \
     DATABASE_URL REDIS_URL NEO4J_PASSWORD NEO4J_AUTH \
@@ -228,12 +229,28 @@ redact_compose_logs() {
     value="$(env_value "$key")"
     [ -z "$value" ] || sensitive_values+=("$value")
   done
-  compose logs --tail=200 "${services[@]}" 2>&1 | while IFS= read -r line; do
+  compose logs --tail="$tail_lines" "${services[@]}" 2>&1 | while IFS= read -r line; do
     for value in "${sensitive_values[@]}"; do
       line="${line//"$value"/<redacted>}"
     done
     printf '%s\n' "$line"
   done
+}
+redact_backend_failure_logs() {
+  COMPOSE_LOG_TAIL=2000 redact_compose_logs backend | awk '
+    /Traceback \(most recent call last\)/ ||
+    /The above exception was the direct cause/ ||
+    /During handling of the above exception/ ||
+    /File "\/app\/app\// ||
+    /ERROR:/ ||
+    /WARNING:/ ||
+    /Error:/ ||
+    /Exception:/ ||
+    /索引创建失败/ ||
+    /Neo4j unavailable/ {
+      print
+    }
+  '
 }
 configure_storage_fallback() {
   local current enabled
@@ -456,7 +473,7 @@ log "starting services"
 if ! run_with_retry compose up -d --remove-orphans; then
   log "service startup failed; printing redacted backend diagnostics"
   compose ps || true
-  redact_compose_logs backend || true
+  redact_backend_failure_logs || true
   exit 1
 fi
 log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"
