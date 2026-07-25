@@ -19,6 +19,21 @@ class OutboundTargetError(ValueError):
     pass
 
 
+def _close_response(response: requests.Response) -> None:
+    """Best-effort close for real and lightweight adapter responses.
+
+    ``requests.Response.close`` expects a ``raw`` stream while it still has
+    unread content.  Production responses always provide one, but test doubles
+    and small adapter responses may deliberately only carry an in-memory body.
+    Redirect handling must not turn that harmless implementation detail into an
+    application failure.
+    """
+    try:
+        response.close()
+    except AttributeError:
+        pass
+
+
 def validate_outbound_url(
     url: str,
     *,
@@ -123,34 +138,38 @@ def request_with_safe_redirects(
         if not location:
             return response
         if redirect_count >= config.OUTBOUND_MAX_REDIRECTS:
-            response.close()
+            _close_response(response)
             raise requests.TooManyRedirects(
                 f"重定向次数超过上限 {config.OUTBOUND_MAX_REDIRECTS}"
             )
 
         # Validate every redirect target again.  This performs a fresh DNS
         # lookup, closing the common redirect-to-private-network SSRF path.
-        next_url = validate(urljoin(current_url, location))
-        if not _same_origin(current_url, next_url):
-            # ``requests`` removes credentials when it follows a cross-origin
-            # redirect.  We follow redirects manually so retain that boundary:
-            # do not send a configured token, caller cookie, or proxy key to a
-            # different host.  W3's session-cookie jar remains domain scoped.
-            _drop_cross_origin_credentials(request_kwargs)
-        request_kwargs.pop("params", None)
-        if response.status_code == 303 or (
-            response.status_code in {301, 302}
-            and current_method not in {"GET", "HEAD"}
-        ):
-            current_method = "GET"
-            for key in ("data", "json", "files"):
-                request_kwargs.pop(key, None)
-            headers = dict(request_kwargs.get("headers") or {})
-            for key in list(headers):
-                if key.lower() in {"content-type", "content-length"}:
-                    headers.pop(key, None)
-            request_kwargs["headers"] = headers or None
-        response.close()
+        try:
+            next_url = validate(urljoin(current_url, location))
+            if not _same_origin(current_url, next_url):
+                # ``requests`` removes credentials when it follows a cross-origin
+                # redirect.  We follow redirects manually so retain that boundary:
+                # do not send a configured token, caller cookie, or proxy key to a
+                # different host.  W3's session-cookie jar remains domain scoped.
+                _drop_cross_origin_credentials(request_kwargs)
+            request_kwargs.pop("params", None)
+            if response.status_code == 303 or (
+                response.status_code in {301, 302}
+                and current_method not in {"GET", "HEAD"}
+            ):
+                current_method = "GET"
+                for key in ("data", "json", "files"):
+                    request_kwargs.pop(key, None)
+                headers = dict(request_kwargs.get("headers") or {})
+                for key in list(headers):
+                    if key.lower() in {"content-type", "content-length"}:
+                        headers.pop(key, None)
+                request_kwargs["headers"] = headers or None
+        finally:
+            # Also release the original response when the redirected target is
+            # rejected by the DNS/private-network safety check.
+            _close_response(response)
         current_url = next_url
 
     raise requests.TooManyRedirects("重定向次数超过安全上限")

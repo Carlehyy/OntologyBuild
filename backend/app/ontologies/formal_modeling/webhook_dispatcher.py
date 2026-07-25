@@ -238,10 +238,10 @@ def dispatch_webhook(config: Mapping[str, Any], *, params: Mapping[str, Any],
                 last_error = f"请求超时（{timeout}s）"
                 retryable = True
             except OutboundTargetError as exc:
-                # Redirect targets are validated one hop at a time.  A URL
-                # that becomes invalid after a redirect is configuration, not
-                # a transient network error, and must never be retried.
-                last_error = f"重定向目标无效: {exc}"
+                # Validation covers the initial target and every redirect.
+                # Either failure is configuration, not a transient network
+                # error, and must never be retried.
+                last_error = f"Webhook 目标无效: {exc}"
                 retryable = False
             except requests.RequestException as exc:
                 last_error = f"请求失败: {exc}"

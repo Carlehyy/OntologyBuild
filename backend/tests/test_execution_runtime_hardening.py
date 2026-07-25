@@ -1,5 +1,6 @@
 """Production guardrails for formal actions, sentinels, and Celery workers."""
 import json
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from app.models.sentinel import Notification, Sentinel, SentinelMatchState
 from app.models.ontology import OntologyProject
 from app.models.v2.mapping import OntologyMapping
 from app.services.formal.action_engine import execute_action
+from app.api_hub import outbound_security
 from app.ontologies.sentinels.evaluator import _sentinel_execution_lock
 from app.services.sentinel.evaluator import (
     evaluate_sentinel,
@@ -117,6 +119,11 @@ def _update_rule(property_name: str, *, source="constant", value="\"done\""):
             "value": value,
         },
     }
+
+
+def _resolve_public_outbound(_host, port, **_kwargs):
+    """Keep webhook unit tests offline while preserving the SSRF guard."""
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port))]
 
 
 def test_pending_actions_include_real_business_context(db):
@@ -322,6 +329,9 @@ def test_webhook_dispatches_rendered_json_with_retry_identity(db, monkeypatch):
         response._content = b"accepted"
         return response
 
+    monkeypatch.setattr(
+        outbound_security.socket, "getaddrinfo", _resolve_public_outbound
+    )
     monkeypatch.setattr(requests.Session, "request", fake_request)
     result = execute_action(
         db, ontology_id,
@@ -372,6 +382,9 @@ def test_webhook_failure_rolls_back_preceding_local_rules(db, monkeypatch):
         response._content = b"temporarily unavailable"
         return response
 
+    monkeypatch.setattr(
+        outbound_security.socket, "getaddrinfo", _resolve_public_outbound
+    )
     monkeypatch.setattr(requests.Session, "request", fake_request)
     result = execute_action(db, ontology_id, _body(action, instance))
     db.refresh(instance)
