@@ -6,6 +6,9 @@ on:
 concurrency:
   group: deploy-nano-ontoprompt
   cancel-in-progress: true
+permissions:
+  contents: read
+  statuses: write
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -13,6 +16,20 @@ jobs:
     # 在冷缓存 runner 上可能超过 25 分钟；保留明确上限，避免误取消正常验证。
     timeout-minutes: 45
     steps:
+      - name: Mark deployment pending
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'pending',
+              context: 'ontologybuild/deploy',
+              description: 'Verification and deployment are running',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            })
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -116,3 +133,30 @@ jobs:
           APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
           HEALTH_URL="${DEPLOY_HEALTH_URL:-http://${DEPLOY_HOST}/}"
           sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "cd '${APP_DIR}' && APP_DIR='${APP_DIR}' SKIP_GIT=1 HEALTH_URL='${HEALTH_URL}' bash scripts/deploy-prod.sh"
+
+  report:
+    if: ${{ always() }}
+    needs: [verify, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish deployment result
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const verify = '${{ needs.verify.result }}'
+            const deploy = '${{ needs.deploy.result }}'
+            const succeeded = verify === 'success' && deploy === 'success'
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: succeeded ? 'success' : 'failure',
+              context: 'ontologybuild/deploy',
+              description: succeeded
+                ? 'Verification and deployment succeeded'
+                : `verify=${verify}, deploy=${deploy}`.slice(0, 140),
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            })
+            if (!succeeded) {
+              core.setFailed(`verify=${verify}, deploy=${deploy}`)
+            }
