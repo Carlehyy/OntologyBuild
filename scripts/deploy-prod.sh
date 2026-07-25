@@ -217,6 +217,24 @@ env_value() {
     END { gsub(/\r$/, "", value); print value }
   ' .env
 }
+redact_compose_logs() {
+  local key value line
+  local -a sensitive_values=()
+  local -a services=("$@")
+  for key in \
+    SECRET_KEY ENCRYPTION_KEY FIRST_ADMIN_PASSWORD POSTGRES_PASSWORD \
+    DATABASE_URL REDIS_URL NEO4J_PASSWORD NEO4J_AUTH \
+    MINIO_ACCESS_KEY MINIO_SECRET_KEY API_HUB_SYSTEM_MCP_TOKEN; do
+    value="$(env_value "$key")"
+    [ -z "$value" ] || sensitive_values+=("$value")
+  done
+  compose logs --tail=200 "${services[@]}" 2>&1 | while IFS= read -r line; do
+    for value in "${sensitive_values[@]}"; do
+      line="${line//"$value"/<redacted>}"
+    done
+    printf '%s\n' "$line"
+  done
+}
 configure_storage_fallback() {
   local current enabled
   enabled="$(env_value STORAGE_LOCAL_FALLBACK)"
@@ -435,7 +453,12 @@ fi
 log "  upgrading to head"
 run_with_retry compose run --rm --no-deps backend alembic upgrade head
 log "starting services"
-run_with_retry compose up -d --remove-orphans
+if ! run_with_retry compose up -d --remove-orphans; then
+  log "service startup failed; printing redacted backend diagnostics"
+  compose ps || true
+  redact_compose_logs backend || true
+  exit 1
+fi
 log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"
 for i in $(seq 1 30); do
   if curl -fsS --connect-timeout 5 --max-time 10 "$READINESS_URL" >/dev/null \
@@ -450,5 +473,5 @@ for i in $(seq 1 30); do
 done
 log "deployment health check failed"
 compose ps || true
-compose logs --tail=200 backend browser frontend || true
+redact_compose_logs backend browser frontend || true
 exit 1
