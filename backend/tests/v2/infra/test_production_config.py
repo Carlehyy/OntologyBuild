@@ -106,8 +106,10 @@ def test_production_compose_shares_fallback_without_minio_startup_dependency():
     worker = compose["services"]["celery_worker"]
 
     assert "minio" not in backend["depends_on"]
-    assert backend["environment"]["STORAGE_LOCAL_FALLBACK"] == "true"
-    assert worker["environment"]["STORAGE_LOCAL_FALLBACK"] == "true"
+    assert backend["environment"]["STORAGE_LOCAL_FALLBACK"] == (
+        "${STORAGE_LOCAL_FALLBACK:-true}")
+    assert worker["environment"]["STORAGE_LOCAL_FALLBACK"] == (
+        "${STORAGE_LOCAL_FALLBACK:-true}")
     assert backend["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
     assert worker["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
     assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in backend["environment"]

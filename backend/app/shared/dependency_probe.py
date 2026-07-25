@@ -1,0 +1,125 @@
+"""Fail-closed connectivity checks for required production dependencies."""
+from __future__ import annotations
+
+import sys
+from collections.abc import Callable
+
+import psycopg2
+import redis
+import urllib3
+from minio import Minio
+from neo4j import GraphDatabase
+
+from app.config import settings
+
+
+def probe_postgresql() -> None:
+    connection = psycopg2.connect(
+        settings.database_url,
+        connect_timeout=5,
+        application_name="ontologybuild-deploy-check",
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            if cursor.fetchone() != (1,):
+                raise RuntimeError("PostgreSQL readiness query returned an invalid result")
+    finally:
+        connection.close()
+
+
+def probe_redis() -> None:
+    client = redis.Redis.from_url(
+        settings.redis_url,
+        socket_connect_timeout=5,
+        socket_timeout=5,
+    )
+    try:
+        if client.ping() is not True:
+            raise RuntimeError("Redis PING returned an invalid result")
+    finally:
+        client.close()
+
+
+def probe_neo4j() -> None:
+    driver = GraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password),
+        connection_timeout=5,
+    )
+    try:
+        driver.verify_connectivity()
+        with driver.session() as session:
+            record = session.run("RETURN 1 AS ready").single()
+            if record is None or record["ready"] != 1:
+                raise RuntimeError("Neo4j readiness query returned an invalid result")
+    finally:
+        driver.close()
+
+
+def probe_minio() -> None:
+    http = urllib3.PoolManager(
+        timeout=urllib3.Timeout(connect=5, read=5),
+        retries=urllib3.Retry(
+            total=0,
+            connect=0,
+            read=0,
+            redirect=0,
+            status=0,
+        ),
+    )
+    try:
+        client = Minio(
+            settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_use_ssl,
+            http_client=http,
+        )
+        client.list_buckets()
+    finally:
+        http.clear()
+
+
+PROBES: tuple[tuple[str, Callable[[], None]], ...] = (
+    ("PostgreSQL", probe_postgresql),
+    ("Redis", probe_redis),
+    ("Neo4j", probe_neo4j),
+    ("MinIO", probe_minio),
+)
+
+
+def main() -> int:
+    if not settings.require_external_dependencies:
+        print(
+            "Required dependency mode is disabled; refusing production preflight",
+            file=sys.stderr,
+        )
+        return 2
+
+    failed: list[str] = []
+    for name, probe in PROBES:
+        try:
+            probe()
+        except Exception as exc:
+            # Never render connection strings or exception messages: driver
+            # errors may embed credentials. Component and exception type are
+            # enough to diagnose the failed boundary without leaking secrets.
+            print(f"{name}: unavailable ({type(exc).__name__})", file=sys.stderr)
+            failed.append(name)
+        else:
+            print(f"{name}: ok")
+
+    if failed:
+        print(
+            "Required production dependency preflight failed: "
+            + ", ".join(failed),
+            file=sys.stderr,
+        )
+        return 1
+    print("Required production dependency preflight succeeded")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

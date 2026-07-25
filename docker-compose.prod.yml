@@ -90,10 +90,12 @@ services:
       # .env files therefore do not need a breaking CORS migration.
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
-      # Both API and worker mount the same persistent uploads volume. Keep the
-      # production fallback fixed below it so an old server .env cannot point
-      # object storage back at an ephemeral container-relative directory.
-      STORAGE_LOCAL_FALLBACK: "true"
+      REQUIRE_EXTERNAL_DEPENDENCIES: ${REQUIRE_EXTERNAL_DEPENDENCIES:-false}
+      DATASET_IMPORT_USE_CELERY: ${DATASET_IMPORT_USE_CELERY:-false}
+      # Compatibility deployments can still use the shared persistent volume.
+      # Required-dependency mode sets this false and the application/deploy
+      # gates reject any attempt to turn the local fallback back on.
+      STORAGE_LOCAL_FALLBACK: ${STORAGE_LOCAL_FALLBACK:-true}
       STORAGE_LOCAL_DIR: /uploads/object-storage
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
@@ -160,7 +162,9 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
-      STORAGE_LOCAL_FALLBACK: "true"
+      REQUIRE_EXTERNAL_DEPENDENCIES: ${REQUIRE_EXTERNAL_DEPENDENCIES:-false}
+      DATASET_IMPORT_USE_CELERY: ${DATASET_IMPORT_USE_CELERY:-false}
+      STORAGE_LOCAL_FALLBACK: ${STORAGE_LOCAL_FALLBACK:-true}
       STORAGE_LOCAL_DIR: /uploads/object-storage
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}

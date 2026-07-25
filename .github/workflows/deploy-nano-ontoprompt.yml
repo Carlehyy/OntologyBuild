@@ -37,6 +37,16 @@ jobs:
           rm -f "${DB_FILE}"
         working-directory: backend
 
+      - name: Production dependency configuration gate
+        run: |
+          test -s production.dependencies.env
+          trap 'rm -f .env' EXIT
+          APP_DIR="${GITHUB_WORKSPACE}" \
+            SKIP_GIT=1 \
+            DEPLOY_VALIDATE_ONLY=1 \
+            HEALTH_URL=http://127.0.0.1/ \
+            bash scripts/deploy-prod.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

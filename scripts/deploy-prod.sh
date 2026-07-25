@@ -4,6 +4,7 @@ APP_DIR="${APP_DIR:-/opt/ontologybuild}"
 BRANCH="${BRANCH:-nano-ontoprompt}"
 REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
+DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-production.dependencies.env}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PUBLIC_PORT:-80}/}"
 READINESS_URL="${READINESS_URL:-${HEALTH_URL%/}/api/health}"
 RETRIES="${DEPLOY_RETRIES:-3}"
@@ -141,6 +142,68 @@ bootstrap_production_env() {
   log "generated runtime secrets were stored in ${APP_DIR}/.env (values are not printed to CI logs)"
 }
 [ -f .env ] || bootstrap_production_env
+
+dependency_key_allowed() {
+  case "$1" in
+    ENVIRONMENT|STRICT_PRODUCTION_CONFIG|REQUIRE_EXTERNAL_DEPENDENCIES|\
+    POSTGRES_HOST|POSTGRES_PORT|POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD|\
+    DATABASE_URL|REDIS_URL|DATASET_IMPORT_USE_CELERY|\
+    NEO4J_URI|NEO4J_USER|NEO4J_PASSWORD|NEO4J_AUTH|\
+    MINIO_CONSOLE_URL|MINIO_ENDPOINT|MINIO_ACCESS_KEY|MINIO_SECRET_KEY|\
+    MINIO_USE_SSL|STORAGE_LOCAL_FALLBACK)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+apply_production_dependency_config() {
+  local raw key value applied=0 current_required
+  if [ ! -f "$DEPENDENCY_CONFIG_FILE" ]; then
+    current_required="$(
+      awk -F= '$1 == "REQUIRE_EXTERNAL_DEPENDENCIES" {
+        print substr($0, index($0, "=") + 1)
+      }' .env | tail -n1
+    )"
+    case "$current_required" in
+      1|true|TRUE|yes|YES)
+        log "$DEPENDENCY_CONFIG_FILE is required by the current production .env"
+        exit 1
+        ;;
+      *)
+        return
+        ;;
+    esac
+  fi
+
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    raw="${raw%$'\r'}"
+    case "$raw" in
+      ""|\#*) continue ;;
+    esac
+    if [[ "$raw" != *=* ]]; then
+      log "$DEPENDENCY_CONFIG_FILE contains an invalid line"
+      exit 1
+    fi
+    key="${raw%%=*}"
+    value="${raw#*=}"
+    if [[ ! "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] \
+        || ! dependency_key_allowed "$key"; then
+      log "$DEPENDENCY_CONFIG_FILE contains unsupported key: $key"
+      exit 1
+    fi
+    if [ -z "$value" ]; then
+      log "$DEPENDENCY_CONFIG_FILE contains an empty required value: $key"
+      exit 1
+    fi
+    set_env_value "$key" "$value"
+    applied=$((applied + 1))
+  done < "$DEPENDENCY_CONFIG_FILE"
+  chmod 600 "$DEPENDENCY_CONFIG_FILE"
+  log "applied ${applied} production dependency settings (values are not printed)"
+}
+apply_production_dependency_config
 chmod 600 .env
 if [ -z "$(awk -F= '$1 == "API_HUB_SYSTEM_MCP_TOKEN" {print substr($0, index($0,"=")+1)}' .env | tail -n1)" ]; then
   set_env_value API_HUB_SYSTEM_MCP_TOKEN "$(random_hex 32)"
@@ -155,7 +218,20 @@ env_value() {
   ' .env
 }
 configure_storage_fallback() {
-  local current
+  local current enabled
+  enabled="$(env_value STORAGE_LOCAL_FALLBACK)"
+  case "$enabled" in
+    0|false|FALSE|no|NO)
+      set_env_value STORAGE_LOCAL_FALLBACK false
+      log "local object-storage fallback is disabled"
+      return
+      ;;
+    ""|1|true|TRUE|yes|YES) ;;
+    *)
+      log "STORAGE_LOCAL_FALLBACK must be true or false"
+      exit 1
+      ;;
+  esac
   current="$(env_value STORAGE_LOCAL_DIR)"
   case "$current" in
     ""|storage|./storage)
@@ -267,6 +343,53 @@ check_secret NEO4J_PASSWORD ontoprompt123
 check_secret NEO4J_AUTH neo4j/ontoprompt123
 check_secret MINIO_ACCESS_KEY minioadmin
 check_secret MINIO_SECRET_KEY minioadmin
+validate_required_external_dependencies() {
+  local key
+  case "$(env_value REQUIRE_EXTERNAL_DEPENDENCIES)" in
+    1|true|TRUE|yes|YES) ;;
+    *) return ;;
+  esac
+  for key in \
+    DATABASE_URL REDIS_URL NEO4J_URI NEO4J_USER NEO4J_PASSWORD \
+    MINIO_ENDPOINT MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
+    require_secret "$key"
+  done
+  case "$(env_value ENVIRONMENT)" in
+    production) ;;
+    *) log "ENVIRONMENT=production is required"; exit 1 ;;
+  esac
+  case "$(env_value STRICT_PRODUCTION_CONFIG)" in
+    1|true|TRUE|yes|YES) ;;
+    *) log "STRICT_PRODUCTION_CONFIG=true is required"; exit 1 ;;
+  esac
+  case "$(env_value STORAGE_LOCAL_FALLBACK)" in
+    0|false|FALSE|no|NO) ;;
+    *) log "STORAGE_LOCAL_FALLBACK=false is required"; exit 1 ;;
+  esac
+  case "$(env_value DATASET_IMPORT_USE_CELERY)" in
+    1|true|TRUE|yes|YES) ;;
+    *) log "DATASET_IMPORT_USE_CELERY=true is required"; exit 1 ;;
+  esac
+  case "$(env_value DATABASE_URL)" in
+    postgresql://*|postgres://*) ;;
+    *) log "DATABASE_URL must use PostgreSQL"; exit 1 ;;
+  esac
+  case "$(env_value REDIS_URL)" in
+    redis://:*@*|rediss://:*@*) ;;
+    *) log "REDIS_URL must use single-password authentication"; exit 1 ;;
+  esac
+  case "$(env_value NEO4J_URI)" in
+    bolt://*|bolt+s://*|neo4j://*|neo4j+s://*) ;;
+    *) log "NEO4J_URI must use a supported Neo4j scheme"; exit 1 ;;
+  esac
+  case "$(env_value MINIO_ENDPOINT)" in
+    *://*) log "MINIO_ENDPOINT must not include a URL scheme"; exit 1 ;;
+    *:9001) log "MINIO_ENDPOINT must use the S3 API port, not console port 9001"; exit 1 ;;
+    *:*) ;;
+    *) log "MINIO_ENDPOINT must include the S3 API port"; exit 1 ;;
+  esac
+}
+validate_required_external_dependencies
 if [ -z "$(env_value ENCRYPTION_KEY)" ]; then
   log "ENCRYPTION_KEY is empty; preserving the existing SECRET_KEY-derived encryption key"
 fi
@@ -294,11 +417,19 @@ fi
 command -v docker >/dev/null 2>&1 || { log "docker is not installed"; exit 1; }
 log "building images"
 run_with_retry compose build --pull
+if case "$(env_value REQUIRE_EXTERNAL_DEPENDENCIES)" in
+    1|true|TRUE|yes|YES) true ;;
+    *) false ;;
+  esac; then
+  log "verifying required production dependency connectivity"
+  run_with_retry compose run --rm --no-deps \
+    backend python -m app.shared.dependency_probe
+fi
 log "running database migrations"
 # Never rewrite Alembic history during a normal deploy.  If a legacy database
 # needs a one-off baseline stamp it must be an explicit, audited operation.
 log "  validating migration graph"
-MIGRATION_HEADS="$(compose run --rm backend alembic heads)"
+MIGRATION_HEADS="$(compose run --rm --no-deps backend alembic heads)"
 printf '%s\n' "$MIGRATION_HEADS"
 HEAD_COUNT="$(printf '%s\n' "$MIGRATION_HEADS" | grep -c '(head)' || true)"
 if [ "$HEAD_COUNT" -ne 1 ]; then
@@ -306,7 +437,7 @@ if [ "$HEAD_COUNT" -ne 1 ]; then
   exit 1
 fi
 log "  upgrading to head"
-run_with_retry compose run --rm backend alembic upgrade head
+run_with_retry compose run --rm --no-deps backend alembic upgrade head
 log "starting services"
 run_with_retry compose up -d --remove-orphans
 log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"

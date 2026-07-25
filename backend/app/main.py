@@ -784,11 +784,13 @@ def health(db: Session = Depends(get_db)):
     # readiness must not create a new unclosed urllib3 pool every few seconds.
     try:
         from app.settings.object_storage.models import MinioConfig
-        managed = db.query(MinioConfig).filter(
-            MinioConfig.id == "default",
-            MinioConfig.enabled.is_(True),
-            MinioConfig.connected.is_(True),
-        ).first()
+        managed = None
+        if not settings.require_external_dependencies:
+            managed = db.query(MinioConfig).filter(
+                MinioConfig.id == "default",
+                MinioConfig.enabled.is_(True),
+                MinioConfig.connected.is_(True),
+            ).first()
         minio_endpoint = (managed.endpoint if managed else settings.minio_endpoint).rstrip("/")
         if "://" not in minio_endpoint:
             scheme = "https" if (managed.secure if managed else settings.minio_use_ssl) else "http"

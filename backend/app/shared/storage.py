@@ -664,6 +664,12 @@ def get_environment_storage_service() -> StorageService:
 def get_storage_service() -> StorageService:
     """Return the shared client, preferring a verified administrator config."""
     global _storage_service
+    if settings.require_external_dependencies:
+        # The committed production dependency manifest is authoritative in
+        # fail-closed mode. A stale administrator row must not silently route
+        # runtime objects to a different MinIO endpoint.
+        _storage_service = get_environment_storage_service()
+        return _storage_service
     if _storage_service is None:
         config = None
         try:
