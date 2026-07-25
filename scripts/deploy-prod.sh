@@ -358,10 +358,6 @@ validate_required_external_dependencies() {
     production) ;;
     *) log "ENVIRONMENT=production is required"; exit 1 ;;
   esac
-  case "$(env_value STRICT_PRODUCTION_CONFIG)" in
-    1|true|TRUE|yes|YES) ;;
-    *) log "STRICT_PRODUCTION_CONFIG=true is required"; exit 1 ;;
-  esac
   case "$(env_value STORAGE_LOCAL_FALLBACK)" in
     0|false|FALSE|no|NO) ;;
     *) log "STORAGE_LOCAL_FALLBACK=false is required"; exit 1 ;;

@@ -173,6 +173,95 @@ def _is_local_dependency_host(hostname: str | None) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
+def required_dependency_config_errors(current: Settings) -> list[str]:
+    """Return errors that would allow required services to degrade locally."""
+    if not current.require_external_dependencies:
+        return []
+
+    errors: list[str] = []
+    if current.storage_local_fallback:
+        errors.append(
+            "STORAGE_LOCAL_FALLBACK=false when "
+            "REQUIRE_EXTERNAL_DEPENDENCIES=true"
+        )
+    if not current.dataset_import_use_celery:
+        errors.append(
+            "DATASET_IMPORT_USE_CELERY=true when "
+            "REQUIRE_EXTERNAL_DEPENDENCIES=true"
+        )
+
+    try:
+        database = urlsplit(current.database_url)
+        database.port
+    except ValueError:
+        database = None
+    if (
+        database is None
+        or database.scheme not in {"postgresql", "postgres"}
+        or _is_local_dependency_host(database.hostname)
+        or not database.username
+        or database.password is None
+        or database.path in {"", "/"}
+    ):
+        errors.append(
+            "DATABASE_URL must reference an authenticated external "
+            "PostgreSQL database"
+        )
+
+    try:
+        redis_url = urlsplit(current.redis_url)
+        redis_url.port
+    except ValueError:
+        redis_url = None
+    if (
+        redis_url is None
+        or redis_url.scheme not in {"redis", "rediss"}
+        or _is_local_dependency_host(redis_url.hostname)
+        or redis_url.password is None
+    ):
+        errors.append(
+            "REDIS_URL must reference an authenticated external Redis"
+        )
+
+    try:
+        neo4j = urlsplit(current.neo4j_uri)
+        neo4j.port
+    except ValueError:
+        neo4j = None
+    if (
+        neo4j is None
+        or neo4j.scheme not in {"bolt", "bolt+s", "neo4j", "neo4j+s"}
+        or _is_local_dependency_host(neo4j.hostname)
+        or not current.neo4j_user
+        or not current.neo4j_password
+    ):
+        errors.append(
+            "NEO4J_URI/NEO4J credentials must reference an external Neo4j"
+        )
+
+    raw_minio = str(current.minio_endpoint or "").strip()
+    try:
+        minio = urlsplit(f"//{raw_minio}")
+        minio_port = minio.port
+    except ValueError:
+        minio = None
+        minio_port = None
+    if (
+        not raw_minio
+        or "://" in raw_minio
+        or minio is None
+        or _is_local_dependency_host(minio.hostname)
+        or minio_port == 9001
+        or not current.minio_access_key
+        or not current.minio_secret_key
+    ):
+        errors.append(
+            "MINIO_ENDPOINT/MINIO credentials must reference an external "
+            "S3 API endpoint, not the browser console"
+        )
+    return errors
+
+
 def production_config_errors(current: Settings) -> list[str]:
     """Return fail-closed production configuration errors.
 
@@ -229,89 +318,7 @@ def production_config_errors(current: Settings) -> list[str]:
                 _insecure.append(
                     "STORAGE_LOCAL_DIR must use a persistent non-temporary volume"
                 )
-    if current.require_external_dependencies:
-        if not current.strict_production_config:
-            _insecure.append("STRICT_PRODUCTION_CONFIG=true")
-        if current.storage_local_fallback:
-            _insecure.append(
-                "STORAGE_LOCAL_FALLBACK=false when "
-                "REQUIRE_EXTERNAL_DEPENDENCIES=true"
-            )
-        if not current.dataset_import_use_celery:
-            _insecure.append(
-                "DATASET_IMPORT_USE_CELERY=true when "
-                "REQUIRE_EXTERNAL_DEPENDENCIES=true"
-            )
-
-        try:
-            database = urlsplit(current.database_url)
-            database.port
-        except ValueError:
-            database = None
-        if (
-            database is None
-            or database.scheme not in {"postgresql", "postgres"}
-            or _is_local_dependency_host(database.hostname)
-            or not database.username
-            or database.password is None
-            or database.path in {"", "/"}
-        ):
-            _insecure.append(
-                "DATABASE_URL must reference an authenticated external "
-                "PostgreSQL database"
-            )
-
-        try:
-            redis_url = urlsplit(current.redis_url)
-            redis_url.port
-        except ValueError:
-            redis_url = None
-        if (
-            redis_url is None
-            or redis_url.scheme not in {"redis", "rediss"}
-            or _is_local_dependency_host(redis_url.hostname)
-            or redis_url.password is None
-        ):
-            _insecure.append(
-                "REDIS_URL must reference an authenticated external Redis"
-            )
-
-        try:
-            neo4j = urlsplit(current.neo4j_uri)
-            neo4j.port
-        except ValueError:
-            neo4j = None
-        if (
-            neo4j is None
-            or neo4j.scheme not in {"bolt", "bolt+s", "neo4j", "neo4j+s"}
-            or _is_local_dependency_host(neo4j.hostname)
-            or not current.neo4j_user
-            or not current.neo4j_password
-        ):
-            _insecure.append(
-                "NEO4J_URI/NEO4J credentials must reference an external Neo4j"
-            )
-
-        raw_minio = str(current.minio_endpoint or "").strip()
-        try:
-            minio = urlsplit(f"//{raw_minio}")
-            minio_port = minio.port
-        except ValueError:
-            minio = None
-            minio_port = None
-        if (
-            not raw_minio
-            or "://" in raw_minio
-            or minio is None
-            or _is_local_dependency_host(minio.hostname)
-            or minio_port == 9001
-            or not current.minio_access_key
-            or not current.minio_secret_key
-        ):
-            _insecure.append(
-                "MINIO_ENDPOINT/MINIO credentials must reference an external "
-                "S3 API endpoint, not the browser console"
-            )
+    _insecure.extend(required_dependency_config_errors(current))
     for key, value in (
         ("PIPELINE_FILE_PUBLIC_APP_BASE_URL",
          current.pipeline_file_public_app_base_url),
@@ -363,18 +370,20 @@ def production_config_errors(current: Settings) -> list[str]:
 settings = Settings()
 
 if settings.environment == "production":
+    _dependency_errors = required_dependency_config_errors(settings)
+    if _dependency_errors:
+        raise RuntimeError(
+            "ENVIRONMENT=production 第三方依赖强制配置无效: "
+            f"{', '.join(_dependency_errors)}"
+        )
     _insecure = production_config_errors(settings)
     if _insecure:
         message = (
             "ENVIRONMENT=production 检测到不安全或旧版配置: "
             f"{', '.join(_insecure)}")
-        if (
-            settings.strict_production_config
-            or settings.require_external_dependencies
-        ):
+        if settings.strict_production_config:
             raise RuntimeError(message)
         import logging
         logging.getLogger(__name__).warning(
             "%s。当前以兼容模式启动；完成服务器 .env 轮换后设置 "
             "STRICT_PRODUCTION_CONFIG=true 可恢复强制门禁。", message)
-

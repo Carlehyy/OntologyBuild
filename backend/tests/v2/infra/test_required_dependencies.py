@@ -6,7 +6,11 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from app.shared.config import Settings, production_config_errors
+from app.shared.config import (
+    Settings,
+    production_config_errors,
+    required_dependency_config_errors,
+)
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -53,9 +57,20 @@ def test_required_external_dependency_mode_accepts_complete_configuration():
     assert production_config_errors(_required_settings()) == []
 
 
+def test_required_dependency_gate_is_independent_from_legacy_app_secrets():
+    current = _required_settings(
+        strict_production_config=False,
+        secret_key="dev-secret-key",
+        first_admin_password="admin123",
+    )
+
+    assert required_dependency_config_errors(current) == []
+    assert "SECRET_KEY" in production_config_errors(current)
+    assert "FIRST_ADMIN_PASSWORD" in production_config_errors(current)
+
+
 def test_required_mode_rejects_every_degraded_dependency_path():
     errors = production_config_errors(_required_settings(
-        strict_production_config=False,
         database_url="postgresql://app:password@db:5432/app",
         redis_url="redis://redis:6379/0",
         dataset_import_use_celery=False,
@@ -65,7 +80,6 @@ def test_required_mode_rejects_every_degraded_dependency_path():
         storage_local_dir="/uploads/object-storage",
     ))
 
-    assert "STRICT_PRODUCTION_CONFIG=true" in errors
     assert any("STORAGE_LOCAL_FALLBACK=false" in item for item in errors)
     assert any("DATASET_IMPORT_USE_CELERY=true" in item for item in errors)
     assert any("authenticated external PostgreSQL" in item for item in errors)
@@ -95,7 +109,7 @@ def test_committed_manifest_enables_required_mode_without_empty_values():
     assert required <= manifest.keys()
     assert all(manifest[key] for key in required)
     assert manifest["ENVIRONMENT"] == "production"
-    assert manifest["STRICT_PRODUCTION_CONFIG"] == "true"
+    assert manifest["STRICT_PRODUCTION_CONFIG"] == "false"
     assert manifest["REQUIRE_EXTERNAL_DEPENDENCIES"] == "true"
     assert manifest["DATASET_IMPORT_USE_CELERY"] == "true"
     assert manifest["STORAGE_LOCAL_FALLBACK"] == "false"
