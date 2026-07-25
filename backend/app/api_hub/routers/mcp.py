@@ -67,3 +67,4 @@ def system_info():
             {"name": "call_interface", "desc": "调用接口并返回响应"},
         ],
     }
+

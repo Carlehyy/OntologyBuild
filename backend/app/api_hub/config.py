@@ -26,6 +26,13 @@ def _csv_env(key: str, default: str = "") -> tuple[str, ...]:
     )
 
 
+def _bool_env(key: str, default: bool) -> bool:
+    value = _env(key)
+    if not value:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 _data_dir = _env("API_HUB_DATA_DIR")
 DATA_DIR = Path(_data_dir) if _data_dir else BACKEND_DIR / "data" / "api_hub"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,6 +62,24 @@ MAX_RUNS_PER_INTERFACE = int(
 )
 TLS_CA_BUNDLE = _env("API_HUB_TLS_CA_BUNDLE")
 OUTBOUND_MAX_REDIRECTS = max(0, int(_env("API_HUB_OUTBOUND_MAX_REDIRECTS", "5")))
+# Block accidental access to the platform's loopback/private control plane.  A
+# deliberate intranet integration can be permitted by its exact hostname/IP;
+# W3 targets have their own narrow allowlist below.
+OUTBOUND_BLOCK_PRIVATE_NETWORKS = _bool_env(
+    "API_HUB_OUTBOUND_BLOCK_PRIVATE_NETWORKS", True
+)
+OUTBOUND_TRUSTED_HOSTS = _csv_env("API_HUB_OUTBOUND_TRUSTED_HOSTS")
+W3_OUTBOUND_TRUSTED_HOSTS = _csv_env(
+    "API_HUB_W3_OUTBOUND_TRUSTED_HOSTS",
+    ",".join(("his.huawei.com", *W3_LOGIN_ALLOWED_HOSTS)),
+)
+
+# Lightweight, single-worker protection until the deployment moves to
+# PostgreSQL / multi-worker infrastructure.  Requests fail fast when the
+# process is saturated instead of letting threads and SQLite writes pile up.
+MAX_INFLIGHT_REQUESTS = max(1, int(_env("API_HUB_MAX_INFLIGHT_REQUESTS", "24")))
+REQUEST_QUEUE_TIMEOUT = max(0.0, float(_env("API_HUB_REQUEST_QUEUE_TIMEOUT", "0.25")))
+SQLITE_BUSY_TIMEOUT_MS = max(100, int(_env("API_HUB_SQLITE_BUSY_TIMEOUT_MS", "8000")))
 
 # Public HTTP proxy publishing. Management APIs stay under the platform JWT
 # boundary; only /proxy/<slug> is public and every call requires a proxy key.

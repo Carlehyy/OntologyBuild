@@ -53,3 +53,4 @@ def configure_session(
     if use_system_trust and _uses_windows_system_trust():
         session.mount("https://", _WindowsSystemTrustAdapter())
     return session
+

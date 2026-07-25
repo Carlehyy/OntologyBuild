@@ -555,13 +555,18 @@ async def call_published_interface(slug: str, request: Request):
             await form.close()
 
     if result.get("status_code") is None:
-        status = 504 if result.get("error_type") == "timeout" else 502
+        status = {
+            "timeout": 504,
+            "overloaded": 503,
+        }.get(result.get("error_type"), 502)
+        headers = {"Retry-After": "1"} if result.get("error_type") == "overloaded" else None
         return JSONResponse(
             status_code=status,
             content={
                 "detail": result.get("error") or "真实接口调用失败",
                 "run_id": result.get("run_id"),
             },
+            headers=headers,
         )
 
     return Response(

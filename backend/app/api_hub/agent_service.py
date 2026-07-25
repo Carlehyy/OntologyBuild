@@ -636,3 +636,4 @@ def call_interface_for_agent(
 def load_interface(iid: int) -> dict:
     """Trusted internal read used by the n8n compiler and proxy router."""
     return _load(iid)
+

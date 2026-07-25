@@ -113,8 +113,8 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
     <Modal
       open={open}
       onClose={onClose}
-      title={`转发调用 · ${current.name}`}
-      description="明确选择调用方可以传入的参数；未开放的固定值、认证信息和 W3 登录态继续由平台保管。"
+      title={`HTTP 发布 · ${current.name}`}
+      description="勾选调用方可传入的业务参数后，平台生成可直接复制的调用包；固定值、认证信息和 W3 登录态继续由平台保管。"
       size="3xl"
       headerIcon={<Share2 size={19} className="text-emerald-700" />}
       footer={callPackage ? (
@@ -124,9 +124,9 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
         </>
       ) : (
         <>
-          {current.http_enabled && <Button variant="ghost" onClick={() => void disable()} disabled={busy} className="mr-auto text-slate-500">停止转发</Button>}
+          {current.http_enabled && <Button variant="ghost" onClick={() => void disable()} disabled={busy} className="mr-auto text-slate-500">停止 HTTP 发布</Button>}
           <Button variant="outline" onClick={() => setConfiguration(suggestedPublicationDraft(current))} disabled={busy}><RefreshCw size={14} />恢复推荐选择</Button>
-          <Button variant="outline" onClick={() => void savePublication(false)} loading={busy}>保存转发配置</Button>
+          <Button variant="outline" onClick={() => void savePublication(false)} loading={busy}>保存 HTTP 配置</Button>
           <Button onClick={() => void savePublication(true)} loading={busy}><Share2 size={14} />{current.http_enabled ? '保存并生成调用包' : '发布并生成调用包'}</Button>
         </>
       )}
@@ -138,7 +138,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
               {current.http_enabled ? <CheckCircle2 size={18} /> : <SlidersHorizontal size={18} />}
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-900">{current.http_enabled ? '转发已经可以使用' : '请确认转发参数'}</div>
+              <div className="text-sm font-semibold text-slate-900">{current.http_enabled ? 'HTTP 接口已经可以使用' : '请确认 HTTP 参数'}</div>
               <p className="mt-1 text-xs leading-5 text-slate-600">已选择 {editableCount} 项调用方可修改的数据；未选择的参数会继续使用接口中保存的固定值。</p>
             </div>
           </div>
@@ -148,7 +148,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
         {!callPackage && (
           <>
             <section className="rounded-xl border border-[var(--color-border)] bg-white p-4">
-              <label className="text-xs font-semibold text-slate-800" htmlFor="api-hub-proxy-slug">转发公开路径</label>
+              <label className="text-xs font-semibold text-slate-800" htmlFor="api-hub-proxy-slug">HTTP 公开路径</label>
               <p className="mt-1 text-[11px] leading-5 text-slate-500">保存后调用地址保持稳定；只能使用小写字母、数字、短横线和下划线。</p>
               <div className="mt-3 flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50 focus-within:border-emerald-400 focus-within:ring-2 focus-within:ring-emerald-100">
                 <span className="flex min-w-0 items-center truncate border-r border-slate-200 px-3 font-mono text-[11px] text-slate-500">{window.location.origin}{proxyPath}/</span>

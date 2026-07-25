@@ -51,7 +51,7 @@ export function OpenInterfacesModal({ open, onClose, interfaces, reload, onError
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="开放接口" description="选择允许 Agent 通过统一 MCP 发现和调用的接口。" size="3xl" footer={<Button variant="outline" onClick={onClose}>完成</Button>}>
+    <Modal open={open} onClose={onClose} title="MCP 开放" description="选择允许 Agent 通过统一 MCP 发现和调用的接口；参数契约与接口详情保持一致。" size="3xl" footer={<Button variant="outline" onClick={onClose}>完成</Button>}>
       <div className="grid max-h-[68vh] min-h-[480px] grid-cols-[1.1fr_0.9fr] gap-5">
         <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)]">
           <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
@@ -59,20 +59,20 @@ export function OpenInterfacesModal({ open, onClose, interfaces, reload, onError
               <Search size={13} className="text-[var(--color-text-tertiary)]" />
               <input value={search} onChange={event => setSearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs outline-none" placeholder="搜索接口" />
             </label>
-            <span className="ml-3 text-[11px] text-[var(--color-text-tertiary)]">已开放 {interfaces.filter(item => item.open_enabled).length}/{interfaces.length}</span>
+            <span className="ml-3 text-[11px] text-[var(--color-text-tertiary)]">已开放 MCP {interfaces.filter(item => item.open_enabled).length}/{interfaces.length}</span>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             {!filtered.length ? <div className="py-20 text-center text-xs text-[var(--color-text-tertiary)]">暂无匹配接口</div> : filtered.map(item => (
               <div key={item.id} className="flex items-center gap-3 rounded-md px-3 py-2.5 hover:bg-[var(--color-bg-hover)]">
                 <span className="w-12 rounded bg-[var(--color-bg-base)] py-1 text-center font-mono text-[10px] font-bold">{item.method}</span>
                 <div className="min-w-0 flex-1"><div className="truncate text-xs font-medium">{item.name}</div><div className="truncate text-[10px] text-[var(--color-text-tertiary)]">{item.group_name || '默认分组'} · {item.url}</div></div>
-                <button disabled={busyId === item.id} aria-label={`${item.open_enabled ? '移出' : '加入'}开放清单：${item.name}`} aria-pressed={item.open_enabled} onClick={() => toggle(item)} className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-40 ${item.open_enabled ? 'bg-[var(--color-nav-bg)]' : 'bg-[var(--color-border-hover)]'}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${item.open_enabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} /></button>
+                <button disabled={busyId === item.id} aria-label={`${item.open_enabled ? '移出' : '加入'} MCP 清单：${item.name}`} aria-pressed={item.open_enabled} onClick={() => toggle(item)} className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-40 ${item.open_enabled ? 'bg-[var(--color-nav-bg)]' : 'bg-[var(--color-border-hover)]'}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${item.open_enabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} /></button>
               </div>
             ))}
           </div>
         </section>
         <section className="space-y-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4">
-          <div className="flex items-start gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-nav-light)] text-[var(--color-nav-bg)]"><Network size={17} /></div><div><h4 className="text-sm font-semibold">统一调用 MCP</h4><p className="mt-0.5 text-[11px] leading-5 text-[var(--color-text-tertiary)]">工具面固定为 list_open_interfaces 与 call_open_interface，接口增减即时生效。</p></div></div>
+          <div className="flex items-start gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-nav-light)] text-[var(--color-nav-bg)]"><Network size={17} /></div><div><h4 className="text-sm font-semibold">统一调用 MCP</h4><p className="mt-0.5 text-[11px] leading-5 text-[var(--color-text-tertiary)]">工具面固定为 list_open_interfaces 与 call_open_interface；Agent 只能传入接口已声明的业务参数，认证信息和 W3 登录态仍由平台保管。</p></div></div>
           <div><label className="mb-1.5 block text-[11px] text-[var(--color-text-tertiary)]">Streamable HTTP 地址</label><div className="flex gap-2"><input readOnly value={endpoint} className="h-9 min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-white px-3 font-mono text-[11px]" /><Button variant="outline" size="icon" onClick={() => void writeTextToClipboard(endpoint)}><Copy size={14} /></Button></div></div>
           <div><div className="mb-1.5 flex items-center justify-between"><label className="text-[11px] text-[var(--color-text-tertiary)]">Agent 配置 JSON</label><button onClick={() => void writeTextToClipboard(mcpConfig)} className="text-[11px] text-[var(--color-nav-bg)]">复制配置</button></div><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[#111827] p-3 font-mono text-[10px] leading-5 text-slate-100">{mcpConfig || '正在读取配置…'}</pre></div>
           {info && <div className={`rounded-md px-3 py-2 text-[11px] ${info.token_required ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>{info.token_required ? '访问 Token 已启用；原值仅保存在服务端。' : '未设置 API_HUB_MCP_TOKEN，MCP 端点当前已禁用。'}</div>}
@@ -186,7 +186,7 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
           <Button onClick={exportData}><Download size={14} />导出备份</Button>
         </section>
         <section className="space-y-4 rounded-lg border border-[var(--color-border)] p-4">
-          <div><h4 className="text-sm font-semibold">数据还原</h4><p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">以名称、方法和 URL 去重；导入后的 MCP、开放清单和 HTTP 发布状态统一保持关闭，需管理员重新确认。</p></div>
+          <div><h4 className="text-sm font-semibold">数据还原</h4><p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">以名称、方法和 URL 去重；导入后的 MCP 与 HTTP 发布状态统一保持关闭，需管理员重新确认。</p></div>
           <label className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border-hover)] bg-[var(--color-bg-base)] text-center hover:border-[var(--color-nav-bg)]"><Upload size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><span className="text-xs font-medium">选择 API-Hub 备份文件</span><span className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">支持 .json</span><input type="file" accept=".json,application/json" className="hidden" onChange={event => { void importData(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
         </section>
       </div>

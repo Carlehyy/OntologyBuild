@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +26,8 @@ _LOGIN_HOST = "login.huawei.com"
 _MAX_BODY_CHARS = 1_000_000
 _MAX_SNAPSHOT_BODY_CHARS = 100_000
 _UNSET = object()
+_REQUEST_GATE = threading.BoundedSemaphore(config.MAX_INFLIGHT_REQUESTS)
+_LOG = logging.getLogger(__name__)
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -417,71 +422,97 @@ def run_interface(
         _save_run(iface, result, overrides, None)
         return result
 
-    session = _session_for_request(use_w3, result)
-    if session is None:
+    if not _REQUEST_GATE.acquire(timeout=config.REQUEST_QUEUE_TIMEOUT):
+        result["elapsed_ms"] = 0
+        result["error"] = "接口调用繁忙，请稍后重试"
+        result["error_type"] = "overloaded"
         _save_run(iface, result, overrides, None)
         return result
 
     try:
-        kwargs, snapshot = _build_kwargs(iface, overrides, use_w3=use_w3, session=session)
-        request_url = snapshot["url"]
-    except ValueError as exc:
-        result["error"] = str(exc)
-        result["error_type"] = "configuration"
-        _save_run(iface, result, overrides, None)
-        return result
-    start = time.perf_counter()
-    try:
-        resp = request_with_safe_redirects(session, method, request_url, **kwargs)
-        if use_w3 and _looks_expired(resp):
-            status = credential.refresh()
-            if status.get("last_result") == "success":
-                session2 = credential.build_session_from_saved()
-                if session2 is not None:
-                    kwargs, snapshot = _build_kwargs(
-                        iface, overrides, use_w3=use_w3, session=session2
-                    )
-                    request_url = snapshot["url"]
-                    resp = request_with_safe_redirects(
-                        session2, method, request_url, **kwargs
-                    )
-                    result["relogin"] = True
+        # Take the gate before W3 preparation as well as before the upstream
+        # request.  ``credential.refresh`` is serialized already, but without
+        # this boundary a burst of expired W3 calls could still consume every
+        # worker thread while waiting for that refresh lock.
+        session = _session_for_request(use_w3, result)
+        if session is None:
+            _save_run(iface, result, overrides, None)
+            return result
+
+        try:
+            kwargs, snapshot = _build_kwargs(
+                iface, overrides, use_w3=use_w3, session=session
+            )
+            request_url = snapshot["url"]
+        except ValueError as exc:
+            result["error"] = str(exc)
+            result["error_type"] = "configuration"
+            _save_run(iface, result, overrides, None)
+            return result
+
+        # W3 has its narrow service/login exception, while explicitly configured
+        # deployment-wide intranet targets must continue to work for W3-backed
+        # interfaces too.  Neither setting weakens certificate verification.
+        trusted_hosts = config.OUTBOUND_TRUSTED_HOSTS + (
+            config.W3_OUTBOUND_TRUSTED_HOSTS if use_w3 else ()
+        )
+        start = time.perf_counter()
+        try:
+            resp = request_with_safe_redirects(
+                session, method, request_url, trusted_hosts=trusted_hosts, **kwargs
+            )
+            if use_w3 and _looks_expired(resp):
+                status = credential.refresh()
+                if status.get("last_result") == "success":
+                    session2 = credential.build_session_from_saved()
+                    if session2 is not None:
+                        kwargs, snapshot = _build_kwargs(
+                            iface, overrides, use_w3=use_w3, session=session2
+                        )
+                        request_url = snapshot["url"]
+                        resp = request_with_safe_redirects(
+                            session2, method, request_url,
+                            trusted_hosts=trusted_hosts, **kwargs
+                        )
+                        result["relogin"] = True
+                    else:
+                        result["error"] = "登录态疑似过期，自动重登后仍未能建立会话"
+                        result["error_type"] = "w3_login"
                 else:
-                    result["error"] = "登录态疑似过期，自动重登后仍未能建立会话"
+                    result["error"] = (
+                        "登录态疑似过期，自动重登失败："
+                        f"{status.get('message') or '未知原因'}"
+                    )
                     result["error_type"] = "w3_login"
-            else:
-                result["error"] = (
-                    "登录态疑似过期，自动重登失败："
-                    f"{status.get('message') or '未知原因'}"
-                )
-                result["error_type"] = "w3_login"
 
-        result["status_code"] = resp.status_code
-        result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["response_headers"] = dict(resp.headers)
-        result["content_type"] = resp.headers.get("Content-Type", "")
-        result["response_body"] = _safe_text(resp)
-        if include_response_content:
-            result["response_content"] = resp.content
-        if not 200 <= resp.status_code < 300:
-            result["error"] = result["error"] or f"上游返回 HTTP {resp.status_code}"
-            result["error_type"] = result["error_type"] or "upstream_http"
-        result["ok"] = result["error"] is None
-    except requests.Timeout as exc:
-        result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"请求超时：{exc}"
-        result["error_type"] = "timeout"
-    except OutboundTargetError as exc:
-        result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"接口 URL 无效：{exc}"
-        result["error_type"] = "configuration"
-    except requests.RequestException as exc:
-        result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        result["error"] = f"请求失败：{exc}"
-        result["error_type"] = "network"
+            result["status_code"] = resp.status_code
+            result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+            result["response_headers"] = dict(resp.headers)
+            result["content_type"] = resp.headers.get("Content-Type", "")
+            result["response_body"] = _safe_text(resp)
+            if include_response_content:
+                result["response_content"] = resp.content
+            if not 200 <= resp.status_code < 300:
+                result["error"] = result["error"] or f"上游返回 HTTP {resp.status_code}"
+                result["error_type"] = result["error_type"] or "upstream_http"
+            result["ok"] = result["error"] is None
+        except requests.Timeout as exc:
+            result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+            result["error"] = f"请求超时：{exc}"
+            result["error_type"] = "timeout"
+        except OutboundTargetError as exc:
+            result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+            result["error"] = f"接口 URL 无效：{exc}"
+            result["error_type"] = "configuration"
+        except requests.RequestException as exc:
+            result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
+            result["error"] = f"请求失败：{exc}"
+            result["error_type"] = "network"
 
-    _save_run(iface, result, overrides, snapshot)
-    return result
+        _save_run(iface, result, overrides, snapshot)
+        return result
+    finally:
+        _REQUEST_GATE.release()
 
 
 def _save_run(
@@ -519,41 +550,54 @@ def _save_run(
             "source_ip": overrides.source_ip,
         }
     now = datetime.now(timezone.utc).isoformat()
-    with db.get_conn() as conn:
-        cur = conn.execute(
-            "INSERT INTO runs(interface_id, ok, status_code, elapsed_ms, request_snapshot, "
-            "response_headers, response_body, error, relogin, source, proxy_key_id, "
-            "proxy_key_name, source_ip, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                interface_id,
-                1 if result["ok"] else 0,
-                result["status_code"],
-                result["elapsed_ms"],
-                json.dumps(snapshot, ensure_ascii=False),
-                json.dumps(
-                    result["response_headers"],
-                    ensure_ascii=False,
+    try:
+        with db.get_conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO runs(interface_id, ok, status_code, elapsed_ms, request_snapshot, "
+                "response_headers, response_body, error, relogin, source, proxy_key_id, "
+                "proxy_key_name, source_ip, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    interface_id,
+                    1 if result["ok"] else 0,
+                    result["status_code"],
+                    result["elapsed_ms"],
+                    json.dumps(snapshot, ensure_ascii=False),
+                    json.dumps(
+                        result["response_headers"],
+                        ensure_ascii=False,
+                    ),
+                    _snapshot_response_body(result["response_body"]),
+                    result["error"],
+                    1 if result["relogin"] else 0,
+                    overrides.source,
+                    overrides.proxy_key_id,
+                    overrides.proxy_key_name,
+                    overrides.source_ip,
+                    now,
                 ),
-                _snapshot_response_body(result["response_body"]),
-                result["error"],
-                1 if result["relogin"] else 0,
-                overrides.source,
-                overrides.proxy_key_id,
-                overrides.proxy_key_name,
-                overrides.source_ip,
-                now,
-            ),
-        )
-        result["run_id"] = cur.lastrowid
-        if overrides.proxy_key_id:
-            conn.execute(
-                "UPDATE proxy_keys SET last_used_at = ?, updated_at = ? WHERE id = ?",
-                (now, now, overrides.proxy_key_id),
             )
-        conn.execute(
-            "DELETE FROM runs WHERE interface_id = ? AND id NOT IN "
-            "(SELECT id FROM runs WHERE interface_id = ? ORDER BY id DESC LIMIT ?)",
-            (interface_id, interface_id, config.MAX_RUNS_PER_INTERFACE),
-        )
+            result["run_id"] = cur.lastrowid
+            if overrides.proxy_key_id:
+                conn.execute(
+                    "UPDATE proxy_keys SET last_used_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, overrides.proxy_key_id),
+                )
+            conn.execute(
+                "DELETE FROM runs WHERE interface_id = ? AND id NOT IN "
+                "(SELECT id FROM runs WHERE interface_id = ? ORDER BY id DESC LIMIT ?)",
+                (interface_id, interface_id, config.MAX_RUNS_PER_INTERFACE),
+            )
+    except sqlite3.OperationalError:
+        # SQLite is a temporary single-worker bridge.  After the configured
+        # busy timeout, an audit lock must not turn an already completed
+        # upstream request into a user-visible 5xx.  Preserve the request
+        # result and leave a warning for operations until PostgreSQL is used.
+        result.pop("run_id", None)
+        _LOG.warning("API-Hub audit write skipped because SQLite stayed busy")
+        return
+
     if iface.get("use_w3"):
-        db.record_credential_usage(iface, result, now)
+        try:
+            db.record_credential_usage(iface, result, now)
+        except sqlite3.OperationalError:
+            _LOG.warning("API-Hub W3 usage audit skipped because SQLite stayed busy")

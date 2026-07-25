@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from starlette.datastructures import FormData, UploadFile
 
-from .. import config, db, executor, publication
+from .. import config, db, executor, mcp_contract, publication
 
 router = APIRouter(prefix="/interfaces", tags=["api-hub-interfaces"])
 
@@ -263,13 +263,18 @@ def _matches_file_accept(filename: str, content_type: str, accept: str) -> bool:
 
 def _raw_run_response(result: dict) -> Response:
     if result.get("status_code") is None:
-        status = 504 if result.get("error_type") == "timeout" else 502
+        status = {
+            "timeout": 504,
+            "overloaded": 503,
+        }.get(result.get("error_type"), 502)
+        headers = {"Retry-After": "1"} if result.get("error_type") == "overloaded" else None
         return JSONResponse(
             status_code=status,
             content={
                 "detail": result.get("error") or "真实接口调用失败",
                 "run_id": result.get("run_id"),
             },
+            headers=headers,
         )
     headers = {
         key: value
@@ -369,7 +374,10 @@ def _row_to_dict(row) -> dict:
         "body_content": row["body_content"],
         "file_fields": _load_json_list(row["file_fields"]),
         "use_w3": bool(row["use_w3"]),
-        "mcp_enabled": bool(row["mcp_enabled"]),
+        # ``mcp_enabled`` is retained only for backup compatibility.  The one
+        # authoritative MCP state is ``open_enabled`` so the UI has exactly
+        # two publication concepts: MCP and HTTP.
+        "mcp_enabled": bool(row["open_enabled"]),
         "open_enabled": bool(row["open_enabled"]),
         "http_enabled": bool(row["http_enabled"]),
         "proxy_slug": row["proxy_slug"],
@@ -422,7 +430,7 @@ def create_interface(body: InterfaceIn):
                 _dump_kv(body.query_params), _dump_kv(body.headers),
                 body.body_type, body.body_content,
                 json.dumps([item.model_dump() for item in body.file_fields], ensure_ascii=False),
-                1 if body.use_w3 else 0, 1 if body.mcp_enabled else 0,
+                1 if body.use_w3 else 0, 1 if body.open_enabled else 0,
                 1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
                 json.dumps(query_keys, ensure_ascii=False),
                 json.dumps(header_keys, ensure_ascii=False),
@@ -541,6 +549,26 @@ def get_interface(iid: int):
     return _row_to_dict(row)
 
 
+@router.get("/{iid}/mcp-contract")
+def get_mcp_contract(iid: int):
+    """Expose the exact, secret-free MCP contract for the management UI.
+
+    This preview is available before an interface is enabled for MCP so an
+    administrator can verify the mapping first.  The public MCP endpoint still
+    checks ``open_enabled`` again at call time.
+    """
+    with db.get_conn() as conn:
+        row = _get_or_404(conn, iid)
+    interface = _row_to_dict(row)
+    return {
+        "interface_id": interface["id"],
+        "interface_name": interface["name"],
+        "open_enabled": interface["open_enabled"],
+        "parameters": mcp_contract.public_parameters(interface),
+        "call_example": mcp_contract.call_example(interface),
+    }
+
+
 @router.put("/{iid}")
 def update_interface(iid: int, body: InterfaceIn):
     _check_group_name(body.group_name)
@@ -559,7 +587,7 @@ def update_interface(iid: int, body: InterfaceIn):
                 _dump_kv(body.query_params), _dump_kv(body.headers),
                 body.body_type, body.body_content,
                 json.dumps([item.model_dump() for item in body.file_fields], ensure_ascii=False),
-                1 if body.use_w3 else 0, 1 if body.mcp_enabled else 0,
+                1 if body.use_w3 else 0, 1 if body.open_enabled else 0,
                 1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
                 json.dumps(query_keys, ensure_ascii=False),
                 json.dumps(header_keys, ensure_ascii=False),
@@ -666,13 +694,13 @@ def delete_group(body: DeleteGroupBody):
 
 @router.post("/{iid}/open")
 def set_open(iid: int, body: OpenBody):
-    """只翻转 open_enabled（加入/移出开放接口清单），不动其它字段。供「开放接口」卡片即时切换。"""
+    """只翻转 MCP 开放状态，不动其它接口字段。"""
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
         _get_or_404(conn, iid)
         conn.execute(
-            "UPDATE interfaces SET open_enabled = ?, updated_at = ? WHERE id = ?",
-            (1 if body.open else 0, now, iid),
+            "UPDATE interfaces SET open_enabled = ?, mcp_enabled = ?, updated_at = ? WHERE id = ?",
+            (1 if body.open else 0, 1 if body.open else 0, now, iid),
         )
         row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
     return _row_to_dict(row)

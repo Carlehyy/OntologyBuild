@@ -164,9 +164,9 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
 
   await page.goto('/#/api-hub/interfaces')
   await expect(page.getByText('创建订单').first()).toBeVisible()
-  await page.getByRole('button', { name: '转发调用', exact: true }).click()
+  await page.getByRole('button', { name: 'HTTP 发布', exact: true }).click()
 
-  const dialog = page.getByRole('dialog', { name: /转发调用/ })
+  const dialog = page.getByRole('dialog', { name: /HTTP 发布/ })
   await dialog.getByRole('button', { name: '保存并生成调用包' }).click()
   const executableExample = dialog.locator('pre')
   await expect(executableExample).toContainText('/proxy/orders?page=1')
@@ -178,7 +178,7 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('hub_one_time_secret')
 
   await dialog.getByRole('button', { name: '完成' }).click()
-  await page.getByRole('button', { name: '复制“创建订单”的转发调用示例' }).click()
+  await page.getByRole('button', { name: '复制“创建订单”的 HTTP 调用示例' }).click()
   const copied = await page.evaluate(() => navigator.clipboard.readText())
   expect(copied).toContain('/proxy/orders?page=1')
   expect(copied).toContain('X-API-Hub-Key: <调用密钥>')
@@ -189,8 +189,8 @@ test('已转发接口可一键复制完整且不泄露平台敏感配置的调�
   expect(copied).not.toContain('password')
   expect(copied).not.toContain('private')
 
-  await page.getByRole('button', { name: '发送原始报文：查看已生成的转发' }).click()
-  const rawDialog = page.getByRole('dialog', { name: /转发调用 · 发送原始报文/ })
+  await page.getByRole('button', { name: '发送原始报文：查看 HTTP 发布配置' }).click()
+  const rawDialog = page.getByRole('dialog', { name: /HTTP 发布 · 发送原始报文/ })
   await rawDialog.getByRole('button', { name: '保存并生成调用包' }).click()
   const rawExample = rawDialog.locator('pre')
   await expect(rawExample).toContainText("--data-binary 'YOUR_REQUEST_BODY'")

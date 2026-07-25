@@ -1,14 +1,14 @@
 """
-把「已开放」的接口，通过一个**统一的 MCP 服务**对外暴露，供其它电脑上的 Agent 调用。
+把「MCP 已开放」的接口，通过一个**统一的 MCP 服务**对外暴露，供其它电脑上的 Agent 调用。
 
 设计（参考 Skill 的渐进式披露）：
 不再为每个接口生成一个独立工具，而是只暴露**两个稳定工具**，无论开放多少个接口，
 Agent 看到的工具数量都不变：
 
-  1) list_open_interfaces  —— 发现层。返回当前所有已开放接口的清单（id、名称、用途
+  1) list_open_interfaces  —— 发现层。返回当前所有 MCP 已开放接口的清单（id、名称、用途
      说明、方法、URL、可用参数）。Agent 先调它，了解“有哪些接口、怎么调、要什么参数”。
-  2) call_open_interface   —— 执行层。按 id 调用某个已开放接口并返回响应；可用 query /
-     body 覆盖默认参数。
+  2) call_open_interface   —— 执行层。按 id 调用某个已开放接口并返回响应；只接受清单中
+     明确声明的业务参数，并将其合并到平台保存的默认请求。
 
 这样做的好处：
 - 工具面恒定且极小（2 个），上下文友好；接口增减只改变 list 的返回内容，不改变工具签名。
@@ -26,7 +26,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import config, db, executor
+from . import config, db, executor, mcp_contract
 
 server = Server(config.MCP_SERVER_NAME)
 
@@ -42,7 +42,7 @@ def tool_name(name: str, iid: int) -> str:
 def _published() -> list[dict]:
     with db.get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM interfaces WHERE mcp_enabled = 1 ORDER BY group_name, sort_order, id"
+            "SELECT * FROM interfaces WHERE open_enabled = 1 ORDER BY group_name, sort_order, id"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -54,7 +54,7 @@ def published_tools() -> list[dict]:
 
 
 def _open_ifaces() -> list[dict]:
-    """已加入「开放接口清单」的接口（供统一 MCP 服务 list_open_interfaces / call_open_interface 使用）。"""
+    """已加入「MCP 开放」清单的接口（供统一 MCP 服务调用）。"""
     with db.get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM interfaces WHERE open_enabled = 1 ORDER BY group_name, sort_order, id"
@@ -67,20 +67,22 @@ def _row_to_iface(row: dict) -> dict:
         "id": row["id"], "name": row["name"], "method": row["method"], "url": row["url"],
         "query_params": json.loads(row["query_params"]), "headers": json.loads(row["headers"]),
         "body_type": row["body_type"], "body_content": row["body_content"],
+        "file_fields": json.loads(row.get("file_fields") or "[]"),
+        "parameter_schema": json.loads(row.get("parameter_schema") or "[]"),
         "use_w3": bool(row["use_w3"]),
     }
 
 
 def _catalog_entry(row: dict) -> dict:
-    """单个已开放接口在「清单」里对 Agent 暴露的视图。"""
-    qp = json.loads(row["query_params"])
-    parsed_url = urlsplit(row["url"])
+    """单个 MCP 已开放接口在清单里对 Agent 暴露的视图。"""
+    iface = _row_to_iface(row)
+    parsed_url = urlsplit(iface["url"])
     return {
-        "id": row["id"],
-        "name": row["name"],
+        "id": iface["id"],
+        "name": iface["name"],
         "description": (row.get("description") or "").strip(),
         "group": row["group_name"],
-        "method": row["method"],
+        "method": iface["method"],
         # 清单只用于发现，不披露 URL 查询值（其中可能包含访问令牌）。
         "url": urlunsplit(
             (
@@ -91,24 +93,23 @@ def _catalog_entry(row: dict) -> dict:
                 "",
             )
         ),
-        # 只暴露“接口当前已配置了哪些 query 键”，作为可覆盖参数的提示
-        "query_params": [p["key"] for p in qp if p.get("key")],
-        "body_type": row["body_type"],
-        "needs_w3": bool(row["use_w3"]),
+        "parameters": mcp_contract.public_parameters(iface),
+        "body_type": iface["body_type"],
+        "needs_w3": iface["use_w3"],
     }
 
 
 # ── 两个统一工具 ───────────────────────────────────────────
 _LIST_DESC = (
-    "列出当前已加入开放接口清单的全部接口及其调用方式（id、名称、用途说明、HTTP 方法、URL、"
-    "可覆盖的 query 参数、Body 类型）。在调用任何具体接口之前，应先调用本工具，"
+    "列出当前已加入 MCP 开放清单的全部接口及其调用方式（id、名称、用途说明、HTTP 方法、URL、"
+    "可传入的 Path/Query/Header/Body 参数、Body 类型）。在调用任何具体接口之前，应先调用本工具，"
     "据此选择目标接口的 id 并了解它需要的参数。支持可选的 keyword 关键字过滤。"
 )
 
 _CALL_DESC = (
     "调用一个已开放的接口，并返回其 HTTP 响应（状态码、耗时、响应体）。"
-    "interface_id 取自 list_open_interfaces 返回的 id。可用 query 追加/覆盖查询参数、"
-    "用 body 覆盖请求体；不传则按接口已保存的配置发送。调用会自动带上平台维护的登录态。"
+    "interface_id 取自 list_open_interfaces 返回的 id。只可传入该接口清单中声明的 path、query、"
+    "headers 与 body 业务参数；未传入字段继续使用平台保存的固定值。调用会自动带上平台维护的登录态。"
 )
 
 
@@ -140,12 +141,22 @@ async def list_tools() -> list[types.Tool]:
                     },
                     "query": {
                         "type": "object",
-                        "description": "可选。追加或覆盖查询参数（键值对，值为字符串）。",
+                        "description": "可选。仅可传入清单 parameters 中 location=query 的键值对。",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "path": {
+                        "type": "object",
+                        "description": "可选。URL 模板中的 Path 参数；必填项会在清单中标记。",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "可选。仅可传入清单 parameters 中允许的业务请求头；认证头由平台管理。",
                         "additionalProperties": {"type": "string"},
                     },
                     "body": {
-                        "type": "string",
-                        "description": "可选。覆盖请求体内容（按接口已配置的 Body 类型发送）。",
+                        "description": "可选。JSON 接口传对象；Form/Multipart 传键值对象；Raw 接口传字符串。仅已声明字段会覆盖平台默认值。",
+                        "oneOf": [{"type": "object"}, {"type": "string"}],
                     },
                 },
                 "required": ["interface_id"],
@@ -170,23 +181,9 @@ def _handle_list(keyword) -> list[types.TextContent]:
         "usage": "用 call_open_interface 并传 interface_id 调用其中某个接口。",
     }
     if not items:
-        payload["usage"] = "当前没有已开放的接口。请在平台「开放接口」里勾选要开放的接口。"
+        payload["usage"] = "当前没有 MCP 已开放接口。请在平台「MCP 开放」里勾选要开放的接口。"
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     return [types.TextContent(type="text", text=text)]
-
-
-def _apply_overrides(iface: dict, args: dict) -> dict:
-    q = args.get("query")
-    if isinstance(q, dict) and q:
-        merged = {p["key"]: dict(p) for p in iface["query_params"] if p.get("key")}
-        for k, v in q.items():
-            merged[k] = {"key": k, "value": str(v)}
-        iface["query_params"] = list(merged.values())
-
-    b = args.get("body")
-    if isinstance(b, str) and b != "":
-        iface["body_content"] = b
-    return iface
 
 
 def _truncate_for_mcp(text: str) -> str:
@@ -213,12 +210,19 @@ async def _handle_call(args: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text",
                 text=f"接口 {iid} 不存在或未开放。请重新调用 list_open_interfaces 获取最新的开放清单。")]
 
-    iface = _apply_overrides(_row_to_iface(dict(row)), args)
+    iface = _row_to_iface(dict(row))
+    try:
+        overrides = mcp_contract.request_overrides(iface, args)
+    except mcp_contract.McpContractError as exc:
+        return [types.TextContent(
+            type="text",
+            text=f"调用参数不符合接口契约：{exc}。请重新调用 list_open_interfaces 查看可传入字段。",
+        )]
 
     # executor 是同步阻塞的，放到线程里跑，避免卡住事件循环
     result = await anyio.to_thread.run_sync(
         lambda: executor.run_interface(
-            iface, executor.RequestOverrides(source="mcp_open")
+            iface, overrides
         )
     )
 

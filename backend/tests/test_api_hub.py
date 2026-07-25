@@ -1,4 +1,7 @@
 import json
+import socket
+import sqlite3
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -7,8 +10,19 @@ import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api_hub import config, credential as credential_service, db
-from app.api_hub.outbound_security import OutboundTargetError, validate_outbound_url
+from app.api_hub import (
+    config,
+    credential as credential_service,
+    db,
+    executor,
+    mcp_contract,
+    outbound_security,
+)
+from app.api_hub.outbound_security import (
+    OutboundTargetError,
+    request_with_safe_redirects,
+    validate_outbound_url,
+)
 from app.api_hub.routers import backup, credential, http_proxy, interfaces, mcp, proxy
 
 
@@ -18,6 +32,9 @@ def hub_client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
     monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
     monkeypatch.setattr(config, "INTERNAL_PROXY_TOKEN", "internal-proxy-test-token")
+    # Most unit tests use .example placeholders and replace the actual request
+    # method.  Dedicated outbound-security tests enable the guard explicitly.
+    monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", False)
     monkeypatch.setattr(
         config,
         "W3_LOGIN_ALLOWED_HOSTS",
@@ -634,11 +651,219 @@ def test_preview_run_uses_draft_without_saving_and_keeps_full_history(
     assert "upstream-secret" in detail["response_body"]
 
 
-def test_outbound_urls_need_no_allowlist_and_mcp_tokens_fail_closed(
+def test_mcp_contract_merges_only_declared_runtime_fields():
+    interface = {
+        "id": 99,
+        "name": "订单详情",
+        "method": "POST",
+        "url": "https://service.example/orders/{order_id}",
+        "query_params": [{"key": "page", "value": "1"}],
+        "headers": [
+            {"key": "X-Tenant", "value": "default"},
+            {"key": "Authorization", "value": "Bearer platform-secret"},
+        ],
+        "body_type": "json",
+        "body_content": '{"include":false,"token":"platform-secret"}',
+        "file_fields": [],
+        "parameter_schema": [],
+        "use_w3": True,
+    }
+
+    public = mcp_contract.public_parameters(interface)
+    assert {item["name"] for item in public} >= {"order_id", "page", "X-Tenant", "/include"}
+    assert all("token" not in item["name"].lower() for item in public)
+
+    overrides = mcp_contract.request_overrides(
+        interface,
+        {
+            "path": {"order_id": "A-1024"},
+            "query": {"page": 2},
+            "headers": {"X-Tenant": "tenant-a"},
+            "body": {"include": True},
+        },
+    )
+    assert overrides.path_params == [("order_id", "A-1024")]
+    assert overrides.query_params == [("page", "2")]
+    assert overrides.headers == [("X-Tenant", "tenant-a")]
+    assert json.loads(overrides.body) == {
+        "include": True,
+        "token": "platform-secret",
+    }
+
+    with pytest.raises(mcp_contract.McpContractError, match="未在 MCP 契约中开放"):
+        mcp_contract.request_overrides(
+            interface,
+            {"path": {"order_id": "A-1024"}, "query": {"debug": "1"}},
+        )
+
+    explicit = {
+        **interface,
+        "parameter_schema": [
+            {"name": "page", "location": "query", "dynamic": True},
+            {"name": "Authorization", "location": "header", "dynamic": True},
+            {"name": "api_token", "location": "query", "dynamic": True},
+        ],
+    }
+    assert mcp_contract.public_parameters(explicit) == [
+        {
+            "name": "page",
+            "location": "query",
+            "value_type": "string",
+            "required": False,
+            "description": "",
+        }
+    ]
+
+
+def test_mcp_contract_preview_matches_runtime_mapping_without_secrets(hub_client):
+    item = hub_client.post(
+        "/interfaces",
+        json=_interface(
+            name="订单详情",
+            method="POST",
+            url="https://service.example/orders/{order_id}",
+            query_params=[{"key": "page", "value": "1"}],
+            headers=[
+                {"key": "X-Tenant", "value": "default"},
+                {"key": "Authorization", "value": "Bearer platform-secret"},
+            ],
+            body_type="json",
+            body_content='{"include":false,"token":"platform-secret"}',
+        ),
+    ).json()
+
+    response = hub_client.get(f"/interfaces/{item['id']}/mcp-contract")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["open_enabled"] is True
+    names = {parameter["name"] for parameter in payload["parameters"]}
+    assert {"order_id", "page", "X-Tenant", "/include"} <= names
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "platform-secret" not in serialized
+    assert payload["call_example"] == {
+        "interface_id": item["id"],
+        "path": {"order_id": "<order_id>"},
+        "query": {"page": "<page>"},
+        "headers": {"X-Tenant": "<X-Tenant>"},
+        "body": {"include": "<include>"},
+    }
+
+
+def test_single_worker_request_gate_fails_fast_when_saturated(monkeypatch):
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(executor, "_REQUEST_GATE", gate)
+    monkeypatch.setattr(config, "REQUEST_QUEUE_TIMEOUT", 0)
+
+    result = executor.run_interface(
+        {
+            "id": None,
+            "name": "过载保护",
+            "method": "GET",
+            "url": "https://service.example/health",
+            "query_params": [],
+            "headers": [],
+            "body_type": "none",
+            "body_content": "",
+            "use_w3": False,
+        }
+    )
+    assert result["error_type"] == "overloaded"
+    assert result["error"] == "接口调用繁忙，请稍后重试"
+
+
+def test_sqlite_audit_contention_does_not_fail_completed_upstream_call(monkeypatch):
+    def fake_request(_session, _method, url, **_kwargs):
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response.headers["Content-Type"] = "application/json"
+        response._content = b'{"ok":true}'
+        return response
+
+    def busy_connection():
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(executor.db, "get_conn", busy_connection)
+    monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", False)
+    result = executor.run_interface(
+        {
+            "id": 123,
+            "name": "审计争用",
+            "method": "GET",
+            "url": "https://service.example/health",
+            "query_params": [],
+            "headers": [],
+            "body_type": "none",
+            "body_content": "",
+            "use_w3": False,
+        }
+    )
+    assert result["ok"] is True
+    assert result["status_code"] == 200
+    assert "run_id" not in result
+
+
+def test_w3_calls_keep_global_and_w3_trusted_host_exceptions(monkeypatch):
+    observed = {}
+
+    def fake_request(_session, _method, url, **kwargs):
+        observed["trusted_hosts"] = kwargs["trusted_hosts"]
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response.headers["Content-Type"] = "application/json"
+        response._content = b'{}'
+        return response
+
+    monkeypatch.setattr(config, "OUTBOUND_TRUSTED_HOSTS", ("intranet.example",))
+    monkeypatch.setattr(config, "W3_OUTBOUND_TRUSTED_HOSTS", ("his.huawei.com",))
+    monkeypatch.setattr(executor, "request_with_safe_redirects", fake_request)
+    monkeypatch.setattr(
+        credential_service, "build_session_from_saved", lambda: requests.Session()
+    )
+    monkeypatch.setattr(credential_service, "saved_is_expired", lambda: False)
+    result = executor.run_interface(
+        {
+            "id": None,
+            "name": "W3 内网服务",
+            "method": "GET",
+            "url": "https://his.huawei.com/msa/service",
+            "query_params": [],
+            "headers": [],
+            "body_type": "none",
+            "body_content": "",
+            "use_w3": True,
+        }
+    )
+    assert result["ok"] is True
+    assert observed["trusted_hosts"] == ("intranet.example", "his.huawei.com")
+
+
+def test_outbound_urls_block_private_targets_but_keep_w3_trusted_hosts(
     hub_client, monkeypatch
 ):
-    assert validate_outbound_url("http://127.0.0.1:8000/private").startswith("http://")
+    monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", True)
+    monkeypatch.setattr(config, "OUTBOUND_TRUSTED_HOSTS", ())
+    monkeypatch.setattr(config, "W3_OUTBOUND_TRUSTED_HOSTS", ("his.huawei.com",))
+
+    def resolve(host, _port, **_kwargs):
+        address = "10.8.0.12" if host in {"private.example", "his.huawei.com"} else "8.8.8.8"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+    monkeypatch.setattr(outbound_security.socket, "getaddrinfo", resolve)
     assert validate_outbound_url("https://public.example/data").startswith("https://")
+    with pytest.raises(OutboundTargetError, match="受保护的内网地址"):
+        validate_outbound_url("https://private.example/data")
+    assert validate_outbound_url(
+        "https://his.huawei.com/msa/service",
+        trusted_hosts=config.W3_OUTBOUND_TRUSTED_HOSTS,
+    ).startswith("https://")
+    assert validate_outbound_url(
+        "http://127.0.0.1:8000/private",
+        trusted_hosts=("127.0.0.1",),
+    ).startswith("http://")
     with pytest.raises(OutboundTargetError):
         validate_outbound_url("file:///etc/passwd")
     with pytest.raises(OutboundTargetError):
@@ -660,3 +885,61 @@ def test_outbound_urls_need_no_allowlist_and_mcp_tokens_fail_closed(
 
     assert "token" not in hub_client.get("/mcp/info").json()
     assert "token" not in hub_client.get("/mcp/system/info").json()
+
+
+def test_outbound_redirect_target_is_revalidated(monkeypatch):
+    monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", True)
+    monkeypatch.setattr(config, "OUTBOUND_TRUSTED_HOSTS", ())
+
+    def resolve(host, _port, **_kwargs):
+        address = "10.8.0.12" if host == "private.example" else "8.8.8.8"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+    class RedirectSession:
+        def request(self, *_args, **_kwargs):
+            response = requests.Response()
+            response.status_code = 302
+            response.headers["Location"] = "https://private.example/internal"
+            return response
+
+    monkeypatch.setattr(outbound_security.socket, "getaddrinfo", resolve)
+    with pytest.raises(OutboundTargetError, match="受保护的内网地址"):
+        request_with_safe_redirects(
+            RedirectSession(), "GET", "https://public.example/start"
+        )
+
+
+def test_cross_origin_redirect_drops_configured_credentials(monkeypatch):
+    monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", True)
+
+    def resolve(_host, _port, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+
+    class RedirectSession:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            response = requests.Response()
+            response.status_code = 302 if len(self.calls) == 1 else 200
+            if response.status_code == 302:
+                response.headers["Location"] = "https://other.example/next"
+            return response
+
+    monkeypatch.setattr(outbound_security.socket, "getaddrinfo", resolve)
+    session = RedirectSession()
+    request_with_safe_redirects(
+        session,
+        "GET",
+        "https://public.example/start",
+        headers={
+            "Authorization": "Bearer platform-token",
+            "X-Api-Key": "platform-key",
+            "X-Tenant": "tenant-a",
+        },
+        cookies={"caller": "cookie-value"},
+    )
+    second_kwargs = session.calls[1][1]
+    assert second_kwargs["headers"] == {"X-Tenant": "tenant-a"}
+    assert "cookies" not in second_kwargs

@@ -97,14 +97,24 @@ ON credential_usage(created_at DESC);
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.DB_PATH, timeout=10)
+    conn = sqlite3.connect(
+        config.DB_PATH,
+        timeout=config.SQLITE_BUSY_TIMEOUT_MS / 1000,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {config.SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
 def init_db() -> None:
     with get_conn() as conn:
+        # WAL lets UI/history reads proceed while a short audit write is in
+        # flight.  It remains a single-file SQLite deployment and is therefore
+        # deliberately only a bridge until PostgreSQL is configured.
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         conn.executescript(_SCHEMA)
         _migrate(conn)
 

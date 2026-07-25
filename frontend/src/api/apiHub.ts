@@ -166,6 +166,22 @@ export interface McpInfo {
   tools?: { name: string; desc: string }[]
 }
 
+export interface McpContractParameter {
+  name: string
+  location: 'path' | 'query' | 'header' | 'body'
+  value_type: InterfaceParameter['value_type']
+  required: boolean
+  description: string
+}
+
+export interface McpContract {
+  interface_id: number
+  interface_name: string
+  open_enabled: boolean
+  parameters: McpContractParameter[]
+  call_example: Record<string, unknown>
+}
+
 export interface ProxyInfo {
   path: string
   key_header: string
@@ -232,6 +248,7 @@ export const apiHub = {
   deleteInterface: (id: number) => data<{ ok: boolean }>(http.delete(`/interfaces/${id}`)),
   deleteGroup: (group_name: string) => data<{ ok: boolean; count: number }>(http.post('/interfaces/groups/delete', { group_name })),
   setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
+  mcpContract: (id: number) => data<McpContract>(http.get(`/interfaces/${id}/mcp-contract`)),
   setHttpPublication: (
     id: number,
     body: { enabled: boolean; slug: string; query_keys: string[]; header_keys: string[]; body_enabled: boolean; body_keys?: string[] },
@@ -370,11 +387,55 @@ function contentDispositionFilename(value: string): string {
     || ''
 }
 
+/** Keep FastAPI validation payloads safe to render in every API-Hub surface. */
+function errorText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) return value.map(errorText).filter(Boolean).join('；')
+  if (!value || typeof value !== 'object') return ''
+
+  const item = value as { detail?: unknown; message?: unknown; msg?: unknown; loc?: unknown }
+  const message = errorText(item.msg ?? item.message ?? item.detail)
+  if (!message) return ''
+  const location = errorLocation(item.loc)
+  return location ? `${location}：${message}` : message
+}
+
+function errorLocation(value: unknown): string {
+  if (!Array.isArray(value)) return ''
+  const parts = value
+    .filter((item): item is string | number => typeof item === 'string' || typeof item === 'number')
+    .map(String)
+    .filter(item => item !== 'body' && item !== 'query' && item !== 'path')
+  if (!parts.length) return ''
+  const labels: Record<string, string> = {
+    url: '请求 URL',
+    name: '接口名称',
+    method: '请求方法',
+    description: '用途说明',
+    group_name: '接口分组',
+  }
+  return labels[parts[0]] || parts.join('.')
+}
+
+export function validateHttpUrl(value: string): string {
+  const url = value.trim()
+  if (!url) return '请填写请求 URL'
+  try {
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+      return '请求 URL 必须是无账号信息的 http:// 或 https:// 完整地址，例如 https://www.baidu.com'
+    }
+  } catch {
+    return '请求 URL 必须是无账号信息的 http:// 或 https:// 完整地址，例如 https://www.baidu.com'
+  }
+  return ''
+}
+
 export function apiError(error: unknown): string {
   if (typeof error === 'string') return error
   if (error && typeof error === 'object') {
-    const value = error as { detail?: string; message?: string }
-    return value.detail || value.message || '请求失败'
+    const value = error as { detail?: unknown; message?: unknown; msg?: unknown }
+    return errorText(value.detail) || errorText(value.message) || errorText(value.msg) || '请求失败'
   }
   return '请求失败'
 }

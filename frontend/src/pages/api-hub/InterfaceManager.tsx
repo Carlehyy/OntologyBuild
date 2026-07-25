@@ -4,7 +4,7 @@ import {
   Plus, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2,
   LoaderCircle,
 } from 'lucide-react'
-import { apiError, apiHub, emptyHubInterface, type HubInterface, type KV, type RunResult } from '@/api/apiHub'
+import { apiError, apiHub, emptyHubInterface, validateHttpUrl, type HubInterface, type KV, type McpContract, type RunResult } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { writeTextToClipboard } from '@/utils/clipboard'
@@ -55,6 +55,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
   const [openInterfaces, setOpenInterfaces] = useState(false)
+  const [mcpContractOpen, setMcpContractOpen] = useState(false)
+  const [mcpContract, setMcpContract] = useState<McpContract | null>(null)
+  const [mcpContractLoading, setMcpContractLoading] = useState(false)
+  const [mcpContractCopyState, setMcpContractCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [publicationTarget, setPublicationTarget] = useState<HubInterface | null>(null)
   const [publicationCopying, setPublicationCopying] = useState(false)
   const [publicationCopied, setPublicationCopied] = useState(false)
@@ -111,6 +115,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   }, [draft.group_name, extraGroups, interfaces])
   const isDirty = draftFingerprint(draft) !== draftFingerprint(baseline)
+  const urlError = draft.url.trim() ? validateHttpUrl(draft.url) : ''
   const resultStale = Boolean(
     result && resultFingerprint !== requestFingerprint(draft, selectedFiles)
   )
@@ -188,7 +193,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
   const save = async (): Promise<HubInterface | null> => {
     if (!draft.name.trim()) { onError('请填写接口名称'); return null }
-    if (!draft.url.trim()) { onError('请填写请求 URL'); return null }
+    const validationError = validateHttpUrl(draft.url)
+    if (validationError) { onError(validationError); return null }
     setSaving(true)
     try {
       const payload = { ...draft, method: draft.method.toUpperCase() }
@@ -235,7 +241,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
   const run = async () => {
     if (!draft.name.trim()) { onError('请填写接口名称'); return }
-    if (!draft.url.trim()) { onError('请填写请求 URL'); return }
+    const validationError = validateHttpUrl(draft.url)
+    if (validationError) { onError(validationError); return }
     setRunning(true)
     try {
       const payload = { ...draft, method: draft.method.toUpperCase() }
@@ -264,17 +271,14 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   }
 
   const showCallExample = async () => {
-    try {
-      buildCallExample(draft, '')
-      setCallExampleDraft(structuredClone(draft))
-      setCallExampleCookie('')
-      setIncludeLogin(false)
-      setCookieMessage('')
-      setCallExampleCopyState('idle')
-    } catch {
-      onError('请先填写有效的绝对 URL，再查看调用示例')
-      return
-    }
+    const validationError = validateHttpUrl(draft.url)
+    if (validationError) { onError(validationError); return }
+    buildCallExample(draft, '')
+    setCallExampleDraft(structuredClone(draft))
+    setCallExampleCookie('')
+    setIncludeLogin(false)
+    setCookieMessage('')
+    setCallExampleCopyState('idle')
 
     if (!draft.use_w3) return
     setCookieLoading(true)
@@ -367,7 +371,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         apiHub.proxyInfo(),
       ])
       if (!saved.http_enabled) {
-        onError('该接口尚未启用转发调用')
+        onError('该接口尚未发布 HTTP 接口')
         return
       }
       const example = buildProxyCallExample({
@@ -385,11 +389,37 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     }
   }
 
+  const showMcpContract = async () => {
+    if (!draft.id) return
+    setMcpContractOpen(true)
+    setMcpContract(null)
+    setMcpContractCopyState('idle')
+    setMcpContractLoading(true)
+    try {
+      setMcpContract(await apiHub.mcpContract(draft.id))
+    } catch (error) {
+      onError(apiError(error))
+      setMcpContractOpen(false)
+    } finally {
+      setMcpContractLoading(false)
+    }
+  }
+
+  const copyMcpContractExample = async () => {
+    if (!mcpContract) return
+    try {
+      await writeTextToClipboard(JSON.stringify(mcpContract.call_example, null, 2))
+      setMcpContractCopyState('copied')
+    } catch {
+      setMcpContractCopyState('failed')
+    }
+  }
+
   return (
     <div ref={containerRef} className="scrollbar-none grid h-full min-h-0 overflow-x-auto overflow-y-hidden p-1" style={{ gridTemplateColumns: `minmax(250px, ${sizes[0]}fr) 4px minmax(680px, ${sizes[1]}fr)` }}>
       <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
         <div className="flex min-h-16 shrink-0 items-center border-b border-[var(--color-border)] px-3">
-          <div className="flex w-full items-center justify-between"><div><h2 className="text-sm font-semibold">接口清单</h2><p className="text-[10px] text-[var(--color-text-tertiary)]">{interfaces.length} 个已纳管接口</p></div><Button size="sm" onClick={create}><CirclePlus size={13} />新建</Button></div>
+          <div className="flex w-full items-center justify-between"><div><h2 className="text-sm font-semibold">接口清单</h2><p className="text-[10px] text-[var(--color-text-tertiary)]">{interfaces.length} 个已纳管接口</p></div><Button size="sm" onClick={create}><CirclePlus size={13} />新建接口</Button></div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {!interfaces.length ? <EmptyList onCreate={create} /> : grouped.map(([group, items]) => (
@@ -434,17 +464,18 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                     <button type="button" onClick={() => select(item)} className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
                       <span className={`w-12 shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-bold ${methodTone[item.method] || methodTone.HEAD}`}>{item.method}</span>
                       <span className={`min-w-0 flex-1 truncate text-xs ${selectedId === item.id ? 'font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-primary)]'}`}>{item.name}</span>
-                      {item.open_enabled && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" title="已加入开放清单" />}
+                      {item.open_enabled && <PublicationBadge label="MCP" title="已向 AI / MCP 开放" />}
+                      {item.http_enabled && <PublicationBadge label="HTTP" title="已发布 HTTP 接口" tone="http" />}
                       <ChevronRight size={12} className="shrink-0 text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100" />
                     </button>
                     <button
                       type="button"
                       onClick={() => setPublicationTarget(item)}
-                      aria-label={`${item.name}：${item.http_enabled ? '查看已生成的转发' : '生成转发'}`}
-                      title={item.http_enabled ? '查看转发与调用方式' : '由平台自动生成转发'}
+                      aria-label={`${item.name}：${item.http_enabled ? '查看 HTTP 发布配置' : '发布 HTTP 接口'}`}
+                      title={item.http_enabled ? '查看 HTTP 调用方式' : '发布为带鉴权的 HTTP 接口'}
                       className={`flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${item.http_enabled ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'border border-dashed border-slate-300 bg-white/70 text-slate-500 hover:border-emerald-300 hover:text-emerald-700'}`}
                     >
-                      <Share2 size={11} />{item.http_enabled ? '已转发' : '生成转发'}
+                      <Share2 size={11} />{item.http_enabled ? 'HTTP 设置' : 'HTTP 发布'}
                     </button>
                   </div>
                 ))}
@@ -453,8 +484,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           ))}
         </div>
         <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem]">
-          <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />开放接口</Button>
-          <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />调用方</Button>
+          <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />MCP 开放</Button>
+          <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />HTTP 调用方</Button>
           <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
         </div>
       </aside>
@@ -474,39 +505,41 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             {isDirty && <span className="shrink-0 rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint(''); setSelectedFiles([]) }}><Copy size={14} /></Button>}
+            {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, open_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint(''); setSelectedFiles([]) }}><Copy size={14} /></Button>}
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
-            {draft.id && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />转发调用</Button>}
-            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的转发调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? '转发调用示例复制成功' : ''}</span></Button>}
-            <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => void showCallExample()}><FileCode2 size={14} />调用示例</Button>
+            {draft.id && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
+            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
+            <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>
           </div>
         </div>
 
         <div className="shrink-0 p-4 pb-3">
-          <div className="flex overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] focus-within:border-[var(--color-nav-bg)]">
+          <div className={`flex overflow-hidden rounded-md border bg-[var(--color-bg-base)] focus-within:border-[var(--color-nav-bg)] ${urlError ? 'border-red-300' : 'border-[var(--color-border)]'}`}>
             <select value={draft.method} onChange={event => patchDraft('method', event.target.value)} className="w-28 border-r border-[var(--color-border)] bg-transparent px-3 text-xs font-bold outline-none">
               {methods.map(method => <option key={method}>{method}</option>)}
             </select>
-            <input value={draft.url} onChange={event => patchDraft('url', event.target.value)} className="h-10 min-w-0 flex-1 bg-transparent px-3 font-mono text-xs outline-none" placeholder="https://example.com/api/resource" />
+            <input value={draft.url} aria-invalid={Boolean(urlError)} aria-describedby={urlError ? 'api-hub-url-error' : undefined} onChange={event => patchDraft('url', event.target.value)} className="h-10 min-w-0 flex-1 bg-transparent px-3 font-mono text-xs outline-none" placeholder="https://example.com/api/resource" />
             <button onClick={run} disabled={running} className={`relative m-1 flex min-w-[84px] items-center justify-center gap-1.5 overflow-hidden rounded bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-emerald-700 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-90 ${running ? 'ring-4 ring-emerald-100' : ''}`}>
               {running ? <><LoaderCircle size={14} className="animate-spin" />调用中…</> : <><Play size={13} />调用</>}
               {running && <span className="absolute inset-0 animate-pulse bg-white/10" />}
             </button>
           </div>
+          {urlError && <p id="api-hub-url-error" role="alert" className="mt-2 text-[11px] text-red-600">{urlError}</p>}
         </div>
 
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4">
           <div className="flex gap-5">
             {(['params', 'headers', 'body', 'description'] as const).map(key => (
               <button key={key} onClick={() => setEditorTab(key)} className={`relative py-2.5 text-xs font-medium ${editorTab === key ? 'text-[var(--color-nav-bg)]' : 'text-[var(--color-text-secondary)]'}`}>
-                {{ params: '查询参数', headers: '请求头', body: '请求体', description: '用途说明' }[key]}
+                {{ params: '查询参数', headers: '请求头', body: '请求体', description: 'MCP 用途说明' }[key]}
                 {editorTab === key && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-nav-bg)]" />}
               </button>
             ))}
           </div>
           <div className="flex items-center gap-4">
             <Toggle label="注入 W3 登录态" value={draft.use_w3} onChange={value => patchDraft('use_w3', value)} />
-            <Toggle label="开放清单" value={draft.open_enabled} onChange={value => patchDraft('open_enabled', value)} />
+            <Toggle label="MCP 开放" value={draft.open_enabled} onChange={value => patchDraft('open_enabled', value)} />
+            {draft.id && <button type="button" onClick={() => void showMcpContract()} className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)]" title="查看并复制 MCP 的实际参数契约"><Braces size={13} />MCP 调用示例</button>}
           </div>
         </div>
 
@@ -514,7 +547,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {editorTab === 'params' && <KVEditor value={draft.query_params} onChange={value => patchDraft('query_params', value)} keyPlaceholder="参数名" valuePlaceholder="参数值" />}
           {editorTab === 'headers' && <KVEditor value={draft.headers} onChange={value => patchDraft('headers', value)} keyPlaceholder="Header" valuePlaceholder="值" />}
           {editorTab === 'body' && <BodyEditor draft={draft} patchDraft={patchDraft} selectedFiles={selectedFiles} setSelectedFiles={setSelectedFiles} />}
-          {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="描述接口用途、参数要求与返回结果，供 Agent 渐进式发现时理解此接口。" />}
+          {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；MCP 中的 Agent 将据此理解何时调用此接口。" />}
         </div>
 
         <ResponsePanel result={result} stale={resultStale} loading={running} useW3={draft.use_w3} />
@@ -533,7 +566,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       <Modal
         open={Boolean(callExampleDraft)}
         onClose={() => setCallExampleDraft(null)}
-        title="导出 cURL"
+        title="上游调试 cURL"
         size="2xl"
         panelClassName="max-w-[600px] border-slate-200 bg-white shadow-[0_24px_56px_-16px_rgba(13,148,136,0.22),0_12px_28px_-12px_rgba(15,23,42,0.2)]"
         backdropClassName="bg-[#111e1c]/45 backdrop-blur-md"
@@ -555,7 +588,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       >
         <div className="space-y-3.5">
           <div className="rounded-r-lg border-l-[3px] border-teal-600 bg-teal-50/80 px-3.5 py-2.5 text-xs leading-5 text-slate-600">
-            复制到终端直接运行，CMD / PowerShell / bash 通用。
+            此命令直连真实上游地址，仅用于管理员调试；对外系统请使用“HTTP 发布”生成的调用包。CMD / PowerShell / bash 通用。
           </div>
           <pre aria-label="cURL 命令" className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-[10px] border border-slate-200 bg-slate-50 px-4 py-3.5 font-mono text-[12.5px] leading-[1.7] text-slate-700">{callExample}</pre>
           {callExampleDraft?.use_w3 && (
@@ -573,6 +606,33 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           </span>
         </div>
       </Modal>
+      <Modal
+        open={mcpContractOpen}
+        onClose={() => setMcpContractOpen(false)}
+        title="MCP 调用示例"
+        description="这里展示的是服务端实际执行的参数契约，可直接复制到 MCP 客户端的 call_open_interface 调用参数中。"
+        size="2xl"
+        footer={<><Button variant="outline" onClick={() => setMcpContractOpen(false)}>关闭</Button><Button disabled={!mcpContract} onClick={() => void copyMcpContractExample()}>{mcpContractCopyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}{mcpContractCopyState === 'copied' ? '已复制' : mcpContractCopyState === 'failed' ? '重试复制' : '复制 MCP 调用参数'}</Button></>}
+      >
+        {mcpContractLoading ? (
+          <div className="flex min-h-52 items-center justify-center gap-2 text-xs text-[var(--color-text-tertiary)]"><LoaderCircle size={16} className="animate-spin text-emerald-600" />正在读取实际参数契约…</div>
+        ) : mcpContract ? (
+          <div className="space-y-4">
+            <div className={`rounded-lg border px-3.5 py-3 text-xs leading-5 ${mcpContract.open_enabled ? 'border-emerald-100 bg-emerald-50/70 text-emerald-800' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
+              {mcpContract.open_enabled ? '此接口已向 MCP 开放。' : '此接口尚未向 MCP 开放；可先核对下方映射，再打开「MCP 开放」。'} 固定默认值、认证 Header 和 W3 登录态均由平台保管，不会出现在此示例中。
+            </div>
+            <section className="overflow-hidden rounded-lg border border-[var(--color-border)]">
+              <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-base)] px-3.5 py-2.5 text-xs font-semibold">可由 Agent 传入的参数</div>
+              {!mcpContract.parameters.length ? <div className="px-3.5 py-5 text-center text-xs text-[var(--color-text-tertiary)]">该接口没有可动态覆盖的参数；MCP 调用会使用平台保存的固定请求。</div> : <div className="max-h-44 overflow-auto"><table className="w-full text-left text-[11px]"><thead className="sticky top-0 bg-white text-[var(--color-text-tertiary)]"><tr><th className="px-3.5 py-2 font-medium">位置</th><th className="px-3.5 py-2 font-medium">字段</th><th className="px-3.5 py-2 font-medium">说明</th></tr></thead><tbody>{mcpContract.parameters.map(parameter => <tr key={`${parameter.location}-${parameter.name}`} className="border-t border-[var(--color-border)]"><td className="px-3.5 py-2 font-medium text-[var(--color-nav-bg)]">{mcpLocationLabel(parameter.location)}{parameter.required ? ' · 必填' : ''}</td><td className="px-3.5 py-2 font-mono text-slate-700">{parameter.name}</td><td className="px-3.5 py-2 text-[var(--color-text-tertiary)]">{parameter.description || parameter.value_type}</td></tr>)}</tbody></table></div>}
+            </section>
+            <section>
+              <div className="mb-1.5 flex items-center justify-between"><span className="text-xs font-semibold">call_open_interface 参数</span><span className="text-[10px] text-[var(--color-text-tertiary)]">仅占位符，按业务值替换</span></div>
+              <pre aria-label="MCP 调用参数" className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3.5 font-mono text-[11px] leading-5 text-slate-100">{JSON.stringify(mcpContract.call_example, null, 2)}</pre>
+            </section>
+            <span className="sr-only" role="status" aria-live="polite">{mcpContractCopyState === 'copied' ? 'MCP 调用参数已复制' : mcpContractCopyState === 'failed' ? '复制失败，请重试' : ''}</span>
+          </div>
+        ) : <div className="min-h-52 px-4 py-12 text-center text-xs text-[var(--color-text-tertiary)]">暂无可展示的 MCP 参数契约。</div>}
+      </Modal>
       <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reloadOpenState} onError={onError} />
       <HttpPublicationModal open={Boolean(publicationTarget)} onClose={() => setPublicationTarget(null)} item={publicationTarget} reload={reloadPublication} onError={onError} />
       <ProxyKeysModal open={proxyKeys} onClose={() => setProxyKeys(false)} interfaces={interfaces} onError={onError} />
@@ -583,6 +643,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
 function EmptyList({ onCreate }: { onCreate: () => void }) {
   return <div className="flex flex-col items-center px-5 py-14 text-center"><Braces size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><p className="text-xs text-[var(--color-text-secondary)]">还没有接口</p><button onClick={onCreate} className="mt-2 text-xs font-medium text-[var(--color-nav-bg)]">新建一个接口</button></div>
+}
+
+function mcpLocationLabel(location: 'path' | 'query' | 'header' | 'body') {
+  return { path: 'Path', query: 'Query', header: 'Header', body: 'Body' }[location]
 }
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
@@ -599,6 +663,10 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
       <span>{label}</span>
     </button>
   )
+}
+
+function PublicationBadge({ label, title, tone = 'mcp' }: { label: 'MCP' | 'HTTP'; title: string; tone?: 'mcp' | 'http' }) {
+  return <span title={title} className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide ${tone === 'http' ? 'bg-sky-50 text-sky-700' : 'bg-emerald-50 text-emerald-700'}`}>{label}</span>
 }
 
 function KVEditor({ value, onChange, keyPlaceholder, valuePlaceholder }: { value: KV[]; onChange: (value: KV[]) => void; keyPlaceholder: string; valuePlaceholder: string }) {
@@ -884,7 +952,7 @@ function buildCallExample(draft: HubInterface, cookie: string) {
     body = draft.body_content
   }
 
-  const pieces = [`curl -X ${method} ${shellQuote(url.toString())}`, '  -k']
+  const pieces = [`curl -X ${method} ${shellQuote(url.toString())}`]
   headers.forEach(item => pieces.push(`  -H ${shellQuote(`${item.key}: ${item.value}`)}`))
   if (cookie) pieces.push(`  -b ${shellQuote(cookie)}`)
   if (draft.body_type === 'multipart') {
