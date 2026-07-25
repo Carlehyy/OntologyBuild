@@ -41,7 +41,26 @@ def _dispatch_dataset_import_task(
     try:
         task.delay(job_id)
         execution_mode = "celery"
-    except Exception:  # noqa: BLE001 - broker outages must not break local imports
+    except Exception as exc:  # noqa: BLE001 - policy decides fallback behavior
+        if settings.require_external_dependencies:
+            update_status(
+                job_id,
+                status="failed",
+                execution_mode="celery",
+                progress=5,
+                phase="后台任务投递失败",
+                error="Redis/Celery 后台任务服务不可用",
+            )
+            logger.error(
+                "Celery 无法投递数据集%s任务 %s；生产强制依赖模式禁止降级",
+                operation,
+                job_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                503,
+                "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行",
+            ) from exc
         logger.warning(
             "Celery 无法投递数据集%s任务 %s，已降级为 API 进程内后台任务",
             operation,

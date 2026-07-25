@@ -726,3 +726,37 @@ def test_async_import_falls_back_to_local_when_enabled_broker_is_down(
     assert inspected.json()["data"]["status"] == "ready"
     assert "已降级为 API 进程内后台任务" in caplog.text
 
+
+def test_async_import_required_mode_fails_closed_when_broker_is_down(
+    api, auth_headers, monkeypatch, tmp_path, caplog,
+):
+    """Required production dependencies must never fall back into the API."""
+    from app.config import settings
+    from app.tasks.v2 import dataset_import as import_tasks
+
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "dataset_import_use_celery", True)
+    monkeypatch.setattr(settings, "require_external_dependencies", True)
+
+    def broker_down(*_args, **_kwargs):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(import_tasks.inspect_dataset_import, "delay", broker_down)
+    caplog.set_level("ERROR", logger="app.data_channel.datasets.router")
+
+    started = api.post(
+        "/api/v2/datasets/imports",
+        files={"file": (
+            "broker-required.csv",
+            io.BytesIO("id,name\nA1,泵机\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+
+    assert started.status_code == 503, started.text
+    assert started.json()["detail"] == (
+        "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行")
+    assert "生产强制依赖模式禁止降级" in caplog.text
+    assert "已降级为 API 进程内后台任务" not in caplog.text
+
