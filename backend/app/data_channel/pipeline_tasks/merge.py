@@ -13,6 +13,8 @@ import json
 from datetime import datetime
 from typing import Any
 
+from app.data_channel.datasets.service import snapshot_cell_text
+
 
 VALID_WRITE_MODES = frozenset({"overwrite", "append", "append_dedup", "upsert"})
 
@@ -48,10 +50,28 @@ def load_latest_rows(db, dataset_id: str) -> list[dict]:
 
 
 def _row_signature(row: dict) -> str:
+    """Compare rows by the canonical representation that is persisted.
+
+    Curated Parquet snapshots intentionally preserve the legacy CSV round-trip
+    contract: scalar values are strings, ``None`` is an empty string, and
+    nested values are JSON text.  Merge inputs, however, still carry native
+    n8n values.  Comparing their Python/JSON runtime types would therefore
+    report a replayed ``True``/``86000`` as different from the already stored
+    ``"True"``/``"86000"`` even though the next snapshot is byte-equivalent.
+    ``content`` is deliberately absent from persisted tabular snapshots.
+    """
+    canonical = {
+        str(key): snapshot_cell_text(value)
+        for key, value in row.items()
+        if str(key) != "content"
+    }
     try:
-        return json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+        return json.dumps(
+            canonical, sort_keys=True, ensure_ascii=False,
+            separators=(",", ":"),
+        )
     except Exception:
-        return str(sorted(row.items()))
+        return str(sorted(canonical.items()))
 
 
 def _dedup_by_key(rows: list[dict], key_cols: list[str]) -> list[dict]:

@@ -57,6 +57,8 @@ export interface SentinelFiring {
   status: string
   matchCount: number
   matches: Record<string, string>[]
+  entered: string[]
+  left: string[]
   actionResults: any[]
   error?: string
   durationMs?: number
@@ -99,6 +101,28 @@ export interface SentinelCdcStatus {
   }>
 }
 
+export interface SentinelRunResult {
+  evaluated: number
+  fired: number
+  errors: number
+  no_change: number
+  no_match: number
+  pending: number
+  muted: number
+  runtimeErrors: Array<Record<string, unknown>>
+  firings: Array<{
+    id?: string | null
+    sentinelId: string
+    sentinelName: string
+    status: string
+    matchCount: number
+    entered: string[]
+    left: string[]
+    actionResults: any[]
+    error?: string | null
+  }>
+}
+
 const base = (ontologyId: string) => `/ontologies/${ontologyId}/sentinels`
 const releaseQuery = (releaseId?: string | null) => releaseId
   ? `?release_id=${encodeURIComponent(releaseId)}`
@@ -129,7 +153,7 @@ export const sentinelApi = {
     body,
   ),
   run: (ontologyId: string) =>
-    apiClient.post<any>(`${base(ontologyId)}/run`),
+    apiClient.post<SentinelRunResult>(`${base(ontologyId)}/run`),
   firings: (ontologyId: string, releaseId?: string | null) =>
     apiClient.get<SentinelFiring[]>(`${base(ontologyId)}/firings${releaseQuery(releaseId)}`),
   notifications: (ontologyId: string) =>

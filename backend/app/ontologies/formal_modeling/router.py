@@ -47,6 +47,7 @@ from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
 from app.config import settings
+from app.shared.time_utils import utc_iso
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 logger = logging.getLogger(__name__)
@@ -1327,7 +1328,7 @@ def _fact_to_dict(f: PropertyFact) -> dict:
         "ontologyVersion": f.ontology_version,
         "ontologyReleaseId": f.ontology_release_id,
         "seq": f.seq,
-        "recordedAt": f.recorded_at.isoformat() if f.recorded_at else None,
+        "recordedAt": utc_iso(f.recorded_at),
     }
 
 

@@ -1,7 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
-async function mockMappingPreview(page: Page) {
+async function mockMappingPreview(page: Page, options: { failFirstApply?: boolean } = {}) {
   const columns = Array.from({ length: 8 }, (_, index) => `field_${index + 1}`)
+  let applyAttempts = 0
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
     localStorage.setItem('auth-store', JSON.stringify({
@@ -58,6 +59,30 @@ async function mockMappingPreview(page: Page) {
         columns.map((column, columnIndex) => [column, `R${rowIndex + 1}-C${columnIndex + 1}`]),
       )),
     })
+    if (
+      url.pathname === '/api/v2/ontologies/ontology-preview/mappings/mapping-1/apply-from-dataset'
+      && route.request().method() === 'POST'
+    ) {
+      applyAttempts += 1
+      await new Promise(resolve => setTimeout(resolve, 180))
+      if (options.failFirstApply && applyAttempts === 1) {
+        return route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: {
+              code: 'dataset_version_not_approved',
+              message: '当前成品版本尚未批准，不能进入正式本体',
+            },
+          }),
+        })
+      }
+      return ok({
+        total_entities: 2,
+        total_relations: 1,
+        sentinel_dispatch: { evaluated: 2, fired: 1 },
+      })
+    }
     if (url.pathname === '/api/v2/curated/dataset-wide/preview') {
       const offset = Number(url.searchParams.get('offset') || 0)
       const limit = Number(url.searchParams.get('limit') || 20)
@@ -74,6 +99,7 @@ async function mockMappingPreview(page: Page) {
     if (url.pathname.startsWith('/api/v2/formal/ontologies/ontology-preview/')) return ok([])
     return ok([])
   })
+  return { applyAttempts: () => applyAttempts }
 }
 
 test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async ({ page }) => {
@@ -153,4 +179,23 @@ test('数据映射按钮进入映射工作台，左上角按钮返回上一页',
   await expect(page.getByTestId('mapping-workspace')).toBeVisible()
   await page.getByRole('button', { name: '模型结构', exact: true }).click()
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph$/)
+})
+
+test('当前发布态可安全重放已批准数据，并明确反馈加载、失败与完整对账结果', async ({ page }) => {
+  const calls = await mockMappingPreview(page, { failFirstApply: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const reconcile = page.getByRole('button', { name: '立即对账' })
+  await expect(reconcile).toBeVisible()
+  await expect(page.getByText('只读取当前 Mapping 绑定的最新已批准版本')).toBeVisible()
+
+  await reconcile.click()
+  await expect(page.getByRole('button', { name: '正在对账…' })).toBeDisabled()
+  await expect(page.getByRole('alert')).toContainText('当前成品版本尚未批准，不能进入正式本体')
+
+  await page.getByRole('button', { name: '立即对账' }).click()
+  await expect(page.getByRole('status')).toContainText(
+    '对账完成：对象 2 条、关系 1 条；哨兵评估 2 次、触发 1 次。',
+  )
+  expect(calls.applyAttempts()).toBe(2)
 })

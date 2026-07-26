@@ -102,6 +102,8 @@ async function mockAssetLake(page: Page, fixtures?: {
       const limit = Number(url.searchParams.get('limit') || 50)
       return ok({
         pk: ['order_id'],
+        row_pk_encoding: 'plain-string',
+        current_row_pks: [`SO-${offset + 1}`],
         current: {
           version_no: 6,
           dataset_version_id: 'version-6',
@@ -145,6 +147,8 @@ async function mockAssetLake(page: Page, fixtures?: {
     if (url.pathname === '/api/v2/curated/ds-pending-nopk/review-diff') {
       return ok({
         pk: [],
+        row_pk_encoding: 'json-array',
+        current_row_pks: [],
         current: {
           version_no: 2, dataset_version_id: 'version-no-pk-2', total: 2,
           rows: [{ body: '{"status":"new"}', webhookUrl: 'https://example.test/hook' }],
@@ -214,6 +218,14 @@ async function mockAssetLake(page: Page, fixtures?: {
           { name: 'webhookUrl', display_name: 'webhookUrl', display_name_configured: false, type: 'string', nullable: true, is_primary_key: false, sample_values: [] },
         ],
       })
+    }
+    if (
+      url.pathname.startsWith('/api/v2/curated/reviews/')
+      && url.pathname.endsWith('/edits')
+      && route.request().method() === 'POST'
+    ) {
+      const body = route.request().postDataJSON() as { edits?: unknown[] }
+      return ok({ saved: body.edits?.length ?? 0 })
     }
     if (url.pathname === '/api/v2/curated') {
       return ok(url.searchParams.get('paginated') === 'true'
@@ -379,7 +391,7 @@ test('人工与成品数据表少列铺满可视区，宽表保留容器内横�
   await expect.poll(() => grid.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(200)
 })
 
-test('成品数据集列表与详情按待办语义展示审核状态', async ({ page }) => {
+test('被拒绝的成品版本以审计语义展示且没有普通生产导出', async ({ page }) => {
   await mockAssetLake(page, {
     curated: [{
       id: 'ds-reviewed',
@@ -406,7 +418,8 @@ test('成品数据集列表与详情按待办语义展示审核状态', async ({
 
   await expect(page.getByRole('cell', { name: '客户订单成品表' })).toBeVisible()
   await expect(page.getByText('ds-revie')).toHaveCount(0)
-  await expect(page.getByRole('cell', { name: '已审核' })).toBeVisible()
+  await expect(page.getByRole('option', { name: '已处理' })).toHaveCount(1)
+  await expect(page.getByRole('cell', { name: '已拒绝' })).toBeVisible()
   await expect(page.getByText(/2026.*07.*18.*14:35/)).toBeVisible()
   await expect(page.getByRole('button', { name: '查看' })).toBeVisible()
   const deleteButton = page.getByRole('button', { name: '删除' })
@@ -422,20 +435,16 @@ test('成品数据集列表与详情按待办语义展示审核状态', async ({
   await expect(dialog).toBeVisible()
   await expect.poll(async () => (await dialog.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(520)
   await expect.poll(async () => (await dialog.boundingBox())?.width ?? 0).toBeGreaterThan(1000)
-  await expect(dialog.getByText('当前没有新数据需要审核')).toBeVisible()
-  await expect(dialog.getByText('已审核全量数据')).toBeVisible()
+  await expect(dialog.getByText('当前版本已拒绝', { exact: true })).toBeVisible()
+  await expect(dialog.getByText(/仅展示被拒绝的审核快照.*不会进入本体或正式数据消费/)).toBeVisible()
+  await expect(dialog.getByText('已拒绝版本快照')).toBeVisible()
   await expect(dialog.getByText('订单编号（order_id）')).toBeVisible()
   await expect(dialog.getByText('订单金额（amount）')).toBeVisible()
   await expect(dialog.getByText('主键 · 非空')).toBeVisible()
   await expect(dialog.getByText('只读模式，不会修改数据')).toBeVisible()
-  await expect(dialog.getByLabel('已审核数据每页显示条数')).toHaveValue('50')
-  await expect(dialog.getByRole('button', { name: '导出 Excel' })).toBeVisible()
+  await expect(dialog.getByLabel('已拒绝快照每页显示条数')).toHaveValue('50')
+  await expect(dialog.getByRole('button', { name: /导出 CSV|导出 Excel/ })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: /通过审核|拒绝本次数据|撤回/ })).toHaveCount(0)
-
-  const downloadPromise = page.waitForEvent('download')
-  await dialog.getByRole('button', { name: '导出 CSV' }).click()
-  const download = await downloadPromise
-  expect(download.suggestedFilename()).toBe('客户订单成品表.csv')
   await dialog.getByRole('button', { name: '关闭审核详情' }).click()
 
   await page.getByRole('button', { name: /客户订单清洗流水线/ }).click()
@@ -443,7 +452,7 @@ test('成品数据集列表与详情按待办语义展示审核状态', async ({
   await expect(page.getByPlaceholder('搜索名称 / ID...')).toHaveValue('pipeline-reviewed')
 })
 
-test('待审核详情提供三视角、分页、变更列标识和无主键说明', async ({ page }) => {
+test('待审核详情按真实主键保存行级修正，并保留三视角与无主键边界', async ({ page }) => {
   await mockAssetLake(page, {
     curated: [
       {
@@ -475,8 +484,8 @@ test('待审核详情提供三视角、分页、变更列标识和无主键说�
   await expect(dialog.getByRole('button', { name: /上一版本全量/ })).toBeVisible()
   await expect(dialog.getByRole('button', { name: /本次接受后全量/ })).toBeVisible()
   await expect(dialog.getByText('发现新数据，请完成审核')).toBeVisible()
-  await expect(dialog.getByText('审核快照只读')).toBeVisible()
-  await expect(dialog.getByRole('button', { name: '保存编辑' })).toHaveCount(0)
+  await expect(dialog.getByText('变化对比只读；本次全量可修正非主键字段')).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /保存.*处修改/ })).toHaveCount(0)
 
   const actionBar = dialog.getByTestId('curated-review-actions')
   const rejectButton = dialog.getByRole('button', { name: '拒绝本次数据' })
@@ -509,18 +518,46 @@ test('待审核详情提供三视角、分页、变更列标识和无主键说�
 
   await dialog.getByRole('button', { name: /本次接受后全量/ }).click()
   await expect(dialog.getByText(/如果接受本次变化/)).toBeVisible()
-  await expect(dialog.getByText('只读预览')).toBeVisible()
-  await dialog.getByRole('cell', { name: '1280' }).dblclick()
-  await expect(dialog.locator('tbody input')).toHaveCount(0)
+  await expect(dialog.getByText(/如果接受本次变化.*可修正非主键字段/)).toBeVisible()
+  await expect(dialog.getByTestId('curated-edit-grid')).toBeVisible()
+  await expect(dialog.getByLabel('编辑 订单金额（amount），行主键 SO-1')).toHaveValue('1280')
+  await expect(dialog.getByLabel('编辑 客户区域（customer），行主键 SO-1')).toHaveValue('华东门店')
+  await expect(dialog.getByRole('cell', { name: /SO-1/ }).locator('input')).toHaveCount(0)
+
+  await dialog.getByLabel('编辑 订单金额（amount），行主键 SO-1').fill('1350')
+  await expect(dialog.getByText('1 处修改尚未保存')).toBeVisible()
+  await expect(approveButton).toBeDisabled()
+  await expect(rejectButton).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: /变化量/ })).toBeDisabled()
+  const editRequestPromise = page.waitForRequest(request => (
+    request.method() === 'POST'
+    && new URL(request.url()).pathname === '/api/v2/curated/reviews/review-pending-pk/edits'
+  ))
+  await dialog.getByRole('button', { name: '保存 1 处修改' }).click()
+  const editRequest = await editRequestPromise
+  expect(editRequest.postDataJSON()).toEqual({
+    edits: [{
+      row_pk: 'SO-1',
+      field_name: 'amount',
+      old_value: '1280',
+      new_value: '1350',
+    }],
+  })
+  await expect(dialog.getByText(/已保存 1 处审核修改/)).toBeVisible()
+  await expect(approveButton).toBeEnabled()
+  await expect(rejectButton).toBeEnabled()
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
 
   const noPkRow = page.getByRole('row').filter({ hasText: '无主键回调数据' })
   await noPkRow.getByRole('button', { name: '查看' }).click()
   dialog = page.getByRole('dialog', { name: '无主键回调数据' })
-  await expect(dialog.getByText(/当前流水线采用无主键模式，可以正常审核/)).toBeVisible()
+  await expect(dialog.getByText(/当前流水线采用无主键模式，可以正常审核，但无法安全定位具体行/)).toBeVisible()
   await expect(dialog.getByText(/不满足稳定识别数据行的契约/)).toHaveCount(0)
   await expect(dialog.getByText('无主键 · 按整行比较，不单独识别更新')).toBeVisible()
   await expect(dialog.getByText(/沿用字段标识|中文名未配置/)).toHaveCount(0)
   await expect(dialog.getByText('未设置字段名称')).toHaveCount(2)
+  await dialog.getByRole('button', { name: /本次接受后全量/ }).click()
+  await expect(dialog.getByTestId('curated-edit-grid')).toHaveCount(0)
+  await expect(dialog.locator('tbody input')).toHaveCount(0)
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
 })

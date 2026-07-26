@@ -27,10 +27,17 @@ def make_db_with_dataset(status: str = "pending_review"):
         query = MagicMock()
         if model == Dataset:
             query.filter.return_value.first.return_value = dataset
+            query.filter.return_value.with_for_update.return_value \
+                .populate_existing.return_value.first.return_value = dataset
+            query.join.return_value.filter.return_value \
+                .with_for_update.return_value.populate_existing \
+                .return_value.first.return_value = dataset
         elif model == CuratedDataset:
             query.filter.return_value.first.return_value = None
         elif model == CuratedReview:
             query.filter.return_value.first.return_value = review
+            query.filter.return_value.with_for_update.return_value \
+                .populate_existing.return_value.first.return_value = review
             query.filter.return_value.order_by.return_value.first.return_value = None
         elif model == CuratedRowEdit:
             query.filter.return_value.all.return_value = []

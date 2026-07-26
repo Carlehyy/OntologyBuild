@@ -42,6 +42,14 @@ export interface ReviewSession {
   dataset_version_id?: string | null
 }
 
+export interface ReviewRowEdit {
+  /** 单主键为原值字符串；复合主键为按 pk 列顺序编码的紧凑 JSON 数组。 */
+  row_pk: string
+  field_name: string
+  old_value: string | null
+  new_value: string | null
+}
+
 export interface ReviewDiffView {
   version_no: number | null
   dataset_version_id?: string | null
@@ -79,6 +87,11 @@ export interface ReviewDiff {
   pk: string[]
   /** 行级编辑主键编码：单主键为原值字符串，复合主键为 JSON 字符串数组。 */
   row_pk_encoding?: 'plain-string' | 'json-array'
+  /**
+   * 与 current.rows 当前分页逐行对齐的后端 canonical row_pk。
+   * null 表示该行主键缺失；空数组表示资产没有声明主键。
+   */
+  current_row_pks?: Array<string | null>
   current: ReviewDiffView
   previous: ReviewDiffView
   delta: ReviewDelta | null
@@ -115,7 +128,7 @@ const curatedApi = {
   /** 完整删除成品数据集（仅管理员；存在外部引用时拦截） */
   delete: (id: string) => apiClientV2.delete(`/curated/${id}`),
 
-  /** 导出最新已审核版本的全量数据，不受详情分页限制 */
+  /** 导出当前已批准版本的全量数据；pending/rejected 均由后端 fail-closed */
   export: (id: string, format: 'csv' | 'xlsx'): Promise<Blob> =>
     apiClientV2.get(`/curated/${id}/export`, {
       params: { format },
@@ -127,7 +140,7 @@ const curatedApi = {
     apiClientV2.post<ReviewSession>(`/curated/${id}/reviews`),
 
   /** Save batch edits within a review session */
-  saveEdits: (reviewId: string, edits: Array<{ row_pk: string; field_name: string; old_value: string; new_value: string }>) =>
+  saveEdits: (reviewId: string, edits: ReviewRowEdit[]) =>
     apiClientV2.post<{ saved: number }>(`/curated/reviews/${reviewId}/edits`, { edits }),
 
   /** Approve/reject a review session */

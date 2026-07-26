@@ -9,6 +9,7 @@ from app.models.ontology_formal import (
     LinkType,
     ObjectInstance,
     ObjectType,
+    PropertyFact,
 )
 from app.models.sentinel import Sentinel, SentinelMatchState
 from app.ontologies.formal_modeling.action_engine import prepare_action_parameters
@@ -256,6 +257,51 @@ def test_runtime_enforces_every_declared_link_constraint(db):
 
     assert firing.status == "no_match"
     assert firing.match_count == 0
+
+
+def test_absence_fact_flush_failure_does_not_poison_evaluator_session(
+        db, monkeypatch):
+    """A best-effort provenance write must leave the outer run committable."""
+    ontology_id = "sentinel-absence-savepoint-recovery"
+    _project(db, ontology_id)
+    object_type = _object_type(db, ontology_id, "absence-object")
+    sentinel = _sentinel(
+        ontology_id,
+        "absence-sentinel",
+        [{"alias": "a", "objectTypeId": object_type.id}],
+        condition="a.active == True",
+    )
+    db.add(sentinel)
+    db.commit()
+
+    def fail_during_flush(fact_db, **_kwargs):
+        # The NOT NULL violation is deterministic and exercises SQLAlchemy's
+        # failed-flush state inside the same SAVEPOINT used in production.
+        fact_db.add(PropertyFact(
+            ontology_id=None,
+            instance_id=sentinel.id,
+            property_name="query_result",
+            value={"v": {"empty": True}},
+            kind="absence",
+            source="test://forced-flush-failure",
+        ))
+        fact_db.flush()
+
+    monkeypatch.setattr(
+        "app.ontologies.formal_modeling.facts.record_absence_fact",
+        fail_during_flush,
+    )
+
+    firing = evaluator.evaluate_sentinel(
+        db, ontology_id, sentinel, "manual")
+
+    assert firing.status == "no_match"
+    assert firing.error is None
+    assert db.is_active
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id,
+        instance_id=sentinel.id,
+    ).count() == 0
 
 
 def test_tuple_cap_is_an_error_and_does_not_consume_edges(db, monkeypatch):

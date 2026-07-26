@@ -80,6 +80,17 @@ def rows_to_csv_bytes(rows: list[dict], columns: list[str]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
+def snapshot_cell_text(value) -> str:
+    """Canonical text representation used by tabular lake snapshots."""
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def rows_to_parquet_bytes(rows: list[dict]) -> bytes:
     """行列表 → Parquet bytes：湖内产物快照的存储格式（替代 CSV）。
 
@@ -97,15 +108,6 @@ def rows_to_parquet_bytes(rows: list[dict]) -> bytes:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    def _cell(v) -> str:
-        if v is None:
-            return ""
-        if isinstance(v, (bytes, bytearray)):
-            return f"<{len(v)} bytes>"
-        if isinstance(v, (dict, list)):
-            return json.dumps(v, ensure_ascii=False)
-        return str(v)
-
     all_keys: list[str] = []
     seen: set[str] = set()
     for row in rows:
@@ -118,7 +120,10 @@ def rows_to_parquet_bytes(rows: list[dict]) -> bytes:
         return b""
 
     table = pa.table({
-        k: pa.array([_cell(row.get(k)) for row in rows], type=pa.string())
+        k: pa.array(
+            [snapshot_cell_text(row.get(k)) for row in rows],
+            type=pa.string(),
+        )
         for k in all_keys
     })
     buf = _io.BytesIO()
@@ -685,7 +690,15 @@ class DatasetService:
     def _create_version_locked(self, dataset_id: str, data: bytes,
                                rowcount: int | None = None,
                                schema_json: dict | None = None) -> DatasetVersion:
-        ds = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        # dataset_write_lock 先串行化完整读改写流程；Dataset 行锁再与审核事务
+        # 共享同一个数据库终局点。审批按 Dataset → Review 加锁，因此新版本
+        # 发布与审批只能形成明确先后关系，不能在“校验 latest”与决定提交之间
+        # 穿插。populate_existing 避免复用 Session 时读取 identity-map 旧指针。
+        ds = (self._db.query(Dataset)
+              .filter(Dataset.id == dataset_id)
+              .with_for_update(of=Dataset)
+              .populate_existing()
+              .first())
         if not ds:
             raise ValueError(f"Dataset {dataset_id} not found")
 
@@ -752,6 +765,15 @@ class DatasetService:
                             "清理未提交版本对象失败: %s", uri, exc_info=True)
                 if attempt == 2:
                     raise
+                # rollback 会释放 Dataset 行锁；重算版本号前必须按相同顺序
+                # 重新取得它，不能让审批在重试窗口中穿插。
+                ds = (self._db.query(Dataset)
+                      .filter(Dataset.id == dataset_id)
+                      .with_for_update(of=Dataset)
+                      .populate_existing()
+                      .first())
+                if ds is None:
+                    raise ValueError(f"Dataset {dataset_id} not found")
             except Exception:
                 self._db.rollback()
                 if uri:

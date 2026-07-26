@@ -3,9 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.data_channel.pipeline_tasks.merge import merge_rows
+from app.data_channel.pipeline_tasks.merge import compute_lake_impact, merge_rows
 from app.data_channel.datasets.lake_gate import LakeGateError, validate_merged_lake
-from app.data_channel.datasets.service import DatasetService
+from app.data_channel.datasets.service import (
+    DatasetService,
+    _parse_stored_rows,
+    rows_to_parquet_bytes,
+)
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.tasks.v2.pipeline_run import _save_curated_dataset, resolve_curated_target
 
@@ -43,6 +47,39 @@ def test_append_dedup_still_blocks_same_pk_with_changed_fields():
     with pytest.raises(LakeGateError, match="主键重复"):
         validate_merged_lake(
             merged, ["id"], dataset_name="客户", write_mode=meta["mode"])
+
+
+def test_replayed_native_values_match_persisted_snapshot_semantics():
+    replayed = [{
+        "order_id": "O-1002",
+        "amount": 86000,
+        "risk_score": 78,
+        "violation_flag": True,
+        "metadata": {"地区": "华北", "risk": 78},
+        "tags": ["延期", "重点"],
+        "note": None,
+        "content": b"not-tabular-data",
+    }]
+    persisted = _parse_stored_rows(
+        rows_to_parquet_bytes(replayed), limit=None)
+    assert persisted == [{
+        "order_id": "O-1002",
+        "amount": "86000",
+        "risk_score": "78",
+        "violation_flag": "True",
+        "metadata": '{"地区": "华北", "risk": 78}',
+        "tags": '["延期", "重点"]',
+        "note": "",
+    }]
+
+    impact = compute_lake_impact(persisted, replayed, ["order_id"])
+    assert impact["updated_count"] == 0
+    assert impact["unchanged_count"] == 1
+
+    merged, meta = merge_rows(
+        persisted, replayed, {"mode": "append_dedup"})
+    assert meta["mode"] == "append_dedup"
+    assert merged == persisted
 
 
 def test_resolve_target_uses_pipeline_and_output_key_even_after_rename(db):

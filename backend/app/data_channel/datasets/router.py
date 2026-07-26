@@ -939,9 +939,57 @@ def list_versions(dataset_id: str, db: Session = Depends(get_db)):
         } if version.id in events else None),
     } for version in versions]
 
+
+def _require_curated_preview_approved(db: Session, dataset, version) -> None:
+    """通用 Dataset preview 不得绕过成品资产审核门禁。"""
+    if dataset.kind != "curated":
+        return
+    from app.data_channel.curated.review_service import (
+        ReviewApprovalError,
+        require_version_approved,
+        version_review,
+    )
+
+    if version is None:
+        raise HTTPException(409, detail={
+            "code": "dataset_version_not_approved",
+            "message": "该成品数据集尚无可预览的数据版本。",
+        })
+    try:
+        require_version_approved(db, dataset.id, version)
+    except ReviewApprovalError as exc:
+        review = version_review(db, dataset.id, version)
+        rejected = review is not None and review.status == "rejected"
+        raise HTTPException(409, detail={
+            "code": (
+                "dataset_version_rejected"
+                if rejected else "dataset_version_not_approved"
+            ),
+            "message": (
+                f"数据版本 v{version.version_no} 已拒绝，仅可通过审核差异查看审计快照，"
+                "不能用于普通预览或进入本体。"
+                if rejected else
+                f"数据版本 v{version.version_no} 尚未通过审核，不能用于普通预览或进入本体。"
+            ),
+            "dataset_version_id": version.id,
+            "version_no": version.version_no,
+            "review_status": review.status if review is not None else "pending_review",
+        }) from exc
+
+
 @router.get("/{dataset_id}/versions/{version_no}/preview")
 def preview_data(dataset_id: str, version_no: int, limit: int = 100, db: Session = Depends(get_db)):
+    from app.models.v2.dataset import DatasetVersion
+
     svc = DatasetService(db)
+    ds = svc.get_dataset(dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset_id,
+        DatasetVersion.version_no == version_no,
+    ).first()
+    _require_curated_preview_approved(db, ds, version)
     return svc.preview(dataset_id, version_no, limit)
 
 
@@ -953,8 +1001,10 @@ def get_schema(dataset_id: str, db: Session = Depends(get_db)):
     if not ds:
         raise HTTPException(404, "Dataset not found")
 
-    # 在线建表声明过类型的数据集：类型是用户契约，直接返回声明值而非推断
-    # （空表也有列结构，推断路径此时只会返回空列表）
+    # 人工建表或已发布流水线声明过类型的数据集：类型是权威契约，直接返回
+    # 声明值而非从物理快照重推断。成品快照为兼容历史 CSV 语义会把标量保存
+    # 为字符串；若在这里重推断，会把 float(integer 样值)、timestamp 和
+    # boolean 分别误报为 integer/string/string。
     schema_json = ds.schema_json or {}
     from app.data_channel.datasets.lake_gate import split_pk
     pk_columns = set(split_pk(schema_json.get("primary_key")))
@@ -997,7 +1047,11 @@ def get_schema(dataset_id: str, db: Session = Depends(get_db)):
             "is_primary_key": name in pk_columns,
         }
 
-    if schema_json.get("types_source") == "declared" and schema_json.get("columns_typed"):
+    if (
+        schema_json.get("types_source")
+        in {"declared", "published_pipeline_contract"}
+        and schema_json.get("columns_typed")
+    ):
         rows = svc.preview(dataset_id, None, limit=10)
         columns = []
         for c in schema_json["columns_typed"]:
@@ -1156,6 +1210,7 @@ def preview_dataset(dataset_id: str, limit: int = 20, offset: int = 0, db: Sessi
         return {"dataset_id": dataset_id, "rows": [], "columns": [], "total_rows": 0,
                 "offset": 0, "limit": limit}
     latest = versions[-1]
+    _require_curated_preview_approved(db, ds, latest)
     limit = max(1, min(limit, 1000))
     offset = max(0, offset)
     rows = svc.preview(dataset_id, latest.version_no, limit=limit, offset=offset)

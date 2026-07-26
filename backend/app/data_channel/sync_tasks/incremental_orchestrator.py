@@ -187,14 +187,23 @@ class IncrementalOrchestrator:
 
     # ── 触发点 3：审核通过 ─────────────────────────────────────────────
 
-    def on_review_approved(self, review_id: str) -> dict:
+    def on_review_approved(
+        self, review_id: str, *, synchronous: bool = False,
+    ) -> dict:
         """
         Curated Dataset 审核通过后：
-        - 找到关联该 Dataset 的所有 OntologyMapping
-        - 若 spec.auto_apply_on_review = true，自动触发 Mapping Apply
+        - 找到显式订阅该 Dataset 审批事件的对象/关系 Mapping
+        - 每个本体只触发一次全量 Mapping 对账
+
+        ``__auto_apply_on_review__`` 与 ``__auto_apply_on_version__`` 是两种
+        不同的业务事件，不能互相替代：前者消费 curated 审批，后者消费人工
+        数据版本发布。无显式审批订阅时保持不触发。
         """
         from app.models.v2.curated import CuratedReview
-        from app.models.v2.mapping import OntologyMapping
+        from app.models.v2.mapping import (
+            OntologyLinkMapping,
+            OntologyMapping,
+        )
 
         review = self._db.query(CuratedReview).filter(CuratedReview.id == review_id).first()
         if not review or review.status != "approved":
@@ -206,31 +215,73 @@ class IncrementalOrchestrator:
         ).filter(
             OntologyMapping.status != "disabled",
         ).all()
+        link_mappings = self._db.query(OntologyLinkMapping).filter(
+            or_(
+                OntologyLinkMapping.src_dataset_id == dataset_id,
+                OntologyLinkMapping.tgt_dataset_id == dataset_id,
+                OntologyLinkMapping.edge_dataset_id == dataset_id,
+            ),
+            OntologyLinkMapping.status.in_(("active", "inferred")),
+        ).all()
 
-        eligible_by_ontology: dict[str, list] = {}
+        eligible_by_ontology: dict[str, dict[str, list]] = {}
         for mapping in mappings:
-            # 检查是否配置了自动触发
             field_map = mapping.field_mapping or {}
-            auto_apply = field_map.get("__auto_apply_on_review__", False)
-
-            if auto_apply:
-                eligible_by_ontology.setdefault(mapping.ontology_id, []).append(mapping)
+            if bool(field_map.get("__auto_apply_on_review__", False)):
+                eligible_by_ontology.setdefault(
+                    mapping.ontology_id,
+                    {"object_mappings": [], "link_mappings": []},
+                )["object_mappings"].append(mapping)
+        for mapping in link_mappings:
+            field_map = mapping.field_mapping or {}
+            if bool(field_map.get("__auto_apply_on_review__", False)):
+                eligible_by_ontology.setdefault(
+                    mapping.ontology_id,
+                    {"object_mappings": [], "link_mappings": []},
+                )["link_mappings"].append(mapping)
 
         triggered = []
-        for ontology_id, ontology_mappings in eligible_by_ontology.items():
-            trigger_mapping = ontology_mappings[0]
-            task_id = self._trigger_mapping_apply(
-                trigger_mapping.id, ontology_id)
+        for ontology_id in sorted(eligible_by_ontology):
+            subscriptions = eligible_by_ontology[ontology_id]
+            ontology_mappings = subscriptions["object_mappings"]
+            ontology_link_mappings = subscriptions["link_mappings"]
+            # The task reconciles the complete ontology, so one subscribed
+            # definition is only a validated dispatch anchor. Prefer the
+            # historical object anchor and fall back to a link anchor for an
+            # edge-dataset-only review subscription.
+            trigger_mapping = (
+                ontology_mappings[0]
+                if ontology_mappings
+                else ontology_link_mappings[0]
+            )
+            trigger_mapping_kind = (
+                "object" if ontology_mappings else "link"
+            )
+            task_id = (
+                self._trigger_mapping_apply(
+                    trigger_mapping.id, ontology_id, synchronous=True)
+                if synchronous
+                else self._trigger_mapping_apply(
+                    trigger_mapping.id, ontology_id)
+            )
             mapping_ids = [item.id for item in ontology_mappings]
-            triggered.append({
+            link_mapping_ids = [
+                item.id for item in ontology_link_mappings
+            ]
+            trigger_result = {
                 "ontology_id": ontology_id,
                 "mapping_id": trigger_mapping.id,
                 "mapping_ids": mapping_ids,
+                "link_mapping_ids": link_mapping_ids,
+                "trigger_mapping_kind": trigger_mapping_kind,
                 "task_id": task_id,
-            })
+            }
+            if synchronous:
+                trigger_result["dispatch_mode"] = "synchronous"
+            triggered.append(trigger_result)
             logger.info(
-                "自动触发本体 %s 全量映射对账，来源 Mapping=%s",
-                ontology_id, mapping_ids)
+                "自动触发本体 %s 全量映射对账，对象订阅=%s，关系订阅=%s",
+                ontology_id, mapping_ids, link_mapping_ids)
 
         return {
             "triggered_mappings": triggered,
@@ -288,9 +339,42 @@ class IncrementalOrchestrator:
 
         return run.id
 
-    def _trigger_mapping_apply(self, mapping_id: str, ontology_id: str) -> str | None:
+    def _trigger_mapping_apply(
+        self,
+        mapping_id: str,
+        ontology_id: str,
+        *,
+        synchronous: bool = False,
+    ) -> str | None:
         """触发 Mapping Apply 任务"""
         from app.config import settings
+
+        if synchronous:
+            from app.tasks.v2.mapping_apply import mapping_apply_task
+            task = getattr(mapping_apply_task, "run", mapping_apply_task)
+            projection = task(mapping_id, ontology_id)
+            sentinel_dispatch = (
+                projection.get("sentinel_dispatch", {})
+                if isinstance(projection, dict)
+                else {}
+            )
+            if sentinel_dispatch.get("errors"):
+                raise RuntimeError(
+                    f"本体 {ontology_id} durable Sentinel 级联失败，"
+                    f"拒绝确认审核事件：{sentinel_dispatch['errors']}")
+            # Mapping may have committed immediately before a process crash,
+            # leaving the review event unacknowledged.  Its retry then sees no
+            # relational delta and therefore no CDC run.  Perform an edge-safe
+            # full evaluation before acknowledging the durable event; match
+            # state and action idempotency prevent duplicate side effects.
+            if not sentinel_dispatch.get("runs"):
+                from app.services.sentinel.engine import run_manual
+                sentinel_dispatch = run_manual(self._db, ontology_id)
+            if sentinel_dispatch.get("errors"):
+                raise RuntimeError(
+                    f"本体 {ontology_id} 哨兵评估存在 "
+                    f"{sentinel_dispatch['errors']} 个错误，拒绝确认审核事件")
+            return f"sync:{mapping_id}"
 
         try:
             from app.tasks.v2.mapping_apply import mapping_apply_task

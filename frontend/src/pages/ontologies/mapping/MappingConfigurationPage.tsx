@@ -19,6 +19,7 @@ import {
   useMappingData, type MappingDataset, type MappingLinkType,
   type MappingObjectType, type MappingProperty,
 } from '../detail/mapping/mapping-data'
+import { resolveObjectMappingPrimaryKey } from './object-mapping-primary-key'
 import './mapping-configuration.css'
 
 type DatasetNodeData = {
@@ -164,6 +165,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
   const [focusedEdgeId, setFocusedEdgeId] = useState<string | null>(null)
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
+  const [curatedAutoApplyDatasetIds, setCuratedAutoApplyDatasetIds] = useState<Set<string>>(new Set())
   const [manualAutoApplyDatasetIds, setManualAutoApplyDatasetIds] = useState<Set<string>>(new Set())
   const initialized = useRef(false)
   const editable = data.workspaceEditable === true
@@ -234,6 +236,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     setFocusedNodeId(null)
     setFocusedEdgeId(null)
     setHoveredEdgeId(null)
+    setCuratedAutoApplyDatasetIds(new Set())
     setManualAutoApplyDatasetIds(new Set())
   }, [ontologyId, setEdges, setNodes, versionId])
 
@@ -245,12 +248,24 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     const usedDatasets = new Set<string>()
     const usedObjects = new Set<string>()
     const usedRelations = new Set<string>()
+    const curatedAutomationPolicies = new Map<string, boolean[]>()
     const manualAutomationPolicies = new Map<string, boolean[]>()
-    const recordManualAutomationPolicy = (datasetId: string | null, enabled: boolean) => {
-      if (!datasetId || datasetById.get(datasetId)?.source !== 'manual') return
-      const policies = manualAutomationPolicies.get(datasetId) || []
+    let primaryKeyMigrationCount = 0
+    const recordAutomationPolicy = (
+      datasetId: string | null,
+      reviewEnabled: boolean,
+      versionEnabled: boolean,
+    ) => {
+      if (!datasetId) return
+      const source = datasetById.get(datasetId)?.source
+      const policyMap = source === 'curated'
+        ? curatedAutomationPolicies
+        : source === 'manual' ? manualAutomationPolicies : null
+      if (!policyMap) return
+      const policies = policyMap.get(datasetId) || []
+      const enabled = source === 'curated' ? reviewEnabled : versionEnabled
       policies.push(enabled)
-      manualAutomationPolicies.set(datasetId, policies)
+      policyMap.set(datasetId, policies)
     }
 
     for (const mapping of data.mappings) {
@@ -260,8 +275,21 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const object = objectById.get(objectId)
       if (!dataset || !object) continue
       usedDatasets.add(dataset.id); usedObjects.add(object.id)
-      recordManualAutomationPolicy(dataset.id, mapping.auto_apply_on_version)
-      for (const [source, target] of Object.entries(userFieldMapping(mapping))) {
+      recordAutomationPolicy(
+        dataset.id,
+        mapping.auto_apply_on_review,
+        mapping.auto_apply_on_version,
+      )
+      const visibleFieldMapping = userFieldMapping(mapping)
+      const primaryKey = resolveObjectMappingPrimaryKey(
+        object,
+        visibleFieldMapping,
+        mapping.field_mapping,
+      )
+      if (primaryKey.ok && primaryKey.source === 'edge') {
+        primaryKeyMigrationCount += 1
+      }
+      for (const [source, target] of Object.entries(visibleFieldMapping)) {
         nextEdges.push({ id: `object:${mapping.id}:${source}:${target}`, source: `dataset:${dataset.id}`, target: `object:${object.id}`, sourceHandle: source, targetHandle: target, type: 'default', animated: false })
       }
     }
@@ -273,11 +301,18 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const targetDatasetId = mapping.edge_dataset_id || mapping.tgt_dataset_id
       if (sourceDatasetId) usedDatasets.add(sourceDatasetId)
       if (targetDatasetId) usedDatasets.add(targetDatasetId)
-      for (const datasetId of new Set([
-        mapping.src_dataset_id,
-        mapping.tgt_dataset_id,
-        mapping.edge_dataset_id,
-      ])) recordManualAutomationPolicy(datasetId, mapping.auto_apply_on_version)
+      // A fat relationship's review lifecycle belongs to its edge dataset.
+      // Endpoint datasets retain their own object-mapping policies. Thin
+      // relationships have no edge asset, so both endpoint datasets share the
+      // one relation subscription flag.
+      const automationDatasetIds = mapping.edge_dataset_id
+        ? [mapping.edge_dataset_id]
+        : [...new Set([mapping.src_dataset_id, mapping.tgt_dataset_id])]
+      for (const datasetId of automationDatasetIds) recordAutomationPolicy(
+        datasetId,
+        mapping.auto_apply_on_review,
+        mapping.auto_apply_on_version,
+      )
       if (sourceDatasetId) nextEdges.push({ id: `relation:${mapping.id}:source`, source: `dataset:${sourceDatasetId}`, target: `relation:${relation.id}`, sourceHandle: mapping.src_key, targetHandle: REL_SOURCE, type: 'default' })
       if (targetDatasetId) nextEdges.push({ id: `relation:${mapping.id}:target`, source: `dataset:${targetDatasetId}`, target: `relation:${relation.id}`, sourceHandle: mapping.tgt_key, targetHandle: REL_TARGET, type: 'default' })
       if (mapping.edge_dataset_id) for (const [property, column] of Object.entries(mapping.field_mapping || {})) {
@@ -325,12 +360,21 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const node: MappingNode = { id: `relation:${relation.id}`, type: 'relation', position: { x: relationLaneX(), y: relationY }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } }
       nextNodes.push(node); relationY += estimatedNodeHeight(node) + 36
     })
-    setManualAutoApplyDatasetIds(new Set(
-      [...manualAutomationPolicies.entries()]
-        .filter(([, policies]) => policies.length > 0 && policies.every(Boolean))
+    const consistentlyEnabled = (policies: Map<string, boolean[]>) => new Set(
+      [...policies.entries()]
+        .filter(([, values]) => values.length > 0 && values.every(Boolean))
         .map(([datasetId]) => datasetId),
-    ))
+    )
+    setCuratedAutoApplyDatasetIds(consistentlyEnabled(curatedAutomationPolicies))
+    setManualAutoApplyDatasetIds(consistentlyEnabled(manualAutomationPolicies))
     setNodes(nextNodes); setEdges(nextEdges)
+    if (data.workspaceEditable === true && primaryKeyMigrationCount > 0) {
+      setDirty(true)
+      setNotice({
+        tone: 'warn',
+        text: `检测到 ${primaryKeyMigrationCount} 个历史对象映射可补齐稳定身份列，请保存一次完成兼容升级。`,
+      })
+    }
   }, [data, datasetById, objectById, ontologyId, setEdges, setNodes, toggleDatasetPreview])
 
   useEffect(() => {
@@ -514,10 +558,39 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       return
     }
     const issues: SaveIssue[] = [...desiredLinkMappings.issues]
+    const objectMappingPrimaryKeys = new Map<DesiredObjectMapping, string>()
     if (invalidEdges.length) issues.push({ title: '字段类型不兼容', detail: `存在 ${invalidEdges.length} 条历史或草稿连线类型不一致，请删除后重新连接。` })
     for (const desired of desiredObjectMappings) {
       const dataset = datasetById.get(desired.datasetId)
       if (!dataset?.primaryKeyColumns.length) issues.push({ title: desired.object.displayName || desired.object.name, detail: `数据集「${dataset?.name || desired.datasetId}」尚未声明资产主键，不能保存对象映射。` })
+      const existing = data.mappings.find(item => (
+        item.curated_dataset_id === desired.datasetId
+        && mappingTargetId(item) === desired.object.id
+      ))
+      const primaryKey = resolveObjectMappingPrimaryKey(
+        desired.object,
+        desired.fieldMapping,
+        existing?.field_mapping,
+      )
+      if (primaryKey.ok) {
+        objectMappingPrimaryKeys.set(desired, primaryKey.column)
+      } else if (primaryKey.issue === 'object_primary_key_missing') {
+        issues.push({
+          title: desired.object.displayName || desired.object.name,
+          detail: '对象实体尚未设置主键，请先返回模型结构设置主键。',
+        })
+      } else if (primaryKey.issue === 'primary_key_property_missing') {
+        issues.push({
+          title: desired.object.displayName || desired.object.name,
+          detail: '对象实体的主键定义已失效，请先返回模型结构重新选择主键属性。',
+        })
+      } else {
+        const propertyLabel = primaryKey.property?.displayName || primaryKey.property?.name || desired.object.primaryKey
+        issues.push({
+          title: desired.object.displayName || desired.object.name,
+          detail: `请将数据字段连接到主键属性「${propertyLabel}」，用于生成稳定对象身份。`,
+        })
+      }
     }
     if (issues.length) { setSaveIssues(issues); setNotice({ tone: 'bad', text: '当前草稿还有需要处理的问题，尚未写入数据库。' }); return }
 
@@ -526,8 +599,13 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const mappings = desiredObjectMappings.map(desired => {
         const existing = data.mappings.find(item => item.curated_dataset_id === desired.datasetId && mappingTargetId(item) === desired.object.id)
         const dataset = datasetById.get(desired.datasetId)
-        const fieldMapping: Record<string, string | boolean> = { ...desired.fieldMapping }
-        if (dataset?.source === 'manual' && manualAutoApplyDatasetIds.has(dataset.id)) {
+        const fieldMapping: Record<string, string | boolean> = {
+          ...desired.fieldMapping,
+          __primary_key__: objectMappingPrimaryKeys.get(desired)!,
+        }
+        if (dataset?.source === 'curated' && curatedAutoApplyDatasetIds.has(dataset.id)) {
+          fieldMapping.__auto_apply_on_review__ = true
+        } else if (dataset?.source === 'manual' && manualAutoApplyDatasetIds.has(dataset.id)) {
           fieldMapping.__auto_apply_on_version__ = true
         }
         return {
@@ -541,12 +619,24 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       })
       const linkMappings = desiredLinkMappings.desired.map(desired => {
         const existing = linkMappingForType(desired.relation, data.linkMappings)
-        const manualDatasetIds = [
-          desired.srcDatasetId, desired.tgtDatasetId, desired.edgeDatasetId,
-        ].filter((datasetId): datasetId is string => (
+        const automationDatasetIds = desired.edgeDatasetId
+          ? [desired.edgeDatasetId]
+          : [desired.srcDatasetId, desired.tgtDatasetId]
+        const curatedDatasetIds = automationDatasetIds.filter(
+          (datasetId): datasetId is string => (
+          typeof datasetId === 'string' && datasetById.get(datasetId)?.source === 'curated'
+          ),
+        )
+        const manualDatasetIds = automationDatasetIds.filter(
+          (datasetId): datasetId is string => (
           typeof datasetId === 'string' && datasetById.get(datasetId)?.source === 'manual'
-        ))
+          ),
+        )
         const fieldMapping: Record<string, string | boolean> = { ...desired.fieldMapping }
+        if (
+          curatedDatasetIds.length > 0
+          && curatedDatasetIds.every(datasetId => curatedAutoApplyDatasetIds.has(datasetId))
+        ) fieldMapping.__auto_apply_on_review__ = true
         if (
           manualDatasetIds.length > 0
           && manualDatasetIds.every(datasetId => manualAutoApplyDatasetIds.has(datasetId))
@@ -664,8 +754,60 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
             {filteredDatasets.map(dataset => {
               const expanded = expandedAssets.has(dataset.id)
               const added = nodes.some(node => node.id === `dataset:${dataset.id}`)
-              const autoApplyEnabled = manualAutoApplyDatasetIds.has(dataset.id)
-              return <div className="dmc-asset" key={dataset.id}><div className="dmc-asset-main"><button onClick={() => setExpandedAssets(current => { const next = new Set(current); if (expanded) next.delete(dataset.id); else next.add(dataset.id); return next })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button><span className={`dmc-asset-icon dmc-asset-icon--${dataset.source}`}><Table2 size={13} /></span><span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows ?? 0} 行 · {dataset.columns.length} 字段</small></span><button className="dmc-eye" data-active={selectedDatasetId === dataset.id} aria-pressed={selectedDatasetId === dataset.id} onClick={() => toggleDatasetPreview(dataset.id)} title={selectedDatasetId === dataset.id ? '收起预览' : '预览数据'}><Eye size={12} /></button><button className="dmc-add" disabled={!editable || added} onClick={() => addDatasetNode(dataset)} title={!editable ? '只读快照不可添加节点' : undefined}>{added ? <Check size={12} /> : <Plus size={12} />}</button></div>{dataset.source === 'manual' && added && <label className="dmc-asset-policy" title="发布后，当人工数据集产生新版本时，自动按本映射重新灌入并触发哨兵"><input type="checkbox" checked={autoApplyEnabled} disabled={!editable} onChange={event => { const enabled = event.target.checked; setManualAutoApplyDatasetIds(current => { const next = new Set(current); if (enabled) next.add(dataset.id); else next.delete(dataset.id); return next }); setDirty(true) }} /><span><b>新版本自动灌入</b><small>{autoApplyEnabled ? '已订阅，发布态哨兵可持续收到数据变更' : '未订阅将阻止该映射进入发布态'}</small></span></label>}{expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}</div>
+              const autoApplyEnabled = dataset.source === 'curated'
+                ? curatedAutoApplyDatasetIds.has(dataset.id)
+                : manualAutoApplyDatasetIds.has(dataset.id)
+              const setAutoApplyDatasetIds = dataset.source === 'curated'
+                ? setCuratedAutoApplyDatasetIds
+                : setManualAutoApplyDatasetIds
+              const policyTitle = dataset.source === 'curated'
+                ? '审核通过后自动灌入'
+                : '新版本自动灌入'
+              const policyDetail = dataset.source === 'curated'
+                ? autoApplyEnabled
+                  ? '已订阅，批准该成品版本后将自动对账本体并触发哨兵'
+                  : '未订阅，成品版本批准后需要手动对账'
+                : autoApplyEnabled
+                  ? '已订阅，发布态哨兵可持续收到数据变更'
+                  : '未订阅将阻止该映射进入发布态'
+              return (
+                <div className="dmc-asset" key={dataset.id}>
+                  <div className="dmc-asset-main">
+                    <button onClick={() => setExpandedAssets(current => { const next = new Set(current); if (expanded) next.delete(dataset.id); else next.add(dataset.id); return next })}>{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>
+                    <span className={`dmc-asset-icon dmc-asset-icon--${dataset.source}`}><Table2 size={13} /></span>
+                    <span><b>{dataset.name}</b><small>{dataset.sourceLabel} · {dataset.rows ?? 0} 行 · {dataset.columns.length} 字段</small></span>
+                    <button className="dmc-eye" data-active={selectedDatasetId === dataset.id} aria-pressed={selectedDatasetId === dataset.id} onClick={() => toggleDatasetPreview(dataset.id)} title={selectedDatasetId === dataset.id ? '收起预览' : '预览数据'}><Eye size={12} /></button>
+                    <button className="dmc-add" disabled={!editable || added} onClick={() => addDatasetNode(dataset)} title={!editable ? '只读快照不可添加节点' : undefined}>{added ? <Check size={12} /> : <Plus size={12} />}</button>
+                  </div>
+                  {added && (
+                    <label
+                      className="dmc-asset-policy"
+                      title={dataset.source === 'curated'
+                        ? '成品数据当前版本审核通过后，自动按本发布映射对账本体并触发哨兵'
+                        : '人工数据集产生合规新版本后，自动按本发布映射对账本体并触发哨兵'}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={autoApplyEnabled}
+                        disabled={!editable}
+                        aria-label={`${policyTitle} ${dataset.name}`}
+                        onChange={event => {
+                          const enabled = event.target.checked
+                          setAutoApplyDatasetIds(current => {
+                            const next = new Set(current)
+                            if (enabled) next.add(dataset.id)
+                            else next.delete(dataset.id)
+                            return next
+                          })
+                          setDirty(true)
+                        }}
+                      />
+                      <span><b>{policyTitle}</b><small>{policyDetail}</small></span>
+                    </label>
+                  )}
+                  {expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}
+                </div>
+              )
             })}
           </div>
           <div className="dmc-sidebar-foot"><span><Database size={11} />成品 {data.datasets.filter(item => item.source === 'curated').length}</span><span><Table2 size={11} />人工 {data.datasets.filter(item => item.source === 'manual').length}</span></div>

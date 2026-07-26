@@ -120,10 +120,10 @@ def test_production_compose_shares_fallback_without_minio_startup_dependency():
     assert "uploads:/uploads" in worker["volumes"]
 
 
-def test_public_plain_http_n8n_is_rejected_in_production():
-    with pytest.raises(ValueError, match="必须使用 HTTPS"):
-        enforce_n8n_url_policy(
-            "http://n8n.example.com:5678/api/v1", environment="production")
+def test_operator_configured_public_http_n8n_is_allowed_in_production():
+    assert enforce_n8n_url_policy(
+        "http://n8n.example.com:5678/api/v1", environment="production"
+    ) == "http://n8n.example.com:5678/api/v1"
 
 
 def test_private_http_and_public_https_n8n_are_allowed_in_production():

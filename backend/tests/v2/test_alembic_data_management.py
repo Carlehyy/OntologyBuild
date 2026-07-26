@@ -736,3 +736,94 @@ def test_0051_backfills_legacy_outbox_event_kinds(tmp_path, monkeypatch):
     assert "migration_0051_recovered_missing_claimed_at" in (
         recovered.last_error or "")
     assert "enable_generation" in sentinel_columns
+
+
+def test_0052_expands_and_reversibly_downgrades_cdc_status_protocol(
+        tmp_path, monkeypatch):
+    backend = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "sentinel-cdc-protocol.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = _alembic_config(backend, db_path)
+    command.upgrade(cfg, "0051_sentinel_control_events")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    now = datetime.now(timezone.utc)
+    values = {
+        "changed_keys": "[]",
+        "mapping_ids": "[]",
+        "available_at": now,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO sentinel_cdc_outbox
+            (id, chain_id, ontology_id, changed_keys, link_change,
+             cascade_depth, mapping_ids, status, attempts, available_at,
+             created_at, updated_at)
+            VALUES
+            ('legacy-pending', 'legacy-chain', 'ontology',
+             :changed_keys, 0, 0, :mapping_ids, 'pending', 0, :available_at,
+             :created_at, :updated_at)
+        """), values)
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        for status in (
+            "cdc_held", "cdc_pending", "cdc_processing",
+            "cdc_retry", "cdc_dead",
+        ):
+            conn.execute(text("""
+                INSERT INTO sentinel_cdc_outbox
+                (id, chain_id, ontology_id, changed_keys, link_change,
+                 cascade_depth, mapping_ids, status, attempts, available_at,
+                 created_at, updated_at)
+                VALUES
+                (:id, :chain_id, 'ontology', :changed_keys, 0, 0,
+                 :mapping_ids, :status, 0, :available_at,
+                 :created_at, :updated_at)
+            """), {
+                **values,
+                "id": f"row-{status}",
+                "chain_id": f"chain-{status}",
+                "status": status,
+            })
+        statuses = dict(conn.execute(text(
+            "SELECT id, status FROM sentinel_cdc_outbox"
+        )).all())
+        checks = {
+            item["name"]: item["sqltext"]
+            for item in inspect(conn).get_check_constraints(
+                "sentinel_cdc_outbox")
+        }
+    engine.dispose()
+
+    assert statuses["legacy-pending"] == "pending"
+    assert "cdc_pending" in checks["ck_sentinel_cdc_outbox_status"]
+
+    command.downgrade(cfg, "0051_sentinel_control_events")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.connect() as conn:
+        statuses = dict(conn.execute(text(
+            "SELECT id, status FROM sentinel_cdc_outbox"
+        )).all())
+        checks = {
+            item["name"]: item["sqltext"]
+            for item in inspect(conn).get_check_constraints(
+                "sentinel_cdc_outbox")
+        }
+    engine.dispose()
+
+    assert statuses == {
+        "legacy-pending": "pending",
+        "row-cdc_dead": "dead",
+        "row-cdc_held": "held",
+        "row-cdc_pending": "pending",
+        "row-cdc_processing": "processing",
+        "row-cdc_retry": "retry",
+    }
+    assert "cdc_pending" not in checks["ck_sentinel_cdc_outbox_status"]

@@ -4,9 +4,10 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
-  ChevronRight, Database, Eye, GitBranch, Link2, Loader2, Search, Settings2,
-  Table2, X,
+  ChevronRight, Database, Eye, GitBranch, Link2, Loader2, RefreshCw, Search,
+  Settings2, Table2, X,
 } from 'lucide-react'
+import { apiClientV2 } from '@/api/client'
 import curatedApi from '@/api/v2/curated'
 import datasetsApi from '@/api/v2/datasets'
 import {
@@ -31,6 +32,7 @@ interface FieldPair {
 
 interface MappingRow {
   key: string
+  mappingId: string | null
   selection: TargetSelection
   kind: TargetSelection['kind']
   name: string
@@ -44,6 +46,12 @@ interface MappingRow {
   status: MappingRowStatus
   fieldPairs: FieldPair[]
   missingFields: string[]
+}
+
+interface MappingReconcileResult {
+  total_entities?: number
+  total_relations?: number
+  sentinel_dispatch?: { evaluated?: number; fired?: number }
 }
 
 const STATUS_COPY: Record<MappingRowStatus, { label: string; detail: string }> = {
@@ -86,6 +94,16 @@ function previewErrorMessage(error: unknown) {
   if (typeof value.detail === 'string') return value.detail
   if (value.detail && typeof value.detail === 'object' && 'message' in value.detail && typeof value.detail.message === 'string') return value.detail.message
   return value.message || '数据预览加载失败，请稍后重试'
+}
+
+function mappingOperationError(error: unknown) {
+  const value = error as { detail?: unknown; message?: unknown }
+  if (typeof value.detail === 'string') return value.detail
+  if (
+    value.detail && typeof value.detail === 'object'
+    && 'message' in value.detail && typeof value.detail.message === 'string'
+  ) return value.detail.message
+  return typeof value.message === 'string' ? value.message : '本体对账失败，请稍后重试'
 }
 
 function DatasetPreviewDialog({ dataset, onClose }: { dataset: MappingDataset; onClose: () => void }) {
@@ -201,6 +219,12 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const [mappingSearch, setMappingSearch] = useState('')
   const [mappingFilter, setMappingFilter] = useState<MappingFilter>('all')
   const [previewDataset, setPreviewDataset] = useState<MappingDataset | null>(null)
+  const [reconcilingMappingId, setReconcilingMappingId] = useState<string | null>(null)
+  const [reconcileFeedback, setReconcileFeedback] = useState<{
+    mappingId: string
+    tone: 'success' | 'error'
+    message: string
+  } | null>(null)
 
   const objectInstanceCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -238,6 +262,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     const mappingExists = Boolean(mapping)
     return {
       key: `object:${item.id}`,
+      mappingId: mapping?.id || null,
       selection: { kind: 'object', id: item.id },
       kind: 'object',
       name: item.displayName || item.name,
@@ -294,6 +319,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     const totalFields = targetFields.length + 2
     return {
       key: `relation:${item.id}`,
+      mappingId: mapping?.id || null,
       selection: { kind: 'relation', id: item.id },
       kind: 'relation',
       name: item.displayName || item.name,
@@ -345,6 +371,31 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     }, 0) / selectedRow.datasets.filter(dataset => dataset.quality != null).length)
     : null
   const openMappingWorkspace = () => navigate(`/ontologies/${ontologyId}/graph?view=mapping`)
+  const reconcileApprovedData = async (mappingId: string) => {
+    setReconcilingMappingId(mappingId)
+    setReconcileFeedback(null)
+    try {
+      const result = await apiClientV2.post<MappingReconcileResult>(
+        `/ontologies/${ontologyId}/mappings/${mappingId}/apply-from-dataset`,
+      )
+      await data.refetch()
+      const evaluated = result.sentinel_dispatch?.evaluated ?? 0
+      const fired = result.sentinel_dispatch?.fired ?? 0
+      setReconcileFeedback({
+        mappingId,
+        tone: 'success',
+        message: `对账完成：对象 ${result.total_entities ?? 0} 条、关系 ${result.total_relations ?? 0} 条；哨兵评估 ${evaluated} 次、触发 ${fired} 次。`,
+      })
+    } catch (error) {
+      setReconcileFeedback({
+        mappingId,
+        tone: 'error',
+        message: mappingOperationError(error),
+      })
+    } finally {
+      setReconcilingMappingId(null)
+    }
+  }
 
   if (data.isLoading) {
     return <div className="dmo-loading"><Loader2 className="animate-spin" size={20} />正在整理映射状态…</div>
@@ -485,6 +536,37 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                     )
                   })}
                   {selectedQuality != null && <p>来源数据平均质量 <b>{selectedQuality}%</b></p>}
+                </section>
+              )}
+
+              {selectedRow.kind === 'object' && selectedRow.mappingId && (
+                <section className="dmo-reconcile">
+                  <div>
+                    <b>重新灌入已批准数据</b>
+                    <small>只读取当前 Mapping 绑定的最新已批准版本，并按当前发布结构对对象、关系和哨兵做一次完整对账。</small>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={reconcilingMappingId !== null}
+                    aria-busy={reconcilingMappingId === selectedRow.mappingId}
+                    onClick={() => void reconcileApprovedData(selectedRow.mappingId!)}
+                  >
+                    {reconcilingMappingId === selectedRow.mappingId
+                      ? <Loader2 size={13} className="animate-spin" />
+                      : <RefreshCw size={13} />}
+                    {reconcilingMappingId === selectedRow.mappingId ? '正在对账…' : '立即对账'}
+                  </button>
+                  {reconcileFeedback?.mappingId === selectedRow.mappingId && (
+                    <p
+                      role={reconcileFeedback.tone === 'error' ? 'alert' : 'status'}
+                      data-tone={reconcileFeedback.tone}
+                    >
+                      {reconcileFeedback.tone === 'success'
+                        ? <CheckCircle2 size={13} />
+                        : <AlertCircle size={13} />}
+                      <span>{reconcileFeedback.message}</span>
+                    </p>
+                  )}
                 </section>
               )}
 

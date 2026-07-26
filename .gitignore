@@ -19,6 +19,7 @@ build/
 uploads/
 !uploads/.gitkeep
 storage/
+backend/data/
 
 # Node
 node_modules/

@@ -61,6 +61,7 @@ from app.ontologies.formal_modeling.facts import (
     record_link_fact,
     record_property_facts,
 )
+from app.shared.time_utils import utc_iso
 
 
 logger = logging.getLogger(__name__)
@@ -592,6 +593,30 @@ def _match_state_id(body) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _sentinel_id_from_execution_lineage(
+        db: Session | None, ontology_id: str, body) -> str | None:
+    """Resolve the Sentinel that owns an action from durable match lineage.
+
+    HITL approval rebuilds the action request in a fresh transaction.  The
+    durable ``sentinel_match_state_id`` survives that boundary while the
+    evaluator-only ``sentinel_id`` hint does not, so notification provenance
+    must be recovered from the match state rather than depending on the
+    transient request shape.
+    """
+    state_id = _match_state_id(body)
+    if db is not None and state_id is not None:
+        from app.models.sentinel import SentinelMatchState
+
+        row = db.query(SentinelMatchState.sentinel_id).filter(
+            SentinelMatchState.id == state_id,
+            SentinelMatchState.ontology_id == ontology_id,
+        ).first()
+        if row is not None and row[0]:
+            return str(row[0])
+    value = getattr(body, "sentinel_id", None)
+    return value if isinstance(value, str) and value else None
+
+
 def _normalize_target_snapshot(
         body, action: ActionType) -> tuple[dict | None, list[str]]:
     raw = getattr(body, "target_snapshot", None)
@@ -679,13 +704,57 @@ def action_supports_snapshot_execution(action) -> bool:
     return _snapshot_rule_safe(enabled_rules)
 
 
+def _is_executing_sentinel_approval(
+        db: Session, owner: ActionExecutionLog) -> bool:
+    """Whether ``owner`` is the durable checkpoint of an approved HITL run.
+
+    ``executing`` alone is not enough: it is a generic runtime status and may
+    also represent corrupt/legacy state.  The proposal must still be linked to
+    one Sentinel match and carry the committed APPROVED decision fact written
+    by the decision endpoint before technical execution starts.
+    """
+    if (
+        owner.status != "executing"
+        or owner.dry_run
+        or not owner.sentinel_match_state_id
+        or owner.decided_at is None
+        or owner.related_log_id is not None
+    ):
+        return False
+    fact = (
+        db.query(PropertyFact)
+        .filter(
+            PropertyFact.ontology_id == owner.ontology_id,
+            PropertyFact.instance_id == owner.id,
+            PropertyFact.property_name == "decision",
+            PropertyFact.kind == "decision",
+        )
+        .order_by(*fact_order_clause())
+        .first()
+    )
+    wrapped = (
+        fact.value.get("v")
+        if fact and isinstance(fact.value, dict)
+        else None
+    )
+    decision = (
+        wrapped.get("decision")
+        if isinstance(wrapped, dict)
+        else wrapped
+    )
+    return str(decision or "").upper() == "APPROVED"
+
+
 def _idempotent_replay(
-        db: Session, ontology_id: str, key: str | None) -> dict[str, Any] | None:
-    """Return the durable owner of a successful/pending idempotent request.
+        db: Session, ontology_id: str, key: str | None, *,
+        same_request_is_sentinel_approval: bool = False,
+) -> dict[str, Any] | None:
+    """Return the durable owner or one truthful unresolved replay outcome.
 
     An approved HITL row owns the key while the actual execution is kept as a
     related audit log.  It is reusable only when that related execution really
-    succeeded; approval by itself is not proof that downstream effects ran.
+    succeeded; an explicitly verified ``executing`` proposal remains pending,
+    because approval by itself is not proof that downstream effects ran.
     """
     if not key:
         return None
@@ -700,6 +769,22 @@ def _idempotent_replay(
         result["idempotentReplay"] = True
         if owner.status == "pending":
             result["pendingApproval"] = True
+        return result
+    if (
+        same_request_is_sentinel_approval
+        and _is_executing_sentinel_approval(db, owner)
+    ):
+        # The human decision is durable, but the separately committed technical
+        # execution/finalization is not complete yet.  A change caused by that
+        # execution can race back through Sentinel CDC in this window.  Report
+        # the original proposal as unresolved so the edge remains recoverable;
+        # never present approval-in-progress as successful execution.
+        result = _log_to_dict(owner)
+        result["status"] = "pending"
+        result["pendingApproval"] = True
+        result["approvalExecuting"] = True
+        result["approvalLogStatus"] = "executing"
+        result["idempotentReplay"] = True
         return result
     if owner.status == "approved" and owner.related_log_id:
         related = db.query(ActionExecutionLog).filter(
@@ -2033,7 +2118,16 @@ def execute_action(db: Session, ontology_id: str, body,
                 target_snapshot=target_snapshot,
                 suppress_log=preview_only,
             )
-        replay = _idempotent_replay(db, ontology_id, idem_key)
+        replay = _idempotent_replay(
+            db,
+            ontology_id,
+            idem_key,
+            # This flag is reached only after _same_idempotent_request above
+            # accepted the exact action/target/parameters/release payload.
+            same_request_is_sentinel_approval=bool(
+                action.requires_approval and match_state_id
+            ),
+        )
         if replay is not None:
             return replay
 
@@ -2189,6 +2283,12 @@ def execute_action(db: Session, ontology_id: str, body,
     # one stable causal pointer while the log itself is inserted only after all
     # local rules have succeeded.  Any failure rolls all of them back.
     execution_log_id = str(uuid.uuid4())
+    notification_sentinel_id = (
+        _sentinel_id_from_execution_lineage(db, ontology_id, body)
+        if not body.dry_run and any(
+            rule.get("type") == "notification" for rule in rules)
+        else None
+    )
     causal = caused_by_fact or execution_log_id
     src = f"action://{action.name or action.id}"
 
@@ -2870,7 +2970,7 @@ def execute_action(db: Session, ontology_id: str, body,
                             else body.target_instance_id),
                         action_id=action.id,
                         ontology_release_id=ontology_release_id,
-                        sentinel_id=getattr(body, "sentinel_id", None),
+                        sentinel_id=notification_sentinel_id,
                         action_log_id=execution_log_id,
                         status="delivered",
                     ))
@@ -3151,10 +3251,10 @@ def _log_to_dict(log: ActionExecutionLog) -> dict[str, Any]:
         "parameters": log.parameters or {}, "status": log.status,
         "validationErrors": log.validation_errors or [], "effects": log.effects or [],
         "errorMessage": log.error_message, "durationMs": log.duration_ms,
-        "dryRun": log.dry_run, "executedAt": log.executed_at.isoformat() if log.executed_at else None,
+        "dryRun": log.dry_run, "executedAt": utc_iso(log.executed_at),
         "actorId": log.actor_id,
         "decidedBy": log.decided_by,
-        "decidedAt": log.decided_at.isoformat() if log.decided_at else None,
+        "decidedAt": utc_iso(log.decided_at),
         "decisionReason": log.decision_reason,
         "relatedLogId": log.related_log_id,
         "targetSnapshot": log.target_snapshot,

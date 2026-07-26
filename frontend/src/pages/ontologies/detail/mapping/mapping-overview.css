@@ -127,6 +127,16 @@
 .dmo-source-detail button:hover { background: #edf8f6; }
 .dmo-source-detail > p { margin: 6px 0 0; color: #778493; font-size: 10px; }
 .dmo-source-detail > p b { color: #536074; font-variant-numeric: tabular-nums; }
+.dmo-reconcile { margin-top: 15px; padding: 10px; border: 1px solid #dce7e5; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 9px; background: #f4faf9; }
+.dmo-reconcile > div { min-width: 0; display: flex; flex-direction: column; }
+.dmo-reconcile > div b { color: #35625d; font-size: 11px; }
+.dmo-reconcile > div small { margin-top: 3px; color: #6f8380; font-size: 9px; line-height: 1.45; }
+.dmo-reconcile > button { min-height: 31px; padding: 0 9px; border: 1px solid #9dcfc9; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: #11766d; background: #fff; font-size: 10px; font-weight: 700; cursor: pointer; }
+.dmo-reconcile > button:hover:not(:disabled) { background: #e7f5f2; }
+.dmo-reconcile > button:disabled { cursor: wait; opacity: .62; }
+.dmo-reconcile > p { grid-column: 1/-1; margin: 0; padding: 7px 8px; display: flex; align-items: flex-start; gap: 6px; color: #18705d; background: #e5f5ef; font-size: 10px; line-height: 1.45; }
+.dmo-reconcile > p[data-tone="error"] { color: #a34c48; background: #fbeceb; }
+.dmo-reconcile > p svg { margin-top: 1px; flex: none; }
 .dmo-fields > h3 { justify-content: space-between; }
 .dmo-fields > h3 em { color: #168277; font-size: 10px; font-style: normal; font-variant-numeric: tabular-nums; }
 .dmo-field-pairs { border-top: 1px solid #e3e8eb; }

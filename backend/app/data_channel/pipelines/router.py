@@ -1011,7 +1011,7 @@ def validate_column_definitions(
         if d["nullable"] or d["is_primary_key"] or sk not in actual_columns:
             continue
         null_count = sum(1 for row in rows
-                         if row.get(sk) is None or str(row.get(sk) or "").strip() == "")
+                         if row.get(sk) is None or str(row.get(sk)).strip() == "")
         if null_count > 0:
             errors.append({"field_key": d["field_key"], "severity": "error",
                            "message": f"列「{d['field_key']}」不允许为空，但全量数据中存在 {null_count} 个空值"})

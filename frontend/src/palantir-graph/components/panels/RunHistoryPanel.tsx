@@ -15,6 +15,10 @@ import { useOntologyStore } from '../../store/ontologyStore';
 import { listExecutionLogs, listPendingActions, decidePendingAction } from '../../api/formalApi';
 import { sentinelApi, type SentinelFiring, type SentinelNotification } from '../../../api/sentinelApi';
 import type { ActionExecutionLog } from '../../types/ontology';
+import {
+  SentinelFiringSummary,
+  sentinelFiringStatusLabel,
+} from './SentinelFiringSummary';
 
 interface Props {
   isOpen: boolean;
@@ -360,7 +364,11 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
 
           {/* 哨兵触发 */}
           {tab === 'firings' && firings.map((f) => (
-            <div key={f.id} className="rounded-lg border border-slate-700/70 bg-slate-800/40 px-3 py-2.5">
+            <div
+              key={f.id}
+              className="rounded-lg border border-slate-700/70 bg-slate-800/40 px-3 py-2.5"
+              data-testid={`sentinel-firing-${f.id}`}
+            >
               <div className="flex items-center gap-2 text-sm">
                 {f.status === 'error'
                   ? <ExclamationTriangleIcon className="w-4 h-4 text-red-400 shrink-0" />
@@ -370,7 +378,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
                 <span className="text-gray-200 font-medium truncate">{f.sentinelName}</span>
                 <span className={`px-1.5 rounded text-[10px] ${
                   f.status === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-slate-700 text-gray-400'
-                }`}>{f.status}</span>
+                }`}>{sentinelFiringStatusLabel(f.status)}</span>
                 <span className="px-1.5 rounded bg-slate-700 text-[10px] text-gray-400">{f.triggerSource}</span>
                 <span className="ml-auto text-[11px] text-gray-500 shrink-0">{fmtTime(f.createdAt)}</span>
               </div>
@@ -378,6 +386,9 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
                 命中 {f.matchCount} 项
                 {(f.actionResults || []).length > 0 && ` · 执行 ${(f.actionResults || []).length} 个动作`}
                 {f.error && <span className="text-red-400"> · {f.error}</span>}
+              </div>
+              <div className="pl-3.5">
+                <SentinelFiringSummary firing={f} />
               </div>
             </div>
           ))}

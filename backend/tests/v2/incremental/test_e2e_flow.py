@@ -2,9 +2,11 @@
 import pytest
 from unittest.mock import MagicMock, patch, call
 from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
+from app.models.ontology import OntologyProject
 from app.models.v2.pipeline import Pipeline, PipelineRun
 from app.models.v2.curated import CuratedDataset, CuratedReview
-from app.models.v2.mapping import OntologyMapping
+from app.models.v2.dataset import Dataset
+from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
 from datetime import datetime, timezone
 
 
@@ -177,6 +179,124 @@ def test_on_review_approved_skips_non_approved():
     assert result["status"] == "skipped"
 
 
+def test_review_approved_link_only_subscription_dispatches_real_query(
+        db, admin_user):
+    """An approved edge dataset can be consumed only by a LinkMapping.
+
+    This uses real ORM rows so the OR predicate over source/target/edge roles
+    and the link-only dispatch anchor are both exercised.
+    """
+    dataset = Dataset(
+        id="curated-edge-ds",
+        name="curated-edge-ds",
+        kind="curated",
+        schema_json={"primary_key": "edge_id"},
+    )
+    ontology = OntologyProject(
+        id="ont-link-only",
+        name="Link-only review subscription",
+        domain="test",
+        created_by=admin_user.id,
+    )
+    review = CuratedReview(
+        id="rev-link-only",
+        curated_dataset_id=dataset.id,
+        status="approved",
+    )
+    # Endpoint object mappings are deliberately not review subscribers. The
+    # reviewed dataset is used only as the relationship's edge table.
+    endpoint_mapping = OntologyMapping(
+        id="endpoint-object-map",
+        ontology_id=ontology.id,
+        curated_dataset_id=dataset.id,
+        entity_class="Endpoint",
+        field_mapping={"edge_id": "id"},
+        status="applied",
+    )
+    link_mapping = OntologyLinkMapping(
+        id="review-link-map",
+        ontology_id=ontology.id,
+        src_dataset_id=dataset.id,
+        tgt_dataset_id=dataset.id,
+        edge_dataset_id=dataset.id,
+        relation_type="connected_to",
+        src_key="source_id",
+        tgt_key="target_id",
+        field_mapping={"__auto_apply_on_review__": True},
+        status="active",
+    )
+    db.add_all([
+        dataset, ontology, review, endpoint_mapping, link_mapping,
+    ])
+    db.commit()
+
+    orch = IncrementalOrchestrator(db)
+    with patch.object(
+        orch, "_trigger_mapping_apply", return_value="task-link",
+    ) as dispatch:
+        result = orch.on_review_approved(review.id)
+
+    dispatch.assert_called_once_with(link_mapping.id, ontology.id)
+    assert result["triggered_mappings"] == [{
+        "ontology_id": ontology.id,
+        "mapping_id": link_mapping.id,
+        "mapping_ids": [],
+        "link_mapping_ids": [link_mapping.id],
+        "trigger_mapping_kind": "link",
+        "task_id": "task-link",
+    }]
+
+
+def test_review_approval_does_not_treat_version_flag_as_subscription(
+        db, admin_user):
+    """Manual-version automation must never silently opt into human review."""
+    dataset = Dataset(
+        id="curated-no-review-subscription",
+        name="curated-no-review-subscription",
+        kind="curated",
+        schema_json={"primary_key": "id"},
+    )
+    ontology = OntologyProject(
+        id="ont-no-review-subscription",
+        name="No review subscription",
+        domain="test",
+        created_by=admin_user.id,
+    )
+    review = CuratedReview(
+        id="rev-no-review-subscription",
+        curated_dataset_id=dataset.id,
+        status="approved",
+    )
+    mapping = OntologyMapping(
+        id="version-only-object-map",
+        ontology_id=ontology.id,
+        curated_dataset_id=dataset.id,
+        entity_class="BusinessRow",
+        field_mapping={"__auto_apply_on_version__": True},
+        status="applied",
+    )
+    link_mapping = OntologyLinkMapping(
+        id="version-only-link-map",
+        ontology_id=ontology.id,
+        src_dataset_id=dataset.id,
+        tgt_dataset_id=dataset.id,
+        relation_type="related_to",
+        src_key="id",
+        tgt_key="id",
+        field_mapping={"__auto_apply_on_version__": True},
+        status="active",
+    )
+    db.add_all([dataset, ontology, review, mapping, link_mapping])
+    db.commit()
+
+    orch = IncrementalOrchestrator(db)
+    with patch.object(orch, "_trigger_mapping_apply") as dispatch:
+        result = orch.on_review_approved(review.id)
+
+    dispatch.assert_not_called()
+    assert result["triggered_mappings"] == []
+
+
 # ── E2E 完整链路 ──────────────────────────────────────────────────────
 
 def test_full_incremental_chain():
@@ -227,9 +347,15 @@ def test_full_incremental_chain():
 
     # Step 3: 审核通过 → Mapping 自动触发
     review.status = "approved"  # 重新设为 approved
-    with patch.object(orch, '_trigger_mapping_apply', return_value="task-1"):
-        approve_result = orch.on_review_approved("rev-1")
+    with patch.object(
+        orch, '_trigger_mapping_apply', return_value="task-1",
+    ) as trigger_mapping:
+        approve_result = orch.on_review_approved(
+            "rev-1", synchronous=True)
     assert len(approve_result["triggered_mappings"]) == 1
+    trigger_mapping.assert_called_once_with(
+        "map-1", "ont-1", synchronous=True)
+    assert approve_result["triggered_mappings"][0]["dispatch_mode"] == "synchronous"
 
 
 def test_pipeline_dispatch_fails_closed_in_required_dependency_mode(monkeypatch):
@@ -267,3 +393,25 @@ def test_mapping_dispatch_fails_closed_in_required_dependency_mode(monkeypatch):
         orch._trigger_mapping_apply("mapping-strict", "ontology-strict")
 
     assert "broker secret" not in str(exc_info.value)
+
+
+def test_synchronous_mapping_replay_requires_edge_safe_sentinel_barrier():
+    db = MagicMock()
+    orch = IncrementalOrchestrator(db)
+    projection = {"sentinel_dispatch": {"runs": [], "errors": []}}
+    manual_result = {"errors": 0, "firings": []}
+
+    with patch(
+        "app.tasks.v2.mapping_apply.mapping_apply_task",
+    ) as mapping_task, patch(
+        "app.services.sentinel.engine.run_manual",
+        return_value=manual_result,
+    ) as manual:
+        mapping_task.run.return_value = projection
+        result = orch._trigger_mapping_apply(
+            "mapping-durable", "ontology-durable", synchronous=True)
+
+    assert result == "sync:mapping-durable"
+    mapping_task.run.assert_called_once_with(
+        "mapping-durable", "ontology-durable")
+    manual.assert_called_once_with(db, "ontology-durable")

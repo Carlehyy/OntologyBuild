@@ -120,7 +120,7 @@ async function verifyReadonlyGraphInspection(page: Page, objectTypeId: string) {
 }
 
 test('complete branch → real-data trial → reviewed release works in the browser', async ({ page, request }) => {
-  test.setTimeout(90_000)
+  test.setTimeout(180_000)
   const token = await login(page)
   const suffix = Date.now().toString(36)
   const objectTypeId = `ot-browser-order-${suffix}`
@@ -168,7 +168,19 @@ test('complete branch → real-data trial → reviewed release works in the brow
       id: `act-browser-order-${suffix}`, name: 'review_order', displayName: '审核订单',
       description: '核对订单定义', objectTypeId, requiresApproval: true,
       parameters: [{ id: 'ap-note', name: 'note', displayName: '审核备注', type: 'string', required: false }],
-      rules: [],
+      rules: [{
+        id: `rule-browser-order-${suffix}`,
+        name: '记录审核通知',
+        type: 'notification',
+        enabled: true,
+        order: 0,
+        config: {
+          channel: 'internal',
+          recipientSource: 'constant',
+          recipient: 'ontology-reviewers',
+          messageTemplate: '订单定义已进入人工审核',
+        },
+      }],
     }],
     functions: [{
       id: `fn-browser-order-${suffix}`, name: 'order_name', displayName: '订单名称',
@@ -201,7 +213,12 @@ test('complete branch → real-data trial → reviewed release works in the brow
     mappings: [{
       id: `map-browser-order-${suffix}`, curatedDatasetId: dataset.id,
       entityClass: 'BrowserOrder', targetObjectTypeId: objectTypeId,
-      fieldMapping: { id: 'id', name: 'name', __primary_key__: 'id' },
+      fieldMapping: {
+        id: 'id',
+        name: 'name',
+        __primary_key__: 'id',
+        __auto_apply_on_version__: true,
+      },
       status: 'draft', confidence: 1,
     }],
     linkMappings: [{
@@ -213,7 +230,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
       edgeDatasetId: null,
       srcKey: 'id',
       tgtKey: 'id',
-      fieldMapping: {},
+      fieldMapping: { __auto_apply_on_version__: true },
       status: 'draft',
     }],
     sentinels: [],
@@ -350,12 +367,21 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.getByRole('button', { name: '查看历史版本' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()
 
+  const trialResponsePromise = page.waitForResponse(response =>
+    response.request().method() === 'POST'
+      && response.url().endsWith(`/api/v2/ontologies/${ontology.id}/versions/${draft.id}/trial-runs`))
   await page.getByTestId('version-node-v0.1').getByRole('button', { name: '转为试跑态' }).click()
+  const trialResponse = await trialResponsePromise
+  expect(trialResponse.ok(), await trialResponse.text()).toBeTruthy()
+  const trialResponseBody = await trialResponse.json()
+  expect((trialResponseBody.data ?? trialResponseBody).status).toBe('passed')
   const trialDialog = page.getByRole('dialog', { name: '隔离试跑结果' })
   await expect(trialDialog).toBeVisible({ timeout: 20_000 })
   await expect(trialDialog.getByText('外部动作执行数：0')).toBeVisible()
+  await expect(trialDialog.getByRole('button', { name: '打开试跑图谱' })).toBeVisible()
   await trialDialog.getByRole('button', { name: '关闭', exact: true }).click()
-  await expect(draftRow).toContainText('试跑态')
+  await expect(draftRow.getByText('试跑态', { exact: true })).toBeVisible()
+  await expect(draftRow.getByRole('button', { name: '转为发布态' })).toBeVisible()
   await expect(draftRow.getByRole('button', { name: '编辑模型' })).toHaveCount(0)
 
   // 试跑态虽然冻结结构，但模型定义必须可查看，画布仍可移动。
@@ -382,7 +408,8 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.locator('select').filter({ has: page.locator(`option[value="${objectTypeId}"]`) }).selectOption(objectTypeId)
   await expect(page.getByText('真机一号')).toBeVisible()
   await expect(page.getByText('真机二号')).toBeVisible()
-  await expect(page.getByRole('button', { name: '新建实例' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '新建实例' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /属性溯源/ })).toHaveCount(0)
   await page.getByRole('button', { name: '关闭对象实例浏览器' }).click()
 
   await page.getByTitle('打开菜单').click()

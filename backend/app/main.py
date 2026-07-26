@@ -353,7 +353,7 @@ async def lifespan(app: FastAPI):
     # 哨兵引擎：注册 CDC(监听对象改动→变化驱动) + 启动定期扫描 worker
     try:
         from app.services.sentinel import register_cdc, start_scan_worker
-        register_cdc()
+        register_cdc(start_worker=True)
         sentinel_started = start_scan_worker()
         if settings.environment == "production" and not sentinel_started:
             raise RuntimeError("Sentinel scan worker is disabled or failed to start")
@@ -413,6 +413,16 @@ async def lifespan(app: FastAPI):
         try:
             from app.services.v2.sync_scheduler import get_sync_scheduler
             get_sync_scheduler().shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from app.services.sentinel import (
+                stop_cdc_worker,
+                stop_scan_worker,
+            )
+            # Stop the producer first, then the durable outbox consumer.
+            stop_scan_worker()
+            stop_cdc_worker()
         except Exception:  # noqa: BLE001
             pass
         api_hub_scheduler.shutdown()

@@ -710,6 +710,70 @@ def test_validate_definitions_persists_complete_n8n_publish_attestation(
     assert version.definition["n8n"]["validation_attestation"] == attestation
 
 
+def test_validate_definitions_accepts_false_and_zero_as_non_null_values(
+        pipelines_client, client, auth_headers, draft_record):
+    preview = client.post(
+        f"/api/v2/pipelines/{draft_record.pipeline_id}/dry-run",
+        headers=auth_headers,
+    )
+    assert preview.status_code == 200, preview.text
+    dry_run_id = preview.json()["dry_run_id"]
+
+    from app.data_channel.pipelines.router import _DRY_RUN_BUCKET, _dry_run_uri
+    from app.services.storage_service import get_storage_service
+
+    storage = get_storage_service()
+    payload = json.loads(storage.get_object(
+        _dry_run_uri(draft_record.pipeline_id, dry_run_id)).decode("utf-8"))
+    payload["outputs"][0]["rows"] = [
+        {"currency": "USD", "enabled": False, "quantity": 0},
+        {"currency": "CNY", "enabled": True, "quantity": 1},
+    ]
+    payload["output_checksum"] = service.canonical_json_hash(payload["outputs"])
+    storage.put_bytes(
+        _DRY_RUN_BUCKET,
+        f"dry-runs/{draft_record.pipeline_id}/{dry_run_id}.json",
+        json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        content_type="application/json",
+    )
+
+    definitions = [
+        {
+            "source_key": "currency",
+            "field_key": "currency",
+            "field_name": "币种",
+            "field_type": "string",
+            "is_primary_key": True,
+            "nullable": False,
+        },
+        {
+            "source_key": "enabled",
+            "field_key": "enabled",
+            "field_name": "是否启用",
+            "field_type": "boolean",
+            "is_primary_key": False,
+            "nullable": False,
+        },
+        {
+            "source_key": "quantity",
+            "field_key": "quantity",
+            "field_name": "数量",
+            "field_type": "integer",
+            "is_primary_key": False,
+            "nullable": False,
+        },
+    ]
+    validation = client.post(
+        f"/api/v2/pipelines/{draft_record.pipeline_id}/validate-definitions",
+        params={"dry_run_id": dry_run_id},
+        headers=auth_headers,
+        json={"column_definitions": definitions},
+    )
+
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["valid"] is True, validation.text
+
+
 def test_validate_definitions_recovers_internal_evidence_from_snapshot_hash(
         pipelines_client, client, auth_headers, db, draft_record):
     """旧预览缺 workflow_evidence 时，平台用已核对的 snapshot hash 自动恢复。"""

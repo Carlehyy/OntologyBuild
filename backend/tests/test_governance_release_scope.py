@@ -1,6 +1,8 @@
 """Governance page must be a fail-closed view of the current release."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from app.models.ontology_formal import (
     ActionExecutionLog,
     ActionType,
@@ -220,6 +222,109 @@ def test_governance_reads_only_current_release_snapshot(
     assert facts[0]["subjectLabel"] == "发布订单·SO-1"
     assert facts[0]["ontologyVersion"] == "v0"
     assert facts[0]["ontologyReleaseId"] == release_id
+
+
+def test_runtime_audit_timestamps_are_explicit_utc(
+    client, auth_headers, ontology, db,
+):
+    """Database-naive UTC values must never be serialized as browser-local."""
+    from app.ontologies.formal_modeling.action_engine import _log_to_dict
+    from app.shared.time_utils import utc_iso
+
+    assert utc_iso(datetime(
+        2026, 7, 26, 17, 37, 54,
+        tzinfo=timezone(timedelta(hours=8)),
+    )) == "2026-07-26T09:37:54Z"
+
+    ontology_id = ontology["id"]
+    release_id = _seed_release_and_drift(db, ontology)
+    recorded_at = datetime(2026, 7, 26, 9, 37, 54, 123456)
+    decided_at = recorded_at + timedelta(seconds=5)
+
+    pending = db.query(ActionExecutionLog).filter_by(
+        id="pending-current").one()
+    pending.executed_at = recorded_at
+    pending.decided_at = decided_at
+    fact = db.query(PropertyFact).filter_by(id="fact-current").one()
+    fact.recorded_at = recorded_at
+    firing = db.query(SentinelFiring).filter_by(id="firing-current").one()
+    firing.created_at = recorded_at
+    db.add(Notification(
+        id="notification-current",
+        ontology_id=ontology_id,
+        ontology_release_id=release_id,
+        sentinel_id="sentinel-published",
+        action_id="action-published",
+        channel="internal",
+        recipient="admin",
+        status="delivered",
+        created_at=recorded_at,
+    ))
+    db.commit()
+    db.expire_all()
+
+    expected_recorded = "2026-07-26T09:37:54.123456Z"
+    expected_decided = "2026-07-26T09:37:59.123456Z"
+    release_query = f"release_id={release_id}"
+
+    pending_payload = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/pending-actions"
+        f"?{release_query}",
+        headers=auth_headers,
+    ).json()["data"]
+    pending_item = next(item for item in pending_payload
+                        if item["id"] == "pending-current")
+    assert pending_item["executedAt"] == expected_recorded
+    assert pending_item["decidedAt"] == expected_decided
+
+    logs_payload = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/logs",
+        headers=auth_headers,
+    ).json()["data"]
+    log_item = next(item for item in logs_payload
+                    if item["id"] == "pending-current")
+    assert log_item["executedAt"] == expected_recorded
+    assert log_item["decidedAt"] == expected_decided
+
+    facts_payload = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instances/order-1/facts",
+        headers=auth_headers,
+    ).json()["data"]
+    fact_item = next(item for item in facts_payload
+                     if item["id"] == "fact-current")
+    assert fact_item["recordedAt"] == expected_recorded
+
+    recent_payload = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/facts/recent"
+        f"?{release_query}",
+        headers=auth_headers,
+    ).json()["data"]
+    recent_fact = next(item for item in recent_payload
+                       if item["id"] == "fact-current")
+    assert recent_fact["recordedAt"] == expected_recorded
+
+    firings_payload = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/firings"
+        f"?{release_query}",
+        headers=auth_headers,
+    ).json()["data"]
+    firing_item = next(item for item in firings_payload
+                       if item["id"] == "firing-current")
+    assert firing_item["createdAt"] == expected_recorded
+
+    notifications_payload = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/notifications"
+        f"?{release_query}",
+        headers=auth_headers,
+    ).json()["data"]
+    assert notifications_payload[0]["createdAt"] == expected_recorded
+
+    # Direct action execution responses use the engine serializer rather than
+    # ActionLogOut, and must honor the same wire contract.
+    direct = _log_to_dict(
+        db.query(ActionExecutionLog).filter_by(id="pending-current").one())
+    assert direct["executedAt"] == expected_recorded
+    assert direct["decidedAt"] == expected_decided
 
 
 def test_governance_rejects_changed_or_cross_release_context(

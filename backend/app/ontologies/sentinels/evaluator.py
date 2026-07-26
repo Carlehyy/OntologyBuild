@@ -1230,7 +1230,7 @@ def _run_actions(db: Session, ontology_id: str, sentinel: Sentinel,
 
     def _append(aid: str, log: dict) -> str:
         status = str(log.get("status") or "failed")
-        results.append({
+        item = {
             "actionId": aid, "targetInstanceId": target_id, "edge": edge,
             "matchKey": match_key,
             "status": status, "logId": log.get("id"),
@@ -1238,7 +1238,13 @@ def _run_actions(db: Session, ontology_id: str, sentinel: Sentinel,
             "effects": log.get("effects", []),
             "errorMessage": log.get("errorMessage"),
             "validationErrors": log.get("validationErrors", []),
-        })
+        }
+        if log.get("pendingApproval"):
+            item["pendingApproval"] = True
+        if log.get("approvalExecuting"):
+            item["approvalExecuting"] = True
+            item["approvalLogStatus"] = log.get("approvalLogStatus")
+        results.append(item)
         return status
 
     # HITL is a gate for the *whole* chain.  Do not commit earlier automatic
@@ -1999,24 +2005,36 @@ def _evaluate_inner(db: Session, ontology_id: str, sentinel: Sentinel,
 
     # 4.5) 缺席事实：查询结果为空/非空的状态翻转冻结进事实流（Negation-as-Failure 溯源）。
     #      表达式全在报错时跳过——那是 error 不是"确认为空"，不能伪造缺席证据。
-    nested = None
     _guard_expected_release(
         db, ontology_id, release_id)
     try:
-        nested = db.begin_nested()
-        from app.ontologies.formal_modeling.facts import record_absence_fact
-        record_absence_fact(
-            db, ontology_id=ontology_id, subject_id=sentinel.id,
-            empty=(len(current) == 0), scanned=len(tuples),
-            source=f"sentinel://{sentinel.name or sentinel.id}@{source}",
-            detail={"condition": sentinel.condition or "",
-                    "sentinelName": sentinel.display_name},
-            ontology_version=release_version,
-            ontology_release_id=release_id)
-        nested.commit()
+        # ``Session.flush`` marks a failed SAVEPOINT inactive even though
+        # ``SessionTransaction.rollback()`` must still be called to restore
+        # the parent Session.  A manual ``if nested.is_active`` cleanup skips
+        # exactly that path and leaves the evaluator in PendingRollbackError.
+        # Let the transaction context always close/rollback the SAVEPOINT so
+        # this best-effort forensic fact can never poison the durable firing.
+        with db.begin_nested():
+            from app.ontologies.formal_modeling.facts import (
+                record_absence_fact,
+            )
+            record_absence_fact(
+                db, ontology_id=ontology_id, subject_id=sentinel.id,
+                empty=(len(current) == 0), scanned=len(tuples),
+                source=f"sentinel://{sentinel.name or sentinel.id}@{source}",
+                detail={"condition": sentinel.condition or "",
+                        "sentinelName": sentinel.display_name},
+                ontology_version=release_version,
+                ontology_release_id=release_id)
     except Exception:  # noqa: BLE001 — 取证失败不能影响评估主流程
-        if nested is not None and nested.is_active:
-            nested.rollback()
+        # ``begin_nested()`` itself first flushes pending outer state.  If that
+        # pre-SAVEPOINT flush fails there is no nested context to restore the
+        # Session, so recover the invalid outer transaction before recording
+        # the firing.  Durable action/edge checkpoints above have already been
+        # committed; only this run's best-effort observation updates can roll
+        # back here.
+        if not db.is_active:
+            db.rollback()
 
     # 5) 记录触发日志
     action_failed = "failed" in edge_outcomes

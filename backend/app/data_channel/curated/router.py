@@ -17,13 +17,35 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def _dispatch_approved_review(db: Session, review_id: str) -> dict:
-    """两个批准入口共用同一 Mapping 派发语义，并把失败显式返回给页面。"""
+    """返回与审核同事务落库的可靠自动化交接状态。
+
+    实际 Mapping 由 DatasetVersion outbox 调度器执行；不能在审批事务提交后
+    再依赖一次无持久凭据的 ``Celery.delay``，否则用户可能只看到“已审核”，
+    却没有任何可恢复的下游任务。
+    """
     try:
-        from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
-        result = IncrementalOrchestrator(db).on_review_approved(review_id)
-        return {"status": "success", **(result or {})}
+        from app.models.v2.dataset import DatasetVersionEvent
+        review = db.query(CuratedReview).filter(
+            CuratedReview.id == review_id).first()
+        if review is None or not review.dataset_version_id:
+            raise RuntimeError("审核未绑定可自动化的数据版本")
+        event = db.query(DatasetVersionEvent).filter(
+            DatasetVersionEvent.dataset_version_id == review.dataset_version_id,
+            DatasetVersionEvent.event_type == "curated_review_approved",
+        ).first()
+        if event is None:
+            raise RuntimeError("审核自动化 outbox 事件未创建")
+        return {
+            "status": "success" if event.status == "completed" else "queued",
+            "event_id": event.id,
+            "event_status": event.status,
+            "durable": True,
+        }
     except Exception as exc:  # 批准已落库，自动灌入失败必须可见、不可静默伪成功
-        logger.exception("Mapping trigger failed after review approve %s", review_id)
+        logger.exception(
+            "Durable Mapping hand-off failed after review approve %s",
+            review_id,
+        )
         return {
             "status": "failed",
             "error": f"审核已批准，但自动灌入本体失败：{str(exc)[:500]}",
@@ -36,6 +58,54 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _require_current_approved_for_read(
+    db: Session,
+    dataset_id: str,
+    *,
+    action: str,
+):
+    """普通数据出口只允许读取当前且已批准的成品版本。
+
+    pending/rejected 快照仍可通过 review-diff 按审核版本审计，但不能伪装成
+    生产预览或普通导出。
+    """
+    from app.data_channel.curated.review_service import (
+        ReviewApprovalError,
+        latest_dataset_version,
+        require_version_approved,
+        version_review,
+    )
+
+    version = latest_dataset_version(db, dataset_id)
+    if version is None:
+        raise HTTPException(409, detail={
+            "code": "dataset_version_not_approved",
+            "message": f"该成品数据集尚无可用于{action}的数据版本。",
+        })
+    try:
+        require_version_approved(db, dataset_id, version)
+    except ReviewApprovalError as exc:
+        review = version_review(db, dataset_id, version)
+        rejected = review is not None and review.status == "rejected"
+        raise HTTPException(409, detail={
+            "code": (
+                "dataset_version_rejected"
+                if rejected else "dataset_version_not_approved"
+            ),
+            "message": (
+                f"当前数据版本 v{version.version_no} 已拒绝，仅保留用于审核审计，"
+                f"不能用于普通{action}或进入本体。"
+                if rejected else
+                f"当前数据版本 v{version.version_no} 尚未通过审核，"
+                f"不能用于普通{action}或进入本体。"
+            ),
+            "dataset_version_id": version.id,
+            "version_no": version.version_no,
+            "review_status": review.status if review is not None else "pending_review",
+        }) from exc
+    return version
 
 
 class CuratedDatasetResponse(BaseModel):
@@ -271,18 +341,21 @@ def preview_curated(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """数据预览 — 读取已审核行级编辑后的实际数据，并支持 offset/limit 分页。"""
+    """生产预览 — 仅读取当前已批准版本，并支持 offset/limit 分页。"""
     from app.models.v2.dataset import Dataset as Ds2
 
     d2 = db.query(Ds2).filter(Ds2.id == dataset_id, Ds2.kind == "curated").first()
     if not d2:
         raise HTTPException(404, "Curated dataset not found")
     name = d2.name
+    version = _require_current_approved_for_read(
+        db, dataset_id, action="预览")
 
     # 读最新版本数据（叠加行级审核编辑——预览必须与出口数据一致）
     try:
         from app.data_channel.curated.review_service import load_all_rows_with_edits
-        all_rows = load_all_rows_with_edits(db, dataset_id)
+        all_rows = load_all_rows_with_edits(
+            db, dataset_id, require_approved=True, version=version)
         total_rows = len(all_rows)
         rows = all_rows[offset:offset + limit]
         schema_columns = (d2.schema_json or {}).get("columns") or []
@@ -314,17 +387,14 @@ def export_curated(
     format: str = Query("csv", pattern="^(csv|xlsx)$"),
     db: Session = Depends(get_db),
 ):
-    """导出成品数据集最新版本全量数据，并叠加该版本已批准的行级修改。"""
+    """导出当前已批准成品版本全量数据，并叠加该版本已批准的行级修改。"""
     import io
     import json
     from urllib.parse import quote
 
     from app.models.v2.dataset import Dataset
     from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
-    from app.data_channel.curated.review_service import (
-        current_version_review,
-        load_all_rows_with_edits,
-    )
+    from app.data_channel.curated.review_service import load_all_rows_with_edits
 
     dataset = db.query(Dataset).filter(
         Dataset.id == dataset_id,
@@ -332,15 +402,12 @@ def export_curated(
     ).first()
     if not dataset:
         raise HTTPException(404, "Curated dataset not found")
-    review = current_version_review(db, dataset_id)
-    if review is None or review.status not in {"approved", "rejected"}:
-        raise HTTPException(409, detail={
-            "code": "dataset_pending_review",
-            "message": "当前数据版本尚未完成审核，不能从只读详情导出。请先完成审核。",
-        })
+    version = _require_current_approved_for_read(
+        db, dataset_id, action="生产导出")
 
     try:
-        rows = load_all_rows_with_edits(db, dataset_id)
+        rows = load_all_rows_with_edits(
+            db, dataset_id, require_approved=True, version=version)
     except DatasetReadError as exc:
         raise HTTPException(502, f"成品数据导出失败：{exc}") from exc
     except ValueError as exc:
@@ -416,7 +483,7 @@ def review_diff(
     from app.models.v2.dataset import Dataset as Ds2
     from app.services.v2.dataset_service import DatasetService, DatasetReadError
     from app.data_channel.curated.review_service import (
-        apply_all_row_edits, review_matches_version)
+        apply_all_row_edits, encode_row_pk, review_matches_version)
     from app.data_channel.pipeline_tasks.merge import compute_lake_impact
     from app.data_channel.datasets.lake_gate import split_pk
 
@@ -433,7 +500,14 @@ def review_diff(
         "offset": offset, "limit": limit, "has_more": False,
     }
     if not versions:
-        return {"pk": pk_cols, "current": empty, "previous": empty, "delta": None}
+        return {
+            "pk": pk_cols,
+            "row_pk_encoding": "plain-string" if len(pk_cols) == 1 else "json-array",
+            "current_row_pks": [],
+            "current": empty,
+            "previous": empty,
+            "delta": None,
+        }
 
     selected_review = None
     if review_id:
@@ -490,12 +564,25 @@ def review_diff(
         })
 
     delta = compute_lake_impact(prev_full, current_full, pk_cols, sample_limit=200)
+    current_page = current_full[offset:offset + limit]
+    current_row_pks: list[str | None] = []
+    if pk_cols:
+        for row in current_page:
+            try:
+                # 浏览器不应自行猜测/重现 Python 对 bool、float 等值的字符串化；
+                # 审核写接口使用的 canonical row_pk 由同一后端编码器直接下发。
+                current_row_pks.append(
+                    encode_row_pk(row, pk_cols, dataset_name=d2.name))
+            except ValueError:
+                # 只禁用身份不完整的具体行，仍允许审核者查看整个版本并选择拒绝。
+                current_row_pks.append(None)
     return {
         "pk": pk_cols,
         "row_pk_encoding": "plain-string" if len(pk_cols) == 1 else "json-array",
+        "current_row_pks": current_row_pks,
         "current": {"version_no": current.version_no,
                     "dataset_version_id": current.id, "total": len(current_full),
-                    "rows": current_full[offset:offset + limit],
+                    "rows": current_page,
                     "offset": offset, "limit": limit,
                     "has_more": offset + limit < len(current_full)},
         "previous": {"version_no": prev.version_no if prev else None,

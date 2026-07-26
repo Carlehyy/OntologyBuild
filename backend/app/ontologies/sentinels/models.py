@@ -226,7 +226,10 @@ class SentinelCdcOutbox(Base):
     __tablename__ = "sentinel_cdc_outbox"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('held','pending','processing','retry','completed','dead')",
+            "status IN ("
+            "'held','pending','processing','retry','completed','dead',"
+            "'cdc_held','cdc_pending','cdc_processing','cdc_retry','cdc_dead'"
+            ")",
             name="ck_sentinel_cdc_outbox_status",
         ),
         Index(

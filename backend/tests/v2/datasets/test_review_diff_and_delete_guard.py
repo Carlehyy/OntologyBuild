@@ -17,10 +17,16 @@ from app.main import app
 from app.routers.v2 import curated as curated_module
 from app.routers.v2 import datasets as datasets_module
 from app.routers.v2 import mappings as mappings_module
-from app.models.v2.dataset import Dataset, DatasetVersion
+from app.models.v2.dataset import Dataset, DatasetVersion, DatasetVersionEvent
 from app.models.v2.curated import CuratedReview
 from app.data_channel.datasets.service import DatasetService, rows_to_parquet_bytes
-from app.data_channel.curated.review_service import ReviewService, load_rows_with_edits
+from app.data_channel.curated.review_service import (
+    ReviewApprovalError,
+    ReviewService,
+    current_version_review,
+    load_rows_with_edits,
+    require_version_approved,
+)
 
 
 class FakeStorage:
@@ -129,12 +135,31 @@ def test_review_full_views_are_explicitly_paginated(api, auth_headers, db):
     }
 
 
+def test_review_diff_exposes_backend_canonical_row_keys(api, auth_headers, db):
+    """浏览器直接使用服务端 row_pk，不能用 id/行号或分隔符自行猜测。"""
+    ds_id = _make_curated_with_versions(db, [[
+        {"tenant": "中国区", "order_no": "1,2", "amount": 10},
+        {"tenant": "中国区,1", "order_no": "2", "amount": 20},
+    ]], pk="tenant,order_no")
+
+    response = api.get(
+        f"/api/v2/curated/{ds_id}/review-diff?limit=1&offset=1",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json().get("data", response.json())
+    assert payload["row_pk_encoding"] == "json-array"
+    assert payload["current_row_pks"] == ['["中国区,1","2"]']
+
+
 def test_curated_preview_supports_explicit_pagination(api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [[
         {"id": "1", "name": "a"},
         {"id": "2", "name": "b"},
         {"id": "3", "name": "c"},
     ]])
+    review = ReviewService(db).start_review(ds_id)
+    ReviewService(db).approve(review.id)
 
     response = api.get(
         f"/api/v2/curated/{ds_id}/preview?limit=1&offset=1",
@@ -148,6 +173,14 @@ def test_curated_preview_supports_explicit_pagination(api, auth_headers, db):
     assert payload["offset"] == 1
     assert payload["limit"] == 1
     assert payload["has_more"] is True
+
+    version = DatasetService(db).list_versions(ds_id)[-1]
+    for path in (
+        f"/api/v2/datasets/{ds_id}/preview?limit=1&offset=1",
+        f"/api/v2/datasets/{ds_id}/versions/{version.version_no}/preview?limit=1",
+    ):
+        approved_preview = api.get(path, headers=auth_headers)
+        assert approved_preview.status_code == 200, (path, approved_preview.text)
 
 
 def test_curated_export_is_full_and_includes_approved_edits(api, auth_headers, db):
@@ -191,12 +224,48 @@ def test_curated_export_is_full_and_includes_approved_edits(api, auth_headers, d
 
 def test_pending_curated_version_cannot_use_reviewed_export(api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "待审核"}]])
-    response = api.get(
+    version = DatasetService(db).list_versions(ds_id)[-1]
+
+    for path in (
+        f"/api/v2/curated/{ds_id}/preview",
         f"/api/v2/curated/{ds_id}/export?format=csv",
+        f"/api/v2/datasets/{ds_id}/preview",
+        f"/api/v2/datasets/{ds_id}/versions/{version.version_no}/preview",
+    ):
+        response = api.get(path, headers=auth_headers)
+        assert response.status_code == 409, (path, response.text)
+        assert "dataset_version_not_approved" in response.text
+
+
+def test_rejected_curated_version_is_only_readable_through_review_diff(
+        api, auth_headers, db):
+    ds_id = _make_curated_with_versions(db, [[
+        {"id": "1", "name": "应被拒绝"},
+    ]])
+    service = ReviewService(db)
+    review = service.start_review(ds_id)
+    service.reject(review.id, notes="质量不达标")
+    version = DatasetService(db).list_versions(ds_id)[-1]
+
+    for path in (
+        f"/api/v2/curated/{ds_id}/preview",
+        f"/api/v2/curated/{ds_id}/export?format=xlsx",
+        f"/api/v2/datasets/{ds_id}/preview",
+        f"/api/v2/datasets/{ds_id}/versions/{version.version_no}/preview",
+    ):
+        response = api.get(path, headers=auth_headers)
+        assert response.status_code == 409, (path, response.text)
+        assert "dataset_version_rejected" in response.text
+
+    audit = api.get(
+        f"/api/v2/curated/{ds_id}/review-diff?review_id={review.id}",
         headers=auth_headers,
     )
-    assert response.status_code == 409, response.text
-    assert "dataset_pending_review" in response.text
+    assert audit.status_code == 200, audit.text
+    payload = audit.json().get("data", audit.json())
+    assert payload["review"]["status"] == "rejected"
+    assert payload["current"]["dataset_version_id"] == version.id
+    assert payload["current"]["rows"] == [{"id": "1", "name": "应被拒绝"}]
 
 
 def test_review_diff_without_primary_key_uses_full_row_add_delete(api, auth_headers, db):
@@ -221,15 +290,23 @@ def test_curated_schema_uses_pipeline_field_display_names(api, auth_headers, db)
     ds_id = _make_curated_with_versions(db, [[{
         "order_id": "SO-1",
         "body": {"status": "new"},
+        "amount": 5,
+        "promised_at": "2026-07-24",
+        "active": False,
         "fallback": "legacy",
     }]], pk="order_id")
     dataset = db.query(Dataset).filter(Dataset.id == ds_id).one()
     dataset.schema_json = {
         **dict(dataset.schema_json or {}),
-        "columns": ["order_id", "body", "fallback"],
+        "columns": [
+            "order_id", "body", "amount", "promised_at", "active", "fallback",
+        ],
         "columns_typed": [
             {"name": "order_id", "type": "string"},
             {"name": "body", "type": "json"},
+            {"name": "amount", "type": "float"},
+            {"name": "promised_at", "type": "timestamp"},
+            {"name": "active", "type": "boolean"},
             {"name": "fallback", "type": "string"},
         ],
         "types_source": "published_pipeline_contract",
@@ -240,6 +317,9 @@ def test_curated_schema_uses_pipeline_field_display_names(api, auth_headers, db)
         "contract_definitions": [
             {"field_key": "order_id", "field_name": "订单编号", "field_type": "string", "nullable": False},
             {"field_key": "body", "field_name": "body", "field_type": "json", "nullable": True},
+            {"field_key": "amount", "field_name": "订单金额", "field_type": "float", "nullable": False},
+            {"field_key": "promised_at", "field_name": "承诺日期", "field_type": "timestamp", "nullable": False},
+            {"field_key": "active", "field_name": "有效标记", "field_type": "boolean", "nullable": False},
         ],
     }
     db.commit()
@@ -256,6 +336,18 @@ def test_curated_schema_uses_pipeline_field_display_names(api, auth_headers, db)
     assert columns["body"]["display_name_configured"] is True
     assert columns["fallback"]["display_name"] == "fallback"
     assert columns["fallback"]["display_name_configured"] is False
+    assert {name: columns[name]["type"] for name in (
+        "order_id", "body", "amount", "promised_at", "active", "fallback",
+    )} == {
+        "order_id": "string",
+        "body": "json",
+        # 物理快照分别是 JSON 文本、"5"、日期文本和 "False"；发布契约
+        # 必须胜过基于这些字符串样值的二次推断。
+        "amount": "float",
+        "promised_at": "timestamp",
+        "active": "boolean",
+        "fallback": "string",
+    }
 
 
 def test_review_diff_first_version_all_added(api, auth_headers, db):
@@ -513,31 +605,76 @@ def test_repeated_start_review_reuses_pending_session_for_same_version(db, fake_
     assert exported["amount"] == "11"
 
 
-def test_review_session_approve_uses_same_mapping_dispatch(api, auth_headers, db, monkeypatch):
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_terminal_review_cannot_be_reopened_for_same_version(
+        decision, db, fake_storage):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "当前版本"}]], pk="order_no")
+    svc = ReviewService(db)
+    terminal = svc.start_review(ds_id)
+    getattr(svc, decision)(terminal.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        svc.start_review(ds_id)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "review_version_already_decided"
+    assert exc_info.value.detail["review_id"] == terminal.id
+    assert exc_info.value.detail["status"] == (
+        "approved" if decision == "approve" else "rejected")
+
+    DatasetService(db).create_version(
+        ds_id,
+        rows_to_parquet_bytes([{"order_no": "SO-1", "name": "下一版本"}]),
+        rowcount=1,
+    )
+    next_review = svc.start_review(ds_id)
+    assert next_review.id != terminal.id
+    assert next_review.dataset_version_id != terminal.dataset_version_id
+
+
+def test_latest_terminal_decision_controls_legacy_duplicate_reviews(
+        db, fake_storage):
+    ds_id = _make_curated_with_versions(
+        db, [[{"order_no": "SO-1", "name": "当前版本"}]], pk="order_no")
+    svc = ReviewService(db)
+    approved = svc.start_review(ds_id)
+    svc.approve(approved.id)
+
+    # 兼容历史脏数据：旧版本曾允许同一不可变版本重复发起审核。治理读取必须
+    # 服从最新终局决定，不能在较新的 rejected 后继续命中任意旧 approved。
+    rejected = CuratedReview(
+        curated_dataset_id=ds_id,
+        dataset_version_id=approved.dataset_version_id,
+        status="rejected",
+    )
+    db.add(rejected)
+    db.commit()
+
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.id == approved.dataset_version_id).one()
+    with pytest.raises(ReviewApprovalError):
+        require_version_approved(db, ds_id, version)
+    assert current_version_review(db, ds_id, status="approved") is None
+
+
+def test_review_session_approve_uses_durable_mapping_handoff(
+        api, auth_headers, db):
     ds_id = _make_curated_with_versions(db, [[{"id": "1", "name": "a"}]])
     session = api.post(
         f"/api/v2/curated/{ds_id}/reviews", headers=auth_headers).json()
     review_id = session.get("data", session)["review_id"]
-    called: list[str] = []
-
-    class FakeOrchestrator:
-        def __init__(self, _db):
-            pass
-
-        def on_review_approved(self, value):
-            called.append(value)
-            return {"triggered_mappings": []}
-
-    monkeypatch.setattr(
-        "app.services.v2.incremental.orchestrator.IncrementalOrchestrator",
-        FakeOrchestrator,
-    )
     response = api.post(
         f"/api/v2/curated/reviews/{review_id}/approve", headers=auth_headers)
     assert response.status_code == 200, response.text
     payload = response.json().get("data", response.json())
-    assert payload["mapping_dispatch"]["status"] == "success"
-    assert called == [review_id]
+    dispatch = payload["mapping_dispatch"]
+    assert dispatch["status"] == "queued"
+    assert dispatch["durable"] is True
+    event = db.query(DatasetVersionEvent).filter_by(
+        event_type="curated_review_approved").one()
+    assert event.id == dispatch["event_id"]
+    assert event.status == "review_pending"
 
 
 # ── 完整删除已审批数据集 ───────────────────────────────────────

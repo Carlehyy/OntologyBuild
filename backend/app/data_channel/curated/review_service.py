@@ -48,14 +48,30 @@ def review_matches_version(review: CuratedReview, version) -> bool:
 def current_version_review(db: Session, dataset_id: str, *, status: str | None = None):
     """返回当前 DatasetVersion 的最新有效审核；没有则返回 ``None``。"""
     version = latest_dataset_version(db, dataset_id)
+    return version_review(db, dataset_id, version, status=status)
+
+
+def version_review(
+    db: Session,
+    dataset_id: str,
+    version,
+    *,
+    status: str | None = None,
+):
+    """返回指定不可变版本的最新审核决定或待办。
+
+    历史部署曾允许同一版本重复发起审核，因此治理读取必须服从时间上最新的
+    匹配记录；不能跳过较新的 rejected/pending 去命中更早的 approved。
+    """
     reviews = (db.query(CuratedReview)
                .filter(CuratedReview.curated_dataset_id == dataset_id)
                .order_by(CuratedReview.created_at.desc()).all())
     for review in reviews:
-        if status is not None and review.status != status:
+        if not review_matches_version(review, version):
             continue
-        if review_matches_version(review, version):
-            return review
+        # ``status`` 是对最新治理记录的断言，不是允许跳过新决定、向历史
+        # 搜索某种状态的选择器。
+        return review if status is None or review.status == status else None
     return None
 
 
@@ -69,12 +85,8 @@ def require_current_version_approved(db: Session, dataset_id: str) -> CuratedRev
 
 def require_version_approved(db: Session, dataset_id: str, version) -> CuratedReview:
     """要求指定不可变版本已审批，避免检查和读数之间切换版本。"""
-    reviews = (db.query(CuratedReview)
-               .filter(CuratedReview.curated_dataset_id == dataset_id)
-               .order_by(CuratedReview.created_at.desc()).all())
-    review = next((item for item in reviews
-                   if item.status == "approved" and review_matches_version(item, version)), None)
-    if review is None:
+    review = version_review(db, dataset_id, version)
+    if review is None or review.status != "approved":
         raise ReviewApprovalError(
             f"数据集 {dataset_id} 当前版本 v{version.version_no} 尚未审批通过；"
             f"旧版本审批不会自动继承到新版本")
@@ -324,8 +336,28 @@ class ReviewService:
         reviewer_id: str | None = None,
     ) -> CuratedReview:
         """为当前不可变 DatasetVersion 新建或复用 pending 审核。"""
-        self._get_dataset_or_raise(curated_dataset_id)
-        version = latest_dataset_version(self._db, curated_dataset_id)
+        from app.models.v2.dataset import Dataset, DatasetVersion
+
+        # Dataset 是版本发布与审核发起共享的串行点：create_version 更新
+        # latest_version_id 时也会锁该行。这样既防止同版本并发创建两条审核，
+        # 也不会在新版本恰好发布时为旧版本误开审核。
+        dataset = (self._db.query(Dataset).filter(
+            Dataset.id == curated_dataset_id,
+            Dataset.kind == "curated",
+        ).with_for_update(of=Dataset).populate_existing().first())
+        if dataset is None:
+            # 保留 legacy 资产尚未迁移时原有的、可操作的错误信息。
+            self._get_dataset_or_raise(curated_dataset_id)
+        version = None
+        if dataset is not None and dataset.latest_version_id:
+            version = self._db.query(DatasetVersion).filter(
+                DatasetVersion.id == dataset.latest_version_id,
+                DatasetVersion.dataset_id == curated_dataset_id,
+            ).first()
+        if version is None:
+            version = (self._db.query(DatasetVersion)
+                       .filter(DatasetVersion.dataset_id == curated_dataset_id)
+                       .order_by(DatasetVersion.version_no.desc()).first())
         if version is None:
             raise HTTPException(409, detail={
                 "code": "dataset_has_no_version",
@@ -334,11 +366,32 @@ class ReviewService:
 
         existing = (self._db.query(CuratedReview).filter(
             CuratedReview.curated_dataset_id == curated_dataset_id,
-            CuratedReview.status == "pending",
-            CuratedReview.dataset_version_id == version.id,
-        ).order_by(CuratedReview.created_at.desc()).first())
-        if existing:
-            return existing
+        ).order_by(CuratedReview.created_at.desc()).all())
+        existing = [
+            review for review in existing
+            if review_matches_version(review, version)
+        ]
+        terminal = next((
+            review for review in existing
+            if review.status in {"approved", "rejected"}
+        ), None)
+        if terminal is not None:
+            decision_label = "已通过" if terminal.status == "approved" else "已拒绝"
+            raise HTTPException(409, detail={
+                "code": "review_version_already_decided",
+                "message": (
+                    f"当前数据版本 v{version.version_no} {decision_label}，审核决定不可重开；"
+                    "请由流水线产生新版本后再发起审核。"
+                ),
+                "dataset_version_id": version.id,
+                "review_id": terminal.id,
+                "status": terminal.status,
+            })
+        pending = next((
+            review for review in existing if review.status == "pending"
+        ), None)
+        if pending is not None:
+            return pending
 
         review = CuratedReview(
             curated_dataset_id=curated_dataset_id,
@@ -361,9 +414,9 @@ class ReviewService:
         new_value: str | None,
     ) -> CuratedRowEdit:
         """记录单行单字段修改，并验证版本、主键及目标行。"""
-        review = self._get_review_or_raise(review_id)
+        review = self._get_review_for_mutation_or_raise(review_id)
         self._ensure_pending(review)
-        self._assert_review_version_current(review)
+        self._assert_review_version_current(review, bind_legacy=True)
         pk_cols = dataset_pk_columns(self._db, review.curated_dataset_id)
         row_pk = normalize_row_pk(
             row_pk, pk_cols, dataset_name=self._dataset_name(review.curated_dataset_id))
@@ -393,9 +446,9 @@ class ReviewService:
 
     def batch_edit_rows(self, review_id: str, edits: list[dict]) -> list[CuratedRowEdit]:
         """原子保存一批行级编辑。"""
-        review = self._get_review_or_raise(review_id)
+        review = self._get_review_for_mutation_or_raise(review_id)
         self._ensure_pending(review)
-        self._assert_review_version_current(review)
+        self._assert_review_version_current(review, bind_legacy=True)
         pk_cols = dataset_pk_columns(self._db, review.curated_dataset_id)
         dataset_name = self._dataset_name(review.curated_dataset_id)
         prepared: list[tuple[dict, str, str]] = []
@@ -436,23 +489,46 @@ class ReviewService:
         return results
 
     def approve(self, review_id: str, notes: str = "") -> CuratedReview:
-        """批准当前版本审核。"""
-        review = self._get_review_or_raise(review_id)
+        """批准当前版本审核，并原子写入下游自动化 outbox。"""
+        review = self._get_review_for_mutation_or_raise(review_id)
         self._ensure_pending(review)
-        self._assert_review_version_current(review)
+        self._assert_review_version_current(review, bind_legacy=True)
         review.status = "approved"
         review.notes = notes
         review.decided_at = datetime.now(timezone.utc)
         self._set_dataset_status(review.curated_dataset_id, "approved")
+        # 审核决定与下游自动灌入意图必须在同一事务提交。过去这里提交后由
+        # Router 直接 ``Celery.delay``；进程在两步之间退出、或 broker 接受
+        # 但任务未被 worker 消费时，会留下“已审核”却永远没有本体对账的
+        # 不可恢复状态。复用 DatasetVersion 事件 outbox，让调度器在完整
+        # Mapping + Sentinel barrier 成功后才确认事件。
+        if review.dataset_version_id:
+            from app.data_channel.datasets.version_events import (
+                CURATED_REVIEW_APPROVED_EVENT,
+                CURATED_REVIEW_PENDING_STATUS,
+            )
+            from app.models.v2.dataset import DatasetVersionEvent
+            event = self._db.query(DatasetVersionEvent).filter(
+                DatasetVersionEvent.dataset_version_id == review.dataset_version_id,
+                DatasetVersionEvent.event_type
+                == CURATED_REVIEW_APPROVED_EVENT,
+            ).first()
+            if event is None:
+                self._db.add(DatasetVersionEvent(
+                    dataset_id=review.curated_dataset_id,
+                    dataset_version_id=review.dataset_version_id,
+                    event_type=CURATED_REVIEW_APPROVED_EVENT,
+                    status=CURATED_REVIEW_PENDING_STATUS,
+                ))
         self._db.commit()
         self._db.refresh(review)
         return review
 
     def reject(self, review_id: str, notes: str = "") -> CuratedReview:
         """拒绝当前版本审核。"""
-        review = self._get_review_or_raise(review_id)
+        review = self._get_review_for_mutation_or_raise(review_id)
         self._ensure_pending(review)
-        self._assert_review_version_current(review)
+        self._assert_review_version_current(review, bind_legacy=True)
         review.status = "rejected"
         review.notes = notes
         review.decided_at = datetime.now(timezone.utc)
@@ -525,10 +601,20 @@ class ReviewService:
                 "message": f"审核已处于 {review.status} 状态，不能继续编辑或重复决定。",
             })
 
-    def _assert_review_version_current(self, review: CuratedReview) -> None:
+    def _assert_review_version_current(
+        self,
+        review: CuratedReview,
+        *,
+        bind_legacy: bool = False,
+    ) -> None:
         """阻止用旧版本审核结果背书或修改当前资产。"""
         latest = latest_dataset_version(self._db, review.curated_dataset_id)
         if latest is not None and review_matches_version(review, latest):
+            # 迁移前 pending 审核没有不可变版本外键。决定/编辑事务已经先锁住
+            # Dataset 行，此处可安全地把它绑定到刚校验的 latest version，确保
+            # 批准时一定能原子生成带精确版本身份的自动化 outbox。
+            if bind_legacy and review.dataset_version_id is None:
+                review.dataset_version_id = latest.id
             return
         raise HTTPException(409, detail={
             "code": "review_version_stale",
@@ -654,5 +740,42 @@ class ReviewService:
         review = self._db.query(CuratedReview).filter(
             CuratedReview.id == review_id).first()
         if not review:
+            raise HTTPException(404, f"Review {review_id} not found")
+        return review
+
+    def _get_review_for_mutation_or_raise(
+        self,
+        review_id: str,
+    ) -> CuratedReview:
+        """按 Dataset → Review 的固定顺序锁定审核写事务。
+
+        Dataset.latest_version_id 是版本发布的终局写点。先锁 Dataset，随后锁
+        Review，既让审批/拒绝只能有一个终局结果，也保证版本漂移校验与决定
+        提交之间不会插入一个新版本。``populate_existing`` 很重要：请求可能
+        已在 identity map 缓存 pending 状态，等待锁后必须以数据库最新值覆盖。
+        """
+        from app.models.v2.dataset import Dataset
+
+        dataset = (self._db.query(Dataset)
+                   .join(
+                       CuratedReview,
+                       CuratedReview.curated_dataset_id == Dataset.id,
+                   )
+                   .filter(
+                       CuratedReview.id == review_id,
+                       Dataset.kind == "curated",
+                   )
+                   .with_for_update(of=Dataset)
+                   .populate_existing()
+                   .first())
+        if dataset is None:
+            raise HTTPException(404, f"Review {review_id} not found")
+
+        review = (self._db.query(CuratedReview)
+                  .filter(CuratedReview.id == review_id)
+                  .with_for_update(of=CuratedReview)
+                  .populate_existing()
+                  .first())
+        if review is None:
             raise HTTPException(404, f"Review {review_id} not found")
         return review

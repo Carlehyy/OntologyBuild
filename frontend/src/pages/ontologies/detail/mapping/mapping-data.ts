@@ -62,6 +62,7 @@ export interface LinkMappingRecord {
   link_type_id?: string | null
   status?: string
   is_fat: boolean
+  auto_apply_on_review: boolean
   auto_apply_on_version: boolean
 }
 
@@ -172,6 +173,7 @@ export function normalizeLinkMapping(value: unknown): LinkMappingRecord {
     link_type_id: String(raw.link_type_id ?? raw.linkTypeId ?? '') || null,
     status: raw.status == null ? undefined : String(raw.status),
     is_fat: Boolean(raw.is_fat ?? edgeDatasetId),
+    auto_apply_on_review: Boolean(raw.auto_apply_on_review ?? fieldMapping.__auto_apply_on_review__),
     auto_apply_on_version: Boolean(raw.auto_apply_on_version ?? fieldMapping.__auto_apply_on_version__),
   }
 }
@@ -258,8 +260,25 @@ export function useMappingData(
   })
 
   const datasetBase = useMemo<Omit<MappingDataset, 'columns'>[]>(() => {
+    // A curated dataset may have an approved production version while its latest
+    // version is awaiting review. Keep already-mapped logical datasets visible in
+    // that state so the versioned mapping and its review subscription do not
+    // disappear exactly when a reviewer needs to understand the downstream path.
+    const referencedDatasetIds = new Set<string>()
+    for (const mapping of mappings) {
+      if (mapping.curated_dataset_id) referencedDatasetIds.add(mapping.curated_dataset_id)
+    }
+    for (const mapping of linkMappings) {
+      for (const datasetId of [
+        mapping.src_dataset_id,
+        mapping.tgt_dataset_id,
+        mapping.edge_dataset_id,
+      ]) {
+        if (datasetId) referencedDatasetIds.add(datasetId)
+      }
+    }
     const approved = (curatedQuery.data || [])
-      .filter(item => item.status === 'approved')
+      .filter(item => item.status === 'approved' || referencedDatasetIds.has(item.id))
       .map(item => ({
         id: item.id,
         name: item.name,
@@ -283,7 +302,7 @@ export function useMappingData(
     const unique = new Map<string, Omit<MappingDataset, 'columns'>>()
     for (const item of [...approved, ...manual]) unique.set(item.id, item)
     return [...unique.values()]
-  }, [curatedQuery.data, manualQuery.data])
+  }, [curatedQuery.data, linkMappings, manualQuery.data, mappings])
 
   const schemasQuery = useQuery<Record<string, DatasetSchemaColumn[]>>({
     queryKey: ['mapping-dataset-schemas', datasetBase.map(item => item.id).join(',')],

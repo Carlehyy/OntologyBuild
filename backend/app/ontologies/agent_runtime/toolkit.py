@@ -30,6 +30,7 @@ from app.models.ontology_formal import (
 )
 from app.ontologies.agent_runtime.boundary import AgentScope, ToolError
 from app.ontologies.formal_modeling.facts import fact_order_clause
+from app.shared.time_utils import utc_iso
 
 _SCAN_CAP = 5000          # search 单次翻页最多扫描的实例行数（找一页，非计数）
 _AGG_SCAN_CAP = 100_000   # aggregate 流式扫描的安全阀：到此才停并标 partial（不再盲截断 5000）
@@ -797,7 +798,7 @@ class ToolRunner:
                 "actorId": f.actor_id,
                 "causedBy": f.caused_by,
                 "confidence": f.confidence,
-                "recordedAt": f.recorded_at.isoformat() if f.recorded_at else None,
+                "recordedAt": utc_iso(f.recorded_at),
             } for f in facts],
         }
 

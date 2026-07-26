@@ -95,7 +95,7 @@ def test_create_table_basic(api, auth_headers):
         "编号": "string", "名称": "string", "数量": "integer"}
 
 
-def test_manual_version_subscription_can_be_toggled_after_publish(
+def test_manual_version_subscription_requires_versioned_draft_after_publish(
     api, auth_headers, ontology, db,
 ):
     dataset_id = _create_table(api, auth_headers).json()["data"]["id"]
@@ -123,10 +123,17 @@ def test_manual_version_subscription_can_be_toggled_after_publish(
         headers=auth_headers,
         json={"auto_apply_on_version": False},
     )
-    assert response.status_code == 200, response.text
-    assert response.json()["auto_apply_on_version"] is False
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "mapping_policy_requires_versioned_draft"
+    assert detail["fields"] == ["auto_apply_on_version"]
+    assert all(stage in detail["message"] for stage in ("草稿", "试跑", "发布"))
 
-    # Structural edits remain frozen on the same published ontology.
+    from app.models.v2.mapping import OntologyMapping
+    stored = db.query(OntologyMapping).filter_by(id=mapping_id).one()
+    assert stored.field_mapping["__auto_apply_on_version__"] is True
+
+    # Structural edits remain frozen on the same published ontology as well.
     response = api.put(
         f"/api/v2/ontologies/{ontology_id}/mappings/{mapping_id}",
         headers=auth_headers,
@@ -759,4 +766,3 @@ def test_async_import_required_mode_fails_closed_when_broker_is_down(
         "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行")
     assert "生产强制依赖模式禁止降级" in caplog.text
     assert "已降级为 API 进程内后台任务" not in caplog.text
-

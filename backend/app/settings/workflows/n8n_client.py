@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import ipaddress
 import re
 from typing import Any, Optional
 from urllib.parse import urlsplit
@@ -253,11 +252,10 @@ def normalize_n8n_api_base(raw: str) -> str:
 
 
 def enforce_n8n_url_policy(raw: str, *, environment: str = "development") -> str:
-    """规范并校验 n8n 地址，阻断危险 URL 与生产公网明文凭据传输。
+    """规范并校验管理员配置的 n8n 地址。
 
-    n8n API Key 位于请求 Header；生产环境若向公网 ``http://`` 发送，任何链路
-    监听者都可取得完整管理密钥。内网/loopback HTTP 允许用于同机或受控网络，
-    公网实例必须使用 HTTPS。
+    部署方可能在受控网络或既有基础设施中使用 HTTP n8n。这里保留 URL 结构与
+    嵌入凭据检查，但不替管理员改写其明确配置的传输协议。
     """
     api_base = normalize_n8n_api_base(raw)
     if not api_base:
@@ -269,18 +267,6 @@ def enforce_n8n_url_policy(raw: str, *, environment: str = "development") -> str
         raise ValueError("n8n API URL must not contain embedded credentials")
     if parsed.query or parsed.fragment:
         raise ValueError("n8n API URL must not contain query parameters or fragments")
-
-    if environment == "production" and parsed.scheme != "https":
-        host = parsed.hostname.lower()
-        is_private = host in {"localhost", "host.docker.internal"}
-        try:
-            ip = ipaddress.ip_address(host)
-            is_private = ip.is_private or ip.is_loopback or ip.is_link_local
-        except ValueError:
-            # 普通域名无法可靠证明解析后一直是内网，因此生产明文一律拒绝。
-            pass
-        if not is_private:
-            raise ValueError("生产环境的公网 n8n 地址必须使用 HTTPS，避免 API Key 明文传输")
     return api_base
 
 

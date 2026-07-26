@@ -582,6 +582,43 @@ def _paired_dataset(db, monkeypatch) -> DatasetService:
     return service
 
 
+def _order_supplier_dataset(db, monkeypatch) -> DatasetService:
+    storage = MemoryStorage()
+    monkeypatch.setattr(
+        "app.data_channel.datasets.service.get_storage_service", lambda: storage)
+    service = DatasetService(db, storage=storage)
+    dataset = service.create_dataset(
+        "订单供应商宽表", "structured",
+        schema_json={
+            # The asset key identifies order rows, while Supplier must derive
+            # its own identity from the object mapping's hidden PK marker.
+            "primary_key": "order_id",
+            "columns": [
+                {"name": "order_id", "type": "string"},
+                {"name": "supplier_id", "type": "string"},
+                {"name": "supplier_name", "type": "string"},
+            ],
+        },
+    )
+    dataset.id = "dataset-order-suppliers"
+    db.commit()
+    service.create_version(
+        dataset.id,
+        _csv([
+            {"order_id": "ORDER-1", "supplier_id": "SUPPLIER-1",
+             "supplier_name": "供应商一"},
+            {"order_id": "ORDER-2", "supplier_id": "SUPPLIER-2",
+             "supplier_name": "供应商二"},
+            {"order_id": "ORDER-3", "supplier_id": "SUPPLIER-3",
+             "supplier_name": "供应商三"},
+            {"order_id": "ORDER-4", "supplier_id": "SUPPLIER-4",
+             "supplier_name": "供应商四"},
+        ]),
+        rowcount=4,
+    )
+    return service
+
+
 def test_production_manual_mapping_contract_fails_trial_readiness_and_promote(
         client, auth_headers, ontology, db, monkeypatch):
     """The same exact-pin contract must fence all three lifecycle boundaries."""
@@ -2281,6 +2318,138 @@ def test_trial_keeps_same_dataset_mappings_separate_by_endpoint_type(
     } == set()
     assert db.query(LinkInstance).filter_by(ontology_id=oid).count() == 0
     assert db.query(Relation).filter_by(ontology_id=oid).count() == 0
+
+
+def test_trial_uses_each_object_mapping_primary_key_for_order_supplier_fat_table(
+        client, auth_headers, ontology, db, monkeypatch):
+    """订单宽表应生成独立 Order/Supplier 对象，并完整连接四条供货关系。"""
+    oid = ontology["id"]
+    _order_supplier_dataset(db, monkeypatch)
+    draft = _draft(client, auth_headers, oid, _root(
+        client, auth_headers, oid)["id"])
+    workspace = {
+        "baseRevision": f"{draft['revision']}:{draft['snapshot_hash']}",
+        "version": draft["version_number"],
+        "objectTypes": [
+            {
+                "id": "ot-order",
+                "name": "Order",
+                "displayName": "订单",
+                "primaryKey": "prop-order-id",
+                "properties": [{
+                    "id": "prop-order-id",
+                    "name": "order_id",
+                    "displayName": "订单编号",
+                    "type": "string",
+                    "required": True,
+                }],
+            },
+            {
+                "id": "ot-supplier",
+                "name": "Supplier",
+                "displayName": "供应商",
+                "primaryKey": "prop-supplier-id",
+                "properties": [
+                    {
+                        "id": "prop-supplier-id",
+                        "name": "supplier_id",
+                        "displayName": "供应商编号",
+                        "type": "string",
+                        "required": True,
+                    },
+                    {
+                        "id": "prop-supplier-name",
+                        "name": "supplier_name",
+                        "displayName": "供应商名称",
+                        "type": "string",
+                    },
+                ],
+            },
+        ],
+        "linkTypes": [{
+            "id": "lt-supplied-by",
+            "name": "supplied_by",
+            "displayName": "由供应商供货",
+            "sourceObjectTypeId": "ot-order",
+            "targetObjectTypeId": "ot-supplier",
+            "cardinality": "many-to-one",
+            "properties": [],
+        }],
+        "actions": [],
+        "functions": [],
+        "instances": [],
+        "linkInstances": [],
+    }
+    saved = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers,
+        json=workspace,
+    )
+    assert saved.status_code == 200, saved.text
+
+    mapped = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace/mappings",
+        headers=auth_headers,
+        json={
+            "baseRevision": saved.json()["data"]["revision"],
+            "mappings": [
+                {
+                    "id": "map-order",
+                    "curatedDatasetId": "dataset-order-suppliers",
+                    "entityClass": "Order",
+                    "targetObjectTypeId": "ot-order",
+                    "fieldMapping": {
+                        "order_id": "order_id",
+                        "__primary_key__": "order_id",
+                    },
+                },
+                {
+                    "id": "map-supplier",
+                    "curatedDatasetId": "dataset-order-suppliers",
+                    "entityClass": "Supplier",
+                    "targetObjectTypeId": "ot-supplier",
+                    "fieldMapping": {
+                        "supplier_id": "supplier_id",
+                        "supplier_name": "supplier_name",
+                        "__primary_key__": "supplier_id",
+                    },
+                },
+            ],
+            "linkMappings": [{
+                "id": "lm-supplied-by",
+                "linkTypeId": "lt-supplied-by",
+                "relationType": "supplied_by",
+                "srcDatasetId": "dataset-order-suppliers",
+                "tgtDatasetId": "dataset-order-suppliers",
+                "edgeDatasetId": "dataset-order-suppliers",
+                "srcKey": "order_id",
+                "tgtKey": "supplier_id",
+                "fieldMapping": {},
+            }],
+            "sentinels": [],
+        },
+    )
+    assert mapped.status_code == 200, mapped.text
+
+    trial_response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers,
+        json={},
+    )
+    assert trial_response.status_code == 201, trial_response.text
+    trial = trial_response.json()["data"]
+    assert trial["status"] == "passed", trial
+    assert trial["result"]["counts"]["objects"] == 8
+    assert trial["result"]["counts"]["links"] == 4
+
+    trial_objects = db.query(OntologyTrialObject).filter_by(
+        trial_run_id=trial["id"]).all()
+    assert sum(item.object_type_id == "ot-order"
+               for item in trial_objects) == 4
+    assert sum(item.object_type_id == "ot-supplier"
+               for item in trial_objects) == 4
+    assert db.query(OntologyTrialLink).filter_by(
+        trial_run_id=trial["id"]).count() == 4
 
 
 def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(

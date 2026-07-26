@@ -9,6 +9,7 @@ import pytest
 import requests
 import yaml
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from app.models.ontology_formal import (
     ActionExecutionLog,
@@ -20,7 +21,12 @@ from app.models.ontology_formal import (
     OntologyFunction,
     PropertyFact,
 )
-from app.models.sentinel import Notification, Sentinel, SentinelMatchState
+from app.models.sentinel import (
+    Notification,
+    Sentinel,
+    SentinelFiring,
+    SentinelMatchState,
+)
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
 from app.models.v2.mapping import OntologyMapping
@@ -33,6 +39,8 @@ from app.ontologies.formal_modeling.webhook_dispatcher import (
     WebhookDispatchError,
     preview_webhook,
 )
+from app.ontologies.formal_modeling.facts import record_decision_fact
+from app.ontologies.formal_modeling import router as formal_router
 from app.ontologies.sentinels.evaluator import _sentinel_execution_lock
 from app.ontologies.sentinels import evaluator as sentinel_evaluator
 from app.services.sentinel.evaluator import (
@@ -803,6 +811,16 @@ def test_approved_sentinel_action_recovers_release_from_durable_lineage(db):
             "value": "\"released\"",
         },
     }
+    notification_rule = {
+        "id": "notify-owner", "type": "notification",
+        "name": "notify owner", "enabled": True, "order": 1,
+        "config": {
+            "channel": "internal",
+            "recipientSource": "constant",
+            "recipient": "ops",
+            "messageTemplate": "approved={{object.id}}",
+        },
+    }
     release = OntologyVersion(
         id=release_id, ontology_id=ontology_id,
         version_number="v1", node_kind="release",
@@ -827,7 +845,8 @@ def test_approved_sentinel_action_recovers_release_from_durable_lineage(db):
                 "id": action_id, "name": "approved_sentinel_action",
                 "displayName": "Approved sentinel action",
                 "objectTypeId": object_type_id,
-                "parameters": [], "rules": [released_rule],
+                "parameters": [],
+                "rules": [released_rule, notification_rule],
                 "requiresApproval": True,
             }],
             "sentinels": [], "mappings": [], "linkMappings": [],
@@ -858,13 +877,16 @@ def test_approved_sentinel_action_recovers_release_from_durable_lineage(db):
         name="approved_sentinel_action",
         display_name="Approved sentinel action",
         object_type_id=object_type_id, parameters=[],
-        rules=[{
-            **released_rule,
-            "config": {
-                **released_rule["config"],
-                "value": "\"draft\"",
+        rules=[
+            {
+                **released_rule,
+                "config": {
+                    **released_rule["config"],
+                    "value": "\"draft\"",
+                },
             },
-        }],
+            notification_rule,
+        ],
         requires_approval=True,
     )
     state = SentinelMatchState(
@@ -902,6 +924,11 @@ def test_approved_sentinel_action_recovers_release_from_durable_lineage(db):
     assert result["status"] == "success", result
     assert result["ontologyReleaseId"] == release_id
     assert instance.properties["status"] == "released"
+    notification = db.query(Notification).filter_by(
+        ontology_id=ontology_id).one()
+    assert notification.sentinel_id == state.sentinel_id
+    assert notification.ontology_release_id == release_id
+    assert notification.action_log_id == result["id"]
 
 
 def test_production_action_blocks_during_incomplete_mapping_projection(
@@ -2309,6 +2336,250 @@ def test_action_idempotency_replays_success_and_pending(db):
     assert pending_two["idempotentReplay"] is True
     assert db.query(ActionExecutionLog).filter_by(
         ontology_id=ontology_id, idempotency_key="idem-pending").count() == 1
+
+
+def test_executing_sentinel_approval_replay_is_narrow_and_fail_closed(db):
+    ontology_id = "executing-approval-replay-contract"
+    object_type, instance = _seed_object(db, ontology_id)
+    other = ObjectInstance(
+        id="order-2",
+        ontology_id=ontology_id,
+        object_type_id=object_type.id,
+        properties={
+            "id": "order-2",
+            "active": True,
+            "count": 0,
+            "status": "new",
+        },
+    )
+    action = ActionType(
+        id="approval-replay-action",
+        ontology_id=ontology_id,
+        name="approval_replay",
+        display_name="Approval replay",
+        object_type_id=object_type.id,
+        parameters=[],
+        rules=[_update_rule("status", value="\"approved\"")],
+        requires_approval=True,
+    )
+    owner = ActionExecutionLog(
+        id="executing-approval-owner",
+        ontology_id=ontology_id,
+        action_id=action.id,
+        action_name=action.display_name,
+        object_type_id=object_type.id,
+        object_instance_id=instance.id,
+        parameters={},
+        status="executing",
+        validation_errors=[],
+        effects=[],
+        dry_run=False,
+        decided_by="approval-admin",
+        decided_at=datetime.now(timezone.utc),
+        idempotency_key="sentinel-approval-key",
+        sentinel_match_state_id="approval-match-state",
+        ontology_version="v1.0.0",
+    )
+    db.add_all([other, action, owner])
+    db.commit()
+    exact_body = _body(
+        action,
+        instance,
+        idempotency_key=owner.idempotency_key,
+        sentinel_match_state_id=owner.sentinel_match_state_id,
+    )
+
+    # ``executing`` by itself is not trusted as an approval checkpoint.
+    missing_fact = execute_action(db, ontology_id, exact_body)
+    assert missing_fact["status"] == "failed"
+    assert missing_fact["validationErrors"] == ["idempotency_key_conflict"]
+
+    record_decision_fact(
+        db,
+        ontology_id=ontology_id,
+        action_log_id=owner.id,
+        decision="APPROVED",
+        source="user://approval-admin",
+        actor_id="approval-admin",
+        ontology_version=owner.ontology_version,
+    )
+    db.commit()
+
+    replay = execute_action(db, ontology_id, exact_body)
+    assert replay["id"] == owner.id
+    assert replay["status"] == "pending"
+    assert replay["pendingApproval"] is True
+    assert replay["approvalExecuting"] is True
+    assert replay["approvalLogStatus"] == "executing"
+    assert replay["idempotentReplay"] is True
+    assert replay["effects"] == []
+
+    # Even a valid approval checkpoint cannot mask reuse by another target.
+    mismatch = execute_action(
+        db,
+        ontology_id,
+        _body(
+            action,
+            other,
+            idempotency_key=owner.idempotency_key,
+            sentinel_match_state_id=owner.sentinel_match_state_id,
+        ),
+    )
+    assert mismatch["status"] == "failed"
+    assert mismatch["validationErrors"] == [
+        "idempotency_key_payload_mismatch",
+    ]
+    db.refresh(owner)
+    assert owner.status == "executing"
+    assert owner.related_log_id is None
+
+
+def test_hitl_execution_cdc_reentry_is_pending_without_error_firing(
+        db, monkeypatch):
+    ontology_id = "hitl-cdc-executing-race"
+    object_type, instance = _seed_object(db, ontology_id)
+    action = ActionType(
+        id="hitl-cdc-action",
+        ontology_id=ontology_id,
+        name="hitl_cdc_action",
+        display_name="HITL CDC action",
+        object_type_id=object_type.id,
+        parameters=[],
+        rules=[_update_rule("status", value="\"approved\"")],
+        requires_approval=True,
+    )
+    sentinel = Sentinel(
+        id="hitl-cdc-sentinel",
+        ontology_id=ontology_id,
+        name="hitl_cdc_sentinel",
+        display_name="HITL CDC Sentinel",
+        bindings=[{
+            "alias": "a",
+            "objectTypeId": object_type.id,
+        }],
+        links=[],
+        condition="a.active == True",
+        primary_alias="a",
+        action_ids=[action.id],
+        action_parameters={},
+        trigger_mode="on_enter",
+        muted=False,
+        enabled=True,
+        status="published",
+    )
+    db.add_all([action, sentinel])
+    db.commit()
+    release_id = _freeze_runtime_release(db, ontology_id)
+
+    initial = evaluate_sentinel(
+        db,
+        ontology_id,
+        sentinel,
+        "manual",
+        expected_release_id=release_id,
+    )
+    state = db.query(SentinelMatchState).filter_by(
+        sentinel_id=sentinel.id,
+    ).one()
+    proposal = db.query(ActionExecutionLog).filter_by(
+        ontology_id=ontology_id,
+        action_id=action.id,
+        status="pending",
+    ).one()
+    assert initial.status == "pending"
+    assert state.runtime_status == "pending_enter"
+
+    real_execute_action = formal_router.execute_action
+    race_observation = {}
+    RaceSession = sessionmaker(
+        bind=db.get_bind(),
+        expire_on_commit=False,
+    )
+
+    def execute_then_reenter_cdc(execution_db, *args, **kwargs):
+        execution = real_execute_action(execution_db, *args, **kwargs)
+        race_db = RaceSession()
+        try:
+            race_sentinel = race_db.query(Sentinel).filter_by(
+                id=sentinel.id,
+                ontology_id=ontology_id,
+            ).one()
+            firing = evaluate_sentinel(
+                race_db,
+                ontology_id,
+                race_sentinel,
+                "change",
+                expected_release_id=release_id,
+            )
+            race_observation.update({
+                "status": firing.status,
+                "error": firing.error,
+                "actionResults": list(firing.action_results or []),
+            })
+        finally:
+            race_db.close()
+        return execution
+
+    monkeypatch.setattr(
+        formal_router,
+        "execute_action",
+        execute_then_reenter_cdc,
+    )
+    admin = SimpleNamespace(
+        id="approval-admin",
+        username="approval-admin",
+        role="admin",
+    )
+    decided = decide_pending_action(
+        ontology_id,
+        proposal.id,
+        DecisionRequest(
+            decision="approved",
+            release_id=release_id,
+        ),
+        db,
+        admin,
+    )["data"]
+
+    assert race_observation["status"] == "pending"
+    assert race_observation["error"] is None
+    assert race_observation["actionResults"] == [{
+        "actionId": action.id,
+        "targetInstanceId": instance.id,
+        "edge": "enter",
+        "matchKey": instance.id,
+        "status": "pending",
+        "logId": proposal.id,
+        "idempotentReplay": True,
+        "effects": [],
+        "errorMessage": None,
+        "validationErrors": [],
+        "pendingApproval": True,
+        "approvalExecuting": True,
+        "approvalLogStatus": "executing",
+    }]
+    assert decided["pendingLog"]["status"] == "approved"
+    assert decided["executionLog"]["status"] == "success"
+    assert decided["sentinelResume"]["status"] == "fired"
+
+    db.refresh(instance)
+    state = db.query(SentinelMatchState).filter_by(
+        sentinel_id=sentinel.id,
+    ).one()
+    firings = db.query(SentinelFiring).filter_by(
+        ontology_id=ontology_id,
+        sentinel_id=sentinel.id,
+    ).all()
+    conflict_logs = [
+        log for log in db.query(ActionExecutionLog).filter_by(
+            ontology_id=ontology_id,
+        ).all()
+        if "idempotency_key_conflict" in (log.validation_errors or [])
+    ]
+    assert instance.properties["status"] == "approved"
+    assert state.runtime_status == "completed"
+    assert all(firing.status != "error" for firing in firings)
+    assert conflict_logs == []
 
 
 def test_idempotent_replay_precedes_mutable_business_preconditions(db):

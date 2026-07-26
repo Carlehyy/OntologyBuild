@@ -1746,6 +1746,56 @@ def get_draft_mappings(
     )}
 
 
+_MAPPING_AUTOMATION_POLICY_KEYS = (
+    "__auto_apply_on_review__",
+    "__auto_apply_on_version__",
+)
+
+
+def _validate_workspace_mapping_policy_types(body: dict) -> None:
+    """Automation flags in an immutable draft snapshot must be JSON booleans."""
+    errors: list[dict] = []
+    for collection, kind in (
+        ("mappings", "mapping"),
+        ("linkMappings", "linkMapping"),
+    ):
+        items = body.get(collection)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            field_mapping = item.get("fieldMapping")
+            if not isinstance(field_mapping, dict):
+                continue
+            for key in _MAPPING_AUTOMATION_POLICY_KEYS:
+                if key not in field_mapping:
+                    continue
+                value = field_mapping[key]
+                # ``bool`` is a subclass of ``int`` in Python; exact type is
+                # required so JSON 0/1 cannot silently become policy values.
+                if type(value) is bool:
+                    continue
+                errors.append({
+                    "kind": kind,
+                    "index": index,
+                    "id": str(item.get("id") or ""),
+                    "field": f"fieldMapping.{key}",
+                    "valueType": (
+                        "null" if value is None else type(value).__name__
+                    ),
+                })
+    if errors:
+        raise HTTPException(422, detail={
+            "code": "invalid_mapping_automation_policy_type",
+            "message": (
+                "映射自动触发策略必须使用 JSON true/false，"
+                "不能使用字符串、数字或 null。"
+            ),
+            "errors": errors,
+        })
+
+
 @router.put("/{ontology_id}/versions/{version_id}/workspace/mappings")
 def save_draft_mappings(
     ontology_id: str, version_id: str, body: dict,
@@ -1767,6 +1817,7 @@ def save_draft_mappings(
             "code": "conflict", "message": "该草稿映射已被修改，请重新加载",
             "currentRevision": expected,
         })
+    _validate_workspace_mapping_policy_types(body)
     snap = complete_snapshot(draft.snapshot_formal)
     for key in ("mappings", "linkMappings", "sentinels"):
         if key in body:

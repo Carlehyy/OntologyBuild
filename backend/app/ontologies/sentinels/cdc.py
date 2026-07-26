@@ -59,6 +59,38 @@ SCHEDULED_SCAN = "scheduled_scan"
 DYNAMIC_ACTIVATION = "dynamic_activation"
 BUILTIN_ACTIVATION = "builtin_activation"
 
+# Protocol-v2 in-flight states fence newly-produced work from legacy workers
+# sharing the same database.  A new worker can adopt legacy rows, but every
+# successful claim is immediately promoted to ``cdc_processing`` so an older
+# worker can neither observe a v2 event nor recover its lease.
+CDC_HELD = "cdc_held"
+CDC_PENDING = "cdc_pending"
+CDC_PROCESSING = "cdc_processing"
+CDC_RETRY = "cdc_retry"
+CDC_DEAD = "cdc_dead"
+
+_HELD_STATUSES = ("held", CDC_HELD)
+_PENDING_STATUSES = ("pending", CDC_PENDING)
+_PROCESSING_STATUSES = ("processing", CDC_PROCESSING)
+_RETRY_STATUSES = ("retry", CDC_RETRY)
+_DEAD_STATUSES = ("dead", CDC_DEAD)
+_FAILED_STATUSES = (*_RETRY_STATUSES, *_DEAD_STATUSES)
+_DISCARDABLE_STATUSES = (
+    *_HELD_STATUSES, *_PENDING_STATUSES, *_RETRY_STATUSES,
+)
+_PUBLIC_STATUS = {
+    CDC_HELD: "held",
+    CDC_PENDING: "pending",
+    CDC_PROCESSING: "processing",
+    CDC_RETRY: "retry",
+    CDC_DEAD: "dead",
+}
+
+
+def _public_outbox_status(status: str | None) -> str:
+    value = str(status or "")
+    return _PUBLIC_STATUS.get(value, value)
+
 
 def _positive_env_int(name: str, default: int, maximum: int) -> int:
     try:
@@ -89,6 +121,8 @@ _dispatch_queue: queue.Queue[str] = queue.Queue(
     maxsize=_DISPATCH_QUEUE_SIZE)
 _dispatch_worker: threading.Thread | None = None
 _dispatch_worker_lock = threading.Lock()
+_dispatch_stop_event = threading.Event()
+_background_worker_enabled = False
 _cascade_depth: ContextVar[int] = ContextVar(
     "sentinel_cascade_depth", default=0)
 _cascade_chain_id: ContextVar[str | None] = ContextVar(
@@ -181,7 +215,7 @@ def _control_outbox_row(
         link_change=False,
         cascade_depth=_event_depth(),
         mapping_ids=[],
-        status="pending",
+        status=CDC_PENDING,
         attempts=0,
         available_at=_now(),
         result_json={"control": dict(control or {})},
@@ -311,10 +345,10 @@ def _outbox_row(
         # Mapping events remain durably fenced until the mapping transaction
         # reaches ``applied`` and dispatch_captured_changes activates them.
         status=(
-            "held"
+            CDC_HELD
             if session.info.get(SUPPRESS_KEY)
             and session.info.get(CAPTURE_SUPPRESSED_KEY)
-            else "pending"
+            else CDC_PENDING
         ),
         attempts=0,
         available_at=_now(),
@@ -394,7 +428,7 @@ def _merge_pointer_switch_deltas(
             str(row.ontology_id) != str(ontology_id)
             or str(row.event_kind or "") not in (
                 OBJECT_CHANGE, LINK_CHANGE)
-            or str(row.status or "") not in ("held", "pending", "retry")
+            or str(row.status or "") not in _DISCARDABLE_STATUSES
         ):
             continue
         row.status = "completed"
@@ -672,11 +706,12 @@ def _release_transaction_guard(
 def _eligible_filter(now: datetime, stale_before: datetime):
     return or_(
         and_(
-            SentinelCdcOutbox.status.in_(("pending", "retry")),
+            SentinelCdcOutbox.status.in_(
+                (*_PENDING_STATUSES, *_RETRY_STATUSES)),
             SentinelCdcOutbox.available_at <= now,
         ),
         and_(
-            SentinelCdcOutbox.status == "processing",
+            SentinelCdcOutbox.status.in_(_PROCESSING_STATUSES),
             SentinelCdcOutbox.claimed_at < stale_before,
         ),
     )
@@ -699,7 +734,7 @@ def _claim_one(
         SentinelCdcOutbox.id == event_id,
         eligible,
     ).update({
-        SentinelCdcOutbox.status: "processing",
+        SentinelCdcOutbox.status: CDC_PROCESSING,
         SentinelCdcOutbox.claimed_at: now,
         SentinelCdcOutbox.claim_token: token,
         SentinelCdcOutbox.attempts: SentinelCdcOutbox.attempts + 1,
@@ -858,7 +893,7 @@ def _execute_claimed_event(
         db: Session, event_id: str, claim_token: str) -> dict:
     event_row = db.query(SentinelCdcOutbox).filter(
         SentinelCdcOutbox.id == event_id,
-        SentinelCdcOutbox.status == "processing",
+        SentinelCdcOutbox.status == CDC_PROCESSING,
         SentinelCdcOutbox.claim_token == claim_token,
     ).first()
     if event_row is None:
@@ -1032,7 +1067,7 @@ def _finalize_success(
         result: dict) -> bool:
     row = db.query(SentinelCdcOutbox).filter(
         SentinelCdcOutbox.id == event_id,
-        SentinelCdcOutbox.status == "processing",
+        SentinelCdcOutbox.status == CDC_PROCESSING,
         SentinelCdcOutbox.claim_token == claim_token,
     ).first()
     if row is None:
@@ -1143,6 +1178,7 @@ def _finalize_failure(
     db.rollback()
     row = db.query(SentinelCdcOutbox).filter(
         SentinelCdcOutbox.id == event_id,
+        SentinelCdcOutbox.status == CDC_PROCESSING,
         SentinelCdcOutbox.claim_token == claim_token,
     ).first()
     if row is None:
@@ -1169,17 +1205,17 @@ def _finalize_failure(
         or int(row.cascade_depth or 0) > _MAX_CASCADE_DEPTH
     )
     if terminal:
-        row.status = "dead"
+        row.status = CDC_DEAD
         row.processed_at = _now()
     else:
-        row.status = "retry"
+        row.status = CDC_RETRY
         delay = min(
             300,
             2 ** min(max(int(row.attempts or 1) - 1, 0), 8),
         )
         row.available_at = _now() + timedelta(seconds=delay)
     db.commit()
-    return row.status
+    return _public_outbox_status(row.status)
 
 
 def _candidate_ids(
@@ -1303,7 +1339,7 @@ def recover_held_outbox(
     try:
         now = _now()
         rows = db.query(SentinelCdcOutbox).filter(
-            SentinelCdcOutbox.status == "held",
+            SentinelCdcOutbox.status.in_(_HELD_STATUSES),
             SentinelCdcOutbox.available_at <= now,
         ).order_by(
             SentinelCdcOutbox.available_at.asc(),
@@ -1335,7 +1371,7 @@ def recover_held_outbox(
             ready = bool(expected) and set(statuses) == expected and all(
                 status == "applied" for status in statuses.values())
             if ready:
-                row.status = "pending"
+                row.status = CDC_PENDING
                 row.available_at = now
                 row.last_error = None
                 row.updated_at = now
@@ -1428,13 +1464,15 @@ def prune_completed_outbox(session_factory=None) -> int:
 
 def _dispatch_loop() -> None:
     global _last_dispatch_error, _last_prune_monotonic
-    while True:
+    while not _dispatch_stop_event.is_set():
         event_id: str | None = None
         try:
             try:
                 event_id = _dispatch_queue.get(timeout=1.0)
             except queue.Empty:
                 pass
+            if _dispatch_stop_event.is_set() and event_id is None:
+                break
             recover_held_outbox(limit=100)
             batch = drain_cdc_outbox(
                 event_ids={event_id} if event_id else None,
@@ -1466,6 +1504,7 @@ def _ensure_dispatch_worker() -> None:
     with _dispatch_worker_lock:
         if _dispatch_worker is not None and _dispatch_worker.is_alive():
             return
+        _dispatch_stop_event.clear()
         _dispatch_worker = threading.Thread(
             target=_dispatch_loop,
             daemon=True,
@@ -1474,8 +1513,38 @@ def _ensure_dispatch_worker() -> None:
         _dispatch_worker.start()
 
 
+def stop_cdc_worker(*, timeout: float = 5.0) -> bool:
+    """Stop the API-owned recovery daemon during application shutdown.
+
+    Listener registration remains process-global and idempotent.  Only the
+    background consumer is stopped, so a later lifespan can safely restart it
+    without duplicating SQLAlchemy event listeners.
+    """
+    global _dispatch_worker, _background_worker_enabled
+    _background_worker_enabled = False
+    _dispatch_stop_event.set()
+    worker = _dispatch_worker
+    if worker is None:
+        return True
+    if worker is threading.current_thread():
+        return False
+    worker.join(timeout=max(0.0, timeout))
+    stopped = not worker.is_alive()
+    if stopped:
+        with _dispatch_worker_lock:
+            if _dispatch_worker is worker:
+                _dispatch_worker = None
+    return stopped
+
+
 def _enqueue_dispatch(event_ids: list[str] | set[str]) -> None:
     """Best-effort accelerator; a full queue never loses the durable event."""
+    # Listener-only processes (notably Mapping Celery workers) own a
+    # synchronous causal-chain barrier and must not create a competing daemon
+    # consumer from ``after_commit``.  The row is durable, so the API process's
+    # recovery worker can still repair it after a task crash.
+    if not _background_worker_enabled:
+        return
     _ensure_dispatch_worker()
     for event_id in sorted(set(event_ids)):
         try:
@@ -1713,10 +1782,12 @@ def cdc_dispatch_status(
             func.count(SentinelCdcOutbox.id),
         )
         counts = scoped(counts)
-        durable.update({
-            status: count for status, count in counts.group_by(
-                SentinelCdcOutbox.status).all()
-        })
+        for status, count in counts.group_by(
+                SentinelCdcOutbox.status).all():
+            public_status = _public_outbox_status(status)
+            durable[public_status] = (
+                int(durable.get(public_status, 0)) + int(count)
+            )
         error_query = db.query(SentinelCdcOutbox).filter(
             SentinelCdcOutbox.last_error.is_not(None),
         )
@@ -1735,7 +1806,7 @@ def cdc_dispatch_status(
             "definitionRevision": control_for(row).get(
                 "definitionRevision"),
             "enableGeneration": control_for(row).get("enableGeneration"),
-            "status": row.status,
+            "status": _public_outbox_status(row.status),
             "cascadeDepth": row.cascade_depth,
             "attempts": row.attempts,
             "error": row.last_error,
@@ -1764,7 +1835,7 @@ def cdc_dispatch_status(
                     "definitionRevision"),
                 "enableGeneration": control_for(row).get(
                     "enableGeneration"),
-                "status": row.status,
+                "status": _public_outbox_status(row.status),
                 "objectTypeId": row.object_type_id,
                 "linkChange": bool(row.link_change),
                 "cascadeDepth": row.cascade_depth,
@@ -1920,12 +1991,12 @@ def _drain_chain_barrier(
                 chain_ids, session_factory=session_factory)
             failed = [
                 row for row in rows
-                if row.status in ("retry", "dead")
+                if row.status in _FAILED_STATUSES
             ]
             if failed:
                 errors.extend([{
                     "eventId": row.id,
-                    "status": row.status,
+                    "status": _public_outbox_status(row.status),
                     "error": row.last_error or "CDC outbox 执行失败",
                     "result": row.result_json,
                 } for row in failed])
@@ -1980,7 +2051,7 @@ def _summary_from_outbox(rows: list[SentinelCdcOutbox]) -> dict:
             "chain_id": row.chain_id,
             "ontology_id": row.ontology_id,
             "cascade_depth": row.cascade_depth,
-            "status": row.status,
+            "status": _public_outbox_status(row.status),
             "result": result,
         }
         if row.link_change:
@@ -1997,11 +2068,11 @@ def _summary_from_outbox(rows: list[SentinelCdcOutbox]) -> dict:
                 "error": f"哨兵评估返回 {nested_errors} 个执行错误",
                 "firings": result.get("firings", []),
             })
-        if row.status in ("retry", "dead"):
+        if row.status in _FAILED_STATUSES:
             summary["errors"].append({
                 "event_id": row.id,
                 "ontology_id": row.ontology_id,
-                "status": row.status,
+                "status": _public_outbox_status(row.status),
                 "error": row.last_error or "CDC outbox 执行失败",
             })
     return summary
@@ -2079,9 +2150,9 @@ def _activate_held_events(
     try:
         changed = db.query(SentinelCdcOutbox).filter(
             SentinelCdcOutbox.id.in_(event_ids),
-            SentinelCdcOutbox.status == "held",
+            SentinelCdcOutbox.status.in_(_HELD_STATUSES),
         ).update({
-            SentinelCdcOutbox.status: "pending",
+            SentinelCdcOutbox.status: CDC_PENDING,
             SentinelCdcOutbox.available_at: _now(),
             SentinelCdcOutbox.updated_at: _now(),
         }, synchronize_session=False)
@@ -2170,7 +2241,7 @@ def discard_captured_changes(session: Session) -> None:
     if outbox_ids:
         session.query(SentinelCdcOutbox).filter(
             SentinelCdcOutbox.id.in_(outbox_ids),
-            SentinelCdcOutbox.status.in_(("held", "pending", "retry")),
+            SentinelCdcOutbox.status.in_(_DISCARDABLE_STATUSES),
         ).delete(synchronize_session=False)
     session.info.pop(_CAPTURED_KEY, None)
     session.info.pop(_CAPTURED_LINK_KEY, None)
@@ -2186,8 +2257,16 @@ def discard_captured_changes(session: Session) -> None:
 _REGISTERED = False
 
 
-def register_cdc() -> None:
-    global _REGISTERED
+def register_cdc(*, start_worker: bool = False) -> None:
+    """Register CDC listeners and optionally start the recovery worker.
+
+    Listener registration is safe in any process.  Starting the durable
+    recovery worker is an explicit API-process responsibility: a Mapping
+    Celery task owns a synchronous chain barrier for the changes it just
+    projected, and a second consumer in that same process would race the task
+    for its own event.
+    """
+    global _REGISTERED, _background_worker_enabled
     if not _REGISTERED:
         event.listen(Session, "before_flush", _before_flush)
         event.listen(Session, "after_commit", _after_commit)
@@ -2195,4 +2274,6 @@ def register_cdc() -> None:
         _REGISTERED = True
     # Registration also performs crash/restart recovery even when this process
     # has not yet observed a new commit.
-    _ensure_dispatch_worker()
+    if start_worker:
+        _background_worker_enabled = True
+        _ensure_dispatch_worker()

@@ -28,7 +28,8 @@ interface Row {
 }
 
 const STATUS_ICON = (status: string) => {
-  if (status === 'approved' || status === 'rejected') return <CheckCircle size={13} className="text-green-500" />
+  if (status === 'approved') return <CheckCircle size={13} className="text-green-500" />
+  if (status === 'rejected') return <AlertTriangle size={13} className="text-rose-500" />
   return <Clock size={13} className="text-yellow-400" />
 }
 
@@ -37,7 +38,7 @@ const STATUS_LABEL: Record<string, string> = {
   pending:        '待审核',
   in_review:      '待审核',
   approved:       '已审核',
-  rejected:       '已审核',
+  rejected:       '已拒绝',
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -45,7 +46,7 @@ const STATUS_STYLE: Record<string, string> = {
   pending:        'bg-yellow-50 text-yellow-700 border-yellow-200',
   in_review:      'bg-yellow-50 text-yellow-700 border-yellow-200',
   approved:       'bg-green-50 text-green-700 border-green-200',
-  rejected:       'bg-green-50 text-green-700 border-green-200',
+  rejected:       'bg-rose-50 text-rose-700 border-rose-200',
 }
 
 type LakeTab = 'curated' | 'raw'
@@ -563,7 +564,7 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
         >
           <option value="">全部审核状态</option>
           <option value="pending_review">待审核</option>
-          <option value="reviewed">已审核</option>
+          <option value="reviewed">已处理</option>
         </select>
 
         {/* 清除筛选 */}

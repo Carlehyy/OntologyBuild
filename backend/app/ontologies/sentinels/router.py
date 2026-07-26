@@ -30,6 +30,7 @@ from app.ontologies.sentinels.dynamic_service import (
     ORIGIN_BUILTIN,
     _sentinel_write_fence,
 )
+from app.shared.time_utils import utc_iso
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
@@ -127,14 +128,14 @@ def _dict(s: Sentinel) -> dict[str, Any]:
         "onChange": s.on_change,
         "onSchedule": s.on_schedule, "scanIntervalSeconds": s.scan_interval_seconds,
         "triggerMode": s.trigger_mode, "muted": s.muted,
-        "lastScannedAt": s.last_scanned_at.isoformat() if s.last_scanned_at else None,
+        "lastScannedAt": utc_iso(s.last_scanned_at),
         "enabled": s.enabled, "status": s.status,
         "enableGeneration": int(s.enable_generation or 0),
         "releaseId": s.bound_release_id,
         "origin": s.origin,
         "source": s.source,
-        "createdAt": s.created_at.isoformat() if s.created_at else None,
-        "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
+        "createdAt": utc_iso(s.created_at),
+        "updatedAt": utc_iso(s.updated_at),
     }
 
 
@@ -172,8 +173,8 @@ def _released_dict(
             if operational is not None else bool(raw.get("muted", False))
         ),
         "lastScannedAt": (
-            operational.last_scanned_at.isoformat()
-            if operational is not None and operational.last_scanned_at else None
+            utc_iso(operational.last_scanned_at)
+            if operational is not None else None
         ),
         "enabled": (
             bool(operational.enabled)
@@ -287,7 +288,7 @@ def list_firings(ontology_id: str, sentinel_id: Optional[str] = None, limit: int
         "durationMs": f.duration_ms,
         "ontologyVersion": f.ontology_version,
         "ontologyReleaseId": f.ontology_release_id,
-        "createdAt": f.created_at.isoformat() if f.created_at else None,
+        "createdAt": utc_iso(f.created_at),
     } for f in items]}
 
 
@@ -312,7 +313,7 @@ def list_notifications(ontology_id: str, limit: int = 50,
         "ontologyReleaseId": n.ontology_release_id,
         "sentinelId": n.sentinel_id,
         "actionLogId": n.action_log_id,
-        "createdAt": n.created_at.isoformat() if n.created_at else None,
+        "createdAt": utc_iso(n.created_at),
     } for n in items]}
 
 

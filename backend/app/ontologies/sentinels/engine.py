@@ -48,7 +48,8 @@ def _summary(firings, runtime_errors: Optional[list[dict]] = None) -> dict:
         "pending": sum(1 for f in firings if f.status == "pending"),
         "muted": sum(1 for f in firings if f.status == "muted"),
         "runtimeErrors": runtime_errors,
-        "firings": [{"sentinelId": f.sentinel_id, "sentinelName": f.sentinel_name,
+        "firings": [{"id": getattr(f, "id", None),
+                     "sentinelId": f.sentinel_id, "sentinelName": f.sentinel_name,
                      "status": f.status, "matchCount": f.match_count,
                      "entered": f.entered or [], "left": f.left or [],
                      "actionResults": f.action_results,
@@ -565,7 +566,7 @@ def run_scheduled(db: Session) -> dict:
         SentinelCdcOutbox.id.in_(event_ids),
     ).all()
     for row in event_rows:
-        if row.status == "dead":
+        if row.status in ("dead", "cdc_dead"):
             runtime_errors.append({
                 "ontologyId": row.ontology_id,
                 "sentinelId": row.sentinel_id,

@@ -280,7 +280,7 @@ def _require_draft_ontology(db: Session, ontology_id: str) -> None:
 
 
 def _lock_ontology(db: Session, ontology_id: str):
-    """Lock an ontology without requiring draft status for runtime policy edits."""
+    """Lock an ontology for guarded non-structural mapping operations."""
     from app.models.ontology import OntologyProject
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).with_for_update().first()
@@ -531,22 +531,62 @@ def create_mapping(ontology_id: str, body: CreateMappingRequest, db: Session = D
 @router.put("/{ontology_id}/mappings/{mapping_id}")
 def update_mapping(ontology_id: str, mapping_id: str, body: UpdateMappingRequest,
                    db: Session = Depends(get_db)):
-    """映射维护：结构只在 draft 修改；运行订阅可随时安全开关。"""
+    """映射维护：结构和版本化自动触发策略均通过 draft 发布。"""
     provided = body.model_fields_set
     structural_fields = {
         "entity_class", "field_mapping", "ignored_fields",
         "primary_key_column", "target_object_type_id",
     }
+    locked_project = None
     if provided & structural_fields:
         _require_draft_ontology(db, ontology_id)
     else:
-        _lock_ontology(db, ontology_id)
+        locked_project = _lock_ontology(db, ontology_id)
     from app.models.v2.mapping import OntologyMapping
     m = db.query(OntologyMapping).filter(
         OntologyMapping.id == mapping_id,
         OntologyMapping.ontology_id == ontology_id).first()
     if not m:
         raise HTTPException(404, "Mapping not found")
+    policy_fields = {
+        "auto_apply_on_review", "auto_apply_on_version",
+    } & provided
+    if locked_project is not None and locked_project.current_release_id:
+        current_policy = {
+            "auto_apply_on_review": bool(
+                (m.field_mapping or {}).get("__auto_apply_on_review__")),
+            "auto_apply_on_version": bool(
+                (m.field_mapping or {}).get("__auto_apply_on_version__")),
+        }
+        requested_policy = {
+            key: getattr(body, key)
+            for key in policy_fields
+            if getattr(body, key) is not None
+        }
+        changed_fields = sorted(
+            key for key, value in requested_policy.items()
+            if bool(value) != current_policy[key]
+        )
+        if changed_fields:
+            raise HTTPException(409, detail={
+                "code": "mapping_policy_requires_versioned_draft",
+                "message": (
+                    "当前发布映射的自动触发策略属于版本化行为，不能直接修改。"
+                    "请新建本体草稿，完成试跑后再发布。"
+                ),
+                "fields": changed_fields,
+                "current_release_id": locked_project.current_release_id,
+            })
+        # A repeated live request with exactly the released value is a true
+        # no-op. Returning before client-definition bookkeeping prevents an
+        # idempotent call from drifting away from the immutable release scope.
+        return {
+            "mapping_id": m.id,
+            "status": m.status,
+            "target_object_type_id": m.target_object_type_id,
+            **current_policy,
+            "idempotent_replay": True,
+        }
     declared_pk = _canonical_primary_key(db, m.curated_dataset_id)
     _assert_client_primary_key_matches(
         body.primary_key_column, declared_pk, m.curated_dataset_id)

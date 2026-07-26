@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +12,7 @@ TICK_SECONDS = int(os.getenv("SENTINEL_SCAN_TICK", "15"))
 
 _started = False
 _thread: threading.Thread | None = None
+_stop_event = threading.Event()
 _last_error: str | None = None
 
 
@@ -20,8 +20,7 @@ def _loop():
     global _last_error
     from app.services.sentinel.engine import run_scheduled
     from app.database import SessionLocal
-    while True:
-        time.sleep(TICK_SECONDS)
+    while not _stop_event.wait(TICK_SECONDS):
         db = SessionLocal()
         try:
             run_scheduled(db)
@@ -40,11 +39,30 @@ def start_scan_worker() -> bool:
         return True
     if os.getenv("SENTINEL_SCAN_ENABLED", "1") in ("0", "false", "False"):
         return False
+    _stop_event.clear()
     _thread = threading.Thread(
         target=_loop, daemon=True, name="sentinel-scan-worker")
     _thread.start()
     _started = _thread.is_alive()
     return _started
+
+
+def stop_scan_worker(*, timeout: float = 5.0) -> bool:
+    """Stop the scheduled scanner owned by the current app lifespan."""
+    global _started, _thread
+    _stop_event.set()
+    worker = _thread
+    if worker is None:
+        _started = False
+        return True
+    if worker is threading.current_thread():
+        return False
+    worker.join(timeout=max(0.0, timeout))
+    stopped = not worker.is_alive()
+    if stopped and _thread is worker:
+        _thread = None
+        _started = False
+    return stopped
 
 
 def scan_worker_status() -> dict:

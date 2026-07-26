@@ -11,11 +11,17 @@ import {
 } from '../../../api/sentinelApi'
 import { apiClientV2 } from '../../../api/client'
 import type { ActionParameter } from '../../types/ontology'
+import {
+  SentinelFiringSummary,
+  sentinelFiringStatusLabel,
+} from './SentinelFiringSummary'
 
 interface Props {
   isOpen: boolean
   onClose: () => void
 }
+
+type DefinitionLoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 // 一行结构化条件
 interface CondRow {
@@ -77,6 +83,19 @@ const nextAlias = (bindings: { alias: string }[]) => {
     if (!used.has(a)) return a
   }
   return `x${bindings.length}`
+}
+
+const formatFiringTime = (iso?: string) => {
+  if (!iso) return ''
+  const value = new Date(iso)
+  if (Number.isNaN(value.getTime())) return iso
+  return value.toLocaleString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 const emptyRow = (alias: string): CondRow => ({
@@ -218,6 +237,10 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
   const [operationalBusyId, setOperationalBusyId] = useState<string | null>(null)
   const [tab, setTab] = useState<'list' | 'firings'>('list')
   const [error, setError] = useState<string | null>(null)
+  const [manualRunFiringIds, setManualRunFiringIds] =
+    useState<Set<string>>(() => new Set())
+  const [definitionLoadState, setDefinitionLoadState] =
+    useState<DefinitionLoadState>('idle')
 
   const errText = (e: any) =>
     typeof e?.detail === 'string' ? e.detail : (e?.detail?.message || e?.message || '请求失败')
@@ -248,6 +271,7 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     if (!runtimeAccessible) {
       setList(workspaceSentinels)
       setCdcStatus(null)
+      setDefinitionLoadState('ready')
       const results = workspaceMode === 'trial'
         ? (workspaceTrialRun?.result?.sentinels || [])
         : []
@@ -259,6 +283,8 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
         status: (item.errors || []).length > 0 ? 'error' : item.skipped ? 'skipped' : 'evaluated',
         matchCount: item.matched || 0,
         matches: [],
+        entered: [],
+        left: [],
         actionResults: [],
         error: (item.errors || []).join('；') || undefined,
         durationMs: 0,
@@ -267,22 +293,44 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
       return
     }
     // 失败必须可见：静默吞错会把"后端挂了"伪装成"没有哨兵"
+    setDefinitionLoadState('loading')
+    setError(null)
+    const definitionRequest = sentinelApi.list(ontologyId)
+    // 辅助运行信息不能阻塞发布定义展示；allSettled 也避免任一失败
+    // 让已成功的请求结果被整体丢弃。
+    const auxiliaryRequests = Promise.allSettled([
+      sentinelApi.firings(ontologyId),
+      sentinelApi.cdcStatus(ontologyId),
+    ])
+    const loadErrors: string[] = []
     try {
-      const [s, f, cdc] = await Promise.all([
-        sentinelApi.list(ontologyId),
-        sentinelApi.firings(ontologyId),
-        sentinelApi.cdcStatus(ontologyId),
-      ])
+      const s = await definitionRequest
       setList((s || []) as Sentinel[])
-      setFirings((f || []) as SentinelFiring[])
-      setCdcStatus(cdc)
-      setError(null)
+      setDefinitionLoadState('ready')
     } catch (e: any) {
-      setError(`加载哨兵失败：${errText(e)}`)
+      setList([])
+      setDefinitionLoadState('error')
+      loadErrors.push(`加载哨兵定义失败：${errText(e)}`)
     }
+
+    const [firingsResult, cdcResult] = await auxiliaryRequests
+    if (firingsResult.status === 'fulfilled') {
+      setFirings((firingsResult.value || []) as SentinelFiring[])
+    } else {
+      loadErrors.push(`加载触发日志失败：${errText(firingsResult.reason)}`)
+    }
+    if (cdcResult.status === 'fulfilled') {
+      setCdcStatus(cdcResult.value)
+    } else {
+      loadErrors.push(`加载变化执行链状态失败：${errText(cdcResult.reason)}`)
+    }
+    setError(loadErrors.length > 0 ? loadErrors.join('；') : null)
   }
 
   useEffect(() => { if (isOpen) void refresh() }, [isOpen, ontologyId, runtimeAccessible, workspaceSentinels, workspaceTrialRun])
+  useEffect(() => {
+    if (!isOpen) setManualRunFiringIds(new Set())
+  }, [isOpen])
   useEffect(() => {
     if (!definitionEditable) setDraft(null)
   }, [definitionEditable])
@@ -445,8 +493,35 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
   const runNow = async () => {
     if (!ontologyId || !runtimeAccessible) return
     setBusy(true)
+    setManualRunFiringIds(new Set())
     try {
-      await sentinelApi.run(ontologyId)
+      const manualRunStartedAt = Date.now()
+      const previousIds = new Set(firings.map(item => item.id))
+      const result = await sentinelApi.run(ontologyId)
+      let currentIds = (result?.firings || [])
+        .map(item => item.id)
+        .filter((id): id is string => !!id)
+      // Rolling upgrades may briefly pair this frontend with an older backend
+      // whose otherwise-compatible run summary has no firing ids.  In that
+      // window, identify only newly-created manual records rather than marking
+      // an arbitrary historical "manual" card as the current run.
+      if (currentIds.length === 0) {
+        const latest = await sentinelApi.firings(ontologyId)
+        currentIds = (latest || [])
+          .filter(item => {
+            const createdAt = item.createdAt
+              ? new Date(item.createdAt).getTime()
+              : Number.NaN
+            return (
+              item.triggerSource === 'manual'
+              && !previousIds.has(item.id)
+              && Number.isFinite(createdAt)
+              && createdAt >= manualRunStartedAt - 30_000
+            )
+          })
+          .map(item => item.id)
+      }
+      setManualRunFiringIds(new Set(currentIds))
       setError(null)
       await refresh()
       setTab('firings')
@@ -611,7 +686,9 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
           {(['list', 'firings'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`px-4 py-2.5 ${tab === t ? 'text-rose-400 border-b-2 border-rose-400' : 'text-surface-400'}`}>
-              {t === 'list' ? `哨兵 (${list.length})` : `触发日志 (${firings.length})`}
+              {t === 'list'
+                ? `哨兵 (${definitionLoadState === 'loading' && list.length === 0 ? '…' : list.length})`
+                : `触发日志 (${firings.length})`}
             </button>
           ))}
         </div>
@@ -669,6 +746,11 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
           )}
           {tab === 'list' && !draft && (
             <>
+              {definitionLoadState === 'loading' && list.length === 0 && (
+                <p role="status" className="text-center text-xs text-surface-400 py-6">
+                  正在加载当前发布的哨兵定义…
+                </p>
+              )}
               {definitionEditable && (
                 <button onClick={() => setDraft(emptyDraft())}
                   className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-surface-600 text-surface-300 hover:border-rose-400 hover:text-rose-400 text-sm">
@@ -727,7 +809,9 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
                   </div>
                 </div>
               ))}
-              {list.length === 0 && <p className="text-center text-xs text-surface-500 py-6">还没有哨兵</p>}
+              {definitionLoadState === 'ready' && list.length === 0 && (
+                <p className="text-center text-xs text-surface-500 py-6">还没有哨兵</p>
+              )}
             </>
           )}
 
@@ -1211,14 +1295,40 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
             <div className="space-y-2 text-xs">
               {firings.length === 0 && <p className="text-center text-surface-500 py-6">还没有触发记录</p>}
               {firings.map(f => (
-                <div key={f.id} className="rounded-lg border border-surface-700 bg-surface-800/40 p-3">
+                <div
+                  key={f.id}
+                  className="rounded-lg border border-surface-700 bg-surface-800/40 p-3"
+                  data-testid={`sentinel-firing-${f.id}`}
+                >
                   <div className="flex items-center justify-between">
                     <span className="text-surface-100">{f.sentinelName}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${f.status === 'fired' ? 'bg-emerald-500/20 text-emerald-300' : f.status === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-surface-600/40 text-surface-300'}`}>{f.status}</span>
+                    <div className="flex items-center gap-1.5">
+                      {manualRunFiringIds.has(f.id) && (
+                        <span
+                          data-testid={`sentinel-current-manual-run-${f.id}`}
+                          className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-200"
+                        >
+                          本次手动触发
+                        </span>
+                      )}
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${f.status === 'fired' ? 'bg-emerald-500/20 text-emerald-300' : f.status === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-surface-600/40 text-surface-300'}`}>{sentinelFiringStatusLabel(f.status)}</span>
+                    </div>
                   </div>
-                  <div className="mt-1 text-[11px] text-surface-400">
-                    来源：{f.triggerSource} · 命中 {f.matchCount} · 动作 {f.actionResults?.length || 0} · {f.durationMs}ms
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-surface-400">
+                    <span>
+                      来源：{f.triggerSource} · 命中 {f.matchCount} · 动作 {f.actionResults?.length || 0} · {f.durationMs}ms
+                    </span>
+                    {f.createdAt && (
+                      <time
+                        dateTime={f.createdAt}
+                        title={f.createdAt}
+                        className="shrink-0 text-surface-500"
+                      >
+                        {formatFiringTime(f.createdAt)}
+                      </time>
+                    )}
                   </div>
+                  <SentinelFiringSummary firing={f} />
                   {(f.actionResults || []).map((r: any, i: number) => (
                     <div key={i} className="mt-1 rounded bg-surface-900/50 px-2 py-1.5 text-[11px] text-surface-300">
                       <div>→ {r.status} {(r.effects || []).map((e: any) => e.description).join('; ')}</div>

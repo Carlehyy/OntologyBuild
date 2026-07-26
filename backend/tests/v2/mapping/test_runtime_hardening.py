@@ -4,6 +4,9 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
+import subprocess
+import sys
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -14,7 +17,7 @@ from fastapi import HTTPException
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
 from app.models.v2.dataset import Dataset
-from app.models.v2.mapping import OntologyMapping
+from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
 from app.ontologies.mappings.router import (
     CreateMappingRequest,
     LinkMappingCreate,
@@ -1231,9 +1234,283 @@ def test_mapping_task_reconciles_complete_ontology(
         captured.update(ontology_id=ontology_id, **kwargs)
         return {"complete_rebuild": True}
 
-    with patch("app.database.SessionLocal", return_value=db), patch.object(
-        MappingService, "build_all", _capture):
+    # This unit only verifies the task's Mapping contract.  Keep process-global
+    # CDC registration for the dedicated cold-worker test below so test order
+    # cannot leave a live SQLite consumer behind.
+    with patch(
+        "app.ontologies.sentinels.cdc.register_cdc",
+    ) as register, patch(
+        "app.database.SessionLocal", return_value=db,
+    ), patch.object(
+        MappingService, "build_all", _capture,
+    ):
         mapping_apply_task.run(mapping.id, ontology.id)
+
+    register.assert_called_once_with(start_worker=False)
+    assert captured == {
+        "ontology_id": ontology.id,
+        "require_approved": True,
+    }
+
+
+def test_mapping_worker_cold_import_resolves_canonical_cdc_registration():
+    """Celery imports Mapping without FastAPI lifespan priming Sentinel modules."""
+    backend_dir = Path(__file__).resolve().parents[3]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from app.services.v2.mapping.mapping_service "
+                "import MappingService; "
+                "from app.ontologies.sentinels.cdc import register_cdc; "
+                "from app.services.sentinel "
+                "import register_cdc as compatibility_register_cdc; "
+                "assert MappingService; "
+                "assert register_cdc is compatibility_register_cdc"
+            ),
+        ],
+        cwd=backend_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_mapping_task_cold_worker_path_runs_real_build_all(
+        db, admin_user, lake_storage):
+    """A cold review worker must persist and dispatch both Sentinel edges."""
+    import threading
+    from sqlalchemy.orm import sessionmaker
+    from app import database as app_database
+    from app.data_channel.datasets.service import DatasetService
+    from app.models.entity import Entity
+    from app.models.ontology_formal import ObjectInstance, ObjectType
+    from app.models.sentinel import (
+        Sentinel, SentinelCdcOutbox, SentinelFiring,
+    )
+    from app.ontologies.sentinels import cdc as sentinel_cdc
+    from app.ontologies.versions.evolution_service import (
+        complete_snapshot,
+        snapshot_hash,
+    )
+    from app.ontologies.versions.router import _snapshot_formal
+    from app.tasks.v2.mapping_apply import mapping_apply_task
+
+    ontology, dataset, mapping = _source_graph(
+        db, admin_user, rows=[{"record_id": "R-1", "risk": "high"}])
+    dataset.schema_json = {
+        **dict(dataset.schema_json or {}),
+        "primary_key": "record_id",
+    }
+    object_type = ObjectType(
+        id=f"risk-record-{uuid.uuid4()}",
+        ontology_id=ontology.id,
+        name="RiskRecord",
+        display_name="风险记录",
+        primary_key="risk_record_id",
+        properties=[
+            {
+                "id": "risk_record_id",
+                "name": "record_id",
+                "displayName": "记录编号",
+                "type": "string",
+                "required": True,
+                "source": "stored",
+            },
+            {
+                "id": "risk_level",
+                "name": "risk",
+                "displayName": "风险等级",
+                "type": "string",
+                "required": True,
+                "source": "stored",
+            },
+        ],
+        interfaces=[],
+        position_x=0,
+        position_y=0,
+    )
+    sentinel = Sentinel(
+        id=f"risk-sentinel-{uuid.uuid4()}",
+        ontology_id=ontology.id,
+        name="watch_high_risk",
+        display_name="高风险边沿哨兵",
+        bindings=[{
+            "alias": "record",
+            "objectTypeId": object_type.id,
+        }],
+        links=[],
+        condition="record.risk == 'high'",
+        primary_alias="record",
+        action_ids=[],
+        action_parameters={},
+        on_change=True,
+        on_schedule=False,
+        trigger_mode="on_enter_leave",
+        muted=False,
+        enabled=True,
+        status="published",
+    )
+    mapping.entity_class = object_type.name
+    mapping.target_object_type_id = object_type.id
+    mapping.field_mapping = {
+        "record_id": "record_id",
+        "risk": "risk",
+        "__primary_key__": "record_id",
+        "__pk_source__": "lake",
+        "__auto_apply_on_review__": True,
+    }
+    ontology.status = "published"
+    ontology.version = "v1.0.0"
+    db.add_all([object_type, sentinel])
+    db.commit()
+
+    release_id = f"risk-release-{uuid.uuid4()}"
+    release_snapshot = complete_snapshot(
+        _snapshot_formal(db, ontology.id))
+    release = OntologyVersion(
+        id=release_id,
+        ontology_id=ontology.id,
+        version_number=ontology.version,
+        version_label="风险边沿回归发布",
+        base_release_id=release_id,
+        node_kind="release",
+        lifecycle_status="released",
+        revision=0,
+        snapshot_formal=release_snapshot,
+        snapshot_hash=snapshot_hash(release_snapshot),
+        created_by=admin_user.id,
+    )
+    db.add(release)
+    db.flush()
+    ontology.current_release_id = release.id
+    db.commit()
+
+    worker_session = sessionmaker(bind=db.get_bind())
+    application_session_factory = app_database.SessionLocal
+    register_calls = 0
+    task_session_calls = 0
+    register_worker_modes: list[bool] = []
+    real_register_cdc = sentinel_cdc.register_cdc
+
+    def tracked_register_cdc(*, start_worker: bool = True):
+        nonlocal register_calls
+        register_calls += 1
+        register_worker_modes.append(start_worker)
+        return real_register_cdc(start_worker=start_worker)
+
+    def worker_session_factory():
+        nonlocal task_session_calls
+        # A prior TestClient lifespan may have left its process-global daemon
+        # alive.  Patching app.database.SessionLocal must not redirect that
+        # unrelated thread onto this test's SQLite file, where it would race
+        # the synchronous mapping barrier.  Production processes use one
+        # configured database; this split only restores that boundary in the
+        # multi-engine test process.
+        if threading.current_thread() is not threading.main_thread():
+            return application_session_factory()
+        # Registration must precede Session creation in every Celery process.
+        task_session_calls += 1
+        assert register_calls >= task_session_calls
+        return worker_session()
+
+    # Only replace rebuildable external query projections. MappingService,
+    # its transaction, canonical CDC import and the task boundary all run for
+    # real, matching auto_apply_on_review worker execution.
+    with patch.object(
+        sentinel_cdc, "register_cdc", tracked_register_cdc,
+    ), patch(
+        "app.database.SessionLocal", side_effect=worker_session_factory,
+    ), patch.object(
+        MappingService, "_rebuild_neo4j_projection", return_value=True,
+    ), patch.object(
+        MappingService, "_rebuild_chroma_projection", return_value=1,
+    ):
+        # high establishes the entered edge.
+        mapping_apply_task.run(mapping.id, ontology.id)
+        DatasetService(db).create_version(
+            dataset.id,
+            _csv_bytes([{"record_id": "R-1", "risk": "low"}]),
+            rowcount=1,
+        )
+        # high -> low must persist and synchronously dispatch the leave edge.
+        mapping_apply_task.run(mapping.id, ontology.id)
+
+    db.expire_all()
+    applied = db.query(OntologyMapping).filter_by(id=mapping.id).one()
+    instance = db.query(ObjectInstance).filter_by(
+        ontology_id=ontology.id,
+        object_type_id=object_type.id,
+    ).one()
+    firings = db.query(SentinelFiring).filter_by(
+        ontology_id=ontology.id,
+        sentinel_id=sentinel.id,
+    ).order_by(SentinelFiring.created_at, SentinelFiring.id).all()
+    cdc_events = db.query(SentinelCdcOutbox).filter_by(
+        ontology_id=ontology.id,
+        event_kind="object_change",
+    ).order_by(SentinelCdcOutbox.created_at, SentinelCdcOutbox.id).all()
+
+    assert register_calls == 2
+    assert register_worker_modes == [False, False]
+    assert task_session_calls == 2
+    assert applied.status == "applied"
+    assert applied.field_mapping["__applied_dataset_version_id__"]
+    assert instance.properties["risk"] == "low"
+    assert db.query(Entity).filter_by(ontology_id=ontology.id).count() == 1
+    entered_firing = next(item for item in firings if item.entered)
+    left_firing = next(item for item in firings if item.left)
+    assert entered_firing.trigger_source == "change"
+    assert left_firing.trigger_source == "change"
+    assert len(cdc_events) >= 2
+    assert all(event.status == "completed" for event in cdc_events)
+    assert all((event.result_json or {}).get("evaluated") == 1
+               for event in cdc_events)
+
+
+def test_mapping_task_accepts_link_subscription_anchor_and_stays_approved_only(
+        db, admin_user):
+    """A curated edge review can dispatch from a link-only subscription."""
+    from app.tasks.v2.mapping_apply import mapping_apply_task
+
+    ontology = OntologyProject(
+        name=f"link-review-task-{uuid.uuid4().hex[:8]}",
+        domain="test",
+        created_by=admin_user.id,
+    )
+    dataset = Dataset(
+        name=f"link-review-source-{uuid.uuid4().hex[:8]}",
+        kind="curated",
+        schema_json={"primary_key": "id"},
+    )
+    db.add_all([ontology, dataset])
+    db.flush()
+    link_mapping = OntologyLinkMapping(
+        ontology_id=ontology.id,
+        src_dataset_id=dataset.id,
+        tgt_dataset_id=dataset.id,
+        edge_dataset_id=dataset.id,
+        relation_type="connected_to",
+        src_key="source_id",
+        tgt_key="target_id",
+        field_mapping={"__auto_apply_on_review__": True},
+        status="active",
+    )
+    db.add(link_mapping)
+    db.commit()
+    captured: dict = {}
+
+    def _capture(_self, ontology_id, **kwargs):
+        captured.update(ontology_id=ontology_id, **kwargs)
+        return {"complete_rebuild": True}
+
+    with patch("app.database.SessionLocal", return_value=db), patch.object(
+        MappingService, "build_all", _capture,
+    ):
+        mapping_apply_task.run(link_mapping.id, ontology.id)
 
     assert captured == {
         "ontology_id": ontology.id,

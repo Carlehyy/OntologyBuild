@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from sqlalchemy.orm import sessionmaker
 
@@ -53,7 +54,7 @@ def _set_current_release(
 
 
 def test_captured_mapping_change_observes_applied_fence(db, monkeypatch):
-    register_cdc()
+    register_cdc(start_worker=False)
     project = OntologyProject(
         id="ontology-cdc", name="CDC", domain="test", status="published",
         created_by="user-not-required-by-sqlite",
@@ -89,7 +90,7 @@ def test_captured_mapping_change_observes_applied_fence(db, monkeypatch):
         ontology_id=project.id,
         object_type_id=object_type.id,
     ).one()
-    assert held.status == "held"
+    assert held.status == "cdc_held"
     assert held.mapping_ids == [mapping.id]
     assert held.ontology_release_id == release.id
 
@@ -115,6 +116,22 @@ def test_captured_mapping_change_observes_applied_fence(db, monkeypatch):
     db.expire_all()
     assert db.query(SentinelCdcOutbox).filter_by(
         id=held.id).one().status == "completed"
+    assert db.query(SentinelCdcOutbox).filter_by(
+        id=held.id).one().attempts == 1
+
+
+def test_listener_only_registration_never_starts_competing_worker(monkeypatch):
+    """Celery listener mode leaves durable acceleration to the API process."""
+    from app.ontologies.sentinels import cdc
+
+    monkeypatch.setattr(cdc, "_background_worker_enabled", False)
+    ensure_worker = MagicMock()
+    monkeypatch.setattr(cdc, "_ensure_dispatch_worker", ensure_worker)
+
+    cdc.register_cdc(start_worker=False)
+    cdc._enqueue_dispatch({"durable-event"})
+
+    ensure_worker.assert_not_called()
 
 
 def test_failed_mapping_capture_is_discarded_before_session_reuse(db):
@@ -228,7 +245,7 @@ def test_cdc_skips_draft_projection_without_current_release(db):
     and worker-lifecycle effects: a directly-created legacy draft remains safe
     even after another request has started the Sentinel listeners.
     """
-    register_cdc()
+    register_cdc(start_worker=False)
     project = OntologyProject(
         id="draft-only-cdc-ontology", name="Draft only CDC",
         domain="test", status="draft", created_by="tester",
@@ -263,7 +280,7 @@ def test_cdc_skips_draft_projection_without_current_release(db):
 
 
 def test_cdc_tracks_computed_keys_on_create_and_computed_only_update(db):
-    register_cdc()
+    register_cdc(start_worker=False)
     project = OntologyProject(
         id="computed-cdc-ontology", name="Computed CDC", domain="test",
         status="published", created_by="tester",
@@ -309,7 +326,7 @@ def test_cdc_tracks_computed_keys_on_create_and_computed_only_update(db):
 
 
 def test_cdc_capture_falls_back_to_transaction_current_release(db):
-    register_cdc()
+    register_cdc(start_worker=False)
     project = OntologyProject(
         id="capture-current-ontology", name="Capture current",
         domain="test", status="published", created_by="tester",
@@ -382,6 +399,58 @@ def test_durable_outbox_recovers_without_in_memory_queue(db, monkeypatch):
         "restart-ontology", "restart-type", ["status"])]
     assert recovered.status == "completed"
     assert recovered.attempts == 1
+
+
+def test_protocol_v2_event_is_invisible_to_legacy_worker_and_completes_once(
+        db, monkeypatch):
+    from app.ontologies.sentinels import cdc
+    from app.services.sentinel import engine as sentinel_engine
+
+    event = SentinelCdcOutbox(
+        id="protocol-v2-event",
+        chain_id="protocol-v2-chain",
+        ontology_id="protocol-v2-ontology",
+        object_type_id="protocol-v2-type",
+        changed_keys=["status"],
+        cascade_depth=0,
+        status="cdc_pending",
+        attempts=0,
+        available_at=cdc._now(),
+    )
+    db.add(event)
+    db.commit()
+
+    # This is a superset of the legacy worker's ready/stale state vocabulary.
+    # A protocol-v2 row must not even become one of its candidates.
+    assert db.query(SentinelCdcOutbox).filter(
+        SentinelCdcOutbox.id == event.id,
+        SentinelCdcOutbox.status.in_((
+            "pending", "retry", "processing",
+        )),
+    ).count() == 0
+
+    observed = []
+
+    def fake_run_for_change(
+            run_db, ontology_id, object_type_id, changed_keys):
+        observed.append((ontology_id, object_type_id, changed_keys))
+        return {"evaluated": 1, "fired": 0, "errors": 0, "firings": []}
+
+    monkeypatch.setattr(
+        sentinel_engine, "run_for_change", fake_run_for_change)
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+
+    result = cdc.drain_cdc_outbox(
+        event_ids={event.id}, session_factory=factory)
+
+    db.expire_all()
+    completed = db.query(SentinelCdcOutbox).filter_by(id=event.id).one()
+    assert result["processed"] == 1
+    assert result["errors"] == []
+    assert observed == [(
+        "protocol-v2-ontology", "protocol-v2-type", ["status"])]
+    assert completed.status == "completed"
+    assert completed.attempts == 1
 
 
 def test_superseded_release_event_completes_stale_without_execution(
@@ -725,7 +794,7 @@ def test_chain_barrier_surfaces_downstream_failure(db, monkeypatch):
         id="barrier-downstream").one()
     assert barrier["completed"] is False
     assert barrier["errors"]
-    assert downstream.status == "retry"
+    assert downstream.status == "cdc_retry"
     assert downstream.result_json["errors"] == 1
 
 
@@ -773,7 +842,7 @@ def test_restart_recovers_held_event_only_after_its_mapping_is_applied(db):
     assert recovered == {
         "examined": 1, "activated": 1, "waiting": 0, "errors": [],
     }
-    assert row.status == "pending"
+    assert row.status == "cdc_pending"
     assert row.last_error is None
 
 
@@ -825,7 +894,7 @@ def test_held_recovery_rotates_past_blocked_prefix(db):
     assert db.query(SentinelCdcOutbox).filter_by(
         id=blocked.id).one().status == "held"
     assert db.query(SentinelCdcOutbox).filter_by(
-        id=ready.id).one().status == "pending"
+        id=ready.id).one().status == "cdc_pending"
 
 
 def test_cdc_status_is_ontology_scoped_and_exposes_retry_errors(db):
@@ -874,6 +943,56 @@ def test_cdc_status_is_ontology_scoped_and_exposes_retry_errors(db):
     assert status["durable"]["dead"] == 0
     assert [item["eventId"] for item in status["last_errors"]] == [
         "status-retry"]
+
+
+def test_cdc_status_normalizes_legacy_and_protocol_v2_states(db):
+    now = datetime.now(timezone.utc)
+    project = OntologyProject(
+        id="status-protocol-ontology", name="Status protocol",
+        domain="test", status="published", created_by="tester",
+    )
+    db.add(project)
+    db.commit()
+    release = _set_current_release(
+        db, project, "status-protocol-release")
+    db.add_all([
+        SentinelCdcOutbox(
+            id="status-legacy-retry", chain_id="status-legacy-chain",
+            ontology_id=project.id, ontology_release_id=release.id,
+            object_type_id="type", changed_keys=[], cascade_depth=0,
+            mapping_ids=[], status="retry", attempts=1, available_at=now,
+            last_error="legacy retry",
+        ),
+        SentinelCdcOutbox(
+            id="status-v2-retry", chain_id="status-v2-retry-chain",
+            ontology_id=project.id, ontology_release_id=release.id,
+            object_type_id="type", changed_keys=[], cascade_depth=0,
+            mapping_ids=[], status="cdc_retry", attempts=1,
+            available_at=now, last_error="v2 retry",
+        ),
+        SentinelCdcOutbox(
+            id="status-v2-dead", chain_id="status-v2-dead-chain",
+            ontology_id=project.id, ontology_release_id=release.id,
+            object_type_id="type", changed_keys=[], cascade_depth=0,
+            mapping_ids=[], status="cdc_dead", attempts=4,
+            available_at=now, last_error="v2 dead",
+        ),
+    ])
+    db.commit()
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+
+    status = cdc_dispatch_status(
+        project.id, include_history=True, session_factory=factory)
+
+    assert status["durable"]["retry"] == 2
+    assert status["durable"]["dead"] == 1
+    assert "cdc_retry" not in status["durable"]
+    assert {
+        item["status"] for item in status["last_errors"]
+    } == {"retry", "dead"}
+    assert {
+        item["status"] for item in status["recent_events"]
+    } == {"retry", "dead"}
 
 
 def test_cdc_status_defaults_to_current_release_and_history_is_explicit(db):

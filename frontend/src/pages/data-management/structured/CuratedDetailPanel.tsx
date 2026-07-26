@@ -3,9 +3,9 @@ import {
   X, CheckCircle, AlertTriangle, Clock,
   Loader2, Pencil, Plus, Minus, KeyRound, RefreshCw, Table2,
   ChevronLeft, ChevronRight, Download, FileSpreadsheet, LockKeyhole,
-  Info,
+  Info, Save,
 } from 'lucide-react'
-import curatedApi, { type ReviewDiff } from '@/api/v2/curated'
+import curatedApi, { type ReviewDiff, type ReviewRowEdit } from '@/api/v2/curated'
 import datasetsApi, { FIELD_TYPE_LABELS, type DatasetSchemaColumn } from '@/api/v2/datasets'
 
 interface Props {
@@ -22,7 +22,7 @@ const STATUS_LABEL: Record<string, string> = {
   pending:        '待审核',
   in_review:      '待审核',
   approved:       '已审核',
-  rejected:       '已审核',
+  rejected:       '已拒绝',
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -30,11 +30,12 @@ const STATUS_STYLE: Record<string, string> = {
   pending:        'bg-yellow-50 text-yellow-700 border-yellow-200',
   in_review:      'bg-yellow-50 text-yellow-700 border-yellow-200',
   approved:       'bg-green-50 text-green-700 border-green-200',
-  rejected:       'bg-green-50 text-green-700 border-green-200',
+  rejected:       'bg-rose-50 text-rose-700 border-rose-200',
 }
 
 const STATUS_ICON = (status: string) => {
-  if (status === 'approved' || status === 'rejected') return <CheckCircle size={13} className="text-green-500" />
+  if (status === 'approved') return <CheckCircle size={13} className="text-green-500" />
+  if (status === 'rejected') return <AlertTriangle size={13} className="text-rose-500" />
   return <Clock size={13} className="text-yellow-400" />
 }
 
@@ -189,6 +190,100 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, sche
   )
 }
 
+/** 待审核当前版本的安全编辑表：仅非主键字段可改，行身份严格来自 schema PK。 */
+function EditableReviewTable({
+  rows, rowPks, primaryKeys, startIndex, schemaColumns, pendingEdits, disabled, onCellChange,
+}: {
+  rows: DataRow[]
+  /** 后端使用同一 encode_row_pk 生成，必须与 rows 当前页逐行对齐。 */
+  rowPks: Array<string | null>
+  primaryKeys: string[]
+  startIndex: number
+  schemaColumns: Record<string, DatasetSchemaColumn>
+  pendingEdits: ReviewRowEdit[]
+  disabled: boolean
+  onCellChange: (rowPk: string, fieldName: string, oldValue: string, newValue: string) => void
+}) {
+  if (!rows.length) {
+    return <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-xs text-slate-400">无数据</div>
+  }
+  const columns = columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)])
+  const pendingByCell = new Map(
+    pendingEdits.map(edit => [JSON.stringify([edit.row_pk, edit.field_name]), edit]),
+  )
+
+  return (
+    <div className="h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white" data-testid="curated-edit-grid">
+      <table className="w-max min-w-full border-separate border-spacing-0 text-xs">
+        <thead className="sticky top-0 z-20 bg-slate-50">
+          <tr>
+            <th className="sticky left-0 z-30 w-12 border-b border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-center font-normal text-slate-400">#</th>
+            {columns.map(column => (
+              <th key={column} className="min-w-[170px] whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-left font-medium text-slate-700">
+                <ColumnLabel name={column} primaryKeys={primaryKeys} schemaColumn={schemaColumns[column]} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => {
+            // 不用 id、第一列、分页序号或浏览器字符串化猜测行身份。
+            const rowPk = rowPks[rowIndex] ?? null
+            return (
+              <tr key={`${rowPk ?? 'invalid-row'}-${rowIndex}`} className="transition-colors hover:bg-slate-50/70">
+                <td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2.5 text-center tabular-nums text-slate-300 select-none">
+                  {startIndex + rowIndex + 1}
+                </td>
+                {columns.map(column => {
+                  const isPrimaryKey = primaryKeys.includes(column)
+                  const originalValue = cellText(row[column])
+                  const edit = rowPk
+                    ? pendingByCell.get(JSON.stringify([rowPk, column]))
+                    : undefined
+                  const value = edit?.new_value ?? originalValue
+                  const label = columnDisplayText(column, schemaColumns[column])
+                  return (
+                    <td
+                      key={column}
+                      className={`max-w-[360px] border-b border-slate-100 px-2 py-1.5 ${
+                        isPrimaryKey ? 'bg-amber-50/45 font-mono' : edit ? 'bg-amber-50/70' : ''
+                      }`}
+                    >
+                      {isPrimaryKey ? (
+                        <span className="flex min-h-8 items-center gap-1.5 px-2 text-slate-700" title={originalValue}>
+                          <LockKeyhole size={10} className="shrink-0 text-amber-600" />
+                          <span className="block truncate">{originalValue || '—'}</span>
+                        </span>
+                      ) : (
+                        <input
+                          type="text"
+                          inputMode={schemaColumns[column]?.type === 'integer' || schemaColumns[column]?.type === 'float' ? 'decimal' : undefined}
+                          value={value ?? ''}
+                          disabled={disabled || !rowPk}
+                          onChange={event => {
+                            if (rowPk) onCellChange(rowPk, column, originalValue, event.target.value)
+                          }}
+                          aria-label={`编辑 ${label}，行主键 ${rowPk ?? '无效'}`}
+                          title={!rowPk ? '该行主键为空，系统拒绝猜测行身份' : undefined}
+                          className={`h-8 w-full min-w-[150px] rounded-md border px-2.5 text-xs text-slate-800 outline-none transition ${
+                            edit
+                              ? 'border-amber-300 bg-amber-50 font-medium focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
+                              : 'border-transparent bg-transparent hover:border-slate-200 hover:bg-white focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/20'
+                          } disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400`}
+                        />
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 /** 更新行按「旧行 → 新行」成对展示；每条新行紧跟对应旧行，宽表可水平滚动。 */
 function UpdatedRowsTable({
   updates, primaryKeys, schemaColumns,
@@ -290,9 +385,26 @@ export default function CuratedDetailPanel({
 
   const [actionError, setActionError] = useState('')
   const [reviewAction, setReviewAction] = useState<'approve' | 'reject' | null>(null)
+  const [pendingEdits, setPendingEdits] = useState<ReviewRowEdit[]>([])
+  const [savingEdits, setSavingEdits] = useState(false)
+  const [editMessage, setEditMessage] = useState('')
 
   const reviewPending = isPendingReview(status)
-  const requestClose = useCallback(() => onClose(), [onClose])
+  const hasUnsavedEdits = pendingEdits.length > 0
+  const primaryKeys = diff?.pk ?? []
+  const reviewIsStale = Boolean(diff?.review?.stale)
+  const reviewSessionIsPending = !diff?.review || diff.review.status === 'pending'
+  const canEditCurrentRows = (
+    reviewPending
+    && !reviewIsStale
+    && reviewSessionIsPending
+    && primaryKeys.length > 0
+    && (diff?.current_row_pks?.length ?? -1) === (diff?.current?.rows.length ?? 0)
+  )
+  const requestClose = useCallback(() => {
+    if (hasUnsavedEdits && !window.confirm('还有未保存的审核修改，关闭后将丢失。确认关闭吗？')) return
+    onClose()
+  }, [hasUnsavedEdits, onClose])
 
   const loadDiff = useCallback(() => {
     setLoading(true)
@@ -339,18 +451,94 @@ export default function CuratedDetailPanel({
     return session.review_id
   }
 
+  const handleCellChange = (
+    rowPk: string,
+    fieldName: string,
+    oldValue: string,
+    newValue: string,
+  ) => {
+    setEditMessage('')
+    setActionError('')
+    setPendingEdits(previous => {
+      const existing = previous.find(
+        edit => edit.row_pk === rowPk && edit.field_name === fieldName,
+      )
+      const baseline = existing?.old_value ?? oldValue
+      const withoutCell = previous.filter(
+        edit => !(edit.row_pk === rowPk && edit.field_name === fieldName),
+      )
+      return newValue === baseline
+        ? withoutCell
+        : [...withoutCell, {
+            row_pk: rowPk,
+            field_name: fieldName,
+            old_value: baseline,
+            new_value: newValue,
+          }]
+    })
+  }
+
+  const handleSaveEdits = async () => {
+    if (!pendingEdits.length || savingEdits) return
+    if (!canEditCurrentRows) {
+      setActionError(
+        reviewIsStale
+          ? '该审核对应旧版本，不能保存修改。请切换到最新版本后重新编辑。'
+          : '当前审核状态不允许保存行级修改。',
+      )
+      return
+    }
+
+    setSavingEdits(true)
+    setActionError('')
+    setEditMessage('')
+    const editsToSave = [...pendingEdits]
+    try {
+      const reviewId = await reviewIdForLoadedVersion()
+      const result = await curatedApi.saveEdits(reviewId, editsToSave)
+      setPendingEdits([])
+      setSelectedReviewId(reviewId)
+      setEditMessage(`已保存 ${result.saved} 处审核修改；批准后才会进入正式数据消费。`)
+
+      // 重新读取同一审核版本，让类型归一化后的值、变化量和审计快照保持一致。
+      try {
+        const response = await curatedApi.reviewDiff(
+          datasetId, pageSize, pageOffset, reviewId,
+        )
+        const wrapped = response as ReviewDiff & { data?: ReviewDiff }
+        setDiff(wrapped.data ?? response)
+      } catch (error: unknown) {
+        setActionError(`修改已保存，但快照刷新失败：${errorText(error, '请点击重新加载')}`)
+      }
+    } catch (error: unknown) {
+      setActionError(`保存修改失败：${errorText(error, '请核对字段类型后重试')}`)
+    } finally {
+      setSavingEdits(false)
+    }
+  }
+
   const handleApprove = async () => {
     if (!reviewPending) return
+    if (hasUnsavedEdits) {
+      setActionError('还有未保存的行级修改。请先保存修改并核对刷新后的结果，再通过审核。')
+      return
+    }
     if (diff?.review?.stale) {
       setActionError('该审核仅对应旧版本，不能批准最新数据。请先切换并审阅最新版本。')
       return
     }
     setReviewAction('approve')
     setActionError('')
+    setEditMessage('')
     try {
       const reviewId = await reviewIdForLoadedVersion()
       const result = await curatedApi.approveReview(reviewId) as {
-        mapping_dispatch?: { status?: string; error?: string }
+        mapping_dispatch?: {
+          status?: string
+          error?: string
+          durable?: boolean
+          event_status?: string
+        }
       }
       setStatus('approved')
       setView('current')
@@ -360,6 +548,10 @@ export default function CuratedDetailPanel({
       onStatusChange(datasetId, 'approved')
       if (result?.mapping_dispatch?.status === 'failed') {
         setActionError(result.mapping_dispatch.error || '数据已批准，但自动灌入本体失败，请检查映射任务。')
+      } else if (result?.mapping_dispatch?.status === 'queued') {
+        setEditMessage('审核已通过；自动灌入已进入可靠队列，失败时会自动重试。')
+      } else if (result?.mapping_dispatch?.status === 'success') {
+        setEditMessage('审核已通过，自动灌入本体已完成。')
       }
     } catch (error: unknown) {
       setActionError(`批准失败：${errorText(error, '请稍后重试')}`)
@@ -368,6 +560,10 @@ export default function CuratedDetailPanel({
 
   const handleReject = async () => {
     if (!reviewPending) return
+    if (hasUnsavedEdits) {
+      setActionError('还有未保存的行级修改。请先保存或还原修改，再拒绝本次数据。')
+      return
+    }
     if (diff?.review?.stale) {
       setActionError('该审核仅对应旧版本，不能拒绝最新数据。请先切换并审阅最新版本。')
       return
@@ -389,10 +585,13 @@ export default function CuratedDetailPanel({
   }
 
   const handleSwitchToLatestReview = async () => {
+    if (hasUnsavedEdits && !window.confirm('切换版本会丢弃当前未保存的修改，确认继续吗？')) return
     setSwitchingReview(true)
     setActionError('')
     try {
       const session = await curatedApi.startReview(datasetId)
+      setPendingEdits([])
+      setEditMessage('')
       setLoading(true)
       setPageOffset(0)
       setSelectedReviewId(session.review_id)
@@ -404,7 +603,7 @@ export default function CuratedDetailPanel({
   }
 
   const handleExport = async (format: 'csv' | 'xlsx') => {
-    if (reviewPending) return
+    if (status !== 'approved') return
     setExporting(format)
     setExportMessage('')
     setActionError('')
@@ -421,8 +620,6 @@ export default function CuratedDetailPanel({
 
   const delta = diff?.delta
   const changeCount = delta ? delta.added_count + delta.updated_count + delta.deleted_count : 0
-  const primaryKeys = diff?.pk ?? []
-  const reviewIsStale = Boolean(diff?.review?.stale)
   const pagedView = view === 'current' ? diff?.current : view === 'previous' ? diff?.previous : null
   const pageStart = pagedView?.total ? (pagedView.offset ?? pageOffset) + 1 : 0
   const pageEnd = pagedView
@@ -480,11 +677,17 @@ export default function CuratedDetailPanel({
                 )}
               </div>
               <p className="mt-1 text-xs text-slate-400">
-                来源流水线：{pipelineName} · {reviewPending ? '核对版本变化并完成审核；审核快照仅供查看。' : '当前版本仅供查看，可分页浏览或导出全量数据。'}
+                来源流水线：{pipelineName} · {
+                  reviewPending
+                    ? '核对版本变化；如需修正，请在“本次接受后全量”中按主键编辑并保存。'
+                    : status === 'rejected'
+                      ? '当前版本已拒绝，仅保留审计快照，不会进入本体或正式数据消费。'
+                      : '当前批准版本仅供查看，可分页浏览或导出全量数据。'
+                }
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {!reviewPending && (
+              {status === 'approved' && (
                 <>
                   <button type="button" onClick={() => void handleExport('csv')} disabled={Boolean(exporting)}
                     className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-50">
@@ -511,14 +714,23 @@ export default function CuratedDetailPanel({
               </span>
               <span className="text-amber-800/75">请核对变化量、上一版本全量与本次接受后全量，再在底部作出决定。</span>
               <span className="ml-auto inline-flex items-center gap-1 text-amber-700/70">
-                <LockKeyhole size={11} /> 审核快照只读
+                <LockKeyhole size={11} />
+                {primaryKeys.length
+                  ? '变化对比只读；本次全量可修正非主键字段'
+                  : '无稳定主键，审核快照只读'}
               </span>
+            </div>
+          ) : status === 'rejected' ? (
+            <div className="flex shrink-0 items-center gap-2 border-b border-rose-100 bg-rose-50/70 px-5 py-3 text-xs text-rose-800">
+              <AlertTriangle size={14} className="shrink-0" />
+              <span className="font-medium">当前版本已拒绝</span>
+              <span className="text-rose-700/80">以下仅展示被拒绝的审核快照，供审计追溯；不会进入本体或正式数据消费。</span>
             </div>
           ) : (
             <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50/55 px-5 py-3 text-xs text-emerald-800">
               <CheckCircle size={14} className="shrink-0" />
               <span className="font-medium">当前没有新数据需要审核</span>
-              <span className="text-emerald-700/75">以下展示最近一次已完成审核的数据版本，内容只读；导出不受当前分页限制。</span>
+              <span className="text-emerald-700/75">以下展示当前已批准的数据版本，内容只读；导出不受当前分页限制。</span>
             </div>
           )}
 
@@ -545,10 +757,18 @@ export default function CuratedDetailPanel({
           )}
 
           {actionError && (
-            <div className="flex shrink-0 items-start gap-2 border-b border-red-100 bg-red-50 px-6 py-2 text-xs text-red-700">
+            <div className="flex shrink-0 items-start gap-2 border-b border-red-100 bg-red-50 px-6 py-2 text-xs text-red-700" role="alert">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span className="flex-1">{actionError}</span>
               <button type="button" onClick={() => setActionError('')} className="text-red-400 hover:text-red-700" aria-label="关闭错误提示">×</button>
+            </div>
+          )}
+
+          {editMessage && (
+            <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50 px-6 py-2 text-xs text-emerald-700" role="status">
+              <CheckCircle size={13} className="shrink-0" />
+              <span className="flex-1">{editMessage}</span>
+              <button type="button" onClick={() => setEditMessage('')} className="text-emerald-500 hover:text-emerald-800" aria-label="关闭保存提示">×</button>
             </div>
           )}
 
@@ -570,7 +790,8 @@ export default function CuratedDetailPanel({
             <div className="flex shrink-0 items-start gap-2 border-b border-sky-100 bg-sky-50/70 px-5 py-2.5 text-xs text-sky-800">
               <Info size={13} className="mt-0.5 shrink-0" />
               <span>
-                当前流水线采用无主键模式，可以正常审核。系统会按整行内容比较，因此字段变化会显示为“删除旧行 + 新增新行”，无法归并成更新行。
+                当前流水线采用无主键模式，可以正常审核，但无法安全定位具体行，因此行级修正不可用。
+                系统会按整行内容比较，字段变化将显示为“删除旧行 + 新增新行”；如需在审核中修正，请先在流水线数据契约中声明主键并重新入湖。
               </span>
             </div>
           )}
@@ -579,24 +800,34 @@ export default function CuratedDetailPanel({
           {!loading && !loadError && (
             <div className="flex shrink-0 items-center gap-1 border-b border-slate-100 bg-white px-5 py-2.5">
               {reviewPending ? VIEW_TABS.map(([v, label, count]) => (
-                <button key={v} onClick={() => {
-                  setView(v)
-                  if (v !== 'changes') setPageOffset(0)
-                }}
+                <button
+                  key={v}
+                  disabled={hasUnsavedEdits && v !== 'current'}
+                  title={hasUnsavedEdits && v !== 'current' ? '请先保存或还原当前修改' : undefined}
+                  onClick={() => {
+                    setView(v)
+                    if (v !== 'changes') setPageOffset(0)
+                  }}
                   className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                    view === v ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                    view === v ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                  } disabled:cursor-not-allowed disabled:opacity-45`}>
                   {label}{count !== null && <span className={`ml-1 ${view === v ? 'text-gray-300' : 'text-gray-400'}`}>{count}</span>}
                 </button>
               )) : (
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                  <Table2 size={13} className="text-teal-700" /> 已审核全量数据
+                  <Table2 size={13} className={status === 'rejected' ? 'text-rose-600' : 'text-teal-700'} />
+                  {status === 'rejected' ? '已拒绝版本快照' : '已批准全量数据'}
                 </span>
               )}
               {reviewPending && (
                 <span className="ml-2 text-[11px] text-gray-400">
                   {view === 'changes' && '相对上一版的新增/更新/删除，聚焦本次改动'}
                   {view === 'previous' && '上一版本完整数据（分页查看，用于对照）'}
-                  {view === 'current' && '如果接受本次变化，数据集将呈现的完整数据 · 只读预览'}
+                  {view === 'current' && (
+                    canEditCurrentRows
+                      ? '如果接受本次变化，数据集将呈现的完整数据 · 可修正非主键字段'
+                      : '如果接受本次变化，数据集将呈现的完整数据 · 只读预览'
+                  )}
                 </span>
               )}
             </div>
@@ -633,13 +864,26 @@ export default function CuratedDetailPanel({
                 ? <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-sm text-gray-400">这是首个版本，没有上一版可对照。</div>
                 : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} schemaColumns={schemaColumns} fillAvailable />
             ) : (
-              <ReadonlyTable
-                rows={diff?.current?.rows ?? []}
-                primaryKeys={primaryKeys}
-                startIndex={diff?.current?.offset ?? pageOffset}
-                schemaColumns={schemaColumns}
-                fillAvailable
-              />
+              canEditCurrentRows ? (
+                <EditableReviewTable
+                  rows={diff?.current?.rows ?? []}
+                  rowPks={diff?.current_row_pks ?? []}
+                  primaryKeys={primaryKeys}
+                  startIndex={diff?.current?.offset ?? pageOffset}
+                  schemaColumns={schemaColumns}
+                  pendingEdits={pendingEdits}
+                  disabled={savingEdits || Boolean(reviewAction)}
+                  onCellChange={handleCellChange}
+                />
+              ) : (
+                <ReadonlyTable
+                  rows={diff?.current?.rows ?? []}
+                  primaryKeys={primaryKeys}
+                  startIndex={diff?.current?.offset ?? pageOffset}
+                  schemaColumns={schemaColumns}
+                  fillAvailable
+                />
+              )
             )}
           </div>
 
@@ -659,6 +903,8 @@ export default function CuratedDetailPanel({
                     <label className="flex items-center gap-1.5 text-xs text-slate-500">
                       每页
                       <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
+                        disabled={hasUnsavedEdits}
+                        title={hasUnsavedEdits ? '请先保存或还原当前修改' : undefined}
                         className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500 focus-visible:ring-2 focus-visible:ring-teal-500/20"
                         aria-label="待审核数据每页显示条数">
                         {REVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
@@ -666,7 +912,7 @@ export default function CuratedDetailPanel({
                       条
                     </label>
                     <div className="flex items-center gap-1 text-xs text-slate-500">
-                      <button type="button" onClick={() => switchPage(pageOffset - pageSize)} disabled={pageOffset <= 0 || loading}
+                      <button type="button" onClick={() => switchPage(pageOffset - pageSize)} disabled={pageOffset <= 0 || loading || hasUnsavedEdits}
                         aria-label="上一页"
                         className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
                         <ChevronLeft size={13} />
@@ -674,12 +920,32 @@ export default function CuratedDetailPanel({
                       <span className="min-w-52 text-center tabular-nums">
                         第 {currentPage} / {totalPages} 页 · {pagedTotal ? `${pageStart.toLocaleString()}–${pageEnd.toLocaleString()}` : 0} / {pagedTotal.toLocaleString()} 行
                       </span>
-                      <button type="button" onClick={() => switchPage(pageOffset + pageSize)} disabled={!pagedView?.has_more || loading}
+                      <button type="button" onClick={() => switchPage(pageOffset + pageSize)} disabled={!pagedView?.has_more || loading || hasUnsavedEdits}
                         aria-label="下一页"
                         className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
                         <ChevronRight size={13} />
                       </button>
                     </div>
+                    {view === 'current' && canEditCurrentRows && (
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs ${hasUnsavedEdits ? 'font-medium text-amber-700' : 'text-slate-400'}`} role="status">
+                          {hasUnsavedEdits
+                            ? `${pendingEdits.length} 处修改尚未保存`
+                            : '非主键字段可编辑；主键用于稳定定位且不可修改'}
+                        </span>
+                        {hasUnsavedEdits && (
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveEdits()}
+                            disabled={savingEdits || Boolean(reviewAction)}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-800 transition hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            {savingEdits ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                            保存 {pendingEdits.length} 处修改
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -689,14 +955,14 @@ export default function CuratedDetailPanel({
                   className="h-9 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98]">
                   关闭
                 </button>
-                <button type="button" onClick={handleReject} disabled={Boolean(reviewAction) || reviewIsStale || loading}
-                  title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : '拒绝当前审核版本'}
+                <button type="button" onClick={handleReject} disabled={Boolean(reviewAction) || reviewIsStale || loading || savingEdits || hasUnsavedEdits}
+                  title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : hasUnsavedEdits ? '请先保存或还原当前修改' : '拒绝当前审核版本'}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3.5 text-xs font-medium text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/25 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
                   {reviewAction === 'reject' ? <Loader2 size={13} className="animate-spin" /> : <AlertTriangle size={13} />}
                   拒绝本次数据
                 </button>
-                <button type="button" onClick={handleApprove} disabled={Boolean(reviewAction) || reviewIsStale || loading}
-                  title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : '通过当前审核版本'}
+                <button type="button" onClick={handleApprove} disabled={Boolean(reviewAction) || reviewIsStale || loading || savingEdits || hasUnsavedEdits}
+                  title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : hasUnsavedEdits ? '请先保存或还原当前修改' : '通过当前审核版本'}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm shadow-emerald-900/10 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:ring-offset-1 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
                   {reviewAction === 'approve' ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
                   通过审核
@@ -709,7 +975,7 @@ export default function CuratedDetailPanel({
                 每页
                 <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
                   className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-                  aria-label="已审核数据每页显示条数">
+                  aria-label={status === 'rejected' ? '已拒绝快照每页显示条数' : '已批准数据每页显示条数'}>
                   {REVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
                 </select>
                 条

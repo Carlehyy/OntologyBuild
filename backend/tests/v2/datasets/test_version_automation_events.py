@@ -1,17 +1,26 @@
 """Durable manual DatasetVersion -> ontology automation contract."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.data_channel.datasets.service import DatasetService
 from app.data_channel.datasets.version_events import (
+    CURATED_REVIEW_APPROVED_EVENT,
+    CURATED_REVIEW_PENDING_STATUS,
+    CURATED_REVIEW_PROCESSING_STATUS,
+    CURATED_REVIEW_RETRY_STATUS,
+    VERSION_PUBLISHED_EVENT,
     drain_dataset_version_events,
     manual_dataset_automation_eligibility,
 )
+from app.data_channel.curated.review_service import ReviewService
 from app.data_channel.sync_tasks.incremental_orchestrator import (
     IncrementalOrchestrator,
 )
@@ -71,6 +80,33 @@ def test_version_and_event_commit_together(db):
     assert event.attempts == 0
 
 
+def test_version_publish_locks_dataset_row_before_allocation(db, monkeypatch):
+    """版本发布必须与审核共享 Dataset 行锁，而非只依赖外部写锁。"""
+    from sqlalchemy.orm import Query
+
+    from app.models.v2.dataset import Dataset
+
+    service, _storage, dataset = _manual_service(db)
+    original = Query.with_for_update
+    dataset_locks: list[dict] = []
+
+    def track_for_update(query, *args, **kwargs):
+        entities = {
+            item.get("entity") for item in query.column_descriptions
+        }
+        if Dataset in entities:
+            dataset_locks.append(dict(kwargs))
+        return original(query, *args, **kwargs)
+
+    monkeypatch.setattr(Query, "with_for_update", track_for_update)
+
+    service.create_version(
+        dataset.id, b"id,name\n1,A\n", rowcount=1)
+
+    assert dataset_locks
+    assert dataset_locks[0].get("of") is Dataset
+
+
 def test_managed_minio_failure_does_not_block_database_version_event(db):
     service, storage, dataset = _manual_service(db)
     storage.fail_put = True
@@ -84,6 +120,426 @@ def test_managed_minio_failure_does_not_block_database_version_event(db):
     assert event.dataset_version_id == version.id
 
 
+def test_curated_approval_and_automation_event_commit_together(db):
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+
+    ReviewService(db).approve(review.id)
+
+    events = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id).all()
+    assert {event.event_type for event in events} == {
+        VERSION_PUBLISHED_EVENT,
+        CURATED_REVIEW_APPROVED_EVENT,
+    }
+    approval_event = next(
+        event for event in events
+        if event.event_type == CURATED_REVIEW_APPROVED_EVENT)
+    assert approval_event.status == CURATED_REVIEW_PENDING_STATUS
+    assert approval_event.attempts == 0
+
+
+def test_curated_approval_status_namespace_fences_legacy_worker(db):
+    """旧 worker 的 pending/retry/processing 查询不得看到新审批事件。"""
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "滚动发布成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    approval_event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+
+    now = datetime.now(timezone.utc)
+    stale_before = now + timedelta(seconds=1)
+    legacy_worker_ready = or_(
+        and_(
+            DatasetVersionEvent.status.in_(("pending", "retry")),
+            DatasetVersionEvent.available_at <= now,
+        ),
+        and_(
+            DatasetVersionEvent.status == "processing",
+            DatasetVersionEvent.claimed_at < stale_before,
+        ),
+    )
+    for status in (
+        CURATED_REVIEW_PENDING_STATUS,
+        CURATED_REVIEW_PROCESSING_STATUS,
+        CURATED_REVIEW_RETRY_STATUS,
+    ):
+        approval_event.status = status
+        approval_event.claimed_at = now - timedelta(hours=1)
+        db.commit()
+        assert db.query(DatasetVersionEvent).filter(
+            DatasetVersionEvent.id == approval_event.id,
+            legacy_worker_ready,
+        ).count() == 0
+
+    # The values must fit the deployed varchar(20) column without a migration.
+    assert max(map(len, (
+        CURATED_REVIEW_PENDING_STATUS,
+        CURATED_REVIEW_PROCESSING_STATUS,
+        CURATED_REVIEW_RETRY_STATUS,
+    ))) <= DatasetVersionEvent.__table__.c.status.type.length == 20
+
+
+def test_new_worker_reclaims_stale_namespaced_approval(db):
+    """新 worker 能接管自己的超时审批 claim，旧 worker 则看不到它。"""
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "超时审批成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    published = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=VERSION_PUBLISHED_EVENT,
+    ).one()
+    published.status = "completed"
+    approval_event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    approval_event.status = CURATED_REVIEW_PROCESSING_STATUS
+    approval_event.claim_token = "crashed-new-worker"
+    approval_event.claimed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    db.commit()
+
+    def successful_barrier(review_id, *, synchronous):
+        active = db.query(DatasetVersionEvent).filter_by(
+            id=approval_event.id).one()
+        assert active.status == CURATED_REVIEW_PROCESSING_STATUS
+        assert active.claim_token != "crashed-new-worker"
+        assert review_id == review.id
+        assert synchronous is True
+        return {
+            "dataset_id": dataset.id,
+            "review_id": review.id,
+            "triggered_mappings": [],
+        }
+
+    with patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        side_effect=successful_barrier,
+    ):
+        result = drain_dataset_version_events(db, limit=1)
+
+    assert result == {"processed": 1, "retried": 0, "lost_claims": 0}
+    db.expire_all()
+    stored = db.query(DatasetVersionEvent).filter_by(
+        id=approval_event.id).one()
+    assert stored.status == "completed"
+    assert stored.attempts == 1
+
+
+def test_new_worker_upgrades_legacy_pending_approval_without_migration(db):
+    """升级前已落库的 pending 审批事件仍可由新 worker 正确消费。"""
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "历史待处理成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    published = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=VERSION_PUBLISHED_EVENT,
+    ).one()
+    published.status = "completed"
+    approval_event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    approval_event.status = "pending"
+    db.commit()
+
+    def successful_barrier(review_id, *, synchronous):
+        active = db.query(DatasetVersionEvent).filter_by(
+            id=approval_event.id).one()
+        assert active.status == CURATED_REVIEW_PROCESSING_STATUS
+        assert review_id == review.id
+        assert synchronous is True
+        return {
+            "dataset_id": dataset.id,
+            "review_id": review.id,
+            "triggered_mappings": [],
+        }
+
+    with patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        side_effect=successful_barrier,
+    ):
+        result = drain_dataset_version_events(db, limit=1)
+
+    assert result == {"processed": 1, "retried": 0, "lost_claims": 0}
+    db.expire_all()
+    stored = db.query(DatasetVersionEvent).filter_by(
+        id=approval_event.id).one()
+    assert stored.status == "completed"
+    assert stored.attempts == 1
+
+
+def test_legacy_pending_review_binds_version_before_approval_event(db):
+    """迁移前空 version review 也必须产生精确、可恢复的审批事件。"""
+    from app.models.v2.curated import CuratedReview
+
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "历史成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    legacy_review = CuratedReview(
+        curated_dataset_id=dataset.id,
+        dataset_version_id=None,
+        status="pending",
+    )
+    db.add(legacy_review)
+    db.commit()
+    db.refresh(legacy_review)
+
+    approved = ReviewService(db).approve(legacy_review.id)
+
+    assert approved.dataset_version_id == version.id
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    assert event.status == CURATED_REVIEW_PENDING_STATUS
+
+
+def test_stale_reviewer_session_cannot_overwrite_terminal_decision(db):
+    """等待锁的旧 identity-map 必须刷新，不能把 approved 覆盖成 rejected。"""
+    from app.models.v2.curated import CuratedReview
+
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "并发审核订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    service.create_version(dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    review_id = review.id
+    db.commit()
+
+    isolated_session = sessionmaker(
+        bind=db.get_bind(),
+        expire_on_commit=False,
+    )
+    winner = isolated_session()
+    stale = isolated_session()
+    try:
+        cached = stale.query(CuratedReview).filter_by(id=review_id).one()
+        assert cached.status == "pending"
+        stale.commit()  # 释放 SQLite 读事务，但刻意保留旧 identity-map。
+
+        ReviewService(winner).approve(review_id)
+
+        with pytest.raises(HTTPException) as exc_info:
+            ReviewService(stale).reject(review_id)
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["code"] == "review_already_decided"
+    finally:
+        winner.close()
+        stale.close()
+
+    db.expire_all()
+    stored = db.query(CuratedReview).filter_by(id=review_id).one()
+    assert stored.status == "approved"
+    assert db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=stored.dataset_version_id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).count() == 1
+
+
+def test_curated_approval_event_completes_only_after_sync_mapping_barrier(db):
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+
+    with patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        return_value={
+            "dataset_id": dataset.id,
+            "review_id": review.id,
+            "triggered_mappings": [],
+        },
+    ) as dispatch:
+        result = drain_dataset_version_events(db, limit=10)
+
+    assert result == {"processed": 2, "retried": 0, "lost_claims": 0}
+    dispatch.assert_called_once_with(review.id, synchronous=True)
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    assert event.status == "completed"
+    assert event.result_json["review_id"] == review.id
+
+
+def test_curated_approval_refreshes_stale_event_identity_before_routing(db):
+    """调用方复用旧 Session 时也必须按数据库中的事件类型派发。"""
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    published = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=VERSION_PUBLISHED_EVENT,
+    ).one()
+    published.status = "completed"
+    db.commit()
+
+    isolated_session = sessionmaker(
+        bind=db.get_bind(),
+        expire_on_commit=False,
+    )()
+    try:
+        approval_event = isolated_session.query(
+            DatasetVersionEvent,
+        ).filter_by(
+            dataset_version_id=version.id,
+            event_type=CURATED_REVIEW_APPROVED_EVENT,
+        ).one()
+        # Simulate a caller-owned identity map that predates the claim.  This
+        # changes only SQLAlchemy's committed in-memory value, not the row.
+        set_committed_value(
+            approval_event, "event_type", VERSION_PUBLISHED_EVENT)
+
+        with patch.object(
+            IncrementalOrchestrator,
+            "on_review_approved",
+            return_value={
+                "dataset_id": dataset.id,
+                "review_id": review.id,
+                "triggered_mappings": [],
+            },
+        ) as review_dispatch, patch.object(
+            IncrementalOrchestrator,
+            "on_dataset_version_published",
+        ) as version_dispatch:
+            result = drain_dataset_version_events(
+                isolated_session, limit=1)
+
+        assert result == {
+            "processed": 1, "retried": 0, "lost_claims": 0}
+        review_dispatch.assert_called_once_with(
+            review.id, synchronous=True)
+        version_dispatch.assert_not_called()
+    finally:
+        isolated_session.close()
+
+
+def test_curated_approval_rejects_version_handler_result_identity(db):
+    """审批事件拿到发布 handler 的结果形状时不得被伪确认完成。"""
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    published = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=VERSION_PUBLISHED_EVENT,
+    ).one()
+    published.status = "completed"
+    db.commit()
+
+    wrong_result = {
+        "status": "completed",
+        "dataset_id": dataset.id,
+        "dataset_version_id": version.id,
+        "manual_mapping": {
+            "status": "skipped",
+            "reason": "curated versions require the review-approved trigger",
+        },
+    }
+    with patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        return_value=wrong_result,
+    ):
+        result = drain_dataset_version_events(db, limit=1)
+
+    assert result == {"processed": 0, "retried": 1, "lost_claims": 0}
+    db.expire_all()
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    assert event.status == CURATED_REVIEW_RETRY_STATUS
+    assert "curated_review_approved handler returned" in event.last_error
+    assert event.result_json is None
+
+
+def test_curated_approval_mapping_failure_remains_retryable(db):
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(
+        dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    published = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=VERSION_PUBLISHED_EVENT,
+    ).one()
+    published.status = "completed"
+    db.commit()
+
+    with patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        side_effect=RuntimeError("mapping barrier unavailable"),
+    ):
+        result = drain_dataset_version_events(db, limit=1)
+
+    assert result == {"processed": 0, "retried": 1, "lost_claims": 0}
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    assert event.status == CURATED_REVIEW_RETRY_STATUS
+    assert event.attempts == 1
+    assert "mapping barrier unavailable" in event.last_error
+
+
 def test_superseded_events_are_coalesced_to_latest_snapshot(db):
     service, _storage, dataset = _manual_service(db)
     first = service.create_version(dataset.id, b"id,name\n1,A\n", rowcount=1)
@@ -92,7 +548,15 @@ def test_superseded_events_are_coalesced_to_latest_snapshot(db):
     with patch.object(
         IncrementalOrchestrator,
         "on_dataset_version_published",
-        return_value={"status": "completed"},
+        return_value={
+            "status": "completed",
+            "dataset_id": dataset.id,
+            "dataset_version_id": second.id,
+            "manual_mapping": {
+                "status": "no_subscribers",
+                "ontologies": [],
+            },
+        },
     ) as dispatch:
         result = drain_dataset_version_events(db, limit=10)
 
@@ -109,10 +573,17 @@ def test_dispatch_failure_is_persisted_for_retry(db):
     service, _storage, dataset = _manual_service(db)
     version = service.create_version(dataset.id, b"id,name\n1,A\n", rowcount=1)
 
+    def fail_legacy_version_handler(_dataset_id, _version_id):
+        active = db.query(DatasetVersionEvent).filter_by(
+            dataset_version_id=version.id).one()
+        # Ordinary version_published retains the legacy namespace.
+        assert active.status == "processing"
+        raise RuntimeError("mapping projection unavailable")
+
     with patch.object(
         IncrementalOrchestrator,
         "on_dataset_version_published",
-        side_effect=RuntimeError("mapping projection unavailable"),
+        side_effect=fail_legacy_version_handler,
     ):
         result = drain_dataset_version_events(db, limit=1)
 
@@ -124,6 +595,40 @@ def test_dispatch_failure_is_persisted_for_retry(db):
     assert "mapping projection unavailable" in event.last_error
     assert event.claim_token is None and event.claimed_at is None
     assert event.available_at.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
+
+
+def test_stale_failure_owner_cannot_clobber_successor_claim(db):
+    """超时 owner 报错时不得把已接管的 processing 事件改回 retry。"""
+    service, _storage, dataset = _manual_service(db)
+    version = service.create_version(
+        dataset.id, b"id,name\n1,A\n", rowcount=1)
+    successor_token = "successor-claim-token"
+
+    def takeover_then_fail(active_db, event_id, _old_token):
+        active_db.query(DatasetVersionEvent).filter(
+            DatasetVersionEvent.id == event_id,
+        ).update({
+            DatasetVersionEvent.status: "processing",
+            DatasetVersionEvent.claim_token: successor_token,
+            DatasetVersionEvent.claimed_at: datetime.now(timezone.utc),
+        }, synchronize_session=False)
+        active_db.commit()
+        raise RuntimeError("stale owner failed after takeover")
+
+    with patch(
+        "app.data_channel.datasets.version_events._process_claimed_event",
+        side_effect=takeover_then_fail,
+    ):
+        result = drain_dataset_version_events(db, limit=1)
+
+    assert result == {"processed": 0, "retried": 0, "lost_claims": 1}
+    db.expire_all()
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+    ).one()
+    assert event.status == "processing"
+    assert event.claim_token == successor_token
+    assert event.last_error is None
 
 
 def test_only_explicit_manual_mapping_subscription_runs_build_all(db):
@@ -241,7 +746,9 @@ def test_real_manual_version_to_sentinel_notification_closed_loop(
         MappingService, "_rebuild_neo4j_projection", lambda *_args: True)
     monkeypatch.setattr(
         MappingService, "_rebuild_chroma_projection", lambda *_args: 1)
-    register_cdc()
+    # Mapping owns a synchronous CDC barrier in this test; a second background
+    # consumer would only race it for the same SQLite outbox row.
+    register_cdc(start_worker=False)
 
     ontology_id = "manual-closed-loop"
     project = OntologyProject(

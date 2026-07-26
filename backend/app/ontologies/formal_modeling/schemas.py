@@ -7,7 +7,15 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    model_validator,
+)
+
+from app.shared.time_utils import utc_iso
 
 
 def _to_camel(s: str) -> str:
@@ -252,6 +260,11 @@ class ActionLogOut(CamelModel):
     object_type_name: Optional[str] = None
     object_instance_label: Optional[str] = None
     trigger_source: Optional[str] = None
+
+    @field_serializer("executed_at", "decided_at", when_used="unless-none")
+    def serialize_audit_timestamp(self, value: datetime) -> str:
+        """Never expose a database-naive UTC value as browser-local time."""
+        return utc_iso(value)
 
 
 class DecisionRequest(CamelModel):

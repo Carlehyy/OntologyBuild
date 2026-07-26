@@ -110,6 +110,7 @@ def test_runtime_uses_released_definition_while_live_projection_drifts(
         observed["muted"] = released_sentinel.muted
         observed["release_id"] = expected_release_id
         return SimpleNamespace(
+            id="firing-current-manual-run",
             sentinel_id=released_sentinel.id,
             sentinel_name=released_sentinel.display_name,
             status="no_change",
@@ -126,6 +127,7 @@ def test_runtime_uses_released_definition_while_live_projection_drifts(
 
     assert result["evaluated"] == 1
     assert result["errors"] == 0
+    assert result["firings"][0]["id"] == "firing-current-manual-run"
     assert observed == {
         "condition": None,
         "enabled": True,
@@ -677,7 +679,7 @@ def test_failed_schedule_keeps_recoverable_event_and_success_watermark(
     retry = db.query(SentinelCdcOutbox).filter_by(
         event_kind=cdc.SCHEDULED_SCAN,
         sentinel_id=sentinel.id,
-        status="retry",
+        status="cdc_retry",
     ).one()
     assert retry.available_at > retry.updated_at
     db.refresh(sentinel)
@@ -820,7 +822,7 @@ def test_release_activation_event_is_atomic_with_pointer_switch(
         ontology_release_id=release.id,
     ).one()
     assert durable.sentinel_id is None
-    assert durable.status == "pending"
+    assert durable.status == "cdc_pending"
     assert durable.dedupe_key.startswith("release_activation:")
 
 
@@ -996,7 +998,7 @@ def test_pointer_switch_merges_projection_cdc_and_runs_action_once(
     assert {row.event_kind for row in staged} == {
         cdc.OBJECT_CHANGE, cdc.LINK_CHANGE,
     }
-    assert all(row.status == "pending" for row in staged)
+    assert all(row.status == "cdc_pending" for row in staged)
 
     project = db.query(OntologyProject).filter_by(id=ontology_id).one()
     project.current_release_id = release_id
