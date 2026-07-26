@@ -5,8 +5,12 @@ import {
   ShieldExclamationIcon, PlusIcon, TrashIcon, XMarkIcon, BoltIcon,
 } from '@heroicons/react/24/outline'
 import { useOntologyStore } from '../../store/ontologyStore'
-import { sentinelApi, type Sentinel, type SentinelFiring } from '../../../api/sentinelApi'
+import {
+  sentinelApi, type Sentinel, type SentinelCdcStatus, type SentinelFiring,
+  type SentinelLink,
+} from '../../../api/sentinelApi'
 import { apiClientV2 } from '../../../api/client'
+import type { ActionParameter } from '../../types/ontology'
 
 interface Props {
   isOpen: boolean
@@ -28,12 +32,16 @@ interface Draft {
   id?: string
   displayName: string
   description?: string
-  bindings: { alias: string; objectTypeId: string }[]
+  bindings: { alias: string; objectTypeId: string; filter?: string | null }[]
+  // 关系会改变命中集合和动作对象，必须由用户明确选择；[] 表示全组合。
+  links: SentinelLink[]
+  primaryAlias: string
   condRows: CondRow[]
   condLogic: 'and' | 'or'
   advanced: boolean
   conditionRaw: string              // 高级模式直写
   actionIds: string[]
+  actionParameters: Record<string, Record<string, unknown>>
   onChange: boolean
   onSchedule: boolean
   scanIntervalSeconds: number
@@ -78,24 +86,109 @@ const emptyRow = (alias: string): CondRow => ({
 const emptyDraft = (): Draft => ({
   displayName: '', description: '',
   bindings: [{ alias: 'a', objectTypeId: '' }],
+  links: [], primaryAlias: 'a',
   condRows: [], condLogic: 'and', advanced: false, conditionRaw: '',
-  actionIds: [], onChange: true, onSchedule: false, scanIntervalSeconds: 300,
+  actionIds: [], actionParameters: {},
+  onChange: true, onSchedule: false, scanIntervalSeconds: 300,
   triggerMode: 'on_enter', muted: false, enabled: true,
 })
+
+// 始终使用下标形式。JavaScript 的近似 Unicode 正则无法等价判断 Python
+// Identifier；例如「价格€」「状态。码」走点语法会生成无法编译的表达式。
+const propertyRef = (alias: string, property: string) =>
+  `${alias}[${JSON.stringify(property)}]`
+
+type ParameterMode =
+  | 'default'
+  | 'property'
+  | 'constant'
+  | 'primary_id'
+  | 'event'
+  | 'template'
+  | 'advanced'
+
+const EVENT_PARAMETER_PROPERTIES = [
+  ['edge', '触发边沿（enter/leave）'],
+  ['matchKey', '命中键'],
+  ['occurredAt', '触发时间'],
+  ['sentinelId', '哨兵 ID'],
+  ['sentinelName', '哨兵名称'],
+] as const
+
+const normalizedSource = (spec: Record<string, unknown>) =>
+  String(spec.sourceType || spec.source || '').trim().toLowerCase().replaceAll('-', '_')
+
+function parameterMode(spec: unknown): ParameterMode {
+  if (typeof spec === 'string' && (spec.includes('{{') || spec.includes('}}'))) {
+    return 'template'
+  }
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    return spec === undefined ? 'default' : 'constant'
+  }
+  const source = normalizedSource(spec as Record<string, unknown>)
+  if (!source) return 'constant'
+  if (source === 'constant' || source === 'literal') return 'constant'
+  if (source === 'property' || source === 'match' || source === 'match_property') return 'property'
+  if (source === 'primary_id' || source === 'target_id') return 'primary_id'
+  if (source === 'event' || source === 'event_property' || source === 'edge') return 'event'
+  return 'advanced'
+}
+
+function constantValue(spec: unknown): unknown {
+  if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
+    if ('value' in spec) return (spec as any).value
+    if ('sourceValue' in spec) return (spec as any).sourceValue
+  }
+  return spec
+}
+
+function coerceConstant(raw: string, type?: string): unknown {
+  const normalized = String(type || '').toLowerCase()
+  if (['number', 'integer', 'int', 'float', 'double', 'decimal', 'currency'].includes(normalized)) {
+    if (raw === '') return ''
+    const value = Number(raw)
+    // 保留非法原文，让发布/执行类型闸门明确报错；绝不能让 NaN 经 JSON
+    // 序列化悄悄变成 null。
+    return Number.isFinite(value) ? value : raw
+  }
+  if (['boolean', 'bool'].includes(normalized)) return raw === 'true'
+  if (['json', 'object', 'array'].includes(normalized)) {
+    try { return JSON.parse(raw) } catch { return raw }
+  }
+  return raw
+}
+
+function parameterOptions(parameter: ActionParameter) {
+  const raw = parameter.enum ?? parameter.options ?? parameter.allowedValues ?? []
+  return raw.map(option => {
+    if (
+      option !== null
+      && typeof option === 'object'
+      && !Array.isArray(option)
+      && Object.prototype.hasOwnProperty.call(option, 'value')
+    ) {
+      const item = option as { label?: string; value: unknown }
+      return { label: item.label || String(item.value), value: item.value }
+    }
+    return { label: String(option), value: option }
+  })
+}
 
 // 把一行编译成表达式片段
 function compileRow(r: CondRow): string | null {
   if (!r.leftAlias || !r.leftProp) return null
-  const left = `${r.leftAlias}.${r.leftProp}`
+  const left = propertyRef(r.leftAlias, r.leftProp)
   let right: string
   if (r.rightKind === 'property') {
     if (!r.rightAlias || !r.rightProp) return null
-    right = `${r.rightAlias}.${r.rightProp}`
+    right = propertyRef(r.rightAlias, r.rightProp)
   } else {
     const v = (r.rightValue ?? '').trim()
     if (v === '') return null
     // 数字/布尔保持裸值，其余加引号
-    right = /^-?\d+(\.\d+)?$/.test(v) || v === 'true' || v === 'false' ? v : `'${v.replace(/'/g, "\\'")}'`
+    right = /^-?\d+(\.\d+)?$/.test(v) || v === 'true' || v === 'false'
+      ? v
+      : JSON.stringify(v)
   }
   if (r.op === 'contains') return `${right} in ${left}`
   return `${left} ${r.op} ${right}`
@@ -115,11 +208,14 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
   const workspaceTrialRun = useOntologyStore(s => s.workspaceTrialRun)
   const revision = useOntologyStore(s => s.revision)
   const runtimeAccessible = workspaceMode === 'runtime'
-  const definitionEditable = runtimeAccessible || workspaceMode === 'draft'
+  const definitionEditable = workspaceMode === 'draft'
+  const operationalEditable = runtimeAccessible
   const [list, setList] = useState<Sentinel[]>([])
   const [firings, setFirings] = useState<SentinelFiring[]>([])
+  const [cdcStatus, setCdcStatus] = useState<SentinelCdcStatus | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [busy, setBusy] = useState(false)
+  const [operationalBusyId, setOperationalBusyId] = useState<string | null>(null)
   const [tab, setTab] = useState<'list' | 'firings'>('list')
   const [error, setError] = useState<string | null>(null)
 
@@ -151,6 +247,7 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     if (!ontologyId) return
     if (!runtimeAccessible) {
       setList(workspaceSentinels)
+      setCdcStatus(null)
       const results = workspaceMode === 'trial'
         ? (workspaceTrialRun?.result?.sentinels || [])
         : []
@@ -171,11 +268,14 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     }
     // 失败必须可见：静默吞错会把"后端挂了"伪装成"没有哨兵"
     try {
-      const [s, f] = await Promise.all([
+      const [s, f, cdc] = await Promise.all([
         sentinelApi.list(ontologyId),
         sentinelApi.firings(ontologyId),
+        sentinelApi.cdcStatus(ontologyId),
       ])
-      setList((s || []) as Sentinel[]); setFirings((f || []) as SentinelFiring[])
+      setList((s || []) as Sentinel[])
+      setFirings((f || []) as SentinelFiring[])
+      setCdcStatus(cdc)
       setError(null)
     } catch (e: any) {
       setError(`加载哨兵失败：${errText(e)}`)
@@ -183,25 +283,48 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
   }
 
   useEffect(() => { if (isOpen) void refresh() }, [isOpen, ontologyId, runtimeAccessible, workspaceSentinels, workspaceTrialRun])
+  useEffect(() => {
+    if (!definitionEditable) setDraft(null)
+  }, [definitionEditable])
 
-  // 自动推断关系约束:依据 bindings 两两之间唯一的实体关系
-  const inferLinks = (bindings: Draft['bindings']) => {
-    const links: { from: string; linkTypeId: string; to: string }[] = []
-    for (let i = 0; i < bindings.length; i++) {
-      for (let j = i + 1; j < bindings.length; j++) {
-        const a = bindings[i], b = bindings[j]
-        if (!a.objectTypeId || !b.objectTypeId) continue
-        const cands = linkTypes.filter(lt =>
-          (lt.sourceObjectTypeId === a.objectTypeId && lt.targetObjectTypeId === b.objectTypeId) ||
-          (lt.sourceObjectTypeId === b.objectTypeId && lt.targetObjectTypeId === a.objectTypeId))
-        if (cands.length >= 1) {
-          const lt = cands[0]
-          const fwd = lt.sourceObjectTypeId === a.objectTypeId
-          links.push({ from: fwd ? a.alias : b.alias, linkTypeId: lt.id, to: fwd ? b.alias : a.alias })
-        }
-      }
+  const directedLinkChoices = (
+    left: Draft['bindings'][number],
+    right: Draft['bindings'][number],
+  ) => linkTypes.flatMap(linkType => {
+    const choices: Array<{ link: SentinelLink; displayName: string }> = []
+    if (
+      linkType.sourceObjectTypeId === left.objectTypeId
+      && linkType.targetObjectTypeId === right.objectTypeId
+    ) {
+      choices.push({
+        link: { from: left.alias, linkTypeId: linkType.id, to: right.alias },
+        displayName: linkType.displayName,
+      })
     }
-    return links
+    if (
+      linkType.sourceObjectTypeId === right.objectTypeId
+      && linkType.targetObjectTypeId === left.objectTypeId
+    ) {
+      choices.push({
+        link: { from: right.alias, linkTypeId: linkType.id, to: left.alias },
+        displayName: linkType.displayName,
+      })
+    }
+    return choices
+  })
+
+  const setPairLink = (leftAlias: string, rightAlias: string, encoded: string) => {
+    if (!draft) return
+    const remaining = draft.links.filter(link => !(
+      (link.from === leftAlias && link.to === rightAlias)
+      || (link.from === rightAlias && link.to === leftAlias)
+    ))
+    if (!encoded) {
+      setDraft({ ...draft, links: remaining })
+      return
+    }
+    const selected = JSON.parse(encoded) as SentinelLink
+    setDraft({ ...draft, links: [...remaining, selected] })
   }
 
   // 推断关系的可读描述/歧义提示
@@ -212,31 +335,56 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
       for (let j = i + 1; j < draft.bindings.length; j++) {
         const a = draft.bindings[i], b = draft.bindings[j]
         if (!a.objectTypeId || !b.objectTypeId) continue
-        const cands = linkTypes.filter(lt =>
-          (lt.sourceObjectTypeId === a.objectTypeId && lt.targetObjectTypeId === b.objectTypeId) ||
-          (lt.sourceObjectTypeId === b.objectTypeId && lt.targetObjectTypeId === a.objectTypeId))
-        if (cands.length === 0)
-          results.push({ text: `${otName(a.objectTypeId)} 与 ${otName(b.objectTypeId)} 之间未建立关系（将按全组合匹配）`, ambiguous: false })
-        else if (cands.length === 1)
-          results.push({ text: `已自动关联：${otName(a.objectTypeId)} —${cands[0].displayName}→ ${otName(b.objectTypeId)}`, ambiguous: false })
-        else
-          results.push({ text: `${otName(a.objectTypeId)} 与 ${otName(b.objectTypeId)} 间有多条关系，默认用「${cands[0].displayName}」`, ambiguous: true })
+        const configured = draft.links.filter(link =>
+          (link.from === a.alias && link.to === b.alias)
+          || (link.from === b.alias && link.to === a.alias))
+        if (configured.length === 0) {
+          const choices = directedLinkChoices(a, b)
+          if (choices.length > 0) {
+            results.push({
+              text: `${otName(a.objectTypeId)} 与 ${otName(b.objectTypeId)} 当前不使用关系（按全组合匹配，可在下方明确选择）`,
+              ambiguous: true,
+            })
+          } else {
+            results.push({
+              text: `${otName(a.objectTypeId)} 与 ${otName(b.objectTypeId)} 之间没有可用关系（按全组合匹配）`,
+              ambiguous: false,
+            })
+          }
+        } else {
+          configured.forEach(link => {
+            const linkType = linkTypes.find(item => item.id === link.linkTypeId)
+            results.push({
+              text: `当前约束：${link.from} —${linkType?.displayName || link.linkTypeId}→ ${link.to}`,
+              ambiguous: false,
+            })
+          })
+        }
       }
     }
     return results
-  }, [draft?.bindings, linkTypes])
+  }, [draft?.bindings, draft?.links, linkTypes])
 
   if (!isOpen) return null
 
   // 后端 Sentinel → 前端 Draft（回显）
   const toDraft = (s: Sentinel): Draft => ({
     id: s.id, displayName: s.displayName, description: s.description,
-    bindings: (s.bindings || []).map(b => ({ alias: b.alias, objectTypeId: b.objectTypeId })),
+    bindings: (s.bindings || []).map(b => ({
+      alias: b.alias, objectTypeId: b.objectTypeId, filter: b.filter,
+    })),
+    links: (s.links || []).map(link => ({ ...link })),
+    primaryAlias: s.primaryAlias || s.bindings?.[0]?.alias || 'a',
     condRows: ((s as any).conditionRows || []) as CondRow[],
     condLogic: ((s as any).conditionLogic || 'and') as 'and' | 'or',
     advanced: !((s as any).conditionRows?.length) && !!s.condition,
     conditionRaw: s.condition || '',
     actionIds: s.actionIds || [],
+    actionParameters: Object.fromEntries(
+      Object.entries(s.actionParameters || {}).map(
+        ([actionId, params]) => [actionId, { ...(params || {}) }],
+      ),
+    ),
     onChange: s.onChange, onSchedule: s.onSchedule,
     scanIntervalSeconds: s.scanIntervalSeconds,
     triggerMode: ((s as any).triggerMode || 'on_enter'),
@@ -250,44 +398,42 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
       const condition = draft.advanced ? draft.conditionRaw : compileCondition(draft.condRows, draft.condLogic)
       const body: any = {
         name: draft.displayName, displayName: draft.displayName, description: draft.description,
-        bindings: draft.bindings.map(b => ({ alias: b.alias, objectTypeId: b.objectTypeId, filter: null })),
-        links: inferLinks(draft.bindings),
+        bindings: draft.bindings.map(b => ({
+          alias: b.alias, objectTypeId: b.objectTypeId, filter: b.filter ?? null,
+        })),
+        links: draft.links,
         condition,
         conditionRows: draft.advanced ? [] : draft.condRows,
         conditionLogic: draft.condLogic,
-        primaryAlias: draft.bindings[0]?.alias,
+        primaryAlias: draft.primaryAlias || draft.bindings[0]?.alias,
         actionIds: draft.actionIds,
+        actionParameters: draft.actionParameters,
         onChange: draft.onChange, onSchedule: draft.onSchedule,
         scanIntervalSeconds: draft.scanIntervalSeconds,
         triggerMode: draft.triggerMode, muted: draft.muted,
         enabled: draft.enabled,
         status: 'published',
       }
-      if (runtimeAccessible) {
-        if (draft.id) await sentinelApi.update(ontologyId, draft.id, body)
-        else await sentinelApi.create(ontologyId, body)
-      } else {
-        if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
-        const id = draft.id || uuidv4()
-        const previous = list.find(item => item.id === id)
-        const nextSentinel: Sentinel = {
-          ...(previous || {} as Sentinel),
-          ...body,
-          id,
-          ontologyId,
-          name: previous?.name || draft.displayName,
-          status: 'draft',
-        }
-        const nextList = previous
-          ? list.map(item => item.id === id ? nextSentinel : item)
-          : [...list, nextSentinel]
-        const result = await apiClientV2.put<{ revision: string }>(
-          `/ontologies/${ontologyId}/versions/${workspaceVersionId}/workspace/mappings`,
-          { baseRevision: revision, sentinels: nextList },
-        )
-        setList(nextList)
-        useOntologyStore.setState({ workspaceSentinels: nextList, revision: result.revision })
+      if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
+      const id = draft.id || uuidv4()
+      const previous = list.find(item => item.id === id)
+      const nextSentinel: Sentinel = {
+        ...(previous || {} as Sentinel),
+        ...body,
+        id,
+        ontologyId,
+        name: previous?.name || draft.displayName,
+        status: 'draft',
       }
+      const nextList = previous
+        ? list.map(item => item.id === id ? nextSentinel : item)
+        : [...list, nextSentinel]
+      const result = await apiClientV2.put<{ revision: string }>(
+        `/ontologies/${ontologyId}/versions/${workspaceVersionId}/workspace/mappings`,
+        { baseRevision: revision, sentinels: nextList },
+      )
+      setList(nextList)
+      useOntologyStore.setState({ workspaceSentinels: nextList, revision: result.revision })
       setDraft(null)
       setError(null)
       await refresh()
@@ -309,14 +455,9 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     } finally { setBusy(false) }
   }
 
-  const toggleSentinel = async (sentinel: Sentinel) => {
+  const toggleDraftSentinel = async (sentinel: Sentinel) => {
     if (!ontologyId || !definitionEditable) return
     try {
-      if (runtimeAccessible) {
-        await sentinelApi.toggle(ontologyId, sentinel.id)
-        await refresh()
-        return
-      }
       if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
       const nextList = list.map(item => item.id === sentinel.id ? { ...item, enabled: !item.enabled } : item)
       const result = await apiClientV2.put<{ revision: string }>(
@@ -329,14 +470,52 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
     } catch (e: any) { setError(`切换启停失败：${errText(e)}`) }
   }
 
+  const updateOperationalState = async (
+    sentinel: Sentinel,
+    patch: { enabled?: boolean; muted?: boolean },
+  ) => {
+    if (!ontologyId || !operationalEditable) return
+    if (!sentinel.releaseId) {
+      await refresh()
+      setError('运行态列表缺少发布版本标识，已自动刷新；请确认后端发布状态')
+      return
+    }
+    setOperationalBusyId(sentinel.id)
+    try {
+      const updated = await sentinelApi.updateOperationalState(
+        ontologyId,
+        sentinel.id,
+        {
+          ...patch,
+          expectedReleaseId: sentinel.releaseId,
+          expectedGeneration: sentinel.enableGeneration ?? 0,
+        },
+      )
+      setList(items => items.map(
+        item => item.id === updated.id ? updated : item,
+      ))
+      setError(null)
+    } catch (e: any) {
+      const code = e?.detail?.code
+      if (
+        code === 'release_context_changed'
+        || code === 'current_release_missing'
+        || code === 'current_release_invalid'
+        || code === 'builtin_sentinel_generation_conflict'
+        || code === 'builtin_sentinel_not_in_current_release'
+        || code === 'builtin_sentinel_not_operational'
+      ) {
+        await refresh()
+      }
+      setError(`修改运行状态失败：${errText(e)}`)
+    } finally {
+      setOperationalBusyId(null)
+    }
+  }
+
   const removeSentinel = async (sentinel: Sentinel) => {
     if (!ontologyId || !definitionEditable || !confirm('删除该哨兵？触发历史会保留。')) return
     try {
-      if (runtimeAccessible) {
-        await sentinelApi.remove(ontologyId, sentinel.id)
-        await refresh()
-        return
-      }
       if (!workspaceVersionId) throw new Error('缺少草稿版本标识')
       const nextList = list.filter(item => item.id !== sentinel.id)
       const result = await apiClientV2.put<{ revision: string }>(
@@ -351,8 +530,48 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
 
   const setBinding = (i: number, patch: Partial<Draft['bindings'][0]>) => {
     if (!draft) return
+    const previous = draft.bindings[i]
     const bs = draft.bindings.map((b, j) => j === i ? { ...b, ...patch } : b)
-    setDraft({ ...draft, bindings: bs })
+    const typeChanged = (
+      patch.objectTypeId !== undefined
+      && patch.objectTypeId !== previous?.objectTypeId
+    )
+    setDraft({
+      ...draft,
+      bindings: bs,
+      // 旧关系的端点类型契约已经失效，必须让用户按新类型重新选择。
+      links: typeChanged && previous
+        ? draft.links.filter(link =>
+            link.from !== previous.alias && link.to !== previous.alias)
+        : draft.links,
+    })
+  }
+  const removeBinding = (alias: string) => {
+    if (!draft) return
+    const bindings = draft.bindings.filter(binding => binding.alias !== alias)
+    const links = draft.links.filter(
+      link => link.from !== alias && link.to !== alias,
+    )
+    setDraft({
+      ...draft,
+      bindings,
+      links,
+      primaryAlias: draft.primaryAlias === alias
+        ? (bindings[0]?.alias || '')
+        : draft.primaryAlias,
+    })
+  }
+  const setActionParameter = (
+    actionId: string, parameterName: string, value: unknown | undefined,
+  ) => {
+    if (!draft) return
+    const actionParameters = { ...draft.actionParameters }
+    const params = { ...(actionParameters[actionId] || {}) }
+    if (value === undefined) delete params[parameterName]
+    else params[parameterName] = value
+    if (Object.keys(params).length > 0) actionParameters[actionId] = params
+    else delete actionParameters[actionId]
+    setDraft({ ...draft, actionParameters })
   }
   const setRow = (i: number, patch: Partial<CondRow>) => {
     if (!draft) return
@@ -408,31 +627,97 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
                   : '哨兵定义完整可见；历史或归档版本不读取当前正式触发记录，也不可修改。'}
             </div>
           )}
+          {runtimeAccessible && (
+            <div role="status" className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs leading-5 text-sky-200">
+              当前定义来自不可变发布快照。发布态只允许幂等启停与静默控制；结构修改请进入草稿版本。
+            </div>
+          )}
           {error && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
               {error}
             </div>
           )}
+          {runtimeAccessible && cdcStatus && (
+            <div role="status" className={`rounded-lg border px-3 py-2 text-xs ${
+              !cdcStatus.healthy
+                ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                : !cdcStatus.quiescent
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+            }`}>
+              <div className="font-medium">
+                {!cdcStatus.healthy
+                  ? '变化执行链异常'
+                  : !cdcStatus.quiescent
+                    ? '变化执行链处理中'
+                    : '变化执行链正常'}
+              </div>
+              <div className="mt-1 text-[10px] opacity-80">
+                Worker：{cdcStatus.worker_alive ? '运行中' : '未运行'} ·
+                held {cdcStatus.durable.held || 0} ·
+                pending {cdcStatus.durable.pending || 0} ·
+                processing {cdcStatus.durable.processing || 0} ·
+                retry {cdcStatus.durable.retry || 0} ·
+                dead {cdcStatus.durable.dead || 0}
+              </div>
+              {(cdcStatus.last_error || cdcStatus.last_errors[0]?.error) && (
+                <div className="mt-1 break-all text-[10px]">
+                  最近错误：{cdcStatus.last_error || cdcStatus.last_errors[0]?.error}
+                </div>
+              )}
+            </div>
+          )}
           {tab === 'list' && !draft && (
             <>
-              <button onClick={() => setDraft(emptyDraft())} disabled={!definitionEditable}
-                title={!definitionEditable ? '当前状态不可新建哨兵' : undefined}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-surface-600 text-surface-300 hover:border-rose-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-40 text-sm">
-                <PlusIcon className="w-4 h-4" /> 新建哨兵
-              </button>
+              {definitionEditable && (
+                <button onClick={() => setDraft(emptyDraft())}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-surface-600 text-surface-300 hover:border-rose-400 hover:text-rose-400 text-sm">
+                  <PlusIcon className="w-4 h-4" /> 新建哨兵
+                </button>
+              )}
               {list.map(s => (
                 <div key={s.id} className="rounded-lg border border-surface-700 bg-surface-800/40 p-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full ${s.enabled ? 'bg-emerald-400' : 'bg-surface-500'}`} />
                       <span className="text-sm text-surface-100">{s.displayName}</span>
+                      {s.muted && (
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                          静默
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1">
-                      <button disabled={!definitionEditable} onClick={() => setDraft(toDraft(s))} className="text-[11px] text-surface-400 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-35 px-1">编辑</button>
-                      <button disabled={!definitionEditable} onClick={() => void toggleSentinel(s)}
-                        className="text-[11px] text-surface-400 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-35 px-1">{s.enabled ? '停用' : '启用'}</button>
-                      <button disabled={!definitionEditable} onClick={() => void removeSentinel(s)}
-                        className="p-1 text-surface-400 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-35"><TrashIcon className="w-3.5 h-3.5" /></button>
+                      {definitionEditable && (
+                        <>
+                          <button onClick={() => setDraft(toDraft(s))}
+                            className="text-[11px] text-surface-400 hover:text-rose-400 px-1">编辑</button>
+                          <button onClick={() => void toggleDraftSentinel(s)}
+                            className="text-[11px] text-surface-400 hover:text-emerald-400 px-1">{s.enabled ? '停用' : '启用'}</button>
+                          <button onClick={() => void removeSentinel(s)}
+                            className="p-1 text-surface-400 hover:text-red-400"><TrashIcon className="w-3.5 h-3.5" /></button>
+                        </>
+                      )}
+                      {operationalEditable && (
+                        <>
+                          <button
+                            disabled={operationalBusyId === s.id}
+                            onClick={() => void updateOperationalState(
+                              s, { enabled: !s.enabled },
+                            )}
+                            className="text-[11px] text-surface-400 hover:text-emerald-400 disabled:cursor-wait disabled:opacity-40 px-1">
+                            {s.enabled ? '停用' : '启用'}
+                          </button>
+                          <button
+                            disabled={operationalBusyId === s.id}
+                            onClick={() => void updateOperationalState(
+                              s, { muted: !s.muted },
+                            )}
+                            className="text-[11px] text-surface-400 hover:text-amber-300 disabled:cursor-wait disabled:opacity-40 px-1">
+                            {s.muted ? '解除静默' : '静默'}
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="mt-2 text-[11px] text-surface-400 space-y-0.5">
@@ -463,7 +748,13 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
                     <div className="text-[10px] text-surface-500">给每个对象类型起个代号，下方条件里用代号引用它的属性</div>
                   </div>
                   <button className="text-rose-400 whitespace-nowrap"
-                    onClick={() => setDraft({ ...draft, bindings: [...draft.bindings, { alias: nextAlias(draft.bindings), objectTypeId: '' }] })}>+ 加对象</button>
+                    onClick={() => setDraft({
+                      ...draft,
+                      bindings: [
+                        ...draft.bindings,
+                        { alias: nextAlias(draft.bindings), objectTypeId: '', filter: null },
+                      ],
+                    })}>+ 加对象</button>
                 </div>
                 {draft.bindings.map((b, i) => (
                   <div key={i} className="flex items-center gap-2">
@@ -478,21 +769,72 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
                       {objectTypes.map(o => <option key={o.id} value={o.id}>{o.displayName}</option>)}
                     </select>
                     {draft.bindings.length > 1 && (
-                      <button className="text-red-400 px-1" onClick={() => setDraft({ ...draft, bindings: draft.bindings.filter((_, j) => j !== i) })}>×</button>
+                      <button className="text-red-400 px-1" onClick={() => removeBinding(b.alias)}>×</button>
                     )}
                   </div>
                 ))}
+                <div className="flex items-center gap-2 border-t border-surface-700/60 pt-2">
+                  <span className="text-surface-400 whitespace-nowrap">动作目标对象</span>
+                  <select className="inp" value={draft.primaryAlias}
+                    onChange={e => setDraft({ ...draft, primaryAlias: e.target.value })}>
+                    {draft.bindings.map(binding => (
+                      <option key={binding.alias} value={binding.alias}>
+                        {subjectLabel(binding.alias)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              {/* 2. 关系约束 — 自动推断，仅展示/歧义时可调 */}
+              {/* 2. 关系约束 — 关系会改变命中集合，必须显式选择 */}
               {relationHint && relationHint.length > 0 && (
                 <div className="rounded-lg border border-surface-700 p-3 space-y-1">
-                  <div className="text-surface-200">对象关联<span className="text-[10px] text-surface-500 ml-1">（依据本体已有实体关系自动推断）</span></div>
+                  <div className="text-surface-200">对象关联<span className="text-[10px] text-surface-500 ml-1">（不自动猜测；不选即按全组合匹配）</span></div>
                   {relationHint.map((h, i) => (
                     <div key={i} className={`text-[11px] flex items-start gap-1 ${h.ambiguous ? 'text-amber-300' : 'text-surface-400'}`}>
                       <span>{h.ambiguous ? '⚠' : '↳'}</span><span>{h.text}</span>
                     </div>
                   ))}
+                  {draft.bindings.flatMap((left, leftIndex) =>
+                    draft.bindings.slice(leftIndex + 1).map(right => {
+                      const choices = directedLinkChoices(left, right)
+                      if (choices.length === 0) return null
+                      const configured = draft.links.filter(link => (
+                        (link.from === left.alias && link.to === right.alias)
+                        || (link.from === right.alias && link.to === left.alias)
+                      ))
+                      const value = configured.length === 1
+                        ? JSON.stringify(configured[0])
+                        : configured.length > 1 ? '__multiple__' : ''
+                      return (
+                        <div key={`${left.alias}:${right.alias}`}
+                          className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(180px,1.2fr)] items-center gap-2">
+                          <span className="text-[10px] text-surface-400">
+                            {subjectLabel(left.alias)} ↔ {subjectLabel(right.alias)}
+                          </span>
+                          <select className="inp" value={value}
+                            onChange={event => setPairLink(
+                              left.alias, right.alias, event.target.value,
+                            )}>
+                            {configured.length > 1 && (
+                              <option value="__multiple__" disabled>
+                                当前保留 {configured.length} 条关系约束
+                              </option>
+                            )}
+                            <option value="">不使用关系（按全组合匹配）</option>
+                            {choices.map(choice => {
+                              const link = choice.link
+                              return (
+                                <option key={JSON.stringify(link)} value={JSON.stringify(link)}>
+                                  {link.from} —{choice.displayName}→ {link.to}
+                                </option>
+                              )
+                            })}
+                          </select>
+                        </div>
+                      )
+                    }),
+                  )}
                 </div>
               )}
 
@@ -606,23 +948,219 @@ export default function SentinelPanel({ isOpen, onClose }: Props) {
               <div className="rounded-lg border border-surface-700 p-3 space-y-1">
                 <div className="text-surface-200 mb-1">命中后执行的动作<span className="text-[10px] text-surface-500 ml-1">（可多选，依次执行）</span></div>
                 {actions.map(a => {
-                  const requiredParams = (a.parameters || []).filter(p => p.required)
                   const checked = draft.actionIds.includes(a.id)
                   return (
-                    <div key={a.id} className="py-0.5">
+                    <div key={a.id} className="py-1">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" checked={checked}
                           onChange={e => {
                             const set = new Set(draft.actionIds)
+                            const actionParameters = { ...draft.actionParameters }
                             if (e.target.checked) set.add(a.id)
-                            else set.delete(a.id)
-                            setDraft({ ...draft, actionIds: [...set] })
+                            else {
+                              set.delete(a.id)
+                              delete actionParameters[a.id]
+                            }
+                            setDraft({
+                              ...draft,
+                              actionIds: [...set],
+                              actionParameters,
+                            })
                           }} />
                         <span className="text-surface-200">{a.displayName}</span>
                       </label>
-                      {checked && requiredParams.length > 0 && (
-                        <div className="ml-5 mt-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
-                          该动作有必填参数：{requiredParams.map(p => p.displayName || p.name).join('、')}。哨兵触发时不会弹窗填写参数，执行可能校验失败。
+                      {checked && (a.parameters || []).length > 0 && (
+                        <div className="ml-5 mt-2 space-y-2 rounded border border-surface-700 bg-surface-900/35 p-2">
+                          {(a.parameters || []).map(p => {
+                            const spec = draft.actionParameters[a.id]?.[p.name]
+                            const mode = parameterMode(spec)
+                            const binding = (
+                              spec && typeof spec === 'object' && !Array.isArray(spec)
+                                ? spec as any
+                                : {}
+                            )
+                            const hasDefault = Object.prototype.hasOwnProperty.call(p, 'defaultValue')
+                            const choices = parameterOptions(p)
+                            const propertySelection = JSON.stringify([
+                              binding.alias || draft.primaryAlias,
+                              binding.property || '',
+                            ])
+                            const eventProperty = String(
+                              binding.property
+                              || binding.sourceValue
+                              || (normalizedSource(binding) === 'edge' ? 'edge' : ''),
+                            )
+                            const parameterType = String(p.type).toLowerCase()
+                            const rawConstant = constantValue(spec)
+                            const invalidNumericConstant = (
+                              isNumeric(parameterType)
+                              && typeof rawConstant === 'string'
+                              && rawConstant !== ''
+                            )
+                            return (
+                              <div key={p.id || p.name} className="space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-surface-300">
+                                    {p.displayName || p.name}
+                                    {p.required && <span className="ml-0.5 text-red-400">*</span>}
+                                  </span>
+                                  <select className="inp-inline max-w-[210px]" value={mode}
+                                    onChange={e => {
+                                      const next = e.target.value as ParameterMode
+                                      if (next === 'default') {
+                                        setActionParameter(a.id, p.name, undefined)
+                                      } else if (next === 'property') {
+                                        const alias = draft.primaryAlias || draft.bindings[0]?.alias
+                                        setActionParameter(a.id, p.name, {
+                                          sourceType: 'property',
+                                          alias,
+                                          property: propsOf(
+                                            draft.bindings.find(item => item.alias === alias)?.objectTypeId || '',
+                                          )[0]?.name || '',
+                                        })
+                                      } else if (next === 'primary_id') {
+                                        setActionParameter(a.id, p.name, { sourceType: 'primary_id' })
+                                      } else if (next === 'event') {
+                                        setActionParameter(a.id, p.name, {
+                                          sourceType: 'event', property: 'edge',
+                                        })
+                                      } else if (next === 'template') {
+                                        const alias = draft.primaryAlias || draft.bindings[0]?.alias
+                                        const property = propsOf(
+                                          draft.bindings.find(item => item.alias === alias)?.objectTypeId || '',
+                                        )[0]?.name || 'property'
+                                        setActionParameter(
+                                          a.id,
+                                          p.name,
+                                          `{{${alias}.${property}}}`,
+                                        )
+                                      } else if (next === 'advanced') {
+                                        // 只读保留模式：选择项本身不重写未知的旧配置。
+                                        return
+                                      } else {
+                                        setActionParameter(a.id, p.name, {
+                                          sourceType: 'constant',
+                                          value: p.defaultValue ?? (
+                                            String(p.type).toLowerCase().includes('bool') ? false : ''
+                                          ),
+                                        })
+                                      }
+                                    }}>
+                                    <option value="default">
+                                      {hasDefault ? `使用默认值（${String(p.defaultValue)}）` : '不传此参数'}
+                                    </option>
+                                    <option value="property">取命中对象属性</option>
+                                    <option value="constant">固定值</option>
+                                    <option value="primary_id">主对象实例 ID</option>
+                                    <option value="event">事件上下文</option>
+                                    <option value="template">字符串模板</option>
+                                    {mode === 'advanced' && (
+                                      <option value="advanced">高级配置（原样保留）</option>
+                                    )}
+                                  </select>
+                                </div>
+
+                                {mode === 'property' && (
+                                  <select className="inp" value={propertySelection}
+                                    onChange={e => {
+                                      const [alias, property] = JSON.parse(e.target.value)
+                                      setActionParameter(a.id, p.name, {
+                                        sourceType: 'property', alias, property,
+                                      })
+                                    }}>
+                                    {draft.bindings.flatMap(item =>
+                                      propsOf(item.objectTypeId).map(prop => (
+                                        <option key={`${item.alias}:${prop.name}`}
+                                          value={JSON.stringify([item.alias, prop.name])}>
+                                          {subjectLabel(item.alias)} · {prop.displayName}
+                                        </option>
+                                      )),
+                                    )}
+                                  </select>
+                                )}
+
+                                {mode === 'event' && (
+                                  <select className="inp" value={eventProperty || 'edge'}
+                                    onChange={e => setActionParameter(a.id, p.name, {
+                                      sourceType: 'event',
+                                      property: e.target.value,
+                                    })}>
+                                    {EVENT_PARAMETER_PROPERTIES.map(([value, label]) => (
+                                      <option key={value} value={value}>{label}</option>
+                                    ))}
+                                  </select>
+                                )}
+
+                                {mode === 'template' && (
+                                  <input className="inp font-mono"
+                                    value={typeof spec === 'string' ? spec : ''}
+                                    onChange={e => setActionParameter(a.id, p.name, e.target.value)}
+                                    placeholder={`如 {{${draft.primaryAlias}.property}}`} />
+                                )}
+
+                                {mode === 'advanced' && (
+                                  <div className="space-y-1">
+                                    <pre className="overflow-x-auto rounded bg-surface-950/70 p-2 text-[10px] text-amber-200">
+                                      {JSON.stringify(spec, null, 2)}
+                                    </pre>
+                                    <div className="text-[10px] text-amber-300">
+                                      该旧配置无法用结构化控件无损编辑；当前会原样保存。选择其他来源才会明确替换。
+                                    </div>
+                                  </div>
+                                )}
+
+                                {mode === 'constant' && choices.length > 0 && (
+                                  <select className="inp"
+                                    value={JSON.stringify(rawConstant) ?? 'null'}
+                                    onChange={e => setActionParameter(a.id, p.name, {
+                                      sourceType: 'constant',
+                                      value: JSON.parse(e.target.value),
+                                    })}>
+                                    {choices.map((option, index) => (
+                                      <option key={index} value={JSON.stringify(option.value) ?? 'null'}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                {mode === 'constant' && choices.length === 0 && (
+                                  String(p.type).toLowerCase().includes('bool') ? (
+                                    <select className="inp"
+                                      value={String(constantValue(spec) ?? false)}
+                                      onChange={e => setActionParameter(a.id, p.name, {
+                                        sourceType: 'constant',
+                                        value: e.target.value === 'true',
+                                      })}>
+                                      <option value="true">是</option>
+                                      <option value="false">否</option>
+                                    </select>
+                                  ) : (
+                                    <input className="inp"
+                                      value={
+                                        typeof constantValue(spec) === 'object'
+                                          ? JSON.stringify(constantValue(spec))
+                                          : String(constantValue(spec) ?? '')
+                                      }
+                                      onChange={e => setActionParameter(a.id, p.name, {
+                                        sourceType: 'constant',
+                                        value: coerceConstant(e.target.value, String(p.type)),
+                                      })}
+                                      placeholder={`输入${p.displayName || p.name}`} />
+                                  )
+                                )}
+                                {invalidNumericConstant && (
+                                  <div className="text-[10px] text-red-300">
+                                    数值格式无效；当前保留原文且发布/执行会被类型闸门阻断，请输入不带千位分隔符的有限数字。
+                                  </div>
+                                )}
+                                {mode === 'default' && p.required && !hasDefault && (
+                                  <div className="text-[10px] text-red-300">
+                                    必填参数尚未绑定；发布校验和正式执行都会阻断。
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
                     </div>

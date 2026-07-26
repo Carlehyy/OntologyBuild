@@ -1,14 +1,21 @@
 """Ontology Mapping 执行服务 — PRD v1.1: Entity Mapping + Relation推断 + ChromaDB写入"""
 from __future__ import annotations
+from contextlib import contextmanager
 import logging
+import threading
 import uuid as _uuid
 import json
 import re
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from app.models.v2.mapping import OntologyMapping
 
 logger = logging.getLogger(__name__)
+
+_BUILD_LOCKS_GUARD = threading.Lock()
+_LOCAL_BUILD_LOCKS: dict[str, threading.RLock] = {}
+_BUILD_LOCK_OWNERS = threading.local()
 
 
 class MappingSourceError(ValueError):
@@ -23,6 +30,18 @@ class MappingReleaseScopeError(MappingApplyError):
     """Mutable runtime mapping definitions do not match the current release."""
 
 
+class MappingSentinelDispatchError(MappingApplyError):
+    """Projection committed, but its durable Sentinel cascade did not finish."""
+
+    def __init__(self, ontology_id: str, dispatch: dict):
+        self.ontology_id = ontology_id
+        self.dispatch = dispatch
+        super().__init__(
+            "关系型/Formal 投影已提交，但 Sentinel 下游级联失败；"
+            "已阻断本次构建确认，durable CDC outbox 将保留失败/重试证据："
+            f"{dispatch.get('errors')}")
+
+
 def _release_field_mapping(value: dict | None) -> dict:
     """Remove apply bookkeeping while retaining identity/projection semantics."""
     return {
@@ -31,14 +50,105 @@ def _release_field_mapping(value: dict | None) -> dict:
     }
 
 
-def load_mapping_source_rows(db: Session, mapping: OntologyMapping, *,
-                             require_approved: bool = True) -> tuple[list[dict], object | None]:
+def _local_build_lock(ontology_id: str) -> threading.RLock:
+    with _BUILD_LOCKS_GUARD:
+        return _LOCAL_BUILD_LOCKS.setdefault(ontology_id, threading.RLock())
+
+
+@contextmanager
+def _ontology_build_lock(db: Session, ontology_id: str):
+    """Serialize a complete ontology rebuild across threads and processes.
+
+    The project-row lock protects the relational phase, but ``build_all``
+    intentionally commits that transaction before rebuilding Neo4j and Chroma.
+    Without a wider lock another build can then delete a Chroma collection
+    while the first build is writing it.  PostgreSQL session advisory locks
+    survive those commits, so a dedicated physical connection owns the lock
+    until every derived projection and Sentinel barrier has finished.
+    """
+    ontology_id = str(ontology_id)
+    owned_depths = getattr(_BUILD_LOCK_OWNERS, "depths", None)
+    if owned_depths is None:
+        owned_depths = {}
+        _BUILD_LOCK_OWNERS.depths = owned_depths
+    if owned_depths.get(ontology_id, 0):
+        owned_depths[ontology_id] += 1
+        try:
+            yield
+        finally:
+            owned_depths[ontology_id] -= 1
+        return
+
+    local_lock = _local_build_lock(ontology_id)
+    local_lock.acquire()
+    advisory_connection = None
+    advisory_acquired = False
+    lock_key = f"ontology-mapping-build:{ontology_id}"
+    try:
+        bind = db.get_bind()
+        if bind is not None and bind.dialect.name == "postgresql":
+            # Never acquire a session-scoped advisory lock through the business
+            # Session: its commits may return that connection to the pool while
+            # the lock is still held.
+            engine = bind if hasattr(bind, "connect") else bind.engine
+            advisory_connection = engine.connect()
+            advisory_connection.execute(
+                text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"),
+                {"key": lock_key},
+            )
+            advisory_acquired = True
+            advisory_connection.commit()
+        owned_depths[ontology_id] = 1
+        yield
+    finally:
+        owned_depths.pop(ontology_id, None)
+        if advisory_acquired and advisory_connection is not None:
+            try:
+                released = advisory_connection.execute(
+                    text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"),
+                    {"key": lock_key},
+                ).scalar()
+                advisory_connection.commit()
+                if released is False:
+                    logger.error(
+                        "本体 Mapping advisory lock 未被当前连接持有: %s",
+                        ontology_id,
+                    )
+            except Exception:
+                # Returning a physical connection which still owns a
+                # session-level lock to the pool can deadlock all future
+                # builds.  Invalidate it so the driver closes the connection
+                # and PostgreSQL releases every session lock.
+                logger.warning(
+                    "释放本体 Mapping advisory lock 失败: %s",
+                    ontology_id, exc_info=True)
+                try:
+                    advisory_connection.invalidate()
+                except Exception:
+                    logger.warning(
+                        "废弃 Mapping advisory lock 连接失败: %s",
+                        ontology_id, exc_info=True)
+        if advisory_connection is not None:
+            try:
+                advisory_connection.close()
+            except Exception:
+                logger.warning(
+                    "关闭 Mapping advisory lock 连接失败: %s",
+                    ontology_id, exc_info=True)
+        local_lock.release()
+
+
+def load_mapping_source_rows(
+        db: Session, mapping: OntologyMapping, *,
+        require_approved: bool = True,
+        allow_empty_version: bool = False) -> tuple[list[dict], object | None]:
     """严格全量读取映射绑定的数据版本，返回 ``(rows, DatasetVersion)``。
 
     正式映射不允许使用 UI preview 的容错/截断语义。对新 ``v2_datasets`` 使用
     checksum 校验的全量读取；curated 数据要求当前版本审批通过。仅为兼容旧
-    ``v2_curated_datasets``，允许读取其 sample_rows/无上限 preview，读取为空
-    时明确失败而不是空跑成功。
+    ``v2_curated_datasets``，允许读取其 sample_rows/无上限 preview。默认读取
+    为空会明确失败；只有已发布映射显式传入 ``allow_empty_version`` 且存在
+    一个真实、已治理的 v2 DatasetVersion 时，零行才表示权威的“全部删除”。
     """
     dataset_id = mapping.curated_dataset_id
     if not dataset_id:
@@ -75,7 +185,11 @@ def load_mapping_source_rows(db: Session, mapping: OntologyMapping, *,
             # 无上限仅用于旧表兼容；真实 v2 Dataset 上方始终走严格 load_all_rows。
             rows = DatasetService(db).preview(dataset_id, None, limit=None)
 
-    if not rows:
+    if not rows and not (
+        allow_empty_version
+        and ds is not None
+        and version is not None
+    ):
         name = getattr(ds, "name", None) or dataset_id
         raise MappingSourceError(f"映射数据集「{name}」当前版本为空，已拒绝空跑投影")
     return rows, version
@@ -343,12 +457,16 @@ class MappingService:
         mapping.status = "applying"
         self._db.flush()
         from app.ontologies.sentinels.cdc import (
-            CAPTURE_SUPPRESSED_KEY, SUPPRESS_KEY,
+            CAPTURE_SUPPRESSED_KEY, MAPPING_SCOPE_KEY, SUPPRESS_KEY,
         )
         self._db.info[SUPPRESS_KEY] = True
         self._db.info[CAPTURE_SUPPRESSED_KEY] = True
+        self._db.info[MAPPING_SCOPE_KEY] = {mapping.id}
         try:
-            if data:
+            # Published mappings are immutable release definitions.  Normalizing
+            # them from each incoming dataset would auto-add unselected source
+            # columns and make the very next run fail the release-scope fence.
+            if data and ontology_release_id is None:
                 self._normalize_mapping(mapping, data)
             entities = self._rows_to_entities(mapping, data)
             self._adopt_legacy_projection_ownership(mapping)
@@ -358,7 +476,10 @@ class MappingService:
 
             # 单映射路径同样要投影到正规本体（fo_object_instances）。该投影是
             # Mapping applied 的必需条件，不再作为可吞掉的 best-effort 尾步骤。
-            from app.services.v2.mapping.formal_projection import project_to_formal_ontology
+            from app.services.v2.mapping.formal_projection import (
+                project_to_formal_ontology,
+                projection_property_mappings,
+            )
             pk_col = (mapping.field_mapping or {}).get("__primary_key__") or self._choose_pk_col(data)
             meta = {mapping.id: {
                 "mapping_id": mapping.id,
@@ -375,7 +496,8 @@ class MappingService:
                     for row in data
                 },
                 "columns": list(data[0].keys()) if data else [],
-                "property_mappings": (mapping.field_mapping or {}).get("__properties__", []),
+                "property_mappings": projection_property_mappings(
+                    mapping.field_mapping),
             }}
             formal_projection = project_to_formal_ontology(
                 self._db, mapping.ontology_id, meta,
@@ -416,8 +538,8 @@ class MappingService:
         neo4j_deleted = self._delete_neo4j_entities(
             mapping.ontology_id, stale_entity_ids)
         neo4j_count = self._write_neo4j(mapping.entity_class, entities)
-        from app.ontologies.sentinels.cdc import dispatch_captured_changes
-        sentinel_dispatch = dispatch_captured_changes(self._db)
+        sentinel_dispatch = self._dispatch_captured_sentinel_changes(
+            mapping.ontology_id)
 
         return {"mapping_id": mapping_id, "entity_class": mapping.entity_class,
                 "nodes_created": neo4j_count, "v1_entities_written": v1_count,
@@ -430,6 +552,37 @@ class MappingService:
                              if entities and neo4j_count == 0 else []),
                 "errors": 0, "total_rows": len(data)}
 
+    def _dispatch_captured_sentinel_changes(
+            self, ontology_id: str) -> dict:
+        """Run the post-projection barrier without corrupting projection state."""
+        from app.ontologies.sentinels.cdc import dispatch_captured_changes
+        try:
+            dispatch = dispatch_captured_changes(self._db)
+        except Exception as exc:
+            # An unexpected worker/database exception has the same state
+            # boundary as an explicit retry/dead result: projection is already
+            # committed, while downstream delivery is not confirmed.
+            dispatch = {
+                "evaluated": 0,
+                "fired": 0,
+                "errors": [{
+                    "stage": "dispatch_captured_changes",
+                    "error": str(exc),
+                }],
+                "runs": [],
+                "barrierCompleted": False,
+            }
+            raise MappingSentinelDispatchError(
+                ontology_id, dispatch) from exc
+        if dispatch.get("errors"):
+            # The relational/Formal projection is already committed and is
+            # safe for runtime reads.  Its downstream automation delivery has
+            # an independent durable state in SentinelCdcOutbox.  Re-labelling
+            # this mapping as ``failed`` would make ActionEngine reject the
+            # outbox retry that is meant to repair the delivery failure.
+            raise MappingSentinelDispatchError(ontology_id, dispatch)
+        return dispatch
+
     # ── 全量构建：Entity → Relation → ChromaDB ────────────────────────
 
     def build_all(self, ontology_id: str, *, require_approved: bool = False) -> dict:
@@ -440,6 +593,12 @@ class MappingService:
         either commit together or are rolled back together.  Neo4j/Chroma are
         rebuilt only from the committed relational truth afterwards.
         """
+        with _ontology_build_lock(self._db, ontology_id):
+            return self._build_all_locked(
+                ontology_id, require_approved=require_approved)
+
+    def _build_all_locked(
+            self, ontology_id: str, *, require_approved: bool = False) -> dict:
         from app.models.ontology import OntologyProject
 
         mapping_ids: list[str] = []
@@ -458,6 +617,12 @@ class MappingService:
                 ontology_release_id=ontology_release_id)
         except Exception as exc:
             self._db.rollback()
+            # The projection transaction and its applied fence were committed
+            # before the synchronous Sentinel barrier ran.  Keep that fence
+            # intact so durable CDC retry can invoke production actions; the
+            # retry/dead outbox row remains the authoritative failure state.
+            if isinstance(exc, MappingSentinelDispatchError):
+                raise
             from app.ontologies.sentinels.cdc import discard_captured_changes
             discard_captured_changes(self._db)
             if isinstance(exc, MappingReleaseScopeError):
@@ -496,10 +661,13 @@ class MappingService:
         # ``projecting``.  Capture the exact delta and release it only after all
         # derived projections succeed and every mapping becomes ``applied``.
         from app.ontologies.sentinels.cdc import (
-            CAPTURE_SUPPRESSED_KEY, SUPPRESS_KEY,
+            CAPTURE_SUPPRESSED_KEY, MAPPING_SCOPE_KEY, SUPPRESS_KEY,
         )
         self._db.info[SUPPRESS_KEY] = True
         self._db.info[CAPTURE_SUPPRESSED_KEY] = True
+        self._db.info[MAPPING_SCOPE_KEY] = {
+            item.id for item in mappings if item.curated_dataset_id
+        }
 
         from app.models.v2.dataset import Dataset
         from app.models.v2.curated import CuratedDataset
@@ -507,14 +675,27 @@ class MappingService:
         # Phase 1: Entity Mapping
         entity_results = []
         mapping_meta: dict[str, dict] = {}
+        from app.services.v2.mapping.formal_projection import (
+            project_to_formal_ontology,
+            projection_property_mappings,
+        )
 
         for m in mappings:
             if not m.curated_dataset_id:
                 continue
             rows, source_version = load_mapping_source_rows(
-                self._db, m, require_approved=require_approved)
+                self._db, m, require_approved=require_approved,
+                # A released lake snapshot with a real version and zero rows is
+                # an authoritative all-deleted state.  It must reach Formal
+                # reconciliation; otherwise the last materialized object lives
+                # forever.  Draft/trial and versionless legacy sources remain
+                # fail-closed.
+                allow_empty_version=ontology_release_id is not None)
 
-            if rows:
+            # Keep released mapping definitions byte-for-byte stable.  Dataset
+            # metadata inference is a draft-time concern; production projection
+            # may only use fields captured in the immutable release snapshot.
+            if rows and ontology_release_id is None:
                 self._normalize_mapping(m, rows)
 
             entities = self._rows_to_entities(m, rows)
@@ -547,7 +728,8 @@ class MappingService:
                 "target_object_type_id": m.target_object_type_id,
                 "rows": rows, "entity_id_map": entity_id_map,
                 "columns": list(rows[0].keys()) if rows else [],
-                "property_mappings": (m.field_mapping or {}).get("__properties__", []),
+                "property_mappings": projection_property_mappings(
+                    m.field_mapping),
             }
             m.status = "applying"
             entity_results.append({"mapping_id": m.id, "entity_class": m.entity_class,
@@ -557,16 +739,37 @@ class MappingService:
 
         self._db.flush()
 
-        # Phase 2: Relation 推断
-        relation_results = self._infer_and_write_relations(ontology_id, mappings, mapping_meta)
+        # Phase 2: Relation 推断 is a draft-time discovery aid.  A published
+        # release has an explicit, complete LinkMapping contract; inventing FK
+        # relations from new source columns would attempt to create undeclared
+        # LinkTypes and make production reprojection non-deterministic.
+        if ontology_release_id is None:
+            relation_results = self._infer_and_write_relations(
+                ontology_id, mappings, mapping_meta)
+        else:
+            from app.models.relation import Relation
+            for relation in self._db.query(Relation).filter(
+                    Relation.ontology_id == ontology_id).all():
+                if not (relation.properties or {}).get("__link_mapping_id__"):
+                    self._db.delete(relation)
+            self._db.flush()
+            relation_results = []
 
         # Phase 2b: Link Mapping 处理（手动配置的跨表关系）
         link_results = self._process_link_mappings(ontology_id, mapping_meta)
         relation_results.extend(link_results)
 
-        # Phase 3: Logic / Action Discovery
-        logic_result = self._discover_logic_rules(ontology_id, mappings, mapping_meta, relation_results)
-        action_result = self._discover_action_types(ontology_id, mappings, mapping_meta, relation_results, logic_result)
+        # Phase 3 is likewise draft-only.  Runtime projection must never mutate
+        # the released executable model behind its immutable version snapshot.
+        if ontology_release_id is None:
+            logic_result = self._discover_logic_rules(
+                ontology_id, mappings, mapping_meta, relation_results)
+            action_result = self._discover_action_types(
+                ontology_id, mappings, mapping_meta, relation_results,
+                logic_result)
+        else:
+            logic_result = {"total_v2": 0, "skipped": "released_schema"}
+            action_result = {"total_v2": 0, "skipped": "released_schema"}
 
         # Chroma/Neo4j are derived projections.  They are rebuilt only after the
         # relational + Formal transaction succeeds below, never mid-transaction.
@@ -574,7 +777,6 @@ class MappingService:
         # Phase 5: 投影到正规本体 (Projection to Formal Ontology)
         # 把已落地的 Entity / Relation 投影成 ObjectType / ObjectInstance /
         # LinkType / LinkInstance，让流水线数据直接在图谱编辑器里可见、可建模。
-        from app.services.v2.mapping.formal_projection import project_to_formal_ontology
         formal_projection = project_to_formal_ontology(
             self._db, ontology_id, mapping_meta,
             ontology_release_id=ontology_release_id)
@@ -628,8 +830,8 @@ class MappingService:
             if applied is not None:
                 applied.status = "applied"
         self._db.commit()
-        from app.ontologies.sentinels.cdc import dispatch_captured_changes
-        sentinel_dispatch = dispatch_captured_changes(self._db)
+        sentinel_dispatch = self._dispatch_captured_sentinel_changes(
+            ontology_id)
         if neo4j_rebuilt:
             for result in entity_results:
                 result["nodes_created"] = result["v1_entities_written"]
@@ -2356,6 +2558,7 @@ class MappingService:
 
     def _process_link_mappings(self, ontology_id: str, mapping_meta: dict) -> list[dict]:
         from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping as OM
+        from app.models.ontology_formal import LinkType
 
         links = self._db.query(OntologyLinkMapping).filter(
             OntologyLinkMapping.ontology_id == ontology_id,
@@ -2364,11 +2567,34 @@ class MappingService:
         results = []
         for link in links:
             src_meta = tgt_meta = None
+            link_type = self._db.query(LinkType).filter(
+                LinkType.id == link.link_type_id,
+                LinkType.ontology_id == ontology_id,
+            ).first()
             for mid, meta in mapping_meta.items():
                 m = self._db.query(OM).filter(OM.id == mid).first()
-                if not m: continue
-                if m.curated_dataset_id == link.src_dataset_id: src_meta = meta
-                if m.curated_dataset_id == link.tgt_dataset_id: tgt_meta = meta
+                if not m:
+                    continue
+                target_type_id = (
+                    meta.get("target_object_type_id")
+                    or m.target_object_type_id
+                )
+                if (
+                    m.curated_dataset_id == link.src_dataset_id
+                    and (
+                        link_type is None
+                        or target_type_id == link_type.source_object_type_id
+                    )
+                ):
+                    src_meta = meta
+                if (
+                    m.curated_dataset_id == link.tgt_dataset_id
+                    and (
+                        link_type is None
+                        or target_type_id == link_type.target_object_type_id
+                    )
+                ):
+                    tgt_meta = meta
             if not src_meta or not tgt_meta: continue
             # edge_dataset_id 有值 → 连接表「胖关系」（边可带属性）；否则 → 直连外键「瘦关系」
             if getattr(link, "edge_dataset_id", None):

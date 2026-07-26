@@ -62,6 +62,7 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
         "inbox_deliveries",
         "inbox_event_receipts",
         "inbox_outbox_events",
+        "sentinel_cdc_outbox",
     }
     assert required <= set(inspector.get_table_names())
     assert {
@@ -81,6 +82,14 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
     }
     assert "dataset_version_id" in {
         c["name"] for c in inspector.get_columns("v2_curated_reviews")}
+    assert "source_relation_id" in {
+        c["name"] for c in inspector.get_columns("ontology_trial_links")}
+    assert "target_snapshot" in {
+        c["name"] for c in inspector.get_columns("fo_action_logs")}
+    assert {"mapping_ids", "ontology_release_id"} <= {
+        c["name"] for c in inspector.get_columns("sentinel_cdc_outbox")}
+    assert "ix_ontology_trial_links_source_relation_id" in {
+        item["name"] for item in inspector.get_indexes("ontology_trial_links")}
     assert {"producer_pipeline_id", "output_key", "source_resource"} <= {
         c["name"] for c in inspector.get_columns("v2_datasets")}
     assert {"data_blob", "data_size"} <= {
@@ -97,6 +106,12 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
     assert {"ix_v2_storage_deletion_outbox_storage_uri",
             "ix_v2_storage_deletion_outbox_created_at"} <= {
         i["name"] for i in inspector.get_indexes("v2_storage_deletion_outbox")}
+    assert {
+        "ix_sentinel_cdc_outbox_ready",
+        "ix_sentinel_cdc_outbox_chain",
+        "ix_sentinel_cdc_outbox_release_status",
+    } <= {
+        i["name"] for i in inspector.get_indexes("sentinel_cdc_outbox")}
     row_pk = next(
         c for c in inspector.get_columns("v2_curated_row_edits")
         if c["name"] == "row_pk")
@@ -588,3 +603,136 @@ def test_upgrade_quarantines_enabled_legacy_sync_tasks(tmp_path, monkeypatch):
     assert row.status == "running"
     assert "0017" in row.last_error
     assert "n8n" in row.last_error
+
+
+def test_0049_repairs_partial_sentinel_outbox(tmp_path, monkeypatch):
+    backend = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "partial-sentinel-outbox.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = _alembic_config(backend, db_path)
+    command.upgrade(cfg, "0048_trial_link_lineage")
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS sentinel_cdc_outbox"))
+        conn.execute(text("""
+            CREATE TABLE sentinel_cdc_outbox (
+                id VARCHAR PRIMARY KEY,
+                chain_id VARCHAR(64) NOT NULL,
+                ontology_id VARCHAR NOT NULL,
+                object_type_id VARCHAR,
+                changed_keys JSON NOT NULL,
+                link_change BOOLEAN NOT NULL DEFAULT 0,
+                cascade_depth INTEGER NOT NULL DEFAULT 0,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                available_at DATETIME NOT NULL,
+                claimed_at DATETIME,
+                claim_token VARCHAR(64),
+                last_error TEXT,
+                result_json JSON,
+                processed_at DATETIME,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+        """))
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    inspector = inspect(engine)
+    assert {
+        "mapping_ids", "ontology_release_id",
+        "event_kind", "sentinel_id", "dedupe_key",
+    } <= {
+        column["name"]
+        for column in inspector.get_columns("sentinel_cdc_outbox")
+    }
+    assert {
+        "ix_sentinel_cdc_outbox_chain_id",
+        "ix_sentinel_cdc_outbox_ontology_id",
+        "ix_sentinel_cdc_outbox_object_type_id",
+        "ix_sentinel_cdc_outbox_ready",
+        "ix_sentinel_cdc_outbox_chain",
+        "ix_sentinel_cdc_outbox_release_status",
+        "ix_sentinel_cdc_outbox_control_ready",
+        "uq_sentinel_cdc_outbox_dedupe_key",
+    } <= {
+        index["name"]
+        for index in inspector.get_indexes("sentinel_cdc_outbox")
+    }
+    engine.dispose()
+
+
+def test_0051_backfills_legacy_outbox_event_kinds(tmp_path, monkeypatch):
+    backend = Path(__file__).resolve().parents[2]
+    db_path = tmp_path / "sentinel-control-events.db"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = _alembic_config(backend, db_path)
+    command.upgrade(cfg, "0050_trial_computed_notification")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    now = datetime.now(timezone.utc)
+    with engine.begin() as conn:
+        values = {
+            "chain_id": "legacy-chain",
+            "ontology_id": "legacy-ontology",
+            "changed_keys": "[]",
+            "mapping_ids": "[]",
+            "available_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        conn.execute(text("""
+            INSERT INTO sentinel_cdc_outbox
+            (id, chain_id, ontology_id, ontology_release_id, object_type_id,
+             changed_keys, link_change, cascade_depth, mapping_ids, status,
+             attempts, available_at, created_at, updated_at)
+            VALUES
+            ('legacy-object', :chain_id, :ontology_id, NULL, 'object-type',
+             :changed_keys, 0, 0, :mapping_ids, 'pending', 0,
+             :available_at, :created_at, :updated_at),
+            ('legacy-link', :chain_id, :ontology_id, NULL, NULL,
+             :changed_keys, 1, 0, :mapping_ids, 'pending', 0,
+             :available_at, :created_at, :updated_at),
+            ('legacy-null-claim', :chain_id, :ontology_id, NULL, NULL,
+             :changed_keys, 0, 0, :mapping_ids, 'processing', 1,
+             :available_at, :created_at, :updated_at)
+        """), values)
+        conn.execute(text(
+            "UPDATE sentinel_cdc_outbox "
+            "SET claim_token = 'orphaned-claim' "
+            "WHERE id = 'legacy-null-claim'"
+        ))
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.connect() as conn:
+        kinds = dict(conn.execute(text(
+            "SELECT id, event_kind FROM sentinel_cdc_outbox "
+            "ORDER BY id"
+        )).all())
+        recovered = conn.execute(text(
+            "SELECT status, claimed_at, claim_token, last_error "
+            "FROM sentinel_cdc_outbox "
+            "WHERE id = 'legacy-null-claim'"
+        )).one()
+        sentinel_columns = {
+            column["name"]
+            for column in inspect(conn).get_columns("sentinels")
+        }
+    engine.dispose()
+
+    assert kinds == {
+        "legacy-link": "link_change",
+        "legacy-null-claim": "object_change",
+        "legacy-object": "object_change",
+    }
+    assert recovered.status == "retry"
+    assert recovered.claimed_at is None
+    assert recovered.claim_token is None
+    assert "migration_0051_recovered_missing_claimed_at" in (
+        recovered.last_error or "")
+    assert "enable_generation" in sentinel_columns

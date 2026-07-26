@@ -11,6 +11,7 @@ import ast
 import hashlib
 import json
 import re
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -46,9 +47,11 @@ _LINK_KEYS = {
     "from", "fromAlias", "linkTypeId", "link_type_id", "linkType", "link_type", "to",
 }
 _PARAM_TEMPLATE = re.compile(
-    r"^\{\{\s*(?P<alias>[A-Za-z_][A-Za-z0-9_]*|primary|target)\."
-    r"(?P<property>[A-Za-z_][A-Za-z0-9_]*|id)\s*\}\}$"
+    r"\{\{\s*(?P<alias>[^.\s{}]+)\.(?P<property>[^{}\s]+)\s*\}\}"
 )
+_EVENT_PARAMETER_PROPERTIES = {
+    "edge", "matchKey", "occurredAt", "sentinelId", "sentinelName",
+}
 
 
 def _now() -> datetime:
@@ -85,7 +88,10 @@ def _lock_current_release(db: Session, context: CurrentReleaseContext) -> None:
     """Serialize overlay writes with promotion/rollback of the release pointer."""
     project = (db.query(OntologyProject).filter(
         OntologyProject.id == context.project.id,
-    ).with_for_update().populate_existing().first())
+        # PostgreSQL CDC holds a FOR KEY SHARE release lease on a dedicated
+        # connection. FOR NO KEY UPDATE is compatible with that lease but still
+        # conflicts with promotion/rollback's FOR UPDATE pointer switch.
+    ).with_for_update(key_share=True).populate_existing().first())
     if project is None:
         raise HTTPException(404, "Ontology not found")
     if project.current_release_id != context.id:
@@ -95,6 +101,24 @@ def _lock_current_release(db: Session, context: CurrentReleaseContext) -> None:
             "expectedReleaseId": context.id,
             "currentReleaseId": project.current_release_id,
         })
+
+
+@contextmanager
+def _sentinel_write_fence(db: Session, sentinel_id: str):
+    """Share the evaluator's cross-process fence with one management write."""
+    # Lazy import avoids the evaluator -> action engine -> router import graph at
+    # module initialization while keeping one authoritative lock implementation.
+    from app.ontologies.sentinels.evaluator import _sentinel_execution_lock
+
+    with _sentinel_execution_lock(db, sentinel_id):
+        try:
+            yield
+        except Exception:
+            # Release project/row locks before releasing the advisory lock.  This
+            # preserves the global sentinel -> project -> row lock order even on
+            # validation failures.
+            db.rollback()
+            raise
 
 
 def _resolve_ref(scope, pool_name: str, ref: Any, label: str) -> str:
@@ -273,24 +297,33 @@ def _dynamic_contract_errors(definition: dict, models: dict) -> list[dict]:
         for parameter_name, spec in parameters.items():
             if not isinstance(spec, str) or ("{{" not in spec and "}}" not in spec):
                 continue
-            match = _PARAM_TEMPLATE.fullmatch(spec)
             field = f"actionParameters.{action_id}.{parameter_name}"
-            if match is None:
+            matches = list(_PARAM_TEMPLATE.finditer(spec))
+            remainder = _PARAM_TEMPLATE.sub("", spec)
+            if not matches or "{{" in remainder or "}}" in remainder:
                 errors.append(_error(
                     "invalid_sentinel_parameter_template",
                     f"参数模板格式非法: {spec}", field))
                 continue
-            alias = match.group("alias")
-            alias = primary if alias in {"primary", "target"} else alias
-            prop = match.group("property")
-            if alias not in alias_properties:
-                errors.append(_error(
-                    "sentinel_parameter_alias_not_found",
-                    f"参数模板引用的 alias 不存在: {alias}", field))
-            elif prop != "id" and prop not in alias_properties[alias]:
-                errors.append(_error(
-                    "sentinel_parameter_property_not_found",
-                    f"参数模板引用的发布属性不存在: {alias}.{prop}", field))
+            for match in matches:
+                alias = match.group("alias")
+                prop = match.group("property")
+                if alias in {"event", "edge"}:
+                    if prop not in _EVENT_PARAMETER_PROPERTIES:
+                        errors.append(_error(
+                            "sentinel_event_property_not_found",
+                            f"参数模板引用的事件字段不存在: {alias}.{prop}",
+                            field))
+                    continue
+                alias = primary if alias in {"primary", "target"} else alias
+                if alias not in alias_properties:
+                    errors.append(_error(
+                        "sentinel_parameter_alias_not_found",
+                        f"参数模板引用的 alias 不存在: {alias}", field))
+                elif prop != "id" and prop not in alias_properties[alias]:
+                    errors.append(_error(
+                        "sentinel_parameter_property_not_found",
+                        f"参数模板引用的发布属性不存在: {alias}.{prop}", field))
     encoded = json.dumps(definition, ensure_ascii=False, default=str)
     if len(encoded.encode("utf-8")) > 65536:
         errors.append(_error(
@@ -432,7 +465,7 @@ def dynamic_row(db: Session, ontology_id: str, sentinel_id: str,
         Sentinel.retired_at.is_(None),
     )
     if for_update:
-        query = query.with_for_update()
+        query = query.with_for_update().populate_existing()
     row = query.first()
     if row is None:
         # Built-in ids intentionally look nonexistent through assistant APIs.
@@ -454,6 +487,7 @@ def serialize_dynamic(row: Sentinel) -> dict:
         "boundReleaseId": row.bound_release_id,
         "createdBy": row.created_by,
         "definitionRevision": row.definition_revision,
+        "enableGeneration": int(row.enable_generation or 0),
         **definition_from_row(row),
         "enabled": bool(row.enabled),
         "status": row.status,
@@ -472,60 +506,75 @@ def serialize_dynamic(row: Sentinel) -> dict:
 
 
 def reconcile_release(db: Session, context: CurrentReleaseContext, scope) -> None:
-    _lock_current_release(db, context)
-    rows = db.query(Sentinel).filter(
-        Sentinel.ontology_id == context.project.id,
-        Sentinel.origin == ORIGIN_DYNAMIC,
-        Sentinel.retired_at.is_(None),
-    ).with_for_update().all()
-    changed = False
-    for row in rows:
-        previous = row.validation_report if isinstance(row.validation_report, dict) else {}
-        release_changed = row.bound_release_id != context.id
-        # Disabled, already-valid definitions do not need repeated writes.  An
-        # enabled row is deliberately revalidated at every real execution
-        # boundary so a later AgentProfile restriction fails closed.
-        if not release_changed and not row.enabled and previous.get("passed"):
-            continue
-        definition, report = validate_definition(
-            db, context, scope, definition_from_row(row), sentinel_id=row.id)
-        trial = row.last_trial_report if isinstance(row.last_trial_report, dict) else {}
-        trial_current = bool(
-            trial.get("passed")
-            and row.last_trial_release_id == context.id
-            and row.last_trial_revision == row.definition_revision
-        )
-        must_disable = (
-            not report.get("passed")
-            or release_changed
-            or (row.enabled and not trial_current)
-        )
-        if must_disable:
-            row.enabled = False
-            row.last_trial_at = None
-            row.last_trial_release_id = None
-            row.last_trial_revision = None
-            row.last_trial_report = None
-            db.query(SentinelMatchState).filter(
-                SentinelMatchState.sentinel_id == row.id).delete(
-                    synchronize_session=False)
-        elif previous.get("passed"):
-            # Same release, current trial, deep validation still passes: there
-            # is no state transition to persist.
-            continue
-        if definition:
-            _apply_definition(row, definition)
-        row.bound_release_id = context.id
-        row.validation_report = {
-            **report,
-            "compatibility": (
-                "invalid" if not report.get("passed")
-                else "review_required" if release_changed
-                else "compatible"
-            ),
-        }
-        changed = True
-    if changed:
+    sentinel_ids = [
+        str(item[0]) for item in db.query(Sentinel.id).filter(
+            Sentinel.ontology_id == context.project.id,
+            Sentinel.origin == ORIGIN_DYNAMIC,
+            Sentinel.retired_at.is_(None),
+        ).all()
+    ]
+    with ExitStack() as fences:
+        for sentinel_id in sorted(set(sentinel_ids)):
+            fences.enter_context(_sentinel_write_fence(db, sentinel_id))
+        _lock_current_release(db, context)
+        rows = db.query(Sentinel).filter(
+            Sentinel.ontology_id == context.project.id,
+            Sentinel.origin == ORIGIN_DYNAMIC,
+            Sentinel.retired_at.is_(None),
+        ).with_for_update().populate_existing().all()
+        for row in rows:
+            previous = (
+                row.validation_report
+                if isinstance(row.validation_report, dict) else {})
+            release_changed = row.bound_release_id != context.id
+            # Disabled, already-valid definitions do not need repeated writes.
+            # An enabled row is deliberately revalidated at every real
+            # execution boundary so a later AgentProfile restriction fails
+            # closed.
+            if not release_changed and not row.enabled and previous.get("passed"):
+                continue
+            definition, report = validate_definition(
+                db, context, scope, definition_from_row(row), sentinel_id=row.id)
+            trial = (
+                row.last_trial_report
+                if isinstance(row.last_trial_report, dict) else {})
+            trial_current = bool(
+                trial.get("passed")
+                and row.last_trial_release_id == context.id
+                and row.last_trial_revision == row.definition_revision
+            )
+            must_disable = (
+                not report.get("passed")
+                or release_changed
+                or (row.enabled and not trial_current)
+            )
+            if must_disable:
+                row.enabled = False
+                row.last_trial_at = None
+                row.last_trial_release_id = None
+                row.last_trial_revision = None
+                row.last_trial_report = None
+                db.query(SentinelMatchState).filter(
+                    SentinelMatchState.sentinel_id == row.id).delete(
+                        synchronize_session=False)
+            elif previous.get("passed"):
+                # Same release, current trial, deep validation still passes:
+                # there is no state transition to persist.
+                continue
+            if definition:
+                _apply_definition(row, definition)
+            row.bound_release_id = context.id
+            row.validation_report = {
+                **report,
+                "compatibility": (
+                    "invalid" if not report.get("passed")
+                    else "review_required" if release_changed
+                    else "compatible"
+                ),
+            }
+        # Always close the project/row transaction before the advisory fences.
+        # Leaving a no-op reconciliation transaction open would invert the
+        # order against a concurrent single-Sentinel management write.
         db.commit()
 
 
@@ -565,108 +614,149 @@ def create_dynamic(db: Session, context: CurrentReleaseContext, scope,
 def update_dynamic(db: Session, context: CurrentReleaseContext, scope,
                    sentinel_id: str, expected_revision: int,
                    definition: dict) -> Sentinel:
-    _lock_current_release(db, context)
-    row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
-    if row.definition_revision != expected_revision:
-        raise HTTPException(409, detail={
-            "code": "dynamic_sentinel_revision_conflict",
-            "message": "动态哨兵已被其他会话修改，请刷新后重试",
-            "currentRevision": row.definition_revision,
-        })
-    canonical, report = validate_definition(
-        db, context, scope, definition, sentinel_id=row.id)
-    _raise_validation(report)
-    _apply_definition(row, canonical)
-    row.definition_revision += 1
-    row.bound_release_id = context.id
-    row.validation_report = report
-    row.enabled = False
-    row.last_trial_at = None
-    row.last_trial_release_id = None
-    row.last_trial_revision = None
-    row.last_trial_report = None
-    db.query(SentinelMatchState).filter(
-        SentinelMatchState.sentinel_id == row.id).delete(synchronize_session=False)
-    db.commit()
-    db.refresh(row)
-    return row
+    with _sentinel_write_fence(db, sentinel_id):
+        _lock_current_release(db, context)
+        row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
+        if row.definition_revision != expected_revision:
+            raise HTTPException(409, detail={
+                "code": "dynamic_sentinel_revision_conflict",
+                "message": "动态哨兵已被其他会话修改，请刷新后重试",
+                "currentRevision": row.definition_revision,
+            })
+        canonical, report = validate_definition(
+            db, context, scope, definition, sentinel_id=row.id)
+        _raise_validation(report)
+        _apply_definition(row, canonical)
+        row.definition_revision += 1
+        row.bound_release_id = context.id
+        row.validation_report = report
+        row.enabled = False
+        row.last_trial_at = None
+        row.last_trial_release_id = None
+        row.last_trial_revision = None
+        row.last_trial_report = None
+        db.query(SentinelMatchState).filter(
+            SentinelMatchState.sentinel_id == row.id).delete(
+                synchronize_session=False)
+        db.commit()
+        db.refresh(row)
+        return row
 
 
 def run_trial(db: Session, context: CurrentReleaseContext, scope,
               sentinel_id: str) -> Sentinel:
-    _lock_current_release(db, context)
-    row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
-    canonical, validation = validate_definition(
-        db, context, scope, definition_from_row(row), sentinel_id=row.id)
-    _raise_validation(validation, "动态哨兵不再符合当前发布版本，试跑已拒绝")
-    _apply_definition(row, canonical)
-    from app.ontologies.sentinels.evaluator import preview_sentinel
-    report = preview_sentinel(db, context.project.id, row, context.id)
-    row.bound_release_id = context.id
-    row.validation_report = validation
-    row.last_trial_at = _now()
-    row.last_trial_release_id = context.id
-    row.last_trial_revision = row.definition_revision
-    row.last_trial_report = report
-    if not report.get("passed"):
-        row.enabled = False
-    db.commit()
-    db.refresh(row)
-    return row
+    with _sentinel_write_fence(db, sentinel_id):
+        _lock_current_release(db, context)
+        row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
+        canonical, validation = validate_definition(
+            db, context, scope, definition_from_row(row), sentinel_id=row.id)
+        _raise_validation(validation, "动态哨兵不再符合当前发布版本，试跑已拒绝")
+        _apply_definition(row, canonical)
+        from app.ontologies.sentinels.evaluator import preview_sentinel
+        report = preview_sentinel(db, context.project.id, row, context.id)
+        row.bound_release_id = context.id
+        row.validation_report = validation
+        row.last_trial_at = _now()
+        row.last_trial_release_id = context.id
+        row.last_trial_revision = row.definition_revision
+        row.last_trial_report = report
+        if not report.get("passed"):
+            row.enabled = False
+        db.commit()
+        db.refresh(row)
+        return row
 
 
 def set_enabled(db: Session, context: CurrentReleaseContext, scope,
                 sentinel_id: str, expected_revision: int,
                 enabled: bool) -> Sentinel:
-    _lock_current_release(db, context)
-    row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
-    if row.definition_revision != expected_revision:
-        raise HTTPException(409, detail={
-            "code": "dynamic_sentinel_revision_conflict",
-            "message": "动态哨兵已被修改，请刷新后重试",
-            "currentRevision": row.definition_revision,
-        })
-    if enabled:
-        canonical, validation = validate_definition(
-            db, context, scope, definition_from_row(row), sentinel_id=row.id)
-        _raise_validation(validation, "启用前强校验未通过")
-        _apply_definition(row, canonical)
-        trial = row.last_trial_report if isinstance(row.last_trial_report, dict) else {}
-        if (row.last_trial_release_id != context.id
-                or row.last_trial_revision != row.definition_revision
-                or not trial.get("passed")):
+    with _sentinel_write_fence(db, sentinel_id):
+        _lock_current_release(db, context)
+        row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
+        if row.definition_revision != expected_revision:
             raise HTTPException(409, detail={
-                "code": "dynamic_sentinel_trial_required",
-                "message": "启用前必须在当前发布版本上完成一次通过的全量试跑",
+                "code": "dynamic_sentinel_revision_conflict",
+                "message": "动态哨兵已被修改，请刷新后重试",
+                "currentRevision": row.definition_revision,
             })
-        row.validation_report = validation
-        row.bound_release_id = context.id
-    row.enabled = enabled
-    if not enabled:
-        db.query(SentinelMatchState).filter(
-            SentinelMatchState.sentinel_id == row.id).delete(
-                synchronize_session=False)
-    db.commit()
-    db.refresh(row)
-    return row
+        was_enabled = bool(row.enabled)
+        if enabled:
+            canonical, validation = validate_definition(
+                db, context, scope, definition_from_row(row), sentinel_id=row.id)
+            _raise_validation(validation, "启用前强校验未通过")
+            _apply_definition(row, canonical)
+            trial = (
+                row.last_trial_report
+                if isinstance(row.last_trial_report, dict) else {})
+            if (row.last_trial_release_id != context.id
+                    or row.last_trial_revision != row.definition_revision
+                    or not trial.get("passed")):
+                raise HTTPException(409, detail={
+                    "code": "dynamic_sentinel_trial_required",
+                    "message": "启用前必须在当前发布版本上完成一次通过的全量试跑",
+                })
+            row.validation_report = validation
+            row.bound_release_id = context.id
+        row.enabled = enabled
+        if enabled and not was_enabled:
+            row.enable_generation = int(row.enable_generation or 0) + 1
+            from app.ontologies.sentinels.cdc import (
+                CAPTURE_SUPPRESSED_KEY,
+                SUPPRESS_KEY,
+                capture_dynamic_activation,
+            )
+            # Dynamic enablement is a management transaction, not an editor
+            # save.  A reused Session can still carry the editor's dispatch
+            # suppression marker after its synchronous evaluation; letting
+            # that stale marker leak here would silently drop the required
+            # activation event.  Mapping projection sets the explicit capture
+            # marker and keeps its own chain-scoped barrier semantics.
+            if (
+                db.info.get(SUPPRESS_KEY)
+                and not db.info.get(CAPTURE_SUPPRESSED_KEY)
+            ):
+                db.info.pop(SUPPRESS_KEY, None)
+            activation = capture_dynamic_activation(
+                db,
+                ontology_id=context.project.id,
+                ontology_release_id=context.id,
+                sentinel_id=row.id,
+                definition_revision=row.definition_revision,
+                enable_generation=row.enable_generation,
+            )
+            if activation is None:
+                raise HTTPException(503, detail={
+                    "code": "dynamic_sentinel_activation_unavailable",
+                    "message": "动态哨兵初始化任务无法持久化，启用已回滚",
+                })
+        elif not enabled:
+            db.query(SentinelMatchState).filter(
+                SentinelMatchState.sentinel_id == row.id).delete(
+                    synchronize_session=False)
+        db.commit()
+        db.refresh(row)
+        return row
 
 
 def retire_dynamic(db: Session, context: CurrentReleaseContext, sentinel_id: str,
                    expected_revision: int | None = None) -> None:
-    _lock_current_release(db, context)
-    row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
-    if expected_revision is not None and row.definition_revision != expected_revision:
-        raise HTTPException(409, detail={
-            "code": "dynamic_sentinel_revision_conflict",
-            "message": "动态哨兵已被修改，请刷新后重试",
-            "currentRevision": row.definition_revision,
-        })
-    row.enabled = False
-    row.retired_at = _now()
-    row.definition_revision += 1
-    db.query(SentinelMatchState).filter(
-        SentinelMatchState.sentinel_id == row.id).delete(synchronize_session=False)
-    db.commit()
+    with _sentinel_write_fence(db, sentinel_id):
+        _lock_current_release(db, context)
+        row = dynamic_row(db, context.project.id, sentinel_id, for_update=True)
+        if (expected_revision is not None
+                and row.definition_revision != expected_revision):
+            raise HTTPException(409, detail={
+                "code": "dynamic_sentinel_revision_conflict",
+                "message": "动态哨兵已被修改，请刷新后重试",
+                "currentRevision": row.definition_revision,
+            })
+        row.enabled = False
+        row.retired_at = _now()
+        row.definition_revision += 1
+        db.query(SentinelMatchState).filter(
+            SentinelMatchState.sentinel_id == row.id).delete(
+                synchronize_session=False)
+        db.commit()
 
 
 def proposal(db: Session, context: CurrentReleaseContext, scope,

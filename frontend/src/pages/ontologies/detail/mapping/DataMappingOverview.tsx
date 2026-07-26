@@ -266,7 +266,9 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     const fieldPairs: FieldPair[] = []
     if (mapping?.src_key) fieldPairs.push({ source: mapping.src_key, target: '源对象关联键' })
     if (mapping?.tgt_key) fieldPairs.push({ source: mapping.tgt_key, target: '目标对象关联键' })
-    for (const [target, source] of Object.entries(mapping?.field_mapping || {})) {
+    for (const [target, rawSource] of Object.entries(mapping?.field_mapping || {})) {
+      if (target.startsWith('__') || typeof rawSource !== 'string') continue
+      const source = rawSource
       const sourceField = datasets.flatMap(dataset => dataset.columns).find(column => column.name === source)
       const targetField = targetFields.find(property => property.id === target || property.name === target)
       fieldPairs.push({
@@ -277,7 +279,9 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         compatible: sourceField && targetField ? typesCompatible(sourceField.type, targetField.type) : undefined,
       })
     }
-    const mappedTargets = new Set(Object.keys(mapping?.field_mapping || {}))
+    const mappedTargets = new Set(
+      Object.keys(mapping?.field_mapping || {}).filter(target => !target.startsWith('__')),
+    )
     const missingFields = [
       ...(!mapping?.src_key ? ['源对象关联键'] : []),
       ...(!mapping?.tgt_key ? ['目标对象关联键'] : []),

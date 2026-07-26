@@ -1,5 +1,9 @@
 """Formal 定义必须约束所有实例/链接写入旁路，而不只约束 /full。"""
 
+from types import SimpleNamespace
+
+from app.ontologies.formal_modeling.validation import validate_instance_contract
+
 
 def _base(ontology_id: str) -> str:
     return f"/api/v2/formal/ontologies/{ontology_id}"
@@ -86,6 +90,93 @@ def test_empty_property_definition_remains_open_for_draft_compatibility(
     otid = _create_type(client, auth_headers, oid, "DraftObject")
     r = _create_instance(client, auth_headers, oid, otid, {"arbitrary": {"nested": True}})
     assert r.status_code == 201, r.text
+
+
+def test_computed_projection_only_accepts_declared_typed_derived_values(
+        client, auth_headers, ontology):
+    oid = ontology["id"]
+    otid = _create_type(
+        client, auth_headers, oid, "RiskObject", primary_key="code",
+        properties=[
+            {
+                "id": "risk-code",
+                "name": "code",
+                "displayName": "编号",
+                "type": "string",
+                "required": True,
+            },
+            {
+                "id": "risk-score",
+                "name": "risk_score",
+                "displayName": "风险分",
+                "type": "number",
+                "required": True,
+                "source": "computed",
+                "computed": True,
+            },
+        ],
+    )
+
+    def create(computed):
+        return client.post(f"{_base(oid)}/instances", headers=auth_headers, json={
+            "objectTypeId": otid,
+            "properties": {"code": "R-1"},
+            "computed": computed,
+            "source": "manual",
+        })
+
+    wrong_type = create({"risk_score": "high"})
+    assert wrong_type.status_code == 422
+    assert "property_type_mismatch" in _codes(wrong_type)
+
+    stored_property_in_projection = create({"code": "shadow"})
+    assert stored_property_in_projection.status_code == 422
+    assert "unknown_computed_property" in _codes(stored_property_in_projection)
+
+    undeclared = create({"rogue": 99})
+    assert undeclared.status_code == 422
+    assert "unknown_computed_property" in _codes(undeclared)
+
+    # A computed property marked required is still allowed to be temporarily
+    # unavailable.  Requiredness of the stored primary key remains enforced.
+    valid_missing_projection = create({})
+    assert valid_missing_projection.status_code == 201, valid_missing_projection.text
+
+    missing_stored_required = client.post(
+        f"{_base(oid)}/instances", headers=auth_headers, json={
+            "objectTypeId": otid,
+            "properties": {},
+            "computed": {},
+            "source": "manual",
+        })
+    assert missing_stored_required.status_code == 422
+    assert "required_property_missing" in _codes(missing_stored_required)
+
+
+def test_computed_projection_must_be_a_dict_even_for_internal_writers():
+    object_type = SimpleNamespace(
+        id="risk-type",
+        name="RiskObject",
+        display_name="RiskObject",
+        primary_key=None,
+        properties=[{
+            "id": "risk-score",
+            "name": "risk_score",
+            "type": "number",
+            "source": "computed",
+            "computed": True,
+        }],
+    )
+    instance = SimpleNamespace(
+        id="risk-1",
+        object_type_id="risk-type",
+        properties={},
+        computed=["not", "an", "object"],
+    )
+
+    errors = validate_instance_contract([object_type], [instance])
+
+    assert {error["code"] for error in errors} == {"invalid_computed"}
 
 
 def test_link_crud_enforces_endpoints_duplicates_and_cardinality(

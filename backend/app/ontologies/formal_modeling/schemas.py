@@ -242,6 +242,7 @@ class ActionLogOut(CamelModel):
     decided_at: Optional[datetime] = None
     decision_reason: Optional[str] = None
     related_log_id: Optional[str] = None
+    target_snapshot: Optional[dict] = None
     idempotency_key: Optional[str] = None
     sentinel_match_state_id: Optional[str] = None
     ontology_version: Optional[str] = None
@@ -361,6 +362,10 @@ class RunActionRequest(CamelModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     target_instance_id: Optional[str] = None
     dry_run: bool = False
+    # Compare-and-execute guard.  New callers should always echo the release
+    # selected by the UI; the router also captures the current release when this
+    # field is omitted so a mutable draft definition cannot leak into runtime.
+    release_id: Optional[str] = None
     # Optional caller-provided retry key. Sentinel-generated state linkage stays
     # internal, but API clients can still obtain exactly-once durable effects.
     idempotency_key: Optional[str] = None

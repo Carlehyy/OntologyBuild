@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from sqlalchemy import inspect, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from app.database import engine, Base, SessionLocal
 from app.config import settings
 from app.shared.schema_compat import (
@@ -735,6 +735,7 @@ def health(db: Session = Depends(get_db)):
         "chroma": "unknown",
         "browser": "unknown",
         "sentinel_scheduler": "unknown",
+        "sentinel_cdc": "unknown",
         "data_scheduler": "unknown",
         "ontology_projection": "unknown",
     }
@@ -844,6 +845,32 @@ def health(db: Session = Depends(get_db)):
         checks["sentinel_scheduler"] = "unavailable"
 
     try:
+        from app.ontologies.sentinels.cdc import cdc_dispatch_status
+        cdc_status = cdc_dispatch_status(
+            session_factory=sessionmaker(
+                bind=db.get_bind(), expire_on_commit=False))
+        checks["sentinel_cdc"] = (
+            "ok" if cdc_status["healthy"] else "unavailable")
+        checks["sentinel_cdc_detail"] = {
+            "quiescent": cdc_status["quiescent"],
+            "worker_alive": cdc_status["worker_alive"],
+            "queued": cdc_status["queued"],
+            "durable": cdc_status["durable"],
+            "error_count": len(cdc_status["last_errors"]),
+            "error_code": (
+                "dispatch_error"
+                if cdc_status["last_error"] or cdc_status["last_errors"]
+                else None
+            ),
+        }
+    except Exception:
+        checks["sentinel_cdc"] = "unavailable"
+        checks["sentinel_cdc_detail"] = {
+            "quiescent": False,
+            "error_code": "status_unavailable",
+        }
+
+    try:
         from app.data_channel.sync_tasks.scheduler import get_sync_scheduler
         scheduler = get_sync_scheduler()
         checks["data_scheduler"] = "ok" if scheduler.healthy else "unavailable"
@@ -868,7 +895,7 @@ def health(db: Session = Depends(get_db)):
     service_keys = (
         "db", "redis", "neo4j", "minio", "chroma", "browser",
         "sentinel_scheduler", "data_scheduler",
-        "ontology_projection",
+        "sentinel_cdc", "ontology_projection",
     )
     unavailable = [name for name in service_keys if checks[name] != "ok"]
     # MinIO is optional when the configured durable fallback is writable.

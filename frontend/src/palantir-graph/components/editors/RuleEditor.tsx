@@ -533,6 +533,9 @@ function RuleConfigEditor({
               className="input-field text-sm font-mono"
               placeholder="可选，例如 target.status == 'inactive'"
             />
+            <p className="mt-1 text-[10px] text-surface-500">
+              条件会逐条链接执行；可用 target、source、link、params。留空表示删除该源对象的全部同类型链接。
+            </p>
           </div>
         </div>
       );
@@ -673,14 +676,27 @@ function RuleConfigEditor({
             <label className="input-label">通知渠道</label>
             <select
               value={(config as NotificationConfig).channel}
-              onChange={(e) => onChange({ ...config, channel: e.target.value as 'email' | 'sms' | 'push' | 'internal' } as NotificationConfig)}
+              onChange={(e) => onChange({
+                ...config,
+                channel: e.target.value as NotificationConfig['channel'],
+              } as NotificationConfig)}
               className="select-field text-sm"
             >
               <option value="internal">站内通知</option>
-              <option value="email">邮件</option>
-              <option value="sms">短信</option>
-              <option value="push">推送</option>
+              {['in_app', 'in-app'].includes((config as NotificationConfig).channel) && (
+                <option value={(config as NotificationConfig).channel}>
+                  站内通知（兼容标识：{(config as NotificationConfig).channel}）
+                </option>
+              )}
+              {!['internal', 'in_app', 'in-app'].includes((config as NotificationConfig).channel) && (
+                <option value={(config as NotificationConfig).channel} disabled>
+                  旧配置：{(config as NotificationConfig).channel}（未接入可靠投递器）
+                </option>
+              )}
             </select>
+            <p className="mt-1 text-[10px] text-surface-500">
+              当前仅站内通知具备可查询的持久化投递结果；邮件、短信和推送需通过 Webhook 对接可靠通道。
+            </p>
           </div>
           <div>
             <label className="input-label">接收人</label>

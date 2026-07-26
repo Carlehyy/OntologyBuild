@@ -102,7 +102,10 @@ export interface ActionParameter {
   required: boolean;
   description?: string;
   defaultValue?: unknown;
-  options?: { label: string; value: unknown }[]; // 可选值，用于下拉
+  // 后端兼容标量数组与 {label,value} 数组，也接受 enum/allowedValues 别名。
+  options?: Array<{ label: string; value: unknown } | string | number | boolean | null>;
+  enum?: Array<{ label: string; value: unknown } | string | number | boolean | null>;
+  allowedValues?: Array<{ label: string; value: unknown } | string | number | boolean | null>;
 }
 
 // ======================
@@ -226,6 +229,16 @@ export interface ActionExecutionLog {
   decidedAt?: string | null;
   decisionReason?: string | null;
   relatedLogId?: string | null;
+  ontologyVersion?: string | null;
+  ontologyReleaseId?: string | null;
+  idempotencyKey?: string | null;
+  sentinelMatchStateId?: string | null;
+  targetSnapshot?: {
+    id: string;
+    objectTypeId: string;
+    properties: Record<string, unknown>;
+    computed?: Record<string, unknown>;
+  } | null;
   pendingApproval?: boolean;
 }
 
@@ -306,7 +319,7 @@ export interface WebhookConfig {
 
 export interface NotificationConfig {
   type: 'notification';
-  channel: 'email' | 'sms' | 'push' | 'internal';
+  channel: 'email' | 'sms' | 'push' | 'internal' | 'in_app' | 'in-app';
   /** link = 沿链接跳转取关联对象的属性（如 订单→归属→商家.email），后端已支持 */
   recipientSource: 'parameter' | 'property' | 'constant' | 'link';
   recipient: string;

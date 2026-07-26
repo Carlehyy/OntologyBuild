@@ -236,7 +236,7 @@ export default function LinkMappingPanel({ ontologyId, onDone }: {
               <span className="font-medium text-gray-700">{lm.relation_type}</span>
               {lm.is_fat ? (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border bg-cyan-50 border-cyan-200 text-cyan-700">
-                  <GitBranch size={10} /> 连接表 · {Object.keys(lm.field_mapping || {}).length} 个边属性
+                  <GitBranch size={10} /> 连接表 · {Object.keys(lm.field_mapping || {}).filter(key => !key.startsWith('__')).length} 个边属性
                 </span>
               ) : (
                 <span className="px-1.5 py-0.5 rounded border bg-gray-100 border-gray-200 text-gray-500">直连外键</span>

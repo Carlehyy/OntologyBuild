@@ -29,6 +29,7 @@ from app.ontologies.agent_runtime.models import (
     AnalysisReportRun, AnalysisReportTemplate,
 )
 from app.ontologies.agent_runtime.orchestrator import run_agent_turn
+from app.ontologies.release_context import current_release_context
 from app.ontologies.agent_runtime.graph_service import (
     analyze_change_impact,
     build_workspace_graph,
@@ -798,9 +799,11 @@ def execute_proposal(ontology_id: str, body: S.ExecuteProposalRequest,
     事实追加），actor 记为确认执行的用户 —— agent 只提案，人签字。
     """
     _require_ontology(db, ontology_id)
+    release = current_release_context(
+        db, ontology_id, expected_release_id=body.release_id)
     try:
         _, profile, scope = build_scope(
-            db, ontology_id, release_id=body.release_id)
+            db, ontology_id, release_id=release.id)
         if not profile.enabled:
             raise ToolError("该本体的智能体已停用")
         action = scope.require_action(body.action_id)
@@ -817,7 +820,9 @@ def execute_proposal(ontology_id: str, body: S.ExecuteProposalRequest,
     log = execute_action(
         db, ontology_id,
         RunActionRequest(action_id=action.id, parameters=body.parameters,
-                         target_instance_id=body.target_instance_id, dry_run=False),
+                         target_instance_id=body.target_instance_id, dry_run=False,
+                         release_id=release.id),
         actor_id=getattr(current_user, "id", None),
+        expected_release_id=release.id,
     )
     return _ok(log)

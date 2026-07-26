@@ -101,7 +101,9 @@ services:
     volumes: [minio_data:/data]
 
   chromadb:
-    image: chromadb/chroma:latest
+    # Keep development and production on the same API-compatible release.
+    # ``latest`` has broken readiness/runtime clients during upstream upgrades.
+    image: ${CHROMA_IMAGE:-chromadb/chroma:0.5.20}
     ports:
       - "8001:8000"
     volumes: [chroma_data:/chroma/chroma]

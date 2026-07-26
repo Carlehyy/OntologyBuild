@@ -89,7 +89,12 @@ class IncrementalOrchestrator:
             # full edge-state-safe evaluation before acknowledging the durable
             # version event.  SentinelMatchState keeps notifications/actions
             # idempotent when the affected CDC run already succeeded.
-            if sentinel_dispatch.get("errors") or not sentinel_dispatch.get("runs"):
+            if sentinel_dispatch.get("errors"):
+                raise RuntimeError(
+                    f"本体 {ontology_id} durable Sentinel 级联失败，"
+                    "拒绝用一次新的手动扫描覆盖失败证据："
+                    f"{sentinel_dispatch['errors']}")
+            if not sentinel_dispatch.get("runs"):
                 from app.services.sentinel.engine import run_manual
                 sentinel_dispatch = run_manual(self._db, ontology_id)
             if sentinel_dispatch.get("errors"):
@@ -237,6 +242,7 @@ class IncrementalOrchestrator:
 
     def _trigger_pipeline(self, pipeline_id: str, mode: str = "incremental") -> str | None:
         """触发 Pipeline 运行，返回 run_id"""
+        from app.config import settings
         from app.models.v2.pipeline import PipelineRun
 
         run = PipelineRun(pipeline_id=pipeline_id, status="pending")
@@ -247,7 +253,25 @@ class IncrementalOrchestrator:
         try:
             from app.tasks.v2.pipeline_run import pipeline_run_task
             pipeline_run_task.delay(pipeline_id, run.id)
-        except Exception:
+        except Exception as dispatch_error:
+            if settings.require_external_dependencies:
+                run.status = "failed"
+                run.error_log = (
+                    "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行"
+                )
+                try:
+                    self._db.commit()
+                except Exception:  # noqa: BLE001
+                    self._db.rollback()
+                logger.error(
+                    "Pipeline %s 任务 %s 投递失败；生产强依赖模式禁止同步降级",
+                    pipeline_id,
+                    run.id,
+                    exc_info=True,
+                )
+                raise RuntimeError(
+                    "Redis/Celery 后台任务服务不可用，Pipeline 未执行"
+                ) from dispatch_error
             # Celery 不可用时回退同步执行——静默 pass 会让 PipelineRun 永久 pending
             try:
                 from app.tasks.v2.pipeline_run import pipeline_run_task as _t
@@ -266,11 +290,23 @@ class IncrementalOrchestrator:
 
     def _trigger_mapping_apply(self, mapping_id: str, ontology_id: str) -> str | None:
         """触发 Mapping Apply 任务"""
+        from app.config import settings
+
         try:
             from app.tasks.v2.mapping_apply import mapping_apply_task
             result = mapping_apply_task.delay(mapping_id, ontology_id)
             return str(result.id) if hasattr(result, 'id') else mapping_id
-        except Exception:
+        except Exception as dispatch_error:
+            if settings.require_external_dependencies:
+                logger.error(
+                    "Mapping %s（本体 %s）投递失败；生产强依赖模式禁止同步降级",
+                    mapping_id,
+                    ontology_id,
+                    exc_info=True,
+                )
+                raise RuntimeError(
+                    "Redis/Celery 后台任务服务不可用，Mapping 未执行"
+                ) from dispatch_error
             # Celery 不可用时同步执行
             try:
                 from app.tasks.v2.mapping_apply import mapping_apply_task

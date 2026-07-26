@@ -58,10 +58,11 @@ export interface LinkMappingRecord {
   src_dataset_id: string | null
   tgt_dataset_id: string | null
   edge_dataset_id: string | null
-  field_mapping: Record<string, string>
+  field_mapping: Record<string, string | boolean | unknown>
   link_type_id?: string | null
   status?: string
   is_fat: boolean
+  auto_apply_on_version: boolean
 }
 
 interface MappingWorkspaceResponse {
@@ -157,7 +158,7 @@ export function normalizeObjectMapping(value: unknown): ObjectMappingRecord {
 /** Normalize both immutable snapshot DTOs (camelCase) and legacy runtime DTOs. */
 export function normalizeLinkMapping(value: unknown): LinkMappingRecord {
   const raw = recordValue(value)
-  const fieldMapping = recordValue(raw.field_mapping ?? raw.fieldMapping) as Record<string, string>
+  const fieldMapping = recordValue(raw.field_mapping ?? raw.fieldMapping) as LinkMappingRecord['field_mapping']
   const edgeDatasetId = String(raw.edge_dataset_id ?? raw.edgeDatasetId ?? '') || null
   return {
     id: String(raw.id ?? ''),
@@ -171,6 +172,7 @@ export function normalizeLinkMapping(value: unknown): LinkMappingRecord {
     link_type_id: String(raw.link_type_id ?? raw.linkTypeId ?? '') || null,
     status: raw.status == null ? undefined : String(raw.status),
     is_fat: Boolean(raw.is_fat ?? edgeDatasetId),
+    auto_apply_on_version: Boolean(raw.auto_apply_on_version ?? fieldMapping.__auto_apply_on_version__),
   }
 }
 

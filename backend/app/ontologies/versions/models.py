@@ -112,6 +112,11 @@ class OntologyTrialObject(Base):
     object_id: Mapped[str] = mapped_column(String, nullable=False)
     object_type_id: Mapped[str] = mapped_column(String, nullable=False)
     properties: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Freeze derived values produced inside the isolated trial. Promotion must
+    # activate the exact candidate that was reviewed, not silently recompute a
+    # potentially different result from mutable function/runtime state.
+    computed: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default="{}")
     source_dataset_id: Mapped[str | None] = mapped_column(String, nullable=True)
     source_dataset_version_id: Mapped[str | None] = mapped_column(String, nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -136,6 +141,11 @@ class OntologyTrialLink(Base):
     source_object_id: Mapped[str] = mapped_column(String, nullable=False)
     target_object_id: Mapped[str] = mapped_column(String, nullable=False)
     properties: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Canonical legacy Relation lineage.  Promotion persists this onto the
+    # Formal LinkInstance so the next normal mapping projection updates the
+    # exact promoted edge instead of materializing a parallel unowned link.
+    source_relation_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
 
 
 class OntologyChangeLog(Base):

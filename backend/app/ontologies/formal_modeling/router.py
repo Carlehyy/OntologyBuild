@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, and_, cast, false, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional
 
@@ -42,6 +42,7 @@ from app.ontologies.formal_modeling.legacy_projection import (
     adopt_legacy_projection,
     assess_legacy_projection,
 )
+from app.ontologies.mappings.mapping_service import _ontology_build_lock
 from app.schemas import ontology_formal as S
 from app.services.formal.action_engine import execute_action
 from app.services.formal.function_engine import test_function, compute_object_set_aggregates
@@ -1472,17 +1473,34 @@ def delete_link_instance(ontology_id: str, link_id: str,
 @router.post("/{ontology_id}/run-action")
 def run_action(ontology_id: str, body: S.RunActionRequest,
                db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    _require_ontology(db, ontology_id, for_update=True)
-    log = execute_action(db, ontology_id, body,
-                         actor_id=getattr(current_user, "id", None))
-    return _ok(log)
+    # An external action must observe one stable projection boundary.  A
+    # mapping rebuild commits ``projecting`` before replacing Neo4j/Chroma and
+    # later returns every mapping to ``applied``; waiting on the same
+    # cross-process lock prevents a legitimate action from failing in that
+    # transient window.
+    with _ontology_build_lock(db, ontology_id):
+        _require_ontology(db, ontology_id, for_update=True)
+        release = current_release_context(
+            db, ontology_id, expected_release_id=body.release_id)
+        log = execute_action(
+            db,
+            ontology_id,
+            body,
+            actor_id=getattr(current_user, "id", None),
+            expected_release_id=release.id,
+        )
+        return _ok(log)
 
 
 @router.get("/{ontology_id}/pending-actions")
 def list_pending_actions(ontology_id: str, release_id: Optional[str] = None,
                          current_release_only: bool = False,
                          db: Session = Depends(get_db), _=Depends(get_current_user)):
-    """待审批动作（requires_approval 的动作真实执行先落 pending，等人拍板）。"""
+    """待审批或待恢复动作。
+
+    ``executing`` 表示人的批准事实已经耐久化，但进程可能在技术执行/关联日志
+    之间退出；它必须继续出现在治理队列中，才能用稳定幂等键安全恢复。
+    """
     project = _require_ontology(db, ontology_id)
     release_snapshot = None
     release_identifier = None
@@ -1496,7 +1514,7 @@ def list_pending_actions(ontology_id: str, release_id: Optional[str] = None,
         release_identifier = release_row.id
     query = db.query(ActionExecutionLog).filter(
         ActionExecutionLog.ontology_id == ontology_id,
-        ActionExecutionLog.status == "pending",
+        ActionExecutionLog.status.in_(("pending", "executing")),
         ActionExecutionLog.dry_run == False,  # noqa: E712
     )
     released_actions_by_id = {}
@@ -1539,6 +1557,20 @@ def list_pending_actions(ontology_id: str, release_id: Optional[str] = None,
     result = []
     for item in items:
         instance = instances_by_id.get(item.object_instance_id)
+        if instance is None and isinstance(item.target_snapshot, dict):
+            snapshot = item.target_snapshot
+            snapshot_properties = snapshot.get("properties")
+            if (
+                snapshot.get("id")
+                and snapshot.get("objectTypeId")
+                and isinstance(snapshot_properties, dict)
+            ):
+                instance = SimpleNamespace(
+                    id=str(snapshot["id"]),
+                    object_type_id=str(snapshot["objectTypeId"]),
+                    properties=snapshot_properties,
+                    external_id=None,
+                )
         object_type = object_types_by_id.get(
             instance.object_type_id if instance is not None else item.object_type_id)
         payload = S.ActionLogOut.model_validate(item).model_dump(by_alias=True)
@@ -1565,21 +1597,52 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
                           current_user=Depends(require_admin)):
     """HITL 决策：批准 → 写决策事实并真正执行（执行产生的事实 caused_by=决策事实）；
     拒绝 → 同样写决策事实（拒绝也要溯源，供将来分析"哪些建议被人否决了"）。"""
+    # Approval is a real side effect and must not race the transient
+    # ``projecting`` interval of a concurrent automatic/manual full rebuild.
+    # Rejection has no business side effect and remains immediately available.
+    if (body.decision or "").lower() == "approved":
+        with _ontology_build_lock(db, ontology_id):
+            return _decide_pending_action_locked(
+                ontology_id, log_id, body, db, current_user)
+    return _decide_pending_action_locked(
+        ontology_id, log_id, body, db, current_user)
+
+
+def _decide_pending_action_locked(
+        ontology_id: str, log_id: str, body: S.DecisionRequest,
+        db: Session, current_user):
     project = _require_ontology(db, ontology_id, for_update=True)
     log = db.query(ActionExecutionLog).filter(
         ActionExecutionLog.id == log_id,
         ActionExecutionLog.ontology_id == ontology_id).first()
     if not log:
         raise HTTPException(404, "执行记录不存在")
-    if log.status != "pending":
-        raise HTTPException(409, f"该记录已处理（当前状态: {log.status}），不能重复决策")
     decision = (body.decision or "").lower()
     if decision not in ("approved", "rejected"):
         raise HTTPException(422, "decision 必须是 approved 或 rejected")
+    # ``executing`` is a durable approval checkpoint.  A process can stop after
+    # the human decision commits but before (or just after) the separately
+    # committed action finishes.  Repeating the same approval resumes through
+    # the stable execution idempotency key without creating a second fact.
+    resuming_approved = (
+        log.status == "executing"
+        and decision == "approved"
+        and log.decided_at is not None
+    )
+    if log.status != "pending" and not resuming_approved:
+        raise HTTPException(
+            409,
+            f"该记录已处理（当前状态: {log.status}），不能重复决策",
+        )
+    # Approval always resolves the exact current release, even when an older
+    # client omitted releaseId.  Version labels can repeat across rollback
+    # activations, so comparing project.version alone is not a safety fence.
+    # Rejection is side-effect free and may still process historical proposals
+    # without requiring their release to remain current.
     release = (
         current_release_context(
             db, ontology_id, expected_release_id=body.release_id)
-        if body.release_id else None
+        if decision == "approved" or body.release_id else None
     )
     current_version = release.version if release is not None else project.version
     if release is not None:
@@ -1606,17 +1669,39 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
 
     uid = getattr(current_user, "id", None)
     uname = getattr(current_user, "username", None) or getattr(current_user, "email", None) or uid
-    # 决策事实：无论批准/拒绝都进入事实流（kind=decision）
-    fact = record_decision_fact(
-        db, ontology_id=ontology_id, action_log_id=log.id,
-        decision=decision.upper(), source=f"user://{uname}",
-        actor_id=uid, reason=body.reason,
-        ontology_version=log.ontology_version,
-        ontology_release_id=log.ontology_release_id)
-
-    log.decided_by = uid
-    log.decided_at = datetime.now(timezone.utc)
-    log.decision_reason = body.reason
+    if resuming_approved:
+        fact = (
+            db.query(PropertyFact)
+            .filter(
+                PropertyFact.ontology_id == ontology_id,
+                PropertyFact.instance_id == log.id,
+                PropertyFact.property_name == "decision",
+                PropertyFact.kind == "decision",
+            )
+            .order_by(
+                PropertyFact.recorded_at.desc(),
+                PropertyFact.id.desc(),
+            )
+            .first()
+        )
+        if fact is None:
+            raise HTTPException(
+                409,
+                "审批日志处于执行恢复态，但缺少已持久化的决策事实",
+            )
+    else:
+        # Human governance evidence is committed before any business action is
+        # attempted.  The action runs in a separate Session below, so its
+        # rollback can never erase the approval/rejection audit.
+        fact = record_decision_fact(
+            db, ontology_id=ontology_id, action_log_id=log.id,
+            decision=decision.upper(), source=f"user://{uname}",
+            actor_id=uid, reason=body.reason,
+            ontology_version=log.ontology_version,
+            ontology_release_id=log.ontology_release_id)
+        log.decided_by = uid
+        log.decided_at = datetime.now(timezone.utc)
+        log.decision_reason = body.reason
 
     if decision == "rejected":
         log.status = "rejected"
@@ -1631,28 +1716,90 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
             reject_sentinel_match_claim(db, ontology_id, state_id)
         return _ok(S.ActionLogOut.model_validate(log).model_dump(by_alias=True))
 
-    # 批准：以原参数真正执行；执行事实的因果指针指向决策事实（对齐 caused_by=f010 语义）
-    from types import SimpleNamespace
-    exec_body = SimpleNamespace(action_id=log.action_id, parameters=log.parameters or {},
-                                target_instance_id=log.object_instance_id, dry_run=False,
-                                sentinel_match_state_id=log.sentinel_match_state_id)
+    # Approval is now durable but is not yet proof of technical success.
+    # ``executing`` prevents dashboards from presenting it as completed and
+    # provides a resumable checkpoint for a process crash.
+    log.status = "executing"
+    fact_id = fact.id
+    state_id = log.sentinel_match_state_id
+    decision_actor_id = log.decided_by or uid
+    action_id = log.action_id
+    execution_release_id = log.ontology_release_id
+    parameters = dict(log.parameters or {})
+    object_instance_id = log.object_instance_id
+    target_snapshot = (
+        dict(log.target_snapshot) if isinstance(log.target_snapshot, dict)
+        else None
+    )
+    db.commit()
+
+    # 批准：以原参数真正执行；执行事实的因果指针指向已耐久化的决策事实。
+    # A separate Session is a hard transaction boundary: execute_action may
+    # rollback freely without touching the decision checkpoint above.
+    # The approved execution owns a stable key independent from the proposal
+    # key.  If the process exits after execute_action() commits but before this
+    # pending row is linked, retrying the decision replays the durable execution
+    # instead of applying the business side effect a second time.
+    approved_execution_key = f"approval-execution:{log_id}"
+    exec_body = SimpleNamespace(
+        action_id=action_id,
+        parameters=parameters,
+        target_instance_id=object_instance_id,
+        dry_run=False,
+        sentinel_match_state_id=state_id,
+        idempotency_key=approved_execution_key,
+        target_snapshot=target_snapshot,
+        expected_release_id=execution_release_id,
+    )
     sentinel_token = None
-    if log.sentinel_match_state_id:
+    if state_id:
         from app.services.sentinel.evaluator import in_sentinel_run
         sentinel_token = in_sentinel_run.set(True)
+    execution_session_factory = sessionmaker(
+        bind=db.get_bind(), expire_on_commit=False)
+    execution_db = execution_session_factory()
     try:
-        result = execute_action(db, ontology_id, exec_body, actor_id=uid,
-                                caused_by_fact=fact.id, skip_approval=True)
+        result = execute_action(
+            execution_db,
+            ontology_id,
+            exec_body,
+            actor_id=decision_actor_id,
+            caused_by_fact=fact_id,
+            skip_approval=True,
+            expected_release_id=execution_release_id,
+        )
     finally:
+        execution_db.close()
         if sentinel_token is not None:
             in_sentinel_run.reset(sentinel_token)
-    log.status = "approved"
+
+    # Finalization is a third transaction.  Both successful and failed
+    # technical attempts are linked to the already durable human decision.
+    db.expire_all()
+    log = (
+        db.query(ActionExecutionLog)
+        .filter(
+            ActionExecutionLog.id == log_id,
+            ActionExecutionLog.ontology_id == ontology_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if log is None:
+        raise HTTPException(409, "审批日志在动作执行后不存在，无法完成关联")
     log.related_log_id = result.get("id")
-    state_id = log.sentinel_match_state_id
     execution_succeeded = result.get("status") == "success"
-    if not execution_succeeded:
+    if execution_succeeded:
+        log.status = "approved"
+        log.error_message = None
+    else:
         # Human approval and technical execution are separate facts.  A failed
-        # execution must not permanently own the step's idempotency key.
+        # execution must neither appear as approved/executed nor permanently
+        # own the proposal key.  The decision fact still records that a human
+        # approved the proposal; this row records that execution failed.
+        log.status = "failed"
+        log.error_message = (
+            result.get("errorMessage") or "审批已通过，但动作技术执行失败")
         log.idempotency_key = None
     db.commit(); db.refresh(log)
     sentinel_resume = None
@@ -1666,7 +1813,7 @@ def decide_pending_action(ontology_id: str, log_id: str, body: S.DecisionRequest
     return _ok({
         "pendingLog": S.ActionLogOut.model_validate(log).model_dump(by_alias=True),
         "executionLog": result,
-        "decisionFactId": fact.id,
+        "decisionFactId": fact_id,
         "sentinelResume": sentinel_resume,
     })
 
@@ -1797,7 +1944,7 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
         ActionExecutionLog.ontology_release_id == release.id,
         ActionExecutionLog.action_id.in_(action_ids),
         ActionExecutionLog.dry_run == False).all()) if action_ids else []  # noqa: E712
-    pending_n = sum(1 for l in logs if l.status == "pending")
+    pending_n = sum(1 for l in logs if l.status in ("pending", "executing"))
     decided = sorted([l for l in logs if l.status in ("approved", "rejected")],
                      key=lambda l: (l.decided_at or l.executed_at), reverse=True)
     approved_n = sum(1 for l in decided if l.status == "approved")
@@ -2063,7 +2210,7 @@ def autonomy_stats(ontology_id: str, release_id: Optional[str] = None,
 
         auto = [l for l in ls if l.decided_by is None and l.status in ("success", "failed")]
         auto_failed = sum(1 for l in auto if l.status == "failed")
-        pending_n = sum(1 for l in ls if l.status == "pending")
+        pending_n = sum(1 for l in ls if l.status in ("pending", "executing"))
 
         bound = [s for s in sentinels if a.id in (s.action_ids or [])]
         shadow = bool(bound) and all(bool(s.muted) for s in bound)

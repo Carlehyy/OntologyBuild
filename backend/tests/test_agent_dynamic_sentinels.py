@@ -155,6 +155,12 @@ def test_dynamic_trial_has_zero_side_effects_then_enabled_runtime_matches_builti
     assert report["matchCount"] == 1
     assert report["plannedActionCount"] == 1
     assert report["sideEffects"] == "none"
+    assert report["plannedActions"][0]["status"] == "success"
+    assert report["plannedActions"][0]["edge"] == "enter"
+    assert report["plannedActions"][0]["effects"][0]["type"] == (
+        "update_property")
+    assert report["plannedActions"][0]["effects"][0]["status"] == "preview"
+    assert report["plannedActions"][0]["effects"][0]["committed"] is False
     assert trial_row["canEnable"] is True
     assert db.query(ActionExecutionLog).count() == 0
     assert db.query(SentinelFiring).count() == 0
@@ -173,6 +179,25 @@ def test_dynamic_trial_has_zero_side_effects_then_enabled_runtime_matches_builti
     )
     assert enabled.status_code == 200, enabled.text
 
+    # The mutable Formal definition tables may already contain the next draft.
+    # Runtime must still execute the Action frozen in the current release.
+    from app.models.ontology_formal import ActionType
+    mutable_action = db.query(ActionType).filter_by(
+        id="act-mark-paid").one()
+    mutable_action.rules = [{
+        "id": "draft-only-rule",
+        "type": "update_property",
+        "name": "未发布草稿动作",
+        "enabled": True,
+        "order": 0,
+        "config": {
+            "targetProperty": "status",
+            "valueSource": "constant",
+            "value": "\"draft-corruption\"",
+        },
+    }]
+    db.commit()
+
     run = client.post(
         f"/api/v1/ontologies/{runtime['ontology_id']}/sentinels/run",
         headers=auth_headers,
@@ -188,10 +213,167 @@ def test_dynamic_trial_has_zero_side_effects_then_enabled_runtime_matches_builti
     assert db.query(Sentinel).filter_by(id=row["id"]).one().enabled is True
 
 
+def test_dynamic_enable_transition_captures_one_generation_and_reenable_is_new(
+    client, auth_headers, published_runtime, db, monkeypatch,
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.sentinel import Sentinel, SentinelCdcOutbox
+    from app.ontologies.sentinels import cdc
+    from app.services.sentinel import engine as service_engine
+
+    runtime = published_runtime
+    monkeypatch.setattr(cdc, "_enqueue_dispatch", lambda _ids: None)
+    created = _create(
+        client, auth_headers, runtime,
+        _definition(name="activation_generation", actions=False),
+    )
+    trial = client.post(
+        f"{_fo(runtime['ontology_id'])}/agent/dynamic-sentinels/"
+        f"{created['id']}/trial",
+        headers=auth_headers,
+        json={"releaseId": runtime["release_id"]},
+    ).json()["data"]
+    endpoint = (
+        f"{_fo(runtime['ontology_id'])}/agent/dynamic-sentinels/"
+        f"{created['id']}/enabled"
+    )
+    command = {
+        "releaseId": runtime["release_id"],
+        "expectedRevision": trial["definitionRevision"],
+        "enabled": True,
+    }
+
+    first = client.post(endpoint, headers=auth_headers, json=command)
+    repeated = client.post(endpoint, headers=auth_headers, json=command)
+    assert first.status_code == repeated.status_code == 200
+    assert first.json()["data"]["enableGeneration"] == 1
+    assert repeated.json()["data"]["enableGeneration"] == 1
+    db.expire_all()
+    stored = db.query(Sentinel).filter_by(id=created["id"]).one()
+    first_events = db.query(SentinelCdcOutbox).filter_by(
+        event_kind=cdc.DYNAMIC_ACTIVATION,
+        sentinel_id=stored.id,
+    ).all()
+    assert stored.enable_generation == 1
+    assert len(first_events) == 1
+    first_event_id = first_events[0].id
+    assert first_events[0].ontology_release_id == runtime["release_id"]
+    assert first_events[0].result_json["control"] == {
+        "sentinelId": stored.id,
+        "definitionRevision": stored.definition_revision,
+        "enableGeneration": 1,
+    }
+
+    disabled = client.post(
+        endpoint,
+        headers=auth_headers,
+        json={**command, "enabled": False},
+    )
+    reenabled = client.post(endpoint, headers=auth_headers, json=command)
+    assert disabled.status_code == reenabled.status_code == 200
+    assert reenabled.json()["data"]["enableGeneration"] == 2
+    db.expire_all()
+    events = db.query(SentinelCdcOutbox).filter_by(
+        event_kind=cdc.DYNAMIC_ACTIVATION,
+        sentinel_id=stored.id,
+    ).order_by(SentinelCdcOutbox.created_at.asc()).all()
+    assert len(events) == 2
+    assert events[0].id == first_event_id
+    assert events[0].dedupe_key != events[1].dedupe_key
+    assert events[1].result_json["control"]["enableGeneration"] == 2
+
+    calls = []
+
+    def initialize(_db, _ontology_id, sentinel_id, **_kwargs):
+        calls.append(sentinel_id)
+        return {
+            "evaluated": 1, "fired": 0, "errors": 0,
+            "firings": [], "runtimeErrors": [],
+        }
+
+    monkeypatch.setattr(
+        service_engine, "run_dynamic_initialization", initialize)
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+    drained = cdc.drain_cdc_outbox(
+        event_ids={event.id for event in events},
+        session_factory=factory,
+    )
+    db.expire_all()
+    durable = {
+        event.id: event for event in db.query(SentinelCdcOutbox).filter(
+            SentinelCdcOutbox.id.in_([item.id for item in events])).all()
+    }
+    assert drained["processed"] == 2
+    assert drained["stale"] == 1
+    assert calls == [stored.id]
+    assert durable[first_event_id].result_json["skipped"] == (
+        "dynamic_sentinel_enable_changed")
+
+
+def test_dynamic_activation_executes_existing_trial_match_once(
+    client, auth_headers, published_runtime, db, monkeypatch,
+):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.ontology_formal import ActionExecutionLog, ObjectInstance
+    from app.models.sentinel import SentinelCdcOutbox, SentinelFiring
+    from app.ontologies.sentinels import cdc
+
+    runtime = published_runtime
+    monkeypatch.setattr(cdc, "_enqueue_dispatch", lambda _ids: None)
+    created = _create(
+        client, auth_headers, runtime,
+        _definition(name="activation_existing_match"),
+    )
+    trial = client.post(
+        f"{_fo(runtime['ontology_id'])}/agent/dynamic-sentinels/"
+        f"{created['id']}/trial",
+        headers=auth_headers,
+        json={"releaseId": runtime["release_id"]},
+    ).json()["data"]
+    enabled = client.post(
+        f"{_fo(runtime['ontology_id'])}/agent/dynamic-sentinels/"
+        f"{created['id']}/enabled",
+        headers=auth_headers,
+        json={
+            "releaseId": runtime["release_id"],
+            "expectedRevision": trial["definitionRevision"],
+            "enabled": True,
+        },
+    )
+    assert enabled.status_code == 200, enabled.text
+    event = db.query(SentinelCdcOutbox).filter_by(
+        event_kind=cdc.DYNAMIC_ACTIVATION,
+        sentinel_id=created["id"],
+    ).one()
+    factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+
+    first = cdc.drain_cdc_outbox(
+        event_ids={event.id}, session_factory=factory)
+    replay = cdc.drain_cdc_outbox(
+        event_ids={event.id}, session_factory=factory)
+
+    db.expire_all()
+    assert first["processed"] == 1
+    assert replay["processed"] == 0
+    assert db.query(ObjectInstance).filter_by(
+        id="inst-order-1").one().properties["status"] == "paid"
+    assert db.query(ActionExecutionLog).filter_by(
+        action_id="act-mark-paid").count() == 1
+    assert db.query(SentinelFiring).filter_by(
+        sentinel_id=created["id"]).count() == 1
+
+
 def test_scheduled_dynamic_sentinel_uses_v0_release_while_project_is_draft(
     client, auth_headers, published_runtime, db,
 ):
-    from app.models.sentinel import SentinelFiring
+    from app.models.sentinel import (
+        Sentinel,
+        SentinelCdcOutbox,
+        SentinelFiring,
+    )
+    from app.ontologies.sentinels import cdc
     from app.ontologies.sentinels.engine import run_scheduled
 
     runtime = published_runtime
@@ -218,6 +400,17 @@ def test_scheduled_dynamic_sentinel_uses_v0_release_while_project_is_draft(
     assert result["evaluated"] == 1
     firing = db.query(SentinelFiring).filter_by(sentinel_id=row["id"]).one()
     assert firing.ontology_release_id == runtime["release_id"]
+    live = db.query(Sentinel).filter_by(id=row["id"]).one()
+    scheduled = db.query(SentinelCdcOutbox).filter_by(
+        event_kind=cdc.SCHEDULED_SCAN,
+        sentinel_id=row["id"],
+    ).one()
+    assert scheduled.result_json["control"]["sentinelOrigin"] == (
+        "assistant_dynamic")
+    assert scheduled.result_json["control"]["definitionRevision"] == (
+        live.definition_revision)
+    assert scheduled.result_json["control"]["enableGeneration"] == (
+        live.enable_generation)
 
 
 def test_management_surfaces_are_origin_isolated_and_validation_fails_closed(
@@ -507,6 +700,80 @@ def test_assistant_schema_is_materialized_from_exact_release_snapshot(
     assert scope.require_action("标记已支付").id == "act-mark-paid"
     with pytest.raises(ToolError):
         scope.require_object_type("未发布草稿订单")
+
+
+def test_action_entry_points_execute_the_exact_release_after_live_rule_drift(
+    client, auth_headers, published_runtime, db,
+):
+    """Direct, confirmed and assistant-preview paths must share one release."""
+    from app.models.ontology_formal import ActionType, ObjectInstance
+    from app.ontologies.agent_runtime.boundary import build_scope
+    from app.ontologies.agent_runtime.toolkit import ToolRunner
+
+    runtime = published_runtime
+    mutable_action = db.query(ActionType).filter_by(
+        id="act-mark-paid").one()
+    mutable_action.rules = [{
+        "id": "draft-only-rule",
+        "type": "update_property",
+        "name": "未发布草稿动作",
+        "enabled": True,
+        "order": 0,
+        "config": {
+            "targetProperty": "status",
+            "valueSource": "constant",
+            "value": "\"draft-corruption\"",
+        },
+    }]
+    db.commit()
+
+    _, _, scope = build_scope(
+        db, runtime["ontology_id"], release_id=runtime["release_id"])
+    proposal = ToolRunner(db, scope).run("propose_action", {
+        "action": "act-mark-paid",
+        "target_instance_id": "inst-order-1",
+        "parameters": {},
+    })["proposal"]
+    assert proposal["status"] == "success"
+    assert proposal["releaseId"] == runtime["release_id"]
+    assert proposal["effects"][0]["newValue"] == "paid"
+
+    direct = client.post(
+        f"{_fo(runtime['ontology_id'])}/run-action",
+        headers=auth_headers,
+        json={
+            "releaseId": runtime["release_id"],
+            "actionId": "act-mark-paid",
+            "targetInstanceId": "inst-order-1",
+            "dryRun": False,
+        },
+    )
+    assert direct.status_code == 200, direct.text
+    assert direct.json()["data"]["status"] == "success"
+    db.expire_all()
+    instance = db.query(ObjectInstance).filter_by(id="inst-order-1").one()
+    assert instance.properties["status"] == "paid"
+
+    instance.properties = {
+        **dict(instance.properties or {}),
+        "status": "pending",
+    }
+    db.commit()
+    confirmed = client.post(
+        f"{_fo(runtime['ontology_id'])}/agent/execute-proposal",
+        headers=auth_headers,
+        json={
+            "releaseId": runtime["release_id"],
+            "actionId": "act-mark-paid",
+            "targetInstanceId": "inst-order-1",
+            "parameters": {},
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["data"]["status"] == "success"
+    db.expire_all()
+    assert db.query(ObjectInstance).filter_by(
+        id="inst-order-1").one().properties["status"] == "paid"
 
 
 def test_confirmed_assistant_action_cannot_target_another_release(

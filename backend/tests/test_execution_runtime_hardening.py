@@ -1,6 +1,7 @@
 """Production guardrails for formal actions, sentinels, and Celery workers."""
 import json
 import socket
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,15 +13,28 @@ from sqlalchemy.exc import IntegrityError
 from app.models.ontology_formal import (
     ActionExecutionLog,
     ActionType,
+    LinkInstance,
+    LinkType,
     ObjectInstance,
     ObjectType,
+    OntologyFunction,
+    PropertyFact,
 )
 from app.models.sentinel import Notification, Sentinel, SentinelMatchState
 from app.models.ontology import OntologyProject
+from app.models.ontology_version import OntologyVersion
 from app.models.v2.mapping import OntologyMapping
-from app.services.formal.action_engine import execute_action
 from app.api_hub import outbound_security
+from app.services.formal.action_engine import (
+    execute_action,
+    validate_action_definition,
+)
+from app.ontologies.formal_modeling.webhook_dispatcher import (
+    WebhookDispatchError,
+    preview_webhook,
+)
 from app.ontologies.sentinels.evaluator import _sentinel_execution_lock
+from app.ontologies.sentinels import evaluator as sentinel_evaluator
 from app.services.sentinel.evaluator import (
     evaluate_sentinel,
     reject_sentinel_match_claim,
@@ -28,6 +42,8 @@ from app.services.sentinel.evaluator import (
 )
 from app.ontologies.formal_modeling.router import decide_pending_action, list_pending_actions
 from app.ontologies.formal_modeling.schemas import DecisionRequest
+from app.ontologies.versions.evolution_service import snapshot_hash
+from app.ontologies.versions.router import _snapshot_formal
 from fastapi import HTTPException
 
 
@@ -80,6 +96,302 @@ def test_postgres_sentinel_lock_uses_one_dedicated_connection_across_commits():
     assert connection.closed is True
 
 
+def test_release_scoped_tuple_contract_uses_snapshot_link_definition(db):
+    """Draft LinkType edits cannot alter published Sentinel traversal."""
+    ontology_id = "sentinel-link-snapshot-contract"
+    release_id = "sentinel-link-release"
+    project = OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test",
+        created_by="runtime-tests", status="published", version="v1",
+        current_release_id=release_id,
+    )
+    release = OntologyVersion(
+        id=release_id, ontology_id=ontology_id,
+        version_number="v1", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [],
+            "linkTypes": [{
+                "id": "published-link",
+                "name": "published_link",
+                "displayName": "Published link",
+                "sourceObjectTypeId": "type-a",
+                "targetObjectTypeId": "type-b",
+                "cardinality": "many-to-many",
+                "properties": [],
+            }],
+            "actions": [], "functions": [], "sentinels": [],
+            "mappings": [], "linkMappings": [],
+        },
+        created_by="runtime-tests",
+    )
+    type_a = ObjectType(
+        id="type-a", ontology_id=ontology_id,
+        name="TypeA", display_name="Type A",
+        primary_key="id", properties=[],
+    )
+    type_b = ObjectType(
+        id="type-b", ontology_id=ontology_id,
+        name="TypeB", display_name="Type B",
+        primary_key="id", properties=[],
+    )
+    # The live row represents a newer draft and deliberately contradicts the
+    # immutable release snapshot.
+    draft_link = LinkType(
+        id="published-link", ontology_id=ontology_id,
+        name="draft_link", display_name="Draft link",
+        source_object_type_id="type-b",
+        target_object_type_id="type-a",
+        cardinality="many-to-many", properties=[],
+    )
+    a = ObjectInstance(
+        id="snapshot-a", ontology_id=ontology_id,
+        ontology_release_id=release_id,
+        object_type_id=type_a.id, properties={},
+    )
+    b = ObjectInstance(
+        id="snapshot-b", ontology_id=ontology_id,
+        ontology_release_id=release_id,
+        object_type_id=type_b.id, properties={},
+    )
+    edge = LinkInstance(
+        id="snapshot-edge", ontology_id=ontology_id,
+        ontology_release_id=release_id,
+        link_type_id=draft_link.id,
+        source_object_id=a.id, target_object_id=b.id, properties={},
+    )
+    sentinel = Sentinel(
+        id="snapshot-link-sentinel", ontology_id=ontology_id,
+        name="snapshot_link_sentinel",
+        display_name="Snapshot link sentinel",
+        bindings=[
+            {"alias": "a", "objectTypeId": type_a.id},
+            {"alias": "b", "objectTypeId": type_b.id},
+        ],
+        links=[{
+            "from": "a", "to": "b", "linkTypeId": draft_link.id,
+        }],
+        condition="True", primary_alias="a", action_ids=[],
+        action_parameters={}, trigger_mode="on_enter",
+        on_change=False, on_schedule=False, muted=False,
+        enabled=True, status="published",
+    )
+    db.add_all([
+        project, release, type_a, type_b, draft_link, a, b, edge, sentinel,
+    ])
+    db.commit()
+
+    errors: list[str] = []
+    tuples = sentinel_evaluator._resolve_tuples(
+        db, ontology_id, sentinel, errors, release_id=release_id)
+
+    assert errors == []
+    assert len(tuples) == 1
+    assert tuples[0]["a"].id == a.id
+    assert tuples[0]["b"].id == b.id
+
+
+def test_release_fence_error_keeps_captured_release_lineage(db):
+    ontology_id = "sentinel-release-error-lineage"
+    captured_release_id = "sentinel-release-r1"
+    current_release_id = "sentinel-release-r2"
+    project = OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test",
+        created_by="runtime-tests", status="published", version="v2",
+        current_release_id=current_release_id,
+    )
+    empty_snapshot = {
+        "objectTypes": [], "linkTypes": [], "actions": [],
+        "functions": [], "sentinels": [], "mappings": [],
+        "linkMappings": [],
+    }
+    r1 = OntologyVersion(
+        id=captured_release_id, ontology_id=ontology_id,
+        version_number="v1", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal=empty_snapshot, created_by="runtime-tests",
+    )
+    r2 = OntologyVersion(
+        id=current_release_id, ontology_id=ontology_id,
+        version_number="v2", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal=empty_snapshot, created_by="runtime-tests",
+    )
+    sentinel = Sentinel(
+        id="lineage-fence-sentinel", ontology_id=ontology_id,
+        name="lineage_fence_sentinel",
+        display_name="Lineage fence sentinel",
+        bindings=[], links=[], condition=None, primary_alias=None,
+        action_ids=[], action_parameters={}, trigger_mode="on_enter",
+        on_change=False, on_schedule=False, muted=False,
+        enabled=True, status="published",
+    )
+    db.add_all([project, r1, r2, sentinel])
+    db.commit()
+
+    firing = evaluate_sentinel(
+        db, ontology_id, sentinel, "manual",
+        expected_release_id=captured_release_id,
+    )
+
+    assert firing.status == "error"
+    assert firing.action_results[0]["validationErrors"] == [
+        "release_context_changed",
+    ]
+    assert firing.ontology_release_id == captured_release_id
+    assert firing.ontology_release_id != current_release_id
+
+
+@pytest.mark.parametrize(
+    "delete_live_projection", [False, True],
+    ids=["draft-row-present", "draft-row-physically-deleted"],
+)
+def test_builtin_approval_resume_uses_released_sentinel_definition(
+        db, monkeypatch, delete_live_projection):
+    ontology_id = "builtin-resume-release-definition"
+    release_id = "builtin-resume-r1"
+    sentinel_id = "builtin-resume-sentinel"
+    released_action_id = "builtin-released-action"
+    project = OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test",
+        created_by="runtime-tests", status="published", version="v1",
+        current_release_id=release_id,
+    )
+    release = OntologyVersion(
+        id=release_id, ontology_id=ontology_id,
+        version_number="v1", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [], "linkTypes": [], "actions": [],
+            "functions": [], "mappings": [], "linkMappings": [],
+            "sentinels": [{
+                "id": sentinel_id,
+                "name": "builtin_resume_sentinel",
+                "displayName": "Released sentinel",
+                "bindings": [],
+                "links": [],
+                "condition": None,
+                "primaryAlias": None,
+                "actionIds": [released_action_id],
+                "actionParameters": {},
+                "triggerMode": "on_enter",
+                "enabled": True,
+                "muted": False,
+            }],
+        },
+        created_by="runtime-tests",
+    )
+    # This is the mutable next-draft projection.  Neither its action chain nor
+    # draft enabled bit is allowed to rewrite the pending R1 lifecycle.
+    live = Sentinel(
+        id=sentinel_id, ontology_id=ontology_id,
+        name="draft_resume_sentinel",
+        display_name="Draft sentinel",
+        bindings=[], links=[], condition=None, primary_alias=None,
+        action_ids=["draft-action"], action_parameters={},
+        trigger_mode="on_enter", on_change=False, on_schedule=False,
+        muted=False, enabled=False, status="draft",
+        origin="release_builtin",
+    )
+    state = SentinelMatchState(
+        id="builtin-resume-state", ontology_id=ontology_id,
+        sentinel_id=sentinel_id, match_key="released-match",
+        match_detail={
+            "__snapshots__": {},
+            "__event__": {
+                "edge": "enter",
+                "matchKey": "released-match",
+                "ontologyReleaseId": release_id,
+                "sentinelOrigin": "release_builtin",
+                "sentinelDefinitionRevision": 1,
+            },
+        },
+        runtime_status="pending_enter",
+    )
+    completed_step = ActionExecutionLog(
+        id="builtin-resume-log", ontology_id=ontology_id,
+        action_id=released_action_id,
+        action_name="Released action", parameters={},
+        status="success", dry_run=False,
+        sentinel_match_state_id=state.id,
+        ontology_version="v1", ontology_release_id=release_id,
+    )
+    db.add_all([project, release, live, state, completed_step])
+    db.commit()
+    if delete_live_projection:
+        db.delete(live)
+        db.commit()
+        assert db.query(Sentinel).filter_by(id=sentinel_id).first() is None
+    observed: dict = {}
+
+    def run_released_chain(
+            _db, _ontology_id, runtime_sentinel, _tup, _primary,
+            _edge, _match_key, _state, _results, **_kwargs):
+        observed["name"] = runtime_sentinel.display_name
+        observed["actionIds"] = list(runtime_sentinel.action_ids)
+        observed["enabled"] = runtime_sentinel.enabled
+        return True, "success"
+
+    monkeypatch.setattr(
+        sentinel_evaluator, "_run_actions", run_released_chain)
+
+    result = resume_sentinel_match_claim(db, ontology_id, state.id)
+
+    assert result["status"] == "fired"
+    assert observed == {
+        "name": "Released sentinel",
+        "actionIds": [released_action_id],
+        "enabled": True,
+    }
+
+
+def test_dynamic_approval_resume_requires_live_overlay(db):
+    ontology_id = "dynamic-resume-live-overlay"
+    release_id = "dynamic-resume-r1"
+    sentinel_id = "deleted-dynamic-sentinel"
+    project = OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test",
+        created_by="runtime-tests", status="published", version="v1",
+        current_release_id=release_id,
+    )
+    release = OntologyVersion(
+        id=release_id, ontology_id=ontology_id,
+        version_number="v1", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [], "linkTypes": [], "actions": [],
+            "functions": [], "mappings": [], "linkMappings": [],
+            "sentinels": [{
+                "id": sentinel_id,
+                "name": "same_id_but_builtin",
+                "displayName": "Same ID built-in",
+                "bindings": [], "links": [], "actionIds": [],
+            }],
+        },
+        created_by="runtime-tests",
+    )
+    state = SentinelMatchState(
+        id="dynamic-resume-state", ontology_id=ontology_id,
+        sentinel_id=sentinel_id, match_key="dynamic-match",
+        match_detail={
+            "__snapshots__": {},
+            "__event__": {
+                "edge": "enter",
+                "matchKey": "dynamic-match",
+                "ontologyReleaseId": release_id,
+                "sentinelOrigin": "assistant_dynamic",
+                "sentinelDefinitionRevision": 3,
+            },
+        },
+        runtime_status="pending_enter",
+    )
+    db.add_all([project, release, state])
+    db.commit()
+
+    assert resume_sentinel_match_claim(
+        db, ontology_id, state.id) == {"status": "sentinel_not_found"}
+
+
 def _seed_object(db, ontology_id="runtime-hardening", *, suffix=""):
     if db.query(OntologyProject).filter_by(id=ontology_id).first() is None:
         db.add(OntologyProject(
@@ -89,12 +401,22 @@ def _seed_object(db, ontology_id="runtime-hardening", *, suffix=""):
     object_type = ObjectType(
         id=f"ot-order{suffix}", ontology_id=ontology_id,
         name=f"Order{suffix}", display_name=f"Order{suffix}",
-        primary_key="id", properties=[],
+        primary_key="id", properties=[
+            {"id": "id", "name": "id", "type": "string", "required": True},
+            {"id": "active", "name": "active", "type": "boolean"},
+            {"id": "count", "name": "count", "type": "number"},
+            {"id": "status", "name": "status", "type": "string"},
+        ],
     )
     instance = ObjectInstance(
         id=f"order-1{suffix}", ontology_id=ontology_id,
         object_type_id=object_type.id,
-        properties={"active": True, "count": 0, "status": "new"},
+        properties={
+            "id": f"order-1{suffix}",
+            "active": True,
+            "count": 0,
+            "status": "new",
+        },
     )
     db.add_all([object_type, instance])
     db.commit()
@@ -107,6 +429,32 @@ def _body(action, instance, parameters=None, **extra):
         target_instance_id=instance.id if instance is not None else None,
         parameters=parameters or {}, dry_run=False, **extra,
     )
+
+
+def _freeze_runtime_release(db, ontology_id: str) -> str:
+    """Publish the current Formal rows as the immutable runtime fixture."""
+    project = db.query(OntologyProject).filter_by(id=ontology_id).one()
+    release_id = f"{ontology_id}-release-v1"
+    snapshot = _snapshot_formal(db, ontology_id)
+    release = OntologyVersion(
+        id=release_id,
+        ontology_id=ontology_id,
+        version_number=project.version,
+        node_kind="release",
+        lifecycle_status="released",
+        revision=0,
+        snapshot_formal=snapshot,
+        snapshot_hash=snapshot_hash(snapshot),
+        published_at=datetime.now(timezone.utc),
+        created_by="runtime-tests",
+    )
+    db.add(release)
+    project.current_release_id = release_id
+    for instance in db.query(ObjectInstance).filter_by(
+            ontology_id=ontology_id).all():
+        instance.ontology_release_id = release_id
+    db.commit()
+    return release_id
 
 
 def _update_rule(property_name: str, *, source="constant", value="\"done\""):
@@ -124,6 +472,48 @@ def _update_rule(property_name: str, *, source="constant", value="\"done\""):
 def _resolve_public_outbound(_host, port, **_kwargs):
     """Keep webhook unit tests offline while preserving the SSRF guard."""
     return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port))]
+
+
+def test_webhook_preview_is_network_isolated_and_defers_dns(monkeypatch):
+    def unexpected_network(*_args, **_kwargs):
+        raise AssertionError("Webhook preview must not perform DNS or HTTP")
+
+    monkeypatch.setattr(
+        outbound_security.socket, "getaddrinfo", unexpected_network)
+    monkeypatch.setattr(requests.Session, "request", unexpected_network)
+
+    preview = preview_webhook(
+        {
+            "url": "https://partner.example/hooks/trial",
+            "method": "POST",
+            "bodyTemplate": '{"id": "{{params.request_id}}"}',
+        },
+        params={"request_id": "trial-1"},
+        object_props={},
+    )
+
+    assert preview == {
+        "url": "https://partner.example/hooks/trial",
+        "method": "POST",
+        "hasBody": True,
+        "targetValidation": "syntax_only_dns_deferred",
+    }
+
+
+def test_webhook_preview_rejects_literal_private_target_without_dns(
+        monkeypatch):
+    monkeypatch.setattr(
+        outbound_security.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: pytest.fail("literal IP must not use DNS"),
+    )
+
+    with pytest.raises(WebhookDispatchError, match="受保护的内网地址"):
+        preview_webhook(
+            {"url": "http://127.0.0.1/internal", "method": "POST"},
+            params={},
+            object_props={},
+        )
 
 
 def test_pending_actions_include_real_business_context(db):
@@ -147,15 +537,33 @@ def test_pending_actions_include_real_business_context(db):
         actor_id="runtime-tests",
         ontology_version="v1.0.0",
     )
-    db.add(log)
+    recovering = ActionExecutionLog(
+        id="approval-dashboard-recovering",
+        ontology_id=ontology_id,
+        action_id="refresh-indicators",
+        action_name="刷新治理指标",
+        object_type_id=object_type.id,
+        object_instance_id=instance.id,
+        parameters={"scope": "all"},
+        status="executing",
+        dry_run=False,
+        actor_id="runtime-tests",
+        decided_by="admin",
+        decided_at=datetime.now(timezone.utc),
+        ontology_version="v1.0.0",
+    )
+    db.add_all([log, recovering])
     db.commit()
 
     response = list_pending_actions(ontology_id, db=db, _=None)
 
-    assert len(response["data"]) == 1
-    assert response["data"][0]["objectTypeName"] == "月度运营报告"
-    assert response["data"][0]["objectInstanceLabel"] == "月度运营报告 · 2026-07"
-    assert response["data"][0]["triggerSource"] == "manual"
+    assert {item["id"] for item in response["data"]} == {
+        log.id, recovering.id,
+    }
+    for item in response["data"]:
+        assert item["objectTypeName"] == "月度运营报告"
+        assert item["objectInstanceLabel"] == "月度运营报告 · 2026-07"
+        assert item["triggerSource"] == "manual"
 
 
 def test_action_parameter_contract_applies_defaults_and_rejects_bad_input(db):
@@ -205,6 +613,295 @@ def test_action_parameter_contract_applies_defaults_and_rejects_bad_input(db):
     assert any("未声明参数" in item for item in unknown["validationErrors"])
     assert out_of_range["status"] == "failed"
     assert any("不得大于" in item for item in out_of_range["validationErrors"])
+
+
+def test_static_action_gate_checks_action_and_rule_validation_function_types():
+    object_types = [{
+        "id": "ot-static", "name": "Static", "displayName": "Static",
+        "properties": [{"id": "id", "name": "id", "type": "string"}],
+    }]
+    functions = [
+        {
+            "id": "fn-valid", "name": "valid",
+            "functionType": "action_validation",
+        },
+        {
+            "id": "fn-object", "name": "object",
+            "functionType": "object",
+        },
+    ]
+    base = {
+        "id": "action-static", "name": "static",
+        "displayName": "Static action", "objectTypeId": "ot-static",
+        "parameters": [],
+        "rules": [{
+            "id": "notify", "type": "notification",
+            "name": "notify", "enabled": True, "order": 1,
+            "config": {
+                "channel": "internal", "recipientSource": "constant",
+                "recipient": "ops", "messageTemplate": "ready",
+            },
+        }],
+    }
+    invalid = {
+        **base,
+        "validationFunctionId": "fn-object",
+        "rules": [{
+            "id": "validate", "type": "validation",
+            "name": "validate", "enabled": True, "order": 0,
+            "config": {"functionId": "fn-object"},
+        }, *base["rules"]],
+    }
+
+    errors = validate_action_definition(
+        invalid, object_types, [], functions)
+    assert sum("action_validation" in error for error in errors) == 2
+
+    valid = {**base, "validationFunctionId": "fn-valid"}
+    assert validate_action_definition(
+        valid, object_types, [], functions) == []
+
+
+def test_action_validation_object_set_is_pinned_to_current_release(db):
+    ontology_id = "action-validation-release-scope"
+    release_id = "release-current"
+    project = OntologyProject(
+        id=ontology_id, name="Release scope", domain="test",
+        created_by="runtime-tests", status="published",
+        version="v2", current_release_id=release_id,
+    )
+    release = OntologyVersion(
+        id=release_id, ontology_id=ontology_id,
+        version_number="v2", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [{
+                "id": "ot-release-scoped",
+                "name": "ReleaseScoped",
+                "displayName": "Release scoped",
+                "primaryKey": "id",
+                "properties": [{
+                    "id": "id", "name": "id", "type": "string",
+                    "required": True,
+                }],
+            }],
+            "linkTypes": [],
+            "functions": [{
+                "id": "validate-current-only",
+                "name": "validate_current_only",
+                "displayName": "Validate current only",
+                "functionType": "action_validation",
+                "language": "expression",
+                "targetObjectTypeId": "ot-release-scoped",
+                "parameters": [],
+                "returnType": "object",
+                "body": (
+                    "{'valid': len(objects) == 1, "
+                    "'errors': ['release leak']}"),
+                "enabled": True,
+            }],
+            "actions": [{
+                "id": "release-scoped-action",
+                "name": "release_scoped_action",
+                "displayName": "Release scoped action",
+                "objectTypeId": "ot-release-scoped",
+                "parameters": [],
+                "validationFunctionId": "validate-current-only",
+                "rules": [{
+                    "id": "notify", "type": "notification",
+                    "name": "notify", "enabled": True, "order": 0,
+                    "config": {
+                        "channel": "internal",
+                        "recipientSource": "constant",
+                        "recipient": "ops",
+                        "messageTemplate": "current release only",
+                    },
+                }],
+            }],
+            "sentinels": [], "mappings": [], "linkMappings": [],
+        },
+        created_by="runtime-tests",
+    )
+    object_type = ObjectType(
+        id="ot-release-scoped", ontology_id=ontology_id,
+        name="ReleaseScoped", display_name="Release scoped",
+        primary_key="id", properties=[
+            {"id": "id", "name": "id", "type": "string",
+             "required": True},
+        ],
+    )
+    current = ObjectInstance(
+        id="current-instance", ontology_id=ontology_id,
+        ontology_release_id=release_id,
+        object_type_id=object_type.id, properties={"id": "current"},
+    )
+    stale = ObjectInstance(
+        id="stale-instance", ontology_id=ontology_id,
+        ontology_release_id="release-old",
+        object_type_id=object_type.id, properties={"id": "stale"},
+    )
+    validator = OntologyFunction(
+        id="validate-current-only", ontology_id=ontology_id,
+        name="validate_current_only", display_name="Validate current only",
+        function_type="action_validation", language="expression",
+        target_object_type_id=object_type.id,
+        return_type="object",
+        body="{'valid': len(objects) == 1, 'errors': ['release leak']}",
+        enabled=True,
+    )
+    action = ActionType(
+        id="release-scoped-action", ontology_id=ontology_id,
+        name="release_scoped_action", display_name="Release scoped action",
+        object_type_id=object_type.id, parameters=[],
+        validation_function_id=validator.id,
+        rules=[{
+            "id": "notify", "type": "notification", "name": "notify",
+            "enabled": True, "order": 0,
+            "config": {
+                "channel": "internal", "recipientSource": "constant",
+                "recipient": "ops", "messageTemplate": "current release only",
+            },
+        }],
+    )
+    db.add_all([
+        project, release, object_type, current, stale, validator, action])
+    db.commit()
+
+    # Mutable Formal definitions now represent an unpublished draft. The
+    # expected release must continue to use the frozen validator above.
+    validator.body = "{'valid': False, 'errors': ['draft validator leaked']}"
+    db.commit()
+    result = execute_action(
+        db, ontology_id, _body(action, current),
+        expected_release_id=release_id)
+
+    assert result["status"] == "success", result
+    notification = db.query(Notification).filter_by(
+        ontology_id=ontology_id).one()
+    assert notification.ontology_release_id == release_id
+    assert notification.action_id == action.id
+    assert notification.action_log_id == result["id"]
+    assert notification.sentinel_id is None
+
+
+def test_approved_sentinel_action_recovers_release_from_durable_lineage(db):
+    ontology_id = "approved-sentinel-release-definition"
+    release_id = "approved-sentinel-r1"
+    action_id = "approved-sentinel-action"
+    object_type_id = "approved-sentinel-object"
+    project = OntologyProject(
+        id=ontology_id, name=ontology_id, domain="test",
+        created_by="runtime-tests", status="published", version="v1",
+        current_release_id=release_id,
+    )
+    released_rule = {
+        "id": "released-status", "type": "update_property",
+        "name": "released status", "enabled": True, "order": 0,
+        "config": {
+            "targetProperty": "status",
+            "valueSource": "constant",
+            "value": "\"released\"",
+        },
+    }
+    release = OntologyVersion(
+        id=release_id, ontology_id=ontology_id,
+        version_number="v1", node_kind="release",
+        lifecycle_status="released", revision=0,
+        snapshot_formal={
+            "objectTypes": [{
+                "id": object_type_id, "name": "ApprovedObject",
+                "displayName": "Approved object", "primaryKey": "id",
+                "properties": [
+                    {
+                        "id": "id", "name": "id", "type": "string",
+                        "required": True,
+                    },
+                    {
+                        "id": "status", "name": "status",
+                        "type": "string",
+                    },
+                ],
+            }],
+            "linkTypes": [], "functions": [],
+            "actions": [{
+                "id": action_id, "name": "approved_sentinel_action",
+                "displayName": "Approved sentinel action",
+                "objectTypeId": object_type_id,
+                "parameters": [], "rules": [released_rule],
+                "requiresApproval": True,
+            }],
+            "sentinels": [], "mappings": [], "linkMappings": [],
+        },
+        created_by="runtime-tests",
+    )
+    object_type = ObjectType(
+        id=object_type_id, ontology_id=ontology_id,
+        name="ApprovedObject", display_name="Approved object",
+        primary_key="id", properties=[
+            {
+                "id": "id", "name": "id", "type": "string",
+                "required": True,
+            },
+            {"id": "status", "name": "status", "type": "string"},
+        ],
+    )
+    instance = ObjectInstance(
+        id="approved-target", ontology_id=ontology_id,
+        ontology_release_id=release_id,
+        object_type_id=object_type_id,
+        properties={"id": "approved-target", "status": "new"},
+    )
+    # Live Formal rows may already carry the next draft.  The approved run must
+    # still use the ActionType frozen in R1.
+    live_action = ActionType(
+        id=action_id, ontology_id=ontology_id,
+        name="approved_sentinel_action",
+        display_name="Approved sentinel action",
+        object_type_id=object_type_id, parameters=[],
+        rules=[{
+            **released_rule,
+            "config": {
+                **released_rule["config"],
+                "value": "\"draft\"",
+            },
+        }],
+        requires_approval=True,
+    )
+    state = SentinelMatchState(
+        id="approved-sentinel-state", ontology_id=ontology_id,
+        sentinel_id="approved-sentinel",
+        match_key="approved-target",
+        match_detail={}, runtime_status="pending_enter",
+    )
+    proposal = ActionExecutionLog(
+        id="approved-sentinel-proposal",
+        ontology_id=ontology_id, action_id=action_id,
+        action_name="Approved sentinel action",
+        object_type_id=object_type_id,
+        object_instance_id=instance.id,
+        parameters={}, status="pending", dry_run=False,
+        sentinel_match_state_id=state.id,
+        ontology_version="v1", ontology_release_id=release_id,
+    )
+    db.add_all([
+        project, release, object_type, instance, live_action, state, proposal,
+    ])
+    db.commit()
+
+    result = execute_action(
+        db, ontology_id,
+        _body(
+            live_action, instance,
+            sentinel_match_state_id=state.id,
+            idempotency_key="approval-execution:approved-sentinel-proposal",
+        ),
+        skip_approval=True,
+    )
+
+    db.refresh(instance)
+    assert result["status"] == "success", result
+    assert result["ontologyReleaseId"] == release_id
+    assert instance.properties["status"] == "released"
 
 
 def test_production_action_blocks_during_incomplete_mapping_projection(
@@ -349,7 +1046,9 @@ def test_webhook_dispatches_rendered_json_with_retry_identity(db, monkeypatch):
     }
     assert observed["headers"]["X-Partner-Token"] == "test-token"
     assert observed["headers"]["Content-Type"] == "application/json; charset=utf-8"
-    assert observed["headers"]["Idempotency-Key"].endswith(":manual-request-42")
+    delivery_key = observed["headers"]["Idempotency-Key"]
+    assert ":manual-request-42:" in delivery_key
+    assert len(delivery_key.rsplit(":", 1)[-1]) == 20
     assert result["effects"][0]["type"] == "webhook"
     assert result["effects"][0]["statusCode"] == 202
 
@@ -395,6 +1094,16 @@ def test_webhook_failure_rolls_back_preceding_local_rules(db, monkeypatch):
     assert len(calls) == 2
     assert calls[0][2] == calls[1][2]
     assert instance.properties["status"] == "new"
+    webhook_effect = next(
+        effect for effect in result["effects"]
+        if effect["type"] == "webhook")
+    assert webhook_effect["status"] == "delivery_uncertain"
+    assert webhook_effect["externalDeliveryMayHaveOccurred"] is True
+    assert webhook_effect["localTransactionCommitted"] is False
+    assert webhook_effect["idempotencyKey"] == calls[0][2]
+    assert webhook_effect["attempts"] == 2
+    assert webhook_effect["url"] == "https://partner.example/hooks/fail"
+    assert "按 idempotencyKey 对账" in webhook_effect["description"]
 
 
 def test_internal_notification_has_a_real_queryable_sink(db):
@@ -420,6 +1129,1135 @@ def test_internal_notification_has_a_real_queryable_sink(db):
     assert result["status"] == "success"
     assert notification.status == "delivered"
     assert notification.body == "object=new"
+
+
+def test_empty_action_and_incomplete_notification_fail_closed(db):
+    ontology_id = "action-no-fake-success"
+    object_type, instance = _seed_object(db, ontology_id)
+    empty = ActionType(
+        id="empty-action", ontology_id=ontology_id,
+        name="empty", display_name="Empty",
+        object_type_id=object_type.id, parameters=[], rules=[],
+    )
+    incomplete_notification = ActionType(
+        id="incomplete-notification", ontology_id=ontology_id,
+        name="incomplete_notification", display_name="Incomplete notification",
+        object_type_id=object_type.id, parameters=[], rules=[{
+            "id": "internal", "type": "notification", "name": "internal",
+            "enabled": True, "order": 0,
+            "config": {
+                "channel": "internal",
+                "recipientSource": "constant",
+                "recipient": "ops",
+                "messageTemplate": "missing={{object.not_declared}}",
+            },
+        }],
+    )
+    db.add_all([empty, incomplete_notification])
+    db.commit()
+
+    no_effect = execute_action(db, ontology_id, _body(empty, instance))
+    missing_value = execute_action(
+        db, ontology_id, _body(incomplete_notification, instance))
+
+    assert no_effect["status"] == "failed"
+    assert any("可执行副作用规则" in item
+               for item in no_effect["validationErrors"])
+    assert missing_value["status"] == "failed"
+    assert "模板" in missing_value["errorMessage"]
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 0
+
+
+def test_action_expressions_and_templates_reject_missing_runtime_references(db):
+    ontology_id = "action-missing-runtime-reference"
+    object_type, instance = _seed_object(db, ontology_id)
+    invalid_validation = ActionType(
+        id="invalid-validation-reference", ontology_id=ontology_id,
+        name="invalid_validation_reference",
+        display_name="Invalid validation reference",
+        object_type_id=object_type.id, parameters=[], rules=[
+            {
+                "id": "validate", "type": "validation", "name": "validate",
+                "enabled": True, "order": 0,
+                "config": {
+                    "condition": "object.not_declared != 'blocked'",
+                },
+            },
+            _update_rule("status"),
+        ],
+    )
+    invalid_expression = ActionType(
+        id="invalid-value-reference", ontology_id=ontology_id,
+        name="invalid_value_reference",
+        display_name="Invalid value reference",
+        object_type_id=object_type.id, parameters=[], rules=[
+            _update_rule(
+                "count", source="expression",
+                value="object.not_declared or 1"),
+        ],
+    )
+    invalid_template = ActionType(
+        id="invalid-template-reference", ontology_id=ontology_id,
+        name="invalid_template_reference",
+        display_name="Invalid template reference",
+        object_type_id=object_type.id, parameters=[], rules=[{
+            "id": "notify", "type": "notification", "name": "notify",
+            "enabled": True, "order": 0,
+            "config": {
+                "channel": "internal", "recipientSource": "constant",
+                "recipient": "ops",
+                "messageTemplate": "bad={{unknown.value}}",
+            },
+        }],
+    )
+    db.add_all([
+        invalid_validation, invalid_expression, invalid_template])
+    db.commit()
+
+    validation_result = execute_action(
+        db, ontology_id, _body(invalid_validation, instance))
+    expression_result = execute_action(
+        db, ontology_id, _body(invalid_expression, instance))
+    template_result = execute_action(
+        db, ontology_id, _body(invalid_template, instance))
+
+    assert validation_result["status"] == "failed"
+    assert any("不存在的属性" in error
+               for error in validation_result["validationErrors"])
+    assert expression_result["status"] == "failed"
+    assert "不存在的属性" in expression_result["errorMessage"]
+    assert template_result["status"] == "failed"
+    assert "无法解析的占位符" in template_result["errorMessage"]
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 0
+
+
+def test_deleted_leave_target_snapshot_survives_hitl_but_cannot_mutate(db):
+    ontology_id = "approval-deleted-target-snapshot"
+    object_type, instance = _seed_object(db, ontology_id)
+    notify = ActionType(
+        id="notify-deleted-target", ontology_id=ontology_id,
+        name="notify_deleted_target", display_name="Notify deleted target",
+        object_type_id=object_type.id, parameters=[], requires_approval=True,
+        rules=[{
+            "id": "notify", "type": "notification", "name": "notify",
+            "enabled": True, "order": 0,
+            "config": {
+                "channel": "internal", "recipientSource": "constant",
+                "recipient": "ops",
+                "messageTemplate": (
+                    "deleted={{object.id}} status={{object.status}}"),
+            },
+        }],
+    )
+    mutate = ActionType(
+        id="mutate-deleted-target", ontology_id=ontology_id,
+        name="mutate_deleted_target", display_name="Mutate deleted target",
+        object_type_id=object_type.id, parameters=[],
+        rules=[_update_rule("status", value='"should-not-run"')],
+    )
+    linked_recipient = ActionType(
+        id="notify-deleted-target-via-link", ontology_id=ontology_id,
+        name="notify_deleted_target_via_link",
+        display_name="Notify deleted target via link",
+        object_type_id=object_type.id, parameters=[], rules=[{
+            "id": "notify", "type": "notification", "name": "notify",
+            "enabled": True, "order": 0,
+            "config": {
+                "channel": "internal", "recipientSource": "link",
+                "linkTypeId": "recipient-link",
+                "recipientProperty": "email",
+                "messageTemplate": "deleted={{object.id}}",
+            },
+        }],
+    )
+    db.add_all([notify, mutate, linked_recipient])
+    db.commit()
+    release_id = _freeze_runtime_release(db, ontology_id)
+    target_snapshot = {
+        "id": instance.id,
+        "objectTypeId": object_type.id,
+        "properties": dict(instance.properties),
+        "computed": {},
+    }
+
+    pending = execute_action(
+        db, ontology_id,
+        _body(
+            notify, instance,
+            idempotency_key="deleted-target-proposal",
+            target_snapshot=target_snapshot,
+            expected_release_id=release_id,
+        ),
+    )
+    assert pending["status"] == "pending"
+    assert pending["targetSnapshot"] == target_snapshot
+
+    db.delete(instance)
+    db.commit()
+    pending_rows = list_pending_actions(ontology_id, db=db, _=None)["data"]
+    assert pending_rows[0]["objectInstanceLabel"] == "Order · order-1"
+
+    admin = SimpleNamespace(id="admin", username="admin", role="admin")
+    approved = decide_pending_action(
+        ontology_id, pending["id"],
+        DecisionRequest(decision="approved", release_id=release_id), db, admin,
+    )["data"]
+    assert approved["pendingLog"]["status"] == "approved"
+    assert approved["executionLog"]["status"] == "success"
+    assert approved["executionLog"]["targetSnapshot"] == target_snapshot
+    notification = db.query(Notification).filter_by(
+        ontology_id=ontology_id).one()
+    assert notification.body == "deleted=order-1 status=new"
+    assert notification.related_object_id == "order-1"
+
+    rejected_mutation = execute_action(
+        db, ontology_id,
+        _body(
+            mutate, SimpleNamespace(id="order-1"),
+            target_snapshot=target_snapshot,
+            expected_release_id=release_id,
+        ),
+    )
+    assert rejected_mutation["status"] == "failed"
+    assert any("目标实例不存在" in error
+               for error in rejected_mutation["validationErrors"])
+    rejected_link_lookup = execute_action(
+        db, ontology_id,
+        _body(
+            linked_recipient, SimpleNamespace(id="order-1"),
+            target_snapshot=target_snapshot,
+            expected_release_id=release_id,
+        ),
+    )
+    assert rejected_link_lookup["status"] == "failed"
+    assert any("目标实例不存在" in error
+               for error in rejected_link_lookup["validationErrors"])
+
+
+def test_delete_link_condition_is_applied_per_target(db):
+    ontology_id = "conditional-delete-link"
+    order_type, order = _seed_object(db, ontology_id)
+    target_type = ObjectType(
+        id="ot-recipient", ontology_id=ontology_id,
+        name="Recipient", display_name="Recipient",
+        primary_key="id", properties=[
+            {"id": "id", "name": "id", "type": "string", "required": True},
+            {"id": "status", "name": "status", "type": "string"},
+        ],
+    )
+    active = ObjectInstance(
+        id="recipient-active", ontology_id=ontology_id,
+        object_type_id=target_type.id,
+        properties={"id": "recipient-active", "status": "active"},
+    )
+    inactive = ObjectInstance(
+        id="recipient-inactive", ontology_id=ontology_id,
+        object_type_id=target_type.id,
+        properties={"id": "recipient-inactive", "status": "inactive"},
+    )
+    link_type = LinkType(
+        id="lt-recipient", ontology_id=ontology_id,
+        name="recipient", display_name="Recipient",
+        source_object_type_id=order_type.id,
+        target_object_type_id=target_type.id,
+        cardinality="many-to-many", properties=[],
+    )
+    active_link = LinkInstance(
+        id="link-active", ontology_id=ontology_id,
+        link_type_id=link_type.id,
+        source_object_id=order.id, target_object_id=active.id,
+        properties={},
+    )
+    inactive_link = LinkInstance(
+        id="link-inactive", ontology_id=ontology_id,
+        link_type_id=link_type.id,
+        source_object_id=order.id, target_object_id=inactive.id,
+        properties={},
+    )
+    action = ActionType(
+        id="delete-inactive-recipient", ontology_id=ontology_id,
+        name="delete_inactive", display_name="Delete inactive",
+        object_type_id=order_type.id, parameters=[], rules=[{
+            "id": "delete", "type": "delete_link", "name": "delete",
+            "enabled": True, "order": 0,
+            "config": {
+                "linkTypeId": link_type.id,
+                "condition": "target.status == 'inactive'",
+            },
+        }],
+    )
+    db.add_all([
+        target_type, active, inactive, link_type,
+        active_link, inactive_link, action,
+    ])
+    db.commit()
+
+    result = execute_action(db, ontology_id, _body(action, order))
+
+    assert result["status"] == "success"
+    assert result["effects"][0]["matchedLinkIds"] == [inactive_link.id]
+    assert db.query(LinkInstance).filter_by(
+        ontology_id=ontology_id, id=active_link.id).count() == 1
+    assert db.query(LinkInstance).filter_by(
+        ontology_id=ontology_id, id=inactive_link.id).count() == 0
+
+
+def test_action_mutations_are_blocked_by_formal_contract(db):
+    ontology_id = "action-formal-contract"
+    object_type, instance = _seed_object(db, ontology_id)
+    invalid_update = ActionType(
+        id="invalid-update", ontology_id=ontology_id,
+        name="invalid_update", display_name="Invalid update",
+        object_type_id=object_type.id, parameters=[],
+        rules=[_update_rule("count", value='"not-a-number"')],
+    )
+    db.add(invalid_update)
+    db.commit()
+
+    result = execute_action(
+        db, ontology_id, _body(invalid_update, instance))
+    db.refresh(instance)
+
+    assert result["status"] == "failed"
+    assert "对象实例契约校验失败" in result["errorMessage"]
+    assert instance.properties["count"] == 0
+
+
+def test_derived_failure_rolls_back_action_object_notification_and_facts(
+        db, monkeypatch):
+    ontology_id = "action-derived-rollback"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {
+            "id": "risk-score", "name": "risk_score", "type": "number",
+            "source": "computed", "functionId": "missing-derived-function",
+        },
+    ]
+    action = ActionType(
+        id="derived-failure-action", ontology_id=ontology_id,
+        name="derived_failure_action",
+        display_name="Derived failure action",
+        object_type_id=object_type.id, parameters=[], rules=[
+            _update_rule("status", value='"updated"'),
+            {
+                "id": "notify", "type": "notification",
+                "name": "notify", "enabled": True, "order": 1,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "constant",
+                    "recipient": "ops",
+                    "messageTemplate": "updated={{object.status}}",
+                },
+            },
+            {
+                "id": "webhook", "type": "webhook",
+                "name": "webhook", "enabled": True, "order": 2,
+                "config": {
+                    "url": "https://example.com/derived-failure",
+                    "method": "POST",
+                    "bodyTemplate": (
+                        '{"risk": {{object.risk_score}}}'),
+                },
+            },
+        ],
+    )
+    db.add(action)
+    db.commit()
+    webhook_calls = []
+
+    def unexpected_webhook(*args, **kwargs):
+        webhook_calls.append((args, kwargs))
+        raise AssertionError(
+            "派生重算失败后不得尝试不可回滚的外部投递")
+
+    monkeypatch.setattr(requests.Session, "request", unexpected_webhook)
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+    db.refresh(instance)
+
+    assert result["status"] == "failed"
+    assert "派生" in result["errorMessage"]
+    assert instance.properties["status"] == "new"
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 0
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id).count() == 0
+    assert webhook_calls == []
+
+
+def test_deferred_webhook_uses_recomputed_authoritative_target_view(
+        db, monkeypatch):
+    ontology_id = "action-derived-webhook-view"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {
+            "id": "amount", "name": "amount", "type": "number",
+            "required": True,
+        },
+        {
+            "id": "risk", "name": "risk", "type": "number",
+            "source": "computed", "functionId": "derive-risk",
+        },
+    ]
+    instance.properties = {
+        **dict(instance.properties or {}),
+        "amount": 5,
+    }
+    instance.computed = {"risk": 10}
+    derive_risk = OntologyFunction(
+        id="derive-risk", ontology_id=ontology_id,
+        name="derive_risk", display_name="Derive risk",
+        function_type="object", language="expression",
+        target_object_type_id=object_type.id,
+        parameters=[], return_type="number",
+        body='object["amount"] * 2', enabled=True,
+    )
+    action = ActionType(
+        id="update-and-send-risk", ontology_id=ontology_id,
+        name="update_and_send_risk",
+        display_name="Update and send risk",
+        object_type_id=object_type.id, parameters=[], rules=[
+            _update_rule("amount", value="9"),
+            {
+                "id": "send-risk", "type": "webhook",
+                "name": "Send risk", "enabled": True, "order": 1,
+                "config": {
+                    "url": "https://example.com/risk",
+                    "method": "POST",
+                    "bodyTemplate": (
+                        '{"amount": {{object.amount}}, '
+                        '"risk": {{object.risk}}}'),
+                },
+            },
+        ],
+    )
+    db.add_all([derive_risk, action])
+    db.commit()
+    payloads: list[dict] = []
+
+    def capture_request(session, method, url, **kwargs):
+        payloads.append(json.loads(kwargs["data"]))
+        response = requests.Response()
+        response.status_code = 204
+        response.url = url
+        response._content = b""
+        return response
+
+    monkeypatch.setattr(
+        outbound_security.socket, "getaddrinfo", _resolve_public_outbound
+    )
+    monkeypatch.setattr(requests.Session, "request", capture_request)
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    assert result["status"] == "success", result
+    assert instance.properties["amount"] == 9
+    assert instance.computed["risk"] == 18
+    assert payloads == [{"amount": 9, "risk": 18}]
+
+
+def test_ordered_local_rule_uses_recomputed_authoritative_target_view(db):
+    ontology_id = "action-derived-local-view"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {
+            "id": "amount", "name": "amount", "type": "number",
+            "required": True,
+        },
+        {
+            "id": "risk", "name": "risk", "type": "number",
+            "source": "computed", "functionId": "derive-local-risk",
+        },
+    ]
+    instance.properties = {
+        **dict(instance.properties or {}),
+        "amount": 5,
+    }
+    instance.computed = {"risk": 10}
+    derive_risk = OntologyFunction(
+        id="derive-local-risk", ontology_id=ontology_id,
+        name="derive_local_risk", display_name="Derive local risk",
+        function_type="object", language="expression",
+        target_object_type_id=object_type.id,
+        parameters=[], return_type="number",
+        body='object["amount"] * 2', enabled=True,
+    )
+    action = ActionType(
+        id="update-and-notify-risk", ontology_id=ontology_id,
+        name="update_and_notify_risk",
+        display_name="Update and notify risk",
+        object_type_id=object_type.id, parameters=[], rules=[
+            _update_rule("amount", value="9"),
+            {
+                "id": "notify-risk", "type": "notification",
+                "name": "Notify risk", "enabled": True, "order": 1,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "constant",
+                    "recipient": "ops",
+                    "messageTemplate": (
+                        "amount={{object.amount}} risk={{object.risk}}"),
+                },
+            },
+        ],
+    )
+    db.add_all([derive_risk, action])
+    db.commit()
+
+    dry_result = execute_action(
+        db,
+        ontology_id,
+        SimpleNamespace(
+            action_id=action.id,
+            target_instance_id=instance.id,
+            parameters={},
+            dry_run=True,
+        ),
+    )
+
+    db.refresh(instance)
+    assert dry_result["status"] == "success", dry_result
+    assert dry_result["effects"][1]["message"] == "amount=9 risk=18"
+    assert instance.properties["amount"] == 5
+    assert instance.computed["risk"] == 10
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 0
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    notification = db.query(Notification).filter_by(
+        ontology_id=ontology_id).one()
+    assert result["status"] == "success", result
+    assert result["effects"][1]["message"] == "amount=9 risk=18"
+    assert instance.properties["amount"] == 9
+    assert instance.computed["risk"] == 18
+    assert notification.body == "amount=9 risk=18"
+    facts = db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id,
+        instance_id=instance.id,
+    ).all()
+    assert {fact.property_name for fact in facts} == {"amount", "risk"}
+    amount_fact = next(
+        fact for fact in facts if fact.property_name == "amount")
+    risk_fact = next(
+        fact for fact in facts if fact.property_name == "risk")
+    assert risk_fact.derived_from == [amount_fact.id]
+
+
+def test_each_ordered_update_has_matching_derived_facts_and_live_view(db):
+    ontology_id = "action-derived-multi-update"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {"id": "amount", "name": "amount", "type": "number"},
+        {
+            "id": "risk", "name": "risk", "type": "number",
+            "source": "computed", "functionId": "derive-multi-risk",
+        },
+    ]
+    instance.properties = {
+        **dict(instance.properties or {}),
+        "amount": 5,
+    }
+    instance.computed = {"risk": 10}
+    derive_risk = OntologyFunction(
+        id="derive-multi-risk", ontology_id=ontology_id,
+        name="derive_multi_risk", display_name="Derive multi risk",
+        function_type="object", language="expression",
+        target_object_type_id=object_type.id,
+        parameters=[], return_type="number",
+        body='object["amount"] * 2', enabled=True,
+    )
+    first_update = _update_rule("amount", value="9")
+    first_update["order"] = 0
+    second_update = _update_rule("amount", value="5")
+    second_update["id"] = "restore-amount"
+    second_update["order"] = 2
+    action = ActionType(
+        id="update-consume-restore", ontology_id=ontology_id,
+        name="update_consume_restore",
+        display_name="Update, consume, restore",
+        object_type_id=object_type.id, parameters=[], rules=[
+            first_update,
+            {
+                "id": "notify-intermediate-risk",
+                "type": "notification",
+                "name": "Notify intermediate risk",
+                "enabled": True,
+                "order": 1,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "constant",
+                    "recipient": "ops",
+                    "messageTemplate": "intermediate={{object.risk}}",
+                },
+            },
+            second_update,
+        ],
+    )
+    db.add_all([derive_risk, action])
+    db.commit()
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    assert result["status"] == "success", result
+    assert instance.properties["amount"] == 5
+    assert instance.computed["risk"] == 10
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).one().body == "intermediate=18"
+
+    facts = db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id,
+        instance_id=instance.id,
+    ).all()
+    amount_facts = sorted(
+        (fact for fact in facts if fact.property_name == "amount"),
+        key=lambda fact: fact.seq,
+    )
+    risk_facts = sorted(
+        (fact for fact in facts if fact.property_name == "risk"),
+        key=lambda fact: fact.seq,
+    )
+    assert [fact.value["v"] for fact in amount_facts] == [9, 5]
+    assert [fact.value["v"] for fact in risk_facts] == [18, 10]
+    assert risk_facts[0].derived_from == [amount_facts[0].id]
+    assert risk_facts[1].derived_from == [amount_facts[1].id]
+    assert amount_facts[1].supersedes_id == amount_facts[0].id
+    assert risk_facts[1].supersedes_id == risk_facts[0].id
+    assert {
+        fact.caused_by for fact in [*amount_facts, *risk_facts]
+    } == {result["id"]}
+
+
+def test_nondeterministic_derived_value_is_evaluated_once_per_mutation(db):
+    ontology_id = "action-derived-single-evaluation"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {
+            "id": "evaluated-at", "name": "evaluated_at", "type": "string",
+            "source": "computed", "functionId": "derive-current-time",
+        },
+    ]
+    instance.computed = {"evaluated_at": "old"}
+    current_time = OntologyFunction(
+        id="derive-current-time", ontology_id=ontology_id,
+        name="derive_current_time", display_name="Derive current time",
+        function_type="object", language="expression",
+        target_object_type_id=object_type.id,
+        parameters=[], return_type="string",
+        body="now()", enabled=True,
+    )
+    action = ActionType(
+        id="update-and-report-time", ontology_id=ontology_id,
+        name="update_and_report_time",
+        display_name="Update and report time",
+        object_type_id=object_type.id, parameters=[], rules=[
+            _update_rule("status", value='"updated"'),
+            {
+                "id": "notify-time", "type": "notification",
+                "name": "Notify time", "enabled": True, "order": 1,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "constant",
+                    "recipient": "ops",
+                    "messageTemplate": "at={{object.evaluated_at}}",
+                },
+            },
+        ],
+    )
+    db.add_all([current_time, action])
+    db.commit()
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    derived_fact = db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id,
+        instance_id=instance.id,
+        property_name="evaluated_at",
+    ).one()
+    value = derived_fact.value["v"]
+    assert result["status"] == "success", result
+    assert instance.computed["evaluated_at"] == value
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).one().body == f"at={value}"
+
+
+def test_failed_action_marks_rolled_back_notification_in_audit(db):
+    ontology_id = "action-rollback-audit"
+    object_type, instance = _seed_object(db, ontology_id)
+    invalid_count_update = _update_rule(
+        "count", value='"not-a-number"')
+    invalid_count_update["id"] = "invalid-count"
+    invalid_count_update["order"] = 2
+    action = ActionType(
+        id="notify-then-fail", ontology_id=ontology_id,
+        name="notify_then_fail", display_name="Notify then fail",
+        object_type_id=object_type.id, parameters=[], rules=[
+            _update_rule("status", value='"updated"'),
+            {
+                "id": "notify", "type": "notification",
+                "name": "Notify", "enabled": True, "order": 1,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "constant",
+                    "recipient": "ops",
+                    "messageTemplate": "status={{object.status}}",
+                },
+            },
+            invalid_count_update,
+        ],
+    )
+    db.add(action)
+    db.commit()
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    notification_effect = next(
+        effect for effect in result["effects"]
+        if effect["type"] == "notification")
+    assert result["status"] == "failed"
+    assert instance.properties["status"] == "new"
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 0
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id).count() == 0
+    assert notification_effect["status"] == "rolled_back"
+    assert notification_effect["rolledBack"] is True
+    assert "未投递" in notification_effect["description"]
+
+
+def test_dry_run_accumulates_multiple_updates_like_real_execution(db):
+    ontology_id = "action-dry-run-cumulative"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {"id": "amount", "name": "amount", "type": "number"},
+        {"id": "factor", "name": "factor", "type": "number"},
+        {
+            "id": "risk", "name": "risk", "type": "number",
+            "source": "computed", "functionId": "derive-cumulative-risk",
+        },
+    ]
+    instance.properties = {
+        **dict(instance.properties or {}),
+        "amount": 5,
+        "factor": 2,
+    }
+    instance.computed = {"risk": 10}
+    function = OntologyFunction(
+        id="derive-cumulative-risk", ontology_id=ontology_id,
+        name="derive_cumulative_risk", display_name="Cumulative risk",
+        function_type="object", language="expression",
+        target_object_type_id=object_type.id,
+        parameters=[], return_type="number",
+        body='object["amount"] * object["factor"]', enabled=True,
+    )
+    update_amount = _update_rule("amount", value="9")
+    update_amount["order"] = 0
+    update_factor = _update_rule("factor", value="3")
+    update_factor["order"] = 1
+    action = ActionType(
+        id="cumulative-update", ontology_id=ontology_id,
+        name="cumulative_update", display_name="Cumulative update",
+        object_type_id=object_type.id, parameters=[], rules=[
+            update_amount,
+            update_factor,
+            {
+                "id": "notify-cumulative", "type": "notification",
+                "name": "Notify cumulative", "enabled": True, "order": 2,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "constant",
+                    "recipient": "ops",
+                    "messageTemplate": (
+                        "amount={{object.amount}} "
+                        "factor={{object.factor}} risk={{object.risk}}"),
+                },
+            },
+        ],
+    )
+    db.add_all([function, action])
+    db.commit()
+
+    dry = execute_action(
+        db,
+        ontology_id,
+        SimpleNamespace(
+            action_id=action.id,
+            target_instance_id=instance.id,
+            parameters={},
+            dry_run=True,
+        ),
+    )
+
+    db.refresh(instance)
+    assert dry["status"] == "success", dry
+    assert dry["effects"][1]["oldValue"] == 2
+    assert dry["effects"][2]["message"] == (
+        "amount=9 factor=3 risk=27")
+    assert instance.properties["amount"] == 5
+    assert instance.properties["factor"] == 2
+    assert instance.computed["risk"] == 10
+
+    real = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    assert real["status"] == "success", real
+    assert real["effects"][2]["message"] == dry["effects"][2]["message"]
+    assert instance.properties["amount"] == 9
+    assert instance.properties["factor"] == 3
+    assert instance.computed["risk"] == 27
+
+
+def test_noop_update_does_not_invalidate_projection_or_emit_facts(db):
+    ontology_id = "action-noop-projection"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {
+            "id": "manual-score", "name": "manual_score",
+            "type": "number", "source": "computed",
+        },
+    ]
+    instance.computed = {"manual_score": 99}
+    action = ActionType(
+        id="noop-update", ontology_id=ontology_id,
+        name="noop_update", display_name="No-op update",
+        object_type_id=object_type.id, parameters=[],
+        rules=[_update_rule("status", value='"new"')],
+    )
+    db.add(action)
+    db.commit()
+
+    result = execute_action(db, ontology_id, _body(action, instance))
+
+    db.refresh(instance)
+    assert result["status"] == "success", result
+    assert result["effects"][0]["changed"] is False
+    assert result["effects"][0]["inputFactIds"] == []
+    assert result["effects"][0]["derivedFactCount"] == 0
+    assert instance.computed == {"manual_score": 99}
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id).count() == 0
+
+
+def test_computed_properties_cannot_be_written_as_stored_action_values(db):
+    ontology_id = "action-computed-write"
+    object_type, instance = _seed_object(db, ontology_id)
+    object_type.properties = [
+        *object_type.properties,
+        {
+            "id": "risk", "name": "risk", "type": "number",
+            "source": "computed", "functionId": "derive-write-risk",
+        },
+    ]
+    instance.computed = {"risk": 10}
+    function = OntologyFunction(
+        id="derive-write-risk", ontology_id=ontology_id,
+        name="derive_write_risk", display_name="Derive write risk",
+        function_type="object", language="expression",
+        target_object_type_id=object_type.id,
+        parameters=[], return_type="number",
+        body='object["count"] * 2', enabled=True,
+    )
+    action = ActionType(
+        id="write-computed", ontology_id=ontology_id,
+        name="write_computed", display_name="Write computed",
+        object_type_id=object_type.id, parameters=[],
+        rules=[_update_rule("risk", value="999")],
+    )
+    db.add_all([function, action])
+    db.commit()
+
+    runtime = execute_action(db, ontology_id, _body(action, instance))
+    static_errors = validate_action_definition(
+        action, [object_type], [], [function])
+
+    db.refresh(instance)
+    assert runtime["status"] == "failed"
+    assert "不能写入派生属性" in runtime["errorMessage"]
+    assert any("不能写入派生属性" in error for error in static_errors)
+    assert "risk" not in instance.properties
+    assert instance.computed == {"risk": 10}
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id).count() == 0
+
+
+def test_dry_run_tracks_virtual_objects_links_and_link_recipient(db):
+    ontology_id = "action-dry-run-virtual-link"
+    source_type, source = _seed_object(db, ontology_id)
+    recipient_type = ObjectType(
+        id="ot-virtual-recipient", ontology_id=ontology_id,
+        name="VirtualRecipient", display_name="Virtual recipient",
+        primary_key="id", properties=[
+            {"id": "id", "name": "id", "type": "string",
+             "required": True},
+            {"id": "email", "name": "email", "type": "string",
+             "required": True},
+        ],
+    )
+    link_type = LinkType(
+        id="lt-virtual-recipient", ontology_id=ontology_id,
+        name="virtual_recipient", display_name="Virtual recipient",
+        source_object_type_id=source_type.id,
+        target_object_type_id=recipient_type.id,
+        cardinality="many-to-one", properties=[],
+    )
+    action = ActionType(
+        id="create-link-notify", ontology_id=ontology_id,
+        name="create_link_notify", display_name="Create link and notify",
+        object_type_id=source_type.id, parameters=[], rules=[
+            {
+                "id": "create-recipient", "type": "create_object",
+                "name": "Create recipient", "enabled": True, "order": 0,
+                "config": {
+                    "targetObjectTypeId": recipient_type.id,
+                    "propertyMappings": [{
+                        "targetProperty": "email",
+                        "sourceType": "constant",
+                        "sourceValue": '"ops@example.com"',
+                    }],
+                },
+            },
+            {
+                "id": "link-recipient", "type": "create_link",
+                "name": "Link recipient", "enabled": True, "order": 1,
+                "config": {
+                    "linkTypeId": link_type.id,
+                    "targetSource": "created_object",
+                    "targetValue": recipient_type.id,
+                },
+            },
+            {
+                "id": "notify-recipient", "type": "notification",
+                "name": "Notify recipient", "enabled": True, "order": 2,
+                "config": {
+                    "channel": "internal",
+                    "recipientSource": "link",
+                    "linkTypeId": link_type.id,
+                    "recipientProperty": "email",
+                    "messageTemplate": "virtual link resolved",
+                },
+            },
+        ],
+    )
+    db.add_all([recipient_type, link_type, action])
+    db.commit()
+
+    dry = execute_action(
+        db,
+        ontology_id,
+        SimpleNamespace(
+            action_id=action.id,
+            target_instance_id=source.id,
+            parameters={},
+            dry_run=True,
+        ),
+    )
+
+    assert dry["status"] == "success", dry
+    assert dry["effects"][2]["recipient"] == "ops@example.com"
+    assert dry["effects"][2]["status"] == "preview"
+    assert db.query(ObjectInstance).filter_by(
+        ontology_id=ontology_id,
+        object_type_id=recipient_type.id,
+    ).count() == 0
+    assert db.query(LinkInstance).filter_by(
+        ontology_id=ontology_id,
+        link_type_id=link_type.id,
+    ).count() == 0
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 0
+
+    real = execute_action(db, ontology_id, _body(action, source))
+
+    assert real["status"] == "success", real
+    assert real["effects"][2]["recipient"] == "ops@example.com"
+    assert db.query(ObjectInstance).filter_by(
+        ontology_id=ontology_id,
+        object_type_id=recipient_type.id,
+    ).count() == 1
+    assert db.query(LinkInstance).filter_by(
+        ontology_id=ontology_id,
+        link_type_id=link_type.id,
+    ).count() == 1
+    assert db.query(Notification).filter_by(
+        ontology_id=ontology_id).count() == 1
+
+
+def test_each_webhook_rule_has_a_distinct_stable_delivery_key(db, monkeypatch):
+    ontology_id = "webhook-rule-identity"
+    object_type, instance = _seed_object(db, ontology_id)
+    action = ActionType(
+        id="multi-webhook", ontology_id=ontology_id,
+        name="multi_webhook", display_name="Multi webhook",
+        object_type_id=object_type.id, parameters=[], rules=[
+            {
+                "id": "partner-a", "type": "webhook", "name": "Partner A",
+                "enabled": True, "order": 0,
+                "config": {"url": "https://a.example/hooks", "method": "POST"},
+            },
+            {
+                "id": "partner-b", "type": "webhook", "name": "Partner B",
+                "enabled": True, "order": 1,
+                "config": {"url": "https://b.example/hooks", "method": "POST"},
+            },
+        ],
+    )
+    db.add(action)
+    db.commit()
+    delivery_keys: list[str] = []
+
+    def fake_request(session, method, url, **kwargs):
+        delivery_keys.append(kwargs["headers"]["Idempotency-Key"])
+        response = requests.Response()
+        response.status_code = 204
+        response.url = url
+        response._content = b""
+        return response
+
+    monkeypatch.setattr(
+        outbound_security.socket, "getaddrinfo", _resolve_public_outbound
+    )
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    result = execute_action(
+        db, ontology_id,
+        _body(action, instance, idempotency_key="logical-step"),
+    )
+
+    assert result["status"] == "success"
+    assert len(delivery_keys) == 2
+    assert delivery_keys[0] != delivery_keys[1]
+    assert all(":logical-step:" in key for key in delivery_keys)
+
+
+def test_approval_execution_has_stable_key_and_failure_is_not_approved(db):
+    ontology_id = "approval-execution-identity"
+    object_type, instance = _seed_object(db, ontology_id)
+    succeeds = ActionType(
+        id="approval-succeeds", ontology_id=ontology_id,
+        name="approval_succeeds", display_name="Approval succeeds",
+        object_type_id=object_type.id, parameters=[],
+        rules=[_update_rule("status", value='"approved"')],
+        requires_approval=True,
+    )
+    no_effect = ActionType(
+        id="approval-no-effect", ontology_id=ontology_id,
+        name="approval_no_effect", display_name="Approval no effect",
+        object_type_id=object_type.id, parameters=[], rules=[],
+        requires_approval=True,
+    )
+    db.add_all([succeeds, no_effect])
+    db.commit()
+    release_id = _freeze_runtime_release(db, ontology_id)
+    admin = SimpleNamespace(id="admin", username="admin", role="admin")
+
+    pending_success = execute_action(
+        db, ontology_id,
+        _body(
+            succeeds, instance,
+            idempotency_key="proposal-success",
+            expected_release_id=release_id,
+        ),
+    )
+    approved = decide_pending_action(
+        ontology_id, pending_success["id"],
+        DecisionRequest(decision="approved", release_id=release_id), db, admin,
+    )["data"]
+    assert approved["pendingLog"]["status"] == "approved"
+    assert approved["executionLog"]["status"] == "success"
+    assert approved["executionLog"]["idempotencyKey"] == (
+        f"approval-execution:{pending_success['id']}")
+
+    pending_failure = execute_action(
+        db, ontology_id,
+        _body(
+            no_effect, instance,
+            idempotency_key="proposal-failure",
+            expected_release_id=release_id,
+        ),
+    )
+    failed = decide_pending_action(
+        ontology_id, pending_failure["id"],
+        DecisionRequest(decision="approved", release_id=release_id), db, admin,
+    )["data"]
+    assert failed["pendingLog"]["status"] == "failed"
+    assert failed["executionLog"]["status"] == "failed"
+    assert failed["pendingLog"]["errorMessage"]
+
+
+def test_failed_approved_action_cannot_rollback_human_decision_audit(db):
+    ontology_id = "approval-decision-isolation"
+    _object_type, instance = _seed_object(db, ontology_id)
+    action = ActionType(
+        id="approval-runtime-failure",
+        ontology_id=ontology_id,
+        name="approval_runtime_failure",
+        display_name="Approval runtime failure",
+        object_type_id=instance.object_type_id,
+        parameters=[],
+        # Static definition is valid, but the resolved string violates the
+        # target number property contract during real execution.  This reaches
+        # execute_action's rollback path that previously erased the decision.
+        rules=[_update_rule("count", value='"not-a-number"')],
+        requires_approval=True,
+    )
+    db.add(action)
+    db.commit()
+    release_id = _freeze_runtime_release(db, ontology_id)
+    admin = SimpleNamespace(id="audit-admin", username="audit-admin", role="admin")
+
+    pending = execute_action(
+        db,
+        ontology_id,
+        _body(
+            action, instance,
+            idempotency_key="decision-isolation-proposal",
+            expected_release_id=release_id,
+        ),
+    )
+    decided = decide_pending_action(
+        ontology_id,
+        pending["id"],
+        DecisionRequest(
+            decision="approved", reason="业务确认",
+            release_id=release_id,
+        ),
+        db,
+        admin,
+    )["data"]
+
+    proposal = db.query(ActionExecutionLog).filter_by(id=pending["id"]).one()
+    failed_execution = db.query(ActionExecutionLog).filter_by(
+        id=proposal.related_log_id).one()
+    decision_facts = db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id,
+        instance_id=proposal.id,
+        property_name="decision",
+        kind="decision",
+    ).all()
+    db.refresh(instance)
+
+    assert proposal.status == "failed"
+    assert proposal.decided_by == admin.id
+    assert proposal.decided_at is not None
+    assert proposal.decision_reason == "业务确认"
+    assert failed_execution.status == "failed"
+    assert decided["executionLog"]["id"] == failed_execution.id
+    assert decided["decisionFactId"] == decision_facts[0].id
+    assert len(decision_facts) == 1
+    assert instance.properties["count"] == 0
 
 
 def test_action_idempotency_replays_success_and_pending(db):
@@ -471,6 +2309,48 @@ def test_action_idempotency_replays_success_and_pending(db):
     assert pending_two["idempotentReplay"] is True
     assert db.query(ActionExecutionLog).filter_by(
         ontology_id=ontology_id, idempotency_key="idem-pending").count() == 1
+
+
+def test_idempotent_replay_precedes_mutable_business_preconditions(db):
+    ontology_id = "action-idempotency-precondition"
+    object_type, instance = _seed_object(db, ontology_id)
+    action = ActionType(
+        id="guarded-increment", ontology_id=ontology_id,
+        name="guarded_increment", display_name="Guarded increment",
+        object_type_id=object_type.id, parameters=[], rules=[
+            {
+                "id": "initial-count", "type": "validation",
+                "name": "Initial count", "enabled": True, "order": 0,
+                "config": {
+                    "condition": "object.count == 0",
+                    "errorMessage": "count already changed",
+                },
+            },
+            {
+                **_update_rule("count", value="1"),
+                "order": 1,
+            },
+        ],
+    )
+    db.add(action)
+    db.commit()
+    body = _body(
+        action,
+        instance,
+        idempotency_key="stable-precondition-key",
+    )
+
+    first = execute_action(db, ontology_id, body)
+    second = execute_action(db, ontology_id, body)
+
+    db.refresh(instance)
+    assert first["status"] == "success", first
+    assert second["status"] == "success", second
+    assert second["idempotentReplay"] is True
+    assert second["id"] == first["id"]
+    assert instance.properties["count"] == 1
+    assert db.query(ActionExecutionLog).filter_by(
+        ontology_id=ontology_id).count() == 1
 
 
 def test_sentinel_multi_action_retry_does_not_repeat_successful_step(db):

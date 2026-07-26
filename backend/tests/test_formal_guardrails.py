@@ -5,6 +5,12 @@
   3. 版本发布：快照包含正规模型（snapshot_formal），回滚可恢复被删的对象类型
 """
 import uuid
+from datetime import datetime, timezone
+
+from app.models.ontology import OntologyProject
+from app.models.ontology_version import OntologyVersion
+from app.ontologies.versions import router as version_router
+from app.ontologies.versions.evolution_service import snapshot_hash
 
 
 def _fo(ontology_id: str) -> str:
@@ -234,18 +240,32 @@ def test_delta_patch_save(client, auth_headers, ontology):
     assert r.json()["data"]["instances"] == []
 
 
-def test_version_publish_snapshots_formal_and_rollback(client, auth_headers, ontology):
+def test_version_publish_snapshots_formal_and_rollback(
+        client, auth_headers, ontology, db, admin_user, monkeypatch):
     oid = ontology["id"]
 
-    # 建模 + 发布 v1
+    # 建模并冻结一个不可变的历史发布快照。
     r = client.put(f"{_fo(oid)}/full", headers=auth_headers,
                    json=_minimal_payload({"flight_no": "CA1234"}))
     assert r.status_code == 200
-    r = client.post(f"/api/v2/ontologies/{oid}/versions", headers=auth_headers,
-                    json={"version_label": "基线"})
-    assert r.status_code == 201
-    version_id = r.json()["data"]["id"]
-    formal_diff = r.json()["data"]["change_summary"]["formal"]["total"]
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    root_id = project.current_release_id
+    snap = version_router._snapshot_formal(db, oid)
+    version = OntologyVersion(
+        id="formal-release-v1", ontology_id=oid, version_number="v1",
+        version_label="基线", parent_version_id=root_id,
+        node_kind="release", lifecycle_status="released", revision=0,
+        snapshot_formal=snap, snapshot_hash=snapshot_hash(snap),
+        published_at=datetime.now(timezone.utc), created_by=admin_user.id,
+    )
+    db.add(version)
+    db.flush()
+    version.base_release_id = version.id
+    db.commit()
+    version_id = version.id
+    root = db.query(OntologyVersion).filter_by(id=root_id).one()
+    formal_diff = version_router._diff_formal(
+        root.snapshot_formal, snap)["total"]
     assert formal_diff["added"] >= 1  # 对象类型入快照
 
     # 版本详情包含正规模型快照
@@ -254,19 +274,42 @@ def test_version_publish_snapshots_formal_and_rollback(client, auth_headers, ont
     assert snap and len(snap["objectTypes"]) == 1
     assert snap["objectTypes"][0]["name"] == "Flight"
 
-    # 发布态已封版；先由管理员撤回，再模拟误操作后的空模型保存。
-    r = client.post(f"/api/v2/ontologies/{oid}/unpublish", headers=auth_headers)
-    assert r.status_code == 200
+    # 模拟另一个当前发布投影已经删除类型。
     empty = {"objectTypes": [], "linkTypes": [], "actions": [], "functions": [],
              "instances": [], "linkInstances": []}
     r = client.put(f"{_fo(oid)}/full", headers=auth_headers, json=empty)
     assert r.status_code == 200
     r = client.get(f"{_fo(oid)}/full", headers=auth_headers)
     assert r.json()["data"]["objectTypes"] == []
+    empty_snapshot = version_router._snapshot_formal(db, oid)
+    current = OntologyVersion(
+        id="formal-release-v2", ontology_id=oid, version_number="v2",
+        version_label="空发布", parent_version_id=version_id,
+        node_kind="release", lifecycle_status="released", revision=0,
+        snapshot_formal=empty_snapshot,
+        snapshot_hash=snapshot_hash(empty_snapshot),
+        published_at=datetime.now(timezone.utc), created_by=admin_user.id,
+    )
+    db.add(current)
+    db.flush()
+    current.base_release_id = current.id
+    project.current_release_id = current.id
+    project.version = current.version_number
+    project.status = "published"
+    db.commit()
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections",
+        lambda *_args, **_kwargs: {
+            "ready": True, "neo4j": "ok", "chroma": "ok",
+            "chroma_count": 0,
+        },
+    )
 
-    # 回滚到 v1 → 对象类型恢复
+    # 回滚以一个全新 activation id 恢复 v1 定义。
     r = client.post(f"/api/v2/ontologies/{oid}/versions/{version_id}/rollback", headers=auth_headers)
     assert r.status_code == 200
+    assert r.json()["data"]["id"] not in {version_id, current.id}
+    assert r.json()["data"]["rolled_back_to_id"] == version_id
     assert r.json()["data"]["formal_restored"]["objectTypes"] == 1
     r = client.get(f"{_fo(oid)}/full", headers=auth_headers)
     types = r.json()["data"]["objectTypes"]

@@ -121,7 +121,7 @@ def _seed_portable_structure(client, auth_headers, ontology_id: str) -> dict:
                 "targetObjectTypeId": "ot-order",
                 "parameters": [],
                 "returnType": "number",
-                "body": "properties.total || 0",
+                "body": "0",
                 "enabled": True,
             },
             {

@@ -132,7 +132,7 @@ def modeled_ontology(client, auth_headers, ontology):
     }
     r = client.put(f"{_fo(oid)}/full", headers=auth_headers, json=body)
     assert r.status_code == 200, r.text
-    # 新建本体无需发布即可直接用于查询、预演和真实动作；执行日志绑定当前版本。
+    # 查询可使用草稿投影；真实动作测试会先把该结构冻结到当前 release。
     return ontology
 
 
@@ -378,13 +378,35 @@ def _grant_actions(client, auth_headers, oid, ids):
     assert r.status_code == 200
 
 
+def _freeze_modeled_current_release(db, ontology_id: str) -> str:
+    """Turn the fixture's live draft projection into its immutable v0 baseline."""
+    from app.models.ontology import OntologyProject
+    from app.models.ontology_formal import ObjectInstance
+    from app.models.ontology_version import OntologyVersion
+    from app.ontologies.versions.evolution_service import snapshot_hash
+    from app.ontologies.versions.router import _snapshot_formal
+
+    project = db.query(OntologyProject).filter_by(id=ontology_id).one()
+    release = db.query(OntologyVersion).filter_by(
+        id=project.current_release_id).one()
+    snapshot = _snapshot_formal(db, ontology_id)
+    release.snapshot_formal = snapshot
+    release.snapshot_hash = snapshot_hash(snapshot)
+    for instance in db.query(ObjectInstance).filter_by(
+            ontology_id=ontology_id).all():
+        instance.ontology_release_id = release.id
+    db.commit()
+    return str(release.id)
+
+
 def test_propose_is_dry_run_only(client, auth_headers, modeled_ontology, db):
     oid = modeled_ontology["id"]
     _grant_actions(client, auth_headers, oid, ["act-1"])
+    release_id = _freeze_modeled_current_release(db, oid)
 
     from app.ontologies.agent_runtime.boundary import build_scope, ToolError
     from app.ontologies.agent_runtime.toolkit import ToolRunner
-    _, _, scope = build_scope(db, oid)
+    _, _, scope = build_scope(db, oid, release_id=release_id)
     runner = ToolRunner(db, scope)
 
     r = runner.run("propose_action", {"action": "mark_paid",
@@ -408,6 +430,7 @@ def test_propose_is_dry_run_only(client, auth_headers, modeled_ontology, db):
 def test_execute_proposal_respects_boundary_and_hitl(client, auth_headers, modeled_ontology, db):
     oid = modeled_ontology["id"]
     _grant_actions(client, auth_headers, oid, ["act-1", "act-2"])
+    release_id = _freeze_modeled_current_release(db, oid)
 
     from app.models.ontology import OntologyProject
     project = db.query(OntologyProject).filter_by(id=oid).one()
@@ -416,7 +439,8 @@ def test_execute_proposal_respects_boundary_and_hitl(client, auth_headers, model
     # 普通动作：真实执行 → 属性变更 + 事实追加
     r = client.post(f"{_fo(oid)}/agent/execute-proposal", headers=auth_headers,
                     json={"actionId": "act-1", "targetInstanceId": "inst-o1",
-                          "parameters": {"note": "confirmed"}})
+                          "parameters": {"note": "confirmed"},
+                          "releaseId": release_id})
     assert r.status_code == 200
     log = r.json()["data"]
     assert log["status"] == "success"
@@ -429,17 +453,19 @@ def test_execute_proposal_respects_boundary_and_hitl(client, auth_headers, model
 
     # 需审批动作 → pending，进 HITL 队列，属性不变
     r = client.post(f"{_fo(oid)}/agent/execute-proposal", headers=auth_headers,
-                    json={"actionId": "act-2", "targetInstanceId": "inst-o1"})
+                    json={"actionId": "act-2", "targetInstanceId": "inst-o1",
+                          "releaseId": release_id})
     pending = r.json()["data"]
     assert pending["status"] == "pending"
     db.refresh(inst)
     assert inst.properties["status"] == "paid"     # 没被取消
 
-    # 本体无需发布，审批通过后按提案记录的当前版本继续执行。
+    # 审批通过后仍按提案记录的同一发布节点继续执行。
     approved = client.post(
         f"{_fo(oid)}/action-logs/{pending['id']}/decide",
         headers=auth_headers,
-        json={"decision": "approved", "reason": "版本一致，确认执行"},
+        json={"decision": "approved", "reason": "版本一致，确认执行",
+              "releaseId": release_id},
     )
     assert approved.status_code == 200, approved.text
     decision = approved.json()["data"]
@@ -449,19 +475,22 @@ def test_execute_proposal_respects_boundary_and_hitl(client, auth_headers, model
     # 边界外动作 → 403
     _grant_actions(client, auth_headers, oid, ["act-1"])
     r = client.post(f"{_fo(oid)}/agent/execute-proposal", headers=auth_headers,
-                    json={"actionId": "act-2", "targetInstanceId": "inst-o1"})
+                    json={"actionId": "act-2", "targetInstanceId": "inst-o1",
+                          "releaseId": release_id})
     assert r.status_code == 403
 
 
-def test_direct_action_execution_uses_current_version_without_publish(
+def test_direct_action_execution_uses_current_release(
         client, auth_headers, modeled_ontology, db):
-    """通用动作入口与智能助手一致：新建本体当前版本可直接执行。"""
+    """通用动作入口只执行当前不可变发布快照中的动作。"""
     oid = modeled_ontology["id"]
+    release_id = _freeze_modeled_current_release(db, oid)
 
     response = client.post(
         f"{_fo(oid)}/run-action",
         headers=auth_headers,
-        json={"actionId": "act-1", "targetInstanceId": "inst-o1", "dryRun": False},
+        json={"actionId": "act-1", "targetInstanceId": "inst-o1",
+              "dryRun": False, "releaseId": release_id},
     )
 
     assert response.status_code == 200, response.text

@@ -17,9 +17,92 @@ CRITICAL_SCHEMA_TABLES = (
     "minio_config",
     "minio_operation_audits",
     "v2_dataset_versions",
+    "fo_action_logs",
+    "sentinel_cdc_outbox",
 )
 
 _DEVELOPMENT_COLUMN_REPAIRS = (
+    (
+        "fo_action_logs",
+        "target_snapshot",
+        "ALTER TABLE fo_action_logs ADD COLUMN target_snapshot JSON",
+    ),
+    (
+        "fo_action_logs",
+        "idempotency_key",
+        "ALTER TABLE fo_action_logs ADD COLUMN idempotency_key VARCHAR(255)",
+    ),
+    (
+        "fo_action_logs",
+        "sentinel_match_state_id",
+        "ALTER TABLE fo_action_logs ADD COLUMN sentinel_match_state_id VARCHAR",
+    ),
+    (
+        "fo_action_logs",
+        "ontology_version",
+        "ALTER TABLE fo_action_logs ADD COLUMN ontology_version VARCHAR(20)",
+    ),
+    (
+        "fo_action_logs",
+        "ontology_release_id",
+        "ALTER TABLE fo_action_logs ADD COLUMN ontology_release_id VARCHAR",
+    ),
+    (
+        "sentinel_cdc_outbox",
+        "mapping_ids",
+        "ALTER TABLE sentinel_cdc_outbox "
+        "ADD COLUMN mapping_ids JSON NOT NULL DEFAULT '[]'",
+    ),
+    (
+        "sentinel_cdc_outbox",
+        "ontology_release_id",
+        "ALTER TABLE sentinel_cdc_outbox "
+        "ADD COLUMN ontology_release_id VARCHAR",
+    ),
+    (
+        "sentinel_cdc_outbox",
+        "event_kind",
+        "ALTER TABLE sentinel_cdc_outbox "
+        "ADD COLUMN event_kind VARCHAR(32) NOT NULL DEFAULT 'object_change'",
+    ),
+    (
+        "sentinel_cdc_outbox",
+        "sentinel_id",
+        "ALTER TABLE sentinel_cdc_outbox ADD COLUMN sentinel_id VARCHAR",
+    ),
+    (
+        "sentinel_cdc_outbox",
+        "dedupe_key",
+        "ALTER TABLE sentinel_cdc_outbox ADD COLUMN dedupe_key VARCHAR(255)",
+    ),
+    (
+        "sentinels",
+        "enable_generation",
+        "ALTER TABLE sentinels "
+        "ADD COLUMN enable_generation INTEGER NOT NULL DEFAULT 0",
+    ),
+    (
+        "ontology_trial_objects",
+        "computed",
+        "ALTER TABLE ontology_trial_objects "
+        "ADD COLUMN computed JSON NOT NULL DEFAULT '{}'",
+    ),
+    (
+        "sentinel_notifications",
+        "ontology_release_id",
+        "ALTER TABLE sentinel_notifications "
+        "ADD COLUMN ontology_release_id VARCHAR",
+    ),
+    (
+        "sentinel_notifications",
+        "sentinel_id",
+        "ALTER TABLE sentinel_notifications ADD COLUMN sentinel_id VARCHAR",
+    ),
+    (
+        "sentinel_notifications",
+        "action_log_id",
+        "ALTER TABLE sentinel_notifications ADD COLUMN action_log_id VARCHAR",
+    ),
     (
         "v2_steward_conversations",
         "context_summary",

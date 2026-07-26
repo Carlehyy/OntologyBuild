@@ -219,6 +219,13 @@
 .dmc-eye { color: #168f83 !important; }
 .dmc-eye[data-active="true"] { color: #fff !important; background: #168f83 !important; }
 .dmc-add { color: #6673c7 !important; background: #eef0fa !important; }
+.dmc-asset-policy { margin: -2px 7px 7px 48px; padding: 7px 8px; border: 1px solid #e3ddf4; border-radius: 8px; display: flex; align-items: flex-start; gap: 7px; color: #6d5aaa; background: #f8f6fd; cursor: pointer; }
+.dmc-asset-policy input { margin: 2px 0 0; accent-color: #715fb3; }
+.dmc-asset-policy > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dmc-asset-policy b { font-size: 10px; }
+.dmc-asset-policy small { color: #877aa9; font-size: 9px; line-height: 1.35; }
+.dmc-asset-policy:has(input:not(:checked)) { border-color: #edcfaa; color: #9b6727; background: #fff9f0; }
+.dmc-asset-policy:has(input:not(:checked)) small { color: #9e7b53; }
 .dmc-asset-columns { margin: 0 3px 7px 48px; padding: 4px 0; border-left: 1px solid #dce5e7; }
 .dmc-asset-columns > span { min-height: 26px; padding: 3px 6px; display: grid; grid-template-columns: 11px minmax(0,1fr) auto; align-items: center; gap: 5px; color: #77848f; font-size: 10px; }
 .dmc-asset-columns > span:hover { background: #f3f7f6; }

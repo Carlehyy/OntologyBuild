@@ -352,8 +352,15 @@ export async function instanceAsOf(
 
 // ============ HITL 审批（治理闸门） ============
 /** GET /pending-actions — 等待人工审批的动作执行 */
-export async function listPendingActions(id: string): Promise<ActionExecutionLog[]> {
-  return apiClientV2.get<ActionExecutionLog[]>(`${base(id)}/pending-actions`);
+export async function listPendingActions(
+  id: string,
+  options?: { currentReleaseOnly?: boolean; releaseId?: string | null },
+): Promise<ActionExecutionLog[]> {
+  const query = new URLSearchParams();
+  if (options?.releaseId) query.set('release_id', options.releaseId);
+  if (options?.currentReleaseOnly) query.set('current_release_only', 'true');
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  return apiClientV2.get<ActionExecutionLog[]>(`${base(id)}/pending-actions${suffix}`);
 }
 
 export interface DecideResult {
@@ -368,8 +375,13 @@ export async function decidePendingAction(
   logId: string,
   decision: 'approved' | 'rejected',
   reason?: string,
+  releaseId?: string | null,
 ): Promise<DecideResult | ActionExecutionLog> {
-  return apiClientV2.post(`${base(id)}/action-logs/${logId}/decide`, { decision, reason });
+  return apiClientV2.post(`${base(id)}/action-logs/${logId}/decide`, {
+    decision,
+    reason,
+    releaseId: releaseId || undefined,
+  });
 }
 
 // ============ 自治等级（哨兵×动作 · 人工批准率） ============

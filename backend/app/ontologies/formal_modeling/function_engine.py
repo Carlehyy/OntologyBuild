@@ -7,9 +7,10 @@
 三类：object / object_set / action_validation
 """
 from __future__ import annotations
+import ast
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -21,46 +22,270 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _build_scope(fn: OntologyFunction, db: Session, ontology_id: str,
-                 obj_props: Optional[dict], params: dict) -> dict[str, Any]:
+ScopeObjectLoader = Callable[[], Iterable[dict]]
+
+
+def _contract_field(item: Any, *names: str, default=None):
+    if isinstance(item, dict):
+        for name in names:
+            if name in item:
+                return item[name]
+        return default
+    for name in names:
+        if hasattr(item, name):
+            return getattr(item, name)
+    return default
+
+
+def _expression_contract_references(
+    body: str,
+) -> tuple[set[str], bool, bool]:
+    """Extract statically knowable object refs and forbidden live scopes."""
+    try:
+        tree = ast.parse(body or "", mode="eval")
+    except SyntaxError:
+        # The canonical expression compiler reports syntax errors elsewhere.
+        return set(), False, False
+
+    object_properties: set[str] = set()
+    uses_params = False
+    uses_objects = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            uses_params = uses_params or node.id == "params"
+            uses_objects = uses_objects or node.id == "objects"
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "object"
+            and node.attr != "get"
+        ):
+            object_properties.add(node.attr)
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "object"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            object_properties.add(node.slice.value)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "object"
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            object_properties.add(node.args[0].value)
+    return object_properties, uses_params, uses_objects
+
+
+def derived_function_contract_issues(
+    fn: Any,
+    *,
+    object_type_id: str,
+    computed_property_names: set[str],
+    stored_property_names: set[str] | None = None,
+    expected_return_type: str | None = None,
+) -> list[tuple[str, str]]:
+    """Validate the server-executable contract for one computed property.
+
+    Computed projection evaluation has exactly one input: the instance's
+    stored ``object`` properties.  There is no parameter binding, collection
+    scope, or computed-property DAG/topological scheduler.  Rejecting those
+    unsupported dependencies at save/publish and runtime prevents a model that
+    looks valid but inevitably fails when real data arrives.
+    """
+    issues: list[tuple[str, str]] = []
+    function_type = str(
+        _contract_field(fn, "functionType", "function_type", default="")
+        or ""
+    ).strip().lower()
+    if function_type != "object":
+        issues.append((
+            "invalid_derived_function_type",
+            f"函数类型必须为 object，实际为 "
+            f"{function_type or '(空)'}",
+        ))
+
+    target_type_id = str(
+        _contract_field(
+            fn, "targetObjectTypeId", "target_object_type_id", default="")
+        or ""
+    )
+    if target_type_id and target_type_id != str(object_type_id):
+        issues.append((
+            "derived_function_target_mismatch",
+            f"函数绑定了其他对象类型: {target_type_id}",
+        ))
+
+    parameters = _contract_field(fn, "parameters", default=[]) or []
+    if parameters:
+        issues.append((
+            "derived_function_parameters_unsupported",
+            "派生函数不能声明参数；运行时没有计算属性参数绑定机制",
+        ))
+
+    language = str(
+        _contract_field(fn, "language", default="expression")
+        or "expression"
+    ).strip().lower()
+    if language == "expression":
+        body = str(_contract_field(fn, "body", default="") or "")
+        object_refs, uses_params, uses_objects = (
+            _expression_contract_references(body)
+        )
+        if uses_params:
+            issues.append((
+                "derived_function_params_scope_unsupported",
+                "派生函数表达式不能引用 params；运行时不会注入动作参数",
+            ))
+        if uses_objects:
+            issues.append((
+                "derived_function_objects_scope_unsupported",
+                "派生函数表达式不能引用 objects；派生属性只接受单对象输入",
+            ))
+        computed_dependencies = sorted(
+            object_refs & set(computed_property_names))
+        if computed_dependencies:
+            issues.append((
+                "derived_function_dependency_unsupported",
+                "派生函数不能依赖其他派生属性（尚无 DAG 调度）: "
+                + ", ".join(computed_dependencies),
+            ))
+        if stored_property_names is not None:
+            unknown_properties = sorted(
+                object_refs
+                - set(computed_property_names)
+                - set(stored_property_names)
+            )
+            if unknown_properties:
+                issues.append((
+                    "derived_function_unknown_property",
+                    "派生函数引用了对象类型未声明的存储属性: "
+                    + ", ".join(unknown_properties),
+                ))
+
+    def normalize_type(raw: Any) -> str:
+        value = str(raw or "").strip().lower()
+        return {
+            "integer": "number",
+            "int": "number",
+            "float": "number",
+            "double": "number",
+            "bool": "boolean",
+            "dict": "object",
+            "json": "object",
+            "list": "array",
+            "timestamp": "datetime",
+        }.get(value, value)
+
+    declared_return_type = normalize_type(
+        _contract_field(fn, "returnType", "return_type", default=""))
+    expected = normalize_type(expected_return_type)
+    compatible_return_types = (
+        {"reference", "string", "number"}
+        if expected == "reference" else {expected}
+    )
+    if (
+        declared_return_type
+        and expected
+        and declared_return_type not in compatible_return_types
+    ):
+        issues.append((
+            "derived_function_return_type_mismatch",
+            f"函数声明返回类型 {declared_return_type} 与派生属性类型 "
+            f"{expected} 不一致",
+        ))
+    return issues
+
+
+def function_uses_object_collection(fn: Any) -> bool:
+    """Whether this function contract receives a populated ``objects`` scope."""
+    return str(
+        getattr(fn, "function_type", None) or "object"
+    ).strip().lower() in ("object_set", "action_validation")
+
+
+def build_function_scope(
+    fn: Any,
+    *,
+    obj_props: Optional[dict] = None,
+    params: Optional[dict] = None,
+    object_loader: ScopeObjectLoader | None = None,
+) -> dict[str, Any]:
+    """Build the expression scope shared by production and isolated trials.
+
+    Object functions intentionally receive an empty ``objects`` collection.
+    Only ``object_set`` and ``action_validation`` functions may load the
+    release/type-scoped collection supplied by the caller.
+    """
+    objects: list[dict] = []
+    if function_uses_object_collection(fn) and object_loader is not None:
+        objects = [
+            dict(item or {})
+            for item in object_loader()
+        ]
     scope: dict[str, Any] = {
         "object": obj_props or {},
         "params": params or {},
+        "objects": objects,
     }
-    # object_set / action_validation 注入对象集合
-    if fn.function_type in ("object_set", "action_validation"):
-        q = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id)
-        if fn.target_object_type_id:
-            q = q.filter(ObjectInstance.object_type_id == fn.target_object_type_id)
-        scope["objects"] = [i.properties or {} for i in q.all()]
-    else:
-        scope["objects"] = []
     return scope
 
 
-def execute_function(fn: OntologyFunction, db: Session, ontology_id: str,
-                     obj_props: Optional[dict] = None,
-                     params: Optional[dict] = None) -> dict[str, Any]:
-    """执行单个函数，返回 {success, result, error, durationMs, timestamp}（camelCase）"""
-    start = time.time()
-    ts = _now_iso()
-    params = params or {}
+def evaluate_function_contract(
+    fn: Any,
+    *,
+    obj_props: Optional[dict] = None,
+    params: Optional[dict] = None,
+    object_loader: ScopeObjectLoader | None = None,
+) -> dict[str, Any]:
+    """Evaluate one function definition without coupling it to a database.
 
-    if not fn.enabled:
-        return {"success": False, "error": f'函数 "{fn.display_name}" 已禁用',
-                "durationMs": 0, "timestamp": ts}
+    Both the live executor and version-trial projection call this function, so
+    enabled/language checks, scope construction and action-validation result
+    normalization cannot drift between the two paths.
+    """
+    label = str(
+        getattr(fn, "display_name", None)
+        or getattr(fn, "name", None)
+        or getattr(fn, "id", None)
+        or "(未命名函数)"
+    )
+    if not bool(getattr(fn, "enabled", True)):
+        return {"success": False, "error": f'函数 "{label}" 已禁用'}
 
-    if fn.language == "typescript":
+    language = str(
+        getattr(fn, "language", None) or "expression"
+    ).strip().lower()
+    if language != "expression":
         # 后端不执行 TS，交给前端 functionEngine；这里给出明确契约
+        message = (
+            "TypeScript 函数在前端执行（请用图谱编辑页的函数测试器）；"
+            "后端仅支持 expression 语言。"
+            if language == "typescript"
+            else f"后端不支持函数语言: {language}"
+        )
         return {"success": False,
-                "error": "TypeScript 函数在前端执行（请用图谱编辑页的函数测试器）；后端仅支持 expression 语言。",
-                "durationMs": 0, "timestamp": ts, "clientSide": True}
+                "error": message,
+                "clientSide": language == "typescript"}
 
     try:
-        scope = _build_scope(fn, db, ontology_id, obj_props, params)
-        result = safe_eval(fn.body, scope)
+        scope = build_function_scope(
+            fn,
+            obj_props=obj_props,
+            params=params,
+            object_loader=object_loader,
+        )
+        result = safe_eval(str(getattr(fn, "body", None) or ""), scope)
 
-        if fn.function_type == "action_validation":
+        if str(
+            getattr(fn, "function_type", None) or "object"
+        ).strip().lower() == "action_validation":
             # 规范化为 ValidationResult
             if isinstance(result, bool):
                 result = {"valid": result, "errors": [] if result else ["校验失败"]}
@@ -70,25 +295,50 @@ def execute_function(fn: OntologyFunction, db: Session, ontology_id: str,
                     return {
                         "success": False,
                         "error": "action_validation 的 errors 必须是数组",
-                        "durationMs": int((time.time() - start) * 1000),
-                        "timestamp": ts,
                     }
             else:
                 return {
                     "success": False,
                     "error": "action_validation 必须返回 bool 或包含布尔 valid 的对象",
-                    "durationMs": int((time.time() - start) * 1000),
-                    "timestamp": ts,
                 }
 
-        return {"success": True, "result": result, "data": result,
-                "durationMs": int((time.time() - start) * 1000), "timestamp": ts}
+        return {"success": True, "result": result}
     except SafeEvalError as e:
-        return {"success": False, "error": str(e),
-                "durationMs": int((time.time() - start) * 1000), "timestamp": ts}
+        return {"success": False, "error": str(e)}
     except Exception as e:  # noqa: BLE001
-        return {"success": False, "error": str(e),
-                "durationMs": int((time.time() - start) * 1000), "timestamp": ts}
+        return {"success": False, "error": str(e)}
+
+
+def execute_function(fn: OntologyFunction, db: Session, ontology_id: str,
+                     obj_props: Optional[dict] = None,
+                     params: Optional[dict] = None,
+                     ontology_release_id: str | None = None) -> dict[str, Any]:
+    """执行单个函数，返回 {success, result, error, durationMs, timestamp}（camelCase）"""
+    start = time.time()
+    ts = _now_iso()
+
+    def load_scope_objects() -> list[dict]:
+        q = db.query(ObjectInstance).filter(
+            ObjectInstance.ontology_id == ontology_id)
+        if ontology_release_id is not None:
+            q = q.filter(
+                ObjectInstance.ontology_release_id == ontology_release_id)
+        if fn.target_object_type_id:
+            q = q.filter(
+                ObjectInstance.object_type_id == fn.target_object_type_id)
+        return [dict(item.properties or {}) for item in q.all()]
+
+    result = evaluate_function_contract(
+        fn,
+        obj_props=obj_props,
+        params=params,
+        object_loader=load_scope_objects,
+    )
+    result["durationMs"] = int((time.time() - start) * 1000)
+    result["timestamp"] = ts
+    if result.get("success"):
+        result["data"] = result.get("result")
+    return result
 
 
 def compute_derived_properties(object_type, instance_props: dict, db: Session,

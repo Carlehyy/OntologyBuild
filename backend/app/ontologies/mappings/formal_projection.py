@@ -44,10 +44,106 @@ _RESERVED_PROP_KEYS = {
 _DEFAULT_COLORS = ["indigo", "cyan", "violet", "purple", "yellow"]
 
 
+def projection_property_mappings(field_mapping: dict | None) -> list[dict]:
+    """Return the executable source-column → Formal-property contract.
+
+    ``__properties__`` is enriched draft-time metadata, but it is not the
+    authority for which source column writes which property.  Released
+    mappings deliberately skip runtime normalization so an older release (or
+    a mapping created before its first data build) may have no
+    ``__properties__`` at all.  The explicit non-technical field mapping must
+    therefore be sufficient to recover identity and data bindings.
+    """
+    field_mapping = dict(field_mapping or {})
+    metadata_by_column = {
+        str(item.get("column")): dict(item)
+        for item in (field_mapping.get("__properties__") or [])
+        if isinstance(item, dict) and item.get("column")
+    }
+    ignored = {
+        str(item) for item in (field_mapping.get("__ignored_fields__") or [])
+    }
+    primary_key_columns = {
+        part.strip()
+        for part in str(field_mapping.get("__primary_key__") or "").split(",")
+        if part.strip()
+    }
+
+    result: list[dict] = []
+    for source_column, target_property in field_mapping.items():
+        source_column = str(source_column)
+        if source_column.startswith("__"):
+            continue
+        if source_column in ignored and source_column not in primary_key_columns:
+            continue
+        if target_property in (None, ""):
+            continue
+        item = dict(metadata_by_column.pop(source_column, {}))
+        item["column"] = source_column
+        # The explicit mapping is the immutable authority.  Preserve inferred
+        # type/display metadata, but never let stale metadata redirect writes.
+        item["property"] = str(target_property)
+        result.append(item)
+
+    # Compatibility for legacy metadata whose field map was incompletely
+    # persisted.  These rows still provide useful binding/type hints, while a
+    # declared ignored field remains excluded.
+    for source_column, item in metadata_by_column.items():
+        if source_column in ignored and source_column not in primary_key_columns:
+            continue
+        item.setdefault("column", source_column)
+        item.setdefault("property", source_column)
+        result.append(item)
+    return result
+
+
 def _stable_id(*parts: Any) -> str:
     """根据语义键生成确定性 UUID，保证多次投影幂等。"""
     raw = ":".join(str(p) for p in parts)
     return str(_uuid.uuid5(_uuid.NAMESPACE_URL, raw))
+
+
+def stable_pipeline_entity_id(
+    ontology_id: str, entity_class: str, row_identity: str,
+) -> str:
+    """Return the canonical legacy ``Entity.id`` used by MappingService.
+
+    Version trials materialize directly into the Formal projection and used to
+    invent a different identity scheme.  Keeping the canonical formulas here
+    gives trials, promotion and the normal MappingService projection one
+    contract without requiring trial code to write the legacy Entity table.
+    """
+    return _stable_id(ontology_id, entity_class, row_identity)
+
+
+def stable_object_instance_id(ontology_id: str, entity_id: str) -> str:
+    """Return the canonical pipeline-backed ``ObjectInstance.id``."""
+    return _stable_id("oi", ontology_id, entity_id)
+
+
+def stable_pipeline_relation_id(
+    ontology_id: str,
+    source_entity_id: str,
+    target_entity_id: str,
+    relation_type: str,
+    source: str,
+) -> str:
+    """Return the canonical MappingService ``Relation.id``."""
+    return _stable_id(
+        ontology_id, source_entity_id, relation_type, target_entity_id, source)
+
+
+def stable_link_instance_id(
+    ontology_id: str,
+    link_type_id: str,
+    source_object_id: str,
+    target_object_id: str,
+    edge_key: str = "",
+) -> str:
+    """Return the canonical pipeline-backed ``LinkInstance.id``."""
+    return _stable_id(
+        "li", ontology_id, link_type_id, source_object_id, target_object_id,
+        edge_key)
 
 
 # 关系投影的内部记账键：仅供映射/去重使用，不应作为业务边属性落进 LinkInstance
@@ -136,7 +232,12 @@ def _property_data_binding(
 def _coerce_props_to_type(props: dict, type_props: list[dict]) -> dict:
     """按类型的属性定义做值转换（CSV 来的全是字符串——number 属性不转数字，
     哨兵的数值条件、派生函数、动作校验会整体失灵）。声明过的类型转换失败
-    必须阻止投影，不能把错误字符串悄悄塞进已发布本体。"""
+    必须阻止投影，不能把错误字符串悄悄塞进已发布本体。
+
+    CSV/Excel 解析器会把空单元格表示成空字符串。对 number/boolean/date
+    等非字符串属性，这表示业务空值而不是一个类型为 string 的值，必须在
+    试跑和正式投影共用的这一层归一为 None。必填约束仍由实例契约校验拦截；
+    string 属性则保留原值，避免擦除业务上有意义的文本表示。"""
     kind_by_name = {p.get("name"): (p.get("type") or "string")
                     for p in (type_props or []) if isinstance(p, dict)}
     out = dict(props)
@@ -145,10 +246,11 @@ def _coerce_props_to_type(props: dict, type_props: list[dict]) -> dict:
         if v is None or not isinstance(v, str):
             continue
         s = v.strip()
+        if s == "" and t not in (None, "string"):
+            out[k] = None
+            continue
         try:
             if t in ("number", "integer", "float"):
-                if s == "":
-                    continue
                 f = float(s.replace(",", ""))
                 out[k] = int(f) if f.is_integer() else f
             elif t == "boolean":
@@ -305,6 +407,7 @@ def project_to_formal_ontology(
     summary = {
         "object_types": 0,
         "object_instances": 0,
+        "removed_object_instances": 0,
         "link_types": 0,
         "link_instances": 0,
         "skipped_relations": 0,
@@ -312,12 +415,10 @@ def project_to_formal_ontology(
     }
 
     entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
-    if not entities:
-        logger.info("投影跳过：本体 %s 无 Entity 数据", ontology_id)
-        return summary
 
     # ── 元数据辅助：entity_class → {pk_col, property_mappings} ──
     class_meta: dict[str, dict] = {}
+    reconciliation_classes: set[str] = set()
     for meta in (mapping_meta or {}).values():
         ec = meta.get("entity_class")
         if ec and ec not in class_meta:
@@ -332,6 +433,8 @@ def project_to_formal_ontology(
                     "dataset_name": meta.get("dataset_name"),
                 },
             }
+        if ec:
+            reconciliation_classes.add(str(ec))
 
     # 绑定兜底：投影会重投影本体下全部 entity_class（不只本次映射），
     # 其余类的绑定信息不在本次 meta 里——从映射表按 entity_class 补齐，
@@ -339,12 +442,54 @@ def project_to_formal_ontology(
     try:
         from app.models.v2.mapping import OntologyMapping as _OM
         for _m in db.query(_OM).filter(_OM.ontology_id == ontology_id).all():
+            cm = class_meta.setdefault(_m.entity_class, {})
             if _m.target_object_type_id:
-                cm = class_meta.setdefault(_m.entity_class, {})
                 if not cm.get("target_object_type_id"):
                     cm["target_object_type_id"] = _m.target_object_type_id
+            binding_context = cm.get("binding_context") or {}
+            metadata_owner = binding_context.get("mapping_id")
+            if metadata_owner in (None, _m.id):
+                if not cm.get("pk_col"):
+                    cm["pk_col"] = (
+                        (_m.field_mapping or {}).get("__primary_key__"))
+                persisted_properties = projection_property_mappings(
+                    _m.field_mapping)
+                if persisted_properties:
+                    current_by_column = {
+                        str(item.get("column")): dict(item)
+                        for item in (cm.get("property_mappings") or [])
+                        if isinstance(item, dict) and item.get("column")
+                    }
+                    # Persisted explicit source→target bindings are the
+                    # authority; per-run metadata contributes richer types.
+                    for item in persisted_properties:
+                        column = str(item["column"])
+                        enriched = dict(item)
+                        enriched.update(current_by_column.get(column, {}))
+                        enriched["column"] = column
+                        enriched["property"] = item["property"]
+                        current_by_column[column] = enriched
+                    cm["property_mappings"] = list(
+                        current_by_column.values())
+                if not binding_context:
+                    cm["binding_context"] = {
+                        "mapping_id": _m.id,
+                        "curated_dataset_id": _m.curated_dataset_id,
+                    }
+            # A caller which does not provide per-run metadata is asking for a
+            # full projection.  In that case the persisted Mapping definitions
+            # are the authoritative cleanup scope, including mappings whose
+            # latest source snapshot contains zero rows.  Conversely,
+            # apply_mapping() supplies one explicit meta entry and must not wipe
+            # trial-promoted objects owned by unrelated mappings.
+            if not mapping_meta:
+                reconciliation_classes.add(str(_m.entity_class))
     except Exception:  # noqa: BLE001 — 兜底失败不阻断投影（仍有按名匹配保护）
         logger.warning("读取映射绑定失败，仅按名匹配", exc_info=True)
+
+    if not entities and ontology_release_id is None:
+        logger.info("投影跳过：本体 %s 无 Entity 数据", ontology_id)
+        return summary
 
     # ── 1. 按 entity_class 分组 ──
     entities_by_class: dict[str, list[Entity]] = {}
@@ -418,10 +563,16 @@ def project_to_formal_ontology(
                             if isinstance(p, dict) and p.get("name")}
                 unknown = sorted(incoming - declared)
                 if unknown:
-                    raise ValueError(
-                        f"已发布对象类型「{existing_ot.display_name}」出现未声明字段 {unknown}；"
-                        "请先撤回版本、维护 schema 并重新发布"
-                    )
+                    # Source datasets routinely contain columns deliberately
+                    # omitted from the release mapping.  MappingService's
+                    # normalization keeps metadata for those columns in its
+                    # intermediate Entity envelope; they are not permission to
+                    # extend a published Formal schema.  Ignore them here.  A
+                    # genuinely changed release mapping is already rejected by
+                    # the immutable release-scope fence before projection.
+                    logger.info(
+                        "已发布对象类型 %s 忽略未声明且未发布的源字段 %s",
+                        existing_ot.display_name, unknown)
                 merged = list(existing_ot.properties or [])
             else:
                 merged = _merge_properties(existing_ot.properties or [], data_props)
@@ -478,7 +629,8 @@ def project_to_formal_ontology(
         from app.ontologies.formal_modeling.facts import record_property_facts
         from app.ontologies.formal_modeling.derived import recompute_instance_derived
         for ent in ent_list:
-            inst_id = _stable_id("oi", ontology_id, ent.id)
+            canonical_inst_id = stable_object_instance_id(ontology_id, ent.id)
+            inst_id = canonical_inst_id
             props = {k: v for k, v in (ent.properties or {}).items()
                      if k not in ("ontology_id", "__mapping_ids__", "__business_properties__")}
             business = (ent.properties or {}).get("__business_properties__")
@@ -486,12 +638,57 @@ def project_to_formal_ontology(
                 props.update(business)
             # 按类型属性定义转换值类型（CSV 字符串 → number/boolean）
             props = _coerce_props_to_type(props, final_props)
-            # 补充展示名，便于图谱卡片渲染
-            props.setdefault("name", ent.name_cn or ent.name_en or ent.id)
+            if schema_locked:
+                declared_property_names = {
+                    str(prop.get("name")) for prop in final_props
+                    if isinstance(prop, dict) and prop.get("name")
+                }
+                props = {
+                    key: value for key, value in props.items()
+                    if key in declared_property_names
+                }
+            # 补充展示名仅限声明了 name 的类型。已发布闭合 schema 不能因为
+            # 投影层的展示便利被悄悄写入一个未知业务属性。
+            declared_property_names = {
+                str(prop.get("name")) for prop in final_props
+                if isinstance(prop, dict) and prop.get("name")
+            }
+            if not declared_property_names or "name" in declared_property_names:
+                props.setdefault("name", ent.name_cn or ent.name_en or ent.id)
             existing_inst = db.query(ObjectInstance).filter(
-                ObjectInstance.id == inst_id,
+                ObjectInstance.id == canonical_inst_id,
             ).first()
+            if existing_inst is None:
+                # Promotion versions before the stable-identity contract used
+                # the row identity as external_id and a different object UUID.
+                # First adopt any already-canonical lineage row, then fall back
+                # to an unambiguous primary-key match.  We deliberately keep
+                # the old materialized ID so facts, match states and links do
+                # not experience a synthetic leave/enter transition.
+                existing_inst = db.query(ObjectInstance).filter(
+                    ObjectInstance.ontology_id == ontology_id,
+                    ObjectInstance.object_type_id == ot_id,
+                    ObjectInstance.external_id == ent.id,
+                ).first()
+            if existing_inst is None and class_to_pk_field.get(ec):
+                pk_field = class_to_pk_field[ec]
+                pk_value = props.get(pk_field)
+                legacy_candidates = [
+                    item for item in db.query(ObjectInstance).filter(
+                        ObjectInstance.ontology_id == ontology_id,
+                        ObjectInstance.object_type_id == ot_id,
+                        ObjectInstance.source == "pipeline",
+                    ).all()
+                    if (item.properties or {}).get(pk_field) == pk_value
+                ]
+                if len(legacy_candidates) > 1:
+                    raise ValueError(
+                        f"对象类型「{ec}」主键 {pk_field}={pk_value!r} "
+                        f"对应 {len(legacy_candidates)} 条历史实例，拒绝猜测投影血缘")
+                if legacy_candidates:
+                    existing_inst = legacy_candidates[0]
             if existing_inst:
+                inst_id = existing_inst.id
                 old_props = dict(existing_inst.properties or {})
                 changed = (old_props != props
                            or existing_inst.object_type_id != ot_id
@@ -538,6 +735,103 @@ def project_to_formal_ontology(
                         trigger_facts=new_facts)
                 summary["object_instances"] += 1
             entity_to_instance[ent.id] = inst_id
+
+    # A promoted trial initially has no legacy Entity rows.  The legacy
+    # MappingService reconciliation therefore cannot see pipeline Formal
+    # objects which disappear from a later lake snapshot.  Reconcile the
+    # authoritative released projection here by canonical Entity lineage.
+    #
+    # Scope is intentionally narrow: only pipeline objects owned by a mapped
+    # type and the current release are eligible.  Action/manual-created objects
+    # are business state and must survive normal source refreshes.
+    if ontology_release_id is not None:
+        from sqlalchemy import or_
+        from app.ontologies.formal_modeling.facts import (
+            record_link_fact, record_object_tombstone,
+        )
+
+        mapped_type_ids: set[str] = set()
+        for entity_class in reconciliation_classes:
+            object_type_id = (
+                class_meta.get(entity_class, {}).get("target_object_type_id")
+                or class_to_ot_id.get(entity_class)
+            )
+            if not object_type_id:
+                mapped_type = db.query(ObjectType).filter(
+                    ObjectType.ontology_id == ontology_id,
+                    or_(
+                        ObjectType.name == entity_class,
+                        ObjectType.display_name == entity_class,
+                    ),
+                ).first()
+                object_type_id = mapped_type.id if mapped_type is not None else None
+            if object_type_id:
+                mapped_type_ids.add(str(object_type_id))
+            elif schema_locked:
+                raise ValueError(
+                    f"已发布映射实体类型「{entity_class}」无法解析到 ObjectType，"
+                    "拒绝在未知清理范围下继续投影"
+                )
+
+        # Initialize every released mapping type even when its current source
+        # contributes no Entity rows.  An empty set is meaningful authoritative
+        # lineage ("all source rows were deleted"), not "skip reconciliation".
+        current_external_ids_by_type: dict[str, set[str]] = {
+            object_type_id: set() for object_type_id in mapped_type_ids
+        }
+        for entity in entities:
+            object_type_id = class_to_ot_id.get(entity.type or "Object")
+            if object_type_id in mapped_type_ids:
+                current_external_ids_by_type.setdefault(
+                    object_type_id, set()).add(entity.id)
+
+        stale_instances = []
+        if mapped_type_ids:
+            for instance in db.query(ObjectInstance).filter(
+                    ObjectInstance.ontology_id == ontology_id,
+                    ObjectInstance.ontology_release_id == ontology_release_id,
+                    ObjectInstance.source == "pipeline",
+                    ObjectInstance.object_type_id.in_(sorted(mapped_type_ids)),
+            ).all():
+                current_lineage = current_external_ids_by_type.get(
+                    instance.object_type_id, set())
+                if (
+                    not instance.external_id
+                    or instance.external_id not in current_lineage
+                ):
+                    stale_instances.append(instance)
+
+        for instance in stale_instances:
+            dangling_links = db.query(LinkInstance).filter(
+                LinkInstance.ontology_id == ontology_id,
+                LinkInstance.ontology_release_id == ontology_release_id,
+                or_(
+                    LinkInstance.source_object_id == instance.id,
+                    LinkInstance.target_object_id == instance.id,
+                ),
+            ).all()
+            for link in dangling_links:
+                record_link_fact(
+                    db,
+                    ontology_id=ontology_id,
+                    link_instance_id=link.id,
+                    link_type_id=link.link_type_id,
+                    exists=False,
+                    source="pipeline-reconcile",
+                    ontology_release_id=ontology_release_id,
+                )
+                db.delete(link)
+                summary["removed_link_instances"] += 1
+            record_object_tombstone(
+                db,
+                ontology_id=ontology_id,
+                instance_id=instance.id,
+                object_type_id=instance.object_type_id,
+                source="pipeline-reconcile",
+                ontology_release_id=ontology_release_id,
+            )
+            db.delete(instance)
+            summary["removed_object_instances"] += 1
 
     # Keep object and link projection in one caller-controlled transaction.
     db.flush()
@@ -702,11 +996,49 @@ def project_to_formal_ontology(
         # 连接表胖关系：同一对实体可有多条属性不同的边 → id 纳入 __edge_key__，防被去重合并成一条。
         raw_props = rel.properties or {}
         edge_key = raw_props.get("__edge_key__") or ""
-        li_id = _stable_id("li", ontology_id, lt_id, src_inst, tgt_inst, edge_key)
-        existing_li = db.query(LinkInstance).filter(LinkInstance.id == li_id).first()
+        canonical_li_id = stable_link_instance_id(
+            ontology_id, lt_id, src_inst, tgt_inst, edge_key)
+        li_id = canonical_li_id
+        existing_li = db.query(LinkInstance).filter(
+            LinkInstance.id == canonical_li_id).first()
         # 只保留真正的业务边属性，剔除映射记账用的内部键
         li_props = {k: v for k, v in raw_props.items() if k not in _INTERNAL_LINK_PROP_KEYS}
+        if existing_li is None:
+            lineage_candidates = db.query(LinkInstance).filter(
+                LinkInstance.ontology_id == ontology_id,
+                LinkInstance.link_type_id == lt_id,
+                LinkInstance.source_object_id == src_inst,
+                LinkInstance.target_object_id == tgt_inst,
+                LinkInstance.source_relation_id == rel.id,
+            ).all()
+            if len(lineage_candidates) > 1:
+                raise ValueError(
+                    f"关系 {rel.id} 对应 {len(lineage_candidates)} 条 Formal Link，"
+                    "拒绝猜测投影血缘")
+            if lineage_candidates:
+                existing_li = lineage_candidates[0]
+        if existing_li is None:
+            # Adopt links promoted by older versions which did not persist
+            # Relation lineage.  Endpoint/type/business properties must match
+            # exactly and uniquely; ambiguity is a hard error.
+            legacy_candidates = [
+                item for item in db.query(LinkInstance).filter(
+                    LinkInstance.ontology_id == ontology_id,
+                    LinkInstance.link_type_id == lt_id,
+                    LinkInstance.source_object_id == src_inst,
+                    LinkInstance.target_object_id == tgt_inst,
+                    LinkInstance.source_relation_id.is_(None),
+                ).all()
+                if dict(item.properties or {}) == li_props
+            ]
+            if len(legacy_candidates) > 1:
+                raise ValueError(
+                    f"关系 {rel.id} 对应 {len(legacy_candidates)} 条无血缘 Formal Link，"
+                    "拒绝猜测投影血缘")
+            if legacy_candidates:
+                existing_li = legacy_candidates[0]
         if existing_li:
+            li_id = existing_li.id
             if (existing_li.link_type_id != lt_id
                     or existing_li.source_object_id != src_inst
                     or existing_li.target_object_id != tgt_inst

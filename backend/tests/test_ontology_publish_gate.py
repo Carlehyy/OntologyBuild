@@ -1,5 +1,6 @@
 """本体发布是运行安全边界：只有通过全量契约的 draft 才能生成不可变快照。"""
 import uuid
+from datetime import datetime, timezone
 
 from app.models.ontology import OntologyProject
 from app.models.ontology_formal import (
@@ -7,10 +8,12 @@ from app.models.ontology_formal import (
     ObjectInstance,
 )
 from app.models.sentinel import Sentinel
+from app.models.ontology_version import OntologyVersion
 from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.curated import CuratedReview
 from app.ontologies.versions import router as version_router
+from app.ontologies.versions.evolution_service import snapshot_hash
 
 
 def _versions(ontology_id: str) -> str:
@@ -19,6 +22,22 @@ def _versions(ontology_id: str) -> str:
 
 def _codes(response) -> set[str]:
     return {item["code"] for item in response.json()["detail"]["errors"]}
+
+
+def _release_node(
+        db, project: OntologyProject, *, item_id: str, number: str,
+        snapshot: dict, parent_id: str) -> OntologyVersion:
+    release = OntologyVersion(
+        id=item_id, ontology_id=project.id, version_number=number,
+        version_label=number, parent_version_id=parent_id,
+        node_kind="release", lifecycle_status="released", revision=0,
+        snapshot_formal=snapshot, snapshot_hash=snapshot_hash(snapshot),
+        published_at=datetime.now(timezone.utc), created_by=project.created_by,
+    )
+    db.add(release)
+    db.flush()
+    release.base_release_id = release.id
+    return release
 
 
 def _object_type(ontology_id: str, *, item_id: str = "ot-order",
@@ -51,9 +70,8 @@ def test_publish_requires_formal_contract_admin_and_draft_state(
         client, auth_headers, ontology, db, editor_user):
     oid = ontology["id"]
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 422
-    assert "object_type_required" in _codes(response)
+    assert "object_type_required" in {
+        item["code"] for item in version_router._release_errors(db, oid)}
 
     object_type = _object_type(oid)
     function = OntologyFunction(
@@ -65,33 +83,37 @@ def test_publish_requires_formal_contract_admin_and_draft_state(
     )
     db.add_all([object_type, function]); db.commit()
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 422
-    assert "enabled_typescript_function_forbidden" in _codes(response)
+    assert "enabled_typescript_function_forbidden" in {
+        item["code"] for item in version_router._release_errors(db, oid)}
 
     function.enabled = False
     db.commit()
-    response = client.post(_versions(oid), headers=auth_headers, json={"version_label": "v1"})
-    assert response.status_code == 201, response.text
-    version_id = response.json()["data"]["id"]
+    assert version_router._release_errors(db, oid) == []
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    current_release_id = project.current_release_id
+    response = client.post(
+        _versions(oid), headers=auth_headers, json={"version_label": "v1"})
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"]["code"] == "legacy_publish_endpoint_retired"
 
-    # 不允许 published 上再叠一个版本；必须先显式撤回。
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "invalid_publish_state"
+    # 已废弃入口在任何状态都不能绕过草稿→试跑→晋级。
+    response = client.post(_versions(oid), headers=auth_headers)
+    assert response.status_code == 410
+    db.refresh(project)
+    assert project.current_release_id == current_release_id
 
     editor_headers = _editor_headers(client, editor_user)
     assert client.post(f"/api/v2/ontologies/{oid}/unpublish",
                        headers=editor_headers).status_code == 403
     response = client.post(f"/api/v2/ontologies/{oid}/unpublish", headers=auth_headers)
-    assert response.status_code == 200
-    assert response.json()["data"]["status"] == "draft"
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "unpublish_endpoint_retired"
     assert client.post(_versions(oid), headers=editor_headers, json={}).status_code == 403
-    assert client.post(f"{_versions(oid)}/{version_id}/rollback",
+    assert client.post(f"{_versions(oid)}/{current_release_id}/rollback",
                        headers=editor_headers).status_code == 403
 
 
-def test_sentinel_definition_is_draft_scoped_but_operational_toggle_is_allowed(
+def test_legacy_publish_cannot_elevate_mutable_builtin_sentinel(
         client, auth_headers, ontology, db):
     oid = ontology["id"]
     db.add(_object_type(oid))
@@ -108,19 +130,11 @@ def test_sentinel_definition_is_draft_scoped_but_operational_toggle_is_allowed(
     sentinel_id = response.json()["data"]["id"]
     assert response.json()["data"]["status"] == "draft"
 
-    assert client.post(_versions(oid), headers=auth_headers, json={}).status_code == 201
-    assert client.get(f"{base}/{sentinel_id}", headers=auth_headers).json()["data"]["status"] == "published"
-    assert client.put(
-        f"{base}/{sentinel_id}", headers=auth_headers,
-        json={"condition": "order.amount > 10"},
-    ).status_code == 409
-    assert client.put(
-        f"{base}/{sentinel_id}", headers=auth_headers,
-        json={"muted": True},
-    ).status_code == 200
-
-    assert client.post(
-        f"/api/v2/ontologies/{oid}/unpublish", headers=auth_headers).status_code == 200
+    legacy = client.post(_versions(oid), headers=auth_headers, json={})
+    assert legacy.status_code == 410
+    assert client.get(
+        f"{base}/{sentinel_id}",
+        headers=auth_headers).json()["data"]["status"] == "draft"
     response = client.put(
         f"{base}/{sentinel_id}", headers=auth_headers,
         json={"condition": "order.amount > 10"},
@@ -154,7 +168,16 @@ def test_publish_validates_sentinel_references_aliases_and_required_action_param
             {"name": "severity", "type": "string", "required": True,
              "defaultValue": "normal"},
         ],
-        rules=[], requires_approval=False,
+        rules=[{
+            "id": "notify-review", "type": "notification",
+            "name": "通知复核队列", "enabled": True, "order": 0,
+            "config": {
+                "channel": "internal",
+                "recipientSource": "constant",
+                "recipient": "review-queue",
+                "messageTemplate": "需要人工复核",
+            },
+        }], requires_approval=False,
     )
     sentinel = Sentinel(
         id="sentinel-review", ontology_id=oid,
@@ -171,8 +194,8 @@ def test_publish_validates_sentinel_references_aliases_and_required_action_param
     )
     db.add_all([order, customer, relation, action, sentinel]); db.commit()
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 422
+    codes = {
+        item["code"] for item in version_router._release_errors(db, oid)}
     assert {
         "duplicate_sentinel_alias",
         "invalid_sentinel_primary_alias",
@@ -180,7 +203,7 @@ def test_publish_validates_sentinel_references_aliases_and_required_action_param
         "sentinel_link_type_not_found",
         "sentinel_action_not_found",
         "sentinel_required_action_parameter_missing",
-    } <= _codes(response)
+    } <= codes
 
     sentinel.bindings = [
         {"alias": "order", "objectTypeId": order.id},
@@ -196,14 +219,13 @@ def test_publish_validates_sentinel_references_aliases_and_required_action_param
     }
     db.commit()
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 201, response.text
+    assert version_router._release_errors(db, oid) == []
     db.refresh(sentinel)
-    assert sentinel.status == "published"
+    assert sentinel.status == "draft"
 
 
 def test_snapshot_diff_and_rollback_restore_configs_without_deleting_instances(
-        client, auth_headers, ontology, db):
+        client, auth_headers, ontology, db, monkeypatch):
     oid = ontology["id"]
     object_type = _object_type(oid, with_contract=True)
     instance = ObjectInstance(
@@ -232,29 +254,44 @@ def test_snapshot_diff_and_rollback_restore_configs_without_deleting_instances(
     db.add_all([object_type, instance, sentinel, dataset, mapping, link_mapping])
     db.commit()
 
-    response = client.post(_versions(oid), headers=auth_headers, json={"version_label": "baseline"})
-    assert response.status_code == 201, response.text
-    v1 = response.json()["data"]["id"]
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    root_id = project.current_release_id
+    baseline = version_router._snapshot_formal(db, oid)
+    v1_row = _release_node(
+        db, project, item_id="release-config-v1", number="v1",
+        snapshot=baseline, parent_id=root_id)
+    db.commit()
+    v1 = v1_row.id
     detail = client.get(f"{_versions(oid)}/{v1}", headers=auth_headers).json()["data"]
     snap = detail["snapshot"]["formal"]
     assert len(snap["sentinels"]) == len(snap["mappings"]) == len(snap["linkMappings"]) == 1
 
-    assert client.post(f"/api/v2/ontologies/{oid}/unpublish",
-                       headers=auth_headers).status_code == 200
-    db.refresh(sentinel)
-    assert sentinel.status == "draft"
     object_type.display_name = "已修改订单"
     sentinel.display_name = "已修改哨兵"
     mapping.entity_class = "ChangedOrder"
     link_mapping.relation_type = "CHANGED"
     db.commit()
 
-    response = client.post(_versions(oid), headers=auth_headers, json={"version_label": "changed"})
-    assert response.status_code == 201, response.text
-    diff = response.json()["data"]["change_summary"]["formal"]
+    changed = version_router._snapshot_formal(db, oid)
+    diff = version_router._diff_formal(baseline, changed)
     assert diff["sentinels"]["modified"] == 1
     assert diff["mappings"]["modified"] == 1
     assert diff["linkMappings"]["modified"] == 1
+    v2_row = _release_node(
+        db, project, item_id="release-config-v2", number="v2",
+        snapshot=changed, parent_id=v1)
+    project.current_release_id = v2_row.id
+    project.version = "v2"
+    project.status = "published"
+    instance.ontology_release_id = v2_row.id
+    db.commit()
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections",
+        lambda *_args, **_kwargs: {
+            "ready": True, "neo4j": "ok", "chroma": "ok",
+            "chroma_count": 1,
+        },
+    )
 
     response = client.post(f"{_versions(oid)}/{v1}/rollback", headers=auth_headers)
     assert response.status_code == 200, response.text
@@ -267,7 +304,10 @@ def test_snapshot_diff_and_rollback_restore_configs_without_deleting_instances(
     assert db.query(OntologyMapping).filter_by(id="mapping-1").one().entity_class == "Order"
     assert db.query(OntologyLinkMapping).filter_by(id="link-mapping-1").one().relation_type == "SELF"
     assert db.query(ObjectInstance).filter_by(id="order-1").count() == 1
-    assert db.query(OntologyProject).filter_by(id=oid).one().status == "published"
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert project.status == "published"
+    assert project.current_release_id == response.json()["data"]["id"]
+    assert project.current_release_id not in {v1, v2_row.id}
 
 
 def test_rollback_is_atomic_when_snapshot_rejects_retained_instance(
@@ -279,18 +319,31 @@ def test_rollback_is_atomic_when_snapshot_rejects_retained_instance(
         properties={"code": "O-1"}, computed={}, source="pipeline",
     )
     db.add_all([object_type, instance]); db.commit()
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 201
-    version_id = response.json()["data"]["id"]
-    assert client.post(f"/api/v2/ontologies/{oid}/unpublish",
-                       headers=auth_headers).status_code == 200
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    version = _release_node(
+        db, project, item_id="release-strict-v1", number="v1",
+        snapshot=version_router._snapshot_formal(db, oid),
+        parent_id=project.current_release_id,
+    )
+    db.commit()
+    version_id = version.id
 
-    # 当前 draft 放宽为开放 schema，并写入与旧快照不兼容的实例。
+    # 当前发布投影放宽为开放 schema，并写入与旧快照不兼容的实例。
     object_type.primary_key = None
     object_type.properties = []
     object_type.display_name = "当前草稿"
     instance.properties = {"undeclared": True}
+    current = _release_node(
+        db, project, item_id="release-open-v2", number="v2",
+        snapshot=version_router._snapshot_formal(db, oid),
+        parent_id=version_id,
+    )
+    project.current_release_id = current.id
+    project.version = current.version_number
+    project.status = "published"
+    instance.ontology_release_id = current.id
     db.commit()
+    current_id = current.id
     db.expunge_all()
 
     response = client.post(f"{_versions(oid)}/{version_id}/rollback", headers=auth_headers)
@@ -303,7 +356,60 @@ def test_rollback_is_atomic_when_snapshot_rejects_retained_instance(
     current_instance = db.query(ObjectInstance).filter_by(id="order-bad").one()
     assert current_type.display_name == "当前草稿" and current_type.properties == []
     assert current_instance.properties == {"undeclared": True}
-    assert db.query(OntologyProject).filter_by(id=oid).one().status == "draft"
+    unchanged_project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert unchanged_project.status == "published"
+    assert unchanged_project.current_release_id == current_id
+
+
+def test_production_rollback_projection_failure_keeps_previous_activation(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    object_type = _object_type(oid)
+    object_type.display_name = "历史订单"
+    db.add(object_type)
+    db.flush()
+    target = _release_node(
+        db, project, item_id="rollback-projection-v1", number="v1",
+        snapshot=version_router._snapshot_formal(db, oid),
+        parent_id=project.current_release_id,
+    )
+    object_type.display_name = "当前订单"
+    db.flush()
+    current = _release_node(
+        db, project, item_id="rollback-projection-v2", number="v2",
+        snapshot=version_router._snapshot_formal(db, oid),
+        parent_id=target.id,
+    )
+    project.current_release_id = current.id
+    project.version = current.version_number
+    project.status = "published"
+    db.commit()
+    current_id = current.id
+    version_count = db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count()
+    monkeypatch.setattr(version_router.settings, "environment", "production")
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections",
+        lambda *_args, **_kwargs: {
+            "ready": False, "neo4j": "error", "chroma": "ok",
+            "chroma_count": 0,
+        },
+    )
+
+    response = client.post(
+        f"{_versions(oid)}/{target.id}/rollback", headers=auth_headers)
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "rollback_projection_not_ready"
+    assert response.json()["detail"]["compensation"]["ready"] is False
+    db.expire_all()
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert project.current_release_id == current_id
+    assert project.version == "v2"
+    assert db.query(ObjectType).filter_by(
+        id=object_type.id).one().display_name == "当前订单"
+    assert db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count() == version_count
 
 
 def test_production_publish_requires_current_approved_applied_mapping(
@@ -324,9 +430,9 @@ def test_production_publish_requires_current_approved_applied_mapping(
             "chroma_count": 1,
         })
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 422
-    assert "production_mapping_required" in _codes(response)
+    codes = {
+        item["code"] for item in version_router._release_errors(db, oid)}
+    assert "production_mapping_required" in codes
 
     dataset = Dataset(
         id="prod-dataset", name=f"prod-{uuid.uuid4().hex}", kind="curated")
@@ -345,28 +451,27 @@ def test_production_publish_requires_current_approved_applied_mapping(
     )
     db.add_all([dataset, version_1, version_2, mapping]); db.commit()
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 422
+    codes = {
+        item["code"] for item in version_router._release_errors(db, oid)}
     assert {
         "mapping_not_applied",
         "latest_dataset_version_not_approved",
         "mapping_applied_version_stale",
-    } <= _codes(response)
+    } <= codes
 
     mapping.status = "applied"
     mapping.field_mapping = {"__applied_dataset_version_id__": version_2.id}
     db.commit()
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 422
-    assert _codes(response) == {"latest_dataset_version_not_approved"}
+    codes = {
+        item["code"] for item in version_router._release_errors(db, oid)}
+    assert codes == {"latest_dataset_version_not_approved"}
 
     db.add(CuratedReview(
         id="review-v2", curated_dataset_id=dataset.id,
         dataset_version_id=version_2.id, status="approved",
     ))
     db.commit()
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 201, response.text
+    assert version_router._release_errors(db, oid) == []
 
 
 def test_production_publish_accepts_governed_manual_version_subscription(
@@ -418,25 +523,34 @@ def test_production_publish_accepts_governed_manual_version_subscription(
         },
     )
 
-    response = client.post(_versions(oid), headers=auth_headers, json={})
-    assert response.status_code == 201, response.text
+    assert version_router._release_errors(db, oid) == []
 
 
-def test_production_publish_blocks_when_query_projection_rebuild_fails(
+def test_retired_publish_endpoint_never_rebuilds_or_switches_projection(
         client, auth_headers, ontology, db, monkeypatch):
     oid = ontology["id"]
     db.add(_object_type(oid))
     db.commit()
     monkeypatch.setattr(version_router.settings, "environment", "production")
-    monkeypatch.setattr(
-        version_router, "_rebuild_required_query_projections",
-        lambda *_args, **_kwargs: {
+    calls = []
+
+    def unexpected_rebuild(*_args, **_kwargs):
+        calls.append(True)
+        return {
             "ready": False, "neo4j": "error", "chroma": "ok",
             "chroma_count": 0,
-        })
+        }
+
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections",
+        unexpected_rebuild)
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    release_id = project.current_release_id
 
     response = client.post(_versions(oid), headers=auth_headers, json={})
 
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "query_projection_not_ready"
-    assert db.query(OntologyProject).filter_by(id=oid).one().status == "draft"
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "legacy_publish_endpoint_retired"
+    assert calls == []
+    db.refresh(project)
+    assert project.current_release_id == release_id

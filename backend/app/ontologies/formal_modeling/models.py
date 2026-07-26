@@ -280,6 +280,10 @@ class ActionExecutionLog(Base):
     object_instance_id: Mapped[str] = mapped_column(String, nullable=True)
 
     parameters: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Immutable target evidence used only when an on_leave target has already
+    # been deleted.  Runtime restricts it to validation/notification/webhook;
+    # local data mutation rules must still resolve a live instance.
+    target_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # pending(待审批) | validating | validated | executing | success | failed |
     # rejected(审批拒绝) | rolled_back
     status: Mapped[str] = mapped_column(String(20), default="pending")

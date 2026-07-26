@@ -46,7 +46,7 @@ def test_health_all_service_keys_present():
     data = response.json()
     for key in (
         "db", "redis", "neo4j", "minio", "object_storage", "chroma", "browser",
-        "sentinel_scheduler", "data_scheduler",
+        "sentinel_scheduler", "sentinel_cdc", "data_scheduler",
         "ontology_projection",
     ):
         assert key in data, f"Missing key: {key}"
@@ -59,13 +59,23 @@ def test_health_service_states_are_valid():
     assert data["db"] in VALID_DB_STATES
     for key in (
         "redis", "neo4j", "minio", "chroma", "browser",
-        "sentinel_scheduler", "data_scheduler",
+        "sentinel_scheduler", "sentinel_cdc", "data_scheduler",
         "ontology_projection",
     ):
         assert data[key] in VALID_SERVICE_STATES, (
             f"{key} has unexpected state: {data[key]}"
         )
     assert data["object_storage"] in ("minio", "local", "unavailable", "unknown")
+
+
+def test_public_health_does_not_expose_raw_cdc_errors():
+    response = client.get("/health")
+    detail = response.json()["sentinel_cdc_detail"]
+
+    assert "last_error" not in detail
+    assert "last_errors" not in detail
+    assert "error" not in detail
+    assert "error_code" in detail
 
 
 def test_minio_outage_uses_writable_local_storage_readiness():

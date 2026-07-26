@@ -9,7 +9,12 @@ from app.models.ontology_formal import (
     PropertyFact,
 )
 from app.models.ontology_version import OntologyVersion
-from app.models.sentinel import Sentinel, SentinelFiring
+from app.models.sentinel import (
+    Notification,
+    Sentinel,
+    SentinelCdcOutbox,
+    SentinelFiring,
+)
 from app.ontologies.formal_modeling.facts import record_property_facts
 
 
@@ -55,6 +60,7 @@ def _seed_release_and_drift(db, ontology: dict) -> str:
         id="order-1", ontology_id=ontology_id,
         object_type_id=object_type.id,
         properties={"name": "SO-1", "active": True},
+        ontology_release_id=release_id,
     )
     released_action_projection = ActionType(
         id="action-published", ontology_id=ontology_id,
@@ -238,6 +244,186 @@ def test_governance_rejects_changed_or_cross_release_context(
     assert "跨版本审批已拒绝" in cross_release_decision.json()["detail"]
     db.expire_all()
     assert db.query(ActionExecutionLog).filter_by(id="pending-old").one().status == "pending"
+
+
+def test_direct_action_uses_release_snapshot_instead_of_live_draft(
+    client, auth_headers, ontology, db,
+):
+    ontology_id = ontology["id"]
+    release_id = _seed_release_and_drift(db, ontology)
+
+    response = client.post(
+        f"/api/v2/formal/ontologies/{ontology_id}/run-action",
+        headers=auth_headers,
+        json={
+            "actionId": "action-published",
+            "targetInstanceId": "order-1",
+            "releaseId": release_id,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    log = response.json()["data"]
+    # The immutable action requires approval. Its live draft projection does
+    # not; observing pending is proof the runtime resolved the release snapshot.
+    assert log["status"] == "pending"
+    assert log["pendingApproval"] is True
+    assert log["actionName"] == "发布动作"
+    assert log["ontologyReleaseId"] == release_id
+
+    stale = client.post(
+        f"/api/v2/formal/ontologies/{ontology_id}/run-action",
+        headers=auth_headers,
+        json={
+            "actionId": "action-published",
+            "targetInstanceId": "order-1",
+            "releaseId": "stale-release",
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "release_context_changed"
+
+
+def test_current_release_history_includes_dynamic_overlay_but_not_draft_or_old_rows(
+    client, auth_headers, ontology, db,
+):
+    ontology_id = ontology["id"]
+    release_id = _seed_release_and_drift(db, ontology)
+    db.add_all([
+        Sentinel(
+            id="sentinel-dynamic-current",
+            ontology_id=ontology_id,
+            name="dynamic_current",
+            display_name="当前动态哨兵",
+            bindings=[],
+            links=[],
+            action_ids=[],
+            enabled=True,
+            status="published",
+            origin="assistant_dynamic",
+            bound_release_id=release_id,
+        ),
+        SentinelFiring(
+            id="firing-dynamic-current",
+            ontology_id=ontology_id,
+            sentinel_id="sentinel-dynamic-current",
+            sentinel_name="当前动态哨兵",
+            trigger_source="manual",
+            status="fired",
+            ontology_version="v0",
+            ontology_release_id=release_id,
+        ),
+    ])
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/firings",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert {item["id"] for item in response.json()["data"]} == {
+        "firing-current",
+        "firing-dynamic-current",
+    }
+
+
+def test_notifications_default_to_current_release_with_explicit_history_escape_hatch(
+    client, auth_headers, ontology, db,
+):
+    ontology_id = ontology["id"]
+    release_id = ontology["current_release_id"]
+    db.add_all([
+        Notification(
+            id="notification-current",
+            ontology_id=ontology_id,
+            channel="internal",
+            status="delivered",
+            ontology_release_id=release_id,
+            sentinel_id="sentinel-current",
+            action_log_id="action-log-current",
+        ),
+        Notification(
+            id="notification-old",
+            ontology_id=ontology_id,
+            channel="internal",
+            status="delivered",
+            ontology_release_id="release-old",
+            sentinel_id="sentinel-old",
+            action_log_id="action-log-old",
+        ),
+    ])
+    db.commit()
+
+    current = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/notifications",
+        headers=auth_headers,
+    )
+    history = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/notifications"
+        "?include_history=true",
+        headers=auth_headers,
+    )
+
+    assert [item["id"] for item in current.json()["data"]] == [
+        "notification-current"]
+    assert current.json()["data"][0]["ontologyReleaseId"] == release_id
+    assert current.json()["data"][0]["sentinelId"] == "sentinel-current"
+    assert current.json()["data"][0]["actionLogId"] == "action-log-current"
+    assert {item["id"] for item in history.json()["data"]} == {
+        "notification-current", "notification-old",
+    }
+
+
+def test_authenticated_cdc_status_defaults_current_and_can_explicitly_show_history(
+    client, auth_headers, ontology, db, monkeypatch,
+):
+    from app.ontologies.sentinels import cdc
+
+    ontology_id = ontology["id"]
+    release_id = ontology["current_release_id"]
+    monkeypatch.setattr(cdc, "AUTO_DISPATCH", False)
+    db.add_all([
+        SentinelCdcOutbox(
+            id="cdc-current",
+            chain_id="chain-current",
+            ontology_id=ontology_id,
+            ontology_release_id=release_id,
+            status="completed",
+        ),
+        SentinelCdcOutbox(
+            id="cdc-old-dead",
+            chain_id="chain-old",
+            ontology_id=ontology_id,
+            ontology_release_id="release-old",
+            status="dead",
+            attempts=4,
+            last_error="historical detail",
+        ),
+    ])
+    db.commit()
+
+    current = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/cdc-status",
+        headers=auth_headers,
+    ).json()["data"]
+    history = client.get(
+        f"/api/v1/ontologies/{ontology_id}/sentinels/cdc-status"
+        "?include_history=true",
+        headers=auth_headers,
+    ).json()["data"]
+
+    assert current["scope"] == "current_release"
+    assert current["ontology_release_id"] == release_id
+    assert current["healthy"] is True
+    assert current["durable"]["completed"] == 1
+    assert current["durable"]["dead"] == 0
+    assert history["scope"] == "history"
+    assert history["healthy"] is False
+    assert history["durable"]["dead"] == 1
+    assert {item["eventId"] for item in history["recent_events"]} == {
+        "cdc-current", "cdc-old-dead",
+    }
 
 
 def test_new_runtime_facts_inherit_current_release(ontology, db):

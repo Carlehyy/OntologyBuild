@@ -1,0 +1,409 @@
+"""Regression coverage for production Sentinel matching and parameter safety."""
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from app.models.ontology import OntologyProject
+from app.models.ontology_formal import (
+    ActionType,
+    LinkInstance,
+    LinkType,
+    ObjectInstance,
+    ObjectType,
+)
+from app.models.sentinel import Sentinel, SentinelMatchState
+from app.ontologies.formal_modeling.action_engine import prepare_action_parameters
+from app.ontologies.sentinels import evaluator
+from app.ontologies.sentinels.dynamic_service import _dynamic_contract_errors
+
+
+def _project(db, ontology_id: str) -> None:
+    db.add(OntologyProject(
+        id=ontology_id,
+        name=ontology_id,
+        domain="sentinel-tests",
+        created_by="tests",
+        status="published",
+        version="v1.0.0",
+    ))
+
+
+def _object_type(db, ontology_id: str, object_type_id: str) -> ObjectType:
+    row = ObjectType(
+        id=object_type_id,
+        ontology_id=ontology_id,
+        name=object_type_id,
+        display_name=object_type_id,
+        primary_key="id",
+        properties=[],
+    )
+    db.add(row)
+    return row
+
+
+def _sentinel(ontology_id: str, sentinel_id: str, bindings: list[dict],
+              *, condition: str = "True", links: list[dict] | None = None,
+              trigger_mode: str = "on_enter") -> Sentinel:
+    return Sentinel(
+        id=sentinel_id,
+        ontology_id=ontology_id,
+        name=sentinel_id,
+        display_name=sentinel_id,
+        bindings=bindings,
+        links=links or [],
+        condition=condition,
+        primary_alias=bindings[0]["alias"],
+        action_ids=[],
+        action_parameters={},
+        trigger_mode=trigger_mode,
+        on_change=False,
+        on_schedule=False,
+        muted=False,
+        enabled=True,
+        status="published",
+    )
+
+
+def test_computed_values_are_visible_to_filters_conditions_and_parameters(db):
+    ontology_id = "sentinel-computed-view"
+    _project(db, ontology_id)
+    object_type = _object_type(db, ontology_id, "risk-object")
+    object_type.properties = [
+        {"id": "id", "name": "id", "type": "string", "required": True},
+        {"id": "active", "name": "active", "type": "boolean"},
+        {
+            "id": "risk-score",
+            "name": "risk_score",
+            "type": "number",
+            "source": "computed",
+        },
+        {"id": "seen-risk", "name": "seen_risk", "type": "number"},
+    ]
+    instance = ObjectInstance(
+        id="risk-1",
+        ontology_id=ontology_id,
+        object_type_id=object_type.id,
+        properties={"id": "risk-1", "active": True, "seen_risk": 0},
+        computed={"risk_score": 91},
+    )
+    sentinel = _sentinel(
+        ontology_id,
+        "computed-sentinel",
+        [{
+            "alias": "a",
+            "objectTypeId": object_type.id,
+            "filter": "a.risk_score >= 90",
+        }],
+        condition="a.risk_score == 91",
+    )
+    action = ActionType(
+        id="computed-action",
+        ontology_id=ontology_id,
+        name="computed_action",
+        display_name="computed action",
+        object_type_id=object_type.id,
+        parameters=[{
+            "name": "risk",
+            "type": "number",
+            "required": True,
+        }],
+        rules=[{
+            "id": "record-risk",
+            "type": "update_property",
+            "name": "record risk",
+            "enabled": True,
+            "order": 0,
+            "config": {
+                "targetProperty": "seen_risk",
+                "valueSource": "parameter",
+                "value": "risk",
+            },
+        }],
+    )
+    sentinel.action_ids = [action.id]
+    sentinel.action_parameters = {
+        action.id: {
+            "risk": {
+                "sourceType": "property",
+                "alias": "a",
+                "property": "risk_score",
+            },
+        },
+    }
+    db.add_all([instance, action, sentinel])
+    db.commit()
+
+    firing = evaluator.evaluate_sentinel(
+        db, ontology_id, sentinel, "manual")
+
+    assert firing.status in {"fired", "skipped"}, (
+        firing.error, firing.action_results)
+    assert firing.match_count == 1
+    assert not firing.error
+    assert firing.action_results[0]["status"] == "success"
+    db.refresh(instance)
+    assert instance.properties["seen_risk"] == 91
+
+
+def test_expression_error_never_manufactures_leave_or_mutates_match_state(db):
+    ontology_id = "sentinel-expression-fail-closed"
+    _project(db, ontology_id)
+    object_type = _object_type(db, ontology_id, "order")
+    instance = ObjectInstance(
+        id="order-1",
+        ontology_id=ontology_id,
+        object_type_id=object_type.id,
+        properties={"active": True},
+    )
+    sentinel = _sentinel(
+        ontology_id,
+        "fail-closed-sentinel",
+        [{"alias": "a", "objectTypeId": object_type.id}],
+        condition="a.active == True",
+        trigger_mode="on_enter_leave",
+    )
+    db.add_all([instance, sentinel])
+    db.commit()
+
+    first = evaluator.evaluate_sentinel(
+        db, ontology_id, sentinel, "manual")
+    state = db.query(SentinelMatchState).filter_by(
+        sentinel_id=sentinel.id).one()
+    original_detail = dict(state.match_detail)
+    # ``safe_eval`` alone would map the missing key to None and make this
+    # expression True. Sentinel runtime must classify it as an invalid
+    # observation, not an enter/leave edge.
+    sentinel.condition = "a.missing_value != 'closed'"
+    db.commit()
+
+    failed = evaluator.evaluate_sentinel(
+        db, ontology_id, sentinel, "manual")
+    db.refresh(state)
+
+    assert first.status == "skipped"
+    assert failed.status == "error"
+    assert failed.entered == []
+    assert failed.left == []
+    assert state.runtime_status == "completed"
+    assert state.match_detail == original_detail
+
+
+def test_runtime_enforces_every_declared_link_constraint(db):
+    ontology_id = "sentinel-all-links"
+    _project(db, ontology_id)
+    for object_type_id in ("type-a", "type-b", "type-c"):
+        _object_type(db, ontology_id, object_type_id)
+    db.add_all([
+        LinkType(
+            id="link-ab", ontology_id=ontology_id,
+            name="link_ab", display_name="link ab",
+            source_object_type_id="type-a",
+            target_object_type_id="type-b",
+            cardinality="many-to-many",
+            properties=[],
+        ),
+        LinkType(
+            id="link-bc", ontology_id=ontology_id,
+            name="link_bc", display_name="link bc",
+            source_object_type_id="type-b",
+            target_object_type_id="type-c",
+            cardinality="many-to-many",
+            properties=[],
+        ),
+        LinkType(
+            id="link-ac", ontology_id=ontology_id,
+            name="link_ac", display_name="link ac",
+            source_object_type_id="type-a",
+            target_object_type_id="type-c",
+            cardinality="many-to-many",
+            properties=[],
+        ),
+    ])
+    a = ObjectInstance(
+        id="a-1", ontology_id=ontology_id,
+        object_type_id="type-a", properties={})
+    b = ObjectInstance(
+        id="b-1", ontology_id=ontology_id,
+        object_type_id="type-b", properties={})
+    c = ObjectInstance(
+        id="c-1", ontology_id=ontology_id,
+        object_type_id="type-c", properties={})
+    # AB and BC exist; the declared AC constraint deliberately does not.
+    ab = LinkInstance(
+        id="ab", ontology_id=ontology_id, link_type_id="link-ab",
+        source_object_id=a.id, target_object_id=b.id, properties={})
+    bc = LinkInstance(
+        id="bc", ontology_id=ontology_id, link_type_id="link-bc",
+        source_object_id=b.id, target_object_id=c.id, properties={})
+    sentinel = _sentinel(
+        ontology_id,
+        "all-links-sentinel",
+        [
+            {"alias": "a", "objectTypeId": "type-a"},
+            {"alias": "b", "objectTypeId": "type-b"},
+            {"alias": "c", "objectTypeId": "type-c"},
+        ],
+        links=[
+            {"from": "a", "linkTypeId": "link-ab", "to": "b"},
+            {"from": "b", "linkTypeId": "link-bc", "to": "c"},
+            {"from": "a", "linkTypeId": "link-ac", "to": "c"},
+        ],
+    )
+    db.add_all([a, b, c, ab, bc, sentinel])
+    db.commit()
+
+    firing = evaluator.evaluate_sentinel(
+        db, ontology_id, sentinel, "manual")
+
+    assert firing.status == "no_match"
+    assert firing.match_count == 0
+
+
+def test_tuple_cap_is_an_error_and_does_not_consume_edges(db, monkeypatch):
+    ontology_id = "sentinel-cap"
+    _project(db, ontology_id)
+    object_type = _object_type(db, ontology_id, "cap-object")
+    db.add_all([
+        ObjectInstance(
+            id=f"cap-{index}",
+            ontology_id=ontology_id,
+            object_type_id=object_type.id,
+            properties={"active": True},
+        )
+        for index in range(3)
+    ])
+    sentinel = _sentinel(
+        ontology_id,
+        "cap-sentinel",
+        [{"alias": "a", "objectTypeId": object_type.id}],
+        condition="a.active == True",
+    )
+    db.add(sentinel)
+    db.commit()
+    monkeypatch.setattr(evaluator, "MAX_TUPLES", 2)
+
+    firing = evaluator.evaluate_sentinel(
+        db, ontology_id, sentinel, "manual")
+
+    assert firing.status == "error"
+    assert "安全上限" in (firing.error or "")
+    assert firing.entered == []
+    assert firing.left == []
+    assert db.query(SentinelMatchState).filter_by(
+        sentinel_id=sentinel.id).count() == 0
+
+
+def test_leave_snapshot_restores_unicode_properties_and_event_bindings(db):
+    ontology_id = "sentinel-leave-snapshot"
+    _project(db, ontology_id)
+    object_type = _object_type(db, ontology_id, "snapshot-object")
+    instance = ObjectInstance(
+        id="snapshot-1",
+        ontology_id=ontology_id,
+        object_type_id=object_type.id,
+        properties={"名称": "订单A"},
+        computed={"风险值": 88},
+    )
+    db.add(instance)
+    db.commit()
+    occurred_at = datetime.now(timezone.utc)
+    detail = evaluator._snapshot_match_detail(
+        {"a": instance},
+        edge="leave",
+        match_key=instance.id,
+        occurred_at=occurred_at,
+    )
+    db.delete(instance)
+    db.commit()
+    restored = evaluator._tuple_from_detail(db, ontology_id, detail)
+    action = ActionType(
+        id="snapshot-action",
+        ontology_id=ontology_id,
+        name="snapshot_action",
+        display_name="snapshot action",
+        parameters=[
+            {"name": "message", "type": "string", "required": True},
+            {"name": "risk", "type": "number", "required": True},
+            {
+                "name": "edge",
+                "type": "string",
+                "required": True,
+                "options": ["enter", "leave"],
+            },
+            {
+                "name": "optional",
+                "type": "string",
+                "required": False,
+                "defaultValue": "fallback",
+            },
+        ],
+        rules=[],
+    )
+    sentinel = _sentinel(
+        ontology_id,
+        "snapshot-sentinel",
+        [{"alias": "a", "objectTypeId": object_type.id}],
+    )
+    sentinel.action_parameters = {
+        action.id: {
+            "message": "对象 {{a.名称}} 在 {{event.edge}} 时风险 {{a.风险值}}",
+            "risk": {
+                "sourceType": "property",
+                "alias": "a",
+                "property": "风险值",
+            },
+            "edge": {"sourceType": "event", "property": "edge"},
+            "optional": {
+                "sourceType": "property",
+                "alias": "a",
+                "property": "不存在",
+            },
+        },
+    }
+
+    supplied, binding_errors = evaluator._configured_action_parameters(
+        sentinel,
+        action.id,
+        restored,
+        "a",
+        action=action,
+        event={"edge": "leave"},
+    )
+    prepared, contract_errors = prepare_action_parameters(action, supplied)
+
+    assert binding_errors == []
+    assert contract_errors == []
+    assert prepared == {
+        "message": "对象 订单A 在 leave 时风险 88",
+        "risk": 88,
+        "edge": "leave",
+        "optional": "fallback",
+    }
+
+
+def test_dynamic_template_validation_matches_runtime_unicode_and_event_support():
+    definition = {
+        "bindings": [{"alias": "a", "objectTypeId": "snapshot-object"}],
+        "primaryAlias": "a",
+        "condition": None,
+        "actionParameters": {
+            "notify": {
+                "message": "对象 {{a.名称}} 在 {{event.edge}} 时处理",
+            },
+        },
+    }
+    models = {
+        "objectTypes": [
+            SimpleNamespace(
+                id="snapshot-object",
+                properties=[{"name": "名称"}],
+            ),
+        ],
+    }
+
+    assert _dynamic_contract_errors(definition, models) == []
+
+    definition["actionParameters"]["notify"]["message"] = "{{event.unknown}}"
+    errors = _dynamic_contract_errors(definition, models)
+    assert [item["code"] for item in errors] == [
+        "sentinel_event_property_not_found",
+    ]

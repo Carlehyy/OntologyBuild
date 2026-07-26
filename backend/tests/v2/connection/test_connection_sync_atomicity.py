@@ -218,3 +218,37 @@ def test_async_dispatch_does_not_mark_connection_active_before_completion(
     assert result["status"] == "sync_triggered"
     assert connection.status == "inactive"
     assert dispatched == [(connection.id, "full", "/orders")]
+
+
+def test_async_dispatch_fails_closed_when_production_requires_celery(
+    db, monkeypatch,
+):
+    from app.config import settings
+
+    connection = Connection(
+        id="conn-async-strict",
+        name="生产异步连接",
+        kind="rest",
+        config={},
+        status="inactive",
+    )
+    db.add(connection)
+    db.commit()
+    monkeypatch.setattr(settings, "require_external_dependencies", True)
+    monkeypatch.setattr(
+        sync_connection,
+        "delay",
+        lambda *_args: (_ for _ in ()).throw(ConnectionError("broker secret")),
+        raising=False,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        trigger_sync(
+            connection.id,
+            SyncBody(async_mode=True, resource="/orders"),
+            db,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "禁止降级" in str(exc_info.value.detail)
+    assert "broker secret" not in str(exc_info.value.detail)

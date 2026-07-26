@@ -12,6 +12,14 @@ export interface SentinelLink {
   to: string
 }
 
+export type SentinelParameterBinding =
+  | string
+  | number
+  | boolean
+  | null
+  | SentinelParameterBinding[]
+  | { [key: string]: SentinelParameterBinding }
+
 export interface Sentinel {
   id: string
   ontologyId: string
@@ -25,12 +33,17 @@ export interface Sentinel {
   conditionLogic?: string
   primaryAlias?: string
   actionIds: string[]
+  actionParameters?: Record<string, Record<string, SentinelParameterBinding>>
   onChange: boolean
   onSchedule: boolean
   scanIntervalSeconds: number
   lastScannedAt?: string
+  triggerMode?: 'on_enter' | 'on_enter_leave' | 'run_on_all'
   muted: boolean
   enabled: boolean
+  releaseId?: string | null
+  enableGeneration?: number
+  origin?: 'release_builtin' | 'assistant_dynamic'
   status: string
   createdAt?: string
   updatedAt?: string
@@ -48,7 +61,42 @@ export interface SentinelFiring {
   error?: string
   durationMs?: number
   ontologyVersion?: string | null
+  ontologyReleaseId?: string | null
   createdAt?: string
+}
+
+export interface SentinelCdcStatus {
+  ontology_id: string
+  ontology_release_id?: string | null
+  scope?: 'current_release' | 'release' | 'history'
+  healthy: boolean
+  quiescent: boolean
+  worker_alive: boolean
+  queued: number
+  max_queue_size: number
+  max_cascade_depth: number
+  last_error?: string | null
+  durable: Record<string, number>
+  last_errors: Array<{
+    eventId?: string
+    chainId?: string
+    ontologyId?: string
+    ontologyReleaseId?: string | null
+    status?: string
+    cascadeDepth?: number
+    attempts?: number
+    error?: string | null
+  }>
+  dead_letters: Array<{
+    eventId?: string
+    chainId?: string
+    ontologyId?: string
+    ontologyReleaseId?: string | null
+    status?: string
+    cascadeDepth?: number
+    attempts?: number
+    error?: string | null
+  }>
 }
 
 const base = (ontologyId: string) => `/ontologies/${ontologyId}/sentinels`
@@ -67,12 +115,27 @@ export const sentinelApi = {
     apiClient.delete(`${base(ontologyId)}/${id}`),
   toggle: (ontologyId: string, id: string) =>
     apiClient.post<{ enabled: boolean }>(`${base(ontologyId)}/${id}/toggle`),
+  updateOperationalState: (
+    ontologyId: string,
+    id: string,
+    body: {
+      enabled?: boolean
+      muted?: boolean
+      expectedReleaseId: string
+      expectedGeneration: number
+    },
+  ) => apiClient.patch<Sentinel>(
+    `${base(ontologyId)}/${id}/operational-state`,
+    body,
+  ),
   run: (ontologyId: string) =>
     apiClient.post<any>(`${base(ontologyId)}/run`),
   firings: (ontologyId: string, releaseId?: string | null) =>
     apiClient.get<SentinelFiring[]>(`${base(ontologyId)}/firings${releaseQuery(releaseId)}`),
   notifications: (ontologyId: string) =>
     apiClient.get<SentinelNotification[]>(`${base(ontologyId)}/notifications`),
+  cdcStatus: (ontologyId: string) =>
+    apiClient.get<SentinelCdcStatus>(`${base(ontologyId)}/cdc-status`),
 }
 
 export interface SentinelNotification {
@@ -83,6 +146,9 @@ export interface SentinelNotification {
   body?: string
   relatedObjectId?: string
   actionId?: string
+  ontologyReleaseId?: string | null
+  sentinelId?: string | null
+  actionLogId?: string | null
   status: string
   createdAt?: string
 }

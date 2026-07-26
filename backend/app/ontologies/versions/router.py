@@ -1,9 +1,11 @@
 """本体版本化路由 — 版本历史 / diff / 回滚"""
 from __future__ import annotations
 
+import ast
 import json
 import hashlib
 import math
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -36,10 +38,16 @@ from app.models.v2.curated import CuratedReview
 from app.data_channel.datasets.service import version_has_content
 from app.ontologies.formal_modeling import schemas as FS
 from app.ontologies.formal_modeling.validation import validate_model
+from app.ontologies.sentinels.evaluator import (
+    RESERVED_SENTINEL_ALIASES as _RESERVED_SENTINEL_ALIASES,
+)
 from app.ontologies.access import ontology_access_guard
 from app.ontologies.versions.evolution_service import (
     complete_snapshot, impact_report, materialize_trial, next_draft_number,
     next_release_number, snapshot_hash, snapshot_models, validate_snapshot,
+    validate_builtin_sentinel_contract,
+    validate_expression_function_contract,
+    validate_manual_mapping_trial_contract,
     validate_release_mapping_contract, validate_trial_mapping_contract,
     workspace_snapshot,
 )
@@ -99,6 +107,48 @@ def _raise_publish_errors(errors: list[dict], message: str = "本体发布门禁
             "message": f"{message}（{len(errors)} 个错误）",
             "errors": errors,
         })
+
+
+def _dynamic_sentinel_id_conflict_errors(
+        db: Session, ontology_id: str, sentinels: Any) -> list[dict]:
+    """Protect the global Sentinel PK without mixing the two management schemas."""
+    if not isinstance(sentinels, list):
+        return []
+    builtin_by_id = {
+        str(item.get("id")).strip(): item
+        for item in sentinels
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and str(item.get("id")).strip()
+    }
+    if not builtin_by_id:
+        return []
+    conflicts = {
+        str(item[0])
+        for item in db.query(Sentinel.id).filter(
+            Sentinel.ontology_id == ontology_id,
+            Sentinel.origin == "assistant_dynamic",
+            Sentinel.id.in_(set(builtin_by_id)),
+        ).all()
+    }
+    return [
+        _gate_error(
+            "sentinel_id_conflicts_dynamic",
+            "sentinel",
+            (
+                f"建模内置哨兵 ID「{sentinel_id}」已被本体助手动态哨兵占用；"
+                "两类哨兵必须使用不同 ID"
+            ),
+            item_id=sentinel_id,
+            name=str(
+                builtin_by_id[sentinel_id].get("displayName")
+                or builtin_by_id[sentinel_id].get("name")
+                or sentinel_id
+            ),
+            field="id",
+        )
+        for sentinel_id in sorted(conflicts)
+    ]
 
 
 def _json_safe(value: Any) -> Any:
@@ -193,6 +243,103 @@ def _action_has_usable_default(parameter: dict) -> bool:
     return False
 
 
+_SENTINEL_PARAMETER_TEMPLATE = re.compile(
+    r"\{\{\s*(?P<alias>[^.\s{}]+)\.(?P<property>[^{}\s]+)\s*\}\}"
+)
+_SENTINEL_EVENT_PROPERTIES = frozenset({
+    "edge", "matchKey", "occurredAt", "sentinelId", "sentinelName",
+})
+
+
+def _normal_sentinel_source_type(raw: Any) -> str:
+    value = str(raw or "string").strip().lower()
+    return {
+        "float": "number", "double": "number",
+        "integer": "number", "int": "number",
+        "bool": "boolean",
+        "list": "array", "object_set": "array",
+        "dict": "object",
+        "timestamp": "datetime",
+    }.get(value, value)
+
+
+def _normal_action_parameter_type(raw: Any) -> str:
+    value = str(raw or "string").strip().lower()
+    return {
+        "float": "number", "double": "number",
+        "int": "integer",
+        "bool": "boolean",
+        "list": "array", "object_set": "array",
+        "dict": "object",
+        "timestamp": "datetime",
+    }.get(value, value)
+
+
+def _sentinel_parameter_types_compatible(
+        source_type: str, target_type: str) -> bool:
+    source = _normal_sentinel_source_type(source_type)
+    target = _normal_action_parameter_type(target_type)
+    if target in {"any", "json"}:
+        return True
+    if source == target:
+        return True
+    # Both parameter kinds are represented by immutable string identifiers at
+    # the Sentinel boundary.
+    if source in {"string", "reference"} and target in {"string", "reference"}:
+        return True
+    return False
+
+
+def _sentinel_expression_property_errors(
+        expression: Any, alias_properties: dict[str, set[str]], *,
+        sentinel_id: str, sentinel_name: str, field: str) -> list[dict]:
+    """Validate direct property references against the immutable release schema."""
+    raw = str(expression or "").strip().rstrip(";").strip()
+    if not raw:
+        return []
+    try:
+        tree = ast.parse(raw, mode="eval")
+    except SyntaxError:
+        # validate_safe_expression owns the canonical syntax error.
+        return []
+
+    missing: set[str] = set()
+    dynamic: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            alias = node.value.id
+            if alias in alias_properties and node.attr not in alias_properties[alias]:
+                missing.add(f"{alias}.{node.attr}")
+        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            alias = node.value.id
+            if alias not in alias_properties:
+                continue
+            key = node.slice
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                if key.value not in alias_properties[alias]:
+                    missing.add(f"{alias}[{key.value!r}]")
+            else:
+                dynamic.add(alias)
+
+    errors = [
+        _gate_error(
+            "sentinel_expression_property_not_found", "sentinel",
+            f"哨兵「{sentinel_name}」表达式引用了发布版本中不存在的属性: {reference}",
+            item_id=sentinel_id, name=sentinel_name, field=field,
+        )
+        for reference in sorted(missing)
+    ]
+    errors.extend(
+        _gate_error(
+            "sentinel_dynamic_property_forbidden", "sentinel",
+            f"哨兵「{sentinel_name}」表达式不允许通过动态下标访问 {alias} 的属性",
+            item_id=sentinel_id, name=sentinel_name, field=field,
+        )
+        for alias in sorted(dynamic)
+    )
+    return errors
+
+
 def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectType],
                         link_types: list[FoLinkType], actions: list[FoActionType]) -> list[dict]:
     """发布前验证 Sentinel 的所有静态引用和动作参数可供给性。"""
@@ -232,6 +379,11 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                     "duplicate_sentinel_alias", "sentinel",
                     f"哨兵「{label}」的 alias \"{alias}\" 重复",
                     item_id=sid, name=label, field=f"bindings[{index}].alias"))
+            elif alias in _RESERVED_SENTINEL_ALIASES:
+                errors.append(_gate_error(
+                    "reserved_sentinel_alias", "sentinel",
+                    f"哨兵「{label}」的 alias \"{alias}\" 是运行时保留名称",
+                    item_id=sid, name=label, field=f"bindings[{index}].alias"))
             else:
                 aliases[alias] = object_type_id
             if object_type_id not in object_by_id:
@@ -252,6 +404,22 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                         f"\"{alias or index}\" 的 filter 无法编译: {exc}",
                         item_id=sid, name=label,
                         field=f"bindings[{index}].filter"))
+                if alias and alias not in _RESERVED_SENTINEL_ALIASES:
+                    object_type = object_by_id.get(object_type_id)
+                    property_names = {
+                        str(item.get("name"))
+                        for item in (
+                            (object_type.properties or [])
+                            if object_type is not None else []
+                        )
+                        if isinstance(item, dict) and item.get("name")
+                    }
+                    errors.extend(_sentinel_expression_property_errors(
+                        binding_filter,
+                        {alias: property_names, "obj": property_names},
+                        sentinel_id=sid, sentinel_name=label,
+                        field=f"bindings[{index}].filter",
+                    ))
 
         primary_alias = str(sentinel.primary_alias or "").strip()
         if not primary_alias or primary_alias not in aliases:
@@ -268,6 +436,21 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                     "invalid_sentinel_condition", "sentinel",
                     f"哨兵「{label}」的 condition 无法编译: {exc}",
                     item_id=sid, name=label, field="condition"))
+            alias_properties = {}
+            for alias, object_type_id in aliases.items():
+                object_type = object_by_id.get(object_type_id)
+                alias_properties[alias] = {
+                    str(item.get("name"))
+                    for item in (
+                        (object_type.properties or [])
+                        if object_type is not None else []
+                    )
+                    if isinstance(item, dict) and item.get("name")
+                }
+            errors.extend(_sentinel_expression_property_errors(
+                sentinel.condition, alias_properties,
+                sentinel_id=sid, sentinel_name=label, field="condition",
+            ))
 
         links = sentinel.links or []
         if not isinstance(links, list):
@@ -348,6 +531,18 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                     "sentinel_action_target_mismatch", "sentinel",
                     f"哨兵「{label}」的动作目标类型与 primaryAlias 类型不匹配",
                     item_id=sid, name=label, field=f"actionIds[{index}]"))
+            if getattr(sentinel, "trigger_mode", None) == "on_enter_leave":
+                from app.ontologies.formal_modeling.action_engine import (
+                    action_supports_snapshot_execution,
+                )
+                if not action_supports_snapshot_execution(action):
+                    errors.append(_gate_error(
+                        "sentinel_leave_action_not_snapshot_safe", "sentinel",
+                        f"哨兵「{label}」启用了离开触发，但动作"
+                        f"「{action.display_name or action.name}」依赖实时对象或关系，"
+                        "目标删除后无法仅凭命中快照执行",
+                        item_id=sid, name=label,
+                        field=f"actionIds[{index}]"))
             configured = all_parameters.get(action_id, {})
             if not isinstance(configured, dict):
                 errors.append(_gate_error(
@@ -368,6 +563,117 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                         item_id=sid, name=label,
                         field=f"actionParameters.{action_id}.{parameter_name}"))
                     continue
+                field = f"actionParameters.{action_id}.{parameter_name}"
+                target_parameter = declared_parameters[parameter_name]
+
+                def validate_required_property_supply(
+                        property_definition: dict, source_label: str) -> None:
+                    if (
+                        not target_parameter.get("required")
+                        or _action_has_usable_default(target_parameter)
+                        or property_definition.get("required") is True
+                    ):
+                        return
+                    errors.append(_gate_error(
+                        "sentinel_required_parameter_optional_property",
+                        "sentinel",
+                        f"哨兵「{label}」将动作必填参数"
+                        f"「{parameter_name}」仅绑定到可选属性"
+                        f" {source_label}；真实对象缺字段时动作必然失败",
+                        item_id=sid, name=label, field=field))
+
+                def validate_binding_type(
+                        source_type: str | None, source_label: str) -> None:
+                    if not source_type or _sentinel_parameter_types_compatible(
+                            source_type,
+                            str(target_parameter.get("type") or "string")):
+                        return
+                    errors.append(_gate_error(
+                        "sentinel_parameter_type_mismatch", "sentinel",
+                        f"哨兵「{label}」参数「{parameter_name}」绑定的"
+                        f"{source_label}类型为 {source_type}，与动作参数类型 "
+                        f"{target_parameter.get('type') or 'string'} 不兼容",
+                        item_id=sid, name=label, field=field))
+
+                if isinstance(spec, str):
+                    if "{{" not in spec and "}}" not in spec:
+                        validate_binding_type("string", "字符串常量")
+                        continue
+                    matches = list(_SENTINEL_PARAMETER_TEMPLATE.finditer(spec))
+                    remainder = _SENTINEL_PARAMETER_TEMPLATE.sub("", spec)
+                    if not matches or "{{" in remainder or "}}" in remainder:
+                        errors.append(_gate_error(
+                            "invalid_sentinel_parameter_template", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」模板格式非法: {spec}",
+                            item_id=sid, name=label, field=field))
+                        continue
+                    full_match = _SENTINEL_PARAMETER_TEMPLATE.fullmatch(spec)
+                    template_source_type = (
+                        "string" if full_match is None else None)
+                    template_source_label = (
+                        "插值模板" if full_match is None else "模板来源")
+                    for match in matches:
+                        template_alias = match.group("alias")
+                        prop = match.group("property")
+                        if template_alias in {"event", "edge"}:
+                            if full_match is not None:
+                                template_source_type = "string"
+                                template_source_label = f"事件属性 {prop}"
+                            if prop not in _SENTINEL_EVENT_PROPERTIES:
+                                errors.append(_gate_error(
+                                    "sentinel_event_property_not_found", "sentinel",
+                                    f"哨兵「{label}」参数「{parameter_name}」"
+                                    f"引用了不受支持的事件属性: {prop}",
+                                    item_id=sid, name=label, field=field))
+                            continue
+                        resolved_alias = (
+                            primary_alias
+                            if template_alias in {"primary", "target"}
+                            else template_alias
+                        )
+                        if resolved_alias not in aliases:
+                            errors.append(_gate_error(
+                                "sentinel_parameter_alias_not_found", "sentinel",
+                                f"哨兵「{label}」参数「{parameter_name}」"
+                                f"模板引用的 alias 不存在: {template_alias}",
+                                item_id=sid, name=label, field=field))
+                            continue
+                        if prop == "id":
+                            if full_match is not None:
+                                template_source_type = "string"
+                                template_source_label = (
+                                    f"实例标识 {resolved_alias}.id")
+                            continue
+                        object_type = object_by_id.get(aliases[resolved_alias])
+                        property_definitions = {
+                            str(item.get("name")): item
+                            for item in (
+                                (object_type.properties or [])
+                                if object_type is not None else []
+                            )
+                            if isinstance(item, dict) and item.get("name")
+                        }
+                        if prop not in property_definitions:
+                            errors.append(_gate_error(
+                                "sentinel_parameter_property_not_found", "sentinel",
+                                f"哨兵「{label}」参数「{parameter_name}」"
+                                "模板引用的发布属性不存在: "
+                                f"{resolved_alias}.{prop}",
+                                item_id=sid, name=label, field=field))
+                        else:
+                            property_definition = property_definitions[prop]
+                            validate_required_property_supply(
+                                property_definition,
+                                f"{resolved_alias}.{prop}")
+                            if full_match is not None:
+                                template_source_type = str(
+                                    property_definition.get("type")
+                                    or "string")
+                                template_source_label = (
+                                    f"属性 {resolved_alias}.{prop}")
+                    validate_binding_type(
+                        template_source_type, template_source_label)
+                    continue
                 if not isinstance(spec, dict):
                     continue  # scalar/list/object literal; runtime contract validates its type
                 raw_source = spec.get("sourceType", spec.get("source"))
@@ -377,8 +683,8 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                 allowed_sources = {
                     "constant", "literal", "property", "match",
                     "match_property", "target_id", "primary_id",
+                    "event", "event_property", "edge",
                 }
-                field = f"actionParameters.{action_id}.{parameter_name}"
                 if source not in allowed_sources:
                     errors.append(_gate_error(
                         "invalid_sentinel_parameter_source", "sentinel",
@@ -404,12 +710,45 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                                 f"哨兵「{label}」常量参数「{parameter_name}」无效: {value_error}",
                                 item_id=sid, name=label, field=field))
                     continue
-                alias = str(spec.get("alias") or primary_alias or "").strip()
+                if source in {"event", "event_property", "edge"}:
+                    prop = str(
+                        spec.get("property", spec.get("sourceValue"))
+                        or ("edge" if source == "edge" else "")
+                    ).strip()
+                    allowed_event_properties = {
+                        "edge", "matchKey", "occurredAt",
+                        "sentinelId", "sentinelName",
+                    }
+                    if not prop:
+                        errors.append(_gate_error(
+                            "sentinel_event_property_missing", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」"
+                            "的事件绑定缺少 property",
+                            item_id=sid, name=label, field=field))
+                    elif prop not in allowed_event_properties:
+                        errors.append(_gate_error(
+                            "sentinel_event_property_not_found", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」"
+                            f"引用了不受支持的事件属性: {prop}",
+                            item_id=sid, name=label, field=field))
+                    else:
+                        validate_binding_type("string", f"事件属性 {prop}")
+                    continue
+                raw_alias = str(
+                    spec.get("alias") or primary_alias or "").strip()
+                alias = (
+                    primary_alias
+                    if raw_alias in {"primary", "target"}
+                    else raw_alias
+                )
                 if alias not in aliases:
                     errors.append(_gate_error(
                         "sentinel_parameter_alias_not_found", "sentinel",
-                        f"哨兵「{label}」参数「{parameter_name}」引用的 alias 不存在: {alias}",
+                        f"哨兵「{label}」参数「{parameter_name}」引用的 alias 不存在: {raw_alias}",
                         item_id=sid, name=label, field=field))
+                    continue
+                if source in {"target_id", "primary_id"}:
+                    validate_binding_type("string", f"实例标识 {alias}.id")
                     continue
                 if source in {"property", "match", "match_property"}:
                     prop = str(spec.get("property", spec.get("sourceValue")) or "").strip()
@@ -418,18 +757,32 @@ def _validate_sentinels(sentinels: list[Sentinel], object_types: list[FoObjectTy
                             "sentinel_parameter_property_missing", "sentinel",
                             f"哨兵「{label}」参数「{parameter_name}」的属性绑定缺少 property",
                             item_id=sid, name=label, field=field))
-                    elif prop != "id":
+                    elif prop == "id":
+                        validate_binding_type(
+                            "string", f"实例标识 {alias}.id")
+                    else:
                         object_type = object_by_id.get(aliases[alias])
-                        property_names = {
-                            str(item.get("name"))
-                            for item in ((object_type.properties or []) if object_type else [])
+                        property_definitions = {
+                            str(item.get("name")): item
+                            for item in (
+                                (object_type.properties or [])
+                                if object_type else []
+                            )
                             if isinstance(item, dict) and item.get("name")
                         }
-                        if prop not in property_names:
+                        if prop not in property_definitions:
                             errors.append(_gate_error(
                                 "sentinel_parameter_property_not_found", "sentinel",
                                 f"哨兵「{label}」参数「{parameter_name}」绑定的属性不存在: {alias}.{prop}",
                                 item_id=sid, name=label, field=field))
+                        else:
+                            property_definition = property_definitions[prop]
+                            validate_required_property_supply(
+                                property_definition, f"{alias}.{prop}")
+                            validate_binding_type(
+                                str(property_definition.get("type")
+                                    or "string"),
+                                f"属性 {alias}.{prop}")
             for parameter in (action.parameters or []):
                 if not isinstance(parameter, dict) or not parameter.get("required"):
                     continue
@@ -650,6 +1003,19 @@ def _release_errors(db: Session, ontology_id: str) -> list[dict]:
     link_instances = q(FoLinkInstance)
     errors = validate_model(
         object_types, link_types, actions, functions, instances, link_instances)
+    errors.extend(validate_expression_function_contract(
+        functions, object_types))
+    from app.ontologies.formal_modeling.action_engine import (
+        validate_action_definition,
+    )
+    for action in actions:
+        for message in validate_action_definition(
+                action, object_types, link_types, functions):
+            errors.append(_gate_error(
+                "invalid_action_definition", "action", message,
+                item_id=action.id or "",
+                name=action.display_name or action.name or action.id or "",
+                field="rules"))
     if not object_types:
         errors.append(_gate_error(
             "object_type_required", "ontology",
@@ -667,6 +1033,9 @@ def _release_errors(db: Session, ontology_id: str) -> list[dict]:
         Sentinel.ontology_id == ontology_id,
         Sentinel.origin == "release_builtin",
     ).all()
+    errors.extend(validate_builtin_sentinel_contract(
+        [_snapshot_sentinel(item) for item in sentinels],
+    ))
     errors.extend(_validate_sentinels(sentinels, object_types, link_types, actions))
 
     mappings = q(OntologyMapping)
@@ -879,6 +1248,20 @@ def _current_release(db: Session, project: OntologyProject) -> OntologyVersion:
     return current
 
 
+def _next_release_activation_number(
+        db: Session, ontology_id: str) -> str:
+    """Allocate after every historic release, including legacy pointer reuse."""
+    highest = 0
+    for (number,) in db.query(OntologyVersion.version_number).filter(
+            OntologyVersion.ontology_id == ontology_id,
+            OntologyVersion.node_kind == "release",
+    ).all():
+        raw = str(number or "").removeprefix("v").split(".", 1)[0]
+        if raw.isdigit():
+            highest = max(highest, int(raw))
+    return next_release_number(f"v{highest}")
+
+
 def _workspace_mode(version: OntologyVersion) -> str:
     if version.node_kind == "release":
         return "release"
@@ -910,7 +1293,7 @@ def _workspace_payload(
         "id": item.object_id,
         "objectTypeId": item.object_type_id,
         "properties": _json_safe(item.properties or {}),
-        "computed": {},
+        "computed": _json_safe(item.computed or {}),
         "source": "trial",
         "externalId": item.external_id,
         "createdAt": trial_created_at,
@@ -922,6 +1305,7 @@ def _workspace_payload(
         "sourceObjectId": item.source_object_id,
         "targetObjectId": item.target_object_id,
         "properties": _json_safe(item.properties or {}),
+        "sourceRelationId": item.source_relation_id,
         "createdAt": trial_created_at,
     } for item in (trial_links or [])]
     return {
@@ -1310,6 +1694,9 @@ def save_draft_workspace(
             "code": "invalid_workspace", "message": str(exc),
         }) from exc
     errors = validate_snapshot(candidate, require_object_type=False)
+    errors.extend(_dynamic_sentinel_id_conflict_errors(
+        db, ontology_id, candidate.get("sentinels"),
+    ))
     _raise_publish_errors(errors, "草稿结构校验未通过")
     draft.snapshot_formal = candidate
     valid_layout_ids = _canvas_node_ids(candidate)
@@ -1386,6 +1773,14 @@ def save_draft_mappings(
             if not isinstance(body[key], list):
                 raise HTTPException(422, f"{key} must be an array")
             snap[key] = _json_safe(body[key])
+    sentinel_errors = validate_builtin_sentinel_contract(snap["sentinels"])
+    sentinel_errors.extend(_dynamic_sentinel_id_conflict_errors(
+        db, ontology_id, snap["sentinels"],
+    ))
+    _raise_publish_errors(
+        sentinel_errors,
+        "建模内置哨兵字段校验未通过",
+    )
     draft.snapshot_formal = snap
     draft.revision = (draft.revision or 0) + 1
     draft.snapshot_hash = snapshot_hash(snap)
@@ -1429,8 +1824,41 @@ def _snapshot_sentinel_models(snapshot: dict) -> list[SimpleNamespace]:
             primary_alias=item.get("primaryAlias"),
             action_ids=item.get("actionIds") or [],
             action_parameters=item.get("actionParameters") or {},
+            trigger_mode=item.get("triggerMode") or "on_enter",
         ))
     return result
+
+
+def _invalidate_dynamic_sentinels_for_release(
+        db: Session, ontology_id: str, release_id: str) -> int:
+    """Fail closed every assistant overlay still bound to another release.
+
+    Release activation and dynamic-sentinel reconciliation must not have a
+    lazy window in which an enabled definition validated against the previous
+    schema can run on the newly activated projection.  Keep the old binding as
+    provenance; the assistant service will explicitly revalidate/rebind it
+    when an operator next reviews the definition against this release.
+    """
+    rows = db.query(Sentinel).filter(
+        Sentinel.ontology_id == ontology_id,
+        Sentinel.origin == "assistant_dynamic",
+        Sentinel.retired_at.is_(None),
+    ).with_for_update().all()
+    stale = [row for row in rows if row.bound_release_id != release_id]
+    if not stale:
+        return 0
+    stale_ids = [row.id for row in stale]
+    for row in stale:
+        row.enabled = False
+        row.last_trial_at = None
+        row.last_trial_release_id = None
+        row.last_trial_revision = None
+        row.last_trial_report = None
+    db.query(SentinelMatchState).filter(
+        SentinelMatchState.ontology_id == ontology_id,
+        SentinelMatchState.sentinel_id.in_(stale_ids),
+    ).delete(synchronize_session=False)
+    return len(stale)
 
 
 @router.get("/{ontology_id}/versions/{version_id}/trial-runs")
@@ -1493,6 +1921,9 @@ def create_trial_run(
         })
     snap = complete_snapshot(draft.snapshot_formal)
     structural_errors = validate_snapshot(snap)
+    structural_errors.extend(_dynamic_sentinel_id_conflict_errors(
+        db, ontology_id, snap["sentinels"],
+    ))
     structural_errors.extend(validate_trial_mapping_contract(snap))
     try:
         models = snapshot_models(snap)
@@ -1592,6 +2023,10 @@ def _release_readiness(
 
     # Revalidate mappings even for legacy passed trials. Older deployments may
     # have allowed partial mappings, while current publication is fail-closed.
+    errors.extend(validate_builtin_sentinel_contract(snap["sentinels"]))
+    errors.extend(_dynamic_sentinel_id_conflict_errors(
+        db, draft.ontology_id, snap["sentinels"],
+    ))
     errors.extend(validate_release_mapping_contract(snap))
 
     run = db.query(OntologyTrialRun).filter(
@@ -1619,6 +2054,10 @@ def _release_readiness(
                 item_id=run.id, name=draft.version_number))
         else:
             errors.extend(_verify_trial_dataset_pins(db, run))
+            if settings.environment == "production":
+                errors.extend(validate_manual_mapping_trial_contract(
+                    db, snap, run.dataset_versions,
+                ))
             expected = (run.result_json or {}).get("counts") or {}
             object_count = db.query(OntologyTrialObject).filter(
                 OntologyTrialObject.trial_run_id == run.id).count()
@@ -1654,6 +2093,19 @@ def _release_readiness(
 def promote_draft(
     ontology_id: str, version_id: str, body: dict,
     db: Session = Depends(get_db), current_user=Depends(require_admin),
+):
+    # Acquire the cross-process projection lock before the project row lock.
+    # ``build_all`` uses the same advisory→row order; reversing it here would
+    # allow an ABBA deadlock during publication.
+    from app.ontologies.mappings.mapping_service import _ontology_build_lock
+    with _ontology_build_lock(db, ontology_id):
+        return _promote_draft_locked(
+            ontology_id, version_id, body, db, current_user)
+
+
+def _promote_draft_locked(
+    ontology_id: str, version_id: str, body: dict,
+    db: Session, current_user,
 ):
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).with_for_update().first()
@@ -1703,6 +2155,14 @@ def promote_draft(
             "code": "trial_snapshot_stale",
             "message": "试跑快照与当前结构不一致，请从该版本创建新草稿后重新试跑",
         })
+    sentinel_errors = validate_builtin_sentinel_contract(snap["sentinels"])
+    sentinel_errors.extend(_dynamic_sentinel_id_conflict_errors(
+        db, ontology_id, snap["sentinels"],
+    ))
+    _raise_publish_errors(
+        sentinel_errors,
+        "发布前建模内置哨兵字段校验未通过",
+    )
     _raise_publish_errors(
         validate_release_mapping_contract(snap),
         "发布前数据映射完整性校验未通过",
@@ -1715,7 +2175,15 @@ def promote_draft(
             "message": "影响分析已变化或尚未确认，请重新审核",
             "currentImpactHash": report["impactHash"],
         })
-    _raise_publish_errors(_verify_trial_dataset_pins(db, run), "试跑数据版本已变化")
+    trial_pin_errors = _verify_trial_dataset_pins(db, run)
+    if settings.environment == "production":
+        trial_pin_errors.extend(validate_manual_mapping_trial_contract(
+            db, snap, run.dataset_versions,
+        ))
+    _raise_publish_errors(
+        trial_pin_errors,
+        "试跑数据版本或人工数据自动灌入契约已变化",
+    )
 
     trial_objects = db.query(OntologyTrialObject).filter(
         OntologyTrialObject.trial_run_id == run.id).all()
@@ -1739,7 +2207,7 @@ def promote_draft(
     candidate_ids = {item.object_id for item in trial_objects}
     candidate_link_ids = {item.link_id for item in trial_links}
     release_id = str(uuid.uuid4())
-    release_number = next_release_number(current.version_number)
+    release_number = _next_release_activation_number(db, ontology_id)
     source = f"ontology-release://{release_id}"
 
     try:
@@ -1795,6 +2263,9 @@ def promote_draft(
         # 新投影前先移除旧 ORM 身份，避免 v1→v2 时出现对象冲突或脏缓存。
         for old_item in [*old_links, *old_objects]:
             db.expunge(old_item)
+        promoted_instances: list[
+            tuple[FoObjectInstance, list, OntologyTrialObject]
+        ] = []
         for item in trial_objects:
             old = old_object_by_id.get(item.object_id)
             old_props = dict(old.properties or {}) if old else None
@@ -1803,20 +2274,26 @@ def promote_draft(
             if old_props is not None:
                 for removed in old_props.keys() - new_props.keys():
                     fact_props[removed] = None
-            record_property_facts(
+            new_facts = record_property_facts(
                 db, ontology_id=ontology_id, instance_id=item.object_id,
                 object_type_id=item.object_type_id, old_props=old_props,
                 new_props=fact_props, source=source, actor_id=current_user.id,
                 caused_by=run.id, confidence=1.0,
                 ontology_version=release_number,
                 ontology_release_id=release_id)
-            db.add(FoObjectInstance(
+            promoted_instance = FoObjectInstance(
                 id=item.object_id, ontology_id=ontology_id,
                 ontology_release_id=release_id,
                 object_type_id=item.object_type_id,
-                properties=dict(item.properties or {}), computed={},
+                properties=dict(item.properties or {}),
+                computed=dict(item.computed or {}),
                 source="pipeline", external_id=item.external_id,
-            ))
+            )
+            db.add(promoted_instance)
+            promoted_instances.append((promoted_instance, new_facts, item))
+        # Collection-scope derived functions must observe the complete promoted
+        # object universe, not a prefix determined by insertion order.
+        db.flush()
         for item in trial_links:
             db.add(FoLinkInstance(
                 id=item.link_id, ontology_id=ontology_id,
@@ -1825,6 +2302,7 @@ def promote_draft(
                 source_object_id=item.source_object_id,
                 target_object_id=item.target_object_id,
                 properties=dict(item.properties or {}),
+                source_relation_id=item.source_relation_id,
             ))
             record_link_fact(
                 db, ontology_id=ontology_id, link_instance_id=item.link_id,
@@ -1833,8 +2311,30 @@ def promote_draft(
                 ontology_version=release_number,
                 ontology_release_id=release_id)
         db.flush()
+        from app.ontologies.formal_modeling.derived import (
+            recompute_instance_derived,
+        )
+        for promoted_instance, new_facts, trial_item in promoted_instances:
+            recompute_instance_derived(
+                db,
+                ontology_id=ontology_id,
+                instance=promoted_instance,
+                trigger_facts=new_facts,
+                caused_by=run.id,
+            )
+            if dict(promoted_instance.computed or {}) != dict(
+                    trial_item.computed or {}):
+                raise RuntimeError(
+                    "试跑冻结的派生值与发布激活时重算结果不一致: "
+                    f"{trial_item.object_id}")
+        db.flush()
         _raise_publish_errors(_release_errors(db, ontology_id))
 
+        # The release snapshot is the activated, self-contained definition
+        # set—not the pre-activation draft JSON. Mapping application pins and
+        # built-in Sentinel publication status are part of what a later
+        # rollback must be able to restore without consulting mutable rows.
+        release_snapshot = _snapshot_formal(db, ontology_id)
         release = OntologyVersion(
             id=release_id, ontology_id=ontology_id,
             version_number=release_number,
@@ -1843,10 +2343,12 @@ def promote_draft(
             parent_version_id=current.id, base_release_id=release_id,
             promoted_from_id=draft.id, node_kind="release",
             lifecycle_status="released", revision=0,
-            snapshot_formal=snap, snapshot_hash=current_hash,
+            snapshot_formal=release_snapshot,
+            snapshot_hash=snapshot_hash(release_snapshot),
             canvas_layout=_json_safe(draft.canvas_layout or {}),
             published_at=datetime.now(timezone.utc),
-            change_summary={"formal": _diff_formal(current.snapshot_formal, snap),
+            change_summary={"formal": _diff_formal(
+                                current.snapshot_formal, release_snapshot),
                             "impact": report},
             created_by=current_user.id,
         )
@@ -1862,6 +2364,8 @@ def promote_draft(
         project.version = release_number
         project.status = "published"
         draft.lifecycle_status = "superseded"
+        invalidated_dynamic_sentinels = _invalidate_dynamic_sentinels_for_release(
+            db, ontology_id, release.id)
         db.add(AuditLog(
             id=str(uuid.uuid4()), ontology_id=ontology_id,
             event_type="publish", event_subtype="draft_promoted",
@@ -1869,7 +2373,8 @@ def promote_draft(
             description=f"将 {draft.version_number} 晋级为 {release_number}",
             object_type="ontology_version", object_id=release.id,
             meta={"draft_version_id": draft.id, "trial_run_id": run.id,
-                  "impact_hash": report["impactHash"]},
+                  "impact_hash": report["impactHash"],
+                  "invalidated_dynamic_sentinels": invalidated_dynamic_sentinels},
         ))
         db.flush()
         projection_check = None
@@ -1902,152 +2407,26 @@ def promote_draft(
     }}
 
 
-@router.post("/{ontology_id}/versions", status_code=201, deprecated=True)
-def create_version(ontology_id: str, body: dict, db: Session = Depends(get_db),
+@router.post("/{ontology_id}/versions", status_code=410, deprecated=True)
+def create_version(ontology_id: str, body: dict | None = None,
+                   db: Session = Depends(get_db),
                    current_user=Depends(require_admin)):
-    """创建新版本快照（通常在发布时调用）"""
-    # Serialize publication with mapping rebuilds, actions and other release
-    # transitions.  The release gate and snapshot must observe one stable state.
+    """Retired one-click publication endpoint.
+
+    It used mutable runtime rows as its source and therefore skipped both the
+    isolated trial and immutable-candidate checks.  Keeping it callable would
+    make the three-state lifecycle advisory rather than authoritative.
+    """
     project = db.query(OntologyProject).filter(
-        OntologyProject.id == ontology_id).with_for_update().first()
-    if not project:
+        OntologyProject.id == ontology_id).first()
+    if project is None:
         raise HTTPException(404, "Ontology not found")
-    if project.status != "draft":
-        raise HTTPException(409, detail={
-            "code": "invalid_publish_state",
-            "message": f"只有 draft 本体可发布，当前状态为 {project.status}",
-        })
-
-    _raise_publish_errors(_release_errors(db, ontology_id))
-
-    projection_check = None
-    if settings.environment == "production":
-        projection_check = _rebuild_required_query_projections(db, ontology_id)
-        if not projection_check["ready"]:
-            raise HTTPException(503, detail={
-                "code": "query_projection_not_ready",
-                "message": "Neo4j/Chroma 派生查询投影未完成，拒绝发布",
-                "projection": projection_check,
-            })
-
-    # 兼容旧客户端的一键发布仍然只生成发布主线 v1/v2；新 UI 走草稿→试跑→晋级。
-    latest = None
-    if project.current_release_id:
-        latest = db.query(OntologyVersion).filter(
-            OntologyVersion.id == project.current_release_id,
-            OntologyVersion.ontology_id == ontology_id,
-        ).first()
-    if latest is None:
-        latest = db.query(OntologyVersion).filter(
-            OntologyVersion.ontology_id == ontology_id,
-            OntologyVersion.node_kind == "release",
-        ).order_by(desc(OntologyVersion.created_at)).first()
-    new_version = next_release_number(latest.version_number if latest else None)
-
-    # 快照当前数据
-    entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
-    relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-    logic_rules = db.query(LogicRule).filter(LogicRule.ontology_id == ontology_id).all()
-    actions = db.query(Action).filter(Action.ontology_id == ontology_id).all()
-
-    # 计算变更统计
-    prev_entities = latest.snapshot_entities if latest else []
-    prev_entity_ids = {e.get("id") for e in prev_entities}
-    curr_entity_ids = {e.id for e in entities}
-
-    added = len(curr_entity_ids - prev_entity_ids)
-    deleted = len(prev_entity_ids - curr_entity_ids)
-    modified = 0
-    if latest:
-        curr_map = {e.id: e for e in entities}
-        for prev in prev_entities:
-            curr = curr_map.get(prev.get("id"))
-            if curr and (prev.get("name_cn") != curr.name_cn or prev.get("type") != curr.type):
-                modified += 1
-
-    # 正规模型（图谱编辑器 fo_* 模式层）快照 + 差异
-    # Sentinel 没有独立 publish 端点：本体发布是它的唯一上线边界。
-    # 先提升 enabled 定义，再做快照，保证版本记录与实际运行状态一致。
-    for sentinel in db.query(Sentinel).filter(
-            Sentinel.ontology_id == ontology_id,
-            Sentinel.origin == "release_builtin").all():
-        sentinel.status = "published"
-    db.flush()
-    formal_snapshot = _snapshot_formal(db, ontology_id)
-    formal_diff = _diff_formal(latest.snapshot_formal if latest else None, formal_snapshot)
-
-    version = OntologyVersion(
-        id=str(uuid.uuid4()),
-        ontology_id=ontology_id,
-        version_number=new_version,
-        version_label=body.get("version_label", ""),
-        description=body.get("description", ""),
-        snapshot_entities=[{
-            "id": e.id, "name_cn": e.name_cn, "name_en": e.name_en,
-            "type": e.type, "description": e.description, "confidence": e.confidence,
-            "properties": e.properties or {},
-        } for e in entities],
-        snapshot_relations=[{
-            "id": r.id, "source_entity": r.source_entity,
-            "target_entity": r.target_entity, "type": r.type,
-            "confidence": r.confidence, "properties": r.properties or {},
-        } for r in relations],
-        snapshot_logic=[{
-            "id": lr.id, "name_cn": lr.name_cn, "formula": lr.formula,
-            "enabled": lr.enabled, "status": lr.status,
-        } for lr in logic_rules],
-        snapshot_actions=[{
-            "id": a.id, "name_cn": a.name_cn,
-            "enabled": a.enabled, "status": a.status,
-        } for a in actions],
-        snapshot_formal=formal_snapshot,
-        parent_version_id=latest.id if latest else None,
-        base_release_id=latest.id if latest else None,
-        node_kind="release", lifecycle_status="released", revision=0,
-        snapshot_hash=snapshot_hash(formal_snapshot),
-        published_at=datetime.now(timezone.utc),
-        change_summary={
-            "added": added, "modified": modified, "deleted": deleted,
-            "formal": formal_diff,
-        },
-        created_by=current_user.id,
-    )
-    db.add(version)
-
-    # Persist the FK target before switching the project's release pointer.
-    # PostgreSQL otherwise may execute the project UPDATE before this INSERT
-    # because these models are connected only through scalar FK values rather
-    # than an ORM relationship.
-    db.flush()
-
-    # 更新项目版本号
-    project.version = new_version
-    # 发布版本后，项目状态同步为"已发布"
-    project.status = "published"
-    project.current_release_id = version.id
-
-    # 记录审计
-    audit = AuditLog(
-        id=str(uuid.uuid4()),
-        ontology_id=ontology_id,
-        event_type="publish",
-        event_subtype="version_created",
-        user_id=current_user.id,
-        user_name=current_user.username,
-        description=f"创建版本 {new_version}",
-        object_type="ontology_version",
-        object_id=version.id,
-        meta={"version_number": new_version},
-    )
-    db.add(audit)
-    db.commit()
-
-    return {"data": {
-        "id": version.id,
-        "version_number": new_version,
-        "change_summary": version.change_summary,
-        "query_projection": projection_check,
-    }}
+    raise HTTPException(410, detail={
+        "code": "legacy_publish_endpoint_retired",
+        "message": "一键发布接口已停用；请创建草稿、完成隔离试跑后再调用 promote",
+        "currentReleaseId": project.current_release_id,
+        "requiredFlow": ["draft", "trial", "promote"],
+    })
 
 
 @router.get("/{ontology_id}/versions/{version_id}")
@@ -2076,39 +2455,17 @@ def get_version_detail(ontology_id: str, version_id: str, db: Session = Depends(
 @router.post("/{ontology_id}/versions/unpublish", include_in_schema=False)
 def unpublish_ontology(ontology_id: str, db: Session = Depends(get_db),
                        current_user=Depends(require_admin)):
-    """撤回发布态，回到可编辑 draft；版本快照与运行历史保留。"""
+    """Retired mutable release withdrawal endpoint."""
     project = db.query(OntologyProject).filter(
-        OntologyProject.id == ontology_id).with_for_update().first()
+        OntologyProject.id == ontology_id).first()
     if project is None:
         raise HTTPException(404, "Ontology not found")
-    if project.status != "published":
-        raise HTTPException(409, detail={
-            "code": "invalid_unpublish_state",
-            "message": f"只有 published 本体可撤回，当前状态为 {project.status}",
-        })
-    project.status = "draft"
-    for sentinel in db.query(Sentinel).filter(
-            Sentinel.ontology_id == ontology_id,
-            Sentinel.origin == "release_builtin").all():
-        sentinel.status = "draft"
-    db.add(AuditLog(
-        id=str(uuid.uuid4()),
-        ontology_id=ontology_id,
-        event_type="unpublish",
-        event_subtype="version_withdrawn",
-        user_id=current_user.id,
-        user_name=current_user.username,
-        description=f"撤回本体发布版本 {project.version}",
-        object_type="ontology",
-        object_id=ontology_id,
-        meta={"version_number": project.version},
-    ))
-    db.commit()
-    return {"data": {
-        "id": ontology_id,
-        "status": "draft",
-        "version_number": project.version,
-    }}
+    raise HTTPException(410, detail={
+        "code": "unpublish_endpoint_retired",
+        "message": "发布节点不可撤回；请从目标发布快照创建草稿并完成试跑晋级",
+        "currentReleaseId": project.current_release_id,
+        "requiredFlow": ["draft", "trial", "promote"],
+    })
 
 
 def _restore_formal_snapshot(db: Session, ontology_id: str, snap: dict) -> dict:
@@ -2209,6 +2566,15 @@ def _restore_formal_snapshot(db: Session, ontology_id: str, snap: dict) -> dict:
                 field_mapping=_json_safe(item.get("fieldMapping") or {}),
             ))
 
+    # SessionLocal deliberately uses ``autoflush=False``. Promotion and
+    # rollback immediately query the definitions restored above in order to
+    # publish Sentinels, pin mappings and validate the candidate. Without an
+    # explicit flush those queries see an empty/old projection, leaving new
+    # mappings as ``draft`` and their dataset-version lineage unset until the
+    # later validation fails. Make restoration an observable unit before any
+    # caller continues.
+    db.flush()
+
     return {
         "objectTypes": len(snap.get("objectTypes") or []),
         "linkTypes": len(snap.get("linkTypes") or []),
@@ -2230,23 +2596,45 @@ def _restore_formal_snapshot(db: Session, ontology_id: str, snap: dict) -> dict:
 @router.post("/{ontology_id}/versions/{version_id}/rollback")
 def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(get_db),
                      current_user=Depends(require_admin)):
-    """回滚到指定版本"""
+    """Activate a new release whose definitions come from a historic release.
+
+    A rollback is a new deployment event, never pointer reuse. Runtime rows are
+    rebound to the new immutable activation id while facts, firings and
+    approvals keep the release ids under which they were originally produced.
+    """
+    from app.ontologies.mappings.mapping_service import _ontology_build_lock
+    with _ontology_build_lock(db, ontology_id):
+        return _rollback_version_locked(
+            ontology_id, version_id, db, current_user)
+
+
+def _rollback_version_locked(
+        ontology_id: str, version_id: str, db: Session, current_user):
     v = db.query(OntologyVersion).filter(
         OntologyVersion.id == version_id,
         OntologyVersion.ontology_id == ontology_id,
     ).first()
     if not v:
         raise HTTPException(404, "Version not found")
-    if v.node_kind == "draft":
+    if v.node_kind != "release" or v.lifecycle_status != "released":
         raise HTTPException(409, detail={
             "code": "draft_cannot_rollback",
             "message": "草稿不能成为运行版本；请先完成试跑并晋级",
+        })
+    if v.snapshot_formal is None:
+        raise HTTPException(409, detail={
+            "code": "legacy_snapshot_incomplete",
+            "message": "目标发布节点缺少完整结构快照，不能安全激活",
         })
 
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).with_for_update().first()
     if not project:
         raise HTTPException(404, "Ontology not found")
+    current = _current_release(db, project)
+    activation = None
+    formal_restored = None
+    projection_check = None
 
     try:
         # 旧扁平投影也随版本恢复；先删关系，再删实体，避免 FK 顺序错误。
@@ -2298,10 +2686,24 @@ def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(ge
                 status=item.get("status") or "draft",
             ))
 
-        formal_restored = None
-        if v.snapshot_formal is not None:
-            formal_restored = _restore_formal_snapshot(
-                db, ontology_id, dict(v.snapshot_formal or {}))
+        formal_restored = _restore_formal_snapshot(
+            db, ontology_id, dict(v.snapshot_formal or {}))
+        for sentinel in db.query(Sentinel).filter(
+                Sentinel.ontology_id == ontology_id,
+                Sentinel.origin == "release_builtin").all():
+            sentinel.status = "published"
+        restored_object_types = {
+            item.id: item
+            for item in db.query(FoObjectType).filter(
+                FoObjectType.ontology_id == ontology_id).all()
+        }
+        for instance in db.query(FoObjectInstance).filter(
+                FoObjectInstance.ontology_id == ontology_id).all():
+            # No computed value from the release being left is authoritative
+            # under the restored function set. Server-owned values are rebuilt
+            # after the new activation becomes the transaction's current
+            # release; legacy/browser-only values remain absent.
+            instance.computed = {}
 
         # flush 后在“快照定义 + 原有实例”的合并视图上重跑发布门禁。
         # 任何悬挂/类型/主键/基数错误都不能通过删实例“修好”。
@@ -2315,22 +2717,156 @@ def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(ge
                 "errors": errors,
             })
 
-        project.version = v.version_number
+        activation_id = str(uuid.uuid4())
+        activation_number = _next_release_activation_number(db, ontology_id)
+        activation_snapshot = _snapshot_formal(db, ontology_id)
+        activation = OntologyVersion(
+            id=activation_id,
+            ontology_id=ontology_id,
+            version_number=activation_number,
+            version_label=f"回滚至 {v.version_number}",
+            description=v.description or "",
+            parent_version_id=current.id,
+            base_release_id=activation_id,
+            promoted_from_id=None,
+            node_kind="release",
+            lifecycle_status="released",
+            revision=0,
+            snapshot_entities=_json_safe(v.snapshot_entities or []),
+            snapshot_relations=_json_safe(v.snapshot_relations or []),
+            snapshot_logic=_json_safe(v.snapshot_logic or []),
+            snapshot_actions=_json_safe(v.snapshot_actions or []),
+            snapshot_formal=activation_snapshot,
+            snapshot_hash=snapshot_hash(activation_snapshot),
+            canvas_layout=_json_safe(v.canvas_layout or {}),
+            published_at=datetime.now(timezone.utc),
+            change_summary={
+                "formal": _diff_formal(
+                    current.snapshot_formal, activation_snapshot),
+                "rollback": {
+                    "targetReleaseId": v.id,
+                    "targetVersionNumber": v.version_number,
+                    "previousReleaseId": current.id,
+                    "previousVersionNumber": current.version_number,
+                },
+            },
+            created_by=current_user.id,
+        )
+        db.add(activation)
+        # Persist the FK/self-FK target before rebinding the project and runtime
+        # projection to the new activation id.
+        db.flush()
+        db.query(FoObjectInstance).filter(
+            FoObjectInstance.ontology_id == ontology_id,
+        ).update(
+            {FoObjectInstance.ontology_release_id: activation.id},
+            synchronize_session="fetch",
+        )
+        db.query(FoLinkInstance).filter(
+            FoLinkInstance.ontology_id == ontology_id,
+        ).update(
+            {FoLinkInstance.ontology_release_id: activation.id},
+            synchronize_session="fetch",
+        )
+        project.version = activation.version_number
         project.status = "published"
-        project.current_release_id = v.id
+        project.current_release_id = activation.id
+        db.flush()
+
+        # Retained objects must not carry computed values produced by the
+        # release being left. Recompute against the restored target functions
+        # after rebinding every row to the new activation.
+        from app.ontologies.formal_modeling.derived import (
+            recompute_instance_derived,
+        )
+        for instance in db.query(FoObjectInstance).filter(
+                FoObjectInstance.ontology_id == ontology_id).all():
+            object_type = restored_object_types.get(instance.object_type_id)
+            recompute_instance_derived(
+                db,
+                ontology_id=ontology_id,
+                instance=instance,
+                object_type=object_type,
+                caused_by=activation.id,
+            )
+        db.flush()
+        post_activation_errors = _release_errors(db, ontology_id)
+        if post_activation_errors:
+            raise HTTPException(409, detail={
+                "code": "rollback_validation_failed",
+                "message": (
+                    "回滚快照重算派生投影后不满足发布契约"
+                    f"（{len(post_activation_errors)} 个错误）"),
+                "errors": post_activation_errors,
+            })
+
+        invalidated_dynamic_sentinels = _invalidate_dynamic_sentinels_for_release(
+            db, ontology_id, activation.id)
         db.add(AuditLog(
             id=str(uuid.uuid4()),
             ontology_id=ontology_id,
             event_type="rollback",
+            event_subtype="release_activated",
             user_id=current_user.id,
             user_name=current_user.username,
-            description=f"回滚到版本 {v.version_number}",
-            object_type="ontology",
-            object_id=ontology_id,
-            meta={"version_id": version_id, "version_number": v.version_number},
+            description=(
+                f"从 {v.version_number} 快照激活新发布版本 "
+                f"{activation.version_number}"),
+            object_type="ontology_version",
+            object_id=activation.id,
+            meta={
+                "target_release_id": v.id,
+                "target_version_number": v.version_number,
+                "previous_release_id": current.id,
+                "activation_release_id": activation.id,
+                "activation_version_number": activation.version_number,
+                "invalidated_dynamic_sentinels": invalidated_dynamic_sentinels,
+            },
         ))
+        db.flush()
+        if settings.environment == "production":
+            try:
+                projection_check = _rebuild_required_query_projections(
+                    db, ontology_id)
+            except Exception as projection_exc:  # noqa: BLE001
+                raise HTTPException(503, detail={
+                    "code": "rollback_projection_not_ready",
+                    "message": (
+                        "Neo4j/Chroma 构建回滚候选投影时失败；"
+                        "发布激活事务已回滚"),
+                    "projection": {
+                        "ready": False,
+                        "error": str(projection_exc),
+                    },
+                }) from projection_exc
+            if not projection_check["ready"]:
+                raise HTTPException(503, detail={
+                    "code": "rollback_projection_not_ready",
+                    "message": (
+                        "Neo4j/Chroma 未能构建回滚候选投影；"
+                        "发布激活事务已回滚"),
+                    "projection": projection_check,
+                })
         db.commit()
-    except HTTPException:
+    except HTTPException as exc:
+        db.rollback()
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if (
+            exc.status_code == 503
+            and detail.get("code") == "rollback_projection_not_ready"
+        ):
+            try:
+                compensation = _rebuild_required_query_projections(
+                    db, ontology_id)
+            except Exception as compensation_exc:  # noqa: BLE001
+                compensation = {
+                    "ready": False,
+                    "error": str(compensation_exc),
+                }
+            raise HTTPException(503, detail={
+                **detail,
+                "compensation": compensation,
+            }) from exc
         raise
     except Exception as exc:
         db.rollback()
@@ -2342,27 +2878,24 @@ def rollback_version(ontology_id: str, version_id: str, db: Session = Depends(ge
                 item_id=version_id, name=v.version_number)],
         }) from exc
 
-    projection_check = _rebuild_required_query_projections(db, ontology_id)
-    if settings.environment == "production" and not projection_check["ready"]:
-        # Relational rollback is complete, but a published runtime must never
-        # advertise readiness while graph/search still expose another release.
-        project = db.query(OntologyProject).filter(
-            OntologyProject.id == ontology_id).with_for_update().first()
-        if project is not None:
-            project.status = "draft"
-        for sentinel in db.query(Sentinel).filter(
-                Sentinel.ontology_id == ontology_id,
-                Sentinel.origin == "release_builtin").all():
-            sentinel.status = "draft"
-        db.commit()
-        raise HTTPException(503, detail={
-            "code": "rollback_projection_not_ready",
-            "message": "关系型回滚已完成，但 Neo4j/Chroma 重建失败；本体已保持 draft，重试回滚后方可上线",
-            "projection": projection_check,
-        })
+    if settings.environment != "production":
+        try:
+            projection_check = _rebuild_required_query_projections(
+                db, ontology_id)
+        except Exception as projection_exc:  # noqa: BLE001
+            # SQL activation is already committed in non-production. Surface
+            # optional query-store health without turning a successful,
+            # durable rollback into an ambiguous HTTP 500.
+            projection_check = {
+                "ready": False,
+                "error": str(projection_exc),
+                "nonBlocking": True,
+            }
 
     return {"data": {
-        "version_number": v.version_number,
+        **_version_payload(activation),
+        "rolled_back_to_id": v.id,
+        "rolled_back_to_version": v.version_number,
         "status": "published",
         "message": "Rollback successful",
         "formal_restored": formal_restored,

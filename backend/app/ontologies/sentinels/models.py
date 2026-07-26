@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     String, DateTime, ForeignKey, Text, JSON, Boolean, Integer, UniqueConstraint,
-    CheckConstraint,
+    CheckConstraint, Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -99,6 +99,10 @@ class Sentinel(Base):
     created_by: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     definition_revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1")
+    # Incremented for every disabled -> enabled transition. A definition can
+    # therefore be initialized again without forging a new definition revision.
+    enable_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
     validation_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_trial_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_trial_release_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -133,7 +137,9 @@ class SentinelMatchState(Base):
     sentinel_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     # 命中键:primary 实例 id(跨对象时为元组签名,如 "a=oid|b=mid")
     match_key: Mapped[str] = mapped_column(String(500), nullable=False)
-    # 命中元组明细(回显/证据用)：{alias: instanceId}
+    # 命中元组明细(回显/证据用)：保留 alias→instanceId 兼容字段，并保存
+    # __snapshots__（属性/派生值）与 __event__，使对象删除后的 leave/HITL
+    # 仍能确定性恢复参数，而不是读取已不存在或已变化的当前行。
     match_detail: Mapped[dict] = mapped_column(JSON, default=dict)
     # completed 才表示 on_enter 已被消费；processing/pending/failed 都是
     # 可恢复的执行 claim，仍会在后续评估中续跑而不是静默吸收边沿。
@@ -195,6 +201,108 @@ class Notification(Base):
 
     related_object_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
     action_id: Mapped[str] = mapped_column(String, nullable=True)
+    # Immutable execution provenance. Notifications are effects, not mutable
+    # inbox-only rows: operators must be able to trace them back to the exact
+    # release, Sentinel and ActionExecutionLog that produced them.
+    ontology_release_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
+    sentinel_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
+    action_log_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
 
     status: Mapped[str] = mapped_column(String(20), default="delivered")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SentinelCdcOutbox(Base):
+    """Durable, atomic hand-off from object/link commits to Sentinel runtime.
+
+    The row is inserted in the same transaction as the business projection.
+    Workers claim it with a compare-and-set token; stale claims are recoverable
+    after process termination.  ``chain_id`` scopes a synchronous mapping
+    barrier to only its own downstream cascade.
+    """
+    __tablename__ = "sentinel_cdc_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('held','pending','processing','retry','completed','dead')",
+            name="ck_sentinel_cdc_outbox_status",
+        ),
+        Index(
+            "ix_sentinel_cdc_outbox_ready",
+            "status", "available_at", "created_at",
+        ),
+        Index(
+            "ix_sentinel_cdc_outbox_chain",
+            "chain_id", "status", "created_at",
+        ),
+        Index(
+            "ix_sentinel_cdc_outbox_release_status",
+            "ontology_id", "ontology_release_id", "status", "created_at",
+        ),
+        Index(
+            "ix_sentinel_cdc_outbox_control_ready",
+            "event_kind", "sentinel_id", "ontology_release_id",
+            "status", "available_at",
+        ),
+        Index(
+            "uq_sentinel_cdc_outbox_dedupe_key",
+            "dedupe_key", unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=_uuid)
+    chain_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True)
+    ontology_id: Mapped[str] = mapped_column(
+        String, nullable=False, index=True)
+    # Immutable release that owned the changed runtime row when the event was
+    # captured.  NULL is retained only for pre-migration/unattributed events;
+    # such a row may never be consumed against a later non-NULL release.
+    ontology_release_id: Mapped[str | None] = mapped_column(
+        String, nullable=True)
+    # object_change | link_change | release_activation | scheduled_scan |
+    # dynamic_activation | builtin_activation.
+    # Explicit control-event metadata keeps release/schedule work out of
+    # business object-type identifiers and gives it a durable dedupe identity.
+    event_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="object_change",
+        server_default="object_change")
+    sentinel_id: Mapped[str | None] = mapped_column(
+        String, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True)
+    object_type_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
+    changed_keys: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list)
+    link_change: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0")
+    cascade_depth: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
+    # Mapping-owned root events carry the exact mapping fence that must reach
+    # ``applied`` before a restart recovery may release the held event.
+    mapping_ids: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending",
+        server_default="pending")
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now)
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(
+        String(64), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now,
+        onupdate=_now)

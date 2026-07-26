@@ -230,3 +230,40 @@ def test_full_incremental_chain():
     with patch.object(orch, '_trigger_mapping_apply', return_value="task-1"):
         approve_result = orch.on_review_approved("rev-1")
     assert len(approve_result["triggered_mappings"]) == 1
+
+
+def test_pipeline_dispatch_fails_closed_in_required_dependency_mode(monkeypatch):
+    from app.config import settings
+
+    db = MagicMock()
+    db.refresh.side_effect = lambda row: setattr(row, "id", "run-strict")
+    monkeypatch.setattr(settings, "require_external_dependencies", True)
+    orch = IncrementalOrchestrator(db)
+
+    with patch(
+        "app.tasks.v2.pipeline_run.pipeline_run_task.delay",
+        side_effect=ConnectionError("broker secret"),
+    ), pytest.raises(RuntimeError, match="Pipeline 未执行") as exc_info:
+        orch._trigger_pipeline("pipeline-strict")
+
+    run = db.add.call_args.args[0]
+    assert run.status == "failed"
+    assert "禁止降级" in run.error_log
+    assert "broker secret" not in run.error_log
+    assert "broker secret" not in str(exc_info.value)
+
+
+def test_mapping_dispatch_fails_closed_in_required_dependency_mode(monkeypatch):
+    from app.config import settings
+
+    db = MagicMock()
+    monkeypatch.setattr(settings, "require_external_dependencies", True)
+    orch = IncrementalOrchestrator(db)
+
+    with patch(
+        "app.tasks.v2.mapping_apply.mapping_apply_task.delay",
+        side_effect=ConnectionError("broker secret"),
+    ), pytest.raises(RuntimeError, match="Mapping 未执行") as exc_info:
+        orch._trigger_mapping_apply("mapping-strict", "ontology-strict")
+
+    assert "broker secret" not in str(exc_info.value)

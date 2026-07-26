@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import hashlib
-import itertools
+import ast
 import json
 import uuid
 from datetime import datetime, timezone
@@ -15,13 +15,26 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.mapping import OntologyMapping
 from app.ontologies.formal_modeling import schemas as FS
+from app.ontologies.formal_modeling.function_engine import (
+    evaluate_function_contract,
+)
 from app.ontologies.formal_modeling.safe_eval import SafeEvalError, safe_eval
-from app.ontologies.formal_modeling.validation import validate_model
+from app.ontologies.formal_modeling.validation import (
+    property_value_type_issue,
+    validate_model,
+)
 from app.ontologies.mappings.mapping_service import (
-    MappingSourceError, load_mapping_source_rows,
+    MappingService, MappingSourceError, load_mapping_source_rows,
+)
+from app.ontologies.mappings.formal_projection import (
+    stable_link_instance_id,
+    stable_object_instance_id,
+    stable_pipeline_entity_id,
+    stable_pipeline_relation_id,
 )
 from app.ontologies.versions.models import (
     OntologyTrialLink, OntologyTrialObject, OntologyTrialRun,
@@ -33,6 +46,11 @@ SNAPSHOT_KEYS = (
     "sentinels", "mappings", "linkMappings",
 )
 MAX_SENTINEL_TUPLES = 1000
+BUILTIN_SENTINEL_TRIGGER_MODES = frozenset({
+    "on_enter", "on_enter_leave", "run_on_all",
+})
+BUILTIN_SENTINEL_SCAN_INTERVAL_MIN = 60
+BUILTIN_SENTINEL_SCAN_INTERVAL_MAX = 86_400
 
 
 def json_safe(value: Any) -> Any:
@@ -43,6 +61,147 @@ def complete_snapshot(snapshot: dict | None) -> dict:
     """历史快照也归一为包含全部集合的完整结构。"""
     source = snapshot or {}
     return {key: json_safe(source.get(key) or []) for key in SNAPSHOT_KEYS}
+
+
+def validate_builtin_sentinel_contract(sentinels: Any) -> list[dict]:
+    """Validate release-built Sentinel envelope fields without coercion.
+
+    This validator deliberately operates on the raw snapshot dictionaries.  If
+    values were first projected through ``bool()``/``int()``, strings such as
+    ``"false"`` or an invalid scan interval could survive the isolated trial
+    and fail (or change meaning) only while the draft is being promoted.
+
+    Built-in Sentinels retain the editor's explicit "manual only" mode:
+    ``onChange == onSchedule == False`` is valid and means that only the manual
+    run endpoint evaluates the definition.  Assistant-created Sentinels keep
+    their separate, stricter schema and are not routed through this contract.
+    """
+    if not isinstance(sentinels, list):
+        return [{
+            "code": "invalid_sentinel_collection",
+            "kind": "sentinel",
+            "id": "",
+            "name": "",
+            "field": "sentinels",
+            "message": "sentinels 必须是数组",
+        }]
+
+    errors: list[dict] = []
+    seen_ids: dict[str, int] = {}
+
+    def add_error(
+            code: str, message: str, *, index: int,
+            item: dict | None = None, field: str = "") -> None:
+        raw = item or {}
+        raw_id = raw.get("id")
+        sentinel_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        label = str(
+            raw.get("displayName") or raw.get("name")
+            or sentinel_id or f"第 {index + 1} 个哨兵"
+        )
+        error = {
+            "code": code,
+            "kind": "sentinel",
+            "id": sentinel_id,
+            "name": label,
+            "message": message,
+        }
+        if field:
+            error["field"] = field
+        errors.append(error)
+
+    for index, item in enumerate(sentinels):
+        if not isinstance(item, dict):
+            add_error(
+                "invalid_sentinel_definition",
+                f"第 {index + 1} 个哨兵定义必须是对象",
+                index=index,
+            )
+            continue
+
+        raw_id = item.get("id")
+        sentinel_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        if (
+            not isinstance(raw_id, str)
+            or not sentinel_id
+            or raw_id != sentinel_id
+        ):
+            add_error(
+                "invalid_sentinel_id",
+                "建模内置哨兵必须提供非空、无首尾空白的字符串 ID",
+                index=index, item=item, field="id",
+            )
+        elif sentinel_id in seen_ids:
+            add_error(
+                "duplicate_sentinel_id",
+                (
+                    f"建模内置哨兵 ID「{sentinel_id}」重复"
+                    f"（首次出现在第 {seen_ids[sentinel_id] + 1} 项）"
+                ),
+                index=index, item=item, field="id",
+            )
+        else:
+            seen_ids[sentinel_id] = index
+
+        for field, default in (
+            ("onChange", True),
+            ("onSchedule", False),
+            ("muted", False),
+            ("enabled", True),
+        ):
+            value = item.get(field, default)
+            if type(value) is not bool:
+                add_error(
+                    "invalid_sentinel_boolean",
+                    f"哨兵字段 {field} 必须是真正的布尔值，不能使用字符串、数字或 null",
+                    index=index, item=item, field=field,
+                )
+
+        trigger_mode = item.get("triggerMode", "on_enter")
+        if (
+            not isinstance(trigger_mode, str)
+            or trigger_mode not in BUILTIN_SENTINEL_TRIGGER_MODES
+        ):
+            add_error(
+                "invalid_sentinel_trigger_mode",
+                (
+                    "triggerMode 必须是 "
+                    + "、".join(sorted(BUILTIN_SENTINEL_TRIGGER_MODES))
+                ),
+                index=index, item=item, field="triggerMode",
+            )
+
+        interval = item.get("scanIntervalSeconds", 300)
+        if type(interval) is not int:
+            add_error(
+                "invalid_sentinel_scan_interval_type",
+                "scanIntervalSeconds 必须是整数秒，不能使用字符串、浮点数或布尔值",
+                index=index, item=item, field="scanIntervalSeconds",
+            )
+        elif not (
+            BUILTIN_SENTINEL_SCAN_INTERVAL_MIN
+            <= interval
+            <= BUILTIN_SENTINEL_SCAN_INTERVAL_MAX
+        ):
+            add_error(
+                "invalid_sentinel_scan_interval_range",
+                (
+                    "scanIntervalSeconds 必须在 "
+                    f"{BUILTIN_SENTINEL_SCAN_INTERVAL_MIN} 到 "
+                    f"{BUILTIN_SENTINEL_SCAN_INTERVAL_MAX} 秒之间"
+                ),
+                index=index, item=item, field="scanIntervalSeconds",
+            )
+
+        condition_logic = item.get("conditionLogic", "and")
+        if type(condition_logic) is not str or condition_logic not in {"and", "or"}:
+            add_error(
+                "invalid_sentinel_condition_logic",
+                "conditionLogic 必须是 and 或 or",
+                index=index, item=item, field="conditionLogic",
+            )
+
+    return errors
 
 
 def canonical_snapshot(snapshot: dict | None) -> dict:
@@ -105,23 +264,353 @@ def snapshot_models(snapshot: dict) -> dict[str, list[SimpleNamespace]]:
     return result
 
 
+def validate_expression_function_contract(
+        functions: list[Any], object_types: list[Any]) -> list[dict]:
+    """Compile every enabled expression function without requiring sample rows."""
+    from app.ontologies.formal_modeling.safe_eval import (
+        validate_safe_expression,
+    )
+
+    object_by_id = {
+        str(getattr(item, "id", "") or ""): item for item in object_types
+    }
+    errors: list[dict] = []
+    for function in functions:
+        if (
+            not bool(getattr(function, "enabled", True))
+            or str(getattr(function, "language", "") or "").strip().lower()
+            != "expression"
+        ):
+            continue
+        function_id = str(getattr(function, "id", "") or "")
+        label = str(
+            getattr(function, "display_name", None)
+            or getattr(function, "name", "")
+            or function_id
+        )
+        body = str(getattr(function, "body", "") or "").strip()
+        if not body:
+            errors.append({
+                "code": "invalid_expression_function", "kind": "function",
+                "id": function_id, "name": label, "field": "body",
+                "message": f"启用的表达式函数「{label}」缺少 body",
+            })
+            continue
+        try:
+            tree = ast.parse(body.rstrip(";").strip(), mode="eval")
+            local_names = {
+                node.id for node in ast.walk(tree)
+                if isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Store)
+            }
+            validate_safe_expression(
+                body,
+                {"object", "objects", "params", *local_names},
+            )
+        except Exception as exc:
+            errors.append({
+                "code": "invalid_expression_function", "kind": "function",
+                "id": function_id, "name": label, "field": "body",
+                "message": f"表达式函数「{label}」无法编译: {exc}",
+            })
+            continue
+
+        target = object_by_id.get(str(
+            getattr(function, "target_object_type_id", "") or ""))
+        object_properties = {
+            str(prop.get("name"))
+            for prop in (
+                (getattr(target, "properties", None) or [])
+                if target is not None else []
+            )
+            if isinstance(prop, dict) and prop.get("name")
+        }
+        parameter_properties = {
+            str(parameter.get("name"))
+            for parameter in (getattr(function, "parameters", None) or [])
+            if isinstance(parameter, dict) and parameter.get("name")
+        }
+        scopes = {
+            "object": object_properties,
+            "params": parameter_properties,
+        }
+        missing: set[str] = set()
+        for node in ast.walk(tree):
+            alias = prop = None
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+            ):
+                alias, prop = node.value.id, node.attr
+            elif (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Name)
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)
+            ):
+                alias, prop = node.value.id, node.slice.value
+            if alias in scopes and prop not in scopes[alias]:
+                missing.add(f"{alias}.{prop}")
+        for reference in sorted(missing):
+            errors.append({
+                "code": "invalid_expression_function", "kind": "function",
+                "id": function_id, "name": label, "field": "body",
+                "message": (
+                    f"表达式函数「{label}」引用了目标模型中不存在的属性: "
+                    f"{reference}"
+                ),
+            })
+    return errors
+
+
 def validate_snapshot(snapshot: dict, *, require_object_type: bool = True) -> list[dict]:
+    source = snapshot if isinstance(snapshot, dict) else {}
+    errors = validate_builtin_sentinel_contract(
+        source.get("sentinels", []),
+    )
     try:
         models = snapshot_models(snapshot)
     except Exception as exc:  # Pydantic gives precise field details in the text.
-        return [{
+        errors.append({
             "code": "invalid_snapshot_shape", "kind": "ontology",
             "id": "", "name": "", "message": str(exc),
-        }]
-    errors = validate_model(
+        })
+        return errors
+    errors.extend(validate_model(
         models["objectTypes"], models["linkTypes"], models["actions"],
         models["functions"], [], [],
+    ))
+    errors.extend(validate_expression_function_contract(
+        models["functions"], models["objectTypes"]))
+    from app.ontologies.formal_modeling.action_engine import (
+        validate_action_definition,
     )
+    for action in models["actions"]:
+        for message in validate_action_definition(
+                action, models["objectTypes"], models["linkTypes"],
+                models["functions"]):
+            errors.append({
+                "code": "invalid_action_definition",
+                "kind": "action",
+                "id": str(getattr(action, "id", "") or ""),
+                "name": str(
+                    getattr(action, "display_name", None)
+                    or getattr(action, "name", "")
+                    or getattr(action, "id", "")
+                ),
+                "field": "rules",
+                "message": message,
+            })
     if require_object_type and not models["objectTypes"]:
         errors.append({
             "code": "object_type_required", "kind": "ontology",
             "id": "", "name": "", "message": "试跑本体至少需要一个 ObjectType",
         })
+    return errors
+
+
+def validate_manual_mapping_trial_contract(
+        db: Session, snapshot: dict,
+        dataset_pins: Any) -> list[dict]:
+    """Fence production auto-apply mappings to the exact isolated-trial pins.
+
+    Drafts may remain incomplete while being edited.  Once a production trial
+    is materialized, however, every mapping consuming a non-curated (manually
+    governed) dataset must explicitly subscribe to version automation and must
+    resolve to one unambiguous trial pin.  The contextual fields make object vs
+    link and source/target/edge failures actionable to API/UI consumers.
+    """
+    snap = complete_snapshot(snapshot)
+    pins_by_dataset: dict[str, list[dict]] = {}
+    if isinstance(dataset_pins, list):
+        for pin in dataset_pins:
+            if not isinstance(pin, dict):
+                continue
+            dataset_id = str(pin.get("datasetId") or "").strip()
+            if dataset_id:
+                pins_by_dataset.setdefault(dataset_id, []).append(pin)
+
+    dataset_ids = {
+        str(item.get("curatedDatasetId") or "").strip()
+        for item in snap["mappings"]
+        if isinstance(item, dict) and item.get("curatedDatasetId")
+    }
+    for item in snap["linkMappings"]:
+        if not isinstance(item, dict):
+            continue
+        dataset_ids.update(
+            str(item.get(field) or "").strip()
+            for field in ("srcDatasetId", "tgtDatasetId", "edgeDatasetId")
+            if item.get(field)
+        )
+    datasets = {
+        str(item.id): item
+        for item in (
+            db.query(Dataset).filter(Dataset.id.in_(dataset_ids)).all()
+            if dataset_ids else []
+        )
+    }
+    errors: list[dict] = []
+
+    def add_error(
+            *, code: str, kind: str, item_id: str, name: str,
+            dataset_id: str, role: str, field: str, message: str) -> None:
+        errors.append({
+            "code": code,
+            "kind": kind,
+            "id": item_id,
+            "name": name,
+            "datasetId": dataset_id,
+            "datasetRole": role,
+            "field": field,
+            "message": message,
+        })
+
+    def validate_pin(
+            *, prefix: str, kind: str, item_id: str, name: str,
+            dataset: Dataset, role: str) -> None:
+        dataset_id = str(dataset.id)
+        pins = pins_by_dataset.get(dataset_id, [])
+        role_label = {
+            "object": "对象",
+            "source": "源端",
+            "target": "目标端",
+            "edge": "边数据",
+        }.get(role, role)
+        if not pins:
+            add_error(
+                code=f"{prefix}_trial_dataset_pin_missing",
+                kind=kind, item_id=item_id, name=name,
+                dataset_id=dataset_id, role=role,
+                field="trial.datasetVersions",
+                message=(
+                    f"{kind}「{name}」的{role_label}人工数据集"
+                    f"「{dataset.name}」缺少精确试跑版本 pin"
+                ),
+            )
+            return
+        if len(pins) != 1:
+            add_error(
+                code=f"{prefix}_trial_dataset_pin_ambiguous",
+                kind=kind, item_id=item_id, name=name,
+                dataset_id=dataset_id, role=role,
+                field="trial.datasetVersions",
+                message=(
+                    f"{kind}「{name}」的{role_label}人工数据集"
+                    f"「{dataset.name}」存在 {len(pins)} 个试跑版本 pin"
+                ),
+            )
+            return
+        pin = pins[0]
+        version_id = str(pin.get("versionId") or "").strip()
+        version = (
+            db.query(DatasetVersion).filter(
+                DatasetVersion.id == version_id,
+                DatasetVersion.dataset_id == dataset_id,
+            ).first()
+            if version_id else None
+        )
+        if version is None:
+            add_error(
+                code=f"{prefix}_trial_dataset_pin_invalid",
+                kind=kind, item_id=item_id, name=name,
+                dataset_id=dataset_id, role=role,
+                field="trial.datasetVersions.versionId",
+                message=(
+                    f"{kind}「{name}」的{role_label}试跑 pin "
+                    f"{version_id or '（空）'} 不属于数据集「{dataset.name}」"
+                ),
+            )
+            return
+        if dataset.latest_version_id != version.id:
+            add_error(
+                code=f"{prefix}_trial_dataset_pin_stale",
+                kind=kind, item_id=item_id, name=name,
+                dataset_id=dataset_id, role=role,
+                field="trial.datasetVersions.versionId",
+                message=(
+                    f"{kind}「{name}」的{role_label}试跑 pin "
+                    f"未指向数据集「{dataset.name}」的当前精确版本"
+                ),
+            )
+        if str(pin.get("checksum") or "") != str(version.checksum or ""):
+            add_error(
+                code=f"{prefix}_trial_dataset_pin_checksum_changed",
+                kind=kind, item_id=item_id, name=name,
+                dataset_id=dataset_id, role=role,
+                field="trial.datasetVersions.checksum",
+                message=(
+                    f"{kind}「{name}」的{role_label}试跑 pin checksum "
+                    f"与数据集「{dataset.name}」版本不一致"
+                ),
+            )
+
+    for mapping in snap["mappings"]:
+        if not isinstance(mapping, dict):
+            continue
+        dataset_id = str(mapping.get("curatedDatasetId") or "").strip()
+        dataset = datasets.get(dataset_id)
+        if dataset is None or dataset.kind == "curated":
+            continue
+        mapping_id = str(mapping.get("id") or "")
+        label = str(mapping.get("entityClass") or mapping_id)
+        field_mapping = mapping.get("fieldMapping")
+        subscribed = (
+            isinstance(field_mapping, dict)
+            and field_mapping.get("__auto_apply_on_version__") is True
+        )
+        if not subscribed:
+            add_error(
+                code="mapping_manual_automation_not_subscribed",
+                kind="mapping", item_id=mapping_id, name=label,
+                dataset_id=dataset_id, role="object",
+                field="fieldMapping.__auto_apply_on_version__",
+                message=(
+                    f"Mapping「{label}」消费人工数据集「{dataset.name}」，"
+                    "精确试跑前必须显式开启版本后自动灌入"
+                ),
+            )
+        validate_pin(
+            prefix="mapping", kind="mapping",
+            item_id=mapping_id, name=label,
+            dataset=dataset, role="object",
+        )
+
+    for mapping in snap["linkMappings"]:
+        if not isinstance(mapping, dict):
+            continue
+        mapping_id = str(mapping.get("id") or "")
+        label = str(mapping.get("relationType") or mapping_id)
+        field_mapping = mapping.get("fieldMapping")
+        subscribed = (
+            isinstance(field_mapping, dict)
+            and field_mapping.get("__auto_apply_on_version__") is True
+        )
+        for role, field in (
+            ("source", "srcDatasetId"),
+            ("target", "tgtDatasetId"),
+            ("edge", "edgeDatasetId"),
+        ):
+            dataset_id = str(mapping.get(field) or "").strip()
+            dataset = datasets.get(dataset_id)
+            if dataset is None or dataset.kind == "curated":
+                continue
+            if not subscribed:
+                add_error(
+                    code="link_mapping_manual_automation_not_subscribed",
+                    kind="linkMapping", item_id=mapping_id, name=label,
+                    dataset_id=dataset_id, role=role,
+                    field="fieldMapping.__auto_apply_on_version__",
+                    message=(
+                        f"LinkMapping「{label}」的 {role} 角色消费人工数据集"
+                        f"「{dataset.name}」，精确试跑前必须显式开启版本自动对账"
+                    ),
+                )
+            validate_pin(
+                prefix="link_mapping", kind="linkMapping",
+                item_id=mapping_id, name=label,
+                dataset=dataset, role=role,
+            )
     return errors
 
 
@@ -271,6 +760,42 @@ def _object_type_for_mapping(mapping: dict, object_types: dict[str, dict]) -> di
                  or item.get("displayName") == entity_class), None)
 
 
+def _mapping_entity_class_target_errors(
+        mappings: list[dict], object_types: dict[str, dict]) -> list[dict]:
+    """Reject a legacy Entity namespace that would route to multiple types.
+
+    MappingService stores ``Entity.type == entityClass`` and Formal projection
+    groups by that value.  Therefore one entityClass cannot safely mean two
+    ObjectTypes, even if today's primary-key values happen not to overlap.
+    """
+    targets_by_class: dict[str, set[str]] = {}
+    mapping_ids_by_class: dict[str, list[str]] = {}
+    for mapping in mappings:
+        entity_class = str(mapping.get("entityClass") or "").strip()
+        target = _object_type_for_mapping(mapping, object_types)
+        target_id = str((target or {}).get("id") or "")
+        if not entity_class or not target_id:
+            continue
+        targets_by_class.setdefault(entity_class, set()).add(target_id)
+        mapping_ids_by_class.setdefault(entity_class, []).append(
+            str(mapping.get("id") or ""))
+
+    return [{
+        "code": "mapping_entity_class_target_ambiguous",
+        "kind": "mapping",
+        "id": ",".join(filter(None, mapping_ids_by_class[entity_class])),
+        "name": entity_class,
+        "message": (
+            f"entityClass「{entity_class}」同时绑定多个 ObjectType "
+            f"({', '.join(sorted(target_ids))})；后续重投影无法保持对象路由，"
+            "请为不同对象类型使用不同 entityClass"
+        ),
+        "field": "entityClass",
+        "targetIds": sorted(target_ids),
+    } for entity_class, target_ids in sorted(targets_by_class.items())
+      if len(target_ids) > 1]
+
+
 def validate_trial_mapping_contract(snapshot: dict | None) -> list[dict]:
     """Allow a draft to enter trial once one object has an effective mapping.
 
@@ -285,6 +810,10 @@ def validate_trial_mapping_contract(snapshot: dict | None) -> list[dict]:
         for item in snap["objectTypes"]
         if item.get("id")
     }
+    ambiguous = _mapping_entity_class_target_errors(
+        snap["mappings"], object_types)
+    if ambiguous:
+        return ambiguous
     for mapping in snap["mappings"]:
         target = _object_type_for_mapping(mapping, object_types)
         field_mapping = mapping.get("fieldMapping")
@@ -351,6 +880,8 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
             and not prop.get("computed")
         ]
 
+    errors.extend(_mapping_entity_class_target_errors(
+        snap["mappings"], object_types))
     for mapping in snap["mappings"]:
         mapping_id = str(mapping.get("id") or "")
         mapping_name = str(mapping.get("entityClass") or mapping_id)
@@ -529,6 +1060,13 @@ def validate_release_mapping_contract(snapshot: dict | None) -> list[dict]:
 
 
 def _simulate_sentinels(snapshot: dict, objects: list[dict], links: list[dict]) -> list[dict]:
+    """Evaluate isolated trial data with the production sentinel contracts.
+
+    Every planned action runs through Action Engine's explicit preview-only
+    branch.  That branch shares validation, mapping, recipient, webhook and
+    object/link planning semantics with production while suppressing every
+    ActionLog/Fact/Notification/network side effect.
+    """
     by_type: dict[str, list[dict]] = {}
     for item in objects:
         by_type.setdefault(item["objectTypeId"], []).append(item)
@@ -536,52 +1074,502 @@ def _simulate_sentinels(snapshot: dict, objects: list[dict], links: list[dict]) 
         (item["linkTypeId"], item["sourceObjectId"], item["targetObjectId"])
         for item in links
     }
+    try:
+        models = snapshot_models(snapshot)
+        action_models = {
+            action.id: action for action in models["actions"]
+        }
+    except Exception:
+        models = {
+            "objectTypes": [], "linkTypes": [], "actions": [],
+            "functions": [],
+        }
+        action_models = {}
+
+    # Keep the deliberately non-executable parameter binding language and
+    # action contract identical to the production evaluator.
+    from app.ontologies.sentinels.evaluator import (
+        _binding_instance,
+        _configured_action_parameters,
+        _holds,
+        _match_key,
+        _passes,
+    )
+    from app.ontologies.formal_modeling.action_engine import (
+        execute_action,
+        prepare_action_parameters,
+    )
+    from app.ontologies.formal_modeling.derived import (
+        DerivedComputationError,
+    )
+
+    def add_error(bucket: list[str], message: str) -> None:
+        if message not in bucket and len(bucket) < 20:
+            bucket.append(message)
+
+    def object_model(item: dict) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=item["objectId"],
+            object_type_id=item["objectTypeId"],
+            properties=dict(item.get("properties") or {}),
+            computed=dict(item.get("computed") or {}),
+            ontology_release_id=None,
+        )
+
+    isolated_objects = [object_model(item) for item in objects]
+    isolated_links = [
+        SimpleNamespace(
+            id=item["linkId"],
+            link_type_id=item["linkTypeId"],
+            source_object_id=item["sourceObjectId"],
+            target_object_id=item["targetObjectId"],
+            properties=dict(item.get("properties") or {}),
+        )
+        for item in links
+    ]
+
+    def derive_candidate(candidate, _object_type, extras: list) -> dict:
+        candidates = [
+            item for item in [*isolated_objects, *extras]
+            if str(item.id) != str(candidate.id)
+        ]
+        candidates.append(candidate)
+        materialized = [{
+            "objectId": str(item.id),
+            "objectTypeId": str(item.object_type_id),
+            "properties": dict(item.properties or {}),
+            "computed": dict(getattr(item, "computed", None) or {}),
+        } for item in candidates]
+        derived_errors = _compute_trial_derived(snapshot, materialized)
+        if derived_errors:
+            raise DerivedComputationError(
+                "；".join(
+                    str(item.get("message") or item)
+                    for item in derived_errors[:8]))
+        computed = next((
+            item.get("computed") or {}
+            for item in materialized
+            if str(item["objectId"]) == str(candidate.id)
+        ), {})
+        return dict(computed)
+
+    preview_context_base = {
+        "isolated": True,
+        "release_id": None,
+        "ontology_version": "trial",
+        "object_types": models["objectTypes"],
+        "link_types": models["linkTypes"],
+        "actions": models["actions"],
+        "functions": models["functions"],
+        "objects": isolated_objects,
+        "links": isolated_links,
+        "derive": derive_candidate,
+    }
+
     results = []
     for sentinel in snapshot.get("sentinels") or []:
         bindings = sentinel.get("bindings") or []
         errors: list[str] = []
-        matched = 0
-        if not sentinel.get("enabled", True) or sentinel.get("muted", False):
-            results.append({"id": sentinel.get("id"), "matched": 0, "errors": [], "skipped": True})
+        activation = (
+            "disabled" if not sentinel.get("enabled", True)
+            else "muted" if sentinel.get("muted", False)
+            else "active"
+        )
+        if not bindings:
+            results.append({
+                "id": sentinel.get("id"),
+                "name": sentinel.get("displayName") or sentinel.get("name"),
+                "matched": 0,
+                "candidateCount": 0,
+                "candidateCapReached": False,
+                "parameterErrorCount": 0,
+                "errors": ["哨兵至少需要一个对象绑定"],
+                "plannedActions": 0,
+                "plannedActionSamples": [],
+                "plannedActionsTruncated": False,
+                "sideEffects": "none",
+            })
             continue
-        candidates: list[list[dict]] = []
+
+        filtered_by_alias: dict[str, list[SimpleNamespace]] = {}
         for binding in bindings:
-            filtered = []
+            alias = str(binding.get("alias") or "")
+            filtered: list[SimpleNamespace] = []
             for obj in by_type.get(str(binding.get("objectTypeId")), []):
-                try:
-                    if not binding.get("filter") or safe_eval(
-                        str(binding["filter"]),
-                        {str(binding.get("alias")): obj["properties"], "obj": obj["properties"]},
-                    ):
-                        filtered.append(obj)
-                except SafeEvalError as exc:
-                    if len(errors) < 5:
-                        errors.append(str(exc))
-            candidates.append(filtered)
-        for combo in itertools.islice(itertools.product(*candidates), MAX_SENTINEL_TUPLES):
-            scope = {str(bindings[i].get("alias")): combo[i]["properties"] for i in range(len(combo))}
-            ids = {str(bindings[i].get("alias")): combo[i]["objectId"] for i in range(len(combo))}
-            valid_links = all(
-                (str(link.get("linkTypeId")), ids.get(str(link.get("from"))),
-                 ids.get(str(link.get("to")))) in link_keys
-                for link in (sentinel.get("links") or [])
+                model = object_model(obj)
+                values = {
+                    **dict(model.properties or {}),
+                    **dict(model.computed or {}),
+                }
+                evaluation_errors: list[str] = []
+                if _passes(
+                        binding.get("filter"), alias, values,
+                        evaluation_errors):
+                    filtered.append(model)
+                for error in evaluation_errors:
+                    add_error(errors, error)
+            filtered_by_alias[alias] = filtered
+
+        sentinel_links = sentinel.get("links") or []
+
+        def joined_links_hold(tup: dict[str, SimpleNamespace]) -> bool:
+            for link in sentinel_links:
+                from_alias = str(link.get("from") or "")
+                to_alias = str(link.get("to") or "")
+                if from_alias not in tup or to_alias not in tup:
+                    continue
+                if (
+                    str(link.get("linkTypeId") or ""),
+                    tup[from_alias].id,
+                    tup[to_alias].id,
+                ) not in link_keys:
+                    return False
+            return True
+
+        # Production expands one binding at a time, uses available links to
+        # constrain candidates and validates every link whose endpoints have
+        # become bound.  The trial mirrors that semantic rather than validating
+        # a differently ordered full Cartesian product.
+        first_alias = str(bindings[0].get("alias") or "")
+        tuples: list[dict[str, SimpleNamespace]] = [
+            {first_alias: item}
+            for item in filtered_by_alias.get(first_alias, [])
+        ]
+        cap_reached = len(tuples) > MAX_SENTINEL_TUPLES
+        if cap_reached:
+            tuples = tuples[:MAX_SENTINEL_TUPLES]
+        for binding in bindings[1:]:
+            if cap_reached:
+                break
+            alias = str(binding.get("alias") or "")
+            expanded: list[dict[str, SimpleNamespace]] = []
+            for tup in tuples:
+                for candidate in filtered_by_alias.get(alias, []):
+                    joined = {**tup, alias: candidate}
+                    if not joined_links_hold(joined):
+                        continue
+                    expanded.append(joined)
+                    if len(expanded) > MAX_SENTINEL_TUPLES:
+                        cap_reached = True
+                        break
+                if cap_reached:
+                    break
+            tuples = expanded[:MAX_SENTINEL_TUPLES]
+        if cap_reached:
+            add_error(
+                errors,
+                f"跨对象候选组合超过安全上限 {MAX_SENTINEL_TUPLES}，"
+                "请收窄绑定过滤条件后重试",
             )
-            if not valid_links:
-                continue
-            try:
-                if not sentinel.get("condition") or safe_eval(str(sentinel["condition"]), scope):
-                    matched += 1
-            except SafeEvalError as exc:
-                if len(errors) < 5:
-                    errors.append(str(exc))
+
+        matched_tuples: list[dict[str, SimpleNamespace]] = []
+        for tup in tuples:
+            evaluation_errors = []
+            if _holds(sentinel.get("condition"), tup, evaluation_errors):
+                matched_tuples.append(tup)
+            for error in evaluation_errors:
+                add_error(errors, error)
+
+        primary = str(sentinel.get("primaryAlias") or "") or first_alias
+        sentinel_model = SimpleNamespace(
+            action_parameters=sentinel.get("actionParameters", {}),
+        )
+        action_ids = [str(item) for item in (sentinel.get("actionIds") or [])]
+        parameter_error_count = 0
+        planned_samples: list[dict] = []
+        total_actions = 0
+        for tup in matched_tuples:
+            target = _binding_instance(tup, primary, primary)
+            match_ids = {alias: instance.id for alias, instance in tup.items()}
+            event = {
+                # Trial parameter resolution uses the same real edge vocabulary
+                # as runtime.  A synthetic "preview" value made otherwise valid
+                # enum-constrained action parameters fail only in trial.
+                "edge": "enter",
+                "matchKey": _match_key(tup, primary),
+                "occurredAt": datetime.now(timezone.utc).isoformat(),
+                "sentinelId": sentinel.get("id"),
+                "sentinelName": (
+                    sentinel.get("displayName") or sentinel.get("name")),
+            }
+            for action_id in action_ids:
+                action = action_models.get(action_id)
+                edges = ["enter"]
+                if sentinel.get("triggerMode") == "on_enter_leave":
+                    edges.append("leave")
+                for edge in edges:
+                    edge_event = {**event, "edge": edge}
+                    parameters, binding_errors = (
+                        _configured_action_parameters(
+                            sentinel_model, action_id, tup, primary,
+                            action=action, event=edge_event)
+                    )
+                    if action is None:
+                        binding_errors.append(
+                            f"动作不存在: {action_id}")
+                    elif action.object_type_id and (
+                        target is None
+                        or target.object_type_id != action.object_type_id
+                    ):
+                        binding_errors.append(
+                            f"动作 {action.display_name or action.name} "
+                            "的目标类型与命中对象不一致")
+                    if action is not None:
+                        parameters, parameter_errors = (
+                            prepare_action_parameters(action, parameters)
+                        )
+                        binding_errors.extend(parameter_errors)
+                    parameter_error_count += len(binding_errors)
+                    for error in binding_errors:
+                        add_error(
+                            errors,
+                            f"{edge} 参数: {error}"
+                            if edge == "leave" else error)
+
+                    preview = {
+                        "status": "failed",
+                        "effects": [],
+                        "validationErrors": list(binding_errors),
+                        "errorMessage": (
+                            "; ".join(binding_errors)
+                            if binding_errors else "动作不存在"),
+                        "sideEffects": "none",
+                    }
+                    if action is not None:
+                        body = SimpleNamespace(
+                            action_id=action_id,
+                            parameters=parameters,
+                            target_instance_id=(
+                                target.id if target else None),
+                            dry_run=True,
+                            target_snapshot=None,
+                            idempotency_key=None,
+                            sentinel_match_state_id=None,
+                            sentinel_id=sentinel.get("id"),
+                            preview_only=True,
+                        )
+                        preview = execute_action(
+                            None,
+                            "isolated-trial",
+                            body,
+                            preview_only=True,
+                            preview_context={
+                                **preview_context_base,
+                                "action": action,
+                            },
+                        )
+                        if preview.get("status") != "success":
+                            preview_errors = [
+                                *list(
+                                    preview.get("validationErrors") or []),
+                            ]
+                            if (
+                                preview.get("errorMessage")
+                                and preview.get("errorMessage")
+                                not in preview_errors
+                            ):
+                                preview_errors.append(
+                                    str(preview["errorMessage"]))
+                            for error in preview_errors:
+                                add_error(
+                                    errors,
+                                    f"{edge} 动作: {error}"
+                                    if edge == "leave" else str(error))
+                    total_actions += 1
+                    if len(planned_samples) < 200:
+                        planned_samples.append({
+                            "actionId": action_id,
+                            "actionName": (
+                                action.display_name or action.name
+                                if action is not None else action_id
+                            ),
+                            "edge": edge,
+                            "targetInstanceId": (
+                                target.id if target else None),
+                            "match": match_ids,
+                            "parameters": parameters,
+                            "status": preview.get("status"),
+                            "effects": preview.get("effects") or [],
+                            "validationErrors": [
+                                *binding_errors,
+                                *[
+                                    item for item in (
+                                        preview.get(
+                                            "validationErrors") or [])
+                                    if item not in binding_errors
+                                ],
+                            ],
+                            "errorMessage": preview.get(
+                                "errorMessage"),
+                            "sideEffects": "none",
+                        })
+        matched = len(matched_tuples)
         results.append({
             "id": sentinel.get("id"),
             "name": sentinel.get("displayName") or sentinel.get("name"),
-            "matched": matched, "errors": errors,
+            "activation": activation,
+            "matched": matched,
+            "candidateCount": len(tuples),
+            "candidateCapReached": cap_reached,
+            "parameterErrorCount": parameter_error_count,
+            "errors": errors,
             # 动作只展示计划，绝不在试跑执行外部副作用。
-            "plannedActions": len(sentinel.get("actionIds") or []) * matched,
+            "plannedActions": total_actions,
+            "plannedActionSamples": planned_samples,
+            "plannedActionsTruncated": total_actions > len(planned_samples),
+            "sideEffects": "none",
         })
     return results
+
+
+def _compute_trial_derived(snapshot: dict, objects: list[dict]) -> list[dict]:
+    """Compute expression-derived values in the isolated trial projection.
+
+    Production Formal projection computes these values before sentinels inspect
+    an instance.  The version trial must expose the same merged property view.
+    TypeScript/client-side functions remain unavailable on the backend exactly
+    as they do in production.
+    """
+    object_types = {
+        str(item.get("id") or ""): item
+        for item in (snapshot.get("objectTypes") or [])
+    }
+    functions = {}
+    for item in snapshot.get("functions") or []:
+        function_id = str(item.get("id") or "")
+        functions[function_id] = SimpleNamespace(
+            id=function_id,
+            name=item.get("name"),
+            display_name=(
+                item.get("displayName") or item.get("display_name")
+            ),
+            function_type=(
+                item.get("functionType")
+                or item.get("function_type")
+                or "object"
+            ),
+            language=item.get("language") or "expression",
+            target_object_type_id=(
+                item.get("targetObjectTypeId")
+                or item.get("target_object_type_id")
+            ),
+            body=item.get("body") or "",
+            enabled=item.get("enabled", True),
+        )
+    errors: list[dict] = []
+    all_values = [
+        dict(item.get("properties") or {}) for item in objects
+    ]
+    values_by_type: dict[str, list[dict]] = {}
+    for item, values in zip(objects, all_values):
+        values_by_type.setdefault(str(item.get("objectTypeId") or ""), []).append(
+            values)
+
+    for item in objects:
+        object_type = object_types.get(str(item.get("objectTypeId") or ""))
+        if object_type is None:
+            continue
+        computed: dict = {}
+        for prop in object_type.get("properties") or []:
+            if not isinstance(prop, dict) or not (
+                prop.get("source") == "computed" or prop.get("computed")
+            ):
+                continue
+            property_name = str(prop.get("name") or "")
+            property_label = str(
+                prop.get("displayName")
+                or prop.get("display_name")
+                or property_name
+                or "(未命名派生属性)"
+            )
+            if not property_name:
+                errors.append({
+                    "code": "derived_property_evaluation_failed",
+                    "kind": "objectInstance",
+                    "id": item.get("objectId") or "",
+                    "name": property_label,
+                    "field": "",
+                    "message": "试跑对象类型存在未命名的派生属性，无法安全计算",
+                })
+                continue
+            function_id = str(prop.get("functionId") or "")
+            if not function_id:
+                # Matches production: an unbound/client-maintained computed
+                # property has no authoritative server value and is omitted.
+                continue
+            fn = functions.get(function_id)
+            if fn is None:
+                errors.append({
+                    "code": "derived_property_evaluation_failed",
+                    "kind": "objectInstance",
+                    "id": item.get("objectId") or "",
+                    "name": property_label,
+                    "field": property_name,
+                    "message": (
+                        f"派生属性「{property_label}」引用的函数不存在: "
+                        f"{function_id}"
+                    ),
+                })
+                continue
+            language = str(
+                getattr(fn, "language", None) or "expression"
+            ).strip().lower()
+            # Matches production: an enabled non-expression function is not
+            # authoritative on the server, so no trial projection is emitted.
+            # Disabled bindings fail before this branch in both environments.
+            if bool(getattr(fn, "enabled", True)) and language != "expression":
+                continue
+            target_type = str(
+                getattr(fn, "target_object_type_id", None) or "")
+            scope_objects = (
+                values_by_type.get(target_type, [])
+                if target_type else all_values
+            )
+            result = evaluate_function_contract(
+                fn,
+                obj_props=dict(item.get("properties") or {}),
+                params={},
+                object_loader=lambda values=scope_objects: values,
+            )
+            if not result.get("success"):
+                errors.append({
+                    "code": "derived_property_evaluation_failed",
+                    "kind": "objectInstance",
+                    "id": item.get("objectId") or "",
+                    "name": property_label,
+                    "field": property_name,
+                    "message": (
+                        f"派生属性「{property_label}」试算失败: "
+                        f"{result.get('error') or '未知错误'}"
+                    ),
+                })
+                continue
+            value = result.get("result")
+            type_issue = property_value_type_issue(prop, value)
+            if type_issue is not None:
+                message = (
+                    f"派生属性「{property_label}」的类型定义"
+                    f"「{prop.get('type')}」非法"
+                    if type_issue["code"]
+                    == "invalid_property_type_definition"
+                    else (
+                        f"派生属性「{property_label}」试算结果类型不匹配："
+                        f"期望 {type_issue['expected']}，"
+                        f"实际为 {type_issue['actual']}"
+                    )
+                )
+                errors.append({
+                    "code": type_issue["code"],
+                    "kind": "objectInstance",
+                    "id": item.get("objectId") or "",
+                    "name": property_label,
+                    "field": property_name,
+                    "message": message,
+                })
+                continue
+            computed[property_name] = value
+        item["computed"] = computed
+    return errors
 
 
 def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dict:
@@ -598,6 +1586,7 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
     # (dataset, object type) 精确索引，不能让后出现的映射覆盖前者。
     mapping_rows: dict[tuple[str, str], dict[str, Any]] = {}
     object_ids: set[str] = set()
+    object_entity_ids: dict[str, str] = {}
 
     for raw_mapping in snap["mappings"]:
         mapping_id = str(raw_mapping.get("id") or "")
@@ -664,10 +1653,11 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
                     "message": "数据行主键为空，无法生成稳定对象身份",
                 })
                 continue
-            object_id = str(uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"{run.ontology_id}:{target.get('id')}:{identity}",
-            ))
+            entity_class = str(
+                raw_mapping.get("entityClass") or target.get("name") or "")
+            entity_id = stable_pipeline_entity_id(
+                run.ontology_id, entity_class, identity)
+            object_id = stable_object_instance_id(run.ontology_id, entity_id)
             if object_id in object_ids:
                 errors.append({
                     "code": "duplicate_primary_key", "kind": "objectInstance",
@@ -681,12 +1671,30 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
                 for source_name, target_name in field_map.items()
                 if not str(source_name).startswith("__") and source_name in row
             }
+            # Formal projection performs the same coercion after MappingService
+            # writes its intermediate Entity rows.  Trial data must therefore
+            # validate and feed sentinels with those production values rather
+            # than raw CSV strings.
+            from app.ontologies.mappings.formal_projection import (
+                _coerce_props_to_type,
+            )
+            try:
+                properties = _coerce_props_to_type(
+                    properties, list(target.get("properties") or []))
+            except ValueError as exc:
+                errors.append({
+                    "code": "mapping_property_coercion_failed",
+                    "kind": "objectInstance", "id": object_id,
+                    "name": raw_mapping.get("entityClass") or "",
+                    "message": str(exc),
+                })
             item = {
                 "objectId": object_id, "objectTypeId": str(target.get("id")),
                 "properties": properties, "sourceDatasetId": dataset_id,
-                "sourceDatasetVersionId": version.id, "externalId": identity,
+                "sourceDatasetVersionId": version.id, "externalId": entity_id,
             }
             objects.append(item)
+            object_entity_ids[object_id] = entity_id
             rows_with_ids.append((row, object_id))
         mapping_rows[(dataset_id, str(target.get("id")))] = {
             "rows": rows_with_ids,
@@ -730,7 +1738,7 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
         tgt_rows = tgt_materialization["rows"]
         src_key = str(link_mapping.get("srcKey") or "")
         tgt_key = str(link_mapping.get("tgtKey") or "")
-        pairs: list[tuple[str, str, dict]] = []
+        pairs: list[tuple[str, str, dict, str]] = []
         edge_dataset = link_mapping.get("edgeDatasetId")
         if edge_dataset:
             try:
@@ -766,13 +1774,17 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
                 if not tgt_index and tgt_rows:
                     raise MappingSourceError("连接表暂不支持复合主键目标端点")
                 fmap = link_mapping.get("fieldMapping") or {}
+                mapping_identity = MappingService(db)
+                edge_pk = mapping_identity._choose_pk_col(edge_rows)
                 for row in edge_rows:
                     source_id = src_index.get(str(row.get(src_key)))
                     target_id = tgt_index.get(str(row.get(tgt_key)))
                     if source_id and target_id:
                         props = {str(prop): row.get(column) for prop, column in fmap.items()
                                  if not str(prop).startswith("__") and column in row}
-                        pairs.append((source_id, target_id, props))
+                        edge_key = mapping_identity._row_identity_value(
+                            row, edge_pk)
+                        pairs.append((source_id, target_id, props, edge_key))
             except Exception as exc:
                 errors.append({
                     "code": "link_mapping_source_unavailable", "kind": "linkMapping",
@@ -785,23 +1797,40 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
                 target_index.setdefault(str(row.get(tgt_key)), []).append(oid)
             for row, source_id in src_rows:
                 for target_id in target_index.get(str(row.get(src_key)), []):
-                    pairs.append((source_id, target_id, {}))
-        for source_id, target_id, properties in pairs:
-            link_id = str(uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"{run.ontology_id}:{source_id}:{link_type_id}:{target_id}:{link_mapping.get('id')}",
-            ))
+                    pairs.append((source_id, target_id, {}, ""))
+        relation_type = str(
+            link_mapping.get("relationType") or link_type.get("name") or "")
+        link_mapping_id = str(link_mapping.get("id") or "")
+        for source_id, target_id, properties, edge_key in pairs:
+            source_entity_id = object_entity_ids[source_id]
+            target_entity_id = object_entity_ids[target_id]
+            relation_source = (
+                f"link_mapping:{link_mapping_id}:{edge_key}"
+                if edge_key else f"link_mapping:{link_mapping_id}"
+            )
+            source_relation_id = stable_pipeline_relation_id(
+                run.ontology_id,
+                source_entity_id,
+                target_entity_id,
+                relation_type,
+                relation_source,
+            )
+            link_id = stable_link_instance_id(
+                run.ontology_id, link_type_id, source_id, target_id, edge_key)
             links.append({
                 "linkId": link_id, "linkTypeId": link_type_id,
                 "sourceObjectId": source_id, "targetObjectId": target_id,
                 "properties": properties,
+                "sourceRelationId": source_relation_id,
             })
+
+    errors.extend(_compute_trial_derived(snap, objects))
 
     try:
         models = snapshot_models(snap)
         instance_models = [SimpleNamespace(
             id=item["objectId"], object_type_id=item["objectTypeId"],
-            properties=item["properties"], computed={},
+            properties=item["properties"], computed=item.get("computed") or {},
         ) for item in objects]
         link_models = [SimpleNamespace(
             id=item["linkId"], link_type_id=item["linkTypeId"],
@@ -827,13 +1856,21 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
                 "message": error,
             })
 
+    run.dataset_versions = list(pinned.values())
+    if settings.environment == "production":
+        errors.extend(validate_manual_mapping_trial_contract(
+            db, snap, run.dataset_versions,
+        ))
+
     # 仅通过的试跑保留可晋级的完整投影；失败试跑保留摘要和样例，避免把大量
     # 无效数据误认为可发布候选。
     if not errors:
         for item in objects:
             db.add(OntologyTrialObject(
                 trial_run_id=run.id, object_id=item["objectId"],
-                object_type_id=item["objectTypeId"], properties=item["properties"],
+                object_type_id=item["objectTypeId"],
+                properties=item["properties"],
+                computed=item.get("computed") or {},
                 source_dataset_id=item["sourceDatasetId"],
                 source_dataset_version_id=item["sourceDatasetVersionId"],
                 external_id=item["externalId"],
@@ -845,9 +1882,9 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
                 source_object_id=item["sourceObjectId"],
                 target_object_id=item["targetObjectId"],
                 properties=item["properties"],
+                source_relation_id=item["sourceRelationId"],
             ))
 
-    run.dataset_versions = list(pinned.values())
     result = {
         "counts": {
             "objects": len(objects), "links": len(links),

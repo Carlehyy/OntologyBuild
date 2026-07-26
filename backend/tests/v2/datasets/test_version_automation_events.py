@@ -162,6 +162,47 @@ def test_only_explicit_manual_mapping_subscription_runs_build_all(db):
     assert result["manual_mapping"]["ontologies"][0]["sentinel_dispatch"]["fired"] == 1
 
 
+def test_dataset_version_does_not_hide_durable_sentinel_failure_with_manual_scan(
+        db):
+    service, _storage, dataset = _manual_service(db)
+    version = service.create_version(
+        dataset.id, b"id,name\n1,A\n", rowcount=1)
+    db.add(OntologyMapping(
+        id="sentinel-failure-subscription",
+        ontology_id="ontology-sentinel-failure",
+        curated_dataset_id=dataset.id,
+        entity_class="BusinessRow",
+        field_mapping={
+            "id": "id",
+            "__primary_key__": "id",
+            "__auto_apply_on_version__": True,
+        },
+        status="applied",
+    ))
+    db.commit()
+
+    with patch(
+        "app.services.v2.mapping.mapping_service.MappingService.build_all",
+        return_value={
+            "total_entities": 1,
+            "total_relations": 0,
+            "sentinel_dispatch": {
+                "fired": 0,
+                "errors": [{"eventId": "failed-outbox"}],
+                "runs": [{"status": "retry"}],
+            },
+        },
+    ), patch(
+        "app.services.sentinel.engine.run_manual",
+    ) as manual_scan:
+        with pytest.raises(
+                RuntimeError, match="durable Sentinel 级联失败"):
+            IncrementalOrchestrator(db).on_dataset_version_published(
+                dataset.id, version.id)
+
+    manual_scan.assert_not_called()
+
+
 def test_manual_automation_requires_contract_and_verifiable_version(db):
     service, _storage, dataset = _manual_service(db)
     version = service.create_version(dataset.id, b"id,name\n1,A\n", rowcount=1)
@@ -284,16 +325,46 @@ def test_real_manual_version_to_sentinel_notification_closed_loop(
     db.add(mapping)
     db.commit()
 
+    # Runtime automation is release-only. Freeze the modeled definition and
+    # mapping before either projection is allowed to reach the Sentinel engine;
+    # the first (false) version then establishes the release-scoped baseline.
+    from app.models.ontology_version import OntologyVersion
+    from app.ontologies.versions.evolution_service import (
+        complete_snapshot,
+        snapshot_hash,
+    )
+    from app.ontologies.versions.router import _snapshot_formal
+
+    release_id = "manual-closed-loop-release-v1"
+    project.status = "published"
+    project.version = "v1.0.0"
+    sentinel.status = "published"
+    release_snapshot = complete_snapshot(
+        _snapshot_formal(db, ontology_id))
+    release = OntologyVersion(
+        id=release_id,
+        ontology_id=ontology_id,
+        version_number=project.version,
+        version_label="人工数据闭环发布",
+        base_release_id=release_id,
+        node_kind="release",
+        lifecycle_status="released",
+        revision=0,
+        snapshot_formal=release_snapshot,
+        snapshot_hash=snapshot_hash(release_snapshot),
+        published_at=datetime.now(timezone.utc),
+        created_by=project.created_by,
+    )
+    db.add(release)
+    db.flush()
+    project.current_release_id = release_id
+    db.commit()
+
     initial = MappingService(db).build_all(ontology_id, require_approved=True)
     assert initial["total_entities"] == 1
     assert mapping.status == "applied"
     assert (mapping.field_mapping or {})[
         "__applied_dataset_version_id__"] == first_version.id
-
-    project.status = "published"
-    project.version = "v1.0.0"
-    sentinel.status = "published"
-    db.commit()
 
     second_version = service.create_version(
         dataset.id, b"rep_id,inconsistent\nR-001,true\n", rowcount=1)

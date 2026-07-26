@@ -9,7 +9,7 @@
   - 同一类型内属性名重复（否则保存时静默去重会丢数据）
   - 关系端点 / 动作绑定 / 函数绑定 / computed 属性函数 悬挂
   - 非法基数
-  - 实例的类型引用、属性类型/必填/未知字段、主键存在与唯一性
+  - 实例的类型引用、存储/派生属性类型、必填/未知字段、主键存在与唯一性
   - 链接实例的关系类型、端点类型、重复边与基数
 草稿态对象类型可不设主键；属性列表为空时按开放 schema 处理，允许保存半成品。
 """
@@ -19,6 +19,8 @@ import json
 import math
 from datetime import date, datetime
 from typing import Any, Iterable, Optional
+
+from .function_engine import derived_function_contract_issues
 
 VALID_CARDINALITIES = {"one-to-one", "one-to-many", "many-to-one", "many-to-many"}
 
@@ -105,6 +107,36 @@ def _is_value_of_type(value: Any, property_type: str) -> bool:
     return False
 
 
+def property_value_type_issue(
+    definition: dict,
+    value: Any,
+) -> Optional[dict[str, str]]:
+    """Return one canonical type-contract issue for a property value.
+
+    Runtime projection, derived recomputation and isolated trials all consume
+    this helper.  Keeping the normalization and value predicate here prevents
+    the trial path from accepting a value that the production projection later
+    rejects (or vice versa).
+    """
+    raw_type = definition.get("type")
+    expected = _normal_property_type(raw_type)
+    if expected not in VALID_PROPERTY_TYPES:
+        return {
+            "code": "invalid_property_type_definition",
+            "rawType": str(raw_type),
+            "expected": expected,
+            "actual": type(value).__name__,
+        }
+    if value is not None and not _is_value_of_type(value, expected):
+        return {
+            "code": "property_type_mismatch",
+            "rawType": str(raw_type),
+            "expected": expected,
+            "actual": type(value).__name__,
+        }
+    return None
+
+
 def _property_defs(owner: Any) -> dict[str, dict]:
     return {
         str(p.get("name")): p
@@ -132,11 +164,29 @@ def _validate_property_values(owner: Any, values: Any, *, kind: str, item_id: st
             errors.append(_err(
                 "unknown_property", kind,
                 f"「{label}」未声明属性 \"{key}\"", label, item_id, field=str(key)))
+        elif key in definitions and (
+            definitions[key].get("source") == "computed"
+            or bool(definitions[key].get("computed"))
+        ):
+            errors.append(_err(
+                "computed_property_in_stored_projection",
+                kind,
+                f"「{label}」派生属性 \"{key}\" 不能写入 properties；"
+                "必须由服务端函数写入 computed 投影",
+                label,
+                item_id,
+                field=str(key),
+            ))
 
     for name, definition in definitions.items():
         computed = definition.get("source") == "computed" or bool(definition.get("computed"))
+        if computed:
+            # Computed definitions are validated exclusively against the
+            # separate materialized projection below.  Never interpret a
+            # shadow value in ``properties`` as a valid stored field.
+            continue
         value = values.get(name)
-        if not computed and definition.get("required") and (name not in values or _is_empty(value)):
+        if definition.get("required") and (name not in values or _is_empty(value)):
             errors.append(_err(
                 "required_property_missing", kind,
                 f"「{label}」必填属性 \"{name}\" 缺失", label, item_id, field=name))
@@ -153,6 +203,65 @@ def _validate_property_values(owner: Any, values: Any, *, kind: str, item_id: st
             errors.append(_err(
                 "property_type_mismatch", kind,
                 f"「{label}」属性 \"{name}\" 应为 {expected}，实际为 {type(value).__name__}",
+                label, item_id, field=name))
+
+
+def _validate_computed_values(owner: Any, values: Any, *, kind: str, item_id: str,
+                              errors: list[dict]) -> None:
+    """Validate the materialized derived projection independently of properties.
+
+    ``computed`` is consumed by Sentinel as an authoritative overlay on top of
+    stored properties.  It therefore cannot inherit the draft/open-schema
+    exception used by ``properties``: every key must name an explicitly
+    declared computed property, and every non-null value must satisfy that
+    property's declared type.
+
+    Requiredness deliberately does not apply here.  A missing computed value
+    means the projection is unavailable and downstream evaluation must fail
+    closed; it must not make an otherwise valid stored instance impossible to
+    persist.
+    """
+    label = _label(owner)
+    if not isinstance(values, dict):
+        errors.append(_err(
+            "invalid_computed", kind,
+            f"「{label}」实例的 computed 必须是对象",
+            label, item_id, field="computed"))
+        return
+
+    definitions = _property_defs(owner)
+    computed_definitions = {
+        name: definition
+        for name, definition in definitions.items()
+        if (definition.get("source") == "computed"
+            or bool(definition.get("computed")))
+    }
+
+    for key in values:
+        if key not in computed_definitions:
+            errors.append(_err(
+                "unknown_computed_property", kind,
+                f"「{label}」未声明派生属性 \"{key}\"",
+                label, item_id, field=str(key)))
+
+    for name, definition in computed_definitions.items():
+        if name not in values or values[name] is None:
+            continue
+        value = values[name]
+        issue = property_value_type_issue(definition, value)
+        if issue is None:
+            continue
+        if issue["code"] == "invalid_property_type_definition":
+            errors.append(_err(
+                "invalid_property_type_definition", kind,
+                f"「{label}」派生属性 \"{name}\" 的类型定义 "
+                f"\"{definition.get('type')}\" 非法",
+                label, item_id, field=name))
+        else:
+            errors.append(_err(
+                "property_type_mismatch", kind,
+                f"「{label}」派生属性 \"{name}\" 应为 {issue['expected']}，"
+                f"实际为 {issue['actual']}",
                 label, item_id, field=name))
 
 
@@ -182,6 +291,9 @@ def validate_instance_contract(object_types: list, instances: list,
             _validate_property_values(
                 ot, getattr(inst, "properties", None), kind="objectInstance", item_id=iid,
                 errors=errors, allowed_unknown=LEGACY_SYSTEM_PROPERTIES)
+            _validate_computed_values(
+                ot, getattr(inst, "computed", None), kind="objectInstance",
+                item_id=iid, errors=errors)
 
         primary_key = getattr(ot, "primary_key", None)
         if not primary_key:
@@ -363,14 +475,42 @@ def validate_model(object_types: list, link_types: list, actions: list,
     _dup_names(functions, "function", errors)
 
     ot_ids = {getattr(o, "id", None) for o in object_types} - {None}
-    fn_ids = {getattr(f, "id", None) for f in functions} - {None}
+    functions_by_id = {
+        str(getattr(f, "id", None)): f
+        for f in functions
+        if getattr(f, "id", None) is not None
+    }
+    fn_ids = set(functions_by_id)
 
     # —— 对象类型：属性重名 / computed 属性函数悬挂 ——
     for ot in object_types:
         label = getattr(ot, "display_name", "") or getattr(ot, "name", "")
+        object_type_id = str(getattr(ot, "id", None) or "")
         prop_names: dict[str, int] = {}
         prop_ids: set[str] = set()
-        for p in (getattr(ot, "properties", None) or []):
+        object_properties = list(
+            getattr(ot, "properties", None) or [])
+        computed_property_names = {
+            str(prop.get("name"))
+            for prop in object_properties
+            if isinstance(prop, dict)
+            and prop.get("name")
+            and (
+                prop.get("source") == "computed"
+                or bool(prop.get("computed"))
+            )
+        }
+        stored_property_names = {
+            str(prop.get("name"))
+            for prop in object_properties
+            if isinstance(prop, dict)
+            and prop.get("name")
+            and not (
+                prop.get("source") == "computed"
+                or bool(prop.get("computed"))
+            )
+        } | set(LEGACY_SYSTEM_PROPERTIES)
+        for p in object_properties:
             pname = p.get("name") if isinstance(p, dict) else None
             if pname:
                 prop_names[pname] = prop_names.get(pname, 0) + 1
@@ -382,12 +522,33 @@ def validate_model(object_types: list, link_types: list, actions: list,
                     f"「{label}」的属性 \"{pname}\" 类型 \"{p.get('type')}\" 非法",
                     name=label, item_id=getattr(ot, "id", "") or "", field=str(pname or "")))
             if isinstance(p, dict) and (p.get("source") == "computed" or p.get("computed")):
-                fid = p.get("functionId")
+                fid = str(p.get("functionId") or "")
                 if fid and fid not in fn_ids:
                     errors.append(_err(
                         "dangling_function", "objectType",
                         f"「{label}」的计算属性 \"{pname}\" 绑定的函数不存在",
                         name=label, item_id=getattr(ot, "id", "") or ""))
+                elif fid:
+                    fn = functions_by_id[str(fid)]
+                    for issue_code, issue_message in (
+                        derived_function_contract_issues(
+                            fn,
+                            object_type_id=object_type_id,
+                            computed_property_names=(
+                                computed_property_names),
+                            stored_property_names=stored_property_names,
+                            expected_return_type=str(
+                                p.get("type") or ""),
+                        )
+                    ):
+                        errors.append(_err(
+                            issue_code, "objectType",
+                            f"「{label}」的计算属性 \"{pname}\" "
+                            f"绑定函数契约无效：{issue_message}",
+                            name=label,
+                            item_id=object_type_id,
+                            field=str(pname or ""),
+                        ))
         for pname, n in prop_names.items():
             if n > 1:
                 errors.append(_err(

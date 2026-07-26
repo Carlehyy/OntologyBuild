@@ -9,18 +9,21 @@ DELETE /api/v2/connections/{id}
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 
+from app.config import settings
 from app.database import SessionLocal
 from app.deps import get_current_user
 from app.models.v2.connection import Connection
 from app.services.connection.registry import get_connector
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
+logger = logging.getLogger(__name__)
 
 
 def get_db():
@@ -165,7 +168,8 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
     """手动触发数据同步，把连接数据落地为 Dataset 版本。
 
     默认同步执行（Celery/Redis 不可用也能跑通）；async_mode=True 时尝试派发
-    Celery 任务，派发失败则回退同步执行。
+    Celery 任务。开发环境派发失败可回退同步执行；生产强依赖模式会显式
+    返回 503，避免 API 把未进入可靠任务队列的工作误报为已触发。
     """
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:
@@ -185,8 +189,28 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
                 delay(connection_id, body.mode, body.resource)
                 return {"connection_id": connection_id, "status": "sync_triggered"}
         except Exception as e:
-            logger_detail = f"任务派发失败，回退同步执行: {e}"
+            if settings.require_external_dependencies:
+                logger.error(
+                    "Connection %s 异步同步任务投递失败；生产强依赖模式禁止降级",
+                    connection_id,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    503,
+                    "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行",
+                ) from e
+            logger.warning(
+                "Connection %s 异步同步任务投递失败，回退同步执行",
+                connection_id,
+                exc_info=True,
+            )
+            logger_detail = "任务投递失败，已回退同步执行"
         else:
+            if settings.require_external_dependencies:
+                raise HTTPException(
+                    503,
+                    "Connection 同步任务未注册，生产环境禁止降级执行",
+                )
             logger_detail = "未注册为 Celery 任务，回退同步执行"
     else:
         logger_detail = None

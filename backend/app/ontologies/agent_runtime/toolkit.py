@@ -889,6 +889,8 @@ class ToolRunner:
     def _tool_propose_action(self, args: dict) -> dict:
         if not self.scope.profile.allow_action_proposals:
             raise ToolError("当前授权边界禁止提出动作提案（allow_action_proposals=false）")
+        if self.scope.release_id is None:
+            raise ToolError("动作提案必须锁定当前发布版本；请刷新本体助手后重试")
         action = self.scope.require_action(args.get("action", ""))
         target_id = args.get("target_instance_id")
         if target_id:
@@ -900,8 +902,14 @@ class ToolRunner:
         from app.services.formal.action_engine import execute_action
         body = RunActionRequest(action_id=action.id,
                                 parameters=args.get("parameters") or {},
-                                target_instance_id=target_id, dry_run=True)
-        log = execute_action(self.db, self.scope.ontology.id, body)
+                                target_instance_id=target_id, dry_run=True,
+                                release_id=self.scope.release_id)
+        log = execute_action(
+            self.db,
+            self.scope.ontology.id,
+            body,
+            expected_release_id=self.scope.release_id,
+        )
 
         proposal = {
             "kind": "action",

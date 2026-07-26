@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,12 +29,14 @@ from app.ontologies.mappings.router import (
 )
 from app.services.v2.mapping.mapping_service import (
     MappingApplyError,
+    MappingSentinelDispatchError,
     MappingSourceError,
     MappingService,
     load_mapping_source_rows,
 )
 from app.data_channel.datasets.service import DatasetService
 from app.services.v2.curated.review_service import ReviewService
+from app.ontologies.mappings.mapping_service import _ontology_build_lock
 
 
 class FakeStorage:
@@ -88,6 +91,80 @@ def _source_graph(db, admin_user, *, rows: list[dict], kind: str = "structured")
     db.commit()
     db.refresh(mapping)
     return ontology, dataset, mapping
+
+
+def test_postgres_mapping_build_lock_spans_business_commits_on_dedicated_connection():
+    calls: list[tuple[object, str, dict]] = []
+
+    class Result:
+        @staticmethod
+        def scalar():
+            return True
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = False
+            self.commits = 0
+            self.invalidated = False
+
+        def execute(self, statement, params):
+            calls.append((self, str(statement), params))
+            return Result()
+
+        def commit(self):
+            self.commits += 1
+
+        def invalidate(self):
+            self.invalidated = True
+
+        def close(self):
+            self.closed = True
+
+    connection = FakeConnection()
+
+    class FakeEngine:
+        dialect = SimpleNamespace(name="postgresql")
+
+        @staticmethod
+        def connect():
+            return connection
+
+    class FakeSession:
+        commits = 0
+
+        @staticmethod
+        def get_bind():
+            return FakeEngine()
+
+        @staticmethod
+        def execute(*_args, **_kwargs):
+            raise AssertionError(
+                "advisory lock must not use the business Session")
+
+        def commit(self):
+            self.commits += 1
+
+    session = FakeSession()
+    with _ontology_build_lock(session, "ontology-dedicated-lock"):
+        # ``build_all`` commits relational truth before rebuilding the external
+        # query projections; the advisory owner must survive both commits.
+        session.commit()
+        # Publication/query-projection helpers may participate in the same
+        # boundary. Re-entry in one thread must not open a second PostgreSQL
+        # connection and deadlock on its own session lock.
+        with _ontology_build_lock(session, "ontology-dedicated-lock"):
+            session.commit()
+
+    assert session.commits == 2
+    assert len(calls) == 2
+    assert "pg_advisory_lock" in calls[0][1]
+    assert "pg_advisory_unlock" in calls[1][1]
+    assert calls[0][2] == calls[1][2] == {
+        "key": "ontology-mapping-build:ontology-dedicated-lock",
+    }
+    assert connection.commits == 2
+    assert connection.invalidated is False
+    assert connection.closed is True
 
 
 def test_strict_mapping_source_has_no_ten_thousand_row_cap(
@@ -282,6 +359,115 @@ def test_formal_projection_failure_marks_mapping_failed(
     failed = db.query(OntologyMapping).filter_by(id=mapping.id).one()
     assert failed.status == "failed"
     assert "formal unavailable" in failed.field_mapping["__last_apply_error__"]
+
+
+def test_applied_projection_with_sentinel_failure_is_not_reported_success(
+        db, admin_user, lake_storage):
+    ontology, _, mapping = _source_graph(
+        db, admin_user, rows=[{"id": "1"}])
+    service = MappingService(db)
+    dispatch = {
+        "evaluated": 1,
+        "fired": 0,
+        "errors": [{
+            "eventId": "sentinel-outbox-failed",
+            "error": "downstream action failed",
+        }],
+        "runs": [{"status": "retry"}],
+        "barrierCompleted": False,
+    }
+
+    with patch.object(
+        MappingService, "_write_neo4j", return_value=1,
+    ), patch.object(
+        MappingService, "_write_v1_entities", return_value=1,
+    ), patch(
+        "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+        return_value={"instances_created": 1},
+    ), patch(
+        "app.ontologies.sentinels.cdc.dispatch_captured_changes",
+        return_value=dispatch,
+    ):
+        with pytest.raises(
+                MappingSentinelDispatchError,
+                match="投影已提交.*Sentinel 下游级联失败"):
+            service.apply_mapping(
+                mapping.id, [{"id": "1"}], ontology_id=ontology.id)
+
+    db.expire_all()
+    applied = db.query(OntologyMapping).filter_by(id=mapping.id).one()
+    assert applied.status == "applied"
+    assert "__last_apply_error__" not in applied.field_mapping
+
+
+def test_build_all_preserves_applied_fence_on_sentinel_dispatch_failure(
+        db, admin_user, lake_storage):
+    ontology, _, mapping = _source_graph(
+        db, admin_user, rows=[{"id": "1"}])
+    dispatch = {
+        "errors": [{
+            "eventId": "build-all-sentinel-retry",
+            "status": "retry",
+            "error": "downstream action failed",
+        }],
+        "barrierCompleted": False,
+    }
+
+    def committed_projection_then_dispatch_failure(*_args, **_kwargs):
+        applied = db.query(OntologyMapping).filter_by(id=mapping.id).one()
+        applied.status = "applied"
+        applied.field_mapping = {
+            key: value
+            for key, value in dict(applied.field_mapping or {}).items()
+            if key != "__last_apply_error__"
+        }
+        db.commit()
+        raise MappingSentinelDispatchError(ontology.id, dispatch)
+
+    with patch.object(
+            MappingService, "_build_all_transaction",
+            side_effect=committed_projection_then_dispatch_failure):
+        with pytest.raises(MappingSentinelDispatchError):
+            MappingService(db).build_all(
+                ontology.id, require_approved=True)
+
+    db.expire_all()
+    applied = db.query(OntologyMapping).filter_by(id=mapping.id).one()
+    assert applied.status == "applied"
+    assert "__last_apply_error__" not in applied.field_mapping
+
+
+def test_unexpected_sentinel_dispatch_exception_preserves_applied_projection(
+        db, admin_user, lake_storage):
+    ontology, _, mapping = _source_graph(
+        db, admin_user, rows=[{"id": "1"}])
+
+    with patch.object(
+        MappingService, "_write_neo4j", return_value=1,
+    ), patch.object(
+        MappingService, "_write_v1_entities", return_value=1,
+    ), patch(
+        "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+        return_value={"instances_created": 1},
+    ), patch(
+        "app.ontologies.sentinels.cdc.dispatch_captured_changes",
+        side_effect=RuntimeError("CDC worker connection lost"),
+    ):
+        with pytest.raises(
+                MappingSentinelDispatchError,
+                match="投影已提交.*Sentinel 下游级联失败") as captured:
+            MappingService(db).apply_mapping(
+                mapping.id, [{"id": "1"}], ontology_id=ontology.id)
+
+    assert captured.value.dispatch["barrierCompleted"] is False
+    assert captured.value.dispatch["errors"][0] == {
+        "stage": "dispatch_captured_changes",
+        "error": "CDC worker connection lost",
+    }
+    db.expire_all()
+    applied = db.query(OntologyMapping).filter_by(id=mapping.id).one()
+    assert applied.status == "applied"
+    assert "__last_apply_error__" not in applied.field_mapping
 
 
 def test_build_all_failure_rolls_back_entities_and_stale_relation_deletes(
@@ -747,6 +933,153 @@ def test_composite_lake_primary_key_produces_stable_json_identity(
     assert by_name["tenant_id"]["primaryKeyPart"] == 1
     assert by_name["order_id"]["required"] is True
     assert by_name["order_id"]["primaryKeyPart"] == 2
+
+
+def test_published_projection_recovers_explicit_mapped_primary_key_without_metadata(
+        db, admin_user):
+    """Released mappings execute without optional draft-time enrichment."""
+    from app.models.entity import Entity
+    from app.models.ontology_formal import ObjectInstance, ObjectType
+    from app.ontologies.mappings.formal_projection import (
+        project_to_formal_ontology,
+        projection_property_mappings,
+    )
+
+    ontology = OntologyProject(
+        id=str(uuid.uuid4()),
+        name=f"released-pk-map-{uuid.uuid4().hex[:8]}",
+        domain="test", status="published", created_by=admin_user.id,
+    )
+    object_type = ObjectType(
+        id=str(uuid.uuid4()), ontology_id=ontology.id,
+        name="SupplierAlert", display_name="供应商告警",
+        primary_key="prop_alert_id",
+        properties=[
+            {
+                "id": "prop_alert_id", "name": "alert_id",
+                "displayName": "告警标识", "type": "string",
+                "required": True, "source": "stored",
+            },
+            {
+                "id": "prop_status", "name": "status",
+                "displayName": "状态", "type": "string",
+                "required": True, "source": "stored",
+            },
+        ],
+        interfaces=[],
+    )
+    mapping = OntologyMapping(
+        id=str(uuid.uuid4()), ontology_id=ontology.id,
+        entity_class="SupplierAlert",
+        target_object_type_id=object_type.id,
+        field_mapping={
+            "供应商ID": "alert_id",
+            "状态": "status",
+            "__primary_key__": "供应商ID",
+            "__pk_source__": "lake",
+        },
+        status="applied",
+    )
+    entity = Entity(
+        id=str(uuid.uuid4()), ontology_id=ontology.id,
+        name_cn="SUP-007", name_en="SUP-007", type="SupplierAlert",
+        properties={
+            "alert_id": "SUP-007",
+            "status": "待处理",
+            "__mapping_ids__": [mapping.id],
+        },
+        confidence=1.0,
+    )
+    db.add_all([ontology, object_type, mapping, entity])
+    db.commit()
+
+    assert projection_property_mappings(mapping.field_mapping) == [
+        {"column": "供应商ID", "property": "alert_id"},
+        {"column": "状态", "property": "status"},
+    ]
+    result = project_to_formal_ontology(
+        db,
+        ontology.id,
+        {
+            mapping.id: {
+                "mapping_id": mapping.id,
+                "entity_class": mapping.entity_class,
+                "pk_col": "供应商ID",
+                # Reproduce the production failure: the immutable release had
+                # no ``__properties__`` draft-time metadata.
+                "property_mappings": [],
+                "target_object_type_id": object_type.id,
+            },
+        },
+        ontology_release_id="released-lineage",
+    )
+
+    projected = db.query(ObjectInstance).filter_by(
+        ontology_id=ontology.id,
+        object_type_id=object_type.id,
+    ).one()
+    assert result["object_instances"] == 1
+    assert projected.properties["alert_id"] == "SUP-007"
+    assert projected.properties["status"] == "待处理"
+    assert projected.ontology_release_id == "released-lineage"
+    db.refresh(object_type)
+    projected_pk = next(
+        prop for prop in object_type.properties
+        if prop.get("name") == "alert_id"
+    )
+    assert projected_pk["primaryKeyPart"] == 1
+
+
+def test_projection_normalizes_blank_non_string_cells_without_erasing_text():
+    """Real CSV/XLSX blanks are nullable values, not mistyped strings."""
+    from app.ontologies.mappings.formal_projection import _coerce_props_to_type
+
+    coerced = _coerce_props_to_type(
+        {
+            "optional_score": "",
+            "required_score": "  ",
+            "optional_flag": "",
+            "optional_date": "",
+            "free_text": "  ",
+        },
+        [
+            {
+                "name": "optional_score",
+                "type": "number",
+                "required": False,
+            },
+            {
+                "name": "required_score",
+                "type": "number",
+                "required": True,
+            },
+            {
+                "name": "optional_flag",
+                "type": "boolean",
+                "required": False,
+            },
+            {
+                "name": "optional_date",
+                "type": "date",
+                "required": False,
+            },
+            {
+                "name": "free_text",
+                "type": "string",
+                "required": False,
+            },
+        ],
+    )
+
+    assert coerced == {
+        "optional_score": None,
+        # Required blanks also become None so the normal required-property
+        # contract rejects them instead of reporting a misleading type error.
+        "required_score": None,
+        "optional_flag": None,
+        "optional_date": None,
+        "free_text": "  ",
+    }
 
 
 def test_apply_refuses_stale_source_version_after_concurrent_publish(

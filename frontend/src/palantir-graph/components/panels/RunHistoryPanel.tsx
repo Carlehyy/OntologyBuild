@@ -54,7 +54,7 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
     try {
       const [l, p, f, n] = await Promise.all([
         listExecutionLogs(backendId),
-        listPendingActions(backendId),
+        listPendingActions(backendId, { currentReleaseOnly: true }),
         sentinelApi.firings(backendId),
         sentinelApi.notifications(backendId),
       ]);
@@ -99,11 +99,38 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
     setError(null);
     setFeedback({
       type: 'info',
-      message: decision === 'approved' ? '正在批准并执行动作…' : '正在记录拒绝决策…',
+      message: decision === 'approved'
+        ? (log.status === 'executing' ? '正在恢复已批准动作的技术执行…' : '正在批准并执行动作…')
+        : '正在记录拒绝决策…',
     });
     try {
-      await decidePendingAction(backendId, log.id, decision, reason);
+      if (!log.ontologyReleaseId) {
+        throw new Error('该待审批动作缺少发布节点标识，已阻止跨版本审批。');
+      }
+      const decisionResult = await decidePendingAction(
+        backendId,
+        log.id,
+        decision,
+        reason,
+        log.ontologyReleaseId,
+      );
+      // The decision endpoint may persist an approved human decision while the
+      // technical execution fails.  Refresh first so the stale pending card is
+      // removed even when we surface that failure below.
       await refresh();
+      if (decision === 'approved') {
+        const executionLog = (
+          'executionLog' in decisionResult
+            ? decisionResult.executionLog
+            : undefined
+        );
+        if (!executionLog || executionLog.status !== 'success') {
+          throw new Error(
+            executionLog?.errorMessage
+              || '审批决策已记录，但动作技术执行失败；平台未将其标记为已执行。'
+          );
+        }
+      }
       if (decision === 'approved') {
         // 批准会真正执行动作 → 拉回最新实例/链接投影，画布与后端保持一致
         await loadFromBackend(backendId);
@@ -128,13 +155,22 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
       case 'success': return <CheckCircleIcon className="w-4 h-4 text-green-400 shrink-0" />;
       case 'approved': return <CheckCircleIcon className="w-4 h-4 text-teal-400 shrink-0" />;
       case 'pending': return <HandRaisedIcon className="w-4 h-4 text-blue-400 shrink-0" />;
+      case 'executing': return <ArrowPathIcon className="w-4 h-4 text-amber-400 shrink-0" />;
       case 'rejected': return <XCircleIcon className="w-4 h-4 text-amber-400 shrink-0" />;
       default: return <XCircleIcon className="w-4 h-4 text-red-400 shrink-0" />;
     }
   };
 
   const statusLabel = (s: string) => (
-    s === 'pending' ? '待审批' : s === 'approved' ? '已批准' : s === 'rejected' ? '已拒绝' : s
+    s === 'pending'
+      ? '待审批'
+      : s === 'executing'
+        ? '已批准，待恢复执行'
+        : s === 'approved'
+          ? '已批准'
+          : s === 'rejected'
+            ? '已拒绝'
+            : s
   );
 
   const TABS: { id: Tab; label: string; icon: React.ElementType; count: number; alert?: boolean }[] = [
@@ -237,6 +273,11 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
                 <span className="ml-auto text-[11px] text-gray-500 shrink-0">{fmtTime(l.executedAt)}</span>
               </div>
               <div className="mt-1.5 pl-6 space-y-0.5 text-[11px] text-gray-400">
+                {l.status === 'executing' && (
+                  <div className="text-amber-300">
+                    人工批准事实已保存，但技术执行尚未完成；可安全恢复，不会重复副作用。
+                  </div>
+                )}
                 {l.objectInstanceId && <div>目标实例：<code className="text-gray-300">{l.objectInstanceId}</code></div>}
                 {Object.keys(l.parameters || {}).length > 0 && (
                   <div>参数：{Object.entries(l.parameters).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join('，')}</div>
@@ -249,16 +290,26 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
                   disabled={deciding === l.id}
                   className="px-4 py-1.5 rounded-lg text-xs font-medium bg-green-500/15 border border-green-500/50 text-green-300 hover:bg-green-500/25 disabled:opacity-40"
                 >
-                  {deciding === l.id ? '处理中…' : '👍 批准并执行'}
+                  {deciding === l.id
+                    ? '处理中…'
+                    : l.status === 'executing'
+                      ? '↻ 恢复执行'
+                      : '👍 批准并执行'}
                 </button>
-                <button
-                  onClick={() => void handleDecide(l, 'rejected')}
-                  disabled={deciding === l.id}
-                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 border border-red-500/40 text-red-300 hover:bg-red-500/20 disabled:opacity-40"
-                >
-                  👎 拒绝
-                </button>
-                <span className="self-center text-[10px] text-gray-600">批准/拒绝都会写入决策事实（可回放）</span>
+                {l.status === 'pending' && (
+                  <button
+                    onClick={() => void handleDecide(l, 'rejected')}
+                    disabled={deciding === l.id}
+                    className="px-4 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 border border-red-500/40 text-red-300 hover:bg-red-500/20 disabled:opacity-40"
+                  >
+                    👎 拒绝
+                  </button>
+                )}
+                <span className="self-center text-[10px] text-gray-600">
+                  {l.status === 'executing'
+                    ? '恢复使用原批准事实与稳定幂等键'
+                    : '批准/拒绝都会写入决策事实（可回放）'}
+                </span>
               </div>
             </div>
           ))}
@@ -344,7 +395,15 @@ export default function RunHistoryPanel({ isOpen, onClose }: Props) {
                 <span className="ml-auto text-[11px] text-gray-500 shrink-0">{fmtTime(n.createdAt)}</span>
               </div>
               {n.body && <div className="mt-1 pl-6 text-[11px] text-gray-400 line-clamp-2">{n.body}</div>}
-              <div className="mt-0.5 pl-6 text-[10px] text-gray-600">→ {n.recipient} · {n.status}</div>
+              <div className="mt-0.5 pl-6 text-[10px] text-gray-600">
+                → {n.recipient} · {n.status}
+                {n.ontologyReleaseId && (
+                  <span title={n.ontologyReleaseId}> · 发布 {n.ontologyReleaseId.slice(0, 8)}</span>
+                )}
+                {n.actionLogId && (
+                  <span title={n.actionLogId}> · 动作日志 {n.actionLogId.slice(0, 8)}</span>
+                )}
+              </div>
             </div>
           ))}
           {tab === 'notifications' && !loading && notifications.length === 0 && backendId && runtimeAccessible && (
