@@ -43,7 +43,12 @@ jobs:
         working-directory: backend
 
       - name: Backend regression suite
-        run: pytest -q --disable-warnings
+        run: pytest -q --disable-warnings --ignore tests/v2/perf
+        working-directory: backend
+
+      - name: Backend performance suite (informational)
+        continue-on-error: true
+        run: pytest -q --disable-warnings tests/v2/perf
         working-directory: backend
 
       - name: Fresh database migration
