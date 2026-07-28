@@ -127,6 +127,18 @@ export default function CreateTableModal({ onClose, onCreated }: {
     (previewPage - 1) * previewPageSize,
     previewPage * previewPageSize,
   ), [previewPage, previewPageSize, rows])
+  const duplicateFieldKeys = useMemo(() => {
+    const counts = new Map<string, number>()
+    columns.forEach(column => {
+      const identifier = column.name.trim()
+      if (identifier) counts.set(identifier, (counts.get(identifier) ?? 0) + 1)
+    })
+    return new Set(
+      [...counts.entries()]
+        .filter(([, count]) => count > 1)
+        .map(([identifier]) => identifier),
+    )
+  }, [columns])
 
   const applyImportJob = useCallback((job: DatasetImportJob) => {
     setImportStatus(job.status)
@@ -281,8 +293,11 @@ export default function CreateTableModal({ onClose, onCreated }: {
     setColumns([emptyColumn(), emptyColumn()])
   }
 
-  const setColumn = (index: number, patch: Partial<ColDraft>) => setColumns(current =>
-    current.map((column, columnIndex) => columnIndex === index ? { ...column, ...patch } : column))
+  const setColumn = (index: number, patch: Partial<ColDraft>) => {
+    setColumns(current =>
+      current.map((column, columnIndex) => columnIndex === index ? { ...column, ...patch } : column))
+    setError('')
+  }
 
   const addColumn = () => setColumns(current => [...current, emptyColumn()])
   const removeColumn = (index: number) => setColumns(current =>
@@ -441,7 +456,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
               <section className="border-b border-slate-100 px-5 py-4">
                 <div className="mb-2 flex items-end justify-between gap-4">
-                  <div><h4 className="text-xs font-semibold text-slate-700">字段设置</h4><p className="mt-0.5 text-[11px] text-slate-400">{file ? '中文名已从原始表头带入；请手动填写稳定字段标识。原始表头仅用于本次及后续版本识别，不会作为本体映射键。' : '中文名用于界面展示；字段标识必须由小写字母、数字和下划线组成，并以小写字母开头。'}主键与非空约束会在创建时校验全部数据。</p></div>
+                  <div><h4 className="text-xs font-semibold text-slate-700">字段设置</h4><p className="mt-0.5 text-[11px] text-slate-400">{file ? '中文名已从上传文件带入；请为每一列填写稳定且唯一的字段标识。' : '中文名用于界面展示；字段标识必须唯一，且由小写字母、数字和下划线组成，并以小写字母开头。'}主键与非空约束会在创建时校验全部数据。</p></div>
                   {blankMode && <button type="button" onClick={addColumn} className="inline-flex h-7 items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900"><Plus size={12} />添加字段</button>}
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -457,7 +472,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                     <tbody className="divide-y divide-slate-100">{columns.map((column, index) => (
                       <tr key={column.id} className="hover:bg-slate-50/60">
                         <td className="p-1.5"><input value={column.displayName} onChange={event => setColumn(index, { displayName: event.target.value })} placeholder="例如：设备名称" className="h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 outline-none focus:border-teal-500" /></td>
-                        <td className="p-1.5"><div><input value={column.name} onChange={event => setColumn(index, { name: event.target.value })} placeholder="例如：device_name" autoCapitalize="none" autoCorrect="off" spellCheck={false} title={file ? `原始表头：${column.sourceKey}` : '以小写字母开头，仅允许小写字母、数字和下划线'} className="h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 font-mono outline-none focus:border-teal-500" />{file && <p className="mt-1 truncate text-[10px] text-slate-400" title={column.sourceKey}>原始表头：{column.sourceKey}</p>}</div></td>
+                        <td className="p-1.5"><div><input value={column.name} onChange={event => setColumn(index, { name: event.target.value })} placeholder="例如：device_name" autoCapitalize="none" autoCorrect="off" spellCheck={false} title="字段标识必须唯一；以小写字母开头，仅允许小写字母、数字和下划线" aria-invalid={duplicateFieldKeys.has(column.name.trim()) || undefined} aria-describedby={duplicateFieldKeys.has(column.name.trim()) ? `field-key-error-${column.id}` : undefined} className={`h-8 w-full min-w-36 rounded-md border px-2 font-mono outline-none transition ${duplicateFieldKeys.has(column.name.trim()) ? 'border-red-400 bg-red-50/50 focus:border-red-500 focus:ring-2 focus:ring-red-500/10' : 'border-slate-200 focus:border-teal-500'}`} />{duplicateFieldKeys.has(column.name.trim()) && <p id={`field-key-error-${column.id}`} className="mt-1 text-[10px] text-red-600" role="alert">字段标识重复，请为每一列使用唯一标识</p>}</div></td>
                         <td className="p-1.5"><select value={column.type} onChange={event => setColumn(index, { type: event.target.value })} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 outline-none focus:border-teal-500">{CONTRACT_FIELD_TYPES.map(type => <option key={type} value={type}>{FIELD_TYPE_LABELS[type] ?? type}（{type}）</option>)}</select></td>
                         <td className="p-1.5 text-center"><input type="checkbox" checked={!column.nullable || column.pk} disabled={column.pk} onChange={event => setColumn(index, { nullable: !event.target.checked })} className="accent-teal-600" aria-label={`${column.name} 非空`} /></td>
                         <td className="p-1.5 text-center"><input type="checkbox" checked={column.pk} onChange={event => setColumn(index, { pk: event.target.checked, nullable: event.target.checked ? false : column.nullable })} className="accent-amber-500" aria-label={`${column.name} 主键`} /></td>
@@ -472,7 +487,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                 <section className="px-5 py-4">
                   <button type="button" onClick={() => setPreviewOpen(current => !current)} disabled={!rows.length} className="inline-flex h-8 items-center gap-1.5 text-xs font-medium text-teal-700 hover:text-teal-900 disabled:opacity-40"><Eye size={13} />{previewOpen ? '收起数据样例' : `查看数据样例（前 ${rows.length} 行）`}</button>
                   {previewOpen && <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
-                    <div className="max-h-72 overflow-auto"><table className="min-w-max text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50"><tr><th className="px-3 py-2 text-left font-medium text-slate-400">#</th>{columns.map(column => <th key={column.id} className="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600">{column.name ? (column.displayName && column.displayName !== column.name ? `${column.displayName}（${column.name}）` : column.name) : `${column.displayName || column.sourceKey}（待填写字段标识）`}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{previewRows.map((row, rowIndex) => <tr key={`${previewPage}-${rowIndex}`} className="hover:bg-slate-50/60"><td className="px-3 py-2 tabular-nums text-slate-300">{(previewPage - 1) * previewPageSize + rowIndex + 1}</td>{columns.map((column, columnIndex) => <td key={column.id} className="whitespace-nowrap px-3 py-2 text-slate-600" title={row[columnIndex]}>{row[columnIndex]}</td>)}</tr>)}</tbody></table></div>
+                    <div className="max-h-72 overflow-auto" data-testid="dataset-preview-scroll"><table className="w-max min-w-full table-auto text-xs" data-testid="dataset-preview-table"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50"><tr><th className="w-12 px-3 py-2 text-left font-medium text-slate-400">#</th>{columns.map(column => <th key={column.id} className="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600">{column.name ? (column.displayName && column.displayName !== column.name ? `${column.displayName}（${column.name}）` : column.name) : `${column.displayName || column.sourceKey}（待填写字段标识）`}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{previewRows.map((row, rowIndex) => <tr key={`${previewPage}-${rowIndex}`} className="hover:bg-slate-50/60"><td className="px-3 py-2 tabular-nums text-slate-300">{(previewPage - 1) * previewPageSize + rowIndex + 1}</td>{columns.map((column, columnIndex) => <td key={column.id} className="whitespace-nowrap px-3 py-2 text-slate-600" title={row[columnIndex]}>{row[columnIndex]}</td>)}</tr>)}</tbody></table></div>
                     <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-xs text-slate-500"><label className="flex items-center gap-1">每页<select value={previewPageSize} onChange={event => { setPreviewPageSize(Number(event.target.value)); setPreviewPage(1) }} className="h-7 rounded-md border border-slate-200 bg-white px-1.5 outline-none">{PREVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select>条</label><button type="button" onClick={() => setPreviewPage(page => Math.max(1, page - 1))} disabled={previewPage <= 1} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronLeft size={12} /></button><span className="min-w-20 text-center tabular-nums">{previewPage} / {previewPages}</span><button type="button" onClick={() => setPreviewPage(page => Math.min(previewPages, page + 1))} disabled={previewPage >= previewPages} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronRight size={12} /></button></div>
                   </div>}
                 </section>
@@ -485,7 +500,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
         <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
           <button type="button" onClick={onClose} disabled={submitting} className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-40">取消</button>
-          <button type="button" onClick={() => void handleSubmit()} disabled={submitting || parsing || !hasSource} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">{submitting ? <Loader2 size={12} className="animate-spin" /> : file ? <Upload size={12} /> : <Table2 size={12} />}{file ? '导入并创建' : '创建空表'}</button>
+          <button type="button" onClick={() => void handleSubmit()} disabled={submitting || parsing || !hasSource || duplicateFieldKeys.size > 0} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">{submitting ? <Loader2 size={12} className="animate-spin" /> : file ? <Upload size={12} /> : <Table2 size={12} />}{file ? '导入并创建' : '创建空表'}</button>
         </footer>
       </div>
     </div>

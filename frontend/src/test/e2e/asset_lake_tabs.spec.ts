@@ -296,6 +296,113 @@ test('资产湖仅保留两个数据集入口，并复用滑动选中动画', as
   )).toBeGreaterThan(initialLeft)
 })
 
+test('在线新建表格校验字段标识唯一，并让数据样例自适应或横向滚动', async ({ page }) => {
+  let importJob: {
+    job_id: string
+    status: 'ready'
+    filename: string
+    file_size: number
+    sheet_name: string
+    rowcount: number
+    columns: Array<{ name: string; type: string }>
+    preview_rows: Array<Record<string, string | number>>
+    progress: number
+    phase: string
+  } = {
+    job_id: 'import-compact',
+    status: 'ready',
+    filename: '航班数据.xlsx',
+    file_size: 1024,
+    sheet_name: '实例数据',
+    rowcount: 2,
+    columns: [
+      { name: 'flight_no', type: 'string' },
+      { name: 'delay', type: 'integer' },
+      { name: 'gate', type: 'string' },
+    ],
+    preview_rows: [
+      { flight_no: 'CA1234', delay: 200, gate: 'A5' },
+      { flight_no: 'MU5678', delay: 20, gate: 'B2' },
+    ],
+    progress: 100,
+    phase: '表格解析完成',
+  }
+
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await mockAssetLake(page)
+  await page.route('**/api/v2/datasets/imports', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: importJob }),
+  }))
+  await page.goto('/#/data/structured?tab=raw', { waitUntil: 'domcontentloaded' })
+
+  await page.getByRole('button', { name: '在线新建表格' }).first().click()
+  let dialog = page.getByRole('dialog', { name: '在线新建表格' })
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: '航班数据.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: Buffer.from('mock workbook'),
+  })
+
+  const fieldKeyInputs = dialog.locator('input[placeholder="例如：device_name"]')
+  await expect(fieldKeyInputs).toHaveCount(3)
+  await fieldKeyInputs.nth(0).fill('flight_no')
+  await fieldKeyInputs.nth(1).fill('flight_no')
+  await fieldKeyInputs.nth(2).fill('gate')
+
+  await expect(dialog.getByText('字段标识重复，请为每一列使用唯一标识')).toHaveCount(2)
+  await expect(dialog.getByRole('button', { name: '导入并创建' })).toBeDisabled()
+  await expect(dialog.getByText(/原始表头：/)).toHaveCount(0)
+
+  await fieldKeyInputs.nth(1).fill('delay')
+  await expect(dialog.getByText('字段标识重复，请为每一列使用唯一标识')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '导入并创建' })).toBeEnabled()
+
+  await dialog.getByRole('button', { name: /查看数据样例/ }).click()
+  let previewScroll = dialog.getByTestId('dataset-preview-scroll')
+  await expect(previewScroll).toBeVisible()
+  await expect.poll(() => previewScroll.evaluate(element => {
+    const table = element.querySelector('table')
+    return table ? Math.abs(table.getBoundingClientRect().width - element.clientWidth) : Number.POSITIVE_INFINITY
+  })).toBeLessThanOrEqual(2)
+  await expect.poll(() => previewScroll.evaluate(
+    element => element.scrollWidth - element.clientWidth,
+  )).toBeLessThanOrEqual(2)
+
+  await dialog.getByRole('button', { name: '关闭在线新建表格' }).click()
+
+  const wideColumns = Array.from({ length: 18 }, (_, index) => ({
+    name: `field_${index + 1}`,
+    type: 'string',
+  }))
+  importJob = {
+    ...importJob,
+    job_id: 'import-wide',
+    filename: '宽表.xlsx',
+    columns: wideColumns,
+    preview_rows: [
+      Object.fromEntries(wideColumns.map((column, index) => [column.name, `值 ${index + 1}`])),
+      Object.fromEntries(wideColumns.map((column, index) => [column.name, `样例 ${index + 1}`])),
+    ],
+  }
+
+  await page.getByRole('button', { name: '在线新建表格' }).first().click()
+  dialog = page.getByRole('dialog', { name: '在线新建表格' })
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: '宽表.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: Buffer.from('mock wide workbook'),
+  })
+  await expect(dialog.locator('input[placeholder="例如：device_name"]')).toHaveCount(18)
+  await dialog.getByRole('button', { name: /查看数据样例/ }).click()
+  previewScroll = dialog.getByTestId('dataset-preview-scroll')
+  await expect(previewScroll).toBeVisible()
+  await expect.poll(() => previewScroll.evaluate(
+    element => element.scrollWidth - element.clientWidth,
+  )).toBeGreaterThan(200)
+})
+
 test('人工与成品数据表少列铺满可视区，宽表保留容器内横向滚动', async ({ page }) => {
   const wideManualColumns = Array.from({ length: 18 }, (_, index) => `column_${index + 1}`)
   const manualItems = [
