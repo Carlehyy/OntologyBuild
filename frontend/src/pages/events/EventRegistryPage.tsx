@@ -19,7 +19,7 @@ const PALETTE = {
 const PAGE_SIZE = 8
 const STATUS_TABS = [
   { value: 'active', label: '活跃', icon: Activity },
-  { value: 'archived', label: '已归档', icon: Archive },
+  { value: 'archived', label: '归档', icon: Archive },
   { value: 'all', label: '全部', icon: Filter },
 ] as const
 
@@ -344,7 +344,7 @@ export default function EventRegistryPage() {
             <table className="w-full min-w-[960px] table-fixed text-sm">
               <thead>
                 <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-sm text-slate-600">
-                  <th className="w-[22%] px-4 py-3 text-center font-medium">事件</th>
+                  <th className="w-[22%] px-4 py-3 text-left font-medium">事件</th>
                   <th className="w-[13%] px-3 py-3 text-center font-medium">来源</th>
                   <th className="w-[9%] px-3 py-3 text-center font-medium">级别</th>
                   <th className="w-[19%] px-3 py-3 text-center font-medium">描述</th>
@@ -372,17 +372,16 @@ export default function EventRegistryPage() {
                   <tr key={r.id}
                     className={`group border-t border-slate-100 transition-colors hover:bg-slate-50 ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
                     style={{ animation: `rowIn 0.35s ease-out ${i * 30}ms both` }}>
-                    <td className="px-4 py-3 text-center align-middle">
-                      <div className="flex items-stretch justify-center gap-2">
+                    <td className="px-4 py-3 text-left align-middle">
+                      <div className="flex items-stretch justify-start gap-2">
                         {(r.severity === 'critical' || r.severity === 'high') && (
                           <span className="w-1 self-stretch rounded-full shrink-0" style={{ background: r.severity === 'critical' ? PALETTE.red : PALETTE.orange }} />
                         )}
                         <div className="min-w-0">
-                          <div className="flex items-center justify-center gap-1 truncate font-medium text-slate-800">
+                          <div className="flex items-center justify-start gap-1 truncate font-medium text-slate-800">
                             {r.title}
                             {r.severity === 'critical' && <AlertOctagon className="h-3.5 w-3.5 shrink-0 text-red-400" />}
                           </div>
-                          <div className="mt-0.5 font-mono text-xs text-slate-400">{r.eventNo}</div>
                         </div>
                       </div>
                     </td>
@@ -408,27 +407,31 @@ export default function EventRegistryPage() {
                     <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-slate-500">{fmt(r.occurredAt)}</td>
                     <td className="px-2 py-3 text-center align-middle">
                       <div className="inline-flex items-center justify-center gap-1">
-                        <button onClick={() => { setEditing(r); setFormOpen(true) }}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-700" title="编辑事件" aria-label={`编辑事件 ${r.title}`}>
+                        <ActionButton
+                          label="编辑事件"
+                          ariaLabel={`编辑事件 ${r.title}`}
+                          onClick={() => { setEditing(r); setFormOpen(true) }}
+                          tone="emerald"
+                        >
                           <Pencil size={15} />
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
+                          label={r.status === 'archived' ? '恢复事件' : '归档事件'}
+                          ariaLabel={`${r.status === 'archived' ? '恢复' : '归档'}事件 ${r.title}`}
                           onClick={() => statusMutation.mutate({ id: r.id, status: r.status === 'archived' ? 'active' : 'archived' })}
                           disabled={statusMutation.isPending}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
-                          title={r.status === 'archived' ? '恢复事件' : '归档事件'}
-                          aria-label={`${r.status === 'archived' ? '恢复' : '归档'}事件 ${r.title}`}
+                          tone="amber"
                         >
                           {r.status === 'archived' ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
+                          label="删除事件（仅管理员）"
+                          ariaLabel={`删除事件 ${r.title}`}
                           onClick={() => setDeleteTarget(r)}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                          title="删除事件（仅管理员）"
-                          aria-label={`删除事件 ${r.title}`}
+                          tone="red"
                         >
                           <Trash2 size={15} />
-                        </button>
+                        </ActionButton>
                       </div>
                     </td>
                   </tr>
@@ -527,6 +530,48 @@ function Select({ value, onChange, options }: { value: string; onChange: (v: str
 
 function LegendDot({ color, label }: { color: string; label: string }) {
   return <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />{label}</span>
+}
+
+function ActionButton({
+  label,
+  ariaLabel,
+  onClick,
+  disabled,
+  tone,
+  children,
+}: {
+  label: string
+  ariaLabel: string
+  onClick: () => void
+  disabled?: boolean
+  tone: 'emerald' | 'amber' | 'red'
+  children: React.ReactNode
+}) {
+  const hoverClass = {
+    emerald: 'hover:bg-emerald-50 hover:text-emerald-700',
+    amber: 'hover:bg-amber-50 hover:text-amber-700',
+    red: 'hover:bg-red-50 hover:text-red-600',
+  }[tone]
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={ariaLabel}
+      className={`group/action relative flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors disabled:opacity-40 ${hoverClass}`}
+    >
+      {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium leading-4 text-white opacity-0 shadow-lg transition-opacity group-hover/action:opacity-100 group-focus-visible/action:opacity-100"
+      >
+        {label}
+        <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+      </span>
+    </button>
+  )
 }
 
 // ─── 级别标签 ────────────────────────────────────────────

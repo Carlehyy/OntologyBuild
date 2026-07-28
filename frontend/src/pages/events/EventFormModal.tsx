@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, FilePlus2, Paperclip, Trash2, Upload } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FilePlus2, Loader2, Paperclip, RefreshCcw, Trash2, Undo2, Upload } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
 import { ontologyApi } from '@/api/ontologies'
-import { eventsApi, formatBytes, type EventCreateBody, type EventItem } from '@/api/events'
+import { eventsApi, formatBytes, type Attachment, type EventCreateBody, type EventItem } from '@/api/events'
 
 const SEVERITY_OPTIONS = [
   { value: 'info', label: '信息' },
@@ -56,6 +56,8 @@ export default function EventFormModal({
   const [ontologyId, setOntologyId] = useState('')
   const [description, setDescription] = useState('')
   const [files, setFiles] = useState<File[]>([])
+  const [existingAttachments, setExistingAttachments] = useState<Attachment[]>([])
+  const [removedAttachmentIds, setRemovedAttachmentIds] = useState<Set<string>>(new Set())
   const [createdEventId, setCreatedEventId] = useState<string | null>(null)
   const [uploadedFileKeys, setUploadedFileKeys] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
@@ -64,6 +66,11 @@ export default function EventFormModal({
     queryKey: ['events-ontology-options'],
     queryFn: () => ontologyApi.list({ page_size: 100 }),
     enabled: open,
+  })
+  const eventDetailQuery = useQuery({
+    queryKey: ['events', 'detail', editing?.id],
+    queryFn: () => eventsApi.get(editing!.id),
+    enabled: open && Boolean(editing?.id),
   })
   const ontologyOptions = [
     { value: '', label: '（不关联本体）' },
@@ -74,6 +81,8 @@ export default function EventFormModal({
     if (!open) return
     setError('')
     setFiles([])
+    setExistingAttachments(editing?.attachments || [])
+    setRemovedAttachmentIds(new Set())
     setCreatedEventId(null)
     setUploadedFileKeys(new Set())
     if (editing) {
@@ -93,16 +102,24 @@ export default function EventFormModal({
     setDescription('')
   }, [editing, open])
 
+  useEffect(() => {
+    if (!open || !editing || !eventDetailQuery.data || eventDetailQuery.data.id !== editing.id) return
+    setExistingAttachments(eventDetailQuery.data.attachments || [])
+  }, [editing, eventDetailQuery.data, open])
+
   const mutation = useMutation({
     mutationFn: async () => {
       if (!title.trim()) throw new Error('请填写事件标题')
+      if (!eventType.trim()) throw new Error('请选择或填写事件类型')
+      if (!severity.trim()) throw new Error('请选择严重程度')
+      if (!description.trim()) throw new Error('请填写详细描述')
       const oversized = files.find(file => file.size > MAX_ATTACHMENT_BYTES)
       if (oversized) throw new Error(`附件“${oversized.name}”超过单文件 ${MAX_ATTACHMENT_MB}MB 限制`)
       const body: EventCreateBody = {
         title: title.trim(),
         eventType: eventType.trim(),
         severity,
-        description,
+        description: description.trim(),
         occurredAt: occurredAt ? new Date(occurredAt).toISOString() : null,
         ontologyId: ontologyId || null,
       }
@@ -114,6 +131,23 @@ export default function EventFormModal({
       } else {
         event = await eventsApi.create(body)
         setCreatedEventId(event.id)
+      }
+      for (const attachment of existingAttachments) {
+        if (!removedAttachmentIds.has(attachment.id)) continue
+        try {
+          await eventsApi.deleteAttachment(event.id, attachment.id)
+          setExistingAttachments(current => current.filter(item => item.id !== attachment.id))
+          setRemovedAttachmentIds(current => {
+            const next = new Set(current)
+            next.delete(attachment.id)
+            return next
+          })
+        } catch (cause) {
+          throw new Error(
+            `事件信息已保存，但已有附件“${attachment.filename}”删除失败：${errorDetail(cause)}。请重试。`,
+            { cause },
+          )
+        }
       }
       for (const file of files) {
         const key = fileIdentity(file)
@@ -151,6 +185,7 @@ export default function EventFormModal({
 
   const labelClass = 'mb-1.5 block text-sm font-medium text-slate-700'
   const controlClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm transition-all placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/15'
+  const visibleExistingCount = existingAttachments.filter(attachment => !removedAttachmentIds.has(attachment.id)).length
 
   return (
     <Modal
@@ -190,14 +225,17 @@ export default function EventFormModal({
         )}
 
         <div>
-          <label className={labelClass}>事件标题 <span className="text-red-500">*</span></label>
-          <input value={title} onChange={event => setTitle(event.target.value)} placeholder="简要描述发生了什么" className={controlClass} />
+          <label htmlFor="event-title" className={labelClass}>事件标题 <span className="text-red-500">*</span></label>
+          <input id="event-title" required aria-required="true" value={title} onChange={event => setTitle(event.target.value)} placeholder="简要描述发生了什么" className={controlClass} />
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className={labelClass}>事件类型</label>
+            <label htmlFor="event-type" className={labelClass}>事件类型 <span className="text-red-500">*</span></label>
             <input
+              id="event-type"
+              required
+              aria-required="true"
               list="event-type-options"
               value={eventType}
               onChange={event => setEventType(event.target.value)}
@@ -209,8 +247,8 @@ export default function EventFormModal({
             </datalist>
           </div>
           <div>
-            <label className={labelClass}>严重程度</label>
-            <select value={severity} onChange={event => setSeverity(event.target.value)} className={controlClass}>
+            <label htmlFor="event-severity" className={labelClass}>严重程度 <span className="text-red-500">*</span></label>
+            <select id="event-severity" required aria-required="true" value={severity} onChange={event => setSeverity(event.target.value)} className={controlClass}>
               {SEVERITY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
@@ -218,20 +256,23 @@ export default function EventFormModal({
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className={labelClass}>发生时间</label>
-            <input type="datetime-local" value={occurredAt} onChange={event => setOccurredAt(event.target.value)} className={controlClass} />
+            <label htmlFor="event-occurred-at" className={labelClass}>发生时间</label>
+            <input id="event-occurred-at" type="datetime-local" value={occurredAt} onChange={event => setOccurredAt(event.target.value)} className={controlClass} />
           </div>
           <div>
-            <label className={labelClass}>关联本体（后续挖掘目标）</label>
-            <select value={ontologyId} onChange={event => setOntologyId(event.target.value)} className={controlClass}>
+            <label htmlFor="event-ontology" className={labelClass}>关联本体（后续挖掘目标）</label>
+            <select id="event-ontology" value={ontologyId} onChange={event => setOntologyId(event.target.value)} className={controlClass}>
               {ontologyOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
         </div>
 
         <div>
-          <label className={labelClass}>详细描述</label>
+          <label htmlFor="event-description" className={labelClass}>详细描述 <span className="text-red-500">*</span></label>
           <textarea
+            id="event-description"
+            required
+            aria-required="true"
             value={description}
             onChange={event => setDescription(event.target.value)}
             rows={4}
@@ -248,9 +289,12 @@ export default function EventFormModal({
                 支持邮件、文档、表格、图片、音视频、压缩包等文件，单文件不超过 {MAX_ATTACHMENT_MB}MB
               </p>
             </div>
-            {files.length > 0 && (
-              <span className="text-xs font-medium text-emerald-700">
-                已选择 {files.length} 个{uploadedFileKeys.size ? ` · 已上传 ${uploadedFileKeys.size} 个` : ''}
+            {(visibleExistingCount > 0 || files.length > 0 || removedAttachmentIds.size > 0) && (
+              <span className="text-right text-xs font-medium text-emerald-700">
+                {visibleExistingCount > 0 ? `已有 ${visibleExistingCount} 个` : ''}
+                {visibleExistingCount > 0 && files.length > 0 ? ' · ' : ''}
+                {files.length > 0 ? `新增 ${files.length} 个` : ''}
+                {removedAttachmentIds.size > 0 ? ` · 待删除 ${removedAttachmentIds.size} 个` : ''}
               </span>
             )}
           </div>
@@ -266,8 +310,55 @@ export default function EventFormModal({
               }}
             />
           </label>
-          {files.length > 0 && (
+          {isEdit && eventDetailQuery.isLoading && existingAttachments.length === 0 && (
+            <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+              <Loader2 size={15} className="animate-spin" /> 正在加载已有附件…
+            </div>
+          )}
+          {isEdit && eventDetailQuery.isError && (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm text-red-600">
+              <span className="flex items-center gap-2"><AlertTriangle size={15} /> 已有附件加载失败</span>
+              <button
+                type="button"
+                onClick={() => void eventDetailQuery.refetch()}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium hover:bg-red-100"
+              >
+                <RefreshCcw size={13} /> 重试
+              </button>
+            </div>
+          )}
+          {(existingAttachments.length > 0 || files.length > 0) && (
             <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+              {existingAttachments.map(attachment => {
+                const removed = removedAttachmentIds.has(attachment.id)
+                return (
+                  <div key={attachment.id} className={`group flex items-center gap-3 border-t border-slate-100 px-3 py-2.5 first:border-t-0 ${removed ? 'bg-red-50/40' : ''}`}>
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${removed ? 'bg-red-50 text-red-400' : 'bg-emerald-50 text-emerald-600'}`}>
+                      <Paperclip size={15} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className={`truncate text-sm font-medium ${removed ? 'text-slate-400 line-through' : 'text-slate-700'}`} title={attachment.filename}>{attachment.filename}</p>
+                      <p className={`mt-0.5 text-xs ${removed ? 'text-red-500' : 'text-slate-400'}`}>
+                        {formatBytes(attachment.fileSize)} · {removed ? '保存后删除' : '已有附件'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRemovedAttachmentIds(current => {
+                        const next = new Set(current)
+                        if (removed) next.delete(attachment.id)
+                        else next.add(attachment.id)
+                        return next
+                      })}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${removed ? 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600' : 'text-slate-400 hover:bg-red-50 hover:text-red-600'}`}
+                      title={removed ? `撤销删除 ${attachment.filename}` : `删除 ${attachment.filename}`}
+                      aria-label={removed ? `撤销删除 ${attachment.filename}` : `删除 ${attachment.filename}`}
+                    >
+                      {removed ? <Undo2 size={15} /> : <Trash2 size={15} />}
+                    </button>
+                  </div>
+                )
+              })}
               {files.map((file, index) => {
                 const uploaded = uploadedFileKeys.has(fileIdentity(file))
                 return (
