@@ -96,6 +96,10 @@
   box-shadow: none;
 }
 
+.onto-glass-root--flat > .onto-glass-card:hover {
+  border-color: var(--glass-border);
+}
+
 /* 次级玻璃按钮 */
 .onto-glass-btn {
   background: var(--glass-bg);

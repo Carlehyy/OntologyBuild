@@ -107,6 +107,13 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   expect(apiHubBox!.y).toBeLessThan(communityBox!.y)
   expect(communityBox!.y).toBeLessThan(modelsBox!.y)
 
+  await expect(community).toHaveAttribute('aria-expanded', 'true')
+  await community.click()
+  await expect(community).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('link', { name: '插件社区' })).toHaveCount(0)
+  await community.click()
+  await expect(community).toHaveAttribute('aria-expanded', 'true')
+
   await page.getByRole('link', { name: '插件社区' }).click()
   await expect(page).toHaveURL(/#\/community\/plugins$/)
   await expect(page.getByRole('heading', { name: '插件社区' })).toBeVisible()

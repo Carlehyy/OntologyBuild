@@ -119,6 +119,40 @@ test('实例数据中的关联数据集可跳转到资产湖并定位成品数�
   await mockInstanceDatasetNavigation(page)
   await page.goto('/#/ontologies/ontology-products?tab=data', { waitUntil: 'domcontentloaded' })
 
+  await expect(page.getByPlaceholder('筛选实体或关系')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '刷新', exact: true })).toHaveCount(0)
+  await expect(page.getByText('电商商品', { exact: true })).toHaveCount(0)
+
+  const instanceHeader = page.getByTestId('instance-data-header')
+  const dataSearch = page.getByPlaceholder('搜索外部 ID 或属性值')
+  await expect(dataSearch).toBeVisible()
+  const [headerBox, searchBox] = await Promise.all([
+    instanceHeader.boundingBox(),
+    dataSearch.boundingBox(),
+  ])
+  expect(headerBox).not.toBeNull()
+  expect(searchBox).not.toBeNull()
+  expect(searchBox!.y).toBeGreaterThanOrEqual(headerBox!.y)
+  expect(searchBox!.y + searchBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height)
+
+  const objectSection = page.locator('[data-catalog-kind="object"]')
+  const linkSection = page.locator('[data-catalog-kind="link"]')
+  const [objectColor, linkColor] = await Promise.all([
+    objectSection.evaluate(element => getComputedStyle(element.firstElementChild!).color),
+    linkSection.evaluate(element => getComputedStyle(element.firstElementChild!).color),
+  ])
+  expect(objectColor).not.toBe(linkColor)
+
+  const objectCount = page.getByTestId('catalog-object-count')
+  await expect(objectCount).toHaveCSS('align-items', 'center')
+  await expect(objectCount).toHaveCSS('justify-content', 'center')
+
+  const detailContent = page.getByTestId('ontology-detail-content')
+  const borderBeforeHover = await detailContent.evaluate(element => getComputedStyle(element).borderColor)
+  await detailContent.hover()
+  await expect.poll(() => detailContent.evaluate(element => getComputedStyle(element).borderColor))
+    .toBe(borderBeforeHover)
+
   const imageArray = page.getByText('["https://example.com/images/item-1001.jpg"]', { exact: true })
   await expect(imageArray).toBeVisible()
   await expect(imageArray).toHaveCSS('white-space', 'nowrap')

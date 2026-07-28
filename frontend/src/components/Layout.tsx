@@ -16,19 +16,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
+  const [collapsedActiveGroup, setCollapsedActiveGroup] = useState<string | null>(null)
   const [inboxOpen, setInboxOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const inboxRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!expandedGroup) return
-    const stillActive = location.pathname === expandedGroup || location.pathname.startsWith(expandedGroup + '/')
-    if (!stillActive) {
-      const timer = window.setTimeout(() => setExpandedGroup(null), 0)
+    if (expandedGroup) {
+      const stillActive = location.pathname === expandedGroup || location.pathname.startsWith(expandedGroup + '/')
+      if (!stillActive) {
+        const timer = window.setTimeout(() => setExpandedGroup(null), 0)
+        return () => window.clearTimeout(timer)
+      }
+    }
+    if (collapsedActiveGroup) {
+      const stillActive = location.pathname === collapsedActiveGroup || location.pathname.startsWith(collapsedActiveGroup + '/')
+      if (stillActive) return
+      const timer = window.setTimeout(() => setCollapsedActiveGroup(null), 0)
       return () => window.clearTimeout(timer)
     }
-  }, [expandedGroup, location.pathname])
+  }, [collapsedActiveGroup, expandedGroup, location.pathname])
 
   // 点击外部关闭下拉面板
   useEffect(() => {
@@ -88,23 +96,28 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {navItems.map((item) => {
             const Icon = item.icon
             const groupActive = isGroupActive(item)
-            const groupExpanded = expandedGroup === item.to || groupActive
+            const groupExpanded = expandedGroup === item.to || (groupActive && collapsedActiveGroup !== item.to)
 
             if (item.subItems) {
               return (
                 <div key={item.to}>
-                  <button onClick={() => {
-                    if (collapsed) return
-                    if (expandedGroup === item.to) {
-                      setExpandedGroup(null)
-                    } else {
-                      setExpandedGroup(item.to)
-                      if (item.subItems && item.subItems.length > 0) {
-                        navigate(item.subItems[0].to)
-                        setMobileNavOpen(false)
+                  <button
+                    type="button"
+                    aria-expanded={groupExpanded}
+                    onClick={() => {
+                      if (collapsed) return
+                      if (groupExpanded) {
+                        setExpandedGroup(null)
+                        setCollapsedActiveGroup(item.to)
+                      } else {
+                        setCollapsedActiveGroup(null)
+                        setExpandedGroup(item.to)
+                        if (!groupActive && item.subItems && item.subItems.length > 0) {
+                          navigate(item.subItems[0].to)
+                          setMobileNavOpen(false)
+                        }
                       }
-                    }
-                  }}
+                    }}
                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${groupActive
                         ? 'text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
                     style={groupActive ? { background: 'var(--color-nav-bg)' } : {}}>
