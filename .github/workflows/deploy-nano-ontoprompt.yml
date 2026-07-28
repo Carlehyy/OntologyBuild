@@ -136,7 +136,34 @@ jobs:
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
           : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
           APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
-          HEALTH_URL="${DEPLOY_HEALTH_URL:-http://${DEPLOY_HOST}/}"
+          if [ -n "${DEPLOY_HEALTH_URL}" ]; then
+            HEALTH_URL="${DEPLOY_HEALTH_URL}"
+          else
+            PUBLIC_PORT="$(
+              awk -F= '$1 == "PUBLIC_PORT" {
+                value = substr($0, index($0, "=") + 1)
+              } END {
+                sub(/\r$/, "", value)
+                print value
+              }' production.dependencies.env
+            )"
+            PUBLIC_PORT="${PUBLIC_PORT:-80}"
+            case "${PUBLIC_PORT}" in
+              *[!0-9]*)
+                echo "PUBLIC_PORT must be an integer between 1 and 65535"
+                exit 1
+                ;;
+            esac
+            if [ "${PUBLIC_PORT}" -lt 1 ] || [ "${PUBLIC_PORT}" -gt 65535 ]; then
+              echo "PUBLIC_PORT must be an integer between 1 and 65535"
+              exit 1
+            fi
+            if [ "${PUBLIC_PORT}" -eq 80 ]; then
+              HEALTH_URL="http://${DEPLOY_HOST}/"
+            else
+              HEALTH_URL="http://${DEPLOY_HOST}:${PUBLIC_PORT}/"
+            fi
+          fi
           sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "cd '${APP_DIR}' && APP_DIR='${APP_DIR}' SKIP_GIT=1 HEALTH_URL='${HEALTH_URL}' bash scripts/deploy-prod.sh"
 
   report:

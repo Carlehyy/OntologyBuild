@@ -277,6 +277,102 @@ def test_deploy_uses_manifest_public_port_for_default_health_origin(tmp_path):
         "http://127.0.0.1:8123")
 
 
+def _deploy_workflow_script() -> str:
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" /
+         "deploy-nano-ontoprompt.yml").read_text())
+    deploy_step = next(
+        step
+        for step in workflow["jobs"]["deploy"]["steps"]
+        if step.get("name") == "Deploy over SSH"
+    )
+    return deploy_step["run"]
+
+
+def _run_deploy_workflow_step(
+    tmp_path: Path,
+    *,
+    dependency_config: str,
+    health_url: str = "",
+):
+    (tmp_path / "production.dependencies.env").write_text(
+        dependency_config,
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sshpass = fake_bin / "sshpass"
+    fake_sshpass.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\"\n",
+        encoding="utf-8",
+    )
+    fake_sshpass.chmod(0o755)
+    env = os.environ.copy()
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "DEPLOY_HOST": "203.0.113.8",
+        "DEPLOY_USER": "deploy-user",
+        "DEPLOY_PASSWORD": "test-password",
+        "DEPLOY_APP_DIR": "/srv/ontologybuild",
+        "DEPLOY_HEALTH_URL": health_url,
+    })
+    return subprocess.run(
+        ["bash", "-e", "-c", _deploy_workflow_script()],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+@pytest.mark.parametrize(
+    ("public_port", "expected_url"),
+    [
+        ("8088", "http://203.0.113.8:8088/"),
+        ("80", "http://203.0.113.8/"),
+    ],
+)
+def test_deploy_workflow_defaults_health_url_to_manifest_public_port(
+    tmp_path, public_port, expected_url,
+):
+    result = _run_deploy_workflow_step(
+        tmp_path,
+        dependency_config=f"PUBLIC_PORT={public_port}\n",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"HEALTH_URL='{expected_url}'" in result.stdout
+
+
+def test_deploy_workflow_preserves_explicit_health_url(tmp_path):
+    result = _run_deploy_workflow_step(
+        tmp_path,
+        dependency_config="PUBLIC_PORT=not-used\n",
+        health_url="https://platform.example.com/health-root/",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "HEALTH_URL='https://platform.example.com/health-root/'"
+        in result.stdout
+    )
+
+
+@pytest.mark.parametrize("public_port", ["not-a-port", "0", "65536"])
+def test_deploy_workflow_rejects_invalid_manifest_public_port(
+    tmp_path, public_port,
+):
+    result = _run_deploy_workflow_step(
+        tmp_path,
+        dependency_config=f"PUBLIC_PORT={public_port}\n",
+    )
+
+    assert result.returncode != 0
+    assert "PUBLIC_PORT must be an integer between 1 and 65535" in result.stdout
+    assert "ssh -o StrictHostKeyChecking" not in result.stdout
+
+
 def test_deploy_empty_exported_public_port_matches_compose_default(
     tmp_path, monkeypatch,
 ):
