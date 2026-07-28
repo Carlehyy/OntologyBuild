@@ -1,6 +1,7 @@
 """Production guardrails for formal actions, sentinels, and Celery workers."""
 import json
 import socket
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +54,114 @@ from app.ontologies.formal_modeling.schemas import DecisionRequest
 from app.ontologies.versions.evolution_service import snapshot_hash
 from app.ontologies.versions.router import _snapshot_formal
 from fastapi import HTTPException
+
+
+def test_action_and_sentinel_public_entrypoints_preserve_global_lock_order(
+        monkeypatch):
+    from app.ontologies.mappings import mapping_service
+    from app.ontologies.formal_modeling import action_engine
+
+    events: list[str] = []
+    held = {"build": False, "sentinel": False}
+
+    @contextmanager
+    def build_lock(_db, ontology_id):
+        assert ontology_id == "lock-order-ontology"
+        assert held["sentinel"] is False
+        held["build"] = True
+        events.append("build-enter")
+        try:
+            yield
+        finally:
+            events.append("build-exit")
+            held["build"] = False
+
+    @contextmanager
+    def sentinel_lock(_db, sentinel_id):
+        assert sentinel_id == "lock-order-sentinel"
+        assert held["build"] is True
+        held["sentinel"] = True
+        events.append("sentinel-enter")
+        try:
+            yield
+        finally:
+            events.append("sentinel-exit")
+            held["sentinel"] = False
+
+    monkeypatch.setattr(mapping_service, "_ontology_build_lock", build_lock)
+    monkeypatch.setattr(
+        sentinel_evaluator, "_sentinel_execution_lock", sentinel_lock)
+    monkeypatch.setattr(
+        sentinel_evaluator,
+        "runtime_release_identity",
+        lambda *_args, **_kwargs: SimpleNamespace(id="release-r1", version="v1"),
+    )
+    monkeypatch.setattr(
+        sentinel_evaluator,
+        "_reload_executable_sentinel",
+        lambda _db, _ontology_id, sentinel, _release_id: sentinel,
+    )
+    monkeypatch.setattr(
+        sentinel_evaluator,
+        "_guard_expected_release",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        sentinel_evaluator,
+        "_evaluate_inner",
+        lambda *_args, **_kwargs: "evaluated",
+    )
+    sentinel = SimpleNamespace(
+        id="lock-order-sentinel",
+        name="lock_order",
+        display_name="锁序",
+    )
+    result = evaluate_sentinel(
+        SimpleNamespace(),
+        "lock-order-ontology",
+        sentinel,
+        "manual",
+        expected_release_id="release-r1",
+    )
+    assert result == "evaluated"
+    assert events == [
+        "build-enter", "sentinel-enter", "sentinel-exit", "build-exit",
+    ]
+
+    events.clear()
+    monkeypatch.setattr(
+        action_engine,
+        "_execute_action_locked",
+        lambda *_args, **_kwargs: {"status": "success"},
+    )
+    assert action_engine.execute_action(
+        None,
+        "isolated-trial",
+        SimpleNamespace(preview_only=True),
+        preview_only=True,
+        preview_context={"isolated": True},
+    ) == {"status": "success"}
+    assert events == []
+
+    assert action_engine.execute_action(
+        SimpleNamespace(),
+        "lock-order-ontology",
+        SimpleNamespace(),
+    ) == {"status": "success"}
+    assert events == ["build-enter", "build-exit"]
+
+    events.clear()
+    monkeypatch.setattr(
+        sentinel_evaluator,
+        "_resume_sentinel_match_claim_locked",
+        lambda *_args, **_kwargs: {"status": "fired"},
+    )
+    assert resume_sentinel_match_claim(
+        SimpleNamespace(),
+        "lock-order-ontology",
+        "state-1",
+    ) == {"status": "fired"}
+    assert events == ["build-enter", "build-exit"]
 
 
 def test_postgres_sentinel_lock_uses_one_dedicated_connection_across_commits():

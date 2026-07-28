@@ -256,6 +256,51 @@ def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path)
         "https://platform.example.com")
 
 
+def test_deploy_uses_manifest_public_port_for_default_health_origin(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env")
+    (tmp_path / "production.dependencies.env").write_text(
+        "PUBLIC_PORT=8123\n",
+        encoding="utf-8",
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["PUBLIC_PORT"] == "8123"
+    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
+        "http://127.0.0.1:8123/api/v2/file-transfer")
+    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
+        "http://127.0.0.1:8123")
+    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
+        "http://127.0.0.1:8123")
+
+
+def test_deploy_empty_exported_public_port_matches_compose_default(
+    tmp_path, monkeypatch,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env")
+    (tmp_path / "production.dependencies.env").write_text(
+        "PUBLIC_PORT=8123\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PUBLIC_PORT", "")
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["PUBLIC_PORT"] == "8123"
+    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
+        "http://127.0.0.1:80/api/v2/file-transfer")
+    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
+        "http://127.0.0.1:80")
+    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
+        "http://127.0.0.1:80")
+
+
 def test_deploy_preserves_explicit_pipeline_file_gateway(tmp_path):
     content = (ROOT / ".env.example").read_text().replace(
         "PIPELINE_FILE_GATEWAY_BASE_URL=http://backend:8000/api/v2/file-transfer",

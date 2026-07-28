@@ -2,6 +2,8 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 
 const now = '2026-07-21T08:00:00+00:00'
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
 
 const json = (route: Route, data: unknown) => route.fulfill({
   status: 200,
@@ -10,16 +12,11 @@ const json = (route: Route, data: unknown) => route.fulfill({
 })
 
 async function authenticate(page: Page) {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e-token')
-    localStorage.setItem('auth-store', JSON.stringify({
-      state: {
-        token: 'e2e-token',
-        user: { id: 'admin', username: 'admin', email: 'admin@example.com', role: 'admin' },
-      },
-      version: 0,
-    }))
-  })
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.locator('button[type="submit"]').click()
+  await page.waitForURL('**/#/overview')
 }
 
 test('MCP 列表失败时仍加载文本模型并允许输入', async ({ page }) => {
@@ -44,7 +41,7 @@ test('MCP 列表失败时仍加载文本模型并允许输入', async ({ page })
       created_at: now,
       updated_at: now,
     }])
-    return route.fulfill({ status: 404, body: '{}' })
+    return route.continue()
   })
   await page.route('**/api/v2/super-assistant/**', route => {
     const path = new URL(route.request().url()).pathname

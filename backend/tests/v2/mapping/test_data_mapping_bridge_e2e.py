@@ -154,10 +154,24 @@ def test_mapping_api_rejects_incompatible_object_and_relation_types(
             ("订单编号", "order_id", "string"),
             ("评分", "score", "float"),
             ("备注", "note", "string"),
+            ("标签", "tags", "json"),
         ],
         "line_id",
-        "关系行号,供应商编号,订单编号,评分,备注\nL-1,S-1,O-1,0.9,优先\n",
+        (
+            "关系行号,供应商编号,订单编号,评分,备注,标签\n"
+            'L-1,S-1,O-1,0.9,优先,"[""priority"",""north""]"\n'
+        ),
     )
+    assignment_schema = api.get(
+        f"/api/v2/datasets/{assignments}/schema",
+        headers=headers,
+    )
+    assert assignment_schema.status_code == 200, assignment_schema.text
+    assignment_columns = {
+        item["name"]: item
+        for item in assignment_schema.json()["columns"]
+    }
+    assert assignment_columns["tags"]["type"] == "json"
 
     supplier_type = _create_object_type(api, headers, ontology_id, "Supplier", [
         {"id": "supplier-id", "name": "supplier_id", "type": "string", "required": True},
@@ -188,9 +202,16 @@ def test_mapping_api_rejects_incompatible_object_and_relation_types(
         "name": "SUPPLIES", "displayName": "供应",
         "sourceObjectTypeId": supplier_type, "targetObjectTypeId": order_type,
         "cardinality": "many-to-many",
-        "properties": [{
-            "id": "supply-score", "name": "score", "type": "number", "required": False,
-        }],
+        "properties": [
+            {
+                "id": "supply-score", "name": "score",
+                "type": "number", "required": False,
+            },
+            {
+                "id": "supply-tags", "name": "tags",
+                "type": "array", "required": False,
+            },
+        ],
     })
     assert link.status_code == 201, link.text
     link_type_id = link.json()["data"]["id"]
@@ -204,6 +225,52 @@ def test_mapping_api_rejects_incompatible_object_and_relation_types(
     })
     assert bad_link.status_code == 422
     assert bad_link.json()["detail"]["code"] == "link_mapping_type_mismatch"
+
+    bad_array_link = api.post(
+        f"/api/v2/ontologies/{ontology_id}/link-mappings",
+        headers=headers,
+        json={
+            "src_dataset_id": suppliers,
+            "tgt_dataset_id": orders,
+            "edge_dataset_id": assignments,
+            "link_type_id": link_type_id,
+            "relation_type": "SUPPLIES",
+            "src_key": "supplier_id",
+            "tgt_key": "order_id",
+            "field_mapping": {"tags": "note"},
+        },
+    )
+    assert bad_array_link.status_code == 422
+    detail = bad_array_link.json()["detail"]
+    assert detail["code"] == "link_mapping_type_mismatch"
+    assert {
+        (
+            item.get("role"),
+            item.get("source_type"),
+            item.get("target_type"),
+        )
+        for item in detail["errors"]
+    } == {("edge_property", "string", "array")}
+
+    valid_json_array_link = api.post(
+        f"/api/v2/ontologies/{ontology_id}/link-mappings",
+        headers=headers,
+        json={
+            "src_dataset_id": suppliers,
+            "tgt_dataset_id": orders,
+            "edge_dataset_id": assignments,
+            "link_type_id": link_type_id,
+            "relation_type": "SUPPLIES",
+            "src_key": "supplier_id",
+            "tgt_key": "order_id",
+            "field_mapping": {
+                "score": "score",
+                "tags": "tags",
+            },
+        },
+    )
+    assert valid_json_array_link.status_code == 200, (
+        valid_json_array_link.text)
 
 
 def test_draft_mapping_cannot_bypass_trial_and_promotion(

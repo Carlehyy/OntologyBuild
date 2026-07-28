@@ -1,52 +1,93 @@
-import { test, expect } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
-const BASE = 'http://localhost:5173'
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://localhost:8000'
+).replace(/\/+$/, '')
 
-async function login(page: any) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
+async function login(page: Page): Promise<string> {
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('admin123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await page.waitForURL('**/#/overview')
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  expect(token).toBeTruthy()
+  return token!
 }
 
-async function createOntology(page: any): Promise<string> {
-  await page.goto(`${BASE}/ontologies`)
-  await page.click('button:has-text("创建 Ontology")')
-  const name = `测试-${Date.now()}`
-  await page.fill('input[placeholder="名称 *"]', name)
-  await page.click('button:has-text("确认")')
-  await page.waitForURL(/\/ontologies\/[a-f0-9-]+$/)
-  return name
+async function createOntology(request: APIRequestContext, token: string): Promise<string> {
+  const response = await request.post(`${API}/api/v1/ontologies`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: `详情测试-${Date.now().toString(36)}`,
+      domain: '供应链',
+      description: '验证当前五段式本体详情信息架构',
+    },
+  })
+  expect(response.ok(), await response.text()).toBeTruthy()
+  const body = await response.json()
+  return (body.data ?? body).id
+}
+
+async function removeOntology(request: APIRequestContext, token: string, ontologyId: string) {
+  const response = await request.delete(`${API}/api/v1/ontologies/${ontologyId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(response.ok(), await response.text()).toBeTruthy()
 }
 
 test.describe('Ontology Detail Page', () => {
-  test.beforeEach(async ({ page }) => {
-    await login(page)
+  test('shows the overview and current release by default', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await page.goto(`/#/ontologies/${ontologyId}`)
+      await expect(page.getByRole('button', { name: '本体总览', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.getByTestId('ontology-detail-content')).toBeVisible()
+      await expect(page.getByTestId('current-release-version')).toHaveText('v0')
+    } finally {
+      await removeOntology(request, token, ontologyId)
+    }
   })
 
-  test('shows info tab by default', async ({ page }) => {
-    await createOntology(page)
-    await expect(page.locator('h3:has-text("基本信息")')).toBeVisible()
-    await expect(page.locator('h3:has-text("LLM 提取")')).toBeVisible()
+  test('switches to the published model structure', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await page.goto(`/#/ontologies/${ontologyId}`)
+      await page.getByRole('button', { name: '本体结构', exact: true }).click()
+      await expect(page.getByRole('button', { name: '本体结构', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.getByText('当前发布版还没有对象实体', { exact: true })).toBeVisible()
+    } finally {
+      await removeOntology(request, token, ontologyId)
+    }
   })
 
-  test('switches to files tab', async ({ page }) => {
-    await createOntology(page)
-    await page.click('button:has-text("文件上传")')
-    await expect(page.locator('text=拖拽文件')).toBeVisible()
+  test('exposes graph, history and JSON export actions', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await page.goto(`/#/ontologies/${ontologyId}`)
+      await expect(page.getByRole('button', { name: '查看当前发布图谱', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: '查看历史版本', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: '导出本体结构 JSON', exact: true })).toBeVisible()
+    } finally {
+      await removeOntology(request, token, ontologyId)
+    }
   })
 
-  test('export buttons visible', async ({ page }) => {
-    await createOntology(page)
-    await expect(page.locator('button:has-text("JSON")')).toBeVisible()
-    await expect(page.locator('button:has-text("YAML")')).toBeVisible()
-    await expect(page.locator('button:has-text("CSV")')).toBeVisible()
-  })
-
-  test('back button navigates to list', async ({ page }) => {
-    await createOntology(page)
-    await page.click('button:has-text("← 返回")')
-    await expect(page).toHaveURL(`${BASE}/ontologies`)
+  test('sidebar ontology management link navigates back to the list', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await page.goto(`/#/ontologies/${ontologyId}`)
+      await page.getByRole('link', { name: '本体管理', exact: true }).click()
+      await expect(page).toHaveURL(/\/#\/ontologies$/)
+      await expect(page.getByRole('region', { name: '本体筛选' })).toBeVisible()
+    } finally {
+      await removeOntology(request, token, ontologyId)
+    }
   })
 })

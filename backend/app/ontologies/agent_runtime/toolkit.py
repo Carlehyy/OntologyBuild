@@ -30,6 +30,7 @@ from app.models.ontology_formal import (
 )
 from app.ontologies.agent_runtime.boundary import AgentScope, ToolError
 from app.ontologies.formal_modeling.facts import fact_order_clause
+from app.ontologies.versions.models import OntologyVersion
 from app.shared.time_utils import utc_iso
 
 _SCAN_CAP = 5000          # search 单次翻页最多扫描的实例行数（找一页，非计数）
@@ -44,6 +45,109 @@ _MAX_HOPS = 5             # 单次多跳最多跳数
 _HOP_FANOUT_CAP = 200     # 每个节点每一跳最多考察的链接数
 _FRONTIER_CAP = 500       # 每一跳最多展开的前沿节点数
 _PATH_NODE_BUDGET = 2000  # 一次多跳最多访问的节点总数
+
+
+def _history_release_lineage(
+        db: Session, ontology_id: str, current_release_id: str) -> dict:
+    """Resolve the release authority segment for Fact-history reads.
+
+    A normal trial promotion is a new provenance baseline, so only its own
+    release id is authoritative.  A rollback activation does not rebuild Fact
+    history; it inherits the direct parent chain through rollback activations
+    until (and including) the nearest normal promotion baseline.
+
+    The traversal is deliberately parent-only.  Missing/cyclic/non-release
+    parents make the lineage incomplete; a rollback then fails closed to the
+    current release instead of treating a partial ancestor set as authority.
+    """
+    rows = db.query(
+        OntologyVersion.id,
+        OntologyVersion.parent_version_id,
+        OntologyVersion.promoted_from_id,
+        OntologyVersion.node_kind,
+        OntologyVersion.lifecycle_status,
+    ).filter(
+        OntologyVersion.ontology_id == ontology_id,
+    ).all()
+    releases = {
+        str(row.id): row
+        for row in rows
+        if (
+            (row.node_kind or "release") == "release"
+            and (row.lifecycle_status or "released") == "released"
+        )
+    }
+    current_id = str(current_release_id)
+    current = releases.get(current_id)
+    if current is None:
+        return {
+            "current": None,
+            "authorityReleaseIds": [current_id],
+            "baselineReleaseId": None,
+            "lineageComplete": False,
+            "preBaselineReleaseIds": [],
+        }
+
+    # A release with promoted_from_id is an ordinary promotion and therefore
+    # defines its own authority reset.  Its ancestors remain readable only for
+    # the explicitly non-authoritative preBaselineOrigin explanation.
+    ordinary = bool(current.promoted_from_id)
+    if ordinary:
+        pre_baseline: list[str] = []
+        seen = {current_id}
+        cursor = str(current.parent_version_id or "")
+        complete = True
+        while cursor:
+            if cursor in seen:
+                complete = False
+                break
+            seen.add(cursor)
+            row = releases.get(cursor)
+            if row is None:
+                complete = False
+                break
+            pre_baseline.append(cursor)
+            cursor = str(row.parent_version_id or "")
+        return {
+            "current": current,
+            "authorityReleaseIds": [current_id],
+            "baselineReleaseId": current_id,
+            "lineageComplete": complete,
+            "preBaselineReleaseIds": pre_baseline if complete else [],
+        }
+
+    authority = [current_id]
+    seen = {current_id}
+    cursor = str(current.parent_version_id or "")
+    baseline_id: str | None = None
+    complete = True
+    while cursor:
+        if cursor in seen:
+            complete = False
+            break
+        seen.add(cursor)
+        row = releases.get(cursor)
+        if row is None:
+            complete = False
+            break
+        authority.append(cursor)
+        if row.promoted_from_id:
+            baseline_id = cursor
+            break
+        cursor = str(row.parent_version_id or "")
+
+    if not complete:
+        # Partial ancestry is evidence, not authority.  Keep only facts whose
+        # immutable release id is the current activation.
+        authority = [current_id]
+        baseline_id = None
+    return {
+        "current": current,
+        "authorityReleaseIds": authority,
+        "baselineReleaseId": baseline_id,
+        "lineageComplete": complete,
+        "preBaselineReleaseIds": [],
+    }
 
 
 # ---------------------------------------------------------------- 工具定义
@@ -780,27 +884,250 @@ class ToolRunner:
                 ObjectInstance.id == args.get("instance_id", "")).first())
         self._cite(inst)
         limit = min(self._limit(args.get("limit")), 50)
-        q = self.db.query(PropertyFact).filter(
+        base_query = self.db.query(PropertyFact).filter(
             PropertyFact.ontology_id == self.scope.ontology.id,
             PropertyFact.instance_id == inst.id)
-        if self.scope.release_id is not None:
-            q = q.filter(PropertyFact.ontology_release_id == self.scope.release_id)
         if args.get("property_name"):
-            q = q.filter(PropertyFact.property_name == args["property_name"])
-        facts = q.order_by(*fact_order_clause()).limit(limit).all()
-        return {
+            base_query = base_query.filter(
+                PropertyFact.property_name == args["property_name"])
+
+        # Legacy/unscoped callers retain the original all-history behavior.
+        if self.scope.release_id is None:
+            facts = (
+                base_query.order_by(*fact_order_clause()).limit(limit).all()
+            )
+            return {
+                "instance": _label(self.scope, inst),
+                "facts": [{
+                    "property": f.property_name,
+                    "value": _trunc((f.value or {}).get("v")),
+                    "present": (f.value or {}).get("present", True),
+                    "kind": f.kind or "property",
+                    "source": f.source,
+                    "actorId": f.actor_id,
+                    "causedBy": f.caused_by,
+                    "confidence": f.confidence,
+                    "recordedAt": utc_iso(f.recorded_at),
+                } for f in facts],
+            }
+
+        current_release_id = str(self.scope.release_id)
+        lineage = _history_release_lineage(
+            self.db, self.scope.ontology.id, current_release_id)
+        authority_ids = list(lineage["authorityReleaseIds"])
+        facts = (
+            base_query.filter(
+                PropertyFact.ontology_release_id.in_(authority_ids))
+            .order_by(*fact_order_clause())
+            .limit(limit)
+            .all()
+        )
+
+        def fact_payload(
+                fact: PropertyFact, *, authoritative: bool,
+                adopted_by_release_id: str | None = None) -> dict:
+            release_id = (
+                str(fact.ontology_release_id)
+                if fact.ontology_release_id is not None else None
+            )
+            item = {
+                "property": fact.property_name,
+                "value": _trunc((fact.value or {}).get("v")),
+                "present": (fact.value or {}).get("present", True),
+                "kind": fact.kind or "property",
+                "source": fact.source,
+                "actorId": fact.actor_id,
+                "causedBy": fact.caused_by,
+                "confidence": fact.confidence,
+                "recordedAt": utc_iso(fact.recorded_at),
+                "ontologyReleaseId": release_id,
+                "inherited": (
+                    authoritative and release_id != current_release_id
+                ),
+                "authoritative": authoritative,
+            }
+            if adopted_by_release_id is not None:
+                item["adoptedByReleaseId"] = adopted_by_release_id
+            return item
+
+        result = {
             "instance": _label(self.scope, inst),
-            "facts": [{
-                "property": f.property_name,
-                "value": _trunc((f.value or {}).get("v")),
-                "kind": f.kind or "property",
-                "source": f.source,
-                "actorId": f.actor_id,
-                "causedBy": f.caused_by,
-                "confidence": f.confidence,
-                "recordedAt": utc_iso(f.recorded_at),
-            } for f in facts],
+            "releaseContext": {
+                "currentReleaseId": current_release_id,
+                "authorityReleaseIds": authority_ids,
+                "baselineReleaseId": lineage["baselineReleaseId"],
+                "lineageComplete": lineage["lineageComplete"],
+            },
+            "facts": [
+                fact_payload(fact, authoritative=True)
+                for fact in facts
+            ],
         }
+
+        current = lineage["current"]
+        # Normal promotion is a provenance reset even when materializing the
+        # reviewed trial produces no new Fact (a no-op value).  Make that
+        # baseline adoption explicit rather than relabelling an older Fact as
+        # current authority.
+        if (
+            current is not None
+            and current.promoted_from_id
+            and not facts
+        ):
+            merged = {
+                **dict(inst.properties or {}),
+                **dict(inst.computed or {}),
+            }
+            requested_property = args.get("property_name")
+            if requested_property:
+                adopted_properties = [{
+                    "property": requested_property,
+                    "value": _trunc(merged.get(requested_property)),
+                    "present": requested_property in merged,
+                }]
+            else:
+                adopted_properties = [{
+                    "property": key,
+                    "value": _trunc(value),
+                    "present": True,
+                } for key, value in sorted(merged.items())]
+
+            audit_trial_id: str | None = None
+            metadata_complete = False
+            # The release row itself does not store the selected trial id.  A
+            # publish audit plus the matching passed trial is the only complete
+            # evidence; old releases without both stay explicit about the gap.
+            from app.ontologies.inference.models import AuditLog
+            from app.ontologies.versions.models import (
+                OntologyTrialObject,
+                OntologyTrialRun,
+            )
+
+            audits = self.db.query(AuditLog).filter(
+                AuditLog.ontology_id == self.scope.ontology.id,
+                AuditLog.event_type == "publish",
+                AuditLog.event_subtype == "draft_promoted",
+                AuditLog.object_id == current_release_id,
+            ).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).all()
+            matching_trial_ids = {
+                str((audit.meta or {}).get("trial_run_id"))
+                for audit in audits
+                if (
+                    str((audit.meta or {}).get("draft_version_id") or "")
+                    == str(current.promoted_from_id)
+                    and (audit.meta or {}).get("trial_run_id")
+                )
+            }
+            if len(matching_trial_ids) == 1:
+                candidate_id = next(iter(matching_trial_ids))
+                trial = self.db.query(OntologyTrialRun).filter(
+                    OntologyTrialRun.id == candidate_id,
+                    OntologyTrialRun.ontology_id
+                    == self.scope.ontology.id,
+                    OntologyTrialRun.version_id
+                    == current.promoted_from_id,
+                    OntologyTrialRun.status == "passed",
+                ).first()
+                if trial is not None:
+                    audit_trial_id = candidate_id
+                    trial_object = self.db.query(
+                        OntologyTrialObject).filter(
+                            OntologyTrialObject.trial_run_id == candidate_id,
+                            OntologyTrialObject.object_id == inst.id,
+                        ).first()
+                    if trial_object is not None:
+                        trial_values = {
+                            **dict(trial_object.properties or {}),
+                            **dict(trial_object.computed or {}),
+                        }
+                        metadata_complete = all(
+                            (
+                                item["property"] in trial_values
+                                and trial_values.get(item["property"])
+                                == merged.get(item["property"])
+                            )
+                            if item["present"] else (
+                                item["property"] not in trial_values
+                            )
+                            for item in adopted_properties
+                        )
+
+            adoption = {
+                "releaseId": current_release_id,
+                "promotedFromId": str(current.promoted_from_id),
+                "objectPresent": True,
+                "properties": adopted_properties,
+                "authoritative": True,
+                "metadataComplete": metadata_complete,
+            }
+            if audit_trial_id is not None:
+                adoption["trialRunId"] = audit_trial_id
+            result["baselineAdoption"] = adoption
+
+            # Older matching values can explain where a value was first seen,
+            # but they are not part of the current release's authority
+            # segment.  Search only the direct parent chain and never siblings.
+            pre_release_ids = list(lineage["preBaselineReleaseIds"])
+            if lineage["lineageComplete"] and pre_release_ids:
+                property_names = [
+                    item["property"] for item in adopted_properties
+                ]
+                old_facts = (
+                    self.db.query(PropertyFact)
+                    .filter(
+                        PropertyFact.ontology_id
+                        == self.scope.ontology.id,
+                        PropertyFact.instance_id == inst.id,
+                        PropertyFact.ontology_release_id.in_(
+                            pre_release_ids),
+                        PropertyFact.property_name.in_(property_names),
+                        PropertyFact.kind.in_(["property", "derived"]),
+                    )
+                    .order_by(*fact_order_clause())
+                    .all()
+                )
+                release_rank = {
+                    release_id: rank
+                    for rank, release_id in enumerate(pre_release_ids)
+                }
+                adopted_by_property = {
+                    item["property"]: item
+                    for item in adopted_properties
+                }
+                origins: dict[str, tuple[int, PropertyFact]] = {}
+                for fact in old_facts:
+                    adopted = adopted_by_property.get(fact.property_name)
+                    if adopted is None:
+                        continue
+                    fact_value = (fact.value or {}).get("v")
+                    fact_present = (fact.value or {}).get("present", True)
+                    if (
+                        fact_value != merged.get(fact.property_name)
+                        or fact_present != adopted["present"]
+                    ):
+                        continue
+                    rank = release_rank.get(
+                        str(fact.ontology_release_id), len(release_rank))
+                    previous = origins.get(fact.property_name)
+                    # Query ordering already selects newest Fact within a
+                    # release; only a nearer release may replace it.
+                    if previous is None or rank < previous[0]:
+                        origins[fact.property_name] = (rank, fact)
+                if origins:
+                    result["preBaselineOrigin"] = [
+                        fact_payload(
+                            origin[1],
+                            authoritative=False,
+                            adopted_by_release_id=current_release_id,
+                        )
+                        for _, origin in sorted(
+                            origins.items(),
+                            key=lambda item: (
+                                item[1][0], item[0],
+                            ),
+                        )
+                    ]
+        return result
 
     def _tool_list_actions(self, args: dict) -> dict:
         items = []

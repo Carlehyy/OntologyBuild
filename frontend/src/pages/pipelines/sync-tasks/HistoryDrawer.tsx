@@ -173,7 +173,7 @@ export default function HistoryDrawer({
             <button type="button" onClick={onClose} aria-label="关闭执行记录" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"><X size={18} /></button>
           </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            {task.name} · 流水线「{task.pipeline_name}」 · 每次执行可逐条追溯配置、产物与资产湖影响
+            {task.name} · 流水线「{task.pipeline_name}」 · 每次执行可逐条追溯配置、产物与原始入湖影响（相对上一原始快照）
           </p>
         </div>
 
@@ -356,7 +356,7 @@ function RunAuditView({ audit, run }: { audit: RunAudit; run: PipelineTaskRun })
         </Section>
       )}
 
-      {/* 每个成品数据集：产物 + 资产湖影响 */}
+      {/* 每个成品数据集：产物 + 原始入湖影响 */}
       {audit.outputs.map((o, i) => (
         <OutputAudit key={o.curated_dataset_id || i} out={o}
           onOpenLake={() => navigate('/data/structured?tab=curated')} />
@@ -406,11 +406,11 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
           {tab === 'output' && <RowTable rows={out.output_sample} columns={out.output_columns} />}
         </div>
 
-        {/* 资产湖影响 */}
+        {/* 原始入湖影响 */}
         {im ? (
           <div className="border-t border-slate-100 pt-2 space-y-1.5">
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-              资产湖影响
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+              <span className="font-medium text-slate-600">原始入湖影响（相对上一原始快照）</span>
               {im.keyed_by ? <span className="text-[10px] text-slate-400">（按主键 {im.keyed_by.join(',')} 识别）</span>
                 : <span className="text-[10px] text-slate-400">（按整行内容比对）</span>}
             </div>
@@ -433,7 +433,7 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
             )}
           </div>
         ) : (
-          <div className="border-t border-slate-100 pt-2 text-[10.5px] text-slate-400">本次为手动画布运行，无入库影响记录</div>
+          <div className="border-t border-slate-100 pt-2 text-[10.5px] text-slate-400">本次为手动画布运行，无原始入湖影响记录</div>
         )}
       </div>
     </div>

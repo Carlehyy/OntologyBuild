@@ -17,6 +17,7 @@ from app.ontologies.formal_modeling.derived import (
     DerivedComputationError,
     recompute_instance_derived,
 )
+from app.ontologies.formal_modeling.facts import record_object_presence
 from app.ontologies.sentinels.evaluator import _instance_values
 from app.ontologies.formal_modeling.validation import validate_model
 
@@ -156,6 +157,57 @@ def test_computed_property_without_function_binding_is_invalidated(db):
 
     assert instance.computed == {"unrelated": "kept"}
     assert "score" not in _instance_values(instance)
+
+
+def test_object_presence_fact_does_not_mask_derived_property_named_exists(db):
+    ontology_id, instance = _seed(
+        db,
+        "derived-exists",
+        body="True",
+        return_type="boolean",
+    )
+    object_type = db.query(ObjectType).filter_by(
+        id=instance.object_type_id).one()
+    function_id = f"derived-function-derived-exists"
+    object_type.properties = [
+        {
+            "id": "stored-amount-derived-exists",
+            "name": "amount",
+            "displayName": "Amount",
+            "type": "number",
+            "source": "stored",
+        },
+        {
+            "id": "derived-property-exists",
+            "name": "exists",
+            "displayName": "Exists",
+            "type": "boolean",
+            "source": "computed",
+            "functionId": function_id,
+        },
+    ]
+    instance.computed = {"exists": True}
+    record_object_presence(
+        db,
+        ontology_id=ontology_id,
+        instance_id=instance.id,
+        object_type_id=instance.object_type_id,
+        source="action://create",
+    )
+    db.flush()
+
+    changed = recompute_instance_derived(
+        db, ontology_id=ontology_id, instance=instance)
+    db.flush()
+
+    assert changed == 1
+    derived = db.query(PropertyFact).filter_by(
+        ontology_id=ontology_id,
+        instance_id=instance.id,
+        property_name="exists",
+        kind="derived",
+    ).one()
+    assert derived.value == {"v": True, "present": True}
 
 
 def test_expression_result_type_mismatch_aborts_projection_update(db):

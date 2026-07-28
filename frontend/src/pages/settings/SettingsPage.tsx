@@ -764,7 +764,7 @@ export default function SettingsPage() {
           <div className="bg-white border rounded-xl p-6">
             <div className="flex items-center gap-2 mb-4">
               <Target size={16} className="text-blue-500"/>
-              <h3 className="text-sm font-semibold">{t('settings.confidenceRules')}</h3>
+              <h3 className="text-sm font-semibold">{t('settings.rules')}</h3>
             </div>
             <div className="space-y-4">
               {isLoading ? <p className="text-gray-400 text-sm">{t('common.loading')}</p> : (rules as any[]).map((r: any) => (
@@ -869,6 +869,7 @@ export default function SettingsPage() {
                 value={promptSearch}
                 onChange={e => setPromptSearch(e.target.value)}
                 placeholder="按名称 / ID 筛选"
+                aria-label="按名称或 ID 筛选提示词"
                 className="pl-8 pr-7 py-1.5 border rounded-lg text-sm w-52"
               />
               {promptSearch && (
@@ -880,6 +881,7 @@ export default function SettingsPage() {
             <select
               value={promptDomainFilter}
               onChange={e => setPromptDomainFilter(e.target.value)}
+              aria-label="按业务域筛选提示词"
               className="border rounded-lg px-3 py-1.5 text-sm"
             >
               <option value="">全部领域</option>
@@ -971,16 +973,27 @@ export default function SettingsPage() {
           {/* Create / Edit Modal */}
           {showPromptModal && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-6" onClick={() => setShowPromptModal(false)}>
-              <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col" style={{ maxHeight: 'calc(100vh - 3rem)' }} onClick={e => e.stopPropagation()}>
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="prompt-template-dialog-title"
+                className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col"
+                style={{ maxHeight: 'calc(100vh - 3rem)' }}
+                onClick={e => e.stopPropagation()}
+              >
                 <div className="flex items-center justify-between px-6 py-4 border-b">
-                  <h3 className="font-semibold">{editingPrompt ? '编辑提示词模版' : '新建提示词模版'}</h3>
-                  <button onClick={() => setShowPromptModal(false)} className="text-gray-400 hover:text-black"><X size={16} /></button>
+                  <h3 id="prompt-template-dialog-title" className="font-semibold">{editingPrompt ? '编辑提示词模版' : '新建提示词模版'}</h3>
+                  <button aria-label="关闭提示词弹窗" onClick={() => setShowPromptModal(false)} className="text-gray-400 hover:text-black"><X size={16} /></button>
                 </div>
                 <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">名称 *</label>
+                      <div className="mb-1 flex text-xs font-medium text-gray-600">
+                        <label htmlFor="prompt-template-name">名称</label>
+                        <span aria-hidden="true" className="ml-0.5">*</span>
+                      </div>
                       <input
+                        id="prompt-template-name"
                         value={promptName}
                         onChange={e => setPromptName(e.target.value)}
                         placeholder="提示词模版名称"
@@ -988,8 +1001,12 @@ export default function SettingsPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">业务域 *</label>
+                      <div className="mb-1 flex text-xs font-medium text-gray-600">
+                        <label htmlFor="prompt-template-domain">业务域</label>
+                        <span aria-hidden="true" className="ml-0.5">*</span>
+                      </div>
                       <select
+                        id="prompt-template-domain"
                         value={promptDomain}
                         onChange={e => setPromptDomain(e.target.value)}
                         className="w-full border rounded-lg px-3 py-2 text-sm"
@@ -1002,7 +1019,10 @@ export default function SettingsPage() {
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-medium text-gray-600">内容 *</label>
+                      <div className="flex text-xs font-medium text-gray-600">
+                        <label htmlFor="prompt-template-content">内容</label>
+                        <span aria-hidden="true" className="ml-0.5">*</span>
+                      </div>
                       <button
                         type="button"
                         onClick={handleGenerateTemplate}
@@ -1014,6 +1034,7 @@ export default function SettingsPage() {
                       </button>
                     </div>
                     <textarea
+                      id="prompt-template-content"
                       value={promptContent}
                       onChange={e => setPromptContent(e.target.value)}
                       placeholder="输入提示词内容，或点击右上角一键生成..."

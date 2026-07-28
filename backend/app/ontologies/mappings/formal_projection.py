@@ -25,6 +25,7 @@ LinkType / LinkInstance)，让流水线与图谱编辑器共用同一套数据�
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid as _uuid
@@ -236,14 +237,23 @@ def _coerce_props_to_type(props: dict, type_props: list[dict]) -> dict:
 
     CSV/Excel 解析器会把空单元格表示成空字符串。对 number/boolean/date
     等非字符串属性，这表示业务空值而不是一个类型为 string 的值，必须在
-    试跑和正式投影共用的这一层归一为 None。必填约束仍由实例契约校验拦截；
-    string 属性则保留原值，避免擦除业务上有意义的文本表示。"""
+    试跑和正式投影共用的这一层归一为 None。array/object 则只接受对应的
+    原生容器或严格 JSON 文本，避免合法映射在运行时退化成字符串。必填约束
+    仍由实例契约校验拦截；string 属性保留原值，避免擦除业务文本。"""
     kind_by_name = {p.get("name"): (p.get("type") or "string")
                     for p in (type_props or []) if isinstance(p, dict)}
+    structured_types = {"array": list, "object": dict}
     out = dict(props)
     for k, v in props.items():
         t = kind_by_name.get(k)
-        if v is None or not isinstance(v, str):
+        if v is None:
+            continue
+        expected_native_type = structured_types.get(t)
+        if expected_native_type is not None and not isinstance(v, str):
+            if not isinstance(v, expected_native_type):
+                raise ValueError(f"属性 {k} 的值 {v!r} 无法转换为 {t}")
+            continue
+        if not isinstance(v, str):
             continue
         s = v.strip()
         if s == "" and t not in (None, "string"):
@@ -261,6 +271,15 @@ def _coerce_props_to_type(props: dict, type_props: list[dict]) -> dict:
                     out[k] = False
                 elif s:
                     raise ValueError(f"属性 {k} 的值 {v!r} 无法转换为 boolean")
+            elif expected_native_type is not None:
+                decoded = json.loads(s)
+                if decoded is None:
+                    out[k] = None
+                elif isinstance(decoded, expected_native_type):
+                    out[k] = decoded
+                else:
+                    raise ValueError(
+                        f"属性 {k} 的值 {v!r} 无法转换为 {t}")
         except (ValueError, TypeError) as exc:
             raise ValueError(f"属性 {k} 的值 {v!r} 无法转换为 {t}") from exc
     return out
@@ -626,7 +645,10 @@ def project_to_formal_ontology(
         # ObjectInstance：每个 Entity → 一条实例，external_id=Entity.id 去重。
         # 变化才写：无变化实例不进 session.dirty（否则重跑投影会让 CDC 对全量
         # 实例误报变化）；变化的写入事实流（source=pipeline）并触发派生重算。
-        from app.ontologies.formal_modeling.facts import record_property_facts
+        from app.ontologies.formal_modeling.facts import (
+            record_object_presence,
+            record_property_facts,
+        )
         from app.ontologies.formal_modeling.derived import recompute_instance_derived
         for ent in ent_list:
             canonical_inst_id = stable_object_instance_id(ontology_id, ent.id)
@@ -724,6 +746,14 @@ def project_to_formal_ontology(
                 )
                 db.add(inst_obj)
                 db.flush()
+                record_object_presence(
+                    db,
+                    ontology_id=ontology_id,
+                    instance_id=inst_id,
+                    object_type_id=ot_id,
+                    source="pipeline",
+                    ontology_release_id=ontology_release_id,
+                )
                 new_facts = record_property_facts(
                     db, ontology_id=ontology_id, instance_id=inst_id,
                     object_type_id=ot_id, old_props=None, new_props=props,
@@ -882,6 +912,7 @@ def project_to_formal_ontology(
 
     # (src_class, tgt_class, rel_type) → LinkType.id
     linktype_cache: dict[tuple[str, str, str], str] = {}
+    linktype_property_cache: dict[str, list[dict]] = {}
 
     # ── 基数兜底推断 ──
     # 上游 FK 推断理应把 cardinality 写进 Relation.properties，但若缺失
@@ -1003,6 +1034,17 @@ def project_to_formal_ontology(
             LinkInstance.id == canonical_li_id).first()
         # 只保留真正的业务边属性，剔除映射记账用的内部键
         li_props = {k: v for k, v in raw_props.items() if k not in _INTERNAL_LINK_PROP_KEYS}
+        link_type_properties = linktype_property_cache.get(lt_id)
+        if link_type_properties is None:
+            resolved_link_type = db.query(LinkType).filter(
+                LinkType.id == lt_id,
+                LinkType.ontology_id == ontology_id,
+            ).first()
+            if resolved_link_type is None:
+                raise ValueError(f"关系类型 {lt_id} 不存在，无法投影关系属性")
+            link_type_properties = list(resolved_link_type.properties or [])
+            linktype_property_cache[lt_id] = link_type_properties
+        li_props = _coerce_props_to_type(li_props, link_type_properties)
         if existing_li is None:
             lineage_candidates = db.query(LinkInstance).filter(
                 LinkInstance.ontology_id == ontology_id,

@@ -1489,6 +1489,14 @@ def resume_sentinel_match_claim(db: Session, ontology_id: str,
     step resolves through its linked success log; only the remaining steps run.
     This avoids both duplicate side effects and silently truncating the chain.
     """
+    from app.ontologies.mappings.mapping_service import _ontology_build_lock
+    with _ontology_build_lock(db, ontology_id):
+        return _resume_sentinel_match_claim_locked(
+            db, ontology_id, state_id)
+
+
+def _resume_sentinel_match_claim_locked(
+        db: Session, ontology_id: str, state_id: str) -> dict:
     state = db.query(SentinelMatchState).filter(
         SentinelMatchState.id == state_id,
         SentinelMatchState.ontology_id == ontology_id,
@@ -1801,14 +1809,23 @@ def evaluate_sentinel(db: Session, ontology_id: str, sentinel: Sentinel,
         or getattr(sentinel, "name", None)
         or selected_id)
     try:
-        with _sentinel_execution_lock(db, selected_id):
-            _guard_expected_release(
-                db, ontology_id, captured_release_id)
-            execution_sentinel = _reload_executable_sentinel(
-                db, ontology_id, sentinel, captured_release_id)
-            return _evaluate_inner(
-                db, ontology_id, execution_sentinel, source, start,
-                release_version, captured_release_id)
+        # Global order is ontology build/projection → Sentinel.  Promotion and
+        # Mapping already own the first lock; independent scheduler/manual CDC
+        # evaluations acquire it here before the per-Sentinel lock.  This keeps
+        # action Fact writes inside promotion's runtime-state serialization
+        # fence without introducing the reverse Sentinel→build ABBA order.
+        from app.ontologies.mappings.mapping_service import (
+            _ontology_build_lock,
+        )
+        with _ontology_build_lock(db, ontology_id):
+            with _sentinel_execution_lock(db, selected_id):
+                _guard_expected_release(
+                    db, ontology_id, captured_release_id)
+                execution_sentinel = _reload_executable_sentinel(
+                    db, ontology_id, sentinel, captured_release_id)
+                return _evaluate_inner(
+                    db, ontology_id, execution_sentinel, source, start,
+                    release_version, captured_release_id)
     except Exception as e:  # noqa: BLE001
         db.rollback()
         if isinstance(e, ReleaseContextChanged):

@@ -222,7 +222,7 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
             v = row.get(col)
             if v is None or (isinstance(v, str) and not v.strip()):
                 raise LakeGateError(
-                    f"数据集「{dataset_name}」第 {i + 1} 行的列「{col}」为空，但流水线契约声明该列不允许为空。"
+                    f"数据集「{dataset_name}」第 {i + 1} 行的非空列「{col}」为空，但流水线契约声明该列不允许为空。"
                     "请在未发布草稿中过滤/补全该列或放宽空值约束；若当前版本已发布，"
                     "请停用旧版本并新建替代流水线。")
 

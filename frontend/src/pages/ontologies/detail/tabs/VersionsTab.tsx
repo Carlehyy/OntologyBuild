@@ -11,6 +11,10 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import TrialActionPlanReview, {
+  redactTrialText,
+  sanitizeTrialValue,
+} from '@/components/ontology/TrialActionPlanReview'
 import {
   ontologyVersionApi,
   type OntologyImpactReport,
@@ -152,6 +156,20 @@ function concisePromotionError(error: any) {
   return typeof detail === 'string' ? detail : detail?.message || error?.message || '发布失败，请重新检查后再试。'
 }
 
+function runtimeValueText(value: unknown, fieldName = '') {
+  // The backend already redacts structured conflict values.  Passing the
+  // business property name here is an independent UI-side safety fence for
+  // legacy/mixed-version responses.
+  const safe = sanitizeTrialValue(value, fieldName)
+  if (typeof safe === 'string') return safe
+  try {
+    const serialized = JSON.stringify(safe)
+    return serialized.length > 240 ? `${serialized.slice(0, 240)}…（已截断）` : serialized
+  } catch {
+    return redactTrialText(value)
+  }
+}
+
 export default function VersionsTab({ ontologyId, onClose }: { ontologyId: string; onClose?: () => void }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -232,14 +250,35 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
   }
 
   const createDraft = useMutation({
-    mutationFn: () => ontologyVersionApi.createDraft(
-      ontologyId, source!.id, { versionLabel: label, description }),
+    mutationFn: () => {
+      const recovery = source!.node_kind === 'release' && source!.id !== currentReleaseId
+      return ontologyVersionApi.createDraft(
+        ontologyId,
+        source!.id,
+        {
+          versionLabel: label,
+          description,
+          ...(recovery
+            ? {
+                recoveryMode: 'current_release_trial' as const,
+                expectedCurrentReleaseId: currentReleaseId,
+              }
+            : {}),
+        },
+      )
+    },
     onSuccess: async node => {
+      const recovery = source?.node_kind === 'release' && source.id !== currentReleaseId
       await refresh()
       setSource(null)
       setLabel('')
       setDescription('')
-      setNotice({ tone: 'good', text: `${node.version_number} 已从完整快照创建，可直接点击节点进入编辑。` })
+      setNotice({
+        tone: 'good',
+        text: recovery
+          ? `${node.version_number} 已创建为恢复草稿；正式环境未改变，请先完成隔离试跑。`
+          : `${node.version_number} 已从完整快照创建，可直接点击节点进入编辑。`,
+      })
     },
   })
 
@@ -342,6 +381,16 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const deletableStage = editing || trial
     const isLeaf = children.length === 0
     const promotedFromVersion = node.promoted_from_id ? promotedFrom.get(node.promoted_from_id) : null
+    const parentNode = node.parent_version_id
+      ? nodes.find(item => item.id === node.parent_version_id)
+      : undefined
+    const recoveryFromVersion = (
+      node.node_kind === 'draft'
+      && parentNode?.node_kind === 'release'
+      && node.base_release_id
+      && node.base_release_id !== parentNode.id
+    ) ? parentNode.version_number : null
+    const historicalRelease = stage === 'release'
     const menuItemClass = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent'
 
     return (
@@ -366,6 +415,11 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 <span className="shrink-0"><StageBadge stage={stage} /></span>
                 {node.version_label && <span className="min-w-0 truncate text-xs font-medium text-slate-500">{node.version_label}</span>}
                 {promotedFromVersion && <span className="shrink-0 whitespace-nowrap text-[11px] text-teal-600">由 {promotedFromVersion} 晋级</span>}
+                {recoveryFromVersion && (
+                  <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-amber-700">
+                    从 {recoveryFromVersion} 恢复 · 按当前发布试跑
+                  </span>
+                )}
               </div>
             </button>
 
@@ -429,7 +483,8 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                       setOpenMenuId(null)
                       setSource(node)
                     }}>
-                      <Plus size={13} /> 创建新版本
+                      {historicalRelease ? <Wrench size={13} /> : <Plus size={13} />}
+                      {historicalRelease ? '创建恢复草稿' : '创建新版本'}
                     </button>
                     {deletableStage && (
                       <button
@@ -541,15 +596,35 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       </section>
 
       {source && (
-        <Modal open onClose={() => setSource(null)} title={`从 ${source.version_number} 创建完整分支`} size="sm"
+        <Modal
+          open
+          onClose={() => setSource(null)}
+          title={source.node_kind === 'release' && source.id !== currentReleaseId
+            ? `从 ${source.version_number} 创建恢复草稿`
+            : `从 ${source.version_number} 创建完整分支`}
+          size="sm"
           footer={<>
             <Button variant="ghost" onClick={() => setSource(null)}>取消</Button>
-            <Button loading={createDraft.isPending} onClick={() => createDraft.mutate()}>创建分支</Button>
+            <Button loading={createDraft.isPending} onClick={() => createDraft.mutate()}>
+              {source.node_kind === 'release' && source.id !== currentReleaseId ? '创建恢复草稿' : '创建分支'}
+            </Button>
           </>}>
           <div className="space-y-3">
-            <p className="text-sm leading-6 text-gray-600">
-              新版本固定为草稿态，并一次性复制对象实体、实体关系、执行动作、激活函数、哨兵、对象映射、关系映射及画布布局，不依赖祖先拼装。
-            </p>
+            {source.node_kind === 'release' && source.id !== currentReleaseId ? (
+              <div className="space-y-2">
+                <p className="text-sm leading-6 text-gray-600">
+                  系统会完整复制 {source.version_number} 的结构、动作、函数、哨兵和映射，但把当前发布
+                  {treeQuery.data?.current_release_version ? ` ${treeQuery.data.current_release_version}` : ''} 作为验证基线。
+                </p>
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  这是安全恢复路径：创建草稿不会改变正式环境；必须先用当前数据完成隔离试跑，再经过发布前检查和人工确认。
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm leading-6 text-gray-600">
+                新版本固定为草稿态，并一次性复制对象实体、实体关系、执行动作、激活函数、哨兵、对象映射、关系映射及画布布局，不依赖祖先拼装。
+              </p>
+            )}
             <input value={label} onChange={event => setLabel(event.target.value)} placeholder="分支标签（可选）" className="w-full rounded-lg border px-3 py-2 text-sm" />
             <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder="本次变化目标（可选）" className="h-20 w-full resize-none rounded-lg border px-3 py-2 text-sm" />
             {createDraft.isError && <p className="text-sm text-red-600">{errorText(createDraft.error)}</p>}
@@ -558,7 +633,13 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       )}
 
       {trialDetail && (
-        <Modal open onClose={() => setTrialDetail(null)} title="隔离试跑结果" size="lg"
+        <Modal
+          open
+          onClose={() => setTrialDetail(null)}
+          title="隔离试跑结果"
+          description="先审查试跑将产生的动作计划，再决定是否进入发布。"
+          size="3xl"
+          panelClassName="h-[min(88dvh,860px)]"
           footer={<>
             <Button variant="ghost" onClick={() => setTrialDetail(null)}>关闭</Button>
             {trialDetail.status === 'passed' && (
@@ -574,12 +655,12 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 <div key={key} className="rounded-lg border bg-gray-50 p-3"><b className="block text-lg">{String(value)}</b><span className="text-xs text-gray-500">{key}</span></div>
               ))}
             </div>
-            <p className="flex items-center gap-2 text-emerald-700"><ShieldCheck size={16} /> 外部动作执行数：{trialDetail.result?.actionsExecuted ?? 0}；副作用：已阻断</p>
+            <TrialActionPlanReview result={trialDetail.result} />
             {(trialDetail.result?.errors || []).length > 0 && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
-              {(trialDetail.result?.errors || []).map((item, index) => <p key={index}>• {item.message}</p>)}
+              {(trialDetail.result?.errors || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
             </div>}
             {(trialDetail.result?.warnings || []).length > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
-              {(trialDetail.result?.warnings || []).map((item, index) => <p key={index}>• {item.message}</p>)}
+              {(trialDetail.result?.warnings || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
             </div>}
           </div>
         </Modal>
@@ -590,7 +671,11 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
           const readiness = promotion.impact.releaseReadiness
           const blocked = promotion.impact.baseOutdated || readiness?.ready === false
           const issues = readiness?.errors || []
-          const groups = groupReleaseIssues(issues)
+          const runtimeConflicts = readiness?.runtimeStateConflicts
+          const hasRuntimeConflicts = Boolean(runtimeConflicts?.totalCount)
+          const groups = groupReleaseIssues(
+            issues.filter(item => item.code !== 'runtime_state_conflict'),
+          )
           const mappingIssues = issues.filter(item => MAPPING_CODES.has(item.code))
           const propertyIssues = issues.filter(item => PROPERTY_MAPPING_CODES.has(item.code))
           const repairable = readiness?.repairStrategy === 'create_draft'
@@ -632,12 +717,16 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                       <div className="min-w-0">
                         <h3 className="font-semibold">当前版本暂时不能发布</h3>
                         <p className="mt-1 leading-6 text-red-800">
-                          {mappingIssues.length > 0
+                          {hasRuntimeConflicts
+                            ? `发现 ${runtimeConflicts!.totalCount} 项当前运行态与试跑候选值冲突。`
+                            : mappingIssues.length > 0
                             ? `发现 ${groups.filter(group => group.issues.some(issue => MAPPING_CODES.has(issue.code))).length} 个本体元素存在 ${mappingIssues.length} 项映射问题${propertyIssues.length > 0 ? `，其中 ${propertyIssues.length} 个存储属性尚未映射` : ''}。`
                             : `仍有 ${readiness?.blockingCount || issues.length || 1} 项发布条件未满足。`}
                         </p>
                         <p className="mt-1 text-xs leading-5 text-red-700">
-                          {repairable
+                          {hasRuntimeConflicts
+                            ? '这些值来自动作、人工或其他非数据湖运行态。系统不会自动选择保留或覆盖，请先结合业务事实处理冲突后重新试跑。'
+                            : repairable
                             ? `${promotion.node.version_number} 已完成试跑并被冻结，系统会从它创建一个完整草稿分支；补齐后需重新试跑。`
                             : '当前发布基线已经变化，请先基于最新发布版合并本分支改动，再重新试跑。'}
                         </p>
@@ -649,6 +738,105 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"><Check size={17} /></span>
                     <div><h3 className="font-semibold">发布条件已满足</h3><p className="mt-1 text-xs leading-5 text-emerald-700">精确试跑、数据版本和映射完整性均已通过检查，可以确认发布。</p></div>
                   </div>
+                )}
+
+                {hasRuntimeConflicts && (
+                  <section
+                    aria-labelledby="runtime-state-conflicts-heading"
+                    data-testid="runtime-state-conflicts"
+                    className="rounded-xl border border-red-200 bg-red-50/40 p-4"
+                  >
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <h3 id="runtime-state-conflicts-heading" className="font-semibold text-red-950">
+                          当前运行态值 vs 试跑候选值
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-red-700">
+                          以下正式属性或关系的最新事实不来自数据湖或无法验证来源。发布已默认阻断，本页面不提供自动覆盖操作。
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+                        {runtimeConflicts!.totalCount} 项
+                      </span>
+                    </div>
+                    <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+                      {runtimeConflicts!.items.map(conflict => (
+                        <article
+                          key={conflict.factId || [
+                            conflict.resourceKind,
+                            conflict.objectId || conflict.linkId,
+                            conflict.property,
+                          ].join(':')}
+                          data-testid="runtime-state-conflict-item"
+                          className="rounded-lg border border-red-100 bg-white p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <code className="text-xs font-semibold text-slate-800">
+                              {conflict.resourceKind === 'link'
+                                ? `链接 ${conflict.linkId} · ${conflict.linkTypeId || '未知类型'}`
+                                : conflict.resourceKind === 'object'
+                                  ? `对象 ${conflict.objectId} · ${conflict.objectTypeId || '未知类型'}`
+                                : `${conflict.objectId} · ${conflict.property}`}
+                            </code>
+                            <span className="text-[11px] text-slate-500">
+                              来源：{redactTrialText(conflict.source)}
+                            </span>
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-stretch">
+                            <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 p-2.5">
+                              <span className="block text-[11px] font-medium text-slate-500">
+                                {conflict.resourceKind === 'link'
+                                  ? '当前正式关系'
+                                  : conflict.resourceKind === 'object'
+                                    ? '当前正式对象'
+                                    : '当前运行态值'}
+                              </span>
+                              <code className="mt-1 block break-all whitespace-pre-wrap text-xs text-slate-800">
+                                {conflict.resourceKind === 'objectProperty'
+                                  && conflict.currentPresent === false
+                                  ? '（当前不存在此属性）'
+                                  : runtimeValueText(
+                                    conflict.current,
+                                    conflict.resourceKind === 'link'
+                                      ? 'link'
+                                      : conflict.resourceKind === 'object'
+                                        ? 'object'
+                                        : conflict.property || '',
+                                  )}
+                              </code>
+                            </div>
+                            <ArrowRight size={16} className="self-center justify-self-center text-red-400" />
+                            <div className="min-w-0 rounded-md border border-red-200 bg-red-50 p-2.5">
+                              <span className="block text-[11px] font-medium text-red-600">
+                                {conflict.resourceKind === 'link'
+                                  ? '试跑候选关系'
+                                  : conflict.resourceKind === 'object'
+                                    ? '试跑候选对象'
+                                    : '试跑候选值'}
+                              </span>
+                              <code className="mt-1 block break-all whitespace-pre-wrap text-xs text-red-900">
+                                {conflict.resourceKind === 'link' || conflict.resourceKind === 'object'
+                                  ? runtimeValueText(conflict.candidate, conflict.resourceKind)
+                                  : conflict.candidatePresent
+                                  ? runtimeValueText(conflict.candidate, conflict.property || '')
+                                  : conflict.candidateObjectPresent
+                                    ? '（候选将删除此属性）'
+                                    : '（候选将删除此对象）'}
+                              </code>
+                            </div>
+                          </div>
+                          <p className="mt-2 break-all text-[10px] text-slate-400">
+                            Fact ID：{conflict.factId || '无可验证 Fact（未知来源）'}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                    {runtimeConflicts!.truncated && (
+                      <p className="mt-3 text-xs text-red-700">
+                        当前仅展示前 {runtimeConflicts!.itemLimit} 项，共 {runtimeConflicts!.totalCount} 项；全部冲突仍会阻断发布。
+                      </p>
+                    )}
+                  </section>
                 )}
 
                 {blocked && groups.length > 0 && (

@@ -7,6 +7,7 @@ Action 执行、采集器）都应经过 record_property_facts，把"改了什�
 
 链接存在性 / 实例存在性（墓碑）也是事实：
   - record_link_fact:   kind='link'，instance_id=链接实例 id，property_name='exists'
+  - record_object_presence: kind='object'，property_name='exists'，value=True
   - record_object_tombstone: kind='object'，property_name='exists'，value=False
 决策也是事实（HITL 批准/拒绝）：
   - record_decision_fact: kind='decision'，instance_id=动作日志 id，property_name='decision'
@@ -24,9 +25,17 @@ from app.ontologies.release_context import (
 )
 
 
-def _wrap(v: Any) -> dict:
-    """JSON 列统一包一层 {"v": ...}，标量/None/嵌套结构都能存。"""
-    return {"v": v}
+def _wrap(v: Any, *, present: Optional[bool] = None) -> dict:
+    """JSON 列统一包一层 ``{"v": ...}``。
+
+    删除属性时 ``v=None`` 无法与“属性仍存在、值为 null”区分，因此 property
+    facts 显式传入 ``present=True/False``。其他事实种类不传该参数，继续保持
+    既有 ``{"v": ...}`` 结构；所有既有 reader 仍可只读取 ``v``。
+    """
+    wrapped = {"v": v}
+    if present is not None:
+        wrapped["present"] = present
+    return wrapped
 
 
 def _runtime_lineage(
@@ -78,21 +87,34 @@ def record_property_facts(
     只追加，不 commit；由调用方的事务统一提交（会 flush 以拿到事实 id）。
     """
     if old_props is None:
-        changed = [(k, v) for k, v in (new_props or {}).items()]
+        changed = [
+            (key, value, True)
+            for key, value in (new_props or {}).items()
+        ]
     else:
-        changed = [(k, v) for k, v in (new_props or {}).items()
-                   if k not in old_props or old_props.get(k) != v]
+        old_snapshot = dict(old_props or {})
+        new_snapshot = dict(new_props or {})
+        changed = [
+            (key, value, True)
+            for key, value in new_snapshot.items()
+            if key not in old_snapshot or old_snapshot.get(key) != value
+        ]
+        changed.extend(
+            (key, None, False)
+            for key in old_snapshot.keys() - new_snapshot.keys()
+        )
     if not changed:
         return []
     release_version, release_id = _runtime_lineage(
         db, ontology_id, ontology_version, ontology_release_id)
 
     # 每个变更属性当前最新的事实 —— 作为 supersedes 指针与 seq 基准
-    changed_keys = [k for k, _ in changed]
+    changed_keys = [key for key, _, _ in changed]
     latest: dict[str, PropertyFact] = {}
     rows = (db.query(PropertyFact)
             .filter(PropertyFact.ontology_id == ontology_id,
                     PropertyFact.instance_id == instance_id,
+                    PropertyFact.kind == kind,
                     PropertyFact.property_name.in_(changed_keys))
             .order_by(*fact_order_clause())
             .all())
@@ -100,14 +122,14 @@ def record_property_facts(
         latest.setdefault(r.property_name, r)
 
     created: list[PropertyFact] = []
-    for key, value in changed:
+    for key, value, present in changed:
         prev = latest.get(key)
         fact = PropertyFact(
             ontology_id=ontology_id,
             instance_id=instance_id,
             object_type_id=object_type_id,
             property_name=key,
-            value=_wrap(value),
+            value=_wrap(value, present=present),
             kind=kind,
             source=source,
             actor_id=actor_id,
@@ -127,13 +149,16 @@ def record_property_facts(
 
 
 def _latest_fact(db: Session, ontology_id: str, instance_id: str,
-                 property_name: str) -> Optional[PropertyFact]:
-    return (db.query(PropertyFact)
-            .filter(PropertyFact.ontology_id == ontology_id,
-                    PropertyFact.instance_id == instance_id,
-                    PropertyFact.property_name == property_name)
-            .order_by(*fact_order_clause())
-            .first())
+                 property_name: str,
+                 kind: Optional[str] = None) -> Optional[PropertyFact]:
+    query = db.query(PropertyFact).filter(
+        PropertyFact.ontology_id == ontology_id,
+        PropertyFact.instance_id == instance_id,
+        PropertyFact.property_name == property_name,
+    )
+    if kind is not None:
+        query = query.filter(PropertyFact.kind == kind)
+    return query.order_by(*fact_order_clause()).first()
 
 
 def record_link_fact(
@@ -151,7 +176,8 @@ def record_link_fact(
 ) -> Optional[PropertyFact]:
     """链接存在性事实（kind='link'）。建链 exists=True，删链 exists=False 并
     supersede 建链事实——关系变化从此可时态回放。同值幂等（不重复追加）。"""
-    prev = _latest_fact(db, ontology_id, link_instance_id, "exists")
+    prev = _latest_fact(
+        db, ontology_id, link_instance_id, "exists", kind="link")
     if prev is not None and (prev.value or {}).get("v") == exists:
         return None  # 幂等：状态没变不追加
     release_version, release_id = _runtime_lineage(
@@ -176,6 +202,73 @@ def record_link_fact(
     return fact
 
 
+def _record_object_existence(
+    db: Session,
+    *,
+    ontology_id: str,
+    instance_id: str,
+    object_type_id: Optional[str],
+    exists: bool,
+    source: str,
+    actor_id: Optional[str] = None,
+    caused_by: Optional[str] = None,
+    ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
+) -> Optional[PropertyFact]:
+    """Append an object-existence edge when the state actually changes."""
+    prev = _latest_fact(
+        db, ontology_id, instance_id, "exists", kind="object")
+    if prev is not None and (prev.value or {}).get("v") is exists:
+        return None
+    release_version, release_id = _runtime_lineage(
+        db, ontology_id, ontology_version, ontology_release_id)
+    fact = PropertyFact(
+        ontology_id=ontology_id,
+        instance_id=instance_id,
+        object_type_id=object_type_id,
+        property_name="exists",
+        value=_wrap(exists),
+        kind="object",
+        source=source,
+        actor_id=actor_id,
+        caused_by=caused_by,
+        ontology_version=release_version,
+        ontology_release_id=release_id,
+        supersedes_id=prev.id if prev is not None else None,
+        seq=(prev.seq or 0) + 1 if prev is not None else 1,
+    )
+    db.add(fact)
+    db.flush()
+    return fact
+
+
+def record_object_presence(
+    db: Session,
+    *,
+    ontology_id: str,
+    instance_id: str,
+    object_type_id: Optional[str],
+    source: str,
+    actor_id: Optional[str] = None,
+    caused_by: Optional[str] = None,
+    ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
+) -> Optional[PropertyFact]:
+    """实例新建或墓碑后重建（kind='object'，exists=True）。"""
+    return _record_object_existence(
+        db,
+        ontology_id=ontology_id,
+        instance_id=instance_id,
+        object_type_id=object_type_id,
+        exists=True,
+        source=source,
+        actor_id=actor_id,
+        caused_by=caused_by,
+        ontology_version=ontology_version,
+        ontology_release_id=ontology_release_id,
+    )
+
+
 def record_object_tombstone(
     db: Session,
     *,
@@ -190,29 +283,18 @@ def record_object_tombstone(
 ) -> Optional[PropertyFact]:
     """实例删除墓碑（kind='object'，exists=False）。投影硬删后，
     事实流仍能回答"它存在过、何时被谁删除"。幂等。"""
-    prev = _latest_fact(db, ontology_id, instance_id, "exists")
-    if prev is not None and (prev.value or {}).get("v") is False:
-        return None
-    release_version, release_id = _runtime_lineage(
-        db, ontology_id, ontology_version, ontology_release_id)
-    fact = PropertyFact(
+    return _record_object_existence(
+        db,
         ontology_id=ontology_id,
         instance_id=instance_id,
         object_type_id=object_type_id,
-        property_name="exists",
-        value=_wrap(False),
-        kind="object",
+        exists=False,
         source=source,
         actor_id=actor_id,
         caused_by=caused_by,
-        ontology_version=release_version,
-        ontology_release_id=release_id,
-        supersedes_id=prev.id if prev is not None else None,
-        seq=(prev.seq or 0) + 1 if prev is not None else 1,
+        ontology_version=ontology_version,
+        ontology_release_id=ontology_release_id,
     )
-    db.add(fact)
-    db.flush()
-    return fact
 
 
 def record_absence_fact(
@@ -236,7 +318,8 @@ def record_absence_fact(
 
     subject_id 为查询主体（哨兵 id）；value = {empty, scanned, ...detail}。
     """
-    prev = _latest_fact(db, ontology_id, subject_id, "query_result")
+    prev = _latest_fact(
+        db, ontology_id, subject_id, "query_result", kind="absence")
     prev_empty = None
     if prev is not None:
         pv = (prev.value or {}).get("v")
@@ -281,7 +364,8 @@ def record_decision_fact(
 ) -> PropertyFact:
     """HITL 决策事实（kind='decision'）：批准与拒绝都要记录、都可回放。
     subject=动作执行日志，predicate=decision，value=APPROVED/REJECTED。"""
-    prev = _latest_fact(db, ontology_id, action_log_id, "decision")
+    prev = _latest_fact(
+        db, ontology_id, action_log_id, "decision", kind="decision")
     release_version, release_id = _runtime_lineage(
         db, ontology_id, ontology_version, ontology_release_id)
     fact = PropertyFact(

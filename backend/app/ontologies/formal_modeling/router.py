@@ -26,8 +26,8 @@ from app.models.ontology_formal import (
 from app.models.ontology_formal import PropertyFact
 from app.models.v2.dataset import Dataset
 from app.ontologies.formal_modeling.facts import (
-    record_property_facts, record_link_fact, record_object_tombstone,
-    record_decision_fact, fact_order_clause,
+    record_property_facts, record_link_fact, record_object_presence,
+    record_object_tombstone, record_decision_fact, fact_order_clause,
 )
 from app.ontologies.formal_modeling.derived import recompute_instance_derived
 from app.ontologies.formal_modeling.validation import (
@@ -279,6 +279,11 @@ def _upsert_items(db: Session, ontology_id: str, model, items, fields) -> set[st
             obj = model(ontology_id=ontology_id, **kwargs)
             db.add(obj)
             db.flush()
+            # Full/delta payload ids are optional.  Keep the request model
+            # aligned with the persisted row so the Fact pass below can record
+            # presence and properties for server-generated instance ids.
+            if not item_id:
+                item.id = obj.id
             keep_ids.add(obj.id)
     return keep_ids
 
@@ -470,6 +475,15 @@ def save_full_ontology(ontology_id: str, body: S.SaveFullOntologyRequest,
     for inst in body.instances:
         if not inst.id:
             continue  # 无 id 的新实例由 _sync 生成 id，此处无法关联，跳过（编辑器始终带 id）
+        if inst.id not in prev_instances:
+            record_object_presence(
+                db,
+                ontology_id=ontology_id,
+                instance_id=inst.id,
+                object_type_id=inst.object_type_id,
+                source="editor-save",
+                actor_id=actor,
+            )
         created = record_property_facts(
             db,
             ontology_id=ontology_id,
@@ -654,6 +668,15 @@ def patch_full_ontology(ontology_id: str, body: S.PatchOntologyRequest,
             ObjectInstance.ontology_id == ontology_id).first()
         if row is None:
             continue
+        if inst.id not in prev_props:
+            record_object_presence(
+                db,
+                ontology_id=ontology_id,
+                instance_id=inst.id,
+                object_type_id=inst.object_type_id,
+                source="editor-save",
+                actor_id=actor,
+            )
         created = record_property_facts(
             db, ontology_id=ontology_id, instance_id=inst.id,
             object_type_id=inst.object_type_id,
@@ -1251,6 +1274,15 @@ def create_instance(ontology_id: str, body: S.ObjectInstanceCreate,
     errors = validate_instance_contract(object_types, [*instances, obj], validate_ids={obj.id})
     _raise_validation_failed(errors, "实例创建被拒绝")
     db.add(obj); db.flush()
+    record_object_presence(
+        db,
+        ontology_id=ontology_id,
+        instance_id=obj.id,
+        object_type_id=obj.object_type_id,
+        source=obj.source or "manual",
+        actor_id=getattr(current_user, "id", None),
+        ontology_release_id=obj.ontology_release_id,
+    )
     created = record_property_facts(
         db, ontology_id=ontology_id, instance_id=obj.id,
         object_type_id=obj.object_type_id,
@@ -1318,6 +1350,7 @@ def _fact_to_dict(f: PropertyFact) -> dict:
         "instanceId": f.instance_id,
         "propertyName": f.property_name,
         "value": (f.value or {}).get("v"),
+        "present": (f.value or {}).get("present", True),
         "kind": f.kind or "property",
         "source": f.source,
         "actorId": f.actor_id,
@@ -1351,23 +1384,52 @@ def instance_as_of(ontology_id: str, instance_id: str, t: str,
                     PropertyFact.recorded_at <= cutoff)
             .order_by(*fact_order_clause())
             .all())
-    # 每属性链是线性的（supersedes 单链），≤T 的最新事实即当时值
-    latest: dict[str, PropertyFact] = {}
+    # 每条同 kind/属性链是线性的（supersedes 单链），≤T 的最新事实即当时值。
+    # object.exists 与业务属性名 "exists" 必须分开，否则新增的对象存在性事实
+    # 会遮蔽一个完全合法的同名业务属性。
+    latest: dict[tuple[str, str], PropertyFact] = {}
     for r in rows:
-        latest.setdefault(r.property_name, r)
+        latest.setdefault((r.kind or "property", r.property_name), r)
 
+    existence_fact = latest.get(("object", "exists"))
+    # Legacy instances can predate the Fact stream, so absence of an existence
+    # fact normally means "present".  The one unambiguous exception is a chain
+    # whose first Fact is an explicit creation after the requested cutoff.
     exists = True
+    if existence_fact is None:
+        first_existence = (
+            db.query(PropertyFact)
+            .filter(
+                PropertyFact.ontology_id == ontology_id,
+                PropertyFact.instance_id == instance_id,
+                PropertyFact.kind == "object",
+                PropertyFact.property_name == "exists",
+            )
+            .order_by(
+                PropertyFact.recorded_at.asc(),
+                PropertyFact.seq.asc(),
+                PropertyFact.id.asc(),
+            )
+            .first()
+        )
+        if first_existence is not None and bool((first_existence.value or {}).get("v")):
+            exists = False
     props: dict = {}
     computed: dict = {}
     detail: dict = {}
-    for name, f in latest.items():
-        v = (f.value or {}).get("v")
+    for (_, name), f in latest.items():
+        fact_value = f.value or {}
+        v = fact_value.get("v")
         if f.kind == "object" and name == "exists":
             exists = bool(v)
             continue
         if f.kind == "decision":
             continue
         bucket = computed if f.kind == "derived" else props
+        if fact_value.get("present", True) is False:
+            bucket.pop(name, None)
+            detail[name] = _fact_to_dict(f)
+            continue
         bucket[name] = v
         detail[name] = _fact_to_dict(f)
     return _ok({

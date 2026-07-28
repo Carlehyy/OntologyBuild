@@ -812,14 +812,25 @@ def declare_contract(dataset_id: str, body: ContractRequest, db: Session = Depen
     schema = dict(ds.schema_json or {})
     old_pk = str(schema.get("primary_key") or "").strip()
     if old_pk and old_pk != new_pk:
-        from app.models.v2.mapping import OntologyMapping
-        bound = db.query(OntologyMapping).filter(
-            OntologyMapping.curated_dataset_id == dataset_id).count()
-        if bound:
+        from app.ontologies.mappings.consumers import dataset_mapping_bindings
+
+        bindings = dataset_mapping_bindings(db, dataset_id)
+        if bindings:
+            object_count = sum(
+                binding.get("kind") == "object" for binding in bindings)
+            link_count = sum(
+                binding.get("kind") == "link" for binding in bindings)
             raise HTTPException(400,
-                f"该数据集已被 {bound} 条本体映射绑定，主键已锁定（改主键会让整批实例身份作废）。"
+                f"该数据集已被 {len(bindings)} 个本体映射绑定"
+                f"（对象映射 {object_count} 个、关系映射 {link_count} 个），"
+                "主键已锁定（改主键会让对象、关系端点或关系实例身份作废）。"
                 f"如确需变更，请先删除相关映射")
 
+    has_declared_column_contract = (
+        schema.get("manual_field_contract_version")
+        == MANUAL_FIELD_CONTRACT_VERSION
+        or schema.get("types_source") == "declared"
+    )
     try:
         rows = svc.load_all_rows(dataset_id)
     except DatasetReadError as e:
@@ -830,8 +841,13 @@ def declare_contract(dataset_id: str, body: ContractRequest, db: Session = Depen
             validate_pk(rows, pk_cols, dataset_name=ds.name, scope="现有数据")
         except LakeGateError as e:
             raise HTTPException(400, str(e))
-        schema["columns"] = list(rows[0].keys())
-        schema["columns_typed"] = infer_columns_typed(rows)
+        # A stable/manual declared contract is authoritative.  Re-inferring it
+        # from one snapshot turns string identifiers such as "001" into
+        # integers and also drops display/source/nullability metadata.  Only
+        # untyped legacy uploads are migrated by inference here.
+        if not has_declared_column_contract:
+            schema["columns"] = list(rows[0].keys())
+            schema["columns_typed"] = infer_columns_typed(rows)
     else:
         missing = [c for c in pk_cols if c not in declared_columns]
         if missing:
@@ -839,6 +855,39 @@ def declare_contract(dataset_id: str, body: ContractRequest, db: Session = Depen
                 400,
                 f"空数据集也必须先声明包含主键的列结构；当前缺少主键列 {missing}",
             )
+
+    if has_declared_column_contract:
+        pk_set = set(pk_cols)
+        typed_columns = []
+        typed_nullable: dict[str, bool] = {}
+        for raw_column in schema.get("columns_typed") or []:
+            if not isinstance(raw_column, dict):
+                typed_columns.append(raw_column)
+                continue
+            column = dict(raw_column)
+            column_name = str(column.get("name") or "")
+            if column_name in pk_set:
+                column["nullable"] = False
+            if column_name and "nullable" in column:
+                typed_nullable[column_name] = bool(column["nullable"])
+            typed_columns.append(column)
+        schema["columns_typed"] = typed_columns
+
+        definitions = []
+        for raw_definition in schema.get("contract_definitions") or []:
+            if not isinstance(raw_definition, dict):
+                definitions.append(raw_definition)
+                continue
+            definition = dict(raw_definition)
+            field_key = str(definition.get("field_key") or "")
+            definition["is_primary_key"] = field_key in pk_set
+            if field_key in pk_set:
+                definition["nullable"] = False
+            elif field_key in typed_nullable:
+                definition["nullable"] = typed_nullable[field_key]
+            definitions.append(definition)
+        if "contract_definitions" in schema:
+            schema["contract_definitions"] = definitions
 
     schema["primary_key"] = new_pk
     schema["pk_source"] = "manual"

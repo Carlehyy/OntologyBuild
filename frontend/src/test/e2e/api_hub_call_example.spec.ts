@@ -1,4 +1,15 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
+
+async function loginAsAdmin(page: Page) {
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.locator('button[type="submit"]').click()
+  await page.waitForURL('**/#/overview')
+}
 
 const exampleInterface = {
   id: 11,
@@ -26,24 +37,8 @@ const exampleInterface = {
 
 test('调用示例以导出 cURL 弹窗展示并可选择登录 Cookie 后复制', async ({ page, context }, testInfo) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'admin-token')
-    localStorage.setItem('auth-store', JSON.stringify({
-      state: {
-        token: 'admin-token',
-        user: {
-          id: 1,
-          username: 'admin',
-          email: 'admin@example.com',
-          role: 'admin',
-          is_active: true,
-        },
-      },
-      version: 0,
-    }))
-  })
+  await loginAsAdmin(page)
 
-  await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
   await page.route('**/api/api-hub/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -90,8 +85,7 @@ test('调用示例以导出 cURL 弹窗展示并可选择登录 Cookie 后复制
 })
 
 test('非法 URL 不会白屏，并把 FastAPI 校验数组显示为可读提示', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('token', 'admin-token'))
-  await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
+  await loginAsAdmin(page)
   await page.route('**/api/api-hub/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -132,8 +126,7 @@ test('非法 URL 不会白屏，并把 FastAPI 校验数组显示为可读提示
 
 test('MCP 参数映射可在页面核对并复制，不暴露平台默认值', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-  await page.addInitScript(() => localStorage.setItem('token', 'admin-token'))
-  await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
+  await loginAsAdmin(page)
   await page.route('**/api/api-hub/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -160,7 +153,7 @@ test('MCP 参数映射可在页面核对并复制，不暴露平台默认值', a
   await page.goto('/#/api-hub/interfaces')
   await page.getByRole('button', { name: 'MCP 调用示例' }).click()
   const dialog = page.getByRole('dialog', { name: 'MCP 调用示例' })
-  await expect(dialog.getByText('Query')).toBeVisible()
+  await expect(dialog.getByRole('cell', { name: 'Query', exact: true })).toBeVisible()
   await expect(dialog.getByText('/include')).toBeVisible()
   await expect(dialog.getByLabel('MCP 调用参数')).toContainText('"order_id": "<order_id>"')
   await dialog.getByRole('button', { name: '复制 MCP 调用参数' }).click()

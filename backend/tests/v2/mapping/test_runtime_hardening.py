@@ -286,25 +286,58 @@ def test_mapping_reapply_reconciles_deleted_source_rows_with_tombstone(
             {"id": "B", "value": "old-b"},
         ])
         stale_id = service._stable_row_id(mapping, {"id": "A"}, "id")
+        formal_instance_id = db.query(ObjectInstance).filter(
+            ObjectInstance.ontology_id == ontology.id,
+            ObjectInstance.external_id == stale_id,
+        ).one().id
 
         result = service.apply_mapping(mapping.id, [
             {"id": "B", "value": "new-b"},
             {"id": "C", "value": "new-c"},
         ])
+        assert result["stale_entities_removed"] == 1
+        assert db.query(Entity).filter(Entity.id == stale_id).first() is None
+        assert db.query(ObjectInstance).filter(
+            ObjectInstance.id == formal_instance_id,
+        ).first() is None
 
-    assert result["stale_entities_removed"] == 1
-    assert db.query(Entity).filter(Entity.id == stale_id).first() is None
-    assert db.query(ObjectInstance).filter(
-        ObjectInstance.ontology_id == ontology.id,
-        ObjectInstance.external_id == stale_id,
-    ).first() is None
-    tombstone = db.query(PropertyFact).filter(
+        service.apply_mapping(mapping.id, [
+            {"id": "A", "value": "restored-a"},
+            {"id": "B", "value": "new-b"},
+            {"id": "C", "value": "new-c"},
+        ])
+        assert db.query(ObjectInstance).filter(
+            ObjectInstance.id == formal_instance_id,
+        ).one().properties["value"] == "restored-a"
+
+        second_delete = service.apply_mapping(mapping.id, [
+            {"id": "B", "value": "new-b"},
+            {"id": "C", "value": "new-c"},
+        ])
+        assert second_delete["stale_entities_removed"] == 1
+
+    existence_facts = db.query(PropertyFact).filter(
         PropertyFact.ontology_id == ontology.id,
+        PropertyFact.instance_id == formal_instance_id,
         PropertyFact.kind == "object",
         PropertyFact.property_name == "exists",
-    ).order_by(PropertyFact.recorded_at.desc()).first()
-    assert tombstone is not None
-    assert tombstone.value == {"v": False}
+    ).order_by(
+        PropertyFact.seq.asc(),
+    ).all()
+    assert [item.value for item in existence_facts] == [
+        {"v": True},
+        {"v": False},
+        {"v": True},
+        {"v": False},
+    ]
+    assert [
+        item.supersedes_id for item in existence_facts
+    ] == [
+        None,
+        existence_facts[0].id,
+        existence_facts[1].id,
+        existence_facts[2].id,
+    ]
 
 
 def test_link_mapping_delete_reconciles_relation_and_formal_link(
@@ -1083,6 +1116,63 @@ def test_projection_normalizes_blank_non_string_cells_without_erasing_text():
         "optional_date": None,
         "free_text": "  ",
     }
+
+
+def test_projection_strictly_coerces_json_array_and_object_properties():
+    """Lake JSON text becomes native values; malformed/wrong shapes fail closed."""
+    from app.ontologies.mappings.formal_projection import _coerce_props_to_type
+
+    native_array = ["already", "native"]
+    native_object = {"already": "native"}
+    definitions = [
+        {"name": "array_json", "type": "array"},
+        {"name": "object_json", "type": "object"},
+        {"name": "array_native", "type": "array"},
+        {"name": "object_native", "type": "object"},
+        {"name": "nullable_array", "type": "array"},
+        {"name": "nullable_object", "type": "object"},
+        {"name": "blank_array", "type": "array"},
+    ]
+
+    coerced = _coerce_props_to_type(
+        {
+            "array_json": '["urgent", 2]',
+            "object_json": '{"enabled": true}',
+            "array_native": native_array,
+            "object_native": native_object,
+            "nullable_array": "null",
+            "nullable_object": None,
+            "blank_array": "  ",
+        },
+        definitions,
+    )
+
+    assert coerced == {
+        "array_json": ["urgent", 2],
+        "object_json": {"enabled": True},
+        "array_native": native_array,
+        "object_native": native_object,
+        "nullable_array": None,
+        "nullable_object": None,
+        "blank_array": None,
+    }
+    assert coerced["array_native"] is native_array
+    assert coerced["object_native"] is native_object
+
+    invalid_cases = [
+        ("array_json", "array", "not-json"),
+        ("array_json", "array", '{"wrong": "shape"}'),
+        ("array_json", "array", {"native": "object"}),
+        ("object_json", "object", '["wrong", "shape"]'),
+        ("object_json", "object", ["native", "array"]),
+        ("object_json", "object", "42"),
+    ]
+    for name, property_type, value in invalid_cases:
+        with pytest.raises(ValueError, match=rf"属性 {name} .*{property_type}"):
+            _coerce_props_to_type(
+                {name: value},
+                [{"name": name, "type": property_type}],
+            )
 
 
 def test_apply_refuses_stale_source_version_after_concurrent_publish(

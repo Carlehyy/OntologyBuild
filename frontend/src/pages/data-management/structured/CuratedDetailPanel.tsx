@@ -500,7 +500,7 @@ export default function CuratedDetailPanel({
       setSelectedReviewId(reviewId)
       setEditMessage(`已保存 ${result.saved} 处审核修改；批准后才会进入正式数据消费。`)
 
-      // 重新读取同一审核版本，让类型归一化后的值、变化量和审计快照保持一致。
+      // 重新读取同一审核版本，让类型归一化后的值、审核影响和审计快照保持一致。
       try {
         const response = await curatedApi.reviewDiff(
           datasetId, pageSize, pageOffset, reviewId,
@@ -640,8 +640,8 @@ export default function CuratedDetailPanel({
   }
 
   const VIEW_TABS: [View, string, number | null][] = [
-    ['changes', '变化量', delta ? changeCount : null],
-    ['previous', '上一版本全量', diff?.previous?.total ?? null],
+    ['changes', '审核影响', delta ? changeCount : null],
+    ['previous', '上一已批准版本全量', diff?.previous?.total ?? null],
     ['current', '本次接受后全量', diff?.current?.total ?? null],
   ]
 
@@ -712,11 +712,11 @@ export default function CuratedDetailPanel({
                 <Clock size={13} className="text-amber-600" />
                 发现新数据，请完成审核
               </span>
-              <span className="text-amber-800/75">请核对变化量、上一版本全量与本次接受后全量，再在底部作出决定。</span>
+              <span className="text-amber-800/75">请核对审核影响、上一已批准版本全量与本次接受后全量，再在底部作出决定。</span>
               <span className="ml-auto inline-flex items-center gap-1 text-amber-700/70">
                 <LockKeyhole size={11} />
                 {primaryKeys.length
-                  ? '变化对比只读；本次全量可修正非主键字段'
+                  ? '审核影响只读；本次全量可修正非主键字段'
                   : '无稳定主键，审核快照只读'}
               </span>
             </div>
@@ -821,8 +821,8 @@ export default function CuratedDetailPanel({
               )}
               {reviewPending && (
                 <span className="ml-2 text-[11px] text-gray-400">
-                  {view === 'changes' && '相对上一版的新增/更新/删除，聚焦本次改动'}
-                  {view === 'previous' && '上一版本完整数据（分页查看，用于对照）'}
+                  {view === 'changes' && '审核影响（相对上一已批准版本，含人工修正）'}
+                  {view === 'previous' && '上一已批准版本完整数据（分页查看，用于对照）'}
                   {view === 'current' && (
                     canEditCurrentRows
                       ? '如果接受本次变化，数据集将呈现的完整数据 · 可修正非主键字段'
@@ -861,7 +861,7 @@ export default function CuratedDetailPanel({
                 curNo={diff?.current?.version_no ?? null} primaryKeys={primaryKeys} schemaColumns={schemaColumns} />
             ) : view === 'previous' ? (
               diff?.previous?.version_no == null
-                ? <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-sm text-gray-400">这是首个版本，没有上一版可对照。</div>
+                ? <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-sm text-gray-400">这是首个待审核版本，没有上一已批准版本可对照。</div>
                 : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} schemaColumns={schemaColumns} fillAvailable />
             ) : (
               canEditCurrentRows ? (
@@ -896,7 +896,7 @@ export default function CuratedDetailPanel({
                 {view === 'changes' ? (
                   <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
                     <Info size={12} className="shrink-0 text-teal-700" />
-                    变化量基于两个完整版本计算；更新前使用红色，更新后使用绿色，具体变更列会单独标出。
+                    审核影响相对上一已批准版本计算，并包含已保存的人工修正；更新前使用红色，更新后使用绿色，具体变更列会单独标出。
                   </span>
                 ) : (
                   <>
@@ -1011,7 +1011,7 @@ export default function CuratedDetailPanel({
   )
 }
 
-/** 变化量视图：相对上一版的新增/更新/删除 */
+/** 审核影响视图：相对上一已批准版本的新增/更新/删除，包含已保存的人工修正 */
 function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
   delta: ReviewDiff['delta']
   prevNo: number | null
@@ -1046,7 +1046,7 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
         {delta.sample_truncated && <span className="text-gray-400">（每类仅展示部分样本）</span>}
       </div>
 
-      {noChange && <div className="p-6 text-center text-sm text-gray-400">与上一版相比没有数据变化。</div>}
+      {noChange && <div className="p-6 text-center text-sm text-gray-400">与上一已批准版本相比没有数据变化。</div>}
 
       {updated_count > 0 && (
         <section>
@@ -1077,7 +1077,7 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <span>
             本次变化超过接口单次明细上限，当前已完整展示接口返回的明细，但并非全部 {changeCountText(delta)} 行。
-            为避免误判，请结合“上一版全量 / 本次全量”核对；后端需要提供变化明细分页后才能可靠展示全部记录。
+            为避免误判，请结合“上一已批准版本全量 / 本次接受后全量”核对；后端需要提供变化明细分页后才能可靠展示全部记录。
           </span>
         </div>
       )}

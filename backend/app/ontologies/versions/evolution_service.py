@@ -31,6 +31,7 @@ from app.ontologies.mappings.mapping_service import (
     MappingService, MappingSourceError, load_mapping_source_rows,
 )
 from app.ontologies.mappings.formal_projection import (
+    _coerce_props_to_type,
     stable_link_instance_id,
     stable_object_instance_id,
     stable_pipeline_entity_id,
@@ -1675,9 +1676,6 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
             # writes its intermediate Entity rows.  Trial data must therefore
             # validate and feed sentinels with those production values rather
             # than raw CSV strings.
-            from app.ontologies.mappings.formal_projection import (
-                _coerce_props_to_type,
-            )
             try:
                 properties = _coerce_props_to_type(
                     properties, list(target.get("properties") or []))
@@ -1817,6 +1815,17 @@ def materialize_trial(db: Session, run: OntologyTrialRun, snapshot: dict) -> dic
             )
             link_id = stable_link_instance_id(
                 run.ontology_id, link_type_id, source_id, target_id, edge_key)
+            try:
+                properties = _coerce_props_to_type(
+                    properties, list(link_type.get("properties") or []))
+            except ValueError as exc:
+                errors.append({
+                    "code": "link_mapping_property_coercion_failed",
+                    "kind": "linkInstance", "id": link_id,
+                    "name": relation_type,
+                    "message": str(exc),
+                })
+                continue
             links.append({
                 "linkId": link_id, "linkTypeId": link_type_id,
                 "sourceObjectId": source_id, "targetObjectId": target_id,

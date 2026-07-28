@@ -258,3 +258,62 @@ def test_pipeline_validation_reads_historical_json_when_rowcount_is_missing(
 
     assert not any("暂无数据版本" in item["message"]
                    for item in fallback_result.warnings)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_valid"),
+    [
+        (b"PK\x03\x04non-empty-docx-payload", True),
+        (b"", False),
+    ],
+    ids=["non-empty", "empty"],
+)
+def test_pipeline_validation_handles_unstructured_version_payload_without_rows(
+    db, payload, expected_valid,
+):
+    storage = _Storage()
+    dataset_service = DatasetService(db, storage=storage)
+    dataset = dataset_service.create_dataset("采购制度", "unstructured")
+    version = dataset_service.create_version(
+        dataset.id,
+        payload,
+        rowcount=None,
+    )
+    assert version.rowcount is None
+    assert version.storage_uri
+
+    pipeline = Pipeline(
+        id="unstructured-file-pipeline",
+        name="非结构化文件流水线",
+        status="draft",
+        definition={
+            "nodes": [
+                {
+                    "id": "connector",
+                    "type": "connector",
+                    "config": {"files": [{"dataset_id": dataset.id}]},
+                },
+                {"id": "storage", "type": "storage", "config": {}},
+                {"id": "transform", "type": "transform", "config": {}},
+                {"id": "output", "type": "output", "config": {}},
+            ],
+            "edges": [
+                {"source": "connector", "target": "storage"},
+                {"source": "storage", "target": "transform"},
+                {"source": "transform", "target": "output"},
+            ],
+        },
+        spec={},
+    )
+    db.add(pipeline)
+    db.commit()
+
+    result = validate_pipeline(pipeline.id, db)
+
+    assert result.valid is expected_valid
+    connector_empty = any(
+        "所有 Connector" in item["message"] for item in result.errors
+    )
+    assert connector_empty is (not expected_valid)
+    if expected_valid:
+        assert not any("暂无数据" in item["message"] for item in result.warnings)

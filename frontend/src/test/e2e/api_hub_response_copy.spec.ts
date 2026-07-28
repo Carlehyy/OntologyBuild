@@ -1,7 +1,17 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const realHttp = process.env.PLAYWRIGHT_REAL_HTTP === '1'
 const expectedCopy = '{\n  "message": "copied over http",\n  "ok": true\n}'
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
+
+async function loginAsAdmin(page: Page) {
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.locator('button[type="submit"]').click()
+  await page.waitForURL('**/#/overview')
+}
 
 const responseInterface = {
   id: 9,
@@ -27,24 +37,8 @@ const responseInterface = {
 }
 
 test('Clipboard API 不可用时仍可复制接口响应', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'admin-token')
-    localStorage.setItem('auth-store', JSON.stringify({
-      state: {
-        token: 'admin-token',
-        user: {
-          id: 1,
-          username: 'admin',
-          email: 'admin@example.com',
-          role: 'admin',
-          is_active: true,
-        },
-      },
-      version: 0,
-    }))
-  })
+  await loginAsAdmin(page)
 
-  await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
   await page.route('**/api/api-hub/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname

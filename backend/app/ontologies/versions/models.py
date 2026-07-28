@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     String, DateTime, Text, JSON, Integer, ForeignKey, UniqueConstraint, Index,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
@@ -70,6 +71,13 @@ class OntologyTrialRun(Base):
     __tablename__ = "ontology_trial_runs"
     __table_args__ = (
         Index("ix_ontology_trial_runs_version_created", "version_id", "created_at"),
+        Index(
+            "uq_ontology_trial_runs_running_version",
+            "version_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+            sqlite_where=text("status = 'running'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -82,6 +90,16 @@ class OntologyTrialRun(Base):
         nullable=False, index=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Freeze the release baseline separately from the mutable draft row.  It is
+    # rechecked when a long-running materialization attempts its terminal write.
+    base_release_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("ontology_versions.id", ondelete="SET NULL"),
+        nullable=True)
+    # A running record owns a short-lived, unguessable claim.  Reclaim clears
+    # the token so a late worker can no longer publish its terminal result.
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
     # running | passed | failed | stale
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="running", server_default="running")

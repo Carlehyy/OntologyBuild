@@ -2,18 +2,15 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 
 const now = '2026-07-20T08:00:00+00:00'
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
 
 const authenticate = async (page: Page) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e-token')
-    localStorage.setItem('auth-store', JSON.stringify({
-      state: {
-        token: 'e2e-token',
-        user: { id: 'admin', username: 'admin', email: 'admin@example.com', role: 'admin' },
-      },
-      version: 0,
-    }))
-  })
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.locator('button[type="submit"]').click()
+  await page.waitForURL('**/#/overview')
 }
 
 const json = (route: Route, data: unknown) => route.fulfill({
@@ -61,7 +58,7 @@ test('管理员测试并保存 MinIO 后只显示一次外部 MCP 配置', async
         mcp_token: 'one-time-mcp-token',
       })
     }
-    return route.fulfill({ status: 404, body: '{}' })
+    return route.continue()
   })
 
   await page.goto('/#/settings/minio')
@@ -117,7 +114,7 @@ test('超级助手配置隐藏平台内置 MinIO，只展示可用的外部 MCP'
   await page.route('**/api/v1/**', route => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/v1/models') return json(route, [])
-    return route.fulfill({ status: 404, body: '{}' })
+    return route.continue()
   })
   await page.route('**/api/v2/super-assistant/**', route => {
     const path = new URL(route.request().url()).pathname

@@ -104,6 +104,10 @@ def test_committed_manifest_enables_required_mode_without_empty_values():
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
         "STORAGE_LOCAL_FALLBACK",
+        "N8N_API_URL",
+        "N8N_EMAIL",
+        "N8N_PASSWORD",
+        "N8N_API_KEY",
     }
 
     assert required <= manifest.keys()

@@ -221,6 +221,7 @@ def recompute_instance_derived(
         last = (db.query(PropertyFact)
                 .filter(PropertyFact.ontology_id == ontology_id,
                         PropertyFact.instance_id == instance.id,
+                        PropertyFact.kind == "derived",
                         PropertyFact.property_name == name)
                 .order_by(*fact_order_clause())
                 .first())

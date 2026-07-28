@@ -10,8 +10,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE = 'http://localhost:5173'
-const API  = 'http://localhost:8000'
+const RUN_ALL_DOMAINS_REAL = process.env.PLAYWRIGHT_ALL_DOMAINS_REAL === '1'
+const BASE = (process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173').replace(/\/+$/, '')
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://127.0.0.1:8000'
+).replace(/\/+$/, '')
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname  = path.dirname(__filename)
 const TEST_DATA  = path.resolve(__dirname, '../../../../test_data')
@@ -51,12 +58,16 @@ function toEntityClass(filename: string): string {
 
 // ── 工具函数 ──────────────────────────────────────────────────────────
 
+function appUrl(route: string): string {
+  return `${BASE}/#${route.startsWith('/') ? route : `/${route}`}`
+}
+
 async function login(page: Page): Promise<string> {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
+  await page.goto(appUrl('/login'))
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`, { timeout: 10000 })
+  await page.waitForURL(appUrl('/overview'), { timeout: 10000 })
   const token = await page.evaluate(() => localStorage.getItem('token') || '')
   expect(token, 'JWT token must be set after login').toBeTruthy()
   return token
@@ -173,7 +184,7 @@ async function runPipelineMapping(
   console.log(`  Pipeline 创建: ${pipelineId.slice(0, 8)}`)
 
   // 3. 前端查看 Pipeline Builder
-  await page.goto(`${BASE}/data/pipelines/${pipelineId}`)
+  await page.goto(appUrl(`/data/pipelines/${pipelineId}`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_01_pipeline_builder`)
 
@@ -186,7 +197,7 @@ async function runPipelineMapping(
 
   // 5. Publish pipeline
   await api(request, 'POST', `/api/v2/pipelines/${pipelineId}/publish`, token)
-  await page.goto(`${BASE}/data/pipelines/${pipelineId}`)
+  await page.goto(appUrl(`/data/pipelines/${pipelineId}`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_02_pipeline_published`)
 
@@ -197,7 +208,7 @@ async function runPipelineMapping(
   console.log(`  ✓ 批准 ${curatedIds.length} 个 curated dataset`)
 
   // 7. 前端查看结构数据页
-  await page.goto(`${BASE}/data/structured`)
+  await page.goto(appUrl('/data/structured'))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_03_structured_data`)
 
@@ -235,7 +246,7 @@ async function runPipelineMapping(
   console.log(`  ✓ 构建完成: entities=${buildBody.total_entities} relations=${buildBody.total_relations} logic=${buildBody.total_logic} actions=${buildBody.total_actions}`)
 
   // 11. 前端查看本体详情
-  await page.goto(`${BASE}/ontologies/${ontologyId}`)
+  await page.goto(appUrl(`/ontologies/${ontologyId}`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_04_ontology_info`)
 
@@ -246,7 +257,7 @@ async function runPipelineMapping(
     await shot(page, outDir, `${domainCn}_05_entities`)
   }
 
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=graph`)
+  await page.goto(appUrl(`/ontologies/${ontologyId}?tab=graph`))
   await page.waitForTimeout(1500)
   await page.waitForTimeout(2000)
   await shot(page, outDir, `${domainCn}_06_graph`)
@@ -269,14 +280,14 @@ async function runSimpleLLM(
   console.log(`  [${domainCn}] 简易LLM: ${files.length} 个文件`)
 
   // 0. 把 JWT token 写入 page 的 localStorage（Playwright 每个 test 的 page 是新 context，无法共享 localStorage）
-  await page.goto(`${BASE}/login`)
+  await page.goto(appUrl('/login'))
   await page.evaluate((tok: string) => {
     localStorage.setItem('token', tok)
     localStorage.setItem('auth-store', JSON.stringify({ state: { token: tok, user: { username: 'admin', role: 'admin' } }, version: 0 }))
   }, token)
 
   // 1. 前端打开本体创建向导（截图记录 UI 状态）
-  await page.goto(`${BASE}/ontologies/new`)
+  await page.goto(appUrl('/ontologies/new'))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_llm_01_wizard_mode`)
 
@@ -298,7 +309,7 @@ async function runSimpleLLM(
   console.log(`  本体创建: ${ontologyId.slice(0, 8)}`)
 
   // 4. 前端跳转到文件上传 tab
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=files`)
+  await page.goto(appUrl(`/ontologies/${ontologyId}?tab=files`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_llm_03_files_tab`)
 
@@ -336,7 +347,7 @@ async function runSimpleLLM(
   console.log(`  提取任务: ${taskId.slice(0, 8)}，等待完成...`)
 
   // 9. 前端查看提取进度（在文件 tab 刷新几次）
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=files`)
+  await page.goto(appUrl(`/ontologies/${ontologyId}?tab=files`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_llm_05_extracting`)
 
@@ -345,7 +356,7 @@ async function runSimpleLLM(
   console.log(`  提取结果: ${finalStatus}`)
 
   // 11. 前端查看结果
-  await page.goto(`${BASE}/ontologies/${ontologyId}`)
+  await page.goto(appUrl(`/ontologies/${ontologyId}`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_llm_06_ontology_info`)
 
@@ -356,7 +367,7 @@ async function runSimpleLLM(
     await shot(page, outDir, `${domainCn}_llm_07_entities`)
   }
 
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=graph`)
+  await page.goto(appUrl(`/ontologies/${ontologyId}?tab=graph`))
   await page.waitForTimeout(1500)
   await page.waitForTimeout(2000)
   await shot(page, outDir, `${domainCn}_llm_08_graph`)
@@ -376,6 +387,11 @@ const DOMAINS = ['供应链', '医疗', '教育', '法律', '营销', '财务']
 test.describe.configure({ mode: 'serial' })
 
 test.describe('六领域 Pipeline Mapping + 简易LLM 全量测试', () => {
+  test.skip(
+    !RUN_ALL_DOMAINS_REAL,
+    '需要隔离后端、六领域真实文件及会产生费用的外部 LLM；设置 PLAYWRIGHT_ALL_DOMAINS_REAL=1 显式启用',
+  )
+
   const ts = Date.now()
   const outDir = path.resolve(__dirname, '../../../../test-results/all-domains', String(ts))
   let token = ''
@@ -387,7 +403,6 @@ test.describe('六领域 Pipeline Mapping + 简易LLM 全量测试', () => {
     token = await login(loginPage)
     await loginPage.close()
     console.log(`\n输出目录: ${outDir}`)
-    console.log(`Token: ${token.slice(0, 20)}...`)
   })
 
   test.afterAll(() => {

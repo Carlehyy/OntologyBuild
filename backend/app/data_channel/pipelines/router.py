@@ -639,6 +639,21 @@ def validate_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
             return False
         if version.rowcount is not None:
             return version.rowcount > 0
+        # 非结构化文件没有“行数”语义，权威载荷保存在对象存储中。此时用
+        # 表格 preview 判定会把可正常 dry-run/VLM 抽取的 DOCX/PDF 误报为空。
+        # 这里只判断是否存在不可变版本载荷；发布仍必须通过执行预览与字段
+        # 契约 attestation，不能凭一个对象地址绕过实际运行校验。
+        if str(getattr(dataset, "kind", "") or "").strip().lower() == "unstructured":
+            from app.data_channel.datasets.service import version_has_content
+            if not version_has_content(version):
+                return False
+            # 对象存储版本没有 rowcount/data_size；新旧版本都保存过全文或
+            # 兼容前缀 checksum，因此仍能在不下载文件的情况下拒绝空载荷。
+            # checksum 为空只可能是迁移前存量，保留 storage_uri 兼容路径。
+            import hashlib
+            checksum = str(getattr(version, "checksum", "") or "").lower()
+            empty_checksum = hashlib.sha256(b"").hexdigest()
+            return checksum not in {empty_checksum, empty_checksum[:16]}
         # 历史 JSON/XML 版本可能没有行数元数据；回读一行判定可用性。
         from app.services.v2.dataset_service import DatasetService
         return bool(DatasetService(db).preview(

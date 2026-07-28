@@ -59,6 +59,7 @@ from app.ontologies.formal_modeling.derived import (
 from app.ontologies.formal_modeling.facts import (
     fact_order_clause,
     record_link_fact,
+    record_object_presence,
     record_property_facts,
 )
 from app.shared.time_utils import utc_iso
@@ -1850,6 +1851,54 @@ def execute_action(db: Session, ontology_id: str, body,
                    preview_only: bool = False,
                    preview_context: Optional[dict] = None,
                    expected_release_id: str | None = None) -> dict[str, Any]:
+    """Authoritative runtime-write fence for every direct action caller.
+
+    Public Sentinel evaluation/resume paths acquire this ontology lock before
+    their per-Sentinel lock, preserving the global build→Sentinel order.  The
+    router and Mapping-dispatch paths already own it and use the lock's
+    same-thread re-entrancy.
+    """
+    effective_preview_only = bool(
+        preview_only or getattr(body, "preview_only", False))
+    if db is None and effective_preview_only:
+        # Isolated trial action planning deliberately has no database or
+        # production projection.  It is already constrained to the frozen
+        # preview_context and cannot acquire a runtime lock.
+        return _execute_action_locked(
+            db,
+            ontology_id,
+            body,
+            actor_id=actor_id,
+            caused_by_fact=caused_by_fact,
+            skip_approval=skip_approval,
+            preview_only=True,
+            preview_context=preview_context,
+            expected_release_id=expected_release_id,
+        )
+    from app.ontologies.mappings.mapping_service import _ontology_build_lock
+    with _ontology_build_lock(db, ontology_id):
+        return _execute_action_locked(
+            db,
+            ontology_id,
+            body,
+            actor_id=actor_id,
+            caused_by_fact=caused_by_fact,
+            skip_approval=skip_approval,
+            preview_only=preview_only,
+            preview_context=preview_context,
+            expected_release_id=expected_release_id,
+        )
+
+
+def _execute_action_locked(
+                   db: Session, ontology_id: str, body,
+                   actor_id: Optional[str] = None,
+                   caused_by_fact: Optional[str] = None,
+                   skip_approval: bool = False,
+                   *,
+                   preview_only: bool = False,
+                   preview_context: Optional[dict] = None,
+                   expected_release_id: str | None = None) -> dict[str, Any]:
     """body 是 RunActionRequest。返回 ActionExecutionLog dict (camelCase)。
 
     actor_id        发起人（哨兵触发为 None）
@@ -2362,6 +2411,7 @@ def execute_action(db: Session, ontology_id: str, body,
                     .filter(
                         PropertyFact.ontology_id == ontology_id,
                         PropertyFact.instance_id == instance.id,
+                        PropertyFact.kind == "derived",
                         PropertyFact.property_name == name,
                     )
                     .order_by(*fact_order_clause())
@@ -2507,6 +2557,17 @@ def execute_action(db: Session, ontology_id: str, body,
                                           object_type_id=ot_id,
                                           properties=props, source="action")
                     db.add(inst)
+                    record_object_presence(
+                        db,
+                        ontology_id=ontology_id,
+                        instance_id=instance_id,
+                        object_type_id=ot_id,
+                        source=src,
+                        actor_id=actor_id,
+                        caused_by=causal,
+                        ontology_version=ontology_version,
+                        ontology_release_id=ontology_release_id,
+                    )
                     _validate_object_write(
                         db, ontology_id, instance_release_id, inst.id, rname,
                         definition_context=definition_context)

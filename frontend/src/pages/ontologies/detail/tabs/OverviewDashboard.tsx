@@ -41,6 +41,7 @@ interface FactRow {
   subjectLabel: string
   propertyName: string
   value: unknown
+  present?: boolean
   kind: string
   source: string
   recordedAt: string | null
@@ -391,7 +392,12 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
                   <strong title={fact.subjectLabel}>{fact.subjectLabel}</strong>
                   <code title={fact.propertyName}>{fact.propertyName}</code>
                   <span className="fact-equals">=</span>
-                  <span className="fact-value" title={formatValue(fact.value, 100)}>{formatValue(fact.value)}</span>
+                  <span
+                    className="fact-value"
+                    title={fact.present === false ? '属性已删除' : formatValue(fact.value, 100)}
+                  >
+                    {fact.present === false ? '（已删除）' : formatValue(fact.value)}
+                  </span>
                   <span className="fact-source">{SOURCE_LABEL[fact.source] || fact.source}</span>
                   <time><Clock3 size={12} />{formatDateTime(fact.recordedAt, true)}</time>
                 </div>

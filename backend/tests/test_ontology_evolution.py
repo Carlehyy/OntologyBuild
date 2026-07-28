@@ -4,15 +4,21 @@ from __future__ import annotations
 import csv
 import copy
 import io
-from datetime import datetime, timezone
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import event
+from sqlalchemy.orm import sessionmaker
 
 from app.data_channel.datasets.service import DatasetService
 from app.models.ontology import OntologyProject
 from app.models.entity import Entity
 from app.models.relation import Relation
+from app.models.inference import AuditLog
 from app.models.ontology_formal import (
     ActionExecutionLog, LinkInstance, LinkType, ObjectInstance, ObjectType,
     PropertyFact,
@@ -265,6 +271,128 @@ def _draft(client, headers, ontology_id: str, source_id: str) -> dict:
     )
     assert response.status_code == 201, response.text
     return response.json()["data"]
+
+
+def test_historical_release_uses_explicit_current_baseline_recovery_draft(
+        client, auth_headers, ontology, admin_user, db):
+    """History is a snapshot source, never an escape hatch around trial."""
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+    root_row = db.query(OntologyVersion).filter_by(id=root["id"]).one()
+    snap = complete_snapshot(root_row.snapshot_formal)
+
+    target = OntologyVersion(
+        id="safe-recovery-release-v1",
+        ontology_id=oid,
+        version_number="v1",
+        version_label="历史稳定版",
+        parent_version_id=root_row.id,
+        base_release_id="safe-recovery-release-v1",
+        node_kind="release",
+        lifecycle_status="released",
+        revision=0,
+        snapshot_formal=copy.deepcopy(snap),
+        snapshot_hash=snapshot_hash(snap),
+        published_at=datetime.now(timezone.utc),
+        created_by=admin_user.id,
+    )
+    current = OntologyVersion(
+        id="safe-recovery-release-v2",
+        ontology_id=oid,
+        version_number="v2",
+        version_label="当前发布版",
+        parent_version_id=target.id,
+        base_release_id="safe-recovery-release-v2",
+        node_kind="release",
+        lifecycle_status="released",
+        revision=0,
+        snapshot_formal=copy.deepcopy(snap),
+        snapshot_hash=snapshot_hash(snap),
+        published_at=datetime.now(timezone.utc),
+        created_by=admin_user.id,
+    )
+    db.add_all([target, current])
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    project.current_release_id = current.id
+    project.version = current.version_number
+    project.status = "published"
+    db.commit()
+
+    endpoint = (
+        f"/api/v2/ontologies/{oid}/versions/{target.id}/drafts"
+    )
+    missing_cas = client.post(
+        endpoint,
+        headers=auth_headers,
+        json={"recoveryMode": "current_release_trial"},
+    )
+    assert missing_cas.status_code == 422, missing_cas.text
+    assert missing_cas.json()["detail"]["code"] == (
+        "recovery_current_release_required"
+    )
+
+    stale_page = client.post(
+        endpoint,
+        headers=auth_headers,
+        json={
+            "recoveryMode": "current_release_trial",
+            "expectedCurrentReleaseId": target.id,
+        },
+    )
+    assert stale_page.status_code == 409, stale_page.text
+    assert stale_page.json()["detail"]["code"] == "recovery_base_changed"
+
+    response = client.post(
+        endpoint,
+        headers=auth_headers,
+        json={
+            "versionLabel": "恢复 v1 规则",
+            "description": "先按当前数据隔离试跑",
+            "recoveryMode": "current_release_trial",
+            "expectedCurrentReleaseId": current.id,
+        },
+    )
+    assert response.status_code == 201, response.text
+    recovery = response.json()["data"]
+    assert recovery["parent_version_id"] == target.id
+    assert recovery["base_release_id"] == current.id
+    assert recovery["node_kind"] == "draft"
+    assert recovery["lifecycle_status"] == "editing"
+    assert recovery["snapshot_hash"] == target.snapshot_hash
+
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{recovery['id']}/impact",
+        headers=auth_headers,
+    )
+    assert impact.status_code == 200, impact.text
+    assert impact.json()["data"]["baseOutdated"] is False
+    assert impact.json()["data"]["currentReleaseId"] == current.id
+
+    # A generic historical branch retains its original audit baseline and is
+    # still rejected by the trial gate. Only the explicit recovery operation
+    # is rebased to the current release.
+    generic = _draft(client, auth_headers, oid, target.id)
+    assert generic["base_release_id"] == target.id
+    blocked = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{generic['id']}/trial-runs",
+        headers=auth_headers,
+        json={},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["detail"]["code"] == "draft_base_outdated"
+
+    recovery_trial = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{recovery['id']}/trial-runs",
+        headers=auth_headers,
+        json={},
+    )
+    assert recovery_trial.status_code == 422, recovery_trial.text
+    assert recovery_trial.json()["detail"]["code"] != "draft_base_outdated"
+
+    db.expire_all()
+    stored_project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert stored_project.current_release_id == current.id
+    assert stored_project.version == "v2"
 
 
 def _workspace(draft: dict) -> dict:
@@ -558,6 +686,34 @@ def _dataset(db, monkeypatch) -> tuple[DatasetService, MemoryStorage]:
     return service, storage
 
 
+def _promote_configured_lake_release(
+    client, headers, ontology_id: str, source_release_id: str,
+) -> dict:
+    draft = _configure_draft(
+        client, headers, ontology_id,
+        _draft(client, headers, ontology_id, source_release_id),
+    )
+    run_response = client.post(
+        f"/api/v2/ontologies/{ontology_id}/versions/{draft['id']}/trial-runs",
+        headers=headers, json={},
+    )
+    assert run_response.status_code == 201, run_response.text
+    run = run_response.json()["data"]
+    impact_response = client.get(
+        f"/api/v2/ontologies/{ontology_id}/versions/{draft['id']}/impact",
+        headers=headers,
+    )
+    assert impact_response.status_code == 200, impact_response.text
+    impact = impact_response.json()["data"]
+    promoted = client.post(
+        f"/api/v2/ontologies/{ontology_id}/versions/{draft['id']}/promote",
+        headers=headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 201, promoted.text
+    return promoted.json()["data"]
+
+
 def _paired_dataset(db, monkeypatch) -> DatasetService:
     storage = MemoryStorage()
     monkeypatch.setattr(
@@ -597,6 +753,8 @@ def _order_supplier_dataset(db, monkeypatch) -> DatasetService:
                 {"name": "order_id", "type": "string"},
                 {"name": "supplier_id", "type": "string"},
                 {"name": "supplier_name", "type": "string"},
+                {"name": "tags", "type": "json"},
+                {"name": "details", "type": "json"},
             ],
         },
     )
@@ -606,13 +764,21 @@ def _order_supplier_dataset(db, monkeypatch) -> DatasetService:
         dataset.id,
         _csv([
             {"order_id": "ORDER-1", "supplier_id": "SUPPLIER-1",
-             "supplier_name": "供应商一"},
+             "supplier_name": "供应商一",
+             "tags": '["priority", "north"]',
+             "details": '{"rank": 1, "active": true}'},
             {"order_id": "ORDER-2", "supplier_id": "SUPPLIER-2",
-             "supplier_name": "供应商二"},
+             "supplier_name": "供应商二",
+             "tags": '["standard"]',
+             "details": '{"rank": 2, "active": false}'},
             {"order_id": "ORDER-3", "supplier_id": "SUPPLIER-3",
-             "supplier_name": "供应商三"},
+             "supplier_name": "供应商三",
+             "tags": "null",
+             "details": '{"rank": 3}'},
             {"order_id": "ORDER-4", "supplier_id": "SUPPLIER-4",
-             "supplier_name": "供应商四"},
+             "supplier_name": "供应商四",
+             "tags": "[]",
+             "details": "{}"},
         ]),
         rowcount=4,
     )
@@ -1865,6 +2031,275 @@ def test_structure_only_draft_cannot_enter_trial(
     }
 
 
+def _finish_stub_trial(candidate: SimpleNamespace) -> None:
+    candidate.dataset_versions = []
+    candidate.result_json = {
+        "counts": {"objects": 0, "links": 0, "facts": 0, "datasets": 0},
+        "errors": [],
+        "warnings": [],
+        "samples": {"objects": [], "links": []},
+        "actionsExecuted": 0,
+        "sideEffects": "blocked",
+    }
+    candidate.status = "passed"
+    candidate.completed_at = datetime.now(timezone.utc)
+
+
+def test_trial_start_is_single_flight_while_first_materialization_is_running(
+        client, auth_headers, ontology, admin_user, db, monkeypatch):
+    """A second API worker observes the durable first claim and fails 409."""
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    draft = _configure_draft(
+        client, auth_headers, oid,
+        _draft(client, auth_headers, oid, _root(
+            client, auth_headers, oid)["id"]),
+    )
+    actor = SimpleNamespace(id=admin_user.id, username=admin_user.username)
+    db.rollback()
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_materialize(_session, candidate, _snapshot):
+        entered.set()
+        assert release.wait(5), "test did not release trial materialization"
+        _finish_stub_trial(candidate)
+        return candidate.result_json
+
+    monkeypatch.setattr(
+        version_router, "materialize_trial", blocked_materialize)
+    factory = sessionmaker(
+        bind=db.get_bind(), autoflush=False, expire_on_commit=True)
+    outcome: dict[str, object] = {}
+
+    def start_first() -> None:
+        session = factory()
+        try:
+            outcome["response"] = version_router.create_trial_run(
+                oid, draft["id"], {}, session, actor)
+        except BaseException as exc:  # captured for assertion in the test thread
+            outcome["error"] = exc
+        finally:
+            session.close()
+
+    worker = threading.Thread(target=start_first, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(5), "first trial did not reach materialization"
+        competing_session = factory()
+        try:
+            with pytest.raises(HTTPException) as caught:
+                version_router.create_trial_run(
+                    oid, draft["id"], {}, competing_session, actor)
+            assert caught.value.status_code == 409
+            assert caught.value.detail["code"] == "trial_already_running"
+            assert caught.value.detail["trialRunId"]
+            assert caught.value.detail["leaseExpiresAt"]
+        finally:
+            competing_session.rollback()
+            competing_session.close()
+    finally:
+        release.set()
+        worker.join(5)
+
+    assert not worker.is_alive()
+    assert "error" not in outcome, repr(outcome.get("error"))
+    first = outcome["response"]["data"]
+    assert first["status"] == "passed"
+    db.expire_all()
+    assert db.query(OntologyTrialRun).filter_by(
+        version_id=draft["id"]).count() == 1
+
+
+def test_expired_trial_is_recovered_for_retry_and_branch_deletion(
+        client, auth_headers, ontology, admin_user, db, monkeypatch):
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    draft = _configure_draft(
+        client, auth_headers, oid,
+        _draft(client, auth_headers, oid, root["id"]),
+    )
+    now = datetime.now(timezone.utc)
+    expired = OntologyTrialRun(
+        id="expired-trial-for-retry",
+        ontology_id=oid,
+        version_id=draft["id"],
+        revision=draft["revision"],
+        snapshot_hash=draft["snapshot_hash"],
+        base_release_id=root["id"],
+        claim_token="expired-claim-for-retry",
+        lease_expires_at=now - timedelta(seconds=1),
+        status="running",
+        dataset_versions=[],
+        result_json={},
+        impact_hash="expired-impact",
+        created_by=admin_user.id,
+        created_at=now - timedelta(hours=2),
+    )
+    db.add(expired)
+    db.commit()
+
+    def successful_materialize(_session, candidate, _snapshot):
+        _finish_stub_trial(candidate)
+        return candidate.result_json
+
+    monkeypatch.setattr(
+        version_router, "materialize_trial", successful_materialize)
+    retried = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers,
+        json={},
+    )
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["data"]["status"] == "passed"
+    assert retried.json()["data"]["id"] != expired.id
+
+    db.expire_all()
+    recovered = db.query(OntologyTrialRun).filter_by(id=expired.id).one()
+    assert recovered.status == "stale"
+    assert recovered.claim_token is None
+    assert recovered.lease_expires_at is None
+    assert recovered.result_json["errors"][0]["code"] == "trial_run_timeout"
+
+    deletable = _draft(client, auth_headers, oid, root["id"])
+    abandoned = OntologyTrialRun(
+        id="expired-trial-for-delete",
+        ontology_id=oid,
+        version_id=deletable["id"],
+        revision=deletable["revision"],
+        snapshot_hash=deletable["snapshot_hash"],
+        base_release_id=root["id"],
+        claim_token="expired-claim-for-delete",
+        lease_expires_at=now - timedelta(seconds=1),
+        status="running",
+        dataset_versions=[],
+        result_json={},
+        impact_hash="expired-delete-impact",
+        created_by=admin_user.id,
+        created_at=now - timedelta(hours=2),
+    )
+    db.add(abandoned)
+    db.commit()
+    abandoned_id = abandoned.id
+    deleted = client.delete(
+        f"/api/v2/ontologies/{oid}/versions/{deletable['id']}",
+        headers=auth_headers,
+    )
+    assert deleted.status_code == 200, deleted.text
+    db.expire_all()
+    assert db.query(OntologyVersion).filter_by(
+        id=deletable["id"]).first() is None
+    assert db.query(OntologyTrialRun).filter_by(
+        id=abandoned_id).first() is None
+
+
+def test_late_trial_completion_cannot_revive_a_drifted_draft(
+        client, auth_headers, ontology, admin_user, db, monkeypatch):
+    """Completion re-locks the draft and fences lifecycle/revision/hash drift."""
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    draft = _configure_draft(
+        client, auth_headers, oid,
+        _draft(client, auth_headers, oid, _root(
+            client, auth_headers, oid)["id"]),
+    )
+    actor = SimpleNamespace(id=admin_user.id, username=admin_user.username)
+    db.rollback()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_materialize(_session, candidate, _snapshot):
+        entered.set()
+        assert release.wait(5), "test did not release trial materialization"
+        _finish_stub_trial(candidate)
+        return candidate.result_json
+
+    monkeypatch.setattr(
+        version_router, "materialize_trial", blocked_materialize)
+    factory = sessionmaker(
+        bind=db.get_bind(), autoflush=False, expire_on_commit=True)
+    outcome: dict[str, object] = {}
+
+    def start_trial() -> None:
+        session = factory()
+        try:
+            outcome["response"] = version_router.create_trial_run(
+                oid, draft["id"], {}, session, actor)
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            session.close()
+
+    worker = threading.Thread(target=start_trial, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(5), "trial did not reach materialization"
+        drift_session = factory()
+        try:
+            drifted = drift_session.query(OntologyVersion).filter_by(
+                id=draft["id"]).one()
+            drifted.lifecycle_status = "superseded"
+            drifted.revision = (drifted.revision or 0) + 1
+            changed_snapshot = copy.deepcopy(drifted.snapshot_formal)
+            changed_snapshot["objectTypes"][0]["displayName"] = "迟到修改"
+            drifted.snapshot_formal = changed_snapshot
+            drifted.snapshot_hash = "f" * 64
+            current = drift_session.query(OntologyVersion).filter_by(
+                id=drifted.base_release_id).one()
+            concurrent_release_id = "release-created-during-trial"
+            drift_session.add(OntologyVersion(
+                id=concurrent_release_id,
+                ontology_id=oid,
+                version_number="v-concurrent",
+                version_label="并发发布",
+                base_release_id=concurrent_release_id,
+                node_kind="release",
+                lifecycle_status="released",
+                revision=0,
+                snapshot_formal=copy.deepcopy(current.snapshot_formal),
+                snapshot_hash=current.snapshot_hash,
+                published_at=datetime.now(timezone.utc),
+                created_by=actor.id,
+            ))
+            project = drift_session.query(OntologyProject).filter_by(
+                id=oid).one()
+            project.current_release_id = concurrent_release_id
+            project.version = "v-concurrent"
+            drift_session.commit()
+        finally:
+            drift_session.close()
+    finally:
+        release.set()
+        worker.join(5)
+
+    assert not worker.is_alive()
+    assert "error" not in outcome, repr(outcome.get("error"))
+    late = outcome["response"]["data"]
+    assert late["status"] == "stale"
+    error = late["result"]["errors"][0]
+    assert error["code"] == "trial_completion_conflict"
+    assert {
+        "lifecycle_changed",
+        "revision_changed",
+        "snapshot_hash_changed",
+        "snapshot_content_changed",
+        "current_release_changed",
+    }.issubset(set(error["conflicts"]))
+
+    db.expire_all()
+    stored_draft = db.query(OntologyVersion).filter_by(
+        id=draft["id"]).one()
+    stored_run = db.query(OntologyTrialRun).filter_by(id=late["id"]).one()
+    assert stored_draft.lifecycle_status == "superseded"
+    assert stored_draft.revision == draft["revision"] + 1
+    assert stored_run.status == "stale"
+    assert stored_run.claim_token is None
+    assert db.query(OntologyTrialObject).filter_by(
+        trial_run_id=stored_run.id).count() == 0
+
+
 def test_one_mapped_object_can_enter_trial_with_other_types_unmapped(
         client, auth_headers, ontology, db, monkeypatch):
     oid = ontology["id"]
@@ -2141,6 +2576,9 @@ def test_trial_freezes_computed_projection_and_promotion_activates_exact_values(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
         headers=auth_headers,
     ).json()["data"]
+    assert impact["releaseReadiness"]["ready"] is True
+    assert impact["releaseReadiness"][
+        "runtimeStateConflicts"]["linkConflictCount"] == 0
     promoted = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
         headers=auth_headers,
@@ -2241,6 +2679,9 @@ def test_trial_keeps_same_dataset_mappings_separate_by_endpoint_type(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
         headers=auth_headers,
     ).json()["data"]
+    assert impact["releaseReadiness"]["ready"] is True
+    assert impact["releaseReadiness"][
+        "runtimeStateConflicts"]["linkConflictCount"] == 0
     promoted = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
         headers=auth_headers,
@@ -2373,7 +2814,20 @@ def test_trial_uses_each_object_mapping_primary_key_for_order_supplier_fat_table
             "sourceObjectTypeId": "ot-order",
             "targetObjectTypeId": "ot-supplier",
             "cardinality": "many-to-one",
-            "properties": [],
+            "properties": [
+                {
+                    "id": "prop-link-tags",
+                    "name": "tags",
+                    "displayName": "标签",
+                    "type": "array",
+                },
+                {
+                    "id": "prop-link-details",
+                    "name": "details",
+                    "displayName": "明细",
+                    "type": "object",
+                },
+            ],
         }],
         "actions": [],
         "functions": [],
@@ -2424,7 +2878,10 @@ def test_trial_uses_each_object_mapping_primary_key_for_order_supplier_fat_table
                 "edgeDatasetId": "dataset-order-suppliers",
                 "srcKey": "order_id",
                 "tgtKey": "supplier_id",
-                "fieldMapping": {},
+                "fieldMapping": {
+                    "tags": "tags",
+                    "details": "details",
+                },
             }],
             "sentinels": [],
         },
@@ -2441,6 +2898,7 @@ def test_trial_uses_each_object_mapping_primary_key_for_order_supplier_fat_table
     assert trial["status"] == "passed", trial
     assert trial["result"]["counts"]["objects"] == 8
     assert trial["result"]["counts"]["links"] == 4
+    assert trial["result"]["errors"] == []
 
     trial_objects = db.query(OntologyTrialObject).filter_by(
         trial_run_id=trial["id"]).all()
@@ -2448,8 +2906,53 @@ def test_trial_uses_each_object_mapping_primary_key_for_order_supplier_fat_table
                for item in trial_objects) == 4
     assert sum(item.object_type_id == "ot-supplier"
                for item in trial_objects) == 4
-    assert db.query(OntologyTrialLink).filter_by(
-        trial_run_id=trial["id"]).count() == 4
+    trial_links = db.query(OntologyTrialLink).filter_by(
+        trial_run_id=trial["id"]).order_by(
+        OntologyTrialLink.source_object_id).all()
+    assert len(trial_links) == 4
+    assert all(
+        item.properties["tags"] is None
+        or isinstance(item.properties["tags"], list)
+        for item in trial_links
+    )
+    assert all(isinstance(item.properties["details"], dict)
+               for item in trial_links)
+    assert {item.properties["details"].get("rank") for item in trial_links} == {
+        None, 1, 2, 3,
+    }
+
+    # Promotion must activate the exact isolated values, and the first regular
+    # pipeline refresh must read the same CSV strings through Formal projection
+    # without regressing the released LinkInstance properties back to strings.
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": trial["id"],
+            "impactHash": impact["impactHash"],
+        },
+    )
+    assert promoted.status_code == 201, promoted.text
+    release_id = promoted.json()["data"]["id"]
+
+    MappingService(db).build_all(oid, require_approved=True)
+    db.expire_all()
+    runtime_links = db.query(LinkInstance).filter_by(
+        ontology_id=oid,
+        ontology_release_id=release_id,
+    ).all()
+    assert len(runtime_links) == 4
+    assert all(
+        item.properties["tags"] is None
+        or isinstance(item.properties["tags"], list)
+        for item in runtime_links
+    )
+    assert all(isinstance(item.properties["details"], dict)
+               for item in runtime_links)
 
 
 def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
@@ -2599,6 +3102,15 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
         "blockingCount": 0,
         "errors": [],
         "trialRunId": run["id"],
+        "runtimeStateConflicts": {
+            "totalCount": 0,
+            "propertyConflictCount": 0,
+            "objectConflictCount": 0,
+            "linkConflictCount": 0,
+            "itemLimit": 50,
+            "truncated": False,
+            "items": [],
+        },
         "repairStrategy": None,
         "repairSourceVersionId": draft["id"],
     }
@@ -2678,7 +3190,9 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
         item.ontology_release_id
         for item in db.query(ObjectInstance).filter_by(ontology_id=oid).all()
     } == {release["id"]}
-    assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 4
+    assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 6
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid, kind="object").count() == 2
     assert db.query(OntologyVersion).filter_by(id=root["id"]).one().snapshot_formal is not None
     assert db.query(OntologyVersion).filter_by(id=draft["id"]).one().lifecycle_status == "superseded"
     release_row = db.query(OntologyVersion).filter_by(id=release["id"]).one()
@@ -2747,7 +3261,1669 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
         item.ontology_release_id
         for item in db.query(ObjectInstance).filter_by(ontology_id=oid).all()
     } == {release_v2["id"]}
-    assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 4
+    assert db.query(PropertyFact).filter_by(ontology_id=oid).count() == 6
+
+
+def test_runtime_action_state_conflict_is_previewed_and_promotion_writes_nothing(
+        client, auth_headers, ontology, db, monkeypatch):
+    """A lake candidate must never silently erase the current action result."""
+    from app.ontologies.formal_modeling.facts import record_property_facts
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run_response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert run_response.status_code == 201, run_response.text
+    run = run_response.json()["data"]
+
+    current_object = next(
+        item for item in db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all()
+        if (item.properties or {}).get("id") == "O-1"
+    )
+    old_props = dict(current_object.properties or {})
+    runtime_props = {**old_props, "name": "动作确认的风险订单"}
+    action_facts = record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=old_props,
+        new_props=runtime_props,
+        source="action://mark-risk",
+        caused_by="action-log-runtime-conflict",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    current_object.properties = runtime_props
+    db.commit()
+    assert len(action_facts) == 1
+
+    impact_response = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    )
+    assert impact_response.status_code == 200, impact_response.text
+    impact = impact_response.json()["data"]
+    readiness = impact["releaseReadiness"]
+    assert readiness["ready"] is False
+    assert readiness["blockingCount"] == 1
+    assert readiness["errors"][0]["code"] == "runtime_state_conflict"
+    assert readiness["errors"][0]["conflictCount"] == 1
+    assert readiness["repairStrategy"] is None
+    conflicts = readiness["runtimeStateConflicts"]
+    assert conflicts == {
+        "totalCount": 1,
+        "propertyConflictCount": 1,
+        "objectConflictCount": 0,
+        "linkConflictCount": 0,
+        "itemLimit": 50,
+        "truncated": False,
+        "items": [{
+            "resourceKind": "objectProperty",
+            "objectId": current_object.id,
+            "objectTypeId": "ot-order",
+            "property": "name",
+            "current": "动作确认的风险订单",
+            "currentPresent": True,
+            "candidate": "一号订单",
+            "candidatePresent": True,
+            "candidateObjectPresent": True,
+            "source": "action://mark-risk",
+            "factId": action_facts[0].id,
+        }],
+    }
+
+    before = {
+        "release": db.query(OntologyProject).filter_by(id=oid).one().current_release_id,
+        "versions": db.query(OntologyVersion).filter_by(ontology_id=oid).count(),
+        "facts": db.query(PropertyFact).filter_by(ontology_id=oid).count(),
+        "objects": db.query(ObjectInstance).filter_by(ontology_id=oid).count(),
+        "audit": db.query(AuditLog).filter_by(ontology_id=oid).count(),
+    }
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 409, promoted.text
+    detail = promoted.json()["detail"]
+    assert detail["code"] == "runtime_state_conflict"
+    assert detail["runtimeStateConflicts"] == conflicts
+    assert "动作确认的风险订单" not in detail["message"]
+
+    db.expire_all()
+    assert {
+        "release": db.query(OntologyProject).filter_by(id=oid).one().current_release_id,
+        "versions": db.query(OntologyVersion).filter_by(ontology_id=oid).count(),
+        "facts": db.query(PropertyFact).filter_by(ontology_id=oid).count(),
+        "objects": db.query(ObjectInstance).filter_by(ontology_id=oid).count(),
+        "audit": db.query(AuditLog).filter_by(ontology_id=oid).count(),
+    } == before
+    persisted = db.query(ObjectInstance).filter_by(id=current_object.id).one()
+    assert persisted.properties["name"] == "动作确认的风险订单"
+    assert db.query(OntologyVersion).filter_by(
+        id=draft["id"]).one().lifecycle_status == "trial_ready"
+
+
+def test_runtime_action_committed_after_impact_preview_is_rechecked_on_promote(
+        client, auth_headers, ontology, db, monkeypatch):
+    """The impact response is advisory; promote repeats the gate under locks."""
+    from app.ontologies.formal_modeling.facts import record_property_facts
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    preview = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert preview["releaseReadiness"]["ready"] is True
+    assert preview["releaseReadiness"][
+        "runtimeStateConflicts"]["totalCount"] == 0
+
+    current_object = next(
+        item for item in db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all()
+        if (item.properties or {}).get("id") == "O-2"
+    )
+    old_props = dict(current_object.properties or {})
+    runtime_props = {**old_props, "name": "试跑后动作写入"}
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=old_props,
+        new_props=runtime_props,
+        source="action://after-trial",
+        caused_by="action-log-after-trial",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    current_object.properties = runtime_props
+    db.commit()
+    before_fact_count = db.query(PropertyFact).filter_by(
+        ontology_id=oid).count()
+
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": preview["impactHash"]},
+    )
+    assert promoted.status_code == 409, promoted.text
+    assert promoted.json()["detail"]["code"] == "runtime_state_conflict"
+    conflict = promoted.json()["detail"]["runtimeStateConflicts"]["items"][0]
+    assert conflict["objectId"] == current_object.id
+    assert conflict["current"] == "试跑后动作写入"
+    assert conflict["candidate"] == "二号订单"
+    db.expire_all()
+    assert db.query(OntologyProject).filter_by(
+        id=oid).one().current_release_id == current["id"]
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid).count() == before_fact_count
+    assert db.query(ObjectInstance).filter_by(
+        id=current_object.id).one().properties["name"] == "试跑后动作写入"
+
+
+def test_runtime_link_conflicts_cover_create_delete_and_same_id_drift(
+        client, auth_headers, ontology, db, monkeypatch):
+    """Runtime link existence and identity cannot be erased or resurrected."""
+    from app.ontologies.formal_modeling.facts import record_link_fact
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    objects = sorted(
+        db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all(),
+        key=lambda item: item.id,
+    )
+    source_id, target_id = objects[0].id, objects[1].id
+
+    created_link = LinkInstance(
+        id="runtime-action-created-link",
+        ontology_id=oid,
+        ontology_release_id=current["id"],
+        link_type_id="lt-runtime-created",
+        source_object_id=source_id,
+        target_object_id=target_id,
+        properties={"label": "动作创建"},
+    )
+    drifted_link = LinkInstance(
+        id="runtime-action-drifted-link",
+        ontology_id=oid,
+        ontology_release_id=current["id"],
+        link_type_id="lt-runtime-current",
+        source_object_id=source_id,
+        target_object_id=target_id,
+        properties={
+            "label": "当前动作关系",
+            "api_key": "current-link-secret",
+        },
+    )
+    unknown_link = LinkInstance(
+        id="runtime-unknown-link",
+        ontology_id=oid,
+        ontology_release_id=current["id"],
+        link_type_id="lt-runtime-unknown",
+        source_object_id=source_id,
+        target_object_id=target_id,
+        properties={"label": "无事实来源关系"},
+    )
+    db.add_all([created_link, drifted_link, unknown_link])
+    db.flush()
+    created_fact = record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id=created_link.id,
+        link_type_id=created_link.link_type_id,
+        exists=True,
+        source="action://create-link",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    drifted_fact = record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id=drifted_link.id,
+        link_type_id=drifted_link.link_type_id,
+        exists=True,
+        source="manual",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    deleted_fact = record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id="runtime-action-deleted-link",
+        link_type_id="lt-runtime-deleted",
+        exists=False,
+        source="action://delete-link",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id="lake-mapping-deleted-link",
+        link_type_id="lt-lake-mapping",
+        exists=False,
+        source="link-mapping://lm-orders",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    db.add_all([
+        OntologyTrialLink(
+            trial_run_id=run["id"],
+            link_id="runtime-action-deleted-link",
+            link_type_id="lt-runtime-deleted",
+            source_object_id=source_id,
+            target_object_id=target_id,
+            properties={"label": "试跑将重新创建"},
+        ),
+        OntologyTrialLink(
+            trial_run_id=run["id"],
+            link_id=drifted_link.id,
+            link_type_id="lt-runtime-candidate",
+            source_object_id=target_id,
+            target_object_id=source_id,
+            properties={
+                "label": "候选关系",
+                "api_key": "candidate-link-secret",
+            },
+        ),
+        OntologyTrialLink(
+            trial_run_id=run["id"],
+            link_id="lake-mapping-deleted-link",
+            link_type_id="lt-lake-mapping",
+            source_object_id=source_id,
+            target_object_id=target_id,
+            properties={"label": "正规湖映射恢复"},
+        ),
+    ])
+    run_row = db.query(OntologyTrialRun).filter_by(id=run["id"]).one()
+    result = copy.deepcopy(run_row.result_json or {})
+    result["counts"] = {**dict(result.get("counts") or {}), "links": 3}
+    run_row.result_json = result
+    db.commit()
+
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    readiness = impact["releaseReadiness"]
+    assert readiness["ready"] is False
+    report = readiness["runtimeStateConflicts"]
+    assert report["totalCount"] == 4
+    assert report["propertyConflictCount"] == 0
+    assert report["linkConflictCount"] == 4
+    items = {item["linkId"]: item for item in report["items"]}
+    assert set(items) == {
+        created_link.id,
+        "runtime-action-deleted-link",
+        drifted_link.id,
+        unknown_link.id,
+    }
+    assert "lake-mapping-deleted-link" not in items
+    assert items[created_link.id]["current"]["exists"] is True
+    assert items[created_link.id]["candidate"] == {"exists": False}
+    assert items[created_link.id]["source"] == "action://create-link"
+    assert items[created_link.id]["factId"] == created_fact.id
+    assert items["runtime-action-deleted-link"]["current"] == {
+        "exists": False,
+    }
+    assert items["runtime-action-deleted-link"]["candidate"][
+        "exists"] is True
+    assert items["runtime-action-deleted-link"][
+        "source"] == "action://delete-link"
+    assert items["runtime-action-deleted-link"]["factId"] == deleted_fact.id
+    drift = items[drifted_link.id]
+    assert drift["current"]["linkTypeId"] == "lt-runtime-current"
+    assert drift["candidate"]["linkTypeId"] == "lt-runtime-candidate"
+    assert drift["current"]["sourceObjectId"] == source_id
+    assert drift["candidate"]["sourceObjectId"] == target_id
+    assert drift["current"]["properties"]["api_key"] == "••••••（已隐藏）"
+    assert drift["candidate"]["properties"]["api_key"] == "••••••（已隐藏）"
+    assert "current-link-secret" not in str(report)
+    assert "candidate-link-secret" not in str(report)
+    assert drift["factId"] == drifted_fact.id
+    assert items[unknown_link.id]["source"] == "unknown"
+    assert items[unknown_link.id]["factId"] is None
+
+    before = {
+        "release": db.query(OntologyProject).filter_by(id=oid).one().current_release_id,
+        "facts": db.query(PropertyFact).filter_by(ontology_id=oid).count(),
+        "links": db.query(LinkInstance).filter_by(ontology_id=oid).count(),
+        "versions": db.query(OntologyVersion).filter_by(ontology_id=oid).count(),
+    }
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 409, promoted.text
+    assert promoted.json()["detail"]["code"] == "runtime_state_conflict"
+    assert promoted.json()["detail"][
+        "runtimeStateConflicts"]["linkConflictCount"] == 4
+    assert "current-link-secret" not in promoted.text
+    assert "candidate-link-secret" not in promoted.text
+    db.expire_all()
+    assert {
+        "release": db.query(OntologyProject).filter_by(id=oid).one().current_release_id,
+        "facts": db.query(PropertyFact).filter_by(ontology_id=oid).count(),
+        "links": db.query(LinkInstance).filter_by(ontology_id=oid).count(),
+        "versions": db.query(OntologyVersion).filter_by(ontology_id=oid).count(),
+    } == before
+
+
+def test_normal_promotion_adopts_stable_link_without_relation_lineage(
+        client, auth_headers, ontology, db, monkeypatch):
+    """An explicit full promotion resets even a legacy link without Relation."""
+    from app.ontologies.formal_modeling.facts import record_link_fact
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    release_v1 = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    stable_link_type_id = "lt-legacy-stable"
+    release_row = db.query(OntologyVersion).filter_by(
+        id=release_v1["id"]).one()
+    release_snapshot = copy.deepcopy(release_row.snapshot_formal or {})
+    release_snapshot["linkTypes"] = [{
+        "id": stable_link_type_id,
+        "name": "legacy_stable",
+        "displayName": "无 Relation 血缘稳定关系",
+        "sourceObjectTypeId": "ot-order",
+        "targetObjectTypeId": "ot-order",
+        "cardinality": "many-to-many",
+        "properties": [],
+    }]
+    release_row.snapshot_formal = release_snapshot
+    release_row.snapshot_hash = snapshot_hash(release_snapshot)
+    db.add(LinkType(
+        id=stable_link_type_id,
+        ontology_id=oid,
+        name="legacy_stable",
+        display_name="无 Relation 血缘稳定关系",
+        source_object_type_id="ot-order",
+        target_object_type_id="ot-order",
+        cardinality="many-to-many",
+        properties=[],
+    ))
+    original_release_mapping_contract = (
+        version_router.validate_release_mapping_contract)
+    monkeypatch.setattr(
+        version_router,
+        "validate_release_mapping_contract",
+        lambda snapshot: [
+            error
+            for error in original_release_mapping_contract(snapshot)
+            if error.get("code") != "link_type_mapping_required"
+        ],
+    )
+    db.commit()
+    objects = sorted(
+        db.query(ObjectInstance).filter_by(
+            ontology_id=oid,
+            ontology_release_id=release_v1["id"],
+        ).all(),
+        key=lambda item: item.id,
+    )
+    stable_link_id = "stable-link-without-relation"
+    source_object_id = objects[0].id
+    target_object_id = objects[1].id
+    stable_link = LinkInstance(
+        id=stable_link_id,
+        ontology_id=oid,
+        ontology_release_id=release_v1["id"],
+        link_type_id=stable_link_type_id,
+        source_object_id=source_object_id,
+        target_object_id=target_object_id,
+        properties={"state": "adopted"},
+        source_relation_id=None,
+    )
+    db.add(stable_link)
+    action_fact = record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id=stable_link_id,
+        link_type_id=stable_link_type_id,
+        exists=True,
+        source="action://create-stable-link",
+        ontology_version=release_v1["version_number"],
+        ontology_release_id=release_v1["id"],
+    )
+    db.commit()
+
+    adopting_draft = _draft(client, auth_headers, oid, release_v1["id"])
+    adopting_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{adopting_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    db.add(OntologyTrialLink(
+        trial_run_id=adopting_run["id"],
+        link_id=stable_link_id,
+        link_type_id=stable_link_type_id,
+        source_object_id=source_object_id,
+        target_object_id=target_object_id,
+        properties={"state": "adopted"},
+        source_relation_id=None,
+    ))
+    run_row = db.query(OntologyTrialRun).filter_by(
+        id=adopting_run["id"]).one()
+    result = copy.deepcopy(run_row.result_json or {})
+    result["counts"] = {
+        **dict(result.get("counts") or {}),
+        "links": 1,
+    }
+    run_row.result_json = result
+    db.commit()
+
+    adopting_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{adopting_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert adopting_impact["releaseReadiness"]["ready"] is True
+    promoted_response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{adopting_draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": adopting_run["id"],
+            "impactHash": adopting_impact["impactHash"],
+        },
+    )
+    assert promoted_response.status_code == 201, promoted_response.text
+    release_v2 = promoted_response.json()["data"]
+    db.expire_all()
+    promoted_link = db.query(LinkInstance).filter_by(
+        id=stable_link_id,
+        ontology_release_id=release_v2["id"],
+    ).one()
+    assert promoted_link.source_relation_id is None
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid,
+        ontology_release_id=release_v2["id"],
+        instance_id=stable_link_id,
+        kind="link",
+    ).count() == 0
+    assert action_fact is not None
+
+    # The next candidate may change/delete the now-explicit baseline.  The
+    # ancestor action source no longer blocks it, and lack of Relation lineage
+    # is relevant only to rollback's implicit inheritance branch.
+    next_draft = _draft(client, auth_headers, oid, release_v2["id"])
+    next_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{next_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert next_run.status_code == 201, next_run.text
+    next_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{next_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert next_impact["releaseReadiness"]["ready"] is True
+    assert next_impact["releaseReadiness"][
+        "runtimeStateConflicts"]["linkConflictCount"] == 0
+
+    rollback_response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{release_v1['id']}/rollback",
+        headers=auth_headers,
+    )
+    assert rollback_response.status_code == 200, rollback_response.text
+    activation = rollback_response.json()["data"]
+    db.expire_all()
+    rollback_link = db.query(LinkInstance).filter_by(
+        id=stable_link_id,
+        ontology_release_id=activation["id"],
+    ).one()
+    assert rollback_link.source_relation_id is None
+    rollback_draft = _draft(client, auth_headers, oid, activation["id"])
+    rollback_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{rollback_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert rollback_run.status_code == 201, rollback_run.text
+    rollback_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{rollback_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    rollback_report = rollback_impact["releaseReadiness"][
+        "runtimeStateConflicts"]
+    assert rollback_report["linkConflictCount"] == 1
+    rollback_conflict = next(
+        item for item in rollback_report["items"]
+        if item["resourceKind"] == "link"
+    )
+    assert rollback_conflict["linkId"] == stable_link_id
+    assert rollback_conflict["source"] == "unknown"
+    assert rollback_conflict["factId"] is None
+
+
+def test_runtime_object_tombstone_blocks_candidate_revival(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import record_object_tombstone
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    deleted = next(
+        item for item in db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all()
+        if (item.properties or {}).get("id") == "O-1"
+    )
+    tombstone = record_object_tombstone(
+        db,
+        ontology_id=oid,
+        instance_id=deleted.id,
+        object_type_id=deleted.object_type_id,
+        source="manual",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    db.delete(deleted)
+    db.commit()
+
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    report = impact["releaseReadiness"]["runtimeStateConflicts"]
+    assert report["objectConflictCount"] == 1
+    conflict = next(
+        item for item in report["items"]
+        if item["resourceKind"] == "object"
+    )
+    assert conflict["objectId"] == deleted.id
+    assert conflict["current"] == {"exists": False}
+    assert conflict["candidate"]["exists"] is True
+    assert conflict["source"] == "manual"
+    assert conflict["factId"] == tombstone.id
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 409, promoted.text
+    assert promoted.json()["detail"]["code"] == "runtime_state_conflict"
+
+
+def test_lake_mapping_tombstone_allows_candidate_object_revival(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import record_object_tombstone
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    deleted = next(
+        item for item in db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all()
+        if (item.properties or {}).get("id") == "O-1"
+    )
+    record_object_tombstone(
+        db,
+        ontology_id=oid,
+        instance_id=deleted.id,
+        object_type_id=deleted.object_type_id,
+        source="mapping://mapping-order",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    db.delete(deleted)
+    db.commit()
+
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert impact["releaseReadiness"]["ready"] is True
+    assert impact["releaseReadiness"][
+        "runtimeStateConflicts"]["objectConflictCount"] == 0
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 201, promoted.text
+    db.expire_all()
+    assert db.query(ObjectInstance).filter_by(
+        ontology_id=oid,
+        ontology_release_id=promoted.json()["data"]["id"],
+    ).count() == 2
+
+
+def test_property_removal_fact_guards_revival_without_blocking_new_or_lake_fields(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import record_property_facts
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    current_object = next(
+        item for item in db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all()
+        if (item.properties or {}).get("id") == "O-1"
+    )
+    trial_object = db.query(OntologyTrialObject).filter_by(
+        trial_run_id=run["id"], object_id=current_object.id,
+    ).one()
+    trial_object.properties = {
+        **dict(trial_object.properties or {}),
+        "action_removed": "候选重加",
+        "lake_removed": "湖端重加",
+        "legacy_ambiguous": "旧 null 事实不能证明删除",
+        "genuinely_new": "正常新增",
+    }
+    baseline = dict(current_object.properties or {})
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=baseline,
+        new_props={**baseline, "action_removed": "动作临时值"},
+        source="action://temporary",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    action_removal = record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props={**baseline, "action_removed": "动作临时值"},
+        new_props=baseline,
+        source="action://remove?api_key=raw-source-secret",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=baseline,
+        new_props={**baseline, "lake_removed": None},
+        source="mapping://mapping-order",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    lake_removal = record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props={**baseline, "lake_removed": None},
+        new_props=baseline,
+        source="mapping://mapping-order",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    db.add(PropertyFact(
+        ontology_id=oid,
+        ontology_release_id=current["id"],
+        ontology_version=current["version_number"],
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        property_name="legacy_ambiguous",
+        value={"v": None},
+        kind="property",
+        source="mapping://legacy-null",
+        seq=1,
+    ))
+    db.commit()
+
+    assert len(action_removal) == 1
+    assert action_removal[0].value == {"v": None, "present": False}
+    assert len(lake_removal) == 1
+    assert lake_removal[0].value == {"v": None, "present": False}
+    impact_response = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    )
+    assert impact_response.status_code == 200, impact_response.text
+    assert "raw-source-secret" not in impact_response.text
+    report = impact_response.json()["data"]["releaseReadiness"][
+        "runtimeStateConflicts"]
+    property_conflicts = [
+        item for item in report["items"]
+        if item["resourceKind"] == "objectProperty"
+    ]
+    assert [item["property"] for item in property_conflicts] == [
+        "action_removed",
+        "legacy_ambiguous",
+    ]
+    conflict = property_conflicts[0]
+    assert conflict["current"] is None
+    assert conflict["currentPresent"] is False
+    assert conflict["candidate"] == "候选重加"
+    assert conflict["candidatePresent"] is True
+    assert conflict["source"] == "action://remove?api_key=[凭据已隐藏]"
+    assert conflict["factId"] == action_removal[0].id
+    legacy_conflict = property_conflicts[1]
+    assert legacy_conflict["currentPresent"] is False
+    assert legacy_conflict["source"] == "unknown"
+    assert legacy_conflict["factId"] is None
+
+
+def test_object_existence_fact_chain_survives_lake_reintroduction(db, ontology):
+    from app.ontologies.formal_modeling.facts import (
+        record_object_presence,
+        record_object_tombstone,
+    )
+
+    oid = ontology["id"]
+    object_id = "lake-object-reintroduced"
+    created = record_object_presence(
+        db, ontology_id=oid, instance_id=object_id,
+        object_type_id="ot-order", source="mapping://mapping-order")
+    deleted = record_object_tombstone(
+        db, ontology_id=oid, instance_id=object_id,
+        object_type_id="ot-order", source="mapping://mapping-order")
+    reintroduced = record_object_presence(
+        db, ontology_id=oid, instance_id=object_id,
+        object_type_id="ot-order", source="mapping://mapping-order")
+    deleted_again = record_object_tombstone(
+        db, ontology_id=oid, instance_id=object_id,
+        object_type_id="ot-order", source="mapping://mapping-order")
+    db.commit()
+
+    assert [fact.value for fact in (
+        created, deleted, reintroduced, deleted_again,
+    )] == [
+        {"v": True}, {"v": False}, {"v": True}, {"v": False},
+    ]
+    assert [fact.seq for fact in (
+        created, deleted, reintroduced, deleted_again,
+    )] == [1, 2, 3, 4]
+    assert deleted.supersedes_id == created.id
+    assert reintroduced.supersedes_id == deleted.id
+    assert deleted_again.supersedes_id == reintroduced.id
+
+
+def test_promotion_does_not_backfill_presence_for_legacy_existing_objects(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    release_v1 = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    # Simulate an installation upgraded from before object-presence facts.
+    db.query(PropertyFact).filter_by(
+        ontology_id=oid, kind="object",
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    draft = _draft(client, auth_headers, oid, release_v1["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 201, promoted.text
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid, kind="object",
+    ).count() == 0
+
+
+def test_zero_property_runtime_object_cannot_be_silently_deleted(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import record_object_presence
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    runtime_object = ObjectInstance(
+        id="runtime-empty-object",
+        ontology_id=oid,
+        ontology_release_id=current["id"],
+        object_type_id="ot-order",
+        properties={},
+        computed={},
+        source="action",
+    )
+    db.add(runtime_object)
+    presence = record_object_presence(
+        db,
+        ontology_id=oid,
+        instance_id=runtime_object.id,
+        object_type_id=runtime_object.object_type_id,
+        source="action://create-empty",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    db.commit()
+
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    report = impact["releaseReadiness"]["runtimeStateConflicts"]
+    object_conflict = next(
+        item for item in report["items"]
+        if item["resourceKind"] == "object"
+        and item["objectId"] == runtime_object.id
+    )
+    assert object_conflict["current"]["exists"] is True
+    assert object_conflict["candidate"] == {"exists": False}
+    assert object_conflict["source"] == "action://create-empty"
+    assert object_conflict["factId"] == presence.id
+
+
+def test_runtime_fact_query_does_not_expand_coordinate_cross_product(
+        db, ontology):
+    oid = ontology["id"]
+    release_id = db.query(OntologyProject).filter_by(id=oid).one().current_release_id
+    recorded_at = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    facts = [
+        PropertyFact(
+            id="fact-requested-coordinate-old",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-A",
+            object_type_id="ot-order",
+            property_name="field-x",
+            value={"v": "requested", "present": True},
+            kind="property",
+            source="pipeline",
+            seq=1,
+            recorded_at=recorded_at,
+        ),
+        PropertyFact(
+            id="fact-requested-coordinate-a",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-A",
+            object_type_id="ot-order",
+            property_name="field-x",
+            value={"v": "same-time-lower-id", "present": True},
+            kind="property",
+            source="pipeline",
+            seq=2,
+            recorded_at=recorded_at,
+        ),
+        PropertyFact(
+            id="fact-requested-coordinate-z",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-A",
+            object_type_id="ot-order",
+            property_name="field-x",
+            value={"v": "canonical-latest", "present": True},
+            kind="property",
+            source="pipeline",
+            seq=2,
+            recorded_at=recorded_at,
+        ),
+        PropertyFact(
+            id="fact-cross-coordinate-a",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-A",
+            object_type_id="ot-order",
+            property_name="field-y",
+            value={"v": "must-not-load", "present": True},
+            kind="property",
+            source="pipeline",
+            seq=1,
+            recorded_at=recorded_at,
+        ),
+        PropertyFact(
+            id="fact-cross-coordinate-b",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-B",
+            object_type_id="ot-order",
+            property_name="field-x",
+            value={"v": "must-not-load", "present": True},
+            kind="property",
+            source="pipeline",
+            seq=1,
+            recorded_at=recorded_at,
+        ),
+        PropertyFact(
+            id="fact-object-exists-old",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-exists-window",
+            object_type_id="ot-order",
+            property_name="exists",
+            value={"v": False},
+            kind="object",
+            source="pipeline",
+            seq=1,
+            recorded_at=recorded_at,
+        ),
+        PropertyFact(
+            id="fact-object-exists-z",
+            ontology_id=oid,
+            ontology_release_id=release_id,
+            instance_id="object-exists-window",
+            object_type_id="ot-order",
+            property_name="exists",
+            value={"v": True},
+            kind="object",
+            source="pipeline",
+            seq=2,
+            recorded_at=recorded_at,
+        ),
+    ]
+    db.add_all(facts)
+    db.commit()
+
+    selected = version_router._runtime_coordinate_facts(
+        db,
+        ontology_id=oid,
+        release_ids=[release_id],
+        kind="property",
+        coordinates=[("object-A", "field-x"), ("object-B", "field-y")],
+    )
+    assert [fact.id for fact in selected] == [
+        "fact-requested-coordinate-z",
+    ]
+    existence = version_router._runtime_existence_facts(
+        db,
+        ontology_id=oid,
+        release_ids=[release_id],
+        kind="object",
+        instance_ids=["object-exists-window"],
+    )
+    assert [fact.id for fact in existence] == ["fact-object-exists-z"]
+
+
+def test_runtime_lake_source_allowlist_is_explicit():
+    assert version_router._is_lake_projection_fact_source("pipeline")
+    assert version_router._is_lake_projection_fact_source(
+        "pipeline-reconcile")
+    assert version_router._is_lake_projection_fact_source(
+        "pipeline://historical")
+    assert version_router._is_lake_projection_fact_source(
+        "ontology-release://release-id")
+    assert version_router._is_lake_projection_fact_source(
+        "mapping://mapping-id")
+    assert version_router._is_lake_projection_fact_source(
+        "link-mapping://mapping-id")
+    assert not version_router._is_lake_projection_fact_source(
+        "pipeline-custom")
+
+
+def test_runtime_property_conflict_values_are_redacted_by_field_name(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import record_property_facts
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    current_object = db.query(ObjectInstance).filter_by(
+        ontology_id=oid, ontology_release_id=current["id"]).first()
+    old_props = dict(current_object.properties or {})
+    runtime_props = {
+        **old_props,
+        "password": "runtime-password-plain",
+        "api_key": "runtime-api-key-plain",
+        "profile": {
+            "credential": "nested-credential-plain",
+            "note": "token=inline-secret-plain",
+        },
+    }
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=old_props,
+        new_props=runtime_props,
+        source="manual",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    current_object.properties = {
+        **runtime_props,
+        "legacy_note": "无事实来源但仍须阻断",
+    }
+    current_object.source = "manual"
+    db.commit()
+
+    response = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    serialized = response.text
+    assert "runtime-password-plain" not in serialized
+    assert "runtime-api-key-plain" not in serialized
+    assert "nested-credential-plain" not in serialized
+    assert "inline-secret-plain" not in serialized
+    conflicts = response.json()["data"]["releaseReadiness"][
+        "runtimeStateConflicts"]["items"]
+    by_property = {
+        item["property"]: item for item in conflicts
+        if item["resourceKind"] == "objectProperty"
+    }
+    assert by_property["password"]["current"] == "••••••（已隐藏）"
+    assert by_property["api_key"]["current"] == "••••••（已隐藏）"
+    assert by_property["profile"]["current"]["credential"] == "••••••（已隐藏）"
+    assert by_property["profile"]["current"]["note"] == "token=[凭据已隐藏]"
+    assert by_property["legacy_note"]["source"] == "unknown"
+    assert by_property["legacy_note"]["factId"] is None
+
+
+def test_collector_fetches_before_runtime_write_lock_and_revalidates_inside(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.data_channel.connections import collectors_router
+
+    oid = ontology["id"]
+    db.add(ObjectType(
+        id="ot-collector-lock",
+        ontology_id=oid,
+        name="CollectorLock",
+        display_name="采集锁验证",
+        properties=[],
+        interfaces=[],
+    ))
+    db.commit()
+    events: list[str] = []
+    held = {"value": False}
+
+    def fetch_items(**_kwargs):
+        assert held["value"] is False
+        events.append("fetch")
+        return {"items": []}
+
+    @contextmanager
+    def runtime_lock(_db, locked_ontology_id):
+        assert locked_ontology_id == oid
+        assert events == ["fetch"]
+        held["value"] = True
+        events.append("lock-enter")
+        try:
+            yield
+        finally:
+            events.append("lock-exit")
+            held["value"] = False
+
+    monkeypatch.setattr(collectors_router.aihot, "fetch_items", fetch_items)
+    monkeypatch.setattr(
+        collectors_router, "_ontology_build_lock", runtime_lock)
+    response = client.post(
+        f"/api/v2/collectors/aihot/collect/{oid}",
+        headers=auth_headers,
+        json={
+            "object_type_id": "ot-collector-lock",
+            "mode": "selected",
+            "take": 1,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["collected"] == 0
+    assert events == ["fetch", "lock-enter", "lock-exit"]
+
+
+def test_collector_write_requires_ontology_owner_or_admin(
+        client, ontology, db, editor_user, monkeypatch):
+    """Authentication alone must not authorize writes into another ontology."""
+    from app.data_channel.connections import collectors_router
+
+    oid = ontology["id"]
+    editor_login = client.post(
+        "/api/v1/auth/login",
+        json={"username": editor_user.username, "password": "editor123"},
+    )
+    assert editor_login.status_code == 200, editor_login.text
+    editor_headers = {
+        "Authorization": (
+            f"Bearer {editor_login.json()['data']['access_token']}"
+        ),
+    }
+    fetch_calls: list[str] = []
+
+    def fetch_items(**_kwargs):
+        fetch_calls.append("fetch")
+        return {"items": []}
+
+    monkeypatch.setattr(collectors_router.aihot, "fetch_items", fetch_items)
+    payload = {
+        "object_type_id": "ot-collector-owner",
+        "mode": "selected",
+        "take": 1,
+    }
+
+    denied = client.post(
+        f"/api/v2/collectors/aihot/collect/{oid}",
+        headers=editor_headers,
+        json=payload,
+    )
+    assert denied.status_code == 403, denied.text
+    assert fetch_calls == []
+
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    project.created_by = editor_user.id
+    db.add(ObjectType(
+        id="ot-collector-owner",
+        ontology_id=oid,
+        name="CollectorOwner",
+        display_name="采集权限验证",
+        properties=[],
+        interfaces=[],
+    ))
+    db.commit()
+
+    allowed = client.post(
+        f"/api/v2/collectors/aihot/collect/{oid}",
+        headers=editor_headers,
+        json=payload,
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["data"]["collected"] == 0
+    assert fetch_calls == ["fetch"]
+
+
+def test_pipeline_fact_difference_does_not_block_promotion(
+        client, auth_headers, ontology, db, monkeypatch):
+    """Pure lake/projection drift stays a normal release replacement."""
+    from app.ontologies.formal_modeling.facts import record_property_facts
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    current = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    draft = _draft(client, auth_headers, oid, current["id"])
+    run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+
+    current_object = next(
+        item for item in db.query(ObjectInstance).filter_by(
+            ontology_id=oid, ontology_release_id=current["id"]).all()
+        if (item.properties or {}).get("id") == "O-1"
+    )
+    old_props = dict(current_object.properties or {})
+    action_props = {**old_props, "name": "已被后续流水线取代的动作值"}
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=old_props,
+        new_props=action_props,
+        source="action://superseded-before-pipeline",
+        caused_by="action-log-superseded",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    current_object.properties = action_props
+    pipeline_props = {**old_props, "name": "流水线刷新中的值"}
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=current_object.id,
+        object_type_id=current_object.object_type_id,
+        old_props=action_props,
+        new_props=pipeline_props,
+        source="pipeline",
+        ontology_version=current["version_number"],
+        ontology_release_id=current["id"],
+    )
+    current_object.properties = pipeline_props
+    db.commit()
+
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert impact["releaseReadiness"]["ready"] is True
+    assert impact["releaseReadiness"][
+        "runtimeStateConflicts"]["totalCount"] == 0
+    promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/promote",
+        headers=auth_headers,
+        json={"trialRunId": run["id"], "impactHash": impact["impactHash"]},
+    )
+    assert promoted.status_code == 201, promoted.text
+    db.expire_all()
+    assert db.query(OntologyProject).filter_by(
+        id=oid).one().current_release_id == promoted.json()["data"]["id"]
+    assert db.query(ObjectInstance).filter_by(
+        id=current_object.id).one().properties["name"] == "一号订单"
+
+
+def test_inherited_lake_facts_allow_change_and_delete_after_noop_release(
+        client, auth_headers, ontology, db, monkeypatch):
+    """Unchanged properties inherit authoritative lake provenance by ancestry."""
+    service, _ = _dataset(db, monkeypatch)
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+    release_v1 = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+
+    noop_draft = _draft(client, auth_headers, oid, release_v1["id"])
+    noop_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    noop_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    noop_promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": noop_run["id"],
+            "impactHash": noop_impact["impactHash"],
+        },
+    )
+    assert noop_promoted.status_code == 201, noop_promoted.text
+    release_v2 = noop_promoted.json()["data"]
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid,
+        ontology_release_id=release_v2["id"],
+    ).count() == 0
+    second_noop_draft = _draft(
+        client, auth_headers, oid, release_v2["id"])
+    second_noop_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{second_noop_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    second_noop_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{second_noop_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    second_noop_promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{second_noop_draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": second_noop_run["id"],
+            "impactHash": second_noop_impact["impactHash"],
+        },
+    )
+    assert second_noop_promoted.status_code == 201, (
+        second_noop_promoted.text)
+    release_v3 = second_noop_promoted.json()["data"]
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid,
+        ontology_release_id=release_v3["id"],
+    ).count() == 0
+
+    # A normal approved lake snapshot changes O-1 and removes O-2.  The latest
+    # authoritative facts live before two consecutive no-op activations.
+    service.create_version(
+        "dataset-orders",
+        _csv([{"id": "O-1", "name": "一号订单（湖端更新）"}]),
+        rowcount=1,
+    )
+    changed_draft = _draft(client, auth_headers, oid, release_v3["id"])
+    changed_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{changed_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert changed_run.status_code == 201, changed_run.text
+    changed_run_data = changed_run.json()["data"]
+    changed_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{changed_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    readiness = changed_impact["releaseReadiness"]
+    assert readiness["ready"] is True
+    assert readiness["runtimeStateConflicts"]["totalCount"] == 0
+    changed_promoted = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{changed_draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": changed_run_data["id"],
+            "impactHash": changed_impact["impactHash"],
+        },
+    )
+    assert changed_promoted.status_code == 201, changed_promoted.text
+    db.expire_all()
+    current_objects = db.query(ObjectInstance).filter_by(
+        ontology_id=oid,
+        ontology_release_id=changed_promoted.json()["data"]["id"],
+    ).all()
+    assert [item.properties for item in current_objects] == [{
+        "id": "O-1",
+        "name": "一号订单（湖端更新）",
+    }]
+
+
+def test_rollback_activation_inherits_post_baseline_action_update_and_delete(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import (
+        record_link_fact,
+        record_object_tombstone,
+        record_property_facts,
+    )
+
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    release_v1 = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    noop_draft = _draft(client, auth_headers, oid, release_v1["id"])
+    noop_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    noop_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    release_v2 = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": noop_run["id"],
+            "impactHash": noop_impact["impactHash"],
+        },
+    ).json()["data"]
+    objects = db.query(ObjectInstance).filter_by(
+        ontology_id=oid, ontology_release_id=release_v2["id"],
+    ).all()
+    changed = next(
+        item for item in objects if (item.properties or {}).get("id") == "O-1")
+    deleted = next(
+        item for item in objects if (item.properties or {}).get("id") == "O-2")
+    changed_baseline = dict(changed.properties or {})
+    runtime_props = {
+        **changed_baseline,
+        "name": "回滚后仍必须保留的动作值",
+    }
+    action_fact = record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=changed.id,
+        object_type_id=changed.object_type_id,
+        old_props=changed_baseline,
+        new_props=runtime_props,
+        source="action://after-v2",
+        ontology_version=release_v2["version_number"],
+        ontology_release_id=release_v2["id"],
+    )[0]
+    changed.properties = runtime_props
+    tombstone = record_object_tombstone(
+        db,
+        ontology_id=oid,
+        instance_id=deleted.id,
+        object_type_id=deleted.object_type_id,
+        source="action://delete-after-v2",
+        ontology_version=release_v2["version_number"],
+        ontology_release_id=release_v2["id"],
+    )
+    link_tombstone = record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id="link-deleted-after-v2",
+        link_type_id="lt-runtime",
+        exists=False,
+        source="action://delete-link-after-v2",
+        ontology_version=release_v2["version_number"],
+        ontology_release_id=release_v2["id"],
+    )
+    db.delete(deleted)
+    db.commit()
+
+    rollback = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{release_v1['id']}/rollback",
+        headers=auth_headers,
+    )
+    assert rollback.status_code == 200, rollback.text
+    activation = rollback.json()["data"]
+    recovery_draft = _draft(client, auth_headers, oid, activation["id"])
+    recovery_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{recovery_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    db.add(OntologyTrialLink(
+        trial_run_id=recovery_run["id"],
+        link_id="link-deleted-after-v2",
+        link_type_id="lt-runtime",
+        source_object_id=changed.id,
+        target_object_id=deleted.id,
+        properties={},
+    ))
+    recovery_run_row = db.query(OntologyTrialRun).filter_by(
+        id=recovery_run["id"]).one()
+    recovery_result = copy.deepcopy(recovery_run_row.result_json or {})
+    recovery_result["counts"] = {
+        **dict(recovery_result.get("counts") or {}),
+        "links": 1,
+    }
+    recovery_run_row.result_json = recovery_result
+    db.commit()
+    impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{recovery_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    report = impact["releaseReadiness"]["runtimeStateConflicts"]
+    assert report["propertyConflictCount"] == 1
+    assert report["objectConflictCount"] == 1
+    assert report["linkConflictCount"] == 1
+    by_kind = {
+        (item["resourceKind"], item.get("objectId")): item
+        for item in report["items"]
+    }
+    property_conflict = by_kind[("objectProperty", changed.id)]
+    assert property_conflict["source"] == "action://after-v2"
+    assert property_conflict["factId"] == action_fact.id
+    object_conflict = by_kind[("object", deleted.id)]
+    assert object_conflict["source"] == "action://delete-after-v2"
+    assert object_conflict["factId"] == tombstone.id
+    link_conflict = next(
+        item for item in report["items"]
+        if item["resourceKind"] == "link"
+    )
+    assert link_conflict["source"] == "action://delete-link-after-v2"
+    assert link_conflict["factId"] == link_tombstone.id
+
+
+def test_promoted_baseline_prevents_old_action_provenance_crossing_rollback(
+        client, auth_headers, ontology, db, monkeypatch):
+    from app.ontologies.formal_modeling.facts import (
+        record_link_fact,
+        record_object_tombstone,
+        record_property_facts,
+    )
+
+    oid = ontology["id"]
+    service, _ = _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    release_v1 = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"])
+    objects = db.query(ObjectInstance).filter_by(
+        ontology_id=oid, ontology_release_id=release_v1["id"],
+    ).all()
+    changed = next(
+        item for item in objects if (item.properties or {}).get("id") == "O-1")
+    deleted = next(
+        item for item in objects if (item.properties or {}).get("id") == "O-2")
+    baseline = dict(changed.properties or {})
+    adopted = {**baseline, "name": "R2 明确采纳的旧动作值"}
+    record_property_facts(
+        db,
+        ontology_id=oid,
+        instance_id=changed.id,
+        object_type_id=changed.object_type_id,
+        old_props=baseline,
+        new_props=adopted,
+        source="action://before-r2-baseline",
+        ontology_version=release_v1["version_number"],
+        ontology_release_id=release_v1["id"],
+    )
+    changed.properties = adopted
+    record_object_tombstone(
+        db,
+        ontology_id=oid,
+        instance_id=deleted.id,
+        object_type_id=deleted.object_type_id,
+        source="action://delete-before-r2-baseline",
+        ontology_version=release_v1["version_number"],
+        ontology_release_id=release_v1["id"],
+    )
+    record_link_fact(
+        db,
+        ontology_id=oid,
+        link_instance_id="link-deleted-before-r2-baseline",
+        link_type_id="lt-runtime",
+        exists=False,
+        source="action://delete-link-before-r2-baseline",
+        ontology_version=release_v1["version_number"],
+        ontology_release_id=release_v1["id"],
+    )
+    db.delete(deleted)
+    db.commit()
+
+    # The isolated trial exactly adopts both runtime outcomes, making them the
+    # new release baseline without appending duplicate facts on R2.
+    service.create_version(
+        "dataset-orders",
+        _csv([{"id": "O-1", "name": adopted["name"]}]),
+        rowcount=1,
+    )
+    adopting_draft = _draft(client, auth_headers, oid, release_v1["id"])
+    adopting_run = client.post(
+        f"/api/v2/ontologies/{oid}/versions/"
+        f"{adopting_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    ).json()["data"]
+    adopting_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{adopting_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert adopting_impact["releaseReadiness"]["ready"] is True
+    release_v2_response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{adopting_draft['id']}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": adopting_run["id"],
+            "impactHash": adopting_impact["impactHash"],
+        },
+    )
+    assert release_v2_response.status_code == 201, release_v2_response.text
+    release_v2 = release_v2_response.json()["data"]
+    assert db.query(PropertyFact).filter_by(
+        ontology_id=oid,
+        ontology_release_id=release_v2["id"],
+    ).count() == 0
+
+    rollback = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{release_v1['id']}/rollback",
+        headers=auth_headers,
+    )
+    assert rollback.status_code == 200, rollback.text
+    activation = rollback.json()["data"]
+    service.create_version(
+        "dataset-orders",
+        _csv([
+            {"id": "O-1", "name": "边界后的湖端新值"},
+            {"id": "O-2", "name": "二号订单恢复"},
+        ]),
+        rowcount=2,
+    )
+    future_draft = _draft(client, auth_headers, oid, activation["id"])
+    future_run_response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{future_draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert future_run_response.status_code == 201, future_run_response.text
+    future_run = future_run_response.json()["data"]
+    db.add(OntologyTrialLink(
+        trial_run_id=future_run["id"],
+        link_id="link-deleted-before-r2-baseline",
+        link_type_id="lt-runtime",
+        source_object_id=changed.id,
+        target_object_id=deleted.id,
+        properties={},
+    ))
+    future_run_row = db.query(OntologyTrialRun).filter_by(
+        id=future_run["id"]).one()
+    future_result = copy.deepcopy(future_run_row.result_json or {})
+    future_result["counts"] = {
+        **dict(future_result.get("counts") or {}),
+        "links": 1,
+    }
+    future_run_row.result_json = future_result
+    db.commit()
+    future_impact = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{future_draft['id']}/impact",
+        headers=auth_headers,
+    ).json()["data"]
+    assert future_impact["releaseReadiness"]["ready"] is True
+    assert future_impact["releaseReadiness"][
+        "runtimeStateConflicts"]["totalCount"] == 0
 
 
 def test_production_promotion_observes_restored_mapping_before_runtime_gate(

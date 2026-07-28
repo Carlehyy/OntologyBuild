@@ -1,4 +1,15 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
+
+async function loginAsAdmin(page: Page) {
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.locator('button[type="submit"]').click()
+  await page.waitForURL('**/#/overview')
+}
 
 const publishedInterface = {
   id: 7,
@@ -84,23 +95,7 @@ const rawForwardingPackage = {
 
 test('已转发接口可一键复制完整且不泄露平台敏感配置的调用示例', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'admin-token')
-    localStorage.setItem('auth-store', JSON.stringify({
-      state: {
-        token: 'admin-token',
-        user: {
-          id: 1,
-          username: 'admin',
-          email: 'admin@example.com',
-          role: 'admin',
-          is_active: true,
-        },
-      },
-      version: 0,
-    }))
-  })
-  await page.route('**/api/v1/**', route => route.fulfill({ json: {} }))
+  await loginAsAdmin(page)
   await page.route('**/api/api-hub/**', async route => {
     const request = route.request()
     const path = new URL(request.url()).pathname

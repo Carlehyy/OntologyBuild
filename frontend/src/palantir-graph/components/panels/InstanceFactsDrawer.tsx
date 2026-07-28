@@ -193,7 +193,14 @@ export default function InstanceFactsDrawer({ instanceId, instanceLabel, onClose
                     <div className="flex items-center gap-2 text-xs">
                       <span className="font-mono text-violet-300">{f.propertyName}</span>
                       <span className="text-gray-500">=</span>
-                      <span className="text-gray-100 font-mono truncate flex-1">{fmtVal(f.value)}</span>
+                      <span
+                        className={`font-mono truncate flex-1 ${
+                          f.present === false ? 'text-red-300' : 'text-gray-100'
+                        }`}
+                        title={f.present === false ? '该属性已从对象中删除' : undefined}
+                      >
+                        {f.present === false ? '（已删除）' : fmtVal(f.value)}
+                      </span>
                       {badge && (
                         <span className={`px-1.5 rounded-full text-[10px] shrink-0 ${badge.cls}`} title={badge.title}>
                           {badge.label}

@@ -222,6 +222,29 @@ class PropertyFact(Base):
     任意时刻 T 的属性值 = recorded_at ≤ T 且未被 T 之前的事实 supersede 的最新事实。
     """
     __tablename__ = "fo_property_facts"
+    __table_args__ = (
+        Index(
+            "ix_fo_facts_release_coord_order",
+            "ontology_id",
+            "ontology_release_id",
+            "kind",
+            "instance_id",
+            "property_name",
+            "recorded_at",
+            "seq",
+            "id",
+        ),
+        Index(
+            "ix_fo_facts_instance_coord_order",
+            "ontology_id",
+            "instance_id",
+            "kind",
+            "property_name",
+            "recorded_at",
+            "seq",
+            "id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False, index=True)

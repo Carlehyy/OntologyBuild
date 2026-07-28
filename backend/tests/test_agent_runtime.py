@@ -233,6 +233,7 @@ def test_aggregate_and_history_and_traverse(client, auth_headers, modeled_ontolo
 
     hist = runner.run("get_object_history", {"instance_id": "inst-o1"})
     assert any(f["property"] == "status" for f in hist["facts"])   # 保存时追加过事实
+    assert all("present" in fact for fact in hist["facts"])
 
 
 def test_progressive_graph_path_and_impact_preview(

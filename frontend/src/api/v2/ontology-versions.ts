@@ -1,5 +1,43 @@
 import { apiClientV2 } from '@/api/client'
 
+export interface OntologyTrialActionEffect {
+  type?: string
+  description?: string
+  status?: string
+  committed?: boolean
+  [key: string]: unknown
+}
+
+export interface OntologyTrialActionSample {
+  actionId?: string
+  actionName?: string
+  edge?: 'enter' | 'leave' | string
+  targetInstanceId?: string | null
+  match?: Record<string, unknown>
+  parameters?: Record<string, unknown>
+  status?: string
+  effects?: OntologyTrialActionEffect[]
+  validationErrors?: string[]
+  errorMessage?: string | null
+  sideEffects?: string
+}
+
+export interface OntologyTrialSentinelResult {
+  id?: string
+  name?: string
+  activation?: 'active' | 'muted' | 'disabled' | string
+  matched?: number
+  candidateCount?: number
+  candidateCapReached?: boolean
+  parameterErrorCount?: number
+  errors?: string[]
+  plannedActions?: number
+  plannedActionSamples?: OntologyTrialActionSample[]
+  plannedActionsTruncated?: boolean
+  sideEffects?: string
+  skipped?: boolean
+}
+
 export interface OntologyTrialRun {
   id: string
   status: 'running' | 'passed' | 'failed' | 'stale'
@@ -7,7 +45,9 @@ export interface OntologyTrialRun {
     counts?: { objects?: number; links?: number; facts?: number; datasets?: number }
     errors?: Array<{ message: string }>
     warnings?: Array<{ message: string }>
+    sentinels?: OntologyTrialSentinelResult[]
     actionsExecuted?: number
+    sideEffects?: string
   }
   impact_hash?: string
   created_at?: string
@@ -47,9 +87,36 @@ export interface OntologyImpactReport {
     blockingCount: number
     errors: OntologyReleaseGateIssue[]
     trialRunId?: string | null
+    runtimeStateConflicts?: OntologyRuntimeStateConflictReport
     repairStrategy?: 'create_draft' | 'rebase' | null
     repairSourceVersionId?: string | null
   }
+}
+
+export interface OntologyRuntimeStateConflict {
+  resourceKind: 'objectProperty' | 'object' | 'link'
+  objectId?: string
+  objectTypeId?: string | null
+  property?: string
+  linkId?: string
+  linkTypeId?: string | null
+  current: unknown
+  currentPresent?: boolean
+  candidate: unknown
+  candidatePresent?: boolean
+  candidateObjectPresent?: boolean
+  source: string
+  factId?: string | null
+}
+
+export interface OntologyRuntimeStateConflictReport {
+  totalCount: number
+  propertyConflictCount: number
+  objectConflictCount: number
+  linkConflictCount: number
+  itemLimit: number
+  truncated: boolean
+  items: OntologyRuntimeStateConflict[]
 }
 
 export interface OntologyReleaseGateIssue {
@@ -69,6 +136,8 @@ export const ontologyVersionApi = {
   createDraft: (ontologyId: string, sourceVersionId: string, body: {
     versionLabel?: string
     description?: string
+    recoveryMode?: 'current_release_trial'
+    expectedCurrentReleaseId?: string
   }) => apiClientV2.post<OntologyVersionNode>(
     `/ontologies/${ontologyId}/versions/${sourceVersionId}/drafts`, body),
   deleteVersion: (ontologyId: string, versionId: string) =>

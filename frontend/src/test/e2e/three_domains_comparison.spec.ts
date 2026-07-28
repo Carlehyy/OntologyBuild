@@ -11,14 +11,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE = 'http://localhost:5173'
-const API  = 'http://localhost:8000'
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://localhost:8000'
+).replace(/\/+$/, '')
 const __filename = fileURLToPath(import.meta.url)
 const __dirname  = path.dirname(__filename)
 const TEST_DATA  = path.resolve(__dirname, '../../../../test_data')
 
 const DOMAINS = ['供应链', '医疗', '财务'] as const
 type Domain = typeof DOMAINS[number]
+const RUN_REAL_LLM = process.env.PLAYWRIGHT_THREE_DOMAINS_REAL === '1'
+const PIPELINE_FIXTURE: Record<Domain, string> = {
+  供应链: 'logistics_performance.csv',
+  医疗: 'adverse_events.csv',
+  财务: 'cash_flow.csv',
+}
 
 // ── 固定 ID（匹配当前 DB 状态） ───────────────────────────────────────────
 const MODEL_ID   = '8f347f97-e844-4d62-b81b-8c655cd3b410'   // deepseek
@@ -30,14 +39,29 @@ const PROMPT_BY_DOMAIN: Record<Domain, string> = {
   '财务':   'bff40feb-6f53-460e-97d1-b5e8d4f4a9be',
 }
 
+interface DryRunOutput {
+  columns: string[]
+  sample: Array<Record<string, unknown>>
+  rows_out: number
+}
+
+interface ColumnDefinition {
+  source_key: string
+  field_key: string
+  field_name: string
+  field_type: 'string'
+  is_primary_key: boolean
+  nullable: boolean
+}
+
 // ── 工具 ─────────────────────────────────────────────────────────────────
 
 async function login(page: Page): Promise<string> {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('admin123')
   await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`, { timeout: 10000 })
+  await page.waitForURL('**/#/overview', { timeout: 10000 })
   const token = await page.evaluate(() => localStorage.getItem('token') ?? '')
   expect(token, 'JWT token must be set').toBeTruthy()
   return token
@@ -60,29 +84,60 @@ async function apiCall(
   return body
 }
 
+function columnDefinitions(output: DryRunOutput): ColumnDefinition[] {
+  const rows = output.sample
+  expect(rows.length, 'dry-run must return all rows used by the contract check').toBe(output.rows_out)
+
+  const completeColumns = output.columns.filter(sourceKey =>
+    rows.every(row => row[sourceKey] !== null && row[sourceKey] !== undefined && String(row[sourceKey]).trim() !== ''),
+  )
+  const uniqueColumns = completeColumns.filter(sourceKey => {
+    const values = rows.map(row => JSON.stringify(row[sourceKey]))
+    return new Set(values).size === values.length
+  })
+  const primaryKeyColumns = uniqueColumns.length > 0 ? [uniqueColumns[0]] : completeColumns
+  expect(primaryKeyColumns.length, 'output must expose at least one complete identity column').toBeGreaterThan(0)
+  const compositeValues = rows.map(row => JSON.stringify(primaryKeyColumns.map(key => row[key])))
+  expect(new Set(compositeValues).size, 'selected identity columns must be unique').toBe(rows.length)
+
+  const used = new Set<string>()
+  return output.columns.map((sourceKey, index) => {
+    const normalized = sourceKey.replace(/[^A-Za-z0-9_]/g, '_')
+    const initial = (
+      /^[A-Za-z_]/.test(normalized)
+      && /[A-Za-z0-9]/.test(normalized)
+      && !normalized.startsWith('__')
+    ) ? normalized : `field_${index + 1}`
+    let fieldKey = initial
+    let suffix = 2
+    while (used.has(fieldKey)) fieldKey = `${initial}_${suffix++}`
+    used.add(fieldKey)
+    const isPrimaryKey = primaryKeyColumns.includes(sourceKey)
+    return {
+      source_key: sourceKey,
+      field_key: fieldKey,
+      field_name: sourceKey,
+      field_type: 'string',
+      is_primary_key: isPrimaryKey,
+      nullable: !isPrimaryKey,
+    }
+  })
+}
+
 async function shot(page: Page, outDir: string, name: string) {
   await page.screenshot({ path: path.join(outDir, `${name}.jpg`), type: 'jpeg', quality: 75 })
 }
 
-// 统一统计函数：从 SQLite 查实体/边/逻辑/动作
+// 统一统计函数：读取当前发布快照，避免旧 build-all 直接写正式实例。
 async function collectStats(request: APIRequestContext, token: string, ontologyId: string) {
-  // 实体 — v1 endpoint 返回 {data: [...]}, 无分页
-  const entBody = await apiCall(request, 'GET', `/api/v1/ontologies/${ontologyId}/entities`, token)
-  const entities: number = Array.isArray(entBody.data) ? entBody.data.length : 0
-
-  // 边 (从 v1 graph 接口，SQLite fallback)
-  const graphBody = await apiCall(request, 'GET', `/api/v1/ontologies/${ontologyId}/graph?limit=5000`, token)
-  const edges: number = (graphBody.data?.edges ?? []).length
-
-  // 逻辑规则
-  const logicBody = await apiCall(request, 'GET', `/api/v1/ontologies/${ontologyId}/logic`, token)
-  const logic: number = (logicBody.data ?? []).length
-
-  // 动作
-  const actionBody = await apiCall(request, 'GET', `/api/v1/ontologies/${ontologyId}/actions`, token)
-  const actions: number = (actionBody.data ?? []).length
-
-  return { entities, edges, logic, actions }
+  const body = await apiCall(request, 'GET', `/api/v2/formal/ontologies/${ontologyId}/full`, token)
+  const snapshot = body.data ?? body
+  return {
+    entities: (snapshot.instances ?? []).length,
+    edges: (snapshot.linkInstances ?? []).length,
+    logic: (snapshot.functions ?? []).length,
+    actions: (snapshot.actions ?? []).length,
+  }
 }
 
 async function pollExtraction(
@@ -115,20 +170,26 @@ async function runPipelineMapping(
 ) {
   const domainDir = path.join(TEST_DATA, domain)
   const files = fs.readdirSync(domainDir).filter(f => fs.statSync(path.join(domainDir, f)).isFile()).sort()
-  console.log(`\n  [${domain}][Pipeline] 文件数: ${files.length}`)
+  const sourceFile = PIPELINE_FIXTURE[domain]
+  expect(files).toContain(sourceFile)
+  console.log(`\n  [${domain}][Pipeline] 单产物发布夹具: ${sourceFile}`)
 
-  // 1. 上传文件到 v2 datasets
-  const uploaded: Array<{ name: string; dataset_id: string }> = []
-  for (const filename of files) {
-    const res = await request.post(`${API}/api/v2/datasets/upload`, {
-      headers: { Authorization: `Bearer ${token}` },
-      multipart: { file: { name: filename, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(domainDir, filename)) } },
-    })
-    const body = await res.json()
-    expect(res.ok(), `upload ${filename}: ${JSON.stringify(body)}`).toBeTruthy()
-    uploaded.push({ name: filename, dataset_id: body.data.id })
-  }
-  console.log(`    上传完成: ${uploaded.length} 个文件`)
+  // 1. 上传一个代表性结构化文件。当前字段契约与发布凭证以单产物为粒度；
+  // 多文件全量覆盖由独立的供应链 golden flow 逐文件验证。
+  const uploadResponse = await request.post(`${API}/api/v2/datasets/upload`, {
+    headers: { Authorization: `Bearer ${token}` },
+    multipart: {
+      file: {
+        name: sourceFile,
+        mimeType: 'application/octet-stream',
+        buffer: fs.readFileSync(path.join(domainDir, sourceFile)),
+      },
+    },
+  })
+  const uploadBody = await uploadResponse.json()
+  expect(uploadResponse.ok(), `upload ${sourceFile}: ${JSON.stringify(uploadBody)}`).toBeTruthy()
+  const uploaded = { name: sourceFile, dataset_id: uploadBody.data.id as string }
+  console.log('    上传完成: 1 个文件')
 
   // 2. 创建 Pipeline
   const plBody = await apiCall(request, 'POST', '/api/v2/pipelines', token, {
@@ -140,7 +201,7 @@ async function runPipelineMapping(
       schema_version: '2.0',
       nodes: [
         { id: 'connector', type: 'connector', label: `${domain}数据源`, position: { x: 80, y: 180 },
-          config: { source_type: 'file', files: uploaded } },
+          config: { source_type: 'file', files: [uploaded] } },
         { id: 'storage',   type: 'storage',   label: '分类存储',       position: { x: 330, y: 180 },
           config: { storage_mode: 'auto' } },
         { id: 'transform', type: 'transform', label: '数据转换',       position: { x: 580, y: 180 },
@@ -160,19 +221,43 @@ async function runPipelineMapping(
   console.log(`    Pipeline: ${pipelineId.slice(0, 8)}`)
 
   // 3. 前端截图 Pipeline Builder
-  await page.goto(`${BASE}/data/pipelines/${pipelineId}`)
+  await page.goto(`/#/data/pipelines/${pipelineId}`)
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domain}_pm_01_pipeline_builder`)
 
-  // 4. 同步运行 Pipeline
-  console.log(`    运行 Pipeline...`)
+  // 4. 当前发布契约：先执行预览，再对完整暂存输出做字段与主键校验，
+  // 保存完全一致的字段定义后才允许发布。
+  const dryRun = await apiCall(
+    request,
+    'POST',
+    `/api/v2/pipelines/${pipelineId}/dry-run?max_rows=500`,
+    token,
+  )
+  expect(dryRun.outputs).toHaveLength(1)
+  const definitions = columnDefinitions(dryRun.outputs[0] as DryRunOutput)
+  const validation = await apiCall(
+    request,
+    'POST',
+    `/api/v2/pipelines/${pipelineId}/validate-definitions?dry_run_id=${dryRun.dry_run_id}`,
+    token,
+    { column_definitions: definitions },
+  )
+  expect(validation.valid, JSON.stringify(validation.errors || [])).toBe(true)
+  await apiCall(request, 'PUT', `/api/v2/pipelines/${pipelineId}`, token, {
+    column_definitions: definitions,
+  })
+  const published = await apiCall(request, 'POST', `/api/v2/pipelines/${pipelineId}/publish`, token, {
+    enable: false,
+  })
+  expect(published).toMatchObject({ status: 'published', enabled: false })
+
+  // 5. 发布后运行，产物才进入资产湖。
+  console.log('    运行 Pipeline...')
   const runBody = await apiCall(request, 'POST', `/api/v2/pipelines/${pipelineId}/run-sync`, token)
   expect(runBody.status, `Pipeline 运行失败: ${JSON.stringify(runBody).slice(0, 200)}`).toBe('success')
   const curatedIds: string[] = runBody.stats?.curated_dataset_ids ?? []
+  expect(curatedIds).toHaveLength(1)
   console.log(`    Pipeline 完成: ${curatedIds.length} 个 curated dataset`)
-
-  // 5. Publish
-  await apiCall(request, 'POST', `/api/v2/pipelines/${pipelineId}/publish`, token)
 
   // 6. 批准全部 curated datasets
   for (const id of curatedIds) {
@@ -190,38 +275,131 @@ async function runPipelineMapping(
   expect(ontologyId).toBeTruthy()
   console.log(`    本体: ${ontologyId.slice(0, 8)}`)
 
-  // 8. 为每个 curated dataset 创建 mapping
-  const outputs: Array<{ curated_dataset_id: string; source_file?: string }> =
-    runBody.stats?.meta?.outputs ?? curatedIds.map((id: string) => ({ curated_dataset_id: id }))
-
-  for (const output of outputs) {
-    const sf = output.source_file ?? ''
-    const entityClass = sf
-      ? sf.replace(/\.[^.]+$/, '').split(/[_\-\s]+/).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join('')
-      : `Dataset_${output.curated_dataset_id.slice(0, 6)}`
-    await apiCall(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings`, token, {
-      curated_dataset_id: output.curated_dataset_id,
-      entity_class: entityClass,
-      field_mapping: { '__primary_key__': '__row_hash__' },
-      confidence: 1.0,
-    })
+  // 8. 将数据映射放入隔离草稿，试跑通过后晋级；不允许旧 build-all
+  // 绕过三态版本边界直接写正式实例。
+  const output = runBody.stats?.meta?.outputs?.[0] as {
+    curated_dataset_id?: string
+    source_file?: string
+  } | undefined
+  const entityClass = (output?.source_file || sourceFile)
+    .replace(/\.[^.]+$/, '')
+    .split(/[_\-\s]+/)
+    .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('')
+  const primary = definitions.find(definition => definition.is_primary_key)
+  expect(primary, `${sourceFile} must expose a single primary key`).toBeTruthy()
+  const objectType = {
+    id: `ot-${domain}-${ts}`,
+    name: entityClass,
+    displayName: entityClass,
+    icon: 'database',
+    primaryKey: primary!.field_key,
+    positionX: 0,
+    positionY: 0,
+    properties: definitions.map((definition, index) => ({
+      id: `prop-${domain}-${ts}-${index}`,
+      name: definition.field_key,
+      displayName: definition.field_name,
+      type: 'string',
+      required: definition.is_primary_key,
+    })),
   }
+  const tree = await apiCall(request, 'GET', `/api/v2/ontologies/${ontologyId}/version-tree`, token)
+  const root = tree.data.versions.find((item: { version_number: string }) => item.version_number === 'v0')
+  expect(root).toBeTruthy()
+  const draftBody = await apiCall(
+    request,
+    'POST',
+    `/api/v2/ontologies/${ontologyId}/versions/${root.id}/drafts`,
+    token,
+    {
+      versionLabel: `${domain} Pipeline Mapping`,
+      description: '单产物发布数据在隔离草稿中完成映射试跑',
+    },
+  )
+  const draft = draftBody.data
+  const saved = await apiCall(
+    request,
+    'PUT',
+    `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/workspace`,
+    token,
+    {
+      baseRevision: `${draft.revision}:${draft.snapshot_hash}`,
+      version: draft.version_number,
+      objectTypes: [objectType],
+      linkTypes: [],
+      actions: [],
+      functions: [],
+      instances: [],
+      linkInstances: [],
+    },
+  )
+  await apiCall(
+    request,
+    'PUT',
+    `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/workspace/mappings`,
+    token,
+    {
+      baseRevision: saved.data.revision,
+      mappings: [{
+        id: `mapping-${domain}-${ts}`,
+        curatedDatasetId: curatedIds[0],
+        entityClass,
+        targetObjectTypeId: objectType.id,
+        fieldMapping: {
+          ...Object.fromEntries(definitions.map(definition => [
+            definition.field_key,
+            definition.field_key,
+          ])),
+          __primary_key__: primary!.field_key,
+        },
+        status: 'draft',
+        confidence: 1,
+      }],
+      linkMappings: [],
+      sentinels: [],
+    },
+  )
+  const trialBody = await apiCall(
+    request,
+    'POST',
+    `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/trial-runs`,
+    token,
+    {},
+  )
+  const trial = trialBody.data
+  expect(trial.status, JSON.stringify(trial.result?.errors || [])).toBe('passed')
+  expect(trial.result.counts.datasets).toBe(1)
+  expect(trial.result.counts.objects).toBeGreaterThan(0)
+  const impactBody = await apiCall(
+    request,
+    'GET',
+    `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/impact`,
+    token,
+  )
+  const impact = impactBody.data
+  expect(impact.releaseReadiness).toMatchObject({ ready: true, blockingCount: 0 })
+  const promotedBody = await apiCall(
+    request,
+    'POST',
+    `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/promote`,
+    token,
+    { trialRunId: trial.id, impactHash: impact.impactHash },
+  )
+  expect(promotedBody.data).toMatchObject({ version_number: 'v1', lifecycle_status: 'released' })
+  console.log(`    发布完成: objects=${trial.result.counts.objects}`)
 
-  // 9. Build all
-  console.log(`    构建本体...`)
-  const buildBody = await apiCall(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings/build-all`, token)
-  console.log(`    构建完成: entities=${buildBody.total_entities} relations=${buildBody.total_relations} logic=${buildBody.total_logic} actions=${buildBody.total_actions}`)
-
-  // 10. 前端截图本体详情 + 图谱
-  await page.goto(`${BASE}/ontologies/${ontologyId}`)
+  // 9. 前端截图本体详情 + 图谱
+  await login(page)
+  await page.goto(`/#/ontologies/${ontologyId}`)
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domain}_pm_02_ontology`)
 
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=graph`)
-  await page.waitForTimeout(3000)
+  await page.getByRole('button', { name: '查看当前发布图谱', exact: true }).click()
+  await expect(page.getByTestId('graph-workspace-stage')).toContainText('当前发布 v1')
   await shot(page, outDir, `${domain}_pm_03_graph`)
 
-  // 11. 统一统计（从 SQLite 直接数 — 与 pipeline build 结果相同，但统一口径）
+  // 10. 统一统计（当前发布快照）
   const stats = await collectStats(request, token, ontologyId)
   return { pipelineId, ontologyId, stats }
 }
@@ -252,12 +430,12 @@ async function runSimpleLLM(
   console.log(`    本体: ${ontologyId.slice(0, 8)}`)
 
   // 2. 截图文件上传 tab
-  await page.goto(`${BASE}/login`)
+  await page.goto('/#/login')
   await page.evaluate((tok: string) => {
     localStorage.setItem('token', tok)
     localStorage.setItem('auth-store', JSON.stringify({ state: { token: tok, user: { username: 'admin', role: 'admin' } }, version: 0 }))
   }, token)
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=files`)
+  await page.goto(`/#/ontologies/${ontologyId}?tab=files`)
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domain}_llm_01_files_tab`)
 
@@ -290,7 +468,7 @@ async function runSimpleLLM(
   console.log(`    提取任务: ${taskId.slice(0, 8)}, 等待完成...`)
 
   // 截图提取中
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=files`)
+  await page.goto(`/#/ontologies/${ontologyId}?tab=files`)
   await page.waitForTimeout(1000)
   await shot(page, outDir, `${domain}_llm_03_extracting`)
 
@@ -299,11 +477,11 @@ async function runSimpleLLM(
   console.log(`    提取结果: ${finalStatus}`)
 
   // 6. 前端截图结果
-  await page.goto(`${BASE}/ontologies/${ontologyId}`)
+  await page.goto(`/#/ontologies/${ontologyId}`)
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domain}_llm_04_ontology`)
 
-  await page.goto(`${BASE}/ontologies/${ontologyId}?tab=graph`)
+  await page.goto(`/#/ontologies/${ontologyId}?tab=graph`)
   await page.waitForTimeout(3000)
   await shot(page, outDir, `${domain}_llm_05_graph`)
 
@@ -375,6 +553,10 @@ test.describe('三领域对比：Pipeline Mapping vs 简易 LLM', () => {
   // ── 简易 LLM 路径（3个域）─────────────────────────────────────────────
   for (const domain of DOMAINS) {
     test(`简易 LLM — ${domain}`, async ({ page, request }) => {
+      test.skip(
+        !RUN_REAL_LLM,
+        '需要 PLAYWRIGHT_THREE_DOMAINS_REAL=1、固定模型/提示词夹具及真实付费外部 LLM',
+      )
       test.setTimeout(3_600_000) // 60 min: deepseek processes 8 files × ~3 min each
       try {
         const result = await runSimpleLLM(page, request, token, domain, ts, outDir)

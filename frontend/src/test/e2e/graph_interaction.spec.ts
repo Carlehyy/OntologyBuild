@@ -1,55 +1,83 @@
-import { test, expect } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
-const BASE = 'http://localhost:5173'
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://localhost:8000'
+).replace(/\/+$/, '')
 
-async function login(page: any) {
-  await page.goto(`${BASE}/login`)
-  await page.fill('input[placeholder="用户名"]', 'admin')
-  await page.fill('input[placeholder="密码"]', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(`${BASE}/overview`)
+async function login(page: Page): Promise<string> {
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('admin123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await page.waitForURL('**/#/overview')
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  expect(token).toBeTruthy()
+  return token!
 }
 
-async function createOntology(page: any): Promise<string> {
-  await page.goto(`${BASE}/ontologies`)
-  await page.click('button:has-text("创建 Ontology")')
-  const name = `图谱测试-${Date.now()}`
-  await page.fill('input[placeholder="名称 *"]', name)
-  await page.click('button:has-text("确认")')
-  await page.waitForURL(/\/ontologies\/[a-f0-9-]+$/)
-  return name
+async function createOntology(request: APIRequestContext, token: string): Promise<string> {
+  const response = await request.post(`${API}/api/v1/ontologies`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: `图谱测试-${Date.now().toString(36)}`,
+      domain: '供应链',
+      description: '验证当前发布图谱的只读空态',
+    },
+  })
+  expect(response.ok(), await response.text()).toBeTruthy()
+  const body = await response.json()
+  return (body.data ?? body).id
+}
+
+async function openCurrentReleaseGraph(page: Page, ontologyId: string) {
+  await page.goto(`/#/ontologies/${ontologyId}`)
+  await page.getByRole('button', { name: '查看当前发布图谱', exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontologyId}/graph$`))
+  await expect(page.getByTestId('graph-workspace-stage')).toContainText('当前发布 v0')
+}
+
+async function removeOntology(request: APIRequestContext, token: string, ontologyId: string) {
+  const response = await request.delete(`${API}/api/v1/ontologies/${ontologyId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(response.ok(), await response.text()).toBeTruthy()
 }
 
 test.describe('Graph Tab Interaction', () => {
-  test.beforeEach(async ({ page }) => {
-    await login(page)
+  test('opens the immutable empty v0 release graph from ontology detail', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await openCurrentReleaseGraph(page, ontologyId)
+      await expect(page.locator('.react-flow')).toBeVisible()
+    } finally {
+      await removeOntology(request, token, ontologyId)
+    }
   })
 
-  test('graph tab shows empty state without extraction', async ({ page }) => {
-    await createOntology(page)
-    await page.click('button:has-text("图谱")')
-    // Graph tab should load - either show canvas or empty message
-    await page.waitForTimeout(1000)
-    const hasEmpty = await page.locator('text=暂无图谱数据').count()
-    const hasCanvas = await page.locator('canvas').count()
-    expect(hasEmpty + hasCanvas).toBeGreaterThan(0)
+  test('empty v0 reports zero object and relation definitions', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await openCurrentReleaseGraph(page, ontologyId)
+      await expect(page.getByRole('button', { name: '查看对象实体，共 0 个' })).toBeVisible()
+      await expect(page.getByRole('button', { name: '查看实体关系，共 0 个' })).toBeVisible()
+    } finally {
+      await removeOntology(request, token, ontologyId)
+    }
   })
 
-  test('graph tab shows node/edge counts', async ({ page }) => {
-    await createOntology(page)
-    await page.click('button:has-text("图谱")')
-    await page.waitForTimeout(1000)
-    await expect(page.locator('text=节点')).toBeVisible()
-    await expect(page.locator('text=边')).toBeVisible()
-  })
-
-  test('graph empty state has guidance message', async ({ page }) => {
-    await createOntology(page)
-    await page.click('button:has-text("图谱")')
-    await page.waitForTimeout(1000)
-    const hasMessage = await page.locator('text=暂无图谱数据').count()
-    if (hasMessage > 0) {
-      await expect(page.locator('text=暂无图谱数据')).toBeVisible()
+  test('current release graph is read-only and offers an explicit draft transition', async ({ page, request }) => {
+    const token = await login(page)
+    const ontologyId = await createOntology(request, token)
+    try {
+      await openCurrentReleaseGraph(page, ontologyId)
+      await expect(page.getByText('当前发布', { exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: '基于此版本开始修改', exact: true })).toBeVisible()
+    } finally {
+      await removeOntology(request, token, ontologyId)
     }
   })
 })

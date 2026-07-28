@@ -1,6 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
 const now = '2026-07-19T08:00:00+00:00'
+const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
+const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
 
 const wrappedMarkdown = `\`\`\`\`markdown
 ### 三级标题
@@ -27,17 +29,16 @@ def hello():
 
 围栏外的补充说明。`
 
+async function loginAsAdmin(page: Page) {
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.locator('button[type="submit"]').click()
+  await page.waitForURL('**/#/overview')
+}
+
 async function mockSuperAssistant(page: Page) {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e-token')
-    localStorage.setItem('auth-store', JSON.stringify({
-      state: {
-        token: 'e2e-token',
-        user: { id: 'admin', username: 'admin', email: 'admin@example.com', role: 'admin' },
-      },
-      version: 0,
-    }))
-  })
+  await loginAsAdmin(page)
 
   const json = (route: Route, data: unknown) => route.fulfill({
     status: 200,
@@ -65,7 +66,7 @@ async function mockSuperAssistant(page: Page) {
       created_at: now,
       updated_at: now,
     }])
-    return route.fulfill({ status: 404, body: '{}' })
+    return route.continue()
   })
 
   await page.route('**/api/v2/super-assistant/**', route => {

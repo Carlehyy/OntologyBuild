@@ -112,6 +112,75 @@ def test_contract_locked_after_mapping_bound(api, auth_headers, db):
     assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
 
 
+@pytest.mark.parametrize("dataset_role", ["src", "tgt", "edge"])
+def test_contract_locked_after_link_mapping_bound(
+        api, auth_headers, db, dataset_role):
+    ds_id = _upload(
+        api, auth_headers, name=f"{dataset_role}-bound.csv")
+    aux_id = _upload(
+        api, auth_headers, name=f"{dataset_role}-endpoint.csv")
+    assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
+    assert _declare(api, auth_headers, aux_id, "编号").status_code == 200
+
+    from app.models.v2.mapping import OntologyLinkMapping
+    roles = {
+        "src_dataset_id": aux_id,
+        "tgt_dataset_id": aux_id,
+        "edge_dataset_id": None,
+    }
+    roles[f"{dataset_role}_dataset_id"] = ds_id
+    db.add(OntologyLinkMapping(
+        ontology_id=f"ont-link-{dataset_role}",
+        relation_type=f"bound_as_{dataset_role}",
+        src_key="编号",
+        tgt_key="编号",
+        field_mapping={},
+        **roles,
+    ))
+    db.commit()
+
+    changed = _declare(api, auth_headers, ds_id, "名称")
+    assert changed.status_code == 400
+    assert "关系映射 1 个" in str(changed.json()["detail"])
+    # 重复声明同一主键仍是幂等操作，不改变任何身份。
+    assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
+
+
+def test_contract_link_mapping_bound_in_multiple_roles_is_counted_once(
+        api, auth_headers, db):
+    ds_id = _upload(api, auth_headers, name="multi-role-bound.csv")
+    assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
+
+    from app.models.v2.mapping import OntologyLinkMapping
+    db.add(OntologyLinkMapping(
+        ontology_id="ont-link-multi-role",
+        src_dataset_id=ds_id,
+        tgt_dataset_id=ds_id,
+        edge_dataset_id=ds_id,
+        relation_type="self_link",
+        src_key="编号",
+        tgt_key="编号",
+        field_mapping={},
+    ))
+    db.commit()
+
+    changed = _declare(api, auth_headers, ds_id, "名称")
+    assert changed.status_code == 400
+    detail = str(changed.json()["detail"])
+    assert "1 个本体映射绑定" in detail
+    assert "对象映射 0 个、关系映射 1 个" in detail
+
+
+def test_contract_primary_key_can_change_without_mapping_binding(
+        api, auth_headers):
+    ds_id = _upload(api, auth_headers, name="unbound-contract.csv")
+    assert _declare(api, auth_headers, ds_id, "编号").status_code == 200
+
+    changed = _declare(api, auth_headers, ds_id, "名称")
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["primary_key"] == "名称"
+
+
 # ── 上传新版本的契约校验 ──────────────────────────────────────
 def test_upload_version_enforces_contract(api, auth_headers):
     ds_id = _upload(api, auth_headers)

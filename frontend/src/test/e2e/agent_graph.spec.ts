@@ -3,11 +3,11 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 const API = process.env.PLAYWRIGHT_API_URL || 'http://localhost:8000'
 
 async function login(page: Page): Promise<string> {
-  await page.goto('/login')
-  await page.getByPlaceholder('用户名').fill('admin')
-  await page.getByPlaceholder('密码').fill('admin123')
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('admin123')
   await page.locator('button[type="submit"]').click()
-  await page.waitForURL('**/overview')
+  await page.waitForURL('**/#/overview')
   const token = await page.evaluate(() => localStorage.getItem('token'))
   expect(token).toBeTruthy()
   return token!
@@ -30,7 +30,7 @@ async function api<T>(
 }
 
 test('assistant data graph supports progressive depth, paths, impact preview and chat handoff', async ({ page, request }) => {
-  test.setTimeout(process.env.PLAYWRIGHT_EXPECT_LLM === '1' ? 120_000 : 60_000)
+  test.setTimeout(process.env.PLAYWRIGHT_EXPECT_LLM === '1' ? 240_000 : 180_000)
   const token = await login(page)
   const suffix = Date.now().toString(36)
   const ontology = await api<any>(request, token, 'post', '/api/v1/ontologies', {
@@ -38,83 +38,277 @@ test('assistant data graph supports progressive depth, paths, impact preview and
     domain: '供应链',
     description: '路径和拟议变更关联范围端到端测试',
   })
+  const deviceTypeId = 'ot-device-' + suffix
+  const taskTypeId = 'ot-task-' + suffix
+  const orderTypeId = 'ot-order-' + suffix
+  const carriesTypeId = 'lt-carries-' + suffix
+  const producesTypeId = 'lt-produces-' + suffix
+  const objectTypes = [
+    {
+      id: deviceTypeId, name: 'Device', displayName: '设备',
+      icon: 'radar',
+      primaryKey: 'device_no', positionX: 0, positionY: 0,
+      properties: [
+        { id: 'dp1', name: 'device_no', displayName: '设备编号', type: 'string', required: true },
+        { id: 'dp2', name: 'status', displayName: '运行状态', type: 'string', required: false },
+      ],
+    },
+    {
+      id: taskTypeId, name: 'Task', displayName: '生产任务',
+      icon: 'alert-triangle',
+      primaryKey: 'task_no', positionX: 0, positionY: 0,
+      properties: [
+        { id: 'tp1', name: 'task_no', displayName: '任务编号', type: 'string', required: true },
+        { id: 'tp2', name: 'state', displayName: '任务状态', type: 'string', required: false },
+      ],
+    },
+    {
+      id: orderTypeId, name: 'WorkOrder', displayName: '工单',
+      icon: 'building',
+      primaryKey: 'order_no', positionX: 0, positionY: 0,
+      properties: [
+        { id: 'op1', name: 'order_no', displayName: '工单号', type: 'string', required: true },
+        { id: 'op2', name: 'priority', displayName: '优先级', type: 'string', required: false },
+      ],
+    },
+  ]
+  const linkTypes = [
+    {
+      id: carriesTypeId, name: 'carries', displayName: '承载',
+      sourceObjectTypeId: deviceTypeId,
+      targetObjectTypeId: taskTypeId,
+      cardinality: 'one-to-many', properties: [],
+    },
+    {
+      id: producesTypeId, name: 'produces', displayName: '生成',
+      sourceObjectTypeId: taskTypeId,
+      targetObjectTypeId: orderTypeId,
+      cardinality: 'one-to-many', properties: [],
+    },
+  ]
+  let datasetId: string | undefined
 
   try {
-    await api(request, token, 'put', '/api/v2/formal/ontologies/' + ontology.id + '/full', {
-      objectTypes: [
-        {
-          id: 'ot-device-' + suffix, name: 'Device', displayName: '设备',
-          icon: 'radar',
-          primaryKey: 'device_no', positionX: 0, positionY: 0,
-          properties: [
-            { id: 'dp1', name: 'device_no', displayName: '设备编号', type: 'string', required: true },
-            { id: 'dp2', name: 'status', displayName: '运行状态', type: 'string', required: false },
-          ],
-        },
-        {
-          id: 'ot-task-' + suffix, name: 'Task', displayName: '生产任务',
-          icon: 'alert-triangle',
-          primaryKey: 'task_no', positionX: 0, positionY: 0,
-          properties: [
-            { id: 'tp1', name: 'task_no', displayName: '任务编号', type: 'string', required: true },
-            { id: 'tp2', name: 'state', displayName: '任务状态', type: 'string', required: false },
-          ],
-        },
-        {
-          id: 'ot-order-' + suffix, name: 'WorkOrder', displayName: '工单',
-          icon: 'building',
-          primaryKey: 'order_no', positionX: 0, positionY: 0,
-          properties: [
-            { id: 'op1', name: 'order_no', displayName: '工单号', type: 'string', required: true },
-            { id: 'op2', name: 'priority', displayName: '优先级', type: 'string', required: false },
-          ],
-        },
-      ],
-      linkTypes: [
-        {
-          id: 'lt-carries-' + suffix, name: 'carries', displayName: '承载',
-          sourceObjectTypeId: 'ot-device-' + suffix,
-          targetObjectTypeId: 'ot-task-' + suffix,
-          cardinality: 'one-to-many', properties: [],
-        },
-        {
-          id: 'lt-produces-' + suffix, name: 'produces', displayName: '生成',
-          sourceObjectTypeId: 'ot-task-' + suffix,
-          targetObjectTypeId: 'ot-order-' + suffix,
-          cardinality: 'one-to-many', properties: [],
-        },
-      ],
-      actions: [],
-      functions: [],
-      instances: [
-        {
-          id: 'inst-device-' + suffix, objectTypeId: 'ot-device-' + suffix,
-          properties: { device_no: 'DEV-A', status: 'running' }, computed: {},
-        },
-        {
-          id: 'inst-task-' + suffix, objectTypeId: 'ot-task-' + suffix,
-          properties: { task_no: 'TASK-B', state: 'active' }, computed: {},
-        },
-        {
-          id: 'inst-order-' + suffix, objectTypeId: 'ot-order-' + suffix,
-          properties: { order_no: 'WO-C', priority: 'high' }, computed: {},
-        },
-      ],
-      linkInstances: [
-        {
-          id: 'li-carries-' + suffix, linkTypeId: 'lt-carries-' + suffix,
-          sourceObjectId: 'inst-device-' + suffix, targetObjectId: 'inst-task-' + suffix,
-        },
-        {
-          id: 'li-produces-' + suffix, linkTypeId: 'lt-produces-' + suffix,
-          sourceObjectId: 'inst-task-' + suffix, targetObjectId: 'inst-order-' + suffix,
-        },
-      ],
-    })
-
+    // A new ontology has a real, immutable, empty v0 release. Draft modeling
+    // must not leak into the Agent's published topology before promotion.
     await page.goto('/#/agent')
     await page.getByLabel('选择本体').selectOption(ontology.id)
     await expect(page.getByRole('heading', { name: '本体拓扑图' })).toBeVisible()
+    await expect(page.getByText('当前本体暂无可视化对象')).toBeVisible()
+    await expect(page.getByTestId('ontology-network-node')).toHaveCount(0)
+    await expect(page.getByLabel('选择本体').locator(`option[value="${ontology.id}"]`)).toContainText('· v0')
+
+    const tree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
+    const root = tree.versions.find((item: any) => item.version_number === 'v0')
+    expect(root, 'new ontology must expose the immutable v0 release').toBeTruthy()
+    const draft = await api<any>(
+      request,
+      token,
+      'post',
+      `/api/v2/ontologies/${ontology.id}/versions/${root.id}/drafts`,
+      {
+        versionLabel: '助手图谱三态验证',
+        description: '共享单行数据在隔离试跑通过后发布',
+      },
+    )
+    const saved = await api<any>(
+      request,
+      token,
+      'put',
+      `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace`,
+      {
+        baseRevision: `${draft.revision}:${draft.snapshot_hash}`,
+        version: draft.version_number,
+        objectTypes,
+        linkTypes,
+        actions: [],
+        functions: [],
+        instances: [],
+        linkInstances: [],
+      },
+    )
+
+    const dataset = await api<any>(request, token, 'post', '/api/v2/datasets/create-table', {
+      name: '助手图谱共享链路-' + suffix,
+      columns: [
+        { name: 'row_key', display_name: '链路键', type: 'string', nullable: false },
+        { name: 'device_no', display_name: '设备编号', type: 'string', nullable: false },
+        { name: 'status', display_name: '运行状态', type: 'string', nullable: false },
+        { name: 'task_no', display_name: '任务编号', type: 'string', nullable: false },
+        { name: 'state', display_name: '任务状态', type: 'string', nullable: false },
+        { name: 'order_no', display_name: '工单号', type: 'string', nullable: false },
+        { name: 'priority', display_name: '优先级', type: 'string', nullable: false },
+      ],
+      primary_key: 'row_key',
+    })
+    datasetId = dataset.id
+    const upload = await request.post(`${API}/api/v2/datasets/${dataset.id}/upload`, {
+      headers: { Authorization: `Bearer ${token}` },
+      multipart: {
+        file: {
+          name: 'assistant-chain.csv',
+          mimeType: 'text/csv',
+          buffer: Buffer.from(
+            'row_key,device_no,status,task_no,state,order_no,priority\n'
+            + 'CHAIN-1,DEV-A,running,TASK-B,active,WO-C,high\n',
+          ),
+        },
+      },
+    })
+    expect(upload.ok(), await upload.text()).toBeTruthy()
+
+    await api<any>(
+      request,
+      token,
+      'put',
+      `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace/mappings`,
+      {
+        baseRevision: saved.revision,
+        mappings: [
+          {
+            id: 'map-device-' + suffix,
+            curatedDatasetId: dataset.id,
+            entityClass: 'Device',
+            targetObjectTypeId: deviceTypeId,
+            fieldMapping: {
+              device_no: 'device_no',
+              status: 'status',
+              __primary_key__: 'device_no',
+              __auto_apply_on_version__: true,
+            },
+            status: 'draft',
+            confidence: 1,
+          },
+          {
+            id: 'map-task-' + suffix,
+            curatedDatasetId: dataset.id,
+            entityClass: 'Task',
+            targetObjectTypeId: taskTypeId,
+            fieldMapping: {
+              task_no: 'task_no',
+              state: 'state',
+              __primary_key__: 'task_no',
+              __auto_apply_on_version__: true,
+            },
+            status: 'draft',
+            confidence: 1,
+          },
+          {
+            id: 'map-order-' + suffix,
+            curatedDatasetId: dataset.id,
+            entityClass: 'WorkOrder',
+            targetObjectTypeId: orderTypeId,
+            fieldMapping: {
+              order_no: 'order_no',
+              priority: 'priority',
+              __primary_key__: 'order_no',
+              __auto_apply_on_version__: true,
+            },
+            status: 'draft',
+            confidence: 1,
+          },
+        ],
+        linkMappings: [
+          {
+            id: 'link-map-carries-' + suffix,
+            linkTypeId: carriesTypeId,
+            relationType: 'carries',
+            srcDatasetId: dataset.id,
+            tgtDatasetId: dataset.id,
+            edgeDatasetId: null,
+            srcKey: 'row_key',
+            tgtKey: 'row_key',
+            fieldMapping: { __auto_apply_on_version__: true },
+            status: 'draft',
+          },
+          {
+            id: 'link-map-produces-' + suffix,
+            linkTypeId: producesTypeId,
+            relationType: 'produces',
+            srcDatasetId: dataset.id,
+            tgtDatasetId: dataset.id,
+            edgeDatasetId: null,
+            srcKey: 'row_key',
+            tgtKey: 'row_key',
+            fieldMapping: { __auto_apply_on_version__: true },
+            status: 'draft',
+          },
+        ],
+        sentinels: [],
+      },
+    )
+
+    const trial = await api<any>(
+      request,
+      token,
+      'post',
+      `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/trial-runs`,
+      {},
+    )
+    expect(trial.status).toBe('passed')
+    expect(trial.result?.counts).toMatchObject({ objects: 3, links: 2, datasets: 1 })
+    expect(trial.result?.errors).toEqual([])
+
+    const impact = await api<any>(
+      request,
+      token,
+      'get',
+      `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/impact`,
+    )
+    expect(impact.impactHash).toBeTruthy()
+    expect(impact.baseOutdated).toBeFalsy()
+    expect(impact.releaseReadiness).toMatchObject({
+      ready: true,
+      blockingCount: 0,
+      trialRunId: trial.id,
+    })
+
+    const promoted = await api<any>(
+      request,
+      token,
+      'post',
+      `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/promote`,
+      { trialRunId: trial.id, impactHash: impact.impactHash },
+    )
+    expect(promoted).toMatchObject({
+      version_number: 'v1',
+      node_kind: 'release',
+      lifecycle_status: 'released',
+      trial_run_id: trial.id,
+      impact_hash: impact.impactHash,
+    })
+
+    const released = await api<any>(
+      request,
+      token,
+      'get',
+      `/api/v2/formal/ontologies/${ontology.id}/full`,
+    )
+    expect(released.instances).toHaveLength(3)
+    expect(released.linkInstances).toHaveLength(2)
+    const device = released.instances.find((item: any) => item.objectTypeId === deviceTypeId)
+    const task = released.instances.find((item: any) => item.objectTypeId === taskTypeId)
+    const order = released.instances.find((item: any) => item.objectTypeId === orderTypeId)
+    expect(device).toMatchObject({ properties: { device_no: 'DEV-A', status: 'running' } })
+    expect(task).toMatchObject({ properties: { task_no: 'TASK-B', state: 'active' } })
+    expect(order).toMatchObject({ properties: { order_no: 'WO-C', priority: 'high' } })
+    expect(released.linkInstances).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        linkTypeId: carriesTypeId,
+        sourceObjectId: device.id,
+        targetObjectId: task.id,
+      }),
+      expect.objectContaining({
+        linkTypeId: producesTypeId,
+        sourceObjectId: task.id,
+        targetObjectId: order.id,
+      }),
+    ]))
+
+    // Reload the Agent so its ontology list observes the new authoritative v1 pointer.
+    await page.reload()
+    await page.getByLabel('选择本体').selectOption(ontology.id)
+    await expect(page.getByLabel('选择本体').locator(`option[value="${ontology.id}"]`)).toContainText('· v1')
     const topologyNodes = page.getByTestId('ontology-network-node')
     await expect(topologyNodes).toHaveCount(3)
     await expect(page.getByText('radar', { exact: true })).toHaveCount(0)
@@ -166,7 +360,7 @@ test('assistant data graph supports progressive depth, paths, impact preview and
     await page.getByRole('button', { name: 'L2' }).click()
     await expect(page.getByText('3 个实例已加载')).toBeVisible()
 
-    await page.getByLabel('快速选择实例').selectOption('instance:inst-device-' + suffix)
+    await page.getByLabel('快速选择实例').selectOption('instance:' + device.id)
     await expect(page.getByTestId('graph-inspector')).toContainText('DEV-A')
     await page.getByRole('button', { name: '展开字段' }).click()
     await expect(page.getByRole('button', { name: 'L3' })).toHaveAttribute('aria-pressed', 'true')
@@ -175,14 +369,15 @@ test('assistant data graph supports progressive depth, paths, impact preview and
     await expect(page.getByTestId('graph-inspector')).toContainText('运行状态')
 
     await page.getByTestId('instance-knowledge-graph').getByRole('button', { name: '路径', exact: true }).click()
-    await page.getByLabel('起点实例').selectOption('inst-device-' + suffix)
-    await page.getByLabel('终点实例').selectOption('inst-order-' + suffix)
+    await page.getByLabel('起点实例').selectOption(device.id)
+    await page.getByLabel('终点实例').selectOption(order.id)
     await page.getByRole('button', { name: '查找路径' }).click()
     await expect(page.getByTestId('analysis-summary')).toContainText('找到 1 条候选路径')
     await expect(page.getByTestId('analysis-summary')).toContainText('DEV-A → WO-C')
 
-    await page.getByRole('button', { name: '推演' }).click()
-    await page.getByLabel('快速选择实例').selectOption('instance:inst-device-' + suffix)
+    await page.getByTestId('instance-knowledge-graph')
+      .getByRole('button', { name: '推演', exact: true }).click()
+    await page.getByLabel('快速选择实例').selectOption('instance:' + device.id)
     await page.getByLabel('字段').selectOption('status')
     await page.getByLabel('拟议新值').fill('maintenance')
     await page.getByRole('button', { name: '只读推演' }).click()
@@ -193,7 +388,7 @@ test('assistant data graph supports progressive depth, paths, impact preview and
       request,
       token,
       'get',
-      '/api/v2/formal/ontologies/' + ontology.id + '/agent/graph/instances/inst-device-' + suffix,
+      '/api/v2/formal/ontologies/' + ontology.id + '/agent/graph/instances/' + device.id,
     )
     expect(detail.properties.status).toBe('running')
 
@@ -213,5 +408,10 @@ test('assistant data graph supports progressive depth, paths, impact preview and
     await request.delete(API + '/api/v1/ontologies/' + ontology.id, {
       headers: { Authorization: 'Bearer ' + token },
     })
+    if (datasetId) {
+      await request.delete(API + '/api/v2/datasets/' + datasetId, {
+        headers: { Authorization: 'Bearer ' + token },
+      })
+    }
   }
 })

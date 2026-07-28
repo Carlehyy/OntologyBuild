@@ -1,13 +1,19 @@
 import { test, expect, type Page } from '@playwright/test'
 
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://localhost:8000'
+).replace(/\/+$/, '')
+
 async function login(page: Page) {
   await page.goto('/#/login')
-  await page.getByPlaceholder('用户名').fill('admin')
-  await page.getByPlaceholder('密码').fill('admin123')
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('admin123')
   await page.getByRole('button', { name: '登录' }).click()
   await page.waitForURL(/\/#\/overview$/)
   const token = await page.evaluate(() => localStorage.getItem('token'))
-  const domainResponse = await page.request.post('http://localhost:5173/api/v1/domains', {
+  const domainResponse = await page.request.post(`${API}/api/v1/domains`, {
     headers: { Authorization: `Bearer ${token}` },
     data: { name: '供应链', description: '导出导入浏览器测试' },
   })
@@ -19,16 +25,16 @@ async function login(page: Page) {
 async function createOntology(page: Page): Promise<string> {
   await page.goto('/#/ontologies')
   const name = `导出导入测试-${Date.now()}`
-  await page.getByRole('button', { name: '立即创建', exact: true }).click()
-  await page.getByPlaceholder('例如：供应链知识本体').fill(name)
+  await page.getByRole('button', { name: '立即创建', exact: true }).first().click()
+  await page.getByLabel('本体名称', { exact: true }).fill(name)
   await page.getByRole('button', { name: '创建本体', exact: true }).click()
   await expect(page.getByText(name, { exact: true })).toBeVisible()
-  await page.getByText(name, { exact: true }).click()
+  await page.getByRole('button', { name, exact: true }).click()
   await page.waitForURL(/\/#\/ontologies\/[a-f0-9-]+$/)
   const ontologyId = page.url().split('/').at(-1)
   const token = await page.evaluate(() => localStorage.getItem('token'))
   const objectTypeResponse = await page.request.post(
-    `http://localhost:5173/api/v2/formal/ontologies/${ontologyId}/object-types`,
+    `${API}/api/v2/formal/ontologies/${ontologyId}/object-types`,
     {
       headers: { Authorization: `Bearer ${token}` },
       data: {

@@ -5,7 +5,7 @@
   3. 版本发布：快照包含正规模型（snapshot_formal），回滚可恢复被删的对象类型
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
@@ -84,7 +84,13 @@ def test_property_facts_append_and_supersede(client, auth_headers, ontology):
     r = client.get(f"{_fo(oid)}/instances/inst-1/facts", headers=auth_headers)
     assert r.status_code == 200
     facts = r.json()["data"]
-    assert {f["propertyName"] for f in facts} == {"flight_no", "status"}
+    assert {
+        (f["kind"], f["propertyName"]) for f in facts
+    } == {
+        ("object", "exists"),
+        ("property", "flight_no"),
+        ("property", "status"),
+    }
     assert all(f["supersedesId"] is None for f in facts)
     assert all(f["source"] == "editor-save" for f in facts)
 
@@ -105,6 +111,153 @@ def test_property_facts_append_and_supersede(client, auth_headers, ontology):
     r = client.get(f"{_fo(oid)}/instances/inst-1/facts",
                    headers=auth_headers, params={"property_name": "flight_no"})
     assert len(r.json()["data"]) == 1
+
+
+def test_full_save_server_generated_instance_id_records_complete_fact_stream(
+        client, auth_headers, ontology):
+    oid = ontology["id"]
+    payload = _minimal_payload({
+        "flight_no": "CA5678",
+        "status": "SCHEDULED",
+    })
+    payload["instances"][0].pop("id")
+
+    saved = client.put(
+        f"{_fo(oid)}/full",
+        headers=auth_headers,
+        json=payload,
+    )
+    assert saved.status_code == 200, saved.text
+    generated = saved.json()["data"]["instances"][0]["id"]
+    assert generated
+
+    facts = client.get(
+        f"{_fo(oid)}/instances/{generated}/facts",
+        headers=auth_headers,
+    ).json()["data"]
+    assert {
+        (fact["kind"], fact["propertyName"], fact["present"])
+        for fact in facts
+    } == {
+        ("object", "exists", True),
+        ("property", "flight_no", True),
+        ("property", "status", True),
+    }
+
+
+def test_property_removal_is_a_present_false_fact_and_as_of_omits_it(
+        client, auth_headers, ontology):
+    oid = ontology["id"]
+    first = client.put(
+        f"{_fo(oid)}/full",
+        headers=auth_headers,
+        json=_minimal_payload({
+            "flight_no": "CA1234",
+            "status": "SCHEDULED",
+        }),
+    )
+    assert first.status_code == 200, first.text
+
+    removed = client.put(
+        f"{_fo(oid)}/full",
+        headers=auth_headers,
+        json=_minimal_payload({"flight_no": "CA1234"}),
+    )
+    assert removed.status_code == 200, removed.text
+
+    status_facts = client.get(
+        f"{_fo(oid)}/instances/inst-1/facts",
+        headers=auth_headers,
+        params={"property_name": "status"},
+    ).json()["data"]
+    assert len(status_facts) == 2
+    assert status_facts[0]["value"] is None
+    assert status_facts[0]["present"] is False
+    assert status_facts[0]["supersedesId"] == status_facts[1]["id"]
+    assert status_facts[1]["value"] == "SCHEDULED"
+    assert status_facts[1]["present"] is True
+
+    replay = client.get(
+        f"{_fo(oid)}/instances/inst-1/as-of",
+        headers=auth_headers,
+        params={"t": status_facts[0]["recordedAt"]},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["data"]["exists"] is True
+    assert replay.json()["data"]["properties"] == {
+        "flight_no": "CA1234",
+    }
+    assert replay.json()["data"]["facts"]["status"]["present"] is False
+
+
+def test_as_of_before_explicit_creation_reports_object_absent(
+        client, auth_headers, ontology):
+    oid = ontology["id"]
+    created = client.put(
+        f"{_fo(oid)}/full",
+        headers=auth_headers,
+        json=_minimal_payload({"flight_no": "CA1234"}),
+    )
+    assert created.status_code == 200, created.text
+    facts = client.get(
+        f"{_fo(oid)}/instances/inst-1/facts",
+        headers=auth_headers,
+    ).json()["data"]
+    creation = next(
+        fact for fact in facts
+        if fact["kind"] == "object" and fact["propertyName"] == "exists"
+    )
+    before = (
+        datetime.fromisoformat(creation["recordedAt"].replace("Z", "+00:00"))
+        - timedelta(microseconds=1)
+    ).isoformat()
+
+    replay = client.get(
+        f"{_fo(oid)}/instances/inst-1/as-of",
+        headers=auth_headers,
+        params={"t": before},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["data"] == {
+        "instanceId": "inst-1",
+        "asOf": before,
+        "exists": False,
+        "properties": {},
+        "computed": {},
+        "facts": {},
+        "totalFacts": 0,
+    }
+
+
+def test_as_of_before_first_legacy_tombstone_keeps_legacy_object_present(
+        client, auth_headers, ontology, db):
+    """A first false Fact means the object predated Fact adoption."""
+    from app.models.ontology_formal import PropertyFact
+
+    oid = ontology["id"]
+    deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.add(PropertyFact(
+        ontology_id=oid,
+        instance_id="legacy-inst",
+        object_type_id="ot-legacy",
+        property_name="exists",
+        value={"v": False},
+        kind="object",
+        source="legacy-delete",
+        seq=1,
+        recorded_at=deleted_at,
+    ))
+    db.commit()
+    before = (deleted_at - timedelta(microseconds=1)).isoformat()
+
+    replay = client.get(
+        f"{_fo(oid)}/instances/legacy-inst/as-of",
+        headers=auth_headers,
+        params={"t": before},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["data"]["exists"] is True
+    assert replay.json()["data"]["totalFacts"] == 0
 
 
 def test_backend_validation_rejects_invalid_model(client, auth_headers, ontology):

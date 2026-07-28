@@ -204,7 +204,10 @@ LLM 与 n8n 密钥只从隐藏输入或 `LLM_API_KEY` / `N8N_API_KEY` 环境变�
 Header Auth 凭据、接口、流水线与公网隧道，验证直接调用和 n8n 动态 Path/Query/Header 传参，
 并在结束时停用、删除全部远端临时资源。
 
-生产环境的 n8n 地址策略要求 HTTPS；仅开发验收允许访问公网 HTTP n8n 地址。
+平台接受管理员明确配置的 HTTP 或 HTTPS n8n 地址；公网场景仍推荐 HTTPS。无论协议，
+地址都不能嵌入账号密码、查询参数或片段。n8n 可访问平台与平台可访问 n8n 是两个独立
+网络方向；包含附件的流水线还必须确保 `PIPELINE_FILE_GATEWAY_BASE_URL` 能被 n8n
+反向访问。
 
 普通 HTTP 发布的真实公网验收不需要 n8n 或私有凭据，可运行：
 

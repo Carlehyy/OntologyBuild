@@ -117,6 +117,18 @@ async function mockInstanceBrowser(page: Page) {
         confidence: 1,
         seq: 1,
         recordedAt: '2026-07-26T08:00:00Z',
+      }, {
+        id: 'fact-obsolete-note-removed',
+        instanceId,
+        propertyName: 'obsolete_note',
+        value: null,
+        present: false,
+        kind: 'property',
+        source: 'action://clear_obsolete_note',
+        actorId: 'admin',
+        confidence: 1,
+        seq: 2,
+        recordedAt: '2026-07-26T08:01:00Z',
       }])
     }
     if (path === '/api/v2/inbox/summary') {
@@ -163,6 +175,9 @@ test('当前发布实例只读，保留事实溯源且不暴露直接写入入�
   }).click()
   await expect(page.getByRole('heading', { name: '属性溯源' })).toBeVisible()
   await expect(page.locator('#fact-fact-status-1').getByText('risk_review_pending')).toBeVisible()
+  await expect(
+    page.locator('#fact-fact-obsolete-note-removed').getByText('（已删除）'),
+  ).toBeVisible()
   await expect(mutations).toEqual([])
 })
 

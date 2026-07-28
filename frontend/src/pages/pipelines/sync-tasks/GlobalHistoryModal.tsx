@@ -92,12 +92,17 @@ export default function GlobalHistoryModal({
   const [dateTo, setDateTo] = useState('')
 
   useEffect(() => {
+    const nextSearch = searchInput.trim()
+    // Do not schedule a redundant page reset on mount (or after the
+    // debounced value has already caught up).  Otherwise a fast click on
+    // "next page" can be undone by the initial 250 ms search timer.
+    if (nextSearch === search) return
     const timer = window.setTimeout(() => {
-      setSearch(searchInput.trim())
+      setSearch(nextSearch)
       setPage(1)
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [searchInput])
+  }, [search, searchInput])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -263,7 +268,7 @@ export default function GlobalHistoryModal({
                     <th className="w-[72px] px-3 py-2.5 font-medium">触发</th>
                     <th className="w-[82px] px-3 py-2.5 font-medium">耗时</th>
                     <th className="w-[80px] px-3 py-2.5 font-medium">输出行数</th>
-                    <th className="w-[110px] px-3 py-2.5 font-medium">入湖影响</th>
+                    <th className="w-[190px] px-3 py-2.5 font-medium">原始入湖影响（相对上一原始快照）</th>
                     <th className="px-3 py-2.5 font-medium">错误信息</th>
                   </tr>
                 </thead>

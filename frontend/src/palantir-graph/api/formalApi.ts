@@ -303,6 +303,8 @@ export interface PropertyFactDTO {
   instanceId?: string;
   propertyName: string;
   value: unknown;
+  /** false means the property was removed; true + null is an explicit null. */
+  present?: boolean;
   /** property=存储属性 | derived=派生重算 | link=链接存在性 |
    *  object=实例存在性(墓碑) | decision=人的审批决策 |
    *  absence=缺席事实(常驻查询结果为空/非空的翻转快照) */

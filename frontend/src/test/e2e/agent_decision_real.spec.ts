@@ -3,11 +3,11 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 const API = process.env.PLAYWRIGHT_API_URL || 'http://localhost:8000'
 
 async function login(page: Page): Promise<string> {
-  await page.goto('/login')
-  await page.getByPlaceholder('用户名').fill('admin')
-  await page.getByPlaceholder('密码').fill('admin123')
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('admin123')
   await page.locator('button[type="submit"]').click()
-  await page.waitForURL('**/overview')
+  await page.waitForURL('**/#/overview')
   const token = await page.evaluate(() => localStorage.getItem('token'))
   expect(token).toBeTruthy()
   return token!

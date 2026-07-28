@@ -208,12 +208,27 @@ def _assert_link_mapping_types_compatible(
         _dataset_column_types(db, edge_dataset_id) if edge_dataset_id else None)
     failures: list[dict] = []
 
-    def compare(source_name: str, source_type: str | None,
-                target_name: str, target_type: str | None, role: str) -> None:
+    def compare(
+        source_name: str,
+        source_type: str | None,
+        target_name: str,
+        target_type: str | None,
+        role: str,
+        *,
+        allow_structured_representation: bool = False,
+    ) -> None:
         # Untyped legacy assets remain operable; typed contracts are strict.
         if source_type is None or target_type is None:
             return
-        if source_type != target_type:
+        # Only business edge properties may use a lossless lake
+        # representation such as JSON → array. Endpoint identity keys keep
+        # exact type equality and never opt into this branch.
+        compatible = (
+            _mapping_types_compatible(source_type, target_type)
+            if allow_structured_representation
+            else source_type == target_type
+        )
+        if not compatible:
             failures.append({
                 "role": role, "source": source_name, "source_type": source_type,
                 "target": target_name, "target_type": target_type,
@@ -255,7 +270,8 @@ def _assert_link_mapping_types_compatible(
                 })
                 continue
             compare(source_name, source_type, target_name,
-                    _normal_mapping_type(target.get("type")), "edge_property")
+                    _normal_mapping_type(target.get("type")), "edge_property",
+                    allow_structured_representation=True)
 
     if failures:
         raise HTTPException(422, detail={

@@ -5,8 +5,11 @@ BRANCH="${BRANCH:-nano-ontoprompt}"
 REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
 DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-production.dependencies.env}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PUBLIC_PORT:-80}/}"
-READINESS_URL="${READINESS_URL:-${HEALTH_URL%/}/api/health}"
+# Preserve explicit operator overrides, but defer defaults until the persistent
+# .env and production.dependencies.env have been merged. PUBLIC_PORT from that
+# manifest must drive the same endpoint that Compose will expose.
+HEALTH_URL="${HEALTH_URL:-}"
+READINESS_URL="${READINESS_URL:-}"
 RETRIES="${DEPLOY_RETRIES:-3}"
 SLEEP_SECONDS="${DEPLOY_RETRY_SLEEP:-10}"
 log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
@@ -145,12 +148,13 @@ bootstrap_production_env() {
 
 dependency_key_allowed() {
   case "$1" in
-    ENVIRONMENT|STRICT_PRODUCTION_CONFIG|REQUIRE_EXTERNAL_DEPENDENCIES|\
+    ENVIRONMENT|PUBLIC_PORT|STRICT_PRODUCTION_CONFIG|REQUIRE_EXTERNAL_DEPENDENCIES|\
     POSTGRES_HOST|POSTGRES_PORT|POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD|\
     DATABASE_URL|REDIS_URL|DATASET_IMPORT_USE_CELERY|\
     NEO4J_URI|NEO4J_USER|NEO4J_PASSWORD|NEO4J_AUTH|\
     MINIO_CONSOLE_URL|MINIO_ENDPOINT|MINIO_ACCESS_KEY|MINIO_SECRET_KEY|\
-    MINIO_USE_SSL|STORAGE_LOCAL_FALLBACK)
+    MINIO_USE_SSL|STORAGE_LOCAL_FALLBACK|\
+    N8N_API_URL|N8N_EMAIL|N8N_PASSWORD|N8N_API_KEY)
       return 0
       ;;
     *)
@@ -217,6 +221,16 @@ env_value() {
     END { gsub(/\r$/, "", value); print value }
   ' .env
 }
+if [ "${PUBLIC_PORT+x}" = "x" ]; then
+  # Match Compose's `${PUBLIC_PORT:-80}` interpolation exactly: an explicitly
+  # exported empty value selects the default instead of the project .env.
+  effective_public_port="${PUBLIC_PORT:-80}"
+else
+  effective_public_port="$(env_value PUBLIC_PORT)"
+  effective_public_port="${effective_public_port:-80}"
+fi
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${effective_public_port}/}"
+READINESS_URL="${READINESS_URL:-${HEALTH_URL%/}/api/health}"
 redact_compose_logs() {
   local key value line tail_lines
   local -a sensitive_values=()
@@ -225,7 +239,8 @@ redact_compose_logs() {
   for key in \
     SECRET_KEY ENCRYPTION_KEY FIRST_ADMIN_PASSWORD POSTGRES_PASSWORD \
     DATABASE_URL REDIS_URL NEO4J_PASSWORD NEO4J_AUTH \
-    MINIO_ACCESS_KEY MINIO_SECRET_KEY API_HUB_SYSTEM_MCP_TOKEN; do
+    MINIO_ACCESS_KEY MINIO_SECRET_KEY API_HUB_SYSTEM_MCP_TOKEN \
+    N8N_PASSWORD N8N_API_KEY; do
     value="$(env_value "$key")"
     [ -z "$value" ] || sensitive_values+=("$value")
   done

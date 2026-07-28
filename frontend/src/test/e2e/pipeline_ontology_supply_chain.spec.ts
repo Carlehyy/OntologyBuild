@@ -5,8 +5,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE = 'http://localhost:5173'
-const API = 'http://localhost:8000'
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://localhost:8000'
+).replace(/\/+$/, '')
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const SUPPLY_CHAIN_DIR = path.resolve(__dirname, '../../../../test_data/供应链')
@@ -22,31 +25,27 @@ const ENTITY_BY_FILE: Record<string, string> = {
   'warehouse_management.pdf': 'WarehouseManagement',
 }
 
-const PK_BY_FILE: Record<string, string> = {
-  'inventory_transactions.csv': '__row_hash__',
-  'logistics_performance.csv': '运单号',
-  'procurement_policy.docx': '__row_hash__',
-  'supplier_database.xlsx': '供应商ID',
-  'supplier_orders.json': 'order_id',
-  'supply_chain_review.pptx': '__row_hash__',
-  'supply_chain_strategy.md': '__row_hash__',
-  'warehouse_management.pdf': '__row_hash__',
+interface DryRunOutput {
+  columns: string[]
+  sample: Array<Record<string, unknown>>
+  rows_out: number
+}
+
+interface ColumnDefinition {
+  source_key: string
+  field_key: string
+  field_name: string
+  field_type: 'string'
+  is_primary_key: boolean
+  nullable: boolean
 }
 
 async function login(page: Page) {
-  for (const password of ['admin123', 'admin123']) {
-    await page.goto(`${BASE}/login`)
-    await page.fill('input[placeholder="用户名"]', 'admin')
-    await page.fill('input[placeholder="密码"]', password)
-    await page.click('button[type="submit"]')
-    try {
-      await page.waitForURL(`${BASE}/overview`, { timeout: 5000 })
-      return
-    } catch {
-      // Try the next known local development password.
-    }
-  }
-  throw new Error('Unable to login as admin with known local passwords')
+  await page.goto('/#/login')
+  await page.getByLabel('用户名', { exact: true }).fill(process.env.PLAYWRIGHT_ADMIN_USER || 'admin')
+  await page.getByLabel('密码', { exact: true }).fill(process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123')
+  await page.click('button[type="submit"]')
+  await page.waitForURL('**/#/overview', { timeout: 10_000 })
 }
 
 async function apiJson(request: APIRequestContext, method: 'GET' | 'POST' | 'PUT', url: string, token: string, data?: unknown) {
@@ -57,6 +56,131 @@ async function apiJson(request: APIRequestContext, method: 'GET' | 'POST' | 'PUT
   })
   expect(response.ok(), `${method} ${url}: ${await response.text()}`).toBeTruthy()
   return response.json()
+}
+
+function columnDefinitions(output: DryRunOutput): ColumnDefinition[] {
+  const rows = output.sample
+  expect(rows.length, 'dry-run must return rows for contract validation').toBe(output.rows_out)
+
+  const completeColumns = output.columns.filter(sourceKey =>
+    rows.every(row => row[sourceKey] !== null && row[sourceKey] !== undefined && String(row[sourceKey]).trim() !== ''),
+  )
+  const uniqueColumns = completeColumns.filter(sourceKey => {
+    const values = rows.map(row => JSON.stringify(row[sourceKey]))
+    return new Set(values).size === values.length
+  })
+  const primaryKeyColumns = uniqueColumns.length > 0 ? [uniqueColumns[0]] : completeColumns
+  expect(primaryKeyColumns.length, 'output must expose at least one complete identity column').toBeGreaterThan(0)
+  const compositeValues = rows.map(row => JSON.stringify(primaryKeyColumns.map(key => row[key])))
+  expect(new Set(compositeValues).size, 'selected identity columns must be unique').toBe(rows.length)
+
+  const used = new Set<string>()
+  return output.columns.map((sourceKey, index) => {
+    const normalized = sourceKey.replace(/[^A-Za-z0-9_]/g, '_')
+    const initial = (
+      /^[A-Za-z_]/.test(normalized)
+      && /[A-Za-z0-9]/.test(normalized)
+      && !normalized.startsWith('__')
+    ) ? normalized : `field_${index + 1}`
+    let fieldKey = initial
+    let suffix = 2
+    while (used.has(fieldKey)) fieldKey = `${initial}_${suffix++}`
+    used.add(fieldKey)
+    const isPrimaryKey = primaryKeyColumns.includes(sourceKey)
+    return {
+      source_key: sourceKey,
+      field_key: fieldKey,
+      field_name: sourceKey,
+      field_type: 'string',
+      is_primary_key: isPrimaryKey,
+      nullable: !isPrimaryKey,
+    }
+  })
+}
+
+async function createPublishedPipeline(
+  request: APIRequestContext,
+  token: string,
+  ts: number,
+  uploaded: { name: string; dataset_id: string },
+) {
+  const definition = {
+    schema_version: '2.0',
+    nodes: [
+      {
+        id: 'connector',
+        type: 'connector',
+        label: `供应链数据源 · ${uploaded.name}`,
+        position: { x: 80, y: 180 },
+        config: { source_type: 'file', files: [uploaded] },
+      },
+      { id: 'storage', type: 'storage', label: '分类存储', position: { x: 330, y: 180 }, config: { storage_mode: 'auto' } },
+      { id: 'transform', type: 'transform', label: '分路径转换', position: { x: 580, y: 180 }, config: { path: 'auto', steps: [{ op: 'vlm_extract', params: { strategy: 'vlm' } }] } },
+      { id: 'output', type: 'output', label: '结构化输出', position: { x: 830, y: 180 }, config: { dataset_type: 'curated_dataset', primary_key: [] } },
+    ],
+    edges: [
+      { id: 'e1', source: 'connector', target: 'storage' },
+      { id: 'e2', source: 'storage', target: 'transform' },
+      { id: 'e3', source: 'transform', target: 'output' },
+    ],
+  }
+  const pipeline = await apiJson(request, 'POST', '/api/v2/pipelines', token, {
+    name: `SC_GOLDEN_E2E_${ts}_${uploaded.name}`,
+    domain: '供应链',
+    description: 'Playwright golden flow: preview -> contract validation -> publish -> curated output',
+    route: 'A',
+    definition,
+  })
+
+  const dryRun = await apiJson(
+    request,
+    'POST',
+    `/api/v2/pipelines/${pipeline.id}/dry-run?max_rows=500`,
+    token,
+  )
+  expect(dryRun.outputs).toHaveLength(1)
+  const definitions = columnDefinitions(dryRun.outputs[0] as DryRunOutput)
+  const validation = await apiJson(
+    request,
+    'POST',
+    `/api/v2/pipelines/${pipeline.id}/validate-definitions?dry_run_id=${dryRun.dry_run_id}`,
+    token,
+    { column_definitions: definitions },
+  )
+  expect(validation.valid, JSON.stringify(validation.errors || [])).toBe(true)
+  await apiJson(request, 'PUT', `/api/v2/pipelines/${pipeline.id}`, token, {
+    column_definitions: definitions,
+  })
+  const published = await apiJson(request, 'POST', `/api/v2/pipelines/${pipeline.id}/publish`, token, {
+    enable: false,
+  })
+  expect(published).toMatchObject({ status: 'published', enabled: false })
+
+  const run = await apiJson(request, 'POST', `/api/v2/pipelines/${pipeline.id}/run-sync`, token)
+  expect(run.status).toBe('success')
+  expect(run.stats.curated_dataset_ids).toHaveLength(1)
+  return {
+    pipeline,
+    run,
+    definitions,
+    curatedDatasetId: run.stats.curated_dataset_ids[0] as string,
+  }
+}
+
+function fixtureBuffer(name: string, filePath: string): Buffer {
+  const source = fs.readFileSync(filePath)
+  if (name !== 'inventory_transactions.csv') return source
+
+  // 该明细表没有天然单列主键；为 E2E 夹具补一个稳定行号，避免把易变的
+  // 全字段组合作为正式对象身份。业务字段内容保持原样。
+  const lines = source.toString('utf-8').replace(/^\uFEFF/, '').split(/\r?\n/)
+  const [header, ...body] = lines
+  const rows = body.filter(line => line.length > 0)
+  return Buffer.from([
+    `e2e_row_id,${header}`,
+    ...rows.map((line, index) => `INV-${index + 1},${line}`),
+    '',
+  ].join('\n'))
 }
 
 async function shot(page: Page, outDir: string, name: string) {
@@ -91,7 +215,7 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
           file: {
             name,
             mimeType: 'application/octet-stream',
-            buffer: fs.readFileSync(filePath),
+            buffer: fixtureBuffer(name, filePath),
           },
         },
       })
@@ -100,49 +224,41 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
       uploaded.push({ name, dataset_id: body.data.id })
     }
 
-    const pipeline = await apiJson(request, 'POST', '/api/v2/pipelines', token, {
-      name: `SC_GOLDEN_E2E_${ts}`,
-      domain: '供应链',
-      description: 'Playwright golden flow: pipeline -> curated -> ontology mapping',
-      route: 'A',
-      definition: {
-        schema_version: '2.0',
-        nodes: [
-          { id: 'connector_all', type: 'connector', label: '供应链数据源', position: { x: 80, y: 180 }, config: { source_type: 'file', files: uploaded } },
-          { id: 'storage_all', type: 'storage', label: '分类存储', position: { x: 330, y: 180 }, config: { storage_mode: 'auto' } },
-          { id: 'transform_all', type: 'transform', label: '分路径转换', position: { x: 580, y: 180 }, config: { path: 'auto', steps: [{ op: 'vlm_extract', params: { strategy: 'vlm' } }] } },
-          { id: 'output_all', type: 'output', label: '结构化输出', position: { x: 830, y: 180 }, config: { dataset_type: 'curated_dataset', primary_key: [] } },
-        ],
-        edges: [
-          { id: 'e1', source: 'connector_all', target: 'storage_all' },
-          { id: 'e2', source: 'storage_all', target: 'transform_all' },
-          { id: 'e3', source: 'transform_all', target: 'output_all' },
-        ],
-      },
-    })
+    // 当前发布门禁的字段契约粒度是「单产物」。八个异构文件因此各自
+    // 经过执行预览、全量字段校验与发布，再共同映射到一个本体。
+    const pipelineOutputs: Array<{
+      pipeline: { id: string }
+      run: {
+        stats: {
+          rows_out: number
+          meta: { outputs: Array<{ curated_dataset_id: string; source_file: string }> }
+        }
+      }
+      definitions: ColumnDefinition[]
+      curatedDatasetId: string
+    }> = []
+    for (const item of uploaded) {
+      pipelineOutputs.push(await createPublishedPipeline(request, token, ts, item))
+    }
+    expect(pipelineOutputs).toHaveLength(8)
 
-    await page.goto(`${BASE}/pipelines/${pipeline.id}`)
-    await expect(page.locator('text=供应链数据源')).toBeVisible()
+    const firstPipeline = pipelineOutputs[0].pipeline
+    await login(page)
+    await page.goto(`/#/data/pipelines/${firstPipeline.id}`)
+    await expect(page.getByText(`供应链数据源 · ${uploaded[0].name}`, { exact: true })).toBeVisible()
     await shot(page, outDir, '01-pipeline-seeded')
 
-    const run = await apiJson(request, 'POST', `/api/v2/pipelines/${pipeline.id}/run-sync`, token)
-    expect(run.status).toBe('success')
-    const curatedIds = run.stats.curated_dataset_ids as string[]
+    const curatedIds = pipelineOutputs.map(item => item.curatedDatasetId)
     expect(curatedIds).toHaveLength(8)
-
-    await page.goto(`${BASE}/pipelines/${pipeline.id}`)
-    await expect(page.locator('text=8 Curated Datasets')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText('Curated Dataset', { exact: true })).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('已发布', { exact: true })).toBeVisible()
     await shot(page, outDir, '02-pipeline-after-run')
-
-    await apiJson(request, 'POST', `/api/v2/pipelines/${pipeline.id}/publish`, token)
-    await page.goto(`${BASE}/pipelines/${pipeline.id}`)
-    await expect(page.locator('text=published')).toBeVisible()
     await shot(page, outDir, '03-pipeline-published')
 
     for (const id of curatedIds) {
       await apiJson(request, 'POST', `/api/v2/curated/${id}/review?action=approve`, token)
     }
-    await page.goto(`${BASE}/pipelines/curated`)
+    await page.goto('/#/data/pipelines/curated')
     await expect(page.locator(`text=SC_GOLDEN_E2E_${ts}`).first()).toBeVisible({ timeout: 15000 })
     await expect(page.locator('text=已审批').first()).toBeVisible()
     await shot(page, outDir, '04-curated-approved')
@@ -156,54 +272,145 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
     const ontologyId = ontologyBody.data?.id || ontologyBody.id
     expect(ontologyId).toBeTruthy()
 
-    const outputs = run.stats.meta.outputs as Array<{ curated_dataset_id: string; source_file: string }>
-    for (const output of outputs) {
-      const sourceFile = output.source_file
-      await apiJson(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings`, token, {
-        curated_dataset_id: output.curated_dataset_id,
-        entity_class: ENTITY_BY_FILE[sourceFile],
-        field_mapping: { '__primary_key__': PK_BY_FILE[sourceFile] || '__row_hash__' },
-        primary_key_column: PK_BY_FILE[sourceFile] || '__row_hash__',
-        confidence: 1.0,
-      })
-    }
+    const tree = await apiJson(request, 'GET', `/api/v2/ontologies/${ontologyId}/version-tree`, token)
+    const root = tree.data.versions.find((item: { version_number: string }) => item.version_number === 'v0')
+    expect(root).toBeTruthy()
+    const draftResponse = await apiJson(
+      request,
+      'POST',
+      `/api/v2/ontologies/${ontologyId}/versions/${root.id}/drafts`,
+      token,
+      {
+        versionLabel: '供应链八资产映射',
+        description: '八个单产物发布流水线在隔离空间完成映射试跑',
+      },
+    )
+    const draft = draftResponse.data
+    const objectTypes = pipelineOutputs.map((item, index) => {
+      const output = item.run.stats.meta.outputs[0]
+      const entityClass = ENTITY_BY_FILE[output.source_file]
+      const primary = item.definitions.find(definition => definition.is_primary_key)
+      expect(primary, `${output.source_file} must have a single primary key`).toBeTruthy()
+      return {
+        id: `ot-${ts}-${index}`,
+        name: entityClass,
+        displayName: entityClass,
+        icon: 'database',
+        primaryKey: primary!.field_key,
+        positionX: (index % 4) * 260,
+        positionY: Math.floor(index / 4) * 220,
+        properties: item.definitions.map((definition, propertyIndex) => ({
+          id: `prop-${ts}-${index}-${propertyIndex}`,
+          name: definition.field_key,
+          displayName: definition.field_name,
+          type: 'string',
+          required: definition.is_primary_key,
+        })),
+      }
+    })
+    const saved = await apiJson(
+      request,
+      'PUT',
+      `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/workspace`,
+      token,
+      {
+        baseRevision: `${draft.revision}:${draft.snapshot_hash}`,
+        version: draft.version_number,
+        objectTypes,
+        linkTypes: [],
+        actions: [],
+        functions: [],
+        instances: [],
+        linkInstances: [],
+      },
+    )
+    const mappings = pipelineOutputs.map((item, index) => {
+      const output = item.run.stats.meta.outputs[0]
+      const entityClass = ENTITY_BY_FILE[output.source_file]
+      const primary = item.definitions.find(definition => definition.is_primary_key)!
+      return {
+        id: `mapping-${ts}-${index}`,
+        curatedDatasetId: item.curatedDatasetId,
+        entityClass,
+        targetObjectTypeId: objectTypes[index].id,
+        fieldMapping: {
+          ...Object.fromEntries(item.definitions.map(definition => [
+            definition.field_key,
+            definition.field_key,
+          ])),
+          __primary_key__: primary.field_key,
+        },
+        status: 'draft',
+        confidence: 1,
+      }
+    })
+    await apiJson(
+      request,
+      'PUT',
+      `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/workspace/mappings`,
+      token,
+      {
+        baseRevision: saved.data.revision,
+        mappings,
+        linkMappings: [],
+        sentinels: [],
+      },
+    )
+    const trialResponse = await apiJson(
+      request,
+      'POST',
+      `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/trial-runs`,
+      token,
+      {},
+    )
+    const trial = trialResponse.data
+    expect(trial.status, JSON.stringify(trial.result?.errors || [])).toBe('passed')
+    expect(trial.result.counts.datasets).toBe(8)
+    expect(trial.result.counts.objects).toBeGreaterThanOrEqual(100)
+    const impactResponse = await apiJson(
+      request,
+      'GET',
+      `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/impact`,
+      token,
+    )
+    const impact = impactResponse.data
+    expect(impact.releaseReadiness).toMatchObject({ ready: true, blockingCount: 0 })
+    const promotedResponse = await apiJson(
+      request,
+      'POST',
+      `/api/v2/ontologies/${ontologyId}/versions/${draft.id}/promote`,
+      token,
+      { trialRunId: trial.id, impactHash: impact.impactHash },
+    )
+    expect(promotedResponse.data).toMatchObject({ version_number: 'v1', lifecycle_status: 'released' })
+    const releasedResponse = await apiJson(
+      request,
+      'GET',
+      `/api/v2/formal/ontologies/${ontologyId}/full`,
+      token,
+    )
+    const released = releasedResponse.data
+    expect(released.objectTypes).toHaveLength(8)
+    expect(released.instances).toHaveLength(trial.result.counts.objects)
 
-    const build = await apiJson(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings/build-all`, token)
-    expect(build.total_entities).toBeGreaterThanOrEqual(100)
-    expect(build.total_relations).toBeGreaterThanOrEqual(50)
-    expect(build.total_logic).toBeGreaterThanOrEqual(10)
-    expect(build.total_actions).toBeGreaterThanOrEqual(15)
-    expect(build.link_mappings_inferred).toBeGreaterThanOrEqual(1)
-
-    await page.goto(`${BASE}/ontologies/${ontologyId}`)
-    await page.click('button:has-text("Curated 数据集")')
-    await expect(page.locator('text=SupplierDatabase')).toBeVisible({ timeout: 15000 })
-    await shot(page, outDir, '05-ontology-curated-mappings')
-
-    await page.click('button:has-text("实体")')
-    await expect(page.locator('table')).toBeVisible()
-    await expect(page.locator('tbody tr').filter({ hasText: 'InventoryTransactions' }).first()).toBeVisible()
+    await login(page)
+    await page.goto(`/#/ontologies/${ontologyId}`)
+    await expect(page.getByTestId('current-release-version')).toHaveText('v1')
+    await page.getByRole('button', { name: '本体结构', exact: true }).click()
+    await expect(page.getByText('InventoryTransactions', { exact: true }).first()).toBeVisible({ timeout: 15_000 })
     await shot(page, outDir, '06-ontology-entities')
 
-    await page.click('button:has-text("逻辑规则")')
-    await expect(page.locator('text=Mapping Rule').first()).toBeVisible()
-    await shot(page, outDir, '07-ontology-logic')
-
-    await page.click('button:has-text("动作")')
-    await expect(page.locator('text=Create').first()).toBeVisible()
-    await shot(page, outDir, '08-ontology-actions')
-
-    await page.goto(`${BASE}/ontologies/${ontologyId}?tab=graph`)
-    await expect(page.locator('text=/SQLite 图谱|Neo4j 已连接/')).toBeVisible({ timeout: 15000 })
-    await expect(page.getByTestId('ontology-graph-canvas')).toBeVisible({ timeout: 15000 })
-    await page.waitForTimeout(1200)
+    await page.getByRole('button', { name: '本体总览', exact: true }).click()
+    await page.getByRole('button', { name: '查看当前发布图谱', exact: true }).click()
+    await expect(page.getByTestId('graph-workspace-stage')).toContainText('当前发布 v1')
+    await expect(page.locator('.react-flow')).toBeVisible()
     await shot(page, outDir, '09-ontology-graph')
 
     fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify({
-      pipeline_id: pipeline.id,
+      pipeline_ids: pipelineOutputs.map(item => item.pipeline.id),
       ontology_id: ontologyId,
       curated_count: curatedIds.length,
-      build,
+      trial_counts: trial.result.counts,
     }, null, 2), 'utf-8')
   })
 })

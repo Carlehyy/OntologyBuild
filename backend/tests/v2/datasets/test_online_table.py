@@ -824,6 +824,123 @@ def _upload_stable_manual_contract(api, auth_headers):
     return response.json()["data"]["id"]
 
 
+def test_declare_contract_preserves_stable_upload_types_and_mapping(
+    api, auth_headers, ontology, db,
+):
+    payload = {
+        "name": "稳定业务编码",
+        "columns": [{
+            "source_key": "原始编码",
+            "name": "code",
+            "display_name": "业务编码",
+            "type": "string",
+            "nullable": True,
+        }],
+        "primary_key": "",
+    }
+    uploaded = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": (
+            "编码-v1.csv",
+            io.BytesIO("原始编码\n001\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    dataset_id = uploaded.json()["data"]["id"]
+
+    declared = api.put(
+        f"/api/v2/datasets/{dataset_id}/contract",
+        json={"primary_key": "code"},
+        headers=auth_headers,
+    )
+    assert declared.status_code == 200, declared.text
+
+    from app.models.v2.dataset import Dataset
+    stored = db.query(Dataset).filter(Dataset.id == dataset_id).one()
+    db.refresh(stored)
+    schema = stored.schema_json
+    code_column = next(
+        item for item in schema["columns_typed"] if item["name"] == "code")
+    assert code_column == {
+        "name": "code",
+        "display_name": "业务编码",
+        "type": "string",
+        "nullable": False,
+        "source_key": "原始编码",
+    }
+    code_definition = next(
+        item for item in schema["contract_definitions"]
+        if item["field_key"] == "code")
+    assert code_definition == {
+        "source_key": "原始编码",
+        "field_key": "code",
+        "field_name": "业务编码",
+        "field_type": "string",
+        "is_primary_key": True,
+        "nullable": False,
+    }
+
+    exposed_schema = api.get(
+        f"/api/v2/datasets/{dataset_id}/schema",
+        headers=auth_headers,
+    )
+    assert exposed_schema.status_code == 200, exposed_schema.text
+    exposed_code = next(
+        item for item in exposed_schema.json()["columns"]
+        if item["name"] == "code")
+    assert exposed_code["type"] == "string"
+    assert exposed_code["display_name"] == "业务编码"
+    assert exposed_code["is_primary_key"] is True
+    assert exposed_code["nullable"] is False
+
+    next_version = api.post(
+        f"/api/v2/datasets/{dataset_id}/upload",
+        files={"file": (
+            "编码-v2.csv",
+            io.BytesIO("原始编码\nABC\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert next_version.status_code == 201, next_version.text
+    assert next_version.json()["version_no"] == 2
+
+    ontology_id = ontology["id"]
+    object_type = api.post(
+        f"/api/v2/formal/ontologies/{ontology_id}/object-types",
+        headers=auth_headers,
+        json={
+            "name": "StableBusinessCode",
+            "displayName": "稳定业务编码",
+            "primaryKey": "code",
+            "properties": [{
+                "id": "stable-business-code",
+                "name": "code",
+                "type": "string",
+                "required": True,
+            }],
+        },
+    )
+    assert object_type.status_code == 201, object_type.text
+    object_type_id = object_type.json()["data"]["id"]
+
+    mapping = api.post(
+        f"/api/v2/ontologies/{ontology_id}/mappings",
+        headers=auth_headers,
+        json={
+            "curated_dataset_id": dataset_id,
+            "entity_class": "StableBusinessCode",
+            "target_object_type_id": object_type_id,
+            "field_mapping": {"code": "code"},
+        },
+    )
+    assert mapping.status_code == 200, mapping.text
+    assert mapping.json()["mapping_id"]
+
+
 def test_stable_manual_contract_normalizes_rows_and_connects_to_mapping(
     api, auth_headers, ontology, db,
 ):

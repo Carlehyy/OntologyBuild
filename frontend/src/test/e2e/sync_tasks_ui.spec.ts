@@ -107,7 +107,29 @@ async function mockTaskPool(page: Page, tasks: MockTask[] = [], recentRuns: Mock
           write_mode: 'overwrite', schedule_type: 'CRON', cron_expression: '0 2 * * *', skip_empty: true,
         },
         pipeline: { id: 'pipeline-orders', name: '订单标准化流水线', version: 3, status: 'published', domain: '供应链' },
-        outputs: [],
+        outputs: [{
+          output_key: 'orders',
+          curated_dataset_id: 'dataset-orders',
+          curated_dataset_name: '订单成品数据集',
+          table_name: 'orders',
+          rows_out: 9,
+          output_columns: ['order_id', 'amount'],
+          output_sample: [],
+          skipped: null,
+          lake_impact: {
+            keyed_by: ['order_id'],
+            added_count: 2,
+            updated_count: 1,
+            deleted_count: 0,
+            unchanged_count: 6,
+            total_before: 7,
+            total_after: 9,
+            added_sample: [],
+            updated_sample: [],
+            deleted_sample: [],
+            sample_truncated: false,
+          },
+        }],
         error_message: '',
       })
     }
@@ -294,6 +316,9 @@ test('全局历史记录弹窗限制尺寸、支持滚动分页与组合筛选',
   expect(modalBox?.height ?? 0).toBeGreaterThan(500)
   await expect(modal.getByText('第 1 / 3 页')).toBeVisible()
   await expect(modal.getByTestId('global-history-record-run-01')).toBeVisible()
+  await expect(modal.getByRole('columnheader', {
+    name: '原始入湖影响（相对上一原始快照）',
+  })).toBeVisible()
 
   const secondPageRequest = page.waitForRequest(request => {
     const url = new URL(request.url())
@@ -505,6 +530,8 @@ test('编辑任务沿用五步向导，执行记录支持筛选分页且保留�
   await page.getByTestId('execution-record-run-02').click()
   await expect(page.getByText('执行信息')).toBeVisible()
   await expect(page.getByText('调用的流水线')).toBeVisible()
+  await expect(historyDrawer.getByText(
+    '原始入湖影响（相对上一原始快照）', { exact: true })).toBeVisible()
 
   await page.getByLabel('执行状态筛选').selectOption('')
   const secondPageRequest = page.waitForRequest(request => {

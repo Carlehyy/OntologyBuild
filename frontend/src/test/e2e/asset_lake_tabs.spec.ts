@@ -480,11 +480,12 @@ test('待审核详情按真实主键保存行级修正，并保留三视角与�
   let dialog = page.getByRole('dialog', { name: '待审核订单成品表' })
   await expect(dialog).toBeVisible()
   await expect.poll(async () => (await dialog.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(520)
-  await expect(dialog.getByRole('button', { name: /变化量/ })).toBeVisible()
-  await expect(dialog.getByRole('button', { name: /上一版本全量/ })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /审核影响/ })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /上一已批准版本全量/ })).toBeVisible()
   await expect(dialog.getByRole('button', { name: /本次接受后全量/ })).toBeVisible()
   await expect(dialog.getByText('发现新数据，请完成审核')).toBeVisible()
-  await expect(dialog.getByText('变化对比只读；本次全量可修正非主键字段')).toBeVisible()
+  await expect(dialog.getByText('审核影响只读；本次全量可修正非主键字段')).toBeVisible()
+  await expect(dialog.getByText('审核影响（相对上一已批准版本，含人工修正）')).toBeVisible()
   await expect(dialog.getByRole('button', { name: /保存.*处修改/ })).toHaveCount(0)
 
   const actionBar = dialog.getByTestId('curated-review-actions')
@@ -507,9 +508,9 @@ test('待审核详情按真实主键保存行级修正，并保留三视角与�
   await expect(dialog.getByText('变更列：订单金额（amount）')).toBeVisible()
   await expect(dialog.getByText('绿色为新值')).toBeVisible()
   await expect(dialog.getByRole('cell', { name: /1280.*已变更/ })).toHaveClass(/bg-emerald-100/)
-  await expect(dialog.getByText(/变化量基于两个完整版本计算/)).toBeVisible()
+  await expect(dialog.getByText(/审核影响相对上一已批准版本计算，并包含已保存的人工修正/)).toBeVisible()
 
-  await dialog.getByRole('button', { name: /上一版本全量/ }).click()
+  await dialog.getByRole('button', { name: /上一已批准版本全量/ }).click()
   await expect(dialog.getByLabel('待审核数据每页显示条数')).toHaveValue('50')
   await dialog.getByLabel('待审核数据每页显示条数').selectOption('20')
   await expect(dialog.getByText(/第 1 \/ 4 页/)).toBeVisible()
@@ -528,7 +529,7 @@ test('待审核详情按真实主键保存行级修正，并保留三视角与�
   await expect(dialog.getByText('1 处修改尚未保存')).toBeVisible()
   await expect(approveButton).toBeDisabled()
   await expect(rejectButton).toBeDisabled()
-  await expect(dialog.getByRole('button', { name: /变化量/ })).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: /审核影响/ })).toBeDisabled()
   const editRequestPromise = page.waitForRequest(request => (
     request.method() === 'POST'
     && new URL(request.url()).pathname === '/api/v2/curated/reviews/review-pending-pk/edits'

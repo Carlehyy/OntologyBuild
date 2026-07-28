@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     dataset_event_poll_seconds: int = 2
     dataset_event_claim_timeout_seconds: int = 3600
     dataset_event_batch_size: int = 20
+    # Trial materialization runs synchronously but persists its running claim
+    # first.  Expired claims are terminalized and can no longer block retry or
+    # deletion; late completion is fenced by the per-run claim token.
+    ontology_trial_lease_seconds: int = 3600
     # Current transform engine is list-based.  Refuse oversized production
     # inputs explicitly instead of risking process OOM; raise as deployments
     # gain memory or replace with a streaming executor.
