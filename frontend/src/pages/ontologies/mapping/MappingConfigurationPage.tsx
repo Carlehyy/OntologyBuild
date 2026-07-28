@@ -44,6 +44,18 @@ function typeLabel(type?: string) {
   return { string: '文本', number: '数字', datetime: '时间', boolean: '布尔', array: '数组', json: 'JSON' }[normalized] || type || '文本'
 }
 
+function datasetColumnLabel(column: MappingDataset['columns'][number]) {
+  const displayName = column.display_name?.trim()
+  return displayName && displayName !== column.name
+    ? `${displayName}（${column.name}）`
+    : column.name
+}
+
+function datasetColumnLabelByName(dataset: MappingDataset | undefined, name: string) {
+  const column = dataset?.columns.find(item => item.name === name)
+  return column ? datasetColumnLabel(column) : name
+}
+
 function targetLaneX() {
   return window.innerWidth < 1400 ? 410 : 650
 }
@@ -61,7 +73,7 @@ function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
       <div className="dmc-node__fields">
         {dataset.columns.map(column => <div key={column.name} className="dmc-node-field">
           {dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={11} className="is-key" /> : <span className="dmc-field-spacer" />}
-          <span title={column.name}>{column.name}</span><em>{typeLabel(column.type)}</em>
+          <span title={datasetColumnLabel(column)}>{datasetColumnLabel(column)}</span><em>{typeLabel(column.type)}</em>
           <Handle type="source" position={Position.Right} id={column.name} className="dmc-handle dmc-handle--source" />
         </div>)}
         {dataset.columns.length === 0 && <div className="dmc-node-empty">暂未识别到字段</div>}
@@ -805,7 +817,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
                       <span><b>{policyTitle}</b><small>{policyDetail}</small></span>
                     </label>
                   )}
-                  {expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b>{column.name}</b><em>{typeLabel(column.type)}</em></span>)}</div>}
+                  {expanded && <div className="dmc-asset-columns">{dataset.columns.map(column => <span key={column.name}>{dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={9} /> : <i />}<b title={datasetColumnLabel(column)}>{datasetColumnLabel(column)}</b><em>{typeLabel(column.type)}</em></span>)}</div>}
                 </div>
               )
             })}
@@ -851,7 +863,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
             <div className="dmc-canvas-stats">节点 <b>{nodes.length}</b><span />字段映射 <b>{edges.length}</b><span />{dirty ? <em>有未保存更改</em> : <i>已与数据库同步</i>}</div>
           </ReactFlow>
 
-          {selectedDatasetId && <section className="dmc-preview-panel" data-testid="mapping-dataset-preview"><header><div><Eye size={14} /><span><b>{datasetById.get(selectedDatasetId)?.name}</b><small>实例数据预览 · 仅用于映射核对</small></span></div><button onClick={() => setSelectedDatasetId(null)} aria-label="关闭数据预览"><X size={14} /></button></header>{previewQuery.isLoading ? <div className="dmc-preview-loading"><Loader2 className="animate-spin" />正在读取数据…</div> : previewQuery.data?.columns?.length ? <div className="dmc-preview-table"><table><thead><tr>{previewQuery.data.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{previewQuery.data.rows.map((row, index) => <tr key={index}>{previewQuery.data!.columns.map(column => <td key={column} title={String(row[column] ?? '')}>{row[column] == null || row[column] === '' ? '—' : typeof row[column] === 'object' ? JSON.stringify(row[column]) : String(row[column])}</td>)}</tr>)}</tbody></table><p>显示 {previewQuery.data.rows.length} 行 · 共 {previewQuery.data.total_rows?.toLocaleString() || 0} 行</p></div> : <div className="dmc-preview-loading"><AlertCircle />当前数据集暂无可预览数据</div>}</section>}
+          {selectedDatasetId && <section className="dmc-preview-panel" data-testid="mapping-dataset-preview"><header><div><Eye size={14} /><span><b>{datasetById.get(selectedDatasetId)?.name}</b><small>实例数据预览 · 仅用于映射核对</small></span></div><button onClick={() => setSelectedDatasetId(null)} aria-label="关闭数据预览"><X size={14} /></button></header>{previewQuery.isLoading ? <div className="dmc-preview-loading"><Loader2 className="animate-spin" />正在读取数据…</div> : previewQuery.data?.columns?.length ? <div className="dmc-preview-table"><table><thead><tr>{previewQuery.data.columns.map(column => <th key={column} title={column}>{datasetColumnLabelByName(datasetById.get(selectedDatasetId), column)}</th>)}</tr></thead><tbody>{previewQuery.data.rows.map((row, index) => <tr key={index}>{previewQuery.data!.columns.map(column => <td key={column} title={String(row[column] ?? '')}>{row[column] == null || row[column] === '' ? '—' : typeof row[column] === 'object' ? JSON.stringify(row[column]) : String(row[column])}</td>)}</tr>)}</tbody></table><p>显示 {previewQuery.data.rows.length} 行 · 共 {previewQuery.data.total_rows?.toLocaleString() || 0} 行</p></div> : <div className="dmc-preview-loading"><AlertCircle />当前数据集暂无可预览数据</div>}</section>}
         </main>
 
         <aside className="dmc-sidebar dmc-sidebar--right">

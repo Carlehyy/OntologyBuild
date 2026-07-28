@@ -75,6 +75,8 @@ export const FIELD_TYPE_LABELS: Record<string, string> = {
 
 export interface CreateTableColumn {
   name: string
+  /** 上传文件中的原始表头；正式数据和本体映射始终使用 name */
+  source_key?: string
   display_name?: string
   /** 平台类型词表 CONTRACT_FIELD_TYPES，非法值会被后端明确拒绝 */
   type: string

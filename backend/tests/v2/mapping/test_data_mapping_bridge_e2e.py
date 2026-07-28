@@ -6,6 +6,9 @@
 """
 from __future__ import annotations
 
+import io
+import json
+
 import pytest
 
 from app.main import app
@@ -76,6 +79,37 @@ def _create_table(api, headers, name: str, columns: list[tuple[str, str]], pk: s
     return dataset_id
 
 
+def _upload_table_with_stable_contract(
+    api,
+    headers,
+    name: str,
+    columns: list[tuple[str, str, str]],
+    primary_key: str,
+    csv_content: str,
+) -> str:
+    response = api.post(
+        "/api/v2/datasets/upload",
+        headers=headers,
+        data={"metadata": json.dumps({
+            "name": name,
+            "columns": [{
+                "source_key": source_key,
+                "name": field_key,
+                "display_name": source_key,
+                "type": field_type,
+            } for source_key, field_key, field_type in columns],
+            "primary_key": primary_key,
+        }, ensure_ascii=False)},
+        files={"file": (
+            f"{name}.csv",
+            io.BytesIO(csv_content.encode("utf-8")),
+            "text/csv",
+        )},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]["id"]
+
+
 def _create_object_type(api, headers, ontology_id: str, name: str,
                         properties: list[dict], primary_key: str) -> str:
     response = api.post(f"{_formal(ontology_id)}/object-types", headers=headers, json={
@@ -110,13 +144,20 @@ def test_mapping_api_rejects_incompatible_object_and_relation_types(
     orders = _create_table(api, headers, "订单", [
         ("order_id", "string"), ("amount", "float"),
     ], "order_id", [{"order_id": "O-1", "amount": "12.5"}])
-    assignments = _create_table(api, headers, "订单供应商关系", [
-        ("line_id", "string"), ("supplier_id", "string"),
-        ("order_id", "string"), ("score", "float"), ("note", "string"),
-    ], "line_id", [{
-        "line_id": "L-1", "supplier_id": "S-1", "order_id": "O-1",
-        "score": "0.9", "note": "优先",
-    }])
+    assignments = _upload_table_with_stable_contract(
+        api,
+        headers,
+        "订单供应商关系",
+        [
+            ("关系行号", "line_id", "string"),
+            ("供应商编号", "supplier_id", "string"),
+            ("订单编号", "order_id", "string"),
+            ("评分", "score", "float"),
+            ("备注", "note", "string"),
+        ],
+        "line_id",
+        "关系行号,供应商编号,订单编号,评分,备注\nL-1,S-1,O-1,0.9,优先\n",
+    )
 
     supplier_type = _create_object_type(api, headers, ontology_id, "Supplier", [
         {"id": "supplier-id", "name": "supplier_id", "type": "string", "required": True},

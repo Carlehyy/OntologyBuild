@@ -16,6 +16,7 @@ const ACCEPTED_EXTENSIONS = ['csv', 'xlsx', 'xls']
 
 interface ColDraft {
   id: string
+  sourceKey: string
   name: string
   displayName: string
   type: string
@@ -27,8 +28,11 @@ const createColumnId = () => globalThis.crypto?.randomUUID?.()
   ?? `column-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 const emptyColumn = (): ColDraft => ({
-  id: createColumnId(), name: '', displayName: '', type: 'string', pk: false, nullable: true,
+  id: createColumnId(), sourceKey: '', name: '', displayName: '',
+  type: 'string', pk: false, nullable: true,
 })
+
+const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]*$/
 
 const fileExtension = (file: File) => file.name.split('.').pop()?.toLowerCase() ?? ''
 const withoutExtension = (filename: string) => filename.replace(/\.[^.]+$/, '')
@@ -133,7 +137,8 @@ export default function CreateTableModal({ onClose, onCreated }: {
       const nextColumns = job.columns ?? []
       setColumns(nextColumns.map(column => ({
         id: createColumnId(),
-        name: column.name,
+        sourceKey: column.name,
+        name: '',
         displayName: column.name,
         type: column.type || 'string',
         pk: false,
@@ -287,11 +292,18 @@ export default function CreateTableModal({ onClose, onCreated }: {
     if (!file && !blankMode) return '请上传一个表格，或选择直接定义空表'
     if (file && importStatus !== 'ready') return '请等待后端完成表格解析'
     if (!name.trim()) return '请填写数据集名称'
-    const configured = columns.filter(column => column.name.trim())
+    const configured = columns.filter(column =>
+      Boolean(file || column.name.trim() || column.displayName.trim()))
     if (!configured.length) return '至少需要定义一列'
     const seen = new Set<string>()
-    for (const column of configured) {
+    for (const [index, column] of configured.entries()) {
       const identifier = column.name.trim()
+      if (!identifier) {
+        return `请为「${column.displayName.trim() || column.sourceKey || `第 ${index + 1} 列`}」填写字段标识`
+      }
+      if (!FIELD_KEY_PATTERN.test(identifier)) {
+        return `字段标识「${identifier}」不合法：必须以小写字母开头，且只能包含小写字母、数字和下划线`
+      }
       if (seen.has(identifier)) return `字段标识「${identifier}」重复`
       seen.add(identifier)
     }
@@ -301,11 +313,13 @@ export default function CreateTableModal({ onClose, onCreated }: {
   const handleSubmit = async () => {
     const validationError = validate()
     if (validationError) { setError(validationError); return }
-    const configured = columns.filter(column => column.name.trim())
+    const configured = columns.filter(column =>
+      Boolean(file || column.name.trim() || column.displayName.trim()))
     const payload = {
       name: name.trim(),
       columns: configured.map(column => ({
         name: column.name.trim(),
+        source_key: column.sourceKey.trim() || column.name.trim(),
         display_name: column.displayName.trim() || column.name.trim(),
         type: column.type,
         nullable: column.pk ? false : column.nullable,
@@ -427,7 +441,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
               <section className="border-b border-slate-100 px-5 py-4">
                 <div className="mb-2 flex items-end justify-between gap-4">
-                  <div><h4 className="text-xs font-semibold text-slate-700">字段设置</h4><p className="mt-0.5 text-[11px] text-slate-400">中文名用于界面展示；字段标识对应文件表头。主键与非空约束会在创建时校验全部数据。</p></div>
+                  <div><h4 className="text-xs font-semibold text-slate-700">字段设置</h4><p className="mt-0.5 text-[11px] text-slate-400">{file ? '中文名已从原始表头带入；请手动填写稳定字段标识。原始表头仅用于本次及后续版本识别，不会作为本体映射键。' : '中文名用于界面展示；字段标识必须由小写字母、数字和下划线组成，并以小写字母开头。'}主键与非空约束会在创建时校验全部数据。</p></div>
                   {blankMode && <button type="button" onClick={addColumn} className="inline-flex h-7 items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900"><Plus size={12} />添加字段</button>}
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -443,7 +457,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                     <tbody className="divide-y divide-slate-100">{columns.map((column, index) => (
                       <tr key={column.id} className="hover:bg-slate-50/60">
                         <td className="p-1.5"><input value={column.displayName} onChange={event => setColumn(index, { displayName: event.target.value })} placeholder="例如：设备名称" className="h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 outline-none focus:border-teal-500" /></td>
-                        <td className="p-1.5"><input value={column.name} readOnly={Boolean(file)} onChange={event => setColumn(index, { name: event.target.value })} placeholder="例如：device_name" title={file ? '上传文件的字段标识来自表头，不可在此修改' : ''} className={`h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 font-mono outline-none focus:border-teal-500 ${file ? 'cursor-not-allowed bg-slate-50 text-slate-500' : ''}`} /></td>
+                        <td className="p-1.5"><div><input value={column.name} onChange={event => setColumn(index, { name: event.target.value })} placeholder="例如：device_name" autoCapitalize="none" autoCorrect="off" spellCheck={false} title={file ? `原始表头：${column.sourceKey}` : '以小写字母开头，仅允许小写字母、数字和下划线'} className="h-8 w-full min-w-36 rounded-md border border-slate-200 px-2 font-mono outline-none focus:border-teal-500" />{file && <p className="mt-1 truncate text-[10px] text-slate-400" title={column.sourceKey}>原始表头：{column.sourceKey}</p>}</div></td>
                         <td className="p-1.5"><select value={column.type} onChange={event => setColumn(index, { type: event.target.value })} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 outline-none focus:border-teal-500">{CONTRACT_FIELD_TYPES.map(type => <option key={type} value={type}>{FIELD_TYPE_LABELS[type] ?? type}（{type}）</option>)}</select></td>
                         <td className="p-1.5 text-center"><input type="checkbox" checked={!column.nullable || column.pk} disabled={column.pk} onChange={event => setColumn(index, { nullable: !event.target.checked })} className="accent-teal-600" aria-label={`${column.name} 非空`} /></td>
                         <td className="p-1.5 text-center"><input type="checkbox" checked={column.pk} onChange={event => setColumn(index, { pk: event.target.checked, nullable: event.target.checked ? false : column.nullable })} className="accent-amber-500" aria-label={`${column.name} 主键`} /></td>
@@ -458,7 +472,7 @@ export default function CreateTableModal({ onClose, onCreated }: {
                 <section className="px-5 py-4">
                   <button type="button" onClick={() => setPreviewOpen(current => !current)} disabled={!rows.length} className="inline-flex h-8 items-center gap-1.5 text-xs font-medium text-teal-700 hover:text-teal-900 disabled:opacity-40"><Eye size={13} />{previewOpen ? '收起数据样例' : `查看数据样例（前 ${rows.length} 行）`}</button>
                   {previewOpen && <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
-                    <div className="max-h-72 overflow-auto"><table className="min-w-max text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50"><tr><th className="px-3 py-2 text-left font-medium text-slate-400">#</th>{columns.map(column => <th key={column.name} className="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600">{column.displayName && column.displayName !== column.name ? `${column.displayName}（${column.name}）` : column.name}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{previewRows.map((row, rowIndex) => <tr key={`${previewPage}-${rowIndex}`} className="hover:bg-slate-50/60"><td className="px-3 py-2 tabular-nums text-slate-300">{(previewPage - 1) * previewPageSize + rowIndex + 1}</td>{columns.map((column, columnIndex) => <td key={column.name} className="whitespace-nowrap px-3 py-2 text-slate-600" title={row[columnIndex]}>{row[columnIndex]}</td>)}</tr>)}</tbody></table></div>
+                    <div className="max-h-72 overflow-auto"><table className="min-w-max text-xs"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50"><tr><th className="px-3 py-2 text-left font-medium text-slate-400">#</th>{columns.map(column => <th key={column.id} className="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-600">{column.name ? (column.displayName && column.displayName !== column.name ? `${column.displayName}（${column.name}）` : column.name) : `${column.displayName || column.sourceKey}（待填写字段标识）`}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{previewRows.map((row, rowIndex) => <tr key={`${previewPage}-${rowIndex}`} className="hover:bg-slate-50/60"><td className="px-3 py-2 tabular-nums text-slate-300">{(previewPage - 1) * previewPageSize + rowIndex + 1}</td>{columns.map((column, columnIndex) => <td key={column.id} className="whitespace-nowrap px-3 py-2 text-slate-600" title={row[columnIndex]}>{row[columnIndex]}</td>)}</tr>)}</tbody></table></div>
                     <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-xs text-slate-500"><label className="flex items-center gap-1">每页<select value={previewPageSize} onChange={event => { setPreviewPageSize(Number(event.target.value)); setPreviewPage(1) }} className="h-7 rounded-md border border-slate-200 bg-white px-1.5 outline-none">{PREVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select>条</label><button type="button" onClick={() => setPreviewPage(page => Math.max(1, page - 1))} disabled={previewPage <= 1} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronLeft size={12} /></button><span className="min-w-20 text-center tabular-nums">{previewPage} / {previewPages}</span><button type="button" onClick={() => setPreviewPage(page => Math.min(previewPages, page + 1))} disabled={previewPage >= previewPages} className="grid h-7 w-7 place-items-center rounded-md border border-slate-200 bg-white disabled:opacity-30"><ChevronRight size={12} /></button></div>
                   </div>}
                 </section>

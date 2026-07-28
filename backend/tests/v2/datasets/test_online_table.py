@@ -202,11 +202,20 @@ def test_configured_xlsx_upload_uses_first_sheet_and_hyperlink_display_text(
     payload = {
         "name": "公式工单导入",
         "columns": [
-            {"name": "工单号", "type": "string", "nullable": False},
-            {"name": "说明", "type": "string", "nullable": True},
-            {"name": "数量", "type": "integer", "nullable": True},
+            {
+                "source_key": "工单号", "name": "ticket_id",
+                "display_name": "工单号", "type": "string", "nullable": False,
+            },
+            {
+                "source_key": "说明", "name": "description",
+                "display_name": "说明", "type": "string", "nullable": True,
+            },
+            {
+                "source_key": "数量", "name": "quantity",
+                "display_name": "数量", "type": "integer", "nullable": True,
+            },
         ],
-        "primary_key": "工单号",
+        "primary_key": "ticket_id",
     }
     response = api.post(
         "/api/v2/datasets/upload",
@@ -224,11 +233,11 @@ def test_configured_xlsx_upload_uses_first_sheet_and_hyperlink_display_text(
     assert result["rowcount"] == 1
     preview = api.get(
         f"/api/v2/datasets/{result['id']}/preview", headers=auth_headers).json()
-    assert preview["columns"] == ["工单号", "说明", "数量"]
+    assert preview["columns"] == ["ticket_id", "description", "quantity"]
     assert preview["rows"] == [{
-        "工单号": "PM26072236369",
-        "说明": "第一行\n第二行",
-        "数量": 3,
+        "ticket_id": "PM26072236369",
+        "description": "第一行\n第二行",
+        "quantity": 3,
     }]
 
 
@@ -267,10 +276,10 @@ def test_configured_xls_upload_accepts_integer_cells(
     ]
 
 
-def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_change(
+def test_async_import_stages_file_and_normalizes_source_headers_to_field_keys(
     api, auth_headers, db, monkeypatch, tmp_path,
 ):
-    """在线建表只上传文件；解析和最终发布都由后台任务完成。"""
+    """后台解析保留原始表头，正式版本只发布稳定字段标识。"""
     import openpyxl
     from sqlalchemy.orm import sessionmaker
 
@@ -298,7 +307,7 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
     workbook = openpyxl.Workbook()
     first = workbook.active
     first.title = "默认首表"
-    first.append(["id", "name", "quantity"])
+    first.append(["设备编号", "设备名称", "数量"])
     first.append(["A1", "泵机", 10])
     second = workbook.create_sheet("不导入")
     second.append(["wrong"])
@@ -333,8 +342,8 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
     assert job["sheet_name"] == "默认首表"
     assert job["rowcount"] == 1
     assert [column["name"] for column in job["columns"]] == [
-        "id", "name", "quantity"]
-    assert job["preview_rows"] == [{"id": "A1", "name": "泵机", "quantity": 10}]
+        "设备编号", "设备名称", "数量"]
+    assert job["preview_rows"] == [{"设备编号": "A1", "设备名称": "泵机", "数量": 10}]
 
     job_dir = tmp_path / "uploads" / "dataset-imports" / job["job_id"]
     assert (job_dir / "source.xlsx").read_bytes() == content.getvalue()
@@ -346,11 +355,20 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
         json={
             "name": "设备台账异步导入",
             "columns": [
-                {"name": "id", "type": "string", "nullable": False},
-                {"name": "name", "type": "string", "nullable": False},
-                {"name": "quantity", "type": "integer", "nullable": True},
+                {
+                    "source_key": "设备编号", "name": "device_id",
+                    "display_name": "设备编号", "type": "string", "nullable": False,
+                },
+                {
+                    "source_key": "设备名称", "name": "device_name",
+                    "display_name": "设备名称", "type": "string", "nullable": False,
+                },
+                {
+                    "source_key": "数量", "name": "quantity",
+                    "display_name": "数量", "type": "integer", "nullable": True,
+                },
             ],
-            "primary_key": "id",
+            "primary_key": "device_id",
         },
         headers=auth_headers,
     )
@@ -374,7 +392,10 @@ def test_async_import_stages_file_parses_first_sheet_and_commits_without_schema_
         headers=auth_headers,
     )
     assert preview.status_code == 200
-    assert preview.json()["rows"] == [{"id": "A1", "name": "泵机", "quantity": 10}]
+    assert preview.json()["columns"] == ["device_id", "device_name", "quantity"]
+    assert preview.json()["rows"] == [{
+        "device_id": "A1", "device_name": "泵机", "quantity": 10,
+    }]
 
 
 def test_configured_upload_accepts_cr_only_csv_newlines(api, auth_headers):
@@ -766,3 +787,182 @@ def test_async_import_required_mode_fails_closed_when_broker_is_down(
         "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行")
     assert "生产强制依赖模式禁止降级" in caplog.text
     assert "已降级为 API 进程内后台任务" not in caplog.text
+
+
+def _upload_stable_manual_contract(api, auth_headers):
+    payload = {
+        "name": "人员台账",
+        "columns": [
+            {
+                "source_key": "姓名",
+                "name": "person_name",
+                "display_name": "姓名",
+                "type": "string",
+                "nullable": False,
+            },
+            {
+                "source_key": "年龄",
+                "name": "age",
+                "display_name": "年龄",
+                "type": "integer",
+                "nullable": True,
+            },
+        ],
+        "primary_key": "person_name",
+    }
+    response = api.post(
+        "/api/v2/datasets/upload",
+        data={"metadata": json.dumps(payload, ensure_ascii=False)},
+        files={"file": (
+            "人员.csv",
+            io.BytesIO("姓名,年龄\n张三,28\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]["id"]
+
+
+def test_stable_manual_contract_normalizes_rows_and_connects_to_mapping(
+    api, auth_headers, ontology, db,
+):
+    dataset_id = _upload_stable_manual_contract(api, auth_headers)
+
+    preview = api.get(
+        f"/api/v2/datasets/{dataset_id}/preview", headers=auth_headers).json()
+    assert preview["columns"] == ["person_name", "age"]
+    assert preview["rows"] == [{"person_name": "张三", "age": "28"}]
+
+    schema = api.get(
+        f"/api/v2/datasets/{dataset_id}/schema", headers=auth_headers).json()
+    columns = {item["name"]: item for item in schema["columns"]}
+    assert columns["person_name"]["display_name"] == "姓名"
+    assert columns["person_name"]["is_primary_key"] is True
+    assert columns["age"]["display_name"] == "年龄"
+    assert columns["age"]["type"] == "integer"
+
+    from app.models.v2.dataset import Dataset
+    stored = db.query(Dataset).filter(Dataset.id == dataset_id).one()
+    assert stored.schema_json["manual_field_contract_version"] == 2
+    assert stored.schema_json["contract_definitions"] == [
+        {
+            "source_key": "姓名",
+            "field_key": "person_name",
+            "field_name": "姓名",
+            "field_type": "string",
+            "is_primary_key": True,
+            "nullable": False,
+        },
+        {
+            "source_key": "年龄",
+            "field_key": "age",
+            "field_name": "年龄",
+            "field_type": "integer",
+            "is_primary_key": False,
+            "nullable": True,
+        },
+    ]
+
+    mapping = api.post(
+        f"/api/v2/ontologies/{ontology['id']}/mappings",
+        headers=auth_headers,
+        json={
+            "curated_dataset_id": dataset_id,
+            "entity_class": "Person",
+            "field_mapping": {
+                "person_name": "name",
+                "age": "age",
+            },
+        },
+    )
+    assert mapping.status_code == 200, mapping.text
+    assert mapping.json()["mapping_id"]
+
+
+def test_stable_manual_contract_locks_follow_up_version_headers(
+    api, auth_headers,
+):
+    dataset_id = _upload_stable_manual_contract(api, auth_headers)
+
+    source_header = api.post(
+        f"/api/v2/datasets/{dataset_id}/upload",
+        files={"file": (
+            "人员-v2.csv",
+            io.BytesIO("姓名,年龄\n李四,31\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert source_header.status_code == 201, source_header.text
+    preview = api.get(
+        f"/api/v2/datasets/{dataset_id}/preview", headers=auth_headers).json()
+    assert preview["rows"] == [{"person_name": "李四", "age": "31"}]
+
+    field_header = api.post(
+        f"/api/v2/datasets/{dataset_id}/upload",
+        files={"file": (
+            "人员-v3.csv",
+            io.BytesIO("person_name,age\n王五,42\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert field_header.status_code == 201, field_header.text
+    preview = api.get(
+        f"/api/v2/datasets/{dataset_id}/preview", headers=auth_headers).json()
+    assert preview["rows"] == [{"person_name": "王五", "age": "42"}]
+
+    before_versions = api.get(
+        f"/api/v2/datasets/{dataset_id}/versions", headers=auth_headers).json()
+    mixed = api.post(
+        f"/api/v2/datasets/{dataset_id}/upload",
+        files={"file": (
+            "人员-混用.csv",
+            io.BytesIO("姓名,age\n赵六,35\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert mixed.status_code == 400
+    assert "不允许混用、新增、缺失或调整字段顺序" in str(
+        mixed.json()["detail"])
+    after_versions = api.get(
+        f"/api/v2/datasets/{dataset_id}/versions", headers=auth_headers).json()
+    assert len(after_versions) == len(before_versions)
+
+    empty = api.post(
+        f"/api/v2/datasets/{dataset_id}/upload",
+        files={"file": (
+            "人员-空表.csv",
+            io.BytesIO("姓名,年龄\n".encode("utf-8")),
+            "text/csv",
+        )},
+        headers=auth_headers,
+    )
+    assert empty.status_code == 201, empty.text
+    preview = api.get(
+        f"/api/v2/datasets/{dataset_id}/preview", headers=auth_headers).json()
+    assert preview["columns"] == ["person_name", "age"]
+    assert preview["rows"] == []
+
+
+@pytest.mark.parametrize("field_key", ["姓名", "PersonName", "_name", "person-name"])
+def test_stable_manual_contract_rejects_invalid_field_identifier(
+    api, auth_headers, field_key,
+):
+    response = api.post(
+        "/api/v2/datasets/create-table",
+        headers=auth_headers,
+        json={
+            "name": "不合法字段",
+            "columns": [{
+                "source_key": field_key,
+                "name": field_key,
+                "display_name": "姓名",
+                "type": "string",
+            }],
+        },
+    )
+    assert response.status_code == 400
+    assert "必须以小写字母开头" in str(response.json()["detail"])

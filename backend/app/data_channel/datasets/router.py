@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,9 @@ from app.services.v2.dataset_service import DatasetService
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
+
+MANUAL_FIELD_CONTRACT_VERSION = 2
+MANUAL_FIELD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 def get_db():
     db = SessionLocal()
@@ -193,13 +197,28 @@ async def upload_dataset(
             physical_columns = stored_columns(content)
         except Exception as exc:
             raise HTTPException(400, f"表格解析失败：{exc}")
-        expected_columns = schema["columns"]
-        if physical_columns != expected_columns:
-            raise HTTPException(
-                400,
-                f"上传文件列结构已发生变化（文件：{physical_columns}；当前设置：{expected_columns}），请重新选择文件",
+        if (
+            schema.get("manual_field_contract_version")
+            == MANUAL_FIELD_CONTRACT_VERSION
+        ):
+            rows, content = _normalize_manual_contract_upload(
+                rows,
+                physical_columns,
+                schema,
+                dataset_name=name,
+                scope="上传数据",
+                allow_field_key_headers=False,
             )
-        _validate_manual_rows(rows, schema, dataset_name=name, scope="上传数据")
+        else:
+            expected_columns = schema["columns"]
+            if physical_columns != expected_columns:
+                raise HTTPException(
+                    400,
+                    "上传文件列结构已发生变化"
+                    f"（文件：{physical_columns}；当前设置：{expected_columns}），请重新选择文件",
+                )
+            _validate_manual_rows(
+                rows, schema, dataset_name=name, scope="上传数据")
 
         svc = DatasetService(db)
         ds = svc.create_dataset(
@@ -309,6 +328,7 @@ def get_dataset_import(
 
 class TableColumnDef(BaseModel):
     name: str
+    source_key: str = ""
     display_name: str = ""
     type: str = "string"  # CONTRACT_FIELD_TYPES 平台词表；非法值显式拒绝
     nullable: bool = True
@@ -331,14 +351,45 @@ def _build_manual_schema(body: CreateTableRequest, *, origin: str) -> tuple[str,
     if len(name) > 200:
         raise HTTPException(400, "表格名称过长（最多 200 字）")
 
-    raw_columns: list[tuple[TableColumnDef, str]] = []
+    explicit_source_keys = [
+        definition.source_key.strip()
+        for definition in body.columns
+        if definition.name.strip()
+    ]
+    has_explicit_source = any(explicit_source_keys)
+    if has_explicit_source and not all(explicit_source_keys):
+        raise HTTPException(400, "字段契约中的原始表头必须为每一列完整提供")
+
+    # Every configured file upload uses the stable-key contract.  ``source_key``
+    # is optional only for legacy English-header clients, where field key and
+    # source header are already identical.  Empty-table API clients opt in by
+    # sending source_key; existing Unicode-key tables remain readable unchanged.
+    use_stable_field_contract = origin == "upload" or has_explicit_source
+
+    raw_columns: list[tuple[TableColumnDef, str, str]] = []
     seen: set[str] = set()
+    seen_sources: set[str] = set()
     for definition in body.columns:
         column = definition.name.strip()
         if not column:
             continue
+        if (
+            use_stable_field_contract
+            and not MANUAL_FIELD_KEY_RE.fullmatch(column)
+        ):
+            raise HTTPException(
+                400,
+                f"字段标识「{column}」不合法：必须以小写字母开头，"
+                "且只能包含小写字母、数字和下划线",
+            )
         if column in seen:
-            raise HTTPException(400, f"列名「{column}」重复，请修改后重试")
+            raise HTTPException(400, f"字段标识「{column}」重复，请修改后重试")
+        source_key = definition.source_key.strip() or column
+        if origin != "upload" and source_key != column:
+            raise HTTPException(400, "空表字段的原始表头必须与字段标识一致")
+        if source_key in seen_sources:
+            raise HTTPException(
+                400, f"原始表头「{source_key}」重复，请修改源文件后重试")
         requested_type = str(definition.type or "").strip().lower()
         if requested_type not in CONTRACT_FIELD_TYPES:
             raise HTTPException(
@@ -346,7 +397,8 @@ def _build_manual_schema(body: CreateTableRequest, *, origin: str) -> tuple[str,
                 f"列「{column}」的数据类型「{definition.type}」不受支持；可选类型：{', '.join(CONTRACT_FIELD_TYPES)}",
             )
         seen.add(column)
-        raw_columns.append((definition, column))
+        seen_sources.add(source_key)
+        raw_columns.append((definition, column, source_key))
     if not raw_columns:
         raise HTTPException(400, "至少需要定义一列（空白列名会被忽略）")
 
@@ -355,12 +407,32 @@ def _build_manual_schema(body: CreateTableRequest, *, origin: str) -> tuple[str,
     if unknown_pk:
         raise HTTPException(400, f"主键列 {unknown_pk} 不在列定义中")
 
-    columns = [{
-        "name": column,
-        "display_name": definition.display_name.strip() or column,
-        "type": normalize_field_type(definition.type),
-        "nullable": False if column in pk_columns else bool(definition.nullable),
-    } for definition, column in raw_columns]
+    columns = []
+    for definition, column, source_key in raw_columns:
+        item = {
+            "name": column,
+            "display_name": (
+                definition.display_name.strip()
+                or (
+                    source_key
+                    if use_stable_field_contract and origin == "upload"
+                    else column
+                )
+            ),
+            "type": normalize_field_type(definition.type),
+            "nullable": False if column in pk_columns else bool(definition.nullable),
+        }
+        if use_stable_field_contract:
+            item["source_key"] = source_key
+        columns.append(item)
+    definitions = [{
+        "source_key": column["source_key"],
+        "field_key": column["name"],
+        "field_name": column["display_name"],
+        "field_type": column["type"],
+        "is_primary_key": column["name"] in pk_columns,
+        "nullable": column["nullable"],
+    } for column in columns] if use_stable_field_contract else []
     schema: dict = {
         "columns": [column["name"] for column in columns],
         "columns_typed": columns,
@@ -368,10 +440,97 @@ def _build_manual_schema(body: CreateTableRequest, *, origin: str) -> tuple[str,
         "types_source": "declared",
         "origin": origin,
     }
+    if use_stable_field_contract:
+        schema["contract_definitions"] = definitions
+        schema["manual_field_contract_version"] = MANUAL_FIELD_CONTRACT_VERSION
     if pk_columns:
         schema["primary_key"] = ",".join(pk_columns)
         schema["pk_source"] = "manual"
     return name, schema
+
+
+def _serialize_manual_contract_rows(rows: list[dict], columns: list[str]) -> bytes:
+    """Store normalized manual rows with authoritative field-key headers.
+
+    Non-empty snapshots use JSON to preserve Excel scalar types.  Empty snapshots
+    use a header-only CSV because a JSON empty list cannot carry column metadata.
+    """
+    if rows:
+        import json
+
+        def json_default(value) -> str:
+            isoformat = getattr(value, "isoformat", None)
+            return isoformat() if callable(isoformat) else str(value)
+
+        return json.dumps(
+            rows,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=json_default,
+        ).encode("utf-8")
+
+    import csv
+    import io
+
+    output = io.StringIO()
+    csv.writer(output).writerow(columns)
+    return output.getvalue().encode("utf-8")
+
+
+def _normalize_manual_contract_upload(
+    rows: list[dict],
+    physical_columns: list[str],
+    schema: dict,
+    *,
+    dataset_name: str,
+    scope: str,
+    allow_field_key_headers: bool,
+) -> tuple[list[dict], bytes]:
+    """Validate one complete manual-file contract and normalize it for the lake.
+
+    The initial import must use the exact original headers captured during
+    inspection.  Later versions may use either the complete original-header set
+    or the complete stable field-key set.  Reordered, mixed, added or missing
+    columns are rejected before a version is created.
+    """
+    from app.data_channel.datasets.lake_gate import (
+        LakeGateError, apply_column_contract, normalize_definitions)
+
+    definitions = normalize_definitions(schema.get("contract_definitions"))
+    source_columns = [item["source_key"] for item in definitions]
+    field_columns = [item["field_key"] for item in definitions]
+    if not definitions or not field_columns:
+        raise HTTPException(400, "人工数据集字段契约缺失，无法安全导入文件")
+
+    active_definitions = definitions
+    if physical_columns == source_columns:
+        pass
+    elif allow_field_key_headers and physical_columns == field_columns:
+        active_definitions = [
+            {**item, "source_key": item["field_key"]}
+            for item in definitions
+        ]
+    else:
+        accepted = f"原始表头 {source_columns}"
+        if allow_field_key_headers and field_columns != source_columns:
+            accepted += f" 或字段标识 {field_columns}"
+        raise HTTPException(
+            400,
+            f"{scope}列结构与字段契约不一致（文件：{physical_columns}；"
+            f"允许：{accepted}）。不允许混用、新增、缺失或调整字段顺序",
+        )
+
+    try:
+        normalized_rows, _warnings = apply_column_contract(
+            rows, active_definitions, dataset_name=dataset_name)
+    except LakeGateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _validate_manual_rows(
+        normalized_rows, schema, dataset_name=dataset_name, scope=scope)
+    return (
+        normalized_rows,
+        _serialize_manual_contract_rows(normalized_rows, field_columns),
+    )
 
 
 def _validate_manual_rows(rows: list[dict], schema: dict, *,
@@ -515,6 +674,11 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
     # 契约管理的数据集（声明过主键 / 在线建表 / 编辑过）需要全量行做校验与列刷新
     schema = dict(ds.schema_json or {})
     declared_pk = str(schema.get("primary_key") or "").strip()
+    has_manual_field_contract = (
+        schema.get("manual_field_contract_version")
+        == MANUAL_FIELD_CONTRACT_VERSION
+        and bool(schema.get("contract_definitions"))
+    )
     full_rows: list[dict] | None = None
     tabular_ext = ext in ("csv", "xlsx", "xls", "json")
     if not tabular_ext and (declared_pk or schema.get("columns")):
@@ -536,8 +700,21 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
                 raise HTTPException(400, f"文件解析失败，无法校验数据契约：{e}")
             full_rows = None
 
+    if has_manual_field_contract:
+        if full_rows is None:
+            raise HTTPException(400, "文件解析失败，无法校验人工数据集字段契约")
+        full_rows, content = _normalize_manual_contract_upload(
+            full_rows,
+            physical_columns,
+            schema,
+            dataset_name=ds.name,
+            scope="上传的新版本",
+            allow_field_key_headers=True,
+        )
+        physical_columns = list(schema.get("columns") or [])
+
     # 已声明主键契约的数据集：即使零行也必须携带完整主键表头。
-    if declared_pk:
+    if declared_pk and not has_manual_field_contract:
         from app.data_channel.datasets.lake_gate import split_pk
         missing_pk_columns = [c for c in split_pk(declared_pk) if c not in physical_columns]
         if missing_pk_columns:
@@ -546,7 +723,10 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
                 f"上传的新版本缺少主键列 {missing_pk_columns}；即使文件为零行，表头也必须包含完整主键",
             )
     # 在线建表声明的类型/非空/主键都是数据契约，文件批量补数也必须遵守。
-    if declared_pk or schema.get("types_source") == "declared":
+    if (
+        not has_manual_field_contract
+        and (declared_pk or schema.get("types_source") == "declared")
+    ):
         _validate_manual_rows(
             full_rows or [], schema, dataset_name=ds.name, scope="上传的新版本")
 
@@ -564,7 +744,7 @@ def _persist_uploaded_version(db: Session, svc: DatasetService, ds, content: byt
 
     # 契约管理的数据集：新文件落盘后同步刷新列结构，否则预览表头/在线编辑器
     # 仍按旧列渲染。声明类型的列保留用户声明，新出现的列按数据推断
-    if schema.get("columns") and full_rows:
+    if schema.get("columns") and full_rows and not has_manual_field_contract:
         from app.data_channel.datasets.lake_gate import infer_columns_typed
         inferred = infer_columns_typed(full_rows)
         if schema.get("types_source") == "declared":

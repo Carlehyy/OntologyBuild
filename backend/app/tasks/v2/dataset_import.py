@@ -90,7 +90,9 @@ def commit_dataset_import(job_id: str) -> None:
     from app.data_channel.datasets.import_jobs import (
         read_manifest, read_metadata, source_path, update_status)
     from app.data_channel.datasets.router import (
-        CreateTableRequest, _build_manual_schema, _validate_manual_rows)
+        MANUAL_FIELD_CONTRACT_VERSION, CreateTableRequest,
+        _build_manual_schema, _normalize_manual_contract_upload,
+        _validate_manual_rows)
     from app.data_channel.datasets.service import (
         _parse_stored_rows, stored_columns, DatasetService)
 
@@ -110,13 +112,28 @@ def commit_dataset_import(job_id: str) -> None:
         update_status(job_id, progress=40, phase="正在解析并校验全部数据")
         rows = _parse_stored_rows(raw, limit=None)
         physical_columns = stored_columns(raw)
-        expected_columns = schema["columns"]
-        if physical_columns != expected_columns:
-            raise ValueError(
-                "上传文件列结构已发生变化"
-                f"（文件：{physical_columns}；当前设置：{expected_columns}），请重新选择文件"
+        if (
+            schema.get("manual_field_contract_version")
+            == MANUAL_FIELD_CONTRACT_VERSION
+        ):
+            rows, normalized_content = _normalize_manual_contract_upload(
+                rows,
+                physical_columns,
+                schema,
+                dataset_name=name,
+                scope="上传数据",
+                allow_field_key_headers=False,
             )
-        _validate_manual_rows(rows, schema, dataset_name=name, scope="上传数据")
+        else:
+            expected_columns = schema["columns"]
+            if physical_columns != expected_columns:
+                raise ValueError(
+                    "上传文件列结构已发生变化"
+                    f"（文件：{physical_columns}；当前设置：{expected_columns}），请重新选择文件"
+                )
+            _validate_manual_rows(
+                rows, schema, dataset_name=name, scope="上传数据")
+            normalized_content = raw
         update_status(job_id, progress=75, phase="数据校验通过，正在创建数据集")
 
         service = DatasetService(db)
@@ -125,7 +142,7 @@ def commit_dataset_import(job_id: str) -> None:
         update_status(job_id, progress=90, phase="正在保存数据集首个版本")
         version = service.create_version(
             dataset.id,
-            raw,
+            normalized_content,
             rowcount=len(rows),
             schema_json=schema,
             _lock_held=True,
@@ -151,4 +168,3 @@ def commit_dataset_import(job_id: str) -> None:
         )
     finally:
         db.close()
-
