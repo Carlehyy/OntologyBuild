@@ -1,4 +1,3 @@
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -15,10 +14,21 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url from the environment if DATABASE_URL is set.
-database_url = os.environ.get("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Use the same Settings resolution as the application.  Keep an explicit URL
+# supplied by an embedding caller (notably migration tests) when no
+# DATABASE_URL was configured; the repository's placeholder is never usable.
+from app.config import settings  # noqa: E402
+
+configured_url = config.get_main_option("sqlalchemy.url")
+if (
+    "database_url" in settings.model_fields_set
+    or configured_url.startswith("driver://")
+):
+    # Alembic's ConfigParser treats percent characters as interpolation.
+    config.set_main_option(
+        "sqlalchemy.url",
+        settings.database_url.replace("%", "%%"),
+    )
 
 # Import the complete model registry so autogenerate and fresh-database upgrades
 # operate on the same metadata as the application.

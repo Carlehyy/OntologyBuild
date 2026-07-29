@@ -109,9 +109,42 @@ docker compose -f docker-compose.v2.yml up --build
 
 打开 [http://localhost:5173](http://localhost:5173),默认账号 `admin / admin123`。
 
-### 方式二 — 手动启动(最小化,无需外部服务)
+### 方式二 — 本地源码完整模式
 
-**前置要求:** Python 3.11+、Node.js 18+
+项目根目录提供独立的 `config/` 配置中心，用网页集中维护端口、PostgreSQL、Redis/Celery、
+Neo4j、MinIO、Chroma、Chromium CDP、n8n 与默认 LLM：
+
+```text
+Windows 11       双击 config/start.bat
+Ubuntu / macOS   执行 ./config/start.sh
+```
+
+页面只监听 `127.0.0.1:8765`，并使用每次启动随机生成的本地访问令牌。全部依赖测试通过后，配置会原子写入
+`config/generated/local/.env`。该目录已被 Git 忽略，GitHub Actions、生产配置与部署脚本不会读取它。
+
+生成后分别启动：
+
+```bash
+# 后端
+cd backend
+uv run python -m app.dev_server
+
+# Celery worker，另开终端
+cd backend
+uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
+
+# 前端，再开终端
+cd frontend
+npm install
+npm run dev
+```
+
+这是完整功能配置，不使用 SQLite、本地对象存储或同步任务降级。详细说明见
+[config/README.md](./config/README.md)。
+
+### 方式三 — 手动启动(最小化,允许降级)
+
+**前置要求:** Python 3.12、Node.js 20.19+ 或 22.13+
 
 ```bash
 # 后端

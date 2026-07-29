@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="OntologyBuild 本地完整功能配置中心">
+    <title>OntologyBuild 本地配置中心</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到配置表单</a>
+
+    <header class="app-header">
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">OB</span>
+          <div>
+            <p class="brand-name">OntologyBuild</p>
+            <p class="brand-subtitle">本地配置中心</p>
+          </div>
+        </div>
+        <div class="header-state">
+          <span class="local-only">仅在本机运行</span>
+          <span id="save-state" class="save-state" aria-live="polite">正在读取配置</span>
+        </div>
+      </div>
+    </header>
+
+    <div id="bootstrap-loading" class="bootstrap-loading" aria-live="polite">
+      <div class="skeleton skeleton-title"></div>
+      <div class="skeleton skeleton-copy"></div>
+      <div class="skeleton-grid" aria-hidden="true">
+        <div class="skeleton skeleton-panel"></div>
+        <div class="skeleton skeleton-panel"></div>
+      </div>
+      <p>正在读取本机配置，请稍候。</p>
+    </div>
+
+    <div id="app-shell" class="app-shell" hidden>
+      <aside class="sidebar" aria-label="配置项目">
+        <div class="sidebar-intro">
+          <p class="sidebar-title">完整功能检查</p>
+          <p>所有依赖都通过测试后，才会生成本地配置文件。</p>
+        </div>
+
+        <div class="progress-summary" aria-labelledby="progress-label">
+          <div class="progress-copy">
+            <span id="progress-label">连通性进度</span>
+            <strong id="progress-count">0 / 8</strong>
+          </div>
+          <progress id="test-progress" value="0" max="8">0 / 8</progress>
+        </div>
+
+        <nav class="section-nav">
+          <a href="#platform-section" data-nav-section="platform">
+            <span>平台与端口</span>
+            <span class="nav-status status-idle">待填写</span>
+          </a>
+          <a href="#postgres-section" data-nav-section="postgres">
+            <span>PostgreSQL</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#redis-section" data-nav-section="redis">
+            <span>Redis 与 Celery</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#neo4j-section" data-nav-section="neo4j">
+            <span>Neo4j</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#minio-section" data-nav-section="minio">
+            <span>MinIO</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#chroma-section" data-nav-section="chroma">
+            <span>Chroma</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#browser-section" data-nav-section="browser">
+            <span>Chromium CDP</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#n8n-section" data-nav-section="n8n">
+            <span>n8n</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#llm-section" data-nav-section="llm">
+            <span>默认大模型</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#advanced-section" data-nav-section="advanced">
+            <span>安全与目录</span>
+            <span class="nav-status status-idle">待确认</span>
+          </a>
+          <a href="#finish-section" data-nav-section="finish">
+            <span>生成与启动</span>
+            <span class="nav-status status-idle">未生成</span>
+          </a>
+        </nav>
+
+        <div class="sidebar-note">
+          <strong>配置不会上传</strong>
+          <p>本工具只写入项目的本地配置目录，不会修改 GitHub Actions 的生产部署配置。</p>
+        </div>
+      </aside>
+
+      <main id="main-content" class="main-content" tabindex="-1">
+        <section class="page-intro" aria-labelledby="page-title">
+          <p class="context-label">本地完整功能模式</p>
+          <h1 id="page-title">一次填好启动所需配置</h1>
+          <p>
+            按页面顺序填写并测试。这里不会启用 SQLite 等降级方案，任何必需服务未通过时都不会生成配置。
+          </p>
+          <div id="existing-config-notice" class="notice notice-info" hidden>
+            <strong>已发现本地配置</strong>
+            <span>页面已加载可安全展示的内容。密码框留空表示继续使用原密码。</span>
+          </div>
+          <div id="global-error" class="notice notice-error" role="alert" hidden></div>
+        </section>
+
+        <form id="config-form" novalidate>
+          <section id="platform-section" class="config-section" data-section="platform" aria-labelledby="platform-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">先确定本机访问地址</p>
+                <h2 id="platform-title">平台与端口</h2>
+                <p>后端提供接口，前端提供网页。端口冲突时可以换成其他未占用端口。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="platform">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待填写</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="backend-host">后端监听地址</label>
+                <input id="backend-host" data-path="platform.backend_host" name="platform.backend_host" type="text" value="127.0.0.1" required autocomplete="off">
+                <p class="field-help">建议保留 127.0.0.1，避免同一网络中的其他设备访问。</p>
+                <p class="field-error" data-error-for="platform.backend_host"></p>
+              </div>
+              <div class="field">
+                <label for="backend-port">后端端口</label>
+                <input id="backend-port" data-path="platform.backend_port" name="platform.backend_port" type="number" min="1024" max="65535" value="8000" required inputmode="numeric">
+                <p class="field-help">本地 API 默认使用 8000。</p>
+                <p class="field-error" data-error-for="platform.backend_port"></p>
+              </div>
+              <div class="field">
+                <label for="frontend-host">前端监听地址</label>
+                <input id="frontend-host" data-path="platform.frontend_host" name="platform.frontend_host" type="text" value="127.0.0.1" required autocomplete="off">
+                <p class="field-help">固定使用本机回环地址，建议保留 127.0.0.1。</p>
+                <p class="field-error" data-error-for="platform.frontend_host"></p>
+              </div>
+              <div class="field">
+                <label for="frontend-port">前端端口</label>
+                <input id="frontend-port" data-path="platform.frontend_port" name="platform.frontend_port" type="number" min="1024" max="65535" value="5173" required inputmode="numeric">
+                <p class="field-help">浏览器访问端口，默认使用 5173。</p>
+                <p class="field-error" data-error-for="platform.frontend_port"></p>
+              </div>
+            </div>
+          </section>
+
+          <section id="postgres-section" class="config-section" data-section="postgres" aria-labelledby="postgres-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">保存账号、项目与业务数据</p>
+                <h2 id="postgres-title">PostgreSQL 数据库</h2>
+                <p>这是完整功能模式的主数据库。测试会实际连接并执行一次只读查询。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="postgres">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="postgres-host">服务器地址</label>
+                <input id="postgres-host" data-path="postgres.host" name="postgres.host" type="text" value="127.0.0.1" required autocomplete="hostname">
+                <p class="field-help">本机安装时通常填 127.0.0.1。</p>
+                <p class="field-error" data-error-for="postgres.host"></p>
+              </div>
+              <div class="field">
+                <label for="postgres-port">端口</label>
+                <input id="postgres-port" data-path="postgres.port" name="postgres.port" type="number" min="1" max="65535" value="5432" required inputmode="numeric">
+                <p class="field-help">PostgreSQL 默认端口是 5432。</p>
+                <p class="field-error" data-error-for="postgres.port"></p>
+              </div>
+              <div class="field">
+                <label for="postgres-database">数据库名称</label>
+                <input id="postgres-database" data-path="postgres.database" name="postgres.database" type="text" value="ontology_build" required autocomplete="off">
+                <p class="field-help">需要是已经创建且当前账号可以访问的数据库。</p>
+                <p class="field-error" data-error-for="postgres.database"></p>
+              </div>
+              <div class="field">
+                <label for="postgres-username">登录账号</label>
+                <input id="postgres-username" data-path="postgres.username" name="postgres.username" type="text" value="postgres" required autocomplete="username">
+                <p class="field-help">常见初始账号是 postgres。</p>
+                <p class="field-error" data-error-for="postgres.username"></p>
+              </div>
+              <div class="field">
+                <label for="postgres-password">登录密码</label>
+                <div class="secret-control">
+                  <input id="postgres-password" data-path="postgres.password" data-secret="postgres.password" name="postgres.password" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="postgres-password" aria-label="显示 PostgreSQL 密码">显示</button>
+                </div>
+                <p class="field-help secret-help">请填写创建 PostgreSQL 时设置的密码。</p>
+                <p class="field-error" data-error-for="postgres.password"></p>
+              </div>
+              <div class="field">
+                <label for="postgres-ssl-mode">加密连接</label>
+                <select id="postgres-ssl-mode" data-path="postgres.ssl_mode" name="postgres.ssl_mode">
+                  <option value="prefer">优先使用加密</option>
+                  <option value="disable">本机不使用加密</option>
+                  <option value="require">必须使用加密</option>
+                </select>
+                <p class="field-help">本机容器通常选择“不使用加密”。</p>
+                <p class="field-error" data-error-for="postgres.ssl_mode"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="postgres">我不知道账号或密码</button>
+              <button class="primary-button test-button" type="button" data-test-service="postgres">测试 PostgreSQL</button>
+            </div>
+            <div class="test-message" data-test-message="postgres" aria-live="polite"></div>
+          </section>
+
+          <section id="redis-section" class="config-section" data-section="redis" aria-labelledby="redis-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">处理缓存与后台任务队列</p>
+                <h2 id="redis-title">Redis 与 Celery</h2>
+                <p>Redis 保存短期状态，也负责把耗时任务交给 Celery。连通性测试会发送 PING 命令。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="redis">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="redis-host">服务器地址</label>
+                <input id="redis-host" data-path="redis.host" name="redis.host" type="text" value="127.0.0.1" required autocomplete="hostname">
+                <p class="field-help">本机安装时通常填 127.0.0.1。</p>
+                <p class="field-error" data-error-for="redis.host"></p>
+              </div>
+              <div class="field">
+                <label for="redis-port">端口</label>
+                <input id="redis-port" data-path="redis.port" name="redis.port" type="number" min="1" max="65535" value="6379" required inputmode="numeric">
+                <p class="field-help">Redis 默认端口是 6379。</p>
+                <p class="field-error" data-error-for="redis.port"></p>
+              </div>
+              <div class="field">
+                <label for="redis-database">数据库编号</label>
+                <input id="redis-database" data-path="redis.database" name="redis.database" type="number" min="0" max="15" value="0" required inputmode="numeric">
+                <p class="field-help">不确定时保留 0。</p>
+                <p class="field-error" data-error-for="redis.database"></p>
+              </div>
+              <div class="field">
+                <label for="redis-username">登录账号，可留空</label>
+                <input id="redis-username" data-path="redis.username" name="redis.username" type="text" autocomplete="username">
+                <p class="field-help">未启用 Redis ACL 时通常无需账号。</p>
+                <p class="field-error" data-error-for="redis.username"></p>
+              </div>
+              <div class="field">
+                <label for="redis-password">登录密码</label>
+                <div class="secret-control">
+                  <input id="redis-password" data-path="redis.password" data-secret="redis.password" name="redis.password" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="redis-password" aria-label="显示 Redis 密码">显示</button>
+                </div>
+                <p class="field-help secret-help">完整功能配置要求 Redis 使用密码。</p>
+                <p class="field-error" data-error-for="redis.password"></p>
+              </div>
+              <div class="field checkbox-field">
+                <input id="redis-use-tls" data-path="redis.use_tls" name="redis.use_tls" type="checkbox">
+                <div>
+                  <label for="redis-use-tls">使用加密连接</label>
+                  <p class="field-help">本机容器通常不勾选，远程 Redis 建议开启。</p>
+                </div>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="redis">我不知道账号或密码</button>
+              <button class="primary-button test-button" type="button" data-test-service="redis">测试 Redis</button>
+            </div>
+            <div class="test-message" data-test-message="redis" aria-live="polite"></div>
+          </section>
+
+          <section id="neo4j-section" class="config-section" data-section="neo4j" aria-labelledby="neo4j-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">保存并查询知识图谱</p>
+                <h2 id="neo4j-title">Neo4j 图数据库</h2>
+                <p>平台通过 Bolt 端口读写图谱。HTTP 端口用于管理页面和健康检查。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="neo4j">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field field-span-two">
+                <label for="neo4j-uri">Bolt 连接地址</label>
+                <input id="neo4j-uri" data-path="neo4j.uri" name="neo4j.uri" type="text" value="bolt://127.0.0.1:7687" required autocomplete="url">
+                <p class="field-help">本机默认是 bolt://127.0.0.1:7687，7687 是图谱读写端口。</p>
+                <p class="field-error" data-error-for="neo4j.uri"></p>
+              </div>
+              <div class="field">
+                <label for="neo4j-username">登录账号</label>
+                <input id="neo4j-username" data-path="neo4j.username" name="neo4j.username" type="text" value="neo4j" required autocomplete="username">
+                <p class="field-help">默认账号通常是 neo4j。</p>
+                <p class="field-error" data-error-for="neo4j.username"></p>
+              </div>
+              <div class="field">
+                <label for="neo4j-password">登录密码</label>
+                <div class="secret-control">
+                  <input id="neo4j-password" data-path="neo4j.password" data-secret="neo4j.password" name="neo4j.password" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="neo4j-password" aria-label="显示 Neo4j 密码">显示</button>
+                </div>
+                <p class="field-help secret-help">首次登录 Neo4j 时通常会要求修改初始密码。</p>
+                <p class="field-error" data-error-for="neo4j.password"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="neo4j">我不知道账号或密码</button>
+              <button class="primary-button test-button" type="button" data-test-service="neo4j">测试 Neo4j</button>
+            </div>
+            <div class="test-message" data-test-message="neo4j" aria-live="polite"></div>
+          </section>
+
+          <section id="minio-section" class="config-section" data-section="minio" aria-labelledby="minio-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">保存上传文件与处理结果</p>
+                <h2 id="minio-title">MinIO 对象存储</h2>
+                <p>MinIO 类似一个本地文件云。测试会登录并读取存储桶列表，不会修改文件。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="minio">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field field-span-two">
+                <label for="minio-endpoint">API 连接地址</label>
+                <input id="minio-endpoint" data-path="minio.endpoint" name="minio.endpoint" type="text" value="127.0.0.1:9000" required autocomplete="url">
+                <p class="field-help">填写主机和 API 端口，不要添加 http://。本机默认是 127.0.0.1:9000。</p>
+                <p class="field-error" data-error-for="minio.endpoint"></p>
+              </div>
+              <div class="field">
+                <label for="minio-access-key">访问账号</label>
+                <input id="minio-access-key" data-path="minio.access_key" data-secret="minio.access_key" name="minio.access_key" type="password" required autocomplete="new-password">
+                <p class="field-help secret-help">对应 MinIO 的 Root User 或 Access Key。</p>
+                <p class="field-error" data-error-for="minio.access_key"></p>
+              </div>
+              <div class="field">
+                <label for="minio-secret-key">访问密码</label>
+                <div class="secret-control">
+                  <input id="minio-secret-key" data-path="minio.secret_key" data-secret="minio.secret_key" name="minio.secret_key" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="minio-secret-key" aria-label="显示 MinIO 密码">显示</button>
+                </div>
+                <p class="field-help secret-help">对应 MinIO 的 Root Password 或 Secret Key。</p>
+                <p class="field-error" data-error-for="minio.secret_key"></p>
+              </div>
+              <div class="field checkbox-field">
+                <input id="minio-secure" data-path="minio.secure" name="minio.secure" type="checkbox">
+                <div>
+                  <label for="minio-secure">使用 HTTPS</label>
+                  <p class="field-help">本机容器通常不勾选，远程服务建议勾选。</p>
+                </div>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="minio">我不知道账号或密码</button>
+              <button class="primary-button test-button" type="button" data-test-service="minio">测试 MinIO</button>
+            </div>
+            <div class="test-message" data-test-message="minio" aria-live="polite"></div>
+          </section>
+
+          <section id="chroma-section" class="config-section" data-section="chroma" aria-labelledby="chroma-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">支持语义检索与向量查询</p>
+                <h2 id="chroma-title">Chroma 向量数据库</h2>
+                <p>Chroma 保存文本向量，让平台能够按语义查找内容。测试只读取服务健康状态。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="chroma">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="chroma-host">服务器地址</label>
+                <input id="chroma-host" data-path="chroma.host" name="chroma.host" type="text" value="127.0.0.1" required autocomplete="hostname">
+                <p class="field-help">本机安装时通常填 127.0.0.1。</p>
+                <p class="field-error" data-error-for="chroma.host"></p>
+              </div>
+              <div class="field">
+                <label for="chroma-port">端口</label>
+                <input id="chroma-port" data-path="chroma.port" name="chroma.port" type="number" min="1" max="65535" value="8001" required inputmode="numeric">
+                <p class="field-help">本项目本机映射默认使用 8001。</p>
+                <p class="field-error" data-error-for="chroma.port"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="chroma">我不知道如何启动 Chroma</button>
+              <button class="primary-button test-button" type="button" data-test-service="chroma">测试 Chroma</button>
+            </div>
+            <div class="test-message" data-test-message="chroma" aria-live="polite"></div>
+          </section>
+
+          <section id="browser-section" class="config-section" data-section="browser" aria-labelledby="browser-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">允许数据管家安全访问网页</p>
+                <h2 id="browser-title">Chromium CDP 浏览器</h2>
+                <p>CDP 是浏览器的远程控制接口。请为它使用单独的相对数据目录，不要复用日常浏览器资料。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="browser">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field field-span-two">
+                <label for="browser-cdp-url">CDP 连接地址</label>
+                <input id="browser-cdp-url" data-path="browser.cdp_url" name="browser.cdp_url" type="url" value="http://127.0.0.1:9222" required autocomplete="url">
+                <p class="field-help">建议只监听本机地址，默认是 http://127.0.0.1:9222。</p>
+                <p class="field-error" data-error-for="browser.cdp_url"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="browser">我不知道如何启动浏览器</button>
+              <button class="primary-button test-button" type="button" data-test-service="browser">测试 Chromium CDP</button>
+            </div>
+            <div class="test-message" data-test-message="browser" aria-live="polite"></div>
+          </section>
+
+          <section id="n8n-section" class="config-section" data-section="n8n" aria-labelledby="n8n-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">连接自动化工作流</p>
+                <h2 id="n8n-title">n8n 工作流服务</h2>
+                <p>平台使用 n8n 执行可视化工作流。测试只读取一条工作流列表，不会执行工作流。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="n8n">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field field-span-two">
+                <label for="n8n-base-url">服务地址</label>
+                <input id="n8n-base-url" data-path="n8n.api_url" name="n8n.api_url" type="url" value="http://127.0.0.1:5678" required autocomplete="url">
+                <p class="field-help">填写到端口即可，不要在末尾添加 /api/v1。</p>
+                <p class="field-error" data-error-for="n8n.api_url"></p>
+              </div>
+              <div class="field">
+                <label for="n8n-api-key">API Key</label>
+                <div class="secret-control">
+                  <input id="n8n-api-key" data-path="n8n.api_key" data-secret="n8n.api_key" name="n8n.api_key" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="n8n-api-key" aria-label="显示 n8n API Key">显示</button>
+                </div>
+                <p class="field-help secret-help">在 n8n 的设置页面创建，不是登录密码。</p>
+                <p class="field-error" data-error-for="n8n.api_key"></p>
+              </div>
+              <div class="field">
+                <label for="n8n-timeout">连接超时，秒</label>
+                <input id="n8n-timeout" data-path="n8n.timeout_seconds" name="n8n.timeout_seconds" type="number" min="2" max="120" value="15" required inputmode="numeric">
+                <p class="field-help">本机通常使用 15 秒。</p>
+                <p class="field-error" data-error-for="n8n.timeout_seconds"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="n8n">我不知道如何创建 API Key</button>
+              <button class="primary-button test-button" type="button" data-test-service="n8n">测试 n8n</button>
+            </div>
+            <div class="test-message" data-test-message="n8n" aria-live="polite"></div>
+          </section>
+
+          <section id="llm-section" class="config-section" data-section="llm" aria-labelledby="llm-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">提供文本理解与生成能力</p>
+                <h2 id="llm-title">默认大模型</h2>
+                <p>可连接 OpenAI、Anthropic 或兼容 OpenAI 接口的本地模型服务。测试会发起一次极小请求。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="llm">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="llm-provider">服务类型</label>
+                <select id="llm-provider" data-path="llm.provider" name="llm.provider" required>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="compatible">兼容 OpenAI 的服务</option>
+                </select>
+                <p class="field-help">Ollama、LiteLLM 等通常选择兼容 OpenAI 的服务。</p>
+                <p class="field-error" data-error-for="llm.provider"></p>
+              </div>
+              <div class="field">
+                <label for="llm-name">配置名称</label>
+                <input id="llm-name" data-path="llm.name" name="llm.name" type="text" value="本地默认模型" required autocomplete="off">
+                <p class="field-help">会显示在平台的模型配置列表中。</p>
+                <p class="field-error" data-error-for="llm.name"></p>
+              </div>
+              <div class="field">
+                <label for="llm-model">默认模型名称</label>
+                <input id="llm-model" data-path="llm.model" name="llm.model" type="text" value="gpt-4.1-mini" required autocomplete="off">
+                <p class="field-help">必须与服务端提供的模型名称完全一致。</p>
+                <p class="field-error" data-error-for="llm.model"></p>
+              </div>
+              <div class="field field-span-two">
+                <label for="llm-api-base">API 地址</label>
+                <input id="llm-api-base" data-path="llm.api_base" name="llm.api_base" type="url" value="https://api.openai.com/v1" required autocomplete="url">
+                <p class="field-help">OpenAI 默认是 https://api.openai.com/v1，本地服务可填 http://127.0.0.1:4000/v1。</p>
+                <p class="field-error" data-error-for="llm.api_base"></p>
+              </div>
+              <div class="field">
+                <label for="llm-api-key">API Key</label>
+                <div class="secret-control">
+                  <input id="llm-api-key" data-path="llm.api_key" data-secret="llm.api_key" name="llm.api_key" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="llm-api-key" aria-label="显示大模型 API Key">显示</button>
+                </div>
+                <p class="field-help secret-help">仅保存在本地配置文件中，不会显示在测试结果里。</p>
+                <p class="field-error" data-error-for="llm.api_key"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="llm">我不知道如何获取 API Key</button>
+              <button class="primary-button test-button" type="button" data-test-service="llm">测试默认大模型</button>
+            </div>
+            <div class="test-message" data-test-message="llm" aria-live="polite"></div>
+          </section>
+
+          <section id="advanced-section" class="config-section" data-section="advanced" aria-labelledby="advanced-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">保护本地数据并固定相对目录</p>
+                <h2 id="advanced-title">安全与本地目录</h2>
+                <p>安全密钥用于加密已保存的第三方密码。生成后请保持不变，否则旧密码将无法解密。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="advanced">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待确认</span>
+              </span>
+            </div>
+            <div class="notice notice-warning">
+              <strong>不要随意重新生成安全密钥</strong>
+              <span>已有配置时，以下密钥留空会继续使用原值。只有明确需要重置时才填写新值。</span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="admin-username">初始管理员账号</label>
+                <input id="admin-username" data-path="platform.first_admin_user" name="platform.first_admin_user" type="text" value="admin" required autocomplete="username">
+                <p class="field-help">仅在数据库中还没有管理员时用于首次创建。</p>
+                <p class="field-error" data-error-for="platform.first_admin_user"></p>
+              </div>
+              <div class="field">
+                <label for="admin-password">初始管理员密码</label>
+                <div class="secret-control">
+                  <input id="admin-password" data-path="platform.first_admin_password" data-secret="platform.first_admin_password" name="platform.first_admin_password" type="password" minlength="12" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="admin-password" aria-label="显示初始管理员密码">显示</button>
+                </div>
+                <p class="field-help secret-help">至少 12 位，建议包含大小写字母、数字和符号。</p>
+                <p class="field-error" data-error-for="platform.first_admin_password"></p>
+              </div>
+              <div class="field">
+                <label for="secret-key">应用签名密钥</label>
+                <div class="secret-control">
+                  <input id="secret-key" data-path="platform.secret_key" data-secret="platform.secret_key" name="platform.secret_key" type="password" minlength="32" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="secret-key" aria-label="显示应用签名密钥">显示</button>
+                </div>
+                <p class="field-help secret-help">建议使用页面生成的随机值，不要手工输入短密码。</p>
+                <p class="field-error" data-error-for="platform.secret_key"></p>
+              </div>
+              <div class="field">
+                <label for="encryption-key">密码加密密钥</label>
+                <div class="secret-control">
+                  <input id="encryption-key" data-path="platform.encryption_key" data-secret="platform.encryption_key" name="platform.encryption_key" type="password" required autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="encryption-key" aria-label="显示密码加密密钥">显示</button>
+                </div>
+                <p class="field-help secret-help">格式由配置中心生成。已有数据时不要更换。</p>
+                <p class="field-error" data-error-for="platform.encryption_key"></p>
+              </div>
+              <div class="field">
+                <label for="uploads-dir">上传文件目录</label>
+                <input id="uploads-dir" data-path="advanced.uploads_dir" name="advanced.uploads_dir" type="text" value="./runtime/uploads" required autocomplete="off">
+                <p class="field-help">使用项目相对路径，兼容 Windows、Ubuntu 和 macOS。</p>
+                <p class="field-error" data-error-for="advanced.uploads_dir"></p>
+              </div>
+              <div class="field">
+                <label for="storage-dir">本地存储目录</label>
+                <input id="storage-dir" data-path="advanced.storage_local_dir" name="advanced.storage_local_dir" type="text" value="./runtime/storage" required autocomplete="off">
+                <p class="field-help">外部存储短暂不可用时只用于诊断，不作为功能降级存储。</p>
+                <p class="field-error" data-error-for="advanced.storage_local_dir"></p>
+              </div>
+              <div class="field">
+                <label for="api-hub-data-dir">API Hub 数据目录</label>
+                <input id="api-hub-data-dir" data-path="advanced.api_hub_data_dir" name="advanced.api_hub_data_dir" type="text" value="./runtime/api-hub" required autocomplete="off">
+                <p class="field-help">保存本地 API Hub 的工作数据。</p>
+                <p class="field-error" data-error-for="advanced.api_hub_data_dir"></p>
+              </div>
+              <div class="field">
+                <label for="skill-root-dir">助手技能目录</label>
+                <input id="skill-root-dir" data-path="advanced.super_assistant_skill_root" name="advanced.super_assistant_skill_root" type="text" value="./runtime/super-assistant/skills" required autocomplete="off">
+                <p class="field-help">保存超级助手在本机使用的技能文件。</p>
+                <p class="field-error" data-error-for="advanced.super_assistant_skill_root"></p>
+              </div>
+              <div class="field">
+                <label for="steward-workspace-dir">数据管家工作目录</label>
+                <input id="steward-workspace-dir" data-path="advanced.steward_workspace_root" name="advanced.steward_workspace_root" type="text" value="./runtime/steward-workspaces" required autocomplete="off">
+                <p class="field-help">保存数据管家任务的本地过程文件。</p>
+                <p class="field-error" data-error-for="advanced.steward_workspace_root"></p>
+              </div>
+            </div>
+            <details class="advanced-details">
+              <summary>API Hub 与 W3 高级连接</summary>
+              <p>仅在需要通过 API Hub 对接 W3 时填写账号。三个内部令牌建议使用随机值。</p>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="w3-username">W3 账号，可留空</label>
+                  <input id="w3-username" data-path="advanced.w3_username" name="advanced.w3_username" type="text" autocomplete="username">
+                  <p class="field-help">没有接入 W3 时可以留空。</p>
+                  <p class="field-error" data-error-for="advanced.w3_username"></p>
+                </div>
+                <div class="field">
+                  <label for="w3-password">W3 密码，可留空</label>
+                  <div class="secret-control">
+                    <input id="w3-password" data-path="advanced.w3_password" data-secret="advanced.w3_password" name="advanced.w3_password" type="password" autocomplete="new-password">
+                    <button class="text-button secret-toggle" type="button" data-toggle-secret="w3-password" aria-label="显示 W3 密码">显示</button>
+                  </div>
+                  <p class="field-help secret-help">留空表示不启用 W3 登录。</p>
+                  <p class="field-error" data-error-for="advanced.w3_password"></p>
+                </div>
+                <div class="field field-span-two">
+                  <label for="w3-login-url">W3 登录地址，可留空</label>
+                  <input id="w3-login-url" data-path="advanced.w3_login_url" name="advanced.w3_login_url" type="url" value="https://login.huawei.com/login1/rest/hwidcenter/login" required autocomplete="url">
+                  <p class="field-help">不使用 W3 时保留默认值即可，不会主动发起登录。</p>
+                  <p class="field-error" data-error-for="advanced.w3_login_url"></p>
+                </div>
+                <div class="field">
+                  <label for="api-hub-mcp-token">API Hub MCP 令牌</label>
+                  <input id="api-hub-mcp-token" data-path="advanced.api_hub_mcp_token" data-secret="advanced.api_hub_mcp_token" name="advanced.api_hub_mcp_token" type="password" required autocomplete="new-password">
+                  <p class="field-help secret-help">用于校验 MCP 请求，建议使用自动生成值。</p>
+                  <p class="field-error" data-error-for="advanced.api_hub_mcp_token"></p>
+                </div>
+                <div class="field">
+                  <label for="api-hub-system-token">API Hub 系统令牌</label>
+                  <input id="api-hub-system-token" data-path="advanced.api_hub_system_mcp_token" data-secret="advanced.api_hub_system_mcp_token" name="advanced.api_hub_system_mcp_token" type="password" required autocomplete="new-password">
+                  <p class="field-help secret-help">用于系统级 MCP 调用，建议使用自动生成值。</p>
+                  <p class="field-error" data-error-for="advanced.api_hub_system_mcp_token"></p>
+                </div>
+                <div class="field field-span-two">
+                  <label for="api-hub-proxy-token">API Hub 内部代理令牌</label>
+                  <input id="api-hub-proxy-token" data-path="advanced.api_hub_internal_proxy_token" data-secret="advanced.api_hub_internal_proxy_token" name="advanced.api_hub_internal_proxy_token" type="password" required autocomplete="new-password">
+                  <p class="field-help secret-help">保护后端内部代理接口，建议使用自动生成值。</p>
+                  <p class="field-error" data-error-for="advanced.api_hub_internal_proxy_token"></p>
+                </div>
+              </div>
+              <div class="details-actions">
+                <button class="secondary-button help-button" type="button" data-guide="w3">我不知道 W3 账号信息</button>
+              </div>
+            </details>
+            <div class="section-actions split-actions">
+              <button id="generate-secrets" class="secondary-button" type="button">生成新的随机密码与密钥</button>
+              <button class="secondary-button help-button" type="button" data-guide="security">查看安全保管建议</button>
+            </div>
+          </section>
+
+          <section id="finish-section" class="config-section finish-section" data-section="finish" aria-labelledby="finish-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">最后检查并写入本地文件</p>
+                <h2 id="finish-title">生成与启动</h2>
+                <p>生成前必须完成全部八项连通性测试。任一字段修改后，对应测试需要重新执行。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="finish">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>未生成</span>
+              </span>
+            </div>
+
+            <div id="requirements-list" class="requirements-list" aria-live="polite">
+              <p class="empty-state">配置要求正在载入。</p>
+            </div>
+
+            <div class="finish-actions">
+              <button id="test-all" class="secondary-button large-button" type="button">测试全部依赖</button>
+              <button id="generate-config" class="primary-button large-button" type="button" disabled>生成本地配置文件</button>
+            </div>
+            <p id="generate-help" class="action-help">请先填写并通过全部八项测试。</p>
+
+            <div id="generated-result" class="generated-result" hidden>
+              <div class="result-heading">
+                <div>
+                  <h3>配置已经写入本地</h3>
+                  <p id="generated-path">现在可以按顺序启动后端、Celery 和前端。</p>
+                  <p>请从 OntologyBuild 项目根目录分别打开三个终端执行下列命令。</p>
+                </div>
+                <span class="result-label">已生成</span>
+              </div>
+              <div id="command-list" class="command-list"></div>
+              <div class="runtime-check">
+                <div>
+                  <h3>启动后复检</h3>
+                  <p>三个终端都启动后，再检查平台是否能完整使用所有依赖。</p>
+                </div>
+                <button id="runtime-check" class="secondary-button" type="button">执行启动后复检</button>
+              </div>
+              <div id="runtime-result" class="runtime-result" aria-live="polite"></div>
+            </div>
+          </section>
+        </form>
+      </main>
+    </div>
+
+    <div id="sticky-actions" class="sticky-actions" hidden>
+      <div>
+        <strong id="sticky-title">还未完成连通性测试</strong>
+        <span id="sticky-copy">0 / 8 项已通过</span>
+      </div>
+      <button id="sticky-test-all" class="secondary-button" type="button">测试全部</button>
+      <button id="sticky-generate" class="primary-button" type="button" disabled>生成配置</button>
+    </div>
+
+    <dialog id="guide-dialog" class="guide-dialog" aria-labelledby="guide-title">
+      <div class="dialog-header">
+        <div>
+          <p class="section-purpose">操作帮助</p>
+          <h2 id="guide-title">如何找到配置信息</h2>
+        </div>
+        <button id="close-guide" class="text-button dialog-close" type="button" aria-label="关闭帮助">关闭</button>
+      </div>
+      <div id="guide-content" class="guide-content"></div>
+    </dialog>
+
+    <dialog id="confirm-secrets-dialog" class="confirm-dialog" aria-labelledby="confirm-secrets-title">
+      <div class="dialog-header">
+        <div>
+          <p class="section-purpose">需要确认</p>
+          <h2 id="confirm-secrets-title">确定更换安全信息吗</h2>
+        </div>
+      </div>
+      <p>如果已经有本地数据，更换加密密钥会导致之前保存的第三方密码无法解密。</p>
+      <div class="dialog-actions">
+        <button id="cancel-secret-generation" class="secondary-button" type="button">取消</button>
+        <button id="confirm-secret-generation" class="danger-button" type="button">确认生成新值</button>
+      </div>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <noscript>
+      <div class="noscript-message">
+        此配置中心需要 JavaScript 才能测试依赖并生成配置，请在浏览器设置中启用 JavaScript。
+      </div>
+    </noscript>
+  </body>
+</html>

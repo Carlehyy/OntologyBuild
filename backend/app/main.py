@@ -255,6 +255,16 @@ def _seed_db():
 
         seed_admin(db)
 
+        # The standalone local configuration center stores ordinary startup
+        # values in the shared env file.  n8n and LLM settings are database
+        # backed, so development may explicitly opt in to an idempotent sync.
+        # The service has a second production guard to prevent accidental use.
+        from app.services.local_config_sync import (
+            sync_local_managed_runtime_config,
+        )
+        if sync_local_managed_runtime_config(db):
+            db.commit()
+
         # Retry domain results that committed just before a previous process
         # stopped, but whose personal inbox projection had not completed yet.
         from app.inbox.service import drain_outbox

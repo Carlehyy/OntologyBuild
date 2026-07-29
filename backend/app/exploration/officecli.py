@@ -44,6 +44,31 @@ _RESOURCE_PROP_PARTS = {
 }
 
 
+def _subprocess_env() -> dict[str, str]:
+    """Pass operational variables to OfficeCLI without platform credentials."""
+
+    environment = dict(os.environ)
+    for key in tuple(environment):
+        normalized = key.upper()
+        if (
+            "PASSWORD" in normalized
+            or "SECRET" in normalized
+            or "TOKEN" in normalized
+            or normalized.endswith("_API_KEY")
+            or normalized.endswith("_ACCESS_KEY")
+            or normalized
+            in {
+                "DATABASE_URL",
+                "REDIS_URL",
+                "NEO4J_AUTH",
+                "ENCRYPTION_KEY",
+            }
+        ):
+            environment.pop(key, None)
+    environment["OFFICECLI_SKIP_UPDATE"] = "1"
+    return environment
+
+
 def executable() -> str | None:
     configured = (settings.exploration_officecli_path or "").strip()
     if configured:
@@ -60,12 +85,10 @@ def _invoke(args: list[str]) -> tuple[str, str, int]:
     exe = executable()
     if not exe:
         raise HTTPException(503, "OfficeCLI 未配置，当前只能下载或读取已抽取文本")
-    env = dict(os.environ)
-    env["OFFICECLI_SKIP_UPDATE"] = "1"
     try:
         result = subprocess.run(
             [exe, *args], capture_output=True, text=True,
-            timeout=30, check=False, env=env,
+            timeout=30, check=False, env=_subprocess_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise HTTPException(504, "OfficeCLI 操作超时（30 秒）") from exc

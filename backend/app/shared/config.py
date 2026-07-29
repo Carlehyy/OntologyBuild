@@ -2,10 +2,37 @@ import ipaddress
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic_settings import BaseSettings
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.shared.env_files import (
+    LEGACY_BACKEND_ENV_FILE,
+    LOCAL_CONFIG_ENV_FILE,
+)
+
 
 class Settings(BaseSettings):
     environment: str = "development"
+    # Local launch settings are deliberately separate from deployment ports.
+    # Docker and production continue to own their Uvicorn command line.
+    local_backend_host: str = "127.0.0.1"
+    local_backend_port: int = Field(default=8000, ge=1, le=65535)
+    local_frontend_host: str = "127.0.0.1"
+    local_frontend_port: int = Field(default=5173, ge=1, le=65535)
+
+    # The local configuration center may manage these two database-backed
+    # integrations.  They remain disabled unless explicitly opted in and are
+    # ignored outside the development environment.
+    local_config_managed: bool = False
+    local_n8n_api_url: str = ""
+    local_n8n_api_key: str = ""
+    local_n8n_timeout_seconds: int = Field(default=10, ge=1, le=300)
+    local_llm_name: str = "OpenOntology Local Default"
+    local_llm_provider: str = "compatible"
+    local_llm_api_base: str = ""
+    local_llm_api_key: str = ""
+    local_llm_model: str = ""
+
     database_url: str = "sqlite:////tmp/ontoprompt.db"
     redis_url: str = "redis://localhost:6379/0"
     # Redis/Celery is optional. Spreadsheet imports run in the API process by
@@ -152,7 +179,13 @@ class Settings(BaseSettings):
     chroma_host: str = "localhost"
     chroma_port: int = 8001
 
-    model_config = {"env_file": ".env"}
+    model_config = SettingsConfigDict(
+        # Later dotenv files override earlier ones.  Real process environment
+        # variables still have the highest pydantic-settings priority.
+        env_file=(LEGACY_BACKEND_ENV_FILE, LOCAL_CONFIG_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 _LOCAL_DEPENDENCY_HOSTS = {

@@ -51,6 +51,24 @@ def _completed(payload: dict, returncode: int = 0):
     )
 
 
+def test_officecli_subprocess_does_not_receive_platform_secrets(
+        monkeypatch):
+    monkeypatch.setenv("PATH", "/safe/bin")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret@db/app")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "llm-secret")
+    monkeypatch.setenv("API_HUB_SYSTEM_MCP_TOKEN", "mcp-secret")
+    monkeypatch.setenv("FIRST_ADMIN_PASSWORD", "admin-secret")
+
+    environment = O._subprocess_env()
+
+    assert environment["PATH"] == "/safe/bin"
+    assert environment["OFFICECLI_SKIP_UPDATE"] == "1"
+    assert "DATABASE_URL" not in environment
+    assert "LOCAL_LLM_API_KEY" not in environment
+    assert "API_HUB_SYSTEM_MCP_TOKEN" not in environment
+    assert "FIRST_ADMIN_PASSWORD" not in environment
+
+
 def test_view_uses_snapshot_and_never_changes_uploaded_file(
         db, exploration_session, tmp_path, monkeypatch):
     """OfficeCLI 的 view 会规范化写回 DOCX；适配器必须把副作用困在临时副本。"""

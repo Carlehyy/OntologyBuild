@@ -42,7 +42,42 @@ docker compose -f docker-compose.v2.yml up --build
 启动后包含 PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、后端与前端。
 轻量 v1 栈可改用 `docker-compose.yml`。
 
-### 方式二 · 本地手动启动(最小依赖,无外部服务)
+### 方式二 · 本地源码完整模式(推荐)
+
+项目根目录的 `config/` 是独立的本地配置中心。它集中管理源码运行所需的端口、PostgreSQL、
+Redis/Celery、Neo4j、MinIO、Chroma、Chromium CDP、n8n 与默认 LLM：
+
+```text
+Windows 11       双击 config/start.bat
+Ubuntu / macOS   执行 ./config/start.sh
+```
+
+网页只监听 `127.0.0.1:8765`，并使用每次启动随机生成的本地访问令牌。所有必需服务连通性测试通过后，工具会原子生成
+`config/generated/local/.env`；该目录已被 Git 忽略，不会影响 GitHub Actions 或生产部署。
+后端、API Hub、Alembic 与 Vite 均从这一处读取本地配置，同时保留系统环境变量最高优先级。
+
+生成后分别启动后端、Celery worker 和前端：
+
+```bash
+# 终端 1
+cd backend
+uv run python -m app.dev_server
+
+# 终端 2
+cd backend
+uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
+
+# 终端 3
+cd frontend
+npm install
+npm run dev
+```
+
+配置中心面向完整功能模式，固定关闭本地对象存储回退并启用 Celery。已保存的 n8n 与默认 LLM
+配置会在本地开发后端启动时加密、幂等地同步到平台数据库；生产环境不会执行这项同步。
+详细边界和安全说明见 [config/README.md](./config/README.md)。
+
+### 方式三 · 本地手动启动(最小依赖,允许降级)
 
 **前置要求:** Python 3.12、Node.js 20.19+ 或 22.13+。推荐使用
 [uv](https://docs.astral.sh/uv/) 创建 Python 环境,它会在本机缺少 Python 3.12 时自动准备兼容版本。
@@ -73,10 +108,10 @@ curl http://localhost:8000/health/live
 # 预期返回: {"status":"ok"}
 ```
 
-手动开发模式无需复制根目录的 `.env.example`,也无需预先执行 `alembic upgrade head`。后端默认使用
+最小开发模式无需复制根目录的 `.env.example`,也无需预先执行 `alembic upgrade head`。后端默认使用
 `/tmp/ontoprompt.db` 并在启动时自动建表。根目录的 `.env.example` 主要供 Docker Compose 使用,
-其中 `db`、`redis`、`minio` 等服务名不能直接用于本机进程;如需自定义本地配置,请在 `backend/.env`
-中使用 `localhost` 地址或显式设置 SQLite `DATABASE_URL`。
+其中 `db`、`redis`、`minio` 等服务名不能直接用于本机进程。新配置优先使用上述 `config/`
+配置中心；旧的 `backend/.env` 仍保持兼容。
 
 启动日志中出现 `Neo4j unavailable` / `Neo4j 不可用，跳过索引初始化` 属于预期降级,不会阻止
 核心平台使用。Neo4j、MinIO、ChromaDB 与 Redis 未启动时,系统分别回退到 SQLite 图谱、本地文件存储、

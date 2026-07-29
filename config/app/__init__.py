@@ -1,0 +1,1 @@
+"""OpenOntology local configuration center."""

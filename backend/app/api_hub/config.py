@@ -8,10 +8,9 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from dotenv import load_dotenv
+from app.shared.env_files import BACKEND_DIR, load_backend_dotenv
 
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BACKEND_DIR / ".env")
+load_backend_dotenv()
 
 
 def _env(key: str, default: str = "") -> str:
@@ -33,8 +32,18 @@ def _bool_env(key: str, default: bool) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
-_data_dir = _env("API_HUB_DATA_DIR")
-DATA_DIR = Path(_data_dir) if _data_dir else BACKEND_DIR / "data" / "api_hub"
+def _resolve_data_dir(raw: str) -> Path:
+    if not raw:
+        return (BACKEND_DIR / "data" / "api_hub").resolve()
+    configured = Path(raw).expanduser()
+    return (
+        configured
+        if configured.is_absolute()
+        else BACKEND_DIR / configured
+    ).resolve()
+
+
+DATA_DIR = _resolve_data_dir(_env("API_HUB_DATA_DIR"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "app.db"
 SESSION_PATH = DATA_DIR / "w3_session.json"
@@ -52,9 +61,22 @@ W3_LOGIN_ALLOWED_HOSTS = _csv_env(
     _default_w3_host,
 )
 
+
+def _app_host_and_port() -> tuple[str, int]:
+    """Return informational ASGI metadata with local backend precedence."""
+
+    host = _env("LOCAL_BACKEND_HOST", _env("APP_HOST", "0.0.0.0"))
+    port = int(
+        _env(
+            "LOCAL_BACKEND_PORT",
+            _env("DEPLOY_RUN_PORT", _env("APP_PORT", "8000")),
+        )
+    )
+    return host, port
+
+
 # Host and port are informational here: OntologyBuild owns the ASGI server.
-APP_HOST = _env("APP_HOST", "0.0.0.0")
-APP_PORT = int(os.getenv("DEPLOY_RUN_PORT", "") or _env("APP_PORT", "8000"))
+APP_HOST, APP_PORT = _app_host_and_port()
 DEFAULT_CRON = _env("API_HUB_DEFAULT_CRON", _env("DEFAULT_CRON", "0 */2 * * *"))
 HTTP_TIMEOUT = int(_env("API_HUB_HTTP_TIMEOUT", _env("HTTP_TIMEOUT", "30")))
 MAX_RUNS_PER_INTERFACE = int(
