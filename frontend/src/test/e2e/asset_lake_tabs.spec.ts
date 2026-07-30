@@ -499,6 +499,7 @@ test('人工与成品数据表少列铺满可视区，宽表保留容器内横�
 })
 
 test('被拒绝的成品版本以审计语义展示且没有普通生产导出', async ({ page }) => {
+  const rejectedUpdatedAt = '2026-07-18T06:35:00Z'
   await mockAssetLake(page, {
     curated: [{
       id: 'ds-reviewed',
@@ -511,7 +512,7 @@ test('被拒绝的成品版本以审计语义展示且没有普通生产导出',
       output_key: 'orders',
       has_review_evidence: true,
       created_at: '2026-07-17T09:00:00Z',
-      updated_at: '2026-07-18T06:35:00Z',
+      updated_at: rejectedUpdatedAt,
     }],
     pipelines: [{
       id: 'pipeline-reviewed',
@@ -527,7 +528,13 @@ test('被拒绝的成品版本以审计语义展示且没有普通生产导出',
   await expect(page.getByText('ds-revie')).toHaveCount(0)
   await expect(page.getByRole('option', { name: '已处理' })).toHaveCount(1)
   await expect(page.getByRole('cell', { name: '已拒绝' })).toBeVisible()
-  await expect(page.getByText(/2026.*07.*18.*14:35/)).toBeVisible()
+  const expectedUpdatedAt = await page.evaluate(value => (
+    new Date(value).toLocaleString('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  ), rejectedUpdatedAt)
+  await expect(page.getByTitle(rejectedUpdatedAt, { exact: true })).toHaveText(expectedUpdatedAt)
   await expect(page.getByRole('button', { name: '查看' })).toBeVisible()
   const deleteButton = page.getByRole('button', { name: '删除' })
   await expect(deleteButton).toBeEnabled()

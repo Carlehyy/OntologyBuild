@@ -36,6 +36,8 @@
 - 后端测试按业务域归档，`tests/v2/` 继续作为明确的 API/runtime v2 契约族。
 - API Hub 权限边界测试复用统一平台数据库 fixture，消除 clean runner 上的
   测试顺序和默认 SQLite 状态依赖。
+- 资产湖离线 E2E 从同一 UTC 原值计算浏览器本地时间断言，不再把东八区显示
+  结果写死为所有 runner 的期望。
 - 前端 49 个 Playwright spec 明确分为 mocked、stack、external 三组。
 - 手工浏览器脚本的资源定位和运行证据统一指向仓库根与 `.artifacts/`。
 

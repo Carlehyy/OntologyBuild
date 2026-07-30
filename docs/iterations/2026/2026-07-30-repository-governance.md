@@ -273,6 +273,10 @@
   `TestClient`，因而绕过标准测试数据库 fixture、意外依赖默认 SQLite 已建表
   状态；现已复用统一 `client` fixture，消除测试文件归档后显现的执行顺序依赖，
   未改动生产权限逻辑。
+- 次轮远端回归暴露资产湖 mocked E2E 把 UTC 时间在东八区的显示结果
+  `14:35` 写死；页面按浏览器本地时区显示的既有语义正确，测试现改为从同一
+  UTC 原值在浏览器上下文计算期望文本，并用原始 ISO `title` 精确定位单元格，
+  在 UTC 与 Asia/Shanghai 环境均可验证而不改变用户时间展示。
 
 ## 后端测试目录收口
 
@@ -303,7 +307,7 @@
 | Celery | 最终 worker `inspect ping` 与应用任务集合断言 | worker pong；6 个稳定应用任务名精确一致 |
 | 前端静态与单元 | `test:unit`、`lint`、`build` | 12 passed；lint/build 通过；5372 个模块完成生产构建，仅保留既存 chunk 体积提示 |
 | 前端模块边界 | `check:feature-boundaries` | 4 个 overview 源文件、111 个页面文件/15 个页面域、221 个生产模块；0 orphan、0 cycle |
-| 前端 E2E 分层 | classification、mocked、最终 strict stack | 49 个 spec 精确归入 26 mocked + 21 stack + 2 external；mocked 80 passed；stack 52 passed、3 个付费外部 LLM 用例 skipped |
+| 前端 E2E 分层 | classification、mocked、最终 strict stack | 49 个 spec 精确归入 26 mocked + 21 stack + 2 external；时区修复后 `TZ=UTC CI=1` 完整 mocked 80 passed，Asia/Shanghai 目标用例 1 passed；stack 52 passed、3 个付费外部 LLM 用例 skipped |
 | Compose 与镜像 | 三套 `config --quiet`；最终 backend/celery/frontend/browser 及开发前端镜像构建 | 全部通过；严格项目从空卷启动 9 个服务且全部满足 Compose 等待条件 |
 | 生产栈冒烟 | `127.0.0.1:18088` 首页、JS/CSS、`/api/health`、PostgreSQL 初始化日志 | HTTP 200；`status=ok`、`unavailable=0`；数据库日志 0 个 ERROR/FATAL/PANIC |
 | 部署守卫 | 配置只读校验、`test-deploy-guards.sh`、仓库与解包后两次生产 Compose 构建 | 现有 26 项生产依赖成功合并且 `PUBLIC_PORT=8088`；配置来源契约、运行时白名单、目录正反例和严格镜像模式通过；backend/celery/frontend/browser 镜像从仓库及最终上传包均构建成功 |
@@ -312,14 +316,16 @@
 
 上述结果证明当前工作树可在本地严格生产配置下构建、迁移、启动并完成核心真实
 业务流程，因此状态为 `Validated`。首轮远端 Actions
-（run `30541030291`）在 clean runner 暴露上述测试隔离问题并于 verify 阶段
-停止，deploy 未执行、生产环境未变更；远端发布状态只以修复提交对应 Actions
+（run `30541030291`）在 clean runner 暴露上述数据库隔离问题；次轮
+（run `30546579509`）的后端、迁移、配置、文档、前端单元、lint 与 build
+均通过，随后由上述时区断言停止（mocked E2E 79 passed、1 failed）。两轮
+deploy 均未执行、生产环境未变更；远端发布状态只以修复提交对应 Actions
 的终态为准，本地证据不单独标记为 `Released`。
 
 ## 回滚
 
-第一阶段文件和已删除过程产物均可从 Git 通过单独 revert 恢复。首轮远端
-验证未进入 deploy；如后续部署配置校验失败，应先核对当前版本的生产依赖
+第一阶段文件和已删除过程产物均可从 Git 通过单独 revert 恢复。前两轮远端
+验证均未进入 deploy；如后续部署配置校验失败，应先核对当前版本的生产依赖
 清单和既有 Repository SSH Secrets，不得在日志中输出真实值。
 
 ## 已知风险与后续动作
