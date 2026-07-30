@@ -269,6 +269,10 @@
 - 取消自动部署对新建 GitHub `production` Environment 的强制依赖，继续使用
   既有生产依赖清单和 Repository SSH Secrets；部署目录校验、SSH host key
   校验、完整 verify 与运行时白名单等安全增强继续保留。
+- 首轮 clean runner 回归暴露 API Hub 权限边界测试仍直接创建平台
+  `TestClient`，因而绕过标准测试数据库 fixture、意外依赖默认 SQLite 已建表
+  状态；现已复用统一 `client` fixture，消除测试文件归档后显现的执行顺序依赖，
+  未改动生产权限逻辑。
 
 ## 后端测试目录收口
 
@@ -289,7 +293,8 @@
 
 | 层级 | 命令/环境 | 当前结果 |
 |---|---|---|
-| 后端完整回归 | `pytest -q --disable-warnings --ignore tests/v2/perf` | 1694 passed、1 个显式 live MinIO 用例 skipped、0 failed；新增 2 个行为复盘守卫 |
+| 后端完整回归 | 修复后、标准 CI 默认环境执行 `pytest -q --disable-warnings --ignore tests/v2/perf` | 1694 passed、1 个显式 live MinIO 用例 skipped、0 failed；新增 2 个行为复盘守卫 |
+| API Hub 空库隔离 | 全新临时 SQLite 执行失败用例及 `tests/api_hub` | 失败用例 1 passed；完整域 39 passed；不依赖默认 `/tmp/ontoprompt.db` |
 | 后端性能门禁 | `pytest -q tests/v2/perf` | 9 passed |
 | 后端依赖边界 | `pytest -q tests/architecture` 与全 `backend/app` AST 图 | 186 passed；557 个模块/1856 条本地边；service→router、canonical router→router 均为 0；仅保留已登记的 Sentinel SCC |
 | 生产配置与配置中心 | backend production config 专项；`pytest config/` | 46 passed；36 passed |
@@ -306,14 +311,16 @@
 | 编译与格式 | Python `compileall`、`git diff --check` | 通过 |
 
 上述结果证明当前工作树可在本地严格生产配置下构建、迁移、启动并完成核心真实
-业务流程，因此状态为 `Validated`。本分支未推送，GitHub Actions 与远程
-staging/production 均未触发，不能标记为 `Released`。
+业务流程，因此状态为 `Validated`。首轮远端 Actions
+（run `30541030291`）在 clean runner 暴露上述测试隔离问题并于 verify 阶段
+停止，deploy 未执行、生产环境未变更；远端发布状态只以修复提交对应 Actions
+的终态为准，本地证据不单独标记为 `Released`。
 
 ## 回滚
 
-第一阶段文件和已删除过程产物均可从 Git 通过单独 revert 恢复。本分支尚未
-推送或部署；如部署配置校验失败，应先核对当前版本的生产依赖清单和既有
-Repository SSH Secrets，不得在日志中输出真实值。
+第一阶段文件和已删除过程产物均可从 Git 通过单独 revert 恢复。首轮远端
+验证未进入 deploy；如后续部署配置校验失败，应先核对当前版本的生产依赖
+清单和既有 Repository SSH Secrets，不得在日志中输出真实值。
 
 ## 已知风险与后续动作
 

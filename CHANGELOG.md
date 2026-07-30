@@ -34,6 +34,8 @@
 - 复盘修正 Data Steward 附件清空时机、Tailwind 全局 token、动态 Sentinel
   发布上下文读取和报告模板查询，使其恢复为整理前的交互与执行语义。
 - 后端测试按业务域归档，`tests/v2/` 继续作为明确的 API/runtime v2 契约族。
+- API Hub 权限边界测试复用统一平台数据库 fixture，消除 clean runner 上的
+  测试顺序和默认 SQLite 状态依赖。
 - 前端 49 个 Playwright spec 明确分为 mocked、stack、external 三组。
 - 手工浏览器脚本的资源定位和运行证据统一指向仓库根与 `.artifacts/`。
 

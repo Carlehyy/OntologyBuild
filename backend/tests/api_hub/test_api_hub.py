@@ -73,7 +73,7 @@ def _interface(**overrides):
     return payload
 
 
-def test_interface_crud_group_and_auth_boundary(hub_client):
+def test_interface_crud_group_and_auth_boundary(hub_client, client):
     created = hub_client.post("/interfaces", json=_interface())
     assert created.status_code == 200
     item = created.json()
@@ -99,20 +99,20 @@ def test_interface_crud_group_and_auth_boundary(hub_client):
     from app.main import app as platform_app
     from app.deps import get_current_user
 
-    response = TestClient(platform_app).get("/api/api-hub/interfaces")
+    response = client.get("/api/api-hub/interfaces")
     assert response.status_code == 403
-    assert TestClient(platform_app).get("/api/api-hub/proxy/info").status_code == 403
+    assert client.get("/api/api-hub/proxy/info").status_code == 403
     try:
         platform_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
             role="viewer", is_active=True
         )
-        assert TestClient(platform_app).get("/api/api-hub/interfaces").status_code == 403
-        assert TestClient(platform_app).post("/api/api-hub/proxy/keys", json={}).status_code == 403
+        assert client.get("/api/api-hub/interfaces").status_code == 403
+        assert client.post("/api/api-hub/proxy/keys", json={}).status_code == 403
 
         platform_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
             role="admin", is_active=True
         )
-        assert TestClient(platform_app).get("/api/api-hub/interfaces").status_code == 200
+        assert client.get("/api/api-hub/interfaces").status_code == 200
     finally:
         platform_app.dependency_overrides.pop(get_current_user, None)
 
