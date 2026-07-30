@@ -6,11 +6,22 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${port}`
 export default defineConfig({
   testDir: './src/test/e2e',
   fullyParallel: false,
-  retries: 1,
+  forbidOnly: Boolean(process.env.CI),
+  workers: process.env.CI ? 1 : undefined,
+  retries: process.env.CI ? 1 : 0,
   timeout: 30000,
+  outputDir: '../.artifacts/playwright/test-results',
+  reporter: process.env.CI
+    ? [
+        ['github'],
+        ['html', { outputFolder: '../.artifacts/playwright/html-report', open: 'never' }],
+      ]
+    : 'list',
   use: {
     baseURL,
     trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
   projects: [
     {
@@ -21,7 +32,7 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --port ${port}`,
     url: baseURL,
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     timeout: 60000,
   },
 })

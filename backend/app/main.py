@@ -7,26 +7,23 @@ v1 兼容：/api/v1/* 路由全部保留
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
-import asyncio
 import hmac
 import json
-import tempfile
-import urllib.request
 
 from fastapi import FastAPI, Depends, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from sqlalchemy import inspect, text
-from sqlalchemy.orm import Session, sessionmaker
-from app.database import engine, Base, SessionLocal
+from sqlalchemy.orm import Session
+from app.database import SessionLocal
 from app.config import settings
-from app.shared.schema_compat import (
-    assert_critical_schema,
-    repair_development_schema,
-)
-from app.routers import auth, users, overview, ontologies, files, prompts, models, entities, logic, actions, extraction, graph, settings as settings_router, export, audit, mcp as mcp_router, domains
+from app.bootstrap import health as bootstrap_health
+from app.bootstrap.lifecycle import application_lifespan
+from app.bootstrap.seeding import seed_database
+from app.routers import auth, users, ontologies, files, entities, logic, actions, extraction, graph, settings as settings_router, export, audit, mcp as mcp_router, domains
+from app.model_configs.router import router as model_configs_router
+from app.platform.router import router as overview_router
+from app.settings.prompts.router import router as prompts_router
 from app.routers import formal as formal_router
 from app.routers import sentinel as sentinel_router
 from app.routers import collectors as collectors_router
@@ -56,386 +53,13 @@ from app.data_channel.datasets.sharing_router import (
 )
 from app.ontologies.access import legacy_ontology_write_guard
 
-def _seed_db():
-    from app.services.auth_service import seed_admin
-    from app.models.rules_config import RulesConfig
-    import uuid
-
-    db = SessionLocal()
-    try:
-        # Import all models to ensure tables are created
-        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, audit_task, mcp, domain
-        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, mcp, domain
-        from app.models.v2 import dataset as v2_dataset, pipeline as v2_pipeline, connection as v2_connection  # noqa: F401
-        from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine  # noqa: F401
-        from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
-        from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
-        from app.models.v2.sync_task import DataSyncTask, DataSyncHistory  # noqa: F401
-        from app.data_channel.pipeline_tasks.models import PipelineTask  # noqa: F401
-        from app.data_channel.datasets.sharing_models import (  # noqa: F401
-            ManualDatasetChange, ManualDatasetShare,
-        )
-        from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
-        from app.models.ontology_version import OntologyVersion, OntologyChangeLog  # noqa: F401
-        from app.models.attribute_schema import AttributeSchema, VocabularyEntry  # noqa: F401
-        from app.models.inference import ShadowRun, InferenceRun, InferenceResult, ActionFiring, AuditLog  # noqa: F401
-        # 正规本体模型 (Palantir 风格) — 平台核心
-        from app.models.ontology_formal import (  # noqa: F401
-            ObjectType, LinkType, ActionType, OntologyFunction,
-            ObjectInstance, LinkInstance, ActionExecutionLog,
-        )
-        # 哨兵引擎模型 (反应式运行时)
-        from app.models.sentinel import Sentinel, SentinelFiring, Notification, SentinelMatchState  # noqa: F401
-        # 本体智能体 (授权边界内的 agent 运行时)
-        from app.ontologies.agent_runtime.models import AgentProfile, AgentConversation, AgentMessage  # noqa: F401
-        from app.ontologies.decision_simulation.models import DecisionSimulationRun  # noqa: F401
-        # 业务探索 (对话式业务建模：画布/文档/本体草稿/会话附件)
-        from app.exploration.models import (  # noqa: F401
-            ExplorationSession, ExplorationMessage, ExplorationDocument, ExplorationDraft,
-            ExplorationAttachment,
-        )
-        from app.models.workflow_config import WorkflowConfig  # noqa: F401
-        from app.settings.object_storage.models import (  # noqa: F401
-            MinioConfig, MinioOperationAudit,
-        )
-        # 数据管家 (对话式 n8n 数据流水线：治理记录 + 会话)
-        from app.data_channel.steward.models import (  # noqa: F401
-            N8nPipeline, StewardConversation, StewardMessage,
-        )
-        from app.data_channel.file_assets.models import PipelineFileAsset  # noqa: F401
-        # 事件登记 (智能助手↔数据通道之间的事件采集入口：主体/附件/审计/第三方密钥)
-        from app.events.models import (  # noqa: F401
-            RegisteredEvent, EventAttachment, EventAuditLog, EventIngestKey,
-        )
-        # 超级助手（独立会话、目录型 Skill、MCP 客户端配置）
-        from app.super_assistant.models import (  # noqa: F401
-            SuperAssistantConversation, SuperAssistantMessage,
-            SuperAssistantToolRun, SuperAssistantSkill, SuperAssistantMcpServer,
-        )
-        from app.inbox.models import (  # noqa: F401
-            InboxItem, InboxDelivery, InboxEventReceipt, InboxOutboxEvent,
-        )
-        # 生产 schema 只认 Alembic。create_all 会把漏跑迁移伪装成“可启动”，
-        # 却没有回填、外键与唯一约束；开发/测试仍保留零配置建库便利。
-        if settings.environment != "production":
-            Base.metadata.create_all(bind=engine)
-
-        # Lightweight column migrations — create_all skips existing tables
-        with engine.connect() as conn:
-            if settings.environment != "production":
-                # Legacy local SQLite databases are intentionally allowed to run
-                # without an Alembic revision. Keep late, additive model changes
-                # usable after an ordinary backend restart.
-                repaired = repair_development_schema(conn)
-                if repaired:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "已修复开发数据库缺失字段: %s", ", ".join(repaired))
-                columns = {
-                    col["name"]
-                    for col in inspect(conn).get_columns("extraction_tasks")
-                }
-                if "validation_report" not in columns:
-                    conn.execute(text(
-                        "ALTER TABLE extraction_tasks "
-                        "ADD COLUMN validation_report JSON"))
-                    conn.commit()
-                entity_columns = {
-                    col["name"] for col in inspect(conn).get_columns("entities")
-                }
-                if "name_abbr" not in entity_columns:
-                    conn.execute(text(
-                        "ALTER TABLE entities ADD COLUMN name_abbr VARCHAR(50)"))
-                    conn.commit()
-                if "snomed_id" not in entity_columns:
-                    conn.execute(text(
-                        "ALTER TABLE entities ADD COLUMN snomed_id VARCHAR(50)"))
-                    conn.commit()
-                if "canonical_id" not in entity_columns:
-                    conn.execute(text(
-                        "ALTER TABLE entities ADD COLUMN canonical_id VARCHAR(200)"))
-                    conn.commit()
-            # 这些历史兼容 DDL 只服务未迁移的开发库；生产部署已在启动前执行
-            # ``alembic upgrade head``，不得再由应用逐条 ALTER 并吞掉失败。
-            for stmt in ([] if settings.environment == "production" else [
-                "ALTER TABLE model_configs ADD COLUMN config_type VARCHAR(30) DEFAULT 'llm'",
-                "ALTER TABLE model_configs ADD COLUMN options JSON DEFAULT '{}'",
-                "ALTER TABLE model_configs ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE model_configs ADD COLUMN is_default BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE ontology_projects ADD COLUMN build_mode VARCHAR(30) DEFAULT 'simple_llm'",
-                "ALTER TABLE ontology_projects ADD COLUMN icon VARCHAR(50)",
-                "ALTER TABLE ontology_projects ADD COLUMN current_release_id VARCHAR",
-                "ALTER TABLE v2_pipelines ADD COLUMN domain VARCHAR(100) DEFAULT '通用'",
-                "ALTER TABLE v2_pipelines ADD COLUMN description TEXT DEFAULT ''",
-                "ALTER TABLE v2_pipelines ADD COLUMN definition JSON",
-                "ALTER TABLE v2_pipelines ADD COLUMN branch VARCHAR(50) DEFAULT 'main'",
-                "ALTER TABLE v2_pipelines ADD COLUMN version INTEGER DEFAULT 1",
-                "ALTER TABLE logic_rules ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE logic_rules ADD COLUMN status VARCHAR(20) DEFAULT 'draft'",
-                "ALTER TABLE actions ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE actions ADD COLUMN status VARCHAR(20) DEFAULT 'draft'",
-                "ALTER TABLE sentinels ADD COLUMN condition_rows JSON DEFAULT '[]'",
-                "ALTER TABLE sentinels ADD COLUMN condition_logic VARCHAR(8) DEFAULT 'and'",
-                "ALTER TABLE sentinels ADD COLUMN trigger_mode VARCHAR(16) DEFAULT 'on_enter'",
-                "ALTER TABLE sentinels ADD COLUMN muted BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE ontology_versions ADD COLUMN snapshot_formal JSON",
-                "ALTER TABLE ontology_versions ADD COLUMN parent_version_id VARCHAR",
-                "ALTER TABLE ontology_versions ADD COLUMN base_release_id VARCHAR",
-                "ALTER TABLE ontology_versions ADD COLUMN promoted_from_id VARCHAR",
-                "ALTER TABLE ontology_versions ADD COLUMN node_kind VARCHAR(20) DEFAULT 'release'",
-                "ALTER TABLE ontology_versions ADD COLUMN lifecycle_status VARCHAR(20) DEFAULT 'released'",
-                "ALTER TABLE ontology_versions ADD COLUMN revision INTEGER DEFAULT 0",
-                "ALTER TABLE ontology_versions ADD COLUMN snapshot_hash VARCHAR(64)",
-                "ALTER TABLE ontology_versions ADD COLUMN published_at DATETIME",
-                "ALTER TABLE fo_property_facts ADD COLUMN kind VARCHAR(16) DEFAULT 'property'",
-                "ALTER TABLE fo_property_facts ADD COLUMN derived_from JSON",
-                "ALTER TABLE fo_property_facts ADD COLUMN supersedes_id VARCHAR",
-                "ALTER TABLE fo_property_facts ADD COLUMN caused_by VARCHAR",
-                "ALTER TABLE fo_property_facts ADD COLUMN source VARCHAR(200) DEFAULT 'manual'",
-                "ALTER TABLE fo_property_facts ADD COLUMN actor_id VARCHAR",
-                # —— 图谱编辑器主链路（缺此列则 GET /full 必 500）——
-                "ALTER TABLE fo_object_types ADD COLUMN interfaces JSON DEFAULT '[]'",
-                # —— HITL 审批闸门 + 执行溯源 ——
-                "ALTER TABLE fo_action_types ADD COLUMN requires_approval BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE fo_action_logs ADD COLUMN actor_id VARCHAR",
-                "ALTER TABLE fo_action_logs ADD COLUMN decided_by VARCHAR",
-                "ALTER TABLE fo_action_logs ADD COLUMN decided_at DATETIME",
-                "ALTER TABLE fo_action_logs ADD COLUMN decision_reason TEXT",
-                "ALTER TABLE fo_action_logs ADD COLUMN related_log_id VARCHAR",
-                # —— 事实层 CBox 补全 + 确定性排序 ——
-                "ALTER TABLE fo_property_facts ADD COLUMN confidence FLOAT",
-                "ALTER TABLE fo_property_facts ADD COLUMN valid_at DATETIME",
-                "ALTER TABLE fo_property_facts ADD COLUMN seq INTEGER DEFAULT 0",
-                # —— 同步任务状态归一（引擎曾写大写，与枚举/守卫的小写互不相认）——
-                "UPDATE v2_data_sync_tasks SET status = lower(status) WHERE status != lower(status)",
-                "UPDATE v2_data_sync_histories SET status = lower(status) WHERE status != lower(status)",
-                # —— 映射绑定已有对象实体（model-first：先建模、再灌数据）——
-                "ALTER TABLE v2_ontology_mappings ADD COLUMN target_object_type_id VARCHAR",
-                # —— 流水线调度任务血缘：run 由哪条任务触发 ——
-                "ALTER TABLE v2_pipeline_runs ADD COLUMN task_id VARCHAR",
-                # —— 事件登记：留存明文密钥以便面板反复复制 ——
-                "ALTER TABLE event_ingest_keys ADD COLUMN secret_plain VARCHAR(120)",
-                # —— 未发布 n8n 执行预览的列样本 → 发布时固化为影子流水线期望列契约 ——
-                "ALTER TABLE v2_n8n_pipelines ADD COLUMN last_test_result JSON",
-                # —— 流水线启用开关：停用后任务池/链式触发不执行 ——
-                "ALTER TABLE v2_pipelines ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
-                # —— 本体元素血缘出处（业务探索草稿落地时写入，Schema 也是事实）——
-                "ALTER TABLE fo_object_types ADD COLUMN source JSON",
-                "ALTER TABLE fo_link_types ADD COLUMN source JSON",
-                "ALTER TABLE fo_action_types ADD COLUMN source JSON",
-                "ALTER TABLE fo_functions ADD COLUMN source JSON",
-                "ALTER TABLE sentinels ADD COLUMN source JSON",
-                # —— 胖关系（LPG 边属性）：关系映射支持连接表 + 边属性字段映射 ——
-                "ALTER TABLE v2_ontology_link_mappings ADD COLUMN link_type_id VARCHAR",
-                "ALTER TABLE v2_ontology_link_mappings ADD COLUMN edge_dataset_id VARCHAR",
-                "ALTER TABLE v2_ontology_link_mappings ADD COLUMN field_mapping JSON DEFAULT '{}'",
-                # —— 回填历史 NULL latest_version_id（create_version 旧 bug：flush 前取 id）——
-                "UPDATE v2_datasets SET latest_version_id = ("
-                " SELECT v.id FROM v2_dataset_versions v WHERE v.dataset_id = v2_datasets.id"
-                " ORDER BY v.version_no DESC LIMIT 1)"
-                " WHERE latest_version_id IS NULL AND EXISTS ("
-                " SELECT 1 FROM v2_dataset_versions v2 WHERE v2.dataset_id = v2_datasets.id)",
-            ]):
-                try:
-                    conn.execute(text(stmt))
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()  # 清掉 aborted 事务，避免下一个 stmt 全炸
-                    msg = str(e).lower()
-                    if "duplicate column" in msg or "already exists" in msg:
-                        pass
-                    else:
-                        import logging
-                        logging.getLogger(__name__).error(
-                            "schema 迁移失败(将导致该表读写 500): %s -> %s", stmt, e)
-
-            # Surface a missed production migration or failed dev repair before
-            # an MCP request reaches SQLAlchemy and becomes an opaque HTTP 500.
-            assert_critical_schema(conn, Base.metadata)
-
-        seed_admin(db)
-
-        # The standalone local configuration center stores ordinary startup
-        # values in the shared env file.  n8n and LLM settings are database
-        # backed, so development may explicitly opt in to an idempotent sync.
-        # The service has a second production guard to prevent accidental use.
-        from app.services.local_config_sync import (
-            sync_local_managed_runtime_config,
-        )
-        if sync_local_managed_runtime_config(db):
-            db.commit()
-
-        # Retry domain results that committed just before a previous process
-        # stopped, but whose personal inbox projection had not completed yet.
-        from app.inbox.service import drain_outbox
-        drain_outbox(db, limit=100)
-
-        # 对象存储删除采用 transactional outbox：上次停机/存储故障遗留的任务在
-        # 启动时重试。空队列不会初始化 MinIO 客户端，不增加健康检查压力。
-        from app.data_channel.file_assets.service import cleanup_expired_assets
-        cleanup_expired_assets(db)
-        from app.data_channel.datasets.service import drain_storage_deletion_outbox
-        drain_storage_deletion_outbox(
-            db, strict_schema=settings.environment == "production")
-
-        # 回填：存量 n8n 治理记录补建影子流水线行（创建即在列表可见的新规则）
-        # 幂等——已有 pipeline_id 的记录 ensure 只做同步，不重复建行
-        try:
-            from app.data_channel.steward.service import ensure_shadow_pipeline
-            from app.data_channel.steward.models import N8nPipeline as _N8nRec, STATUS_ARCHIVED as _ARCH
-            from app.models.v2.pipeline import Pipeline as _Pipeline
-            orphans = db.query(_N8nRec).filter(
-                _N8nRec.status != _ARCH, _N8nRec.pipeline_id.is_(None)).all()
-            for _rec in orphans:
-                ensure_shadow_pipeline(db, _rec)
-            owner_repairs = 0
-            managed = db.query(_N8nRec).filter(
-                _N8nRec.status != _ARCH,
-                _N8nRec.pipeline_id.is_not(None),
-                _N8nRec.created_by.is_not(None),
-            ).all()
-            for _rec in managed:
-                shadow = db.query(_Pipeline).filter(
-                    _Pipeline.id == _rec.pipeline_id).first()
-                if shadow is not None and not shadow.created_by:
-                    shadow.created_by = _rec.created_by
-                    owner_repairs += 1
-            if orphans or owner_repairs:
-                db.commit()
-        except Exception:  # noqa: BLE001 — 回填失败不阻塞启动
-            db.rollback()
-            import logging
-            logging.getLogger(__name__).warning("n8n 影子流水线回填失败", exc_info=True)
-
-        # 重启时清理遗留的 running 任务 — daemon 线程被杀后 task 会永久卡在 85%
-        from app.models.extraction_task import ExtractionTask
-        stale = db.query(ExtractionTask).filter(ExtractionTask.status == "running").all()
-        for t in stale:
-            t.status = "failed"
-            t.error  = "服务重启，任务中断。请重新触发提取。"
-        if stale:
-            db.commit()
-
-        # Seed confidence rules
-        if db.query(RulesConfig).count() == 0:
-            rules = [
-                ("confidence_entity_min", "0.5", "实体最低置信度", "Entity min confidence"),
-                ("confidence_logic_min", "0.6", "逻辑规则最低置信度", "Logic rule min confidence"),
-                ("confidence_action_min", "0.6", "动作最低置信度", "Action min confidence"),
-                ("confidence_relation_min", "0.5", "关系最低置信度", "Relation min confidence"),
-                ("confidence_high_threshold", "0.9", "高置信度阈值", "High confidence threshold"),
-                ("confidence_medium_threshold", "0.7", "中置信度阈值", "Medium confidence threshold"),
-                ("confidence_low_threshold", "0.5", "低置信度阈值", "Low confidence threshold"),
-                ("confidence_display_dashed_below", "0.7", "低于此值显示虚线边", "Show dashed edge below threshold"),
-            ]
-            for key, val, label_cn, label_en in rules:
-                db.add(RulesConfig(id=str(uuid.uuid4()), rule_key=key, rule_value=val,
-                                   rule_label_cn=label_cn, rule_label_en=label_en))
-            db.commit()
-
-        # Seed / update builtin prompts (upsert by name)
-        from app.models.prompt import Prompt
-        from app.models.user import User
-        from app.routers.prompts import BUILTIN_PROMPTS
-        admin = db.query(User).filter(User.role == "admin").first()
-        if admin:
-            for p in BUILTIN_PROMPTS:
-                existing = db.query(Prompt).filter(Prompt.name == p["name"]).first()
-                if existing:
-                    existing.content = p["content"]
-                    existing.domain = p["domain"]
-                else:
-                    db.add(Prompt(id=str(uuid.uuid4()), name=p["name"], domain=p["domain"],
-                                  content=p["content"], version="v1.0", created_by=admin.id))
-            db.commit()
-    finally:
-        db.close()
+_seed_db = seed_database
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _seed_db()
-    # API-Hub keeps its original isolated SQLite store and refresh scheduler.
-    # It is initialized inside the host application's lifecycle so there is
-    # still only one backend process to operate.
-    from app.api_hub import db as api_hub_db, scheduler as api_hub_scheduler
-    api_hub_db.init_db()
-    api_hub_scheduler.start()
-    # 哨兵引擎：注册 CDC(监听对象改动→变化驱动) + 启动定期扫描 worker
-    try:
-        from app.services.sentinel import register_cdc, start_scan_worker
-        register_cdc(start_worker=True)
-        sentinel_started = start_scan_worker()
-        if settings.environment == "production" and not sentinel_started:
-            raise RuntimeError("Sentinel scan worker is disabled or failed to start")
-    except Exception as e:
-        if settings.environment == "production":
-            raise RuntimeError("Sentinel engine failed to initialize") from e
-        import logging; logging.getLogger(__name__).warning(f'Sentinel 启动失败: {e}')
-    # 初始化 Neo4j 索引；开发环境可降级，生产环境必须完成后才就绪。
-    try:
-        from app.services.v2.graph.index_setup import setup_indexes
-        index_result = setup_indexes()
-        if settings.environment == "production" and (
-            index_result.get("status") != "done"
-            or any(item.get("status") != "ok"
-                   for item in index_result.get("results", []))
-        ):
-            raise RuntimeError(f"Neo4j index setup incomplete: {index_result}")
-    except Exception as e:
-        if settings.environment == "production":
-            raise RuntimeError("Neo4j indexes failed to initialize") from e
-    # 启动数据同步任务调度器（后台线程）
-    try:
-        from app.services.v2.sync_scheduler import get_sync_scheduler
-        scheduler = get_sync_scheduler()
-        scheduler.start()
-        if settings.environment == "production" and not scheduler.healthy:
-            raise RuntimeError(
-                f"Data scheduler is not healthy: {scheduler.last_error or 'not running'}")
-    except Exception as e:
-        if settings.environment == "production":
-            raise RuntimeError("Data scheduler failed to initialize") from e
-        import logging
-        logging.getLogger(__name__).warning(f"SyncScheduler 启动失败: {e}")
-    from app import mcp_server as _mcp_server
-    from app.api_hub import mcp_server as api_hub_mcp
-    from app.settings.object_storage import mcp_server as minio_mcp
-    # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建
-    api_hub_public, api_hub_system = api_hub_mcp.reset_session_managers()
-    from app.data_channel.file_assets.service import file_asset_cleanup_loop
-    file_cleanup_task = asyncio.create_task(file_asset_cleanup_loop())
-    try:
-        async with (
-            _mcp_server.reset_session_manager().run(),
-            minio_mcp.reset_session_manager().run(),
-            api_hub_public.run(),
-            api_hub_system.run(),
-        ):
-            yield
-    finally:
-        file_cleanup_task.cancel()
-        try:
-            await file_cleanup_task
-        except asyncio.CancelledError:
-            pass
-        from app.data_channel.steward.browser_runtime import browser_manager
-        browser_manager.close_all()
-        try:
-            from app.services.v2.sync_scheduler import get_sync_scheduler
-            get_sync_scheduler().shutdown()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            from app.services.sentinel import (
-                stop_cdc_worker,
-                stop_scan_worker,
-            )
-            # Stop the producer first, then the durable outbox consumer.
-            stop_scan_worker()
-            stop_cdc_worker()
-        except Exception:  # noqa: BLE001
-            pass
-        api_hub_scheduler.shutdown()
+    # Compatibility wrapper: callers may still monkeypatch app.main._seed_db.
+    async with application_lifespan(app, seed_database=_seed_db):
+        yield
 
 app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
 
@@ -445,24 +69,14 @@ mcp_server.bind_app(app)
 @app.get("/health/live", tags=["health"])
 def liveness():
     """Process liveness only; dependency readiness is exposed separately."""
-    return {"status": "ok"}
+    return bootstrap_health.liveness_payload()
 
 
-def _probe_http_service(url: str, *, timeout: float = 3.0) -> None:
-    """Probe an internal HTTP service without leaving a pooled socket behind.
-
-    Readiness runs repeatedly in production.  Constructing a new Chroma
-    ``HttpClient`` for every probe leaked its underlying HTTP connection into
-    CLOSE_WAIT until the backend exhausted its 1024 file descriptors.  A
-    short-lived stdlib request with ``Connection: close`` keeps this path
-    bounded and makes ownership of the socket explicit.
-    """
-    request = urllib.request.Request(url, headers={"Connection": "close"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        if response.status >= 400:
-            raise RuntimeError(f"health probe returned HTTP {response.status}")
-        # Consume a bounded response so the connection can close cleanly.
-        response.read(4096)
+# Compatibility aliases: old imports keep object identity, and patching
+# ``app.main.urllib.request.urlopen`` still mutates the module used by the
+# canonical probe implementation.
+urllib = bootstrap_health.urllib
+_probe_http_service = bootstrap_health.probe_http_service
 
 app.add_middleware(
     CORSMiddleware,
@@ -604,7 +218,12 @@ admin_guard = [Depends(require_admin)]
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-app.include_router(overview.router, prefix="/api/v1/overview", tags=["overview"], dependencies=overview_guard)
+app.include_router(
+    overview_router,
+    prefix="/api/v1/overview",
+    tags=["overview"],
+    dependencies=overview_guard,
+)
 app.include_router(ontologies.router, prefix="/api/v1/ontologies", tags=["ontologies"], dependencies=ontology_guard)
 legacy_write_guard = [Depends(legacy_ontology_write_guard)]
 legacy_ontology_guard = [*legacy_write_guard, *ontology_guard]
@@ -616,9 +235,9 @@ app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/e
 app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"], dependencies=ontology_guard)
 app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"], dependencies=ontology_guard)
 app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"], dependencies=ontology_guard)
-app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
+app.include_router(prompts_router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
-app.include_router(models.router, prefix="/api/v1/models", tags=["models"], dependencies=models_guard)
+app.include_router(model_configs_router, prefix="/api/v1/models", tags=["models"], dependencies=models_guard)
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"], dependencies=admin_guard)
 app.include_router(mcp_router.router, prefix="/api/v1/mcp", tags=["mcp"])
 
@@ -745,185 +364,9 @@ def get_db():
 @app.get("/health", tags=["health"])
 @app.get("/health/ready", tags=["health"])
 def health(db: Session = Depends(get_db)):
-    checks = {
-        "status": "ok",
-        "db": "unknown",
-        "redis": "unknown",
-        "neo4j": "unknown",
-        "minio": "unknown",
-        "object_storage": "unknown",
-        "chroma": "unknown",
-        "browser": "unknown",
-        "sentinel_scheduler": "unknown",
-        "sentinel_cdc": "unknown",
-        "data_scheduler": "unknown",
-        "ontology_projection": "unknown",
-    }
-
-    # PostgreSQL check
-    try:
-        db.execute(text("SELECT 1"))
-        checks["db"] = "ok"
-    except Exception:
-        checks["db"] = "error"
-
-    # Redis/Celery broker check.  A TCP accept is not readiness: authenticate
-    # and execute PING so a misconfigured or loading Redis fails closed.
-    try:
-        import redis
-        redis.Redis.from_url(
-            settings.redis_url,
-            socket_connect_timeout=1.5,
-            socket_timeout=1.5,
-        ).ping()
-        checks["redis"] = "ok"
-    except Exception:
-        checks["redis"] = "unavailable"
-
-    # Neo4j check
-    driver = None
-    try:
-        from neo4j import GraphDatabase
-        driver = GraphDatabase.driver(
-            settings.neo4j_uri,
-            auth=(settings.neo4j_user, settings.neo4j_password),
-        )
-        driver.verify_connectivity()
-        checks["neo4j"] = "ok"
-    except Exception:
-        checks["neo4j"] = "unavailable"
-    finally:
-        if driver is not None:
-            try:
-                driver.close()
-            except Exception:
-                pass
-
-    # MinIO check.  Prefer the administrator-managed endpoint when enabled.
-    # The unauthenticated liveness endpoint is sufficient here:
-    # credential correctness is exercised by real storage operations, while
-    # readiness must not create a new unclosed urllib3 pool every few seconds.
-    try:
-        from app.settings.object_storage.models import MinioConfig
-        managed = None
-        if not settings.require_external_dependencies:
-            managed = db.query(MinioConfig).filter(
-                MinioConfig.id == "default",
-                MinioConfig.enabled.is_(True),
-                MinioConfig.connected.is_(True),
-            ).first()
-        minio_endpoint = (managed.endpoint if managed else settings.minio_endpoint).rstrip("/")
-        if "://" not in minio_endpoint:
-            scheme = "https" if (managed.secure if managed else settings.minio_use_ssl) else "http"
-            minio_endpoint = f"{scheme}://{minio_endpoint}"
-        _probe_http_service(f"{minio_endpoint}/minio/health/live")
-        checks["minio"] = "ok"
-        checks["object_storage"] = "minio"
-    except Exception:
-        checks["minio"] = "unavailable"
-        if settings.storage_local_fallback:
-            try:
-                from app.shared.storage import StorageService
-
-                local_base = StorageService._configured_local_base()
-                local_base.mkdir(parents=True, exist_ok=True)
-                # os.access is unreliable for root; a same-directory temp file
-                # verifies that the mounted fallback is actually writable.
-                with tempfile.NamedTemporaryFile(dir=local_base):
-                    pass
-                checks["object_storage"] = "local"
-            except Exception:
-                checks["object_storage"] = "unavailable"
-        else:
-            checks["object_storage"] = "unavailable"
-
-    # ChromaDB check.  Do not instantiate chromadb.HttpClient here: Chroma
-    # 0.5.x does not expose deterministic client shutdown and repeated health
-    # probes accumulate CLOSE_WAIT sockets.
-    try:
-        _probe_http_service(
-            f"http://{settings.chroma_host}:{settings.chroma_port}/api/v1/heartbeat")
-        checks["chroma"] = "ok"
-    except Exception:
-        checks["chroma"] = "unavailable"
-
-    # Data-steward Chromium/CDP readiness.  A running container is insufficient:
-    # the image may be alive while its internal CDP bridge is misconfigured.
-    try:
-        from app.data_channel.steward.browser_runtime import probe_browser_cdp
-        checks["browser"] = "ok" if probe_browser_cdp()["reachable"] else "unavailable"
-    except Exception:
-        checks["browser"] = "unavailable"
-
-    try:
-        from app.ontologies.sentinels.scan_worker import scan_worker_status
-        sentinel_status = scan_worker_status()
-        checks["sentinel_scheduler"] = (
-            "ok" if sentinel_status["alive"] and not sentinel_status["last_error"]
-            else "unavailable")
-    except Exception:
-        checks["sentinel_scheduler"] = "unavailable"
-
-    try:
-        from app.ontologies.sentinels.cdc import cdc_dispatch_status
-        cdc_status = cdc_dispatch_status(
-            session_factory=sessionmaker(
-                bind=db.get_bind(), expire_on_commit=False))
-        checks["sentinel_cdc"] = (
-            "ok" if cdc_status["healthy"] else "unavailable")
-        checks["sentinel_cdc_detail"] = {
-            "quiescent": cdc_status["quiescent"],
-            "worker_alive": cdc_status["worker_alive"],
-            "queued": cdc_status["queued"],
-            "durable": cdc_status["durable"],
-            "error_count": len(cdc_status["last_errors"]),
-            "error_code": (
-                "dispatch_error"
-                if cdc_status["last_error"] or cdc_status["last_errors"]
-                else None
-            ),
-        }
-    except Exception:
-        checks["sentinel_cdc"] = "unavailable"
-        checks["sentinel_cdc_detail"] = {
-            "quiescent": False,
-            "error_code": "status_unavailable",
-        }
-
-    try:
-        from app.data_channel.sync_tasks.scheduler import get_sync_scheduler
-        scheduler = get_sync_scheduler()
-        checks["data_scheduler"] = "ok" if scheduler.healthy else "unavailable"
-    except Exception:
-        checks["data_scheduler"] = "unavailable"
-
-    try:
-        from app.models.ontology import OntologyProject
-        from app.models.v2.mapping import OntologyMapping
-        published_ids = [item[0] for item in db.query(OntologyProject.id).filter(
-            OntologyProject.status == "published").all()]
-        unhealthy = 0
-        if published_ids:
-            unhealthy = db.query(OntologyMapping).filter(
-                OntologyMapping.ontology_id.in_(published_ids),
-                OntologyMapping.status != "applied",
-            ).count()
-        checks["ontology_projection"] = "ok" if unhealthy == 0 else "unavailable"
-    except Exception:
-        checks["ontology_projection"] = "unavailable"
-
-    service_keys = (
-        "db", "redis", "neo4j", "minio", "chroma", "browser",
-        "sentinel_scheduler", "data_scheduler",
-        "sentinel_cdc", "ontology_projection",
+    # Resolve the compatibility alias at call time so legacy monkeypatch targets
+    # continue to control the readiness endpoint.
+    return bootstrap_health.readiness_response(
+        db,
+        probe=_probe_http_service,
     )
-    unavailable = [name for name in service_keys if checks[name] != "ok"]
-    # MinIO is optional when the configured durable fallback is writable.
-    # Keep ``minio=unavailable`` for observability without making deployment
-    # readiness depend on an intentionally absent service.
-    if checks["object_storage"] == "local":
-        unavailable = [name for name in unavailable if name != "minio"]
-    strict = settings.environment == "production"
-    checks["status"] = "ok" if not unavailable else ("error" if strict else "degraded")
-    checks["unavailable"] = unavailable
-    return JSONResponse(status_code=503 if strict and unavailable else 200, content=checks)

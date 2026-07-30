@@ -7,7 +7,10 @@ from app.models.user import User
 from app.models.domain import Domain
 from app.models.ontology_version import OntologyVersion
 from app.ontologies.release_context import create_initial_release
-from app.ontologies.versions.evolution_service import complete_snapshot
+from app.ontologies.versions.snapshot_contract import (
+    complete_snapshot,
+)
+from app.ontologies.versions.release_service import resolve_current_release
 from app.ontologies.access import require_ontology_access
 from app.ontologies.export.schemas import OntologyStructurePackage
 from app.ontologies.export.service import import_structure_package
@@ -70,10 +73,7 @@ def _resolved_release_map(
         if locked_release is not None:
             releases[locked_release.id] = locked_release
             continue
-        # Local import avoids a router import cycle at application startup.
-        from app.ontologies.versions.router import _current_release
-
-        release = _current_release(db, locked_project)
+        release = resolve_current_release(db, locked_project)
         releases[release.id] = release
         repaired = True
     if repaired:

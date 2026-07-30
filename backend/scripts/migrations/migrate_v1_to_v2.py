@@ -3,7 +3,7 @@
 v1 (SQLite) → v2 (PostgreSQL + Neo4j + ChromaDB) 数据迁移脚本
 
 用法：
-  python scripts/migrate_v1_to_v2.py \
+  uv run python scripts/migrations/migrate_v1_to_v2.py \
     --v1-db ./ontoprompt.db \
     --pg-url postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt \
     [--dry-run] \

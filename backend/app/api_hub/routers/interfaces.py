@@ -1,236 +1,50 @@
 import json
 import math
-import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Literal
-from urllib.parse import urlsplit
+from typing import List
 
 import anyio
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from starlette.datastructures import FormData, UploadFile
 
 from .. import config, db, executor, mcp_contract, publication
+from ..interface_contracts import (
+    _ALLOWED_BODY_TYPES,
+    _ALLOWED_METHODS,
+    _HEADER_NAME_RE,
+    DeleteGroupBody,
+    FileField,
+    InterfaceIn,
+    InterfaceParameter,
+    KV,
+    PreviewInterfaceIn,
+)
+from ..interface_service import (
+    _PROXY_RESERVED_HEADERS,
+    _PROXY_SLUG_RE,
+    _RESERVED_GROUP,
+    _check_group_name,
+    _dump_kv,
+    _get_or_404,
+    _load_json_list,
+    _normalize_publish_keys,
+    _row_to_dict,
+    _validate_proxy_publish,
+    create_interface,
+    delete_group,
+    delete_interface,
+    update_interface,
+)
 
 router = APIRouter(prefix="/interfaces", tags=["api-hub-interfaces"])
 
-_RESERVED_GROUP = "默认分组"
 _SLOW_RUN_MS = 500
-_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-_ALLOWED_BODY_TYPES = {"none", "json", "form", "multipart", "raw"}
-_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
-_PROXY_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_PROXY_RESERVED_HEADERS = {
-    "host",
-    "content-length",
-    "connection",
-    "keep-alive",
-    "transfer-encoding",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "upgrade",
-}
 _RAW_RESPONSE_BLOCKLIST = _PROXY_RESERVED_HEADERS | {
     "content-encoding",  # requests transparently decompresses upstream content
     "set-cookie",       # never write an upstream cookie into the platform origin
 }
-
-
-def _check_group_name(name: str):
-    """预留分组名拦截。"""
-    if name and name.strip() == _RESERVED_GROUP:
-        raise HTTPException(status_code=400, detail=f"「{_RESERVED_GROUP}」为保留名称，请使用其他名称")
-
-
-class KV(BaseModel):
-    key: str = ""
-    value: str = ""
-
-
-class FileField(BaseModel):
-    key: str = ""
-    accept: str = ""
-    multiple: bool = False
-
-
-class InterfaceParameter(BaseModel):
-    """Machine-readable contract used by Agents and n8n bindings.
-
-    Saved request values remain the source of defaults.  This schema describes
-    which values callers may provide dynamically without exposing credentials.
-    """
-
-    name: str
-    location: Literal["path", "query", "header", "body"]
-    value_type: Literal["string", "integer", "number", "boolean", "object", "array"] = "string"
-    required: bool = False
-    default: Any = None
-    description: str = ""
-    sensitive: bool = False
-    dynamic: bool = True
-
-    @field_validator("name")
-    @classmethod
-    def validate_parameter_name(cls, value: str) -> str:
-        value = value.strip()
-        if not value or len(value) > 500 or "\r" in value or "\n" in value:
-            raise ValueError("接口参数名无效")
-        return value
-
-    @field_validator("description")
-    @classmethod
-    def validate_parameter_description(cls, value: str) -> str:
-        if len(value) > 2000:
-            raise ValueError("接口参数说明不能超过 2000 个字符")
-        return value
-
-
-class InterfaceIn(BaseModel):
-    name: str = "未命名接口"
-    description: str = ""
-    group_name: str = ""
-    method: str = "GET"
-    url: str = ""
-    query_params: List[KV] = Field(default_factory=list)
-    headers: List[KV] = Field(default_factory=list)
-    body_type: str = "none"   # none | json | form | multipart | raw
-    body_content: str = ""
-    file_fields: List[FileField] = Field(default_factory=list)
-    use_w3: bool = False
-    mcp_enabled: bool = False
-    open_enabled: bool = False
-    http_enabled: bool = False
-    proxy_slug: str = ""
-    proxy_query_keys: List[str] = Field(default_factory=list)
-    proxy_header_keys: List[str] = Field(default_factory=list)
-    proxy_body_enabled: bool = False
-    proxy_body_keys: List[str] = Field(default_factory=list)
-    parameter_schema: List[InterfaceParameter] = Field(default_factory=list)
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("接口名称不能为空")
-        if len(value) > 200:
-            raise ValueError("接口名称不能超过 200 个字符")
-        return value
-
-    @field_validator("description")
-    @classmethod
-    def validate_description(cls, value: str) -> str:
-        if len(value) > 20_000:
-            raise ValueError("用途说明不能超过 20000 个字符")
-        return value
-
-    @field_validator("method")
-    @classmethod
-    def validate_method(cls, value: str) -> str:
-        value = value.upper().strip()
-        if value not in _ALLOWED_METHODS:
-            raise ValueError("不支持的 HTTP 方法")
-        return value
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, value: str) -> str:
-        value = value.strip()
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme.lower() not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-        ):
-            raise ValueError("请求 URL 必须是无内嵌账号信息的 HTTP/HTTPS 绝对地址")
-        if len(value) > 4096:
-            raise ValueError("请求 URL 不能超过 4096 个字符")
-        return value
-
-    @field_validator("body_type")
-    @classmethod
-    def validate_body_type(cls, value: str) -> str:
-        value = value.lower().strip()
-        if value not in _ALLOWED_BODY_TYPES:
-            raise ValueError("不支持的请求 Body 类型")
-        return value
-
-    @field_validator("body_content")
-    @classmethod
-    def validate_body_size(cls, value: str) -> str:
-        if len(value.encode("utf-8")) > config.PROXY_MAX_REQUEST_BYTES:
-            raise ValueError("请求 Body 超过平台允许的最大长度")
-        return value
-
-    @field_validator("query_params")
-    @classmethod
-    def validate_query_params(cls, value: List[KV]) -> List[KV]:
-        for item in value:
-            if "\r" in item.key or "\n" in item.key:
-                raise ValueError("查询参数名不能包含换行符")
-            if len(item.key) > 500 or len(item.value) > 100_000:
-                raise ValueError("查询参数过长")
-        return value
-
-    @field_validator("headers")
-    @classmethod
-    def validate_headers(cls, value: List[KV]) -> List[KV]:
-        for item in value:
-            key = item.key.strip()
-            if key and not _HEADER_NAME_RE.fullmatch(key):
-                raise ValueError(f"Header 名称无效：{key}")
-            if "\r" in item.value or "\n" in item.value:
-                raise ValueError(f"Header 值不能包含换行符：{key}")
-            if len(item.value) > 100_000:
-                raise ValueError(f"Header 值过长：{key}")
-            item.key = key
-        return value
-
-    @field_validator("file_fields")
-    @classmethod
-    def validate_file_fields(cls, value: List[FileField]) -> List[FileField]:
-        if len(value) > 50:
-            raise ValueError("文件字段不能超过 50 个")
-        seen = set()
-        for item in value:
-            key = item.key.strip()
-            marker = key.lower()
-            if key and not _HEADER_NAME_RE.fullmatch(key):
-                raise ValueError(f"文件字段名称无效：{key}")
-            if marker and marker in seen:
-                raise ValueError(f"文件字段名称重复：{key}")
-            if len(item.accept) > 500:
-                raise ValueError(f"文件类型限制过长：{key}")
-            item.key = key
-            item.accept = item.accept.strip()
-            if marker:
-                seen.add(marker)
-        return value
-
-    @field_validator("parameter_schema")
-    @classmethod
-    def validate_parameter_schema(
-        cls, value: List[InterfaceParameter]
-    ) -> List[InterfaceParameter]:
-        if len(value) > 200:
-            raise ValueError("接口参数定义不能超过 200 个")
-        seen = set()
-        for item in value:
-            marker = (item.location, item.name.lower() if item.location == "header" else item.name)
-            if marker in seen:
-                raise ValueError(f"接口参数定义重复：{item.location}.{item.name}")
-            if item.sensitive and item.dynamic:
-                raise ValueError(f"敏感参数不能开放动态覆盖：{item.location}.{item.name}")
-            seen.add(marker)
-        return value
-
-
-class PreviewInterfaceIn(InterfaceIn):
-    id: int | None = Field(default=None, gt=0)
 
 
 def _body_form_pairs(text: str) -> list[tuple[str, str]]:
@@ -297,114 +111,6 @@ def _raw_run_response(result: dict) -> Response:
     )
 
 
-def _load_json_list(value) -> list:
-    try:
-        data = json.loads(value) if value else []
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _normalize_publish_keys(items: List[str], *, lower: bool = False) -> list[str]:
-    out = []
-    seen = set()
-    for item in items:
-        key = (item or "").strip()
-        marker = key.lower() if lower else key
-        if not key or marker in seen:
-            continue
-        seen.add(marker)
-        out.append(key)
-    return out
-
-
-def _validate_proxy_publish(
-    conn, body: InterfaceIn, iid: int | None = None
-) -> tuple[str, list[str], list[str], list[str]]:
-    slug = (body.proxy_slug or "").strip().lower()
-    query_keys = _normalize_publish_keys(body.proxy_query_keys)
-    header_keys = _normalize_publish_keys(body.proxy_header_keys, lower=True)
-    body_keys = _normalize_publish_keys(body.proxy_body_keys)
-    if not body.proxy_body_enabled:
-        body_keys = []
-
-    if slug and not _PROXY_SLUG_RE.fullmatch(slug):
-        raise HTTPException(
-            status_code=400,
-            detail="HTTP 公开路径只能包含小写字母、数字、短横线和下划线，长度 1-64 位",
-        )
-    if body.http_enabled:
-        if not slug:
-            raise HTTPException(status_code=400, detail="发布 HTTP 接口前必须填写公开路径")
-        if not (body.url or "").strip():
-            raise HTTPException(status_code=400, detail="发布 HTTP 接口前必须填写真实 URL")
-        sql = "SELECT id FROM interfaces WHERE proxy_slug = ? AND http_enabled = 1"
-        params: list = [slug]
-        if iid is not None:
-            sql += " AND id <> ?"
-            params.append(iid)
-        if conn.execute(sql, params).fetchone():
-            raise HTTPException(status_code=409, detail=f"HTTP 公开路径「{slug}」已被其它接口使用")
-
-    reserved = _PROXY_RESERVED_HEADERS | {config.PROXY_KEY_HEADER.lower()}
-    blocked = [key for key in header_keys if key.lower() in reserved]
-    if blocked:
-        raise HTTPException(
-            status_code=400,
-            detail="以下 Header 由平台代理层管理，不能配置为透传项：" + ", ".join(blocked),
-        )
-    if body_keys and body.body_type not in {"json", "form", "multipart"}:
-        raise HTTPException(status_code=400, detail="只有 JSON、Form 或 Multipart Body 支持字段级开放")
-    if body.body_type == "json" and any(not key.startswith("/") for key in body_keys):
-        raise HTTPException(status_code=400, detail="JSON Body 字段路径必须以 / 开头")
-    return slug, query_keys, header_keys, body_keys
-
-
-def _row_to_dict(row) -> dict:
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "description": row["description"],
-        "group_name": row["group_name"],
-        "method": row["method"],
-        "url": row["url"],
-        "query_params": _load_json_list(row["query_params"]),
-        "headers": _load_json_list(row["headers"]),
-        "body_type": row["body_type"],
-        "body_content": row["body_content"],
-        "file_fields": _load_json_list(row["file_fields"]),
-        "use_w3": bool(row["use_w3"]),
-        # ``mcp_enabled`` is retained only for backup compatibility.  The one
-        # authoritative MCP state is ``open_enabled`` so the UI has exactly
-        # two publication concepts: MCP and HTTP.
-        "mcp_enabled": bool(row["open_enabled"]),
-        "open_enabled": bool(row["open_enabled"]),
-        "http_enabled": bool(row["http_enabled"]),
-        "proxy_slug": row["proxy_slug"],
-        "proxy_query_keys": _load_json_list(row["proxy_query_keys"]),
-        "proxy_header_keys": _load_json_list(row["proxy_header_keys"]),
-        "proxy_body_enabled": bool(row["proxy_body_enabled"]),
-        "proxy_body_keys": _load_json_list(row["proxy_body_keys"]),
-        "parameter_schema": _load_json_list(row["parameter_schema"]),
-        "config_revision": int(row["config_revision"]),
-        "created_by": row["created_by"],
-        "updated_by": row["updated_by"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-def _dump_kv(items: List[KV]) -> str:
-    return json.dumps([kv.model_dump() for kv in items], ensure_ascii=False)
-
-
-def _get_or_404(conn, iid: int):
-    row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="接口不存在")
-    return row
-
-
 @router.get("")
 def list_interfaces():
     with db.get_conn() as conn:
@@ -414,34 +120,7 @@ def list_interfaces():
     return [_row_to_dict(r) for r in rows]
 
 
-@router.post("")
-def create_interface(body: InterfaceIn):
-    _check_group_name(body.group_name)
-    now = datetime.now(timezone.utc).isoformat()
-    with db.get_conn() as conn:
-        slug, query_keys, header_keys, body_keys = _validate_proxy_publish(conn, body)
-        cur = conn.execute(
-            "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-            "body_type, body_content, file_fields, use_w3, mcp_enabled, open_enabled, http_enabled, proxy_slug, "
-            "proxy_query_keys, proxy_header_keys, proxy_body_enabled, proxy_body_keys, parameter_schema, "
-            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                body.name, body.description, body.group_name, body.method.upper(), body.url,
-                _dump_kv(body.query_params), _dump_kv(body.headers),
-                body.body_type, body.body_content,
-                json.dumps([item.model_dump() for item in body.file_fields], ensure_ascii=False),
-                1 if body.use_w3 else 0, 1 if body.open_enabled else 0,
-                1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
-                json.dumps(query_keys, ensure_ascii=False),
-                json.dumps(header_keys, ensure_ascii=False),
-                1 if body.proxy_body_enabled else 0,
-                json.dumps(body_keys, ensure_ascii=False),
-                json.dumps([item.model_dump(mode="json") for item in body.parameter_schema], ensure_ascii=False),
-                now, now,
-            ),
-        )
-        row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (cur.lastrowid,)).fetchone()
-    return _row_to_dict(row)
+router.post("")(create_interface)
 
 
 @router.post("/preview-run")
@@ -569,47 +248,8 @@ def get_mcp_contract(iid: int):
     }
 
 
-@router.put("/{iid}")
-def update_interface(iid: int, body: InterfaceIn):
-    _check_group_name(body.group_name)
-    now = datetime.now(timezone.utc).isoformat()
-    with db.get_conn() as conn:
-        _get_or_404(conn, iid)
-        slug, query_keys, header_keys, body_keys = _validate_proxy_publish(conn, body, iid)
-        conn.execute(
-            "UPDATE interfaces SET name=?, description=?, group_name=?, method=?, url=?, query_params=?, "
-            "headers=?, body_type=?, body_content=?, file_fields=?, use_w3=?, mcp_enabled=?, open_enabled=?, "
-            "http_enabled=?, proxy_slug=?, proxy_query_keys=?, proxy_header_keys=?, "
-            "proxy_body_enabled=?, proxy_body_keys=?, parameter_schema=?, "
-            "config_revision=config_revision+1, updated_at=? WHERE id=?",
-            (
-                body.name, body.description, body.group_name, body.method.upper(), body.url,
-                _dump_kv(body.query_params), _dump_kv(body.headers),
-                body.body_type, body.body_content,
-                json.dumps([item.model_dump() for item in body.file_fields], ensure_ascii=False),
-                1 if body.use_w3 else 0, 1 if body.open_enabled else 0,
-                1 if body.open_enabled else 0, 1 if body.http_enabled else 0, slug,
-                json.dumps(query_keys, ensure_ascii=False),
-                json.dumps(header_keys, ensure_ascii=False),
-                1 if body.proxy_body_enabled else 0,
-                json.dumps(body_keys, ensure_ascii=False),
-                json.dumps([item.model_dump(mode="json") for item in body.parameter_schema], ensure_ascii=False),
-                now, iid,
-            ),
-        )
-        row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
-    return _row_to_dict(row)
-
-
-@router.delete("/{iid}")
-def delete_interface(iid: int):
-    with db.get_conn() as conn:
-        _get_or_404(conn, iid)
-        # 硬删除接口时，显式连带头删除其全部调用记录，避免残留冗余数据。
-        # （虽然 schema 上有 ON DELETE CASCADE，这里不依赖隐式级联，确保一定删干净。）
-        conn.execute("DELETE FROM runs WHERE interface_id = ?", (iid,))
-        conn.execute("DELETE FROM interfaces WHERE id = ?", (iid,))
-    return {"ok": True}
+router.put("/{iid}")(update_interface)
+router.delete("/{iid}")(delete_interface)
 
 
 class OpenBody(BaseModel):
@@ -670,26 +310,7 @@ def move_interface(iid: int, body: MoveBody):
     return {"ok": True}
 
 
-class DeleteGroupBody(BaseModel):
-    group_name: str
-
-
-@router.post("/groups/delete")
-def delete_group(body: DeleteGroupBody):
-    """删除指定分组：将该分组下所有接口移入默认分组（group_name 置空）。"""
-    name = (body.group_name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="分组名不能为空")
-    if name == _RESERVED_GROUP:
-        raise HTTPException(status_code=400, detail=f"「{_RESERVED_GROUP}」不可删除")
-    now = datetime.now(timezone.utc).isoformat()
-    with db.get_conn() as conn:
-        cur = conn.execute(
-            "UPDATE interfaces SET group_name = '', updated_at = ? WHERE group_name = ?",
-            (now, name),
-        )
-        count = cur.rowcount
-    return {"ok": True, "count": count}
+router.post("/groups/delete")(delete_group)
 
 
 @router.post("/{iid}/open")

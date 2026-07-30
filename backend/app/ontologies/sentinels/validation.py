@@ -1,0 +1,704 @@
+"""Shared static validation for release and assistant-created Sentinels."""
+
+from __future__ import annotations
+
+import ast
+import re
+from types import SimpleNamespace
+from typing import Any
+
+from app.ontologies.formal_modeling.models import (
+    ActionType as FoActionType,
+    LinkType as FoLinkType,
+    ObjectType as FoObjectType,
+)
+from app.ontologies.sentinels.evaluator import RESERVED_SENTINEL_ALIASES
+from app.ontologies.sentinels.models import Sentinel
+
+
+_SENTINEL_PARAMETER_TEMPLATE = re.compile(
+    r"\{\{\s*(?P<alias>[^.\s{}]+)\.(?P<property>[^{}\s]+)\s*\}\}"
+)
+_SENTINEL_EVENT_PROPERTIES = frozenset({
+    "edge", "matchKey", "occurredAt", "sentinelId", "sentinelName",
+})
+
+
+def _gate_error(
+    code: str,
+    kind: str,
+    message: str,
+    *,
+    item_id: str = "",
+    name: str = "",
+    field: str = "",
+) -> dict:
+    error = {
+        "code": code,
+        "kind": kind,
+        "id": item_id,
+        "name": name,
+        "message": message,
+    }
+    if field:
+        error["field"] = field
+    return error
+
+
+def _action_has_usable_default(parameter: dict) -> bool:
+    for key in ("defaultValue", "default_value", "default"):
+        if key in parameter:
+            return parameter[key] not in (None, "")
+    return False
+
+
+def _normal_sentinel_source_type(raw: Any) -> str:
+    value = str(raw or "string").strip().lower()
+    return {
+        "float": "number", "double": "number",
+        "integer": "number", "int": "number",
+        "bool": "boolean",
+        "list": "array", "object_set": "array",
+        "dict": "object",
+        "timestamp": "datetime",
+    }.get(value, value)
+
+
+def _normal_action_parameter_type(raw: Any) -> str:
+    value = str(raw or "string").strip().lower()
+    return {
+        "float": "number", "double": "number",
+        "int": "integer",
+        "bool": "boolean",
+        "list": "array", "object_set": "array",
+        "dict": "object",
+        "timestamp": "datetime",
+    }.get(value, value)
+
+
+def _sentinel_parameter_types_compatible(
+    source_type: str,
+    target_type: str,
+) -> bool:
+    source = _normal_sentinel_source_type(source_type)
+    target = _normal_action_parameter_type(target_type)
+    if target in {"any", "json"}:
+        return True
+    if source == target:
+        return True
+    # Both parameter kinds are represented by immutable string identifiers at
+    # the Sentinel boundary.
+    if source in {"string", "reference"} and target in {"string", "reference"}:
+        return True
+    return False
+
+
+def _sentinel_expression_property_errors(
+    expression: Any,
+    alias_properties: dict[str, set[str]],
+    *,
+    sentinel_id: str,
+    sentinel_name: str,
+    field: str,
+) -> list[dict]:
+    """Validate direct property references against the immutable release schema."""
+    raw = str(expression or "").strip().rstrip(";").strip()
+    if not raw:
+        return []
+    try:
+        tree = ast.parse(raw, mode="eval")
+    except SyntaxError:
+        # validate_safe_expression owns the canonical syntax error.
+        return []
+
+    missing: set[str] = set()
+    dynamic: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            alias = node.value.id
+            if (
+                alias in alias_properties
+                and node.attr not in alias_properties[alias]
+            ):
+                missing.add(f"{alias}.{node.attr}")
+        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            alias = node.value.id
+            if alias not in alias_properties:
+                continue
+            key = node.slice
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                if key.value not in alias_properties[alias]:
+                    missing.add(f"{alias}[{key.value!r}]")
+            else:
+                dynamic.add(alias)
+
+    errors = [
+        _gate_error(
+            "sentinel_expression_property_not_found",
+            "sentinel",
+            (
+                f"哨兵「{sentinel_name}」表达式引用了发布版本中不存在的属性: "
+                f"{reference}"
+            ),
+            item_id=sentinel_id,
+            name=sentinel_name,
+            field=field,
+        )
+        for reference in sorted(missing)
+    ]
+    errors.extend(
+        _gate_error(
+            "sentinel_dynamic_property_forbidden",
+            "sentinel",
+            f"哨兵「{sentinel_name}」表达式不允许通过动态下标访问 {alias} 的属性",
+            item_id=sentinel_id,
+            name=sentinel_name,
+            field=field,
+        )
+        for alias in sorted(dynamic)
+    )
+    return errors
+
+
+def validate_sentinels(
+    sentinels: list[Sentinel],
+    object_types: list[FoObjectType],
+    link_types: list[FoLinkType],
+    actions: list[FoActionType],
+) -> list[dict]:
+    """发布前验证 Sentinel 的所有静态引用和动作参数可供给性。"""
+    errors: list[dict] = []
+    object_by_id = {item.id: item for item in object_types}
+    link_by_id = {item.id: item for item in link_types}
+    action_by_id = {item.id: item for item in actions}
+
+    for sentinel in sentinels:
+        sid = sentinel.id or ""
+        label = sentinel.display_name or sentinel.name or sid
+        bindings = sentinel.bindings or []
+        if not isinstance(bindings, list) or not bindings:
+            errors.append(_gate_error(
+                "sentinel_bindings_missing", "sentinel",
+                f"哨兵「{label}」至少需要一个对象绑定",
+                item_id=sid, name=label, field="bindings"))
+            bindings = []
+
+        aliases: dict[str, str] = {}
+        for index, binding in enumerate(bindings):
+            if not isinstance(binding, dict):
+                errors.append(_gate_error(
+                    "invalid_sentinel_binding", "sentinel",
+                    f"哨兵「{label}」第 {index + 1} 个 binding 必须是对象",
+                    item_id=sid, name=label, field=f"bindings[{index}]"))
+                continue
+            alias = str(binding.get("alias") or "").strip()
+            object_type_id = str(binding.get("objectTypeId") or "").strip()
+            if not alias:
+                errors.append(_gate_error(
+                    "sentinel_alias_missing", "sentinel",
+                    f"哨兵「{label}」第 {index + 1} 个 binding 缺少 alias",
+                    item_id=sid, name=label, field=f"bindings[{index}].alias"))
+            elif alias in aliases:
+                errors.append(_gate_error(
+                    "duplicate_sentinel_alias", "sentinel",
+                    f"哨兵「{label}」的 alias \"{alias}\" 重复",
+                    item_id=sid, name=label, field=f"bindings[{index}].alias"))
+            elif alias in RESERVED_SENTINEL_ALIASES:
+                errors.append(_gate_error(
+                    "reserved_sentinel_alias", "sentinel",
+                    f"哨兵「{label}」的 alias \"{alias}\" 是运行时保留名称",
+                    item_id=sid, name=label, field=f"bindings[{index}].alias"))
+            else:
+                aliases[alias] = object_type_id
+            if object_type_id not in object_by_id:
+                errors.append(_gate_error(
+                    "sentinel_object_type_not_found", "sentinel",
+                    f"哨兵「{label}」binding \"{alias or index}\" 引用的对象类型不存在",
+                    item_id=sid, name=label,
+                    field=f"bindings[{index}].objectTypeId"))
+            binding_filter = binding.get("filter")
+            if binding_filter:
+                try:
+                    from app.ontologies.formal_modeling.safe_eval import (
+                        validate_safe_expression,
+                    )
+
+                    validate_safe_expression(
+                        str(binding_filter),
+                        {alias, "obj"} if alias else {"obj"},
+                    )
+                except Exception as exc:
+                    errors.append(_gate_error(
+                        "invalid_sentinel_binding_filter", "sentinel",
+                        f"哨兵「{label}」binding "
+                        f"\"{alias or index}\" 的 filter 无法编译: {exc}",
+                        item_id=sid, name=label,
+                        field=f"bindings[{index}].filter"))
+                if alias and alias not in RESERVED_SENTINEL_ALIASES:
+                    object_type = object_by_id.get(object_type_id)
+                    property_names = {
+                        str(item.get("name"))
+                        for item in (
+                            (object_type.properties or [])
+                            if object_type is not None else []
+                        )
+                        if isinstance(item, dict) and item.get("name")
+                    }
+                    errors.extend(_sentinel_expression_property_errors(
+                        binding_filter,
+                        {alias: property_names, "obj": property_names},
+                        sentinel_id=sid,
+                        sentinel_name=label,
+                        field=f"bindings[{index}].filter",
+                    ))
+
+        primary_alias = str(sentinel.primary_alias or "").strip()
+        if not primary_alias or primary_alias not in aliases:
+            errors.append(_gate_error(
+                "invalid_sentinel_primary_alias", "sentinel",
+                f"哨兵「{label}」的 primaryAlias 必须指向已声明且唯一的 alias",
+                item_id=sid, name=label, field="primaryAlias"))
+        if sentinel.condition:
+            try:
+                from app.ontologies.formal_modeling.safe_eval import (
+                    validate_safe_expression,
+                )
+
+                validate_safe_expression(
+                    str(sentinel.condition),
+                    set(aliases),
+                )
+            except Exception as exc:
+                errors.append(_gate_error(
+                    "invalid_sentinel_condition", "sentinel",
+                    f"哨兵「{label}」的 condition 无法编译: {exc}",
+                    item_id=sid, name=label, field="condition"))
+            alias_properties = {}
+            for alias, object_type_id in aliases.items():
+                object_type = object_by_id.get(object_type_id)
+                alias_properties[alias] = {
+                    str(item.get("name"))
+                    for item in (
+                        (object_type.properties or [])
+                        if object_type is not None else []
+                    )
+                    if isinstance(item, dict) and item.get("name")
+                }
+            errors.extend(_sentinel_expression_property_errors(
+                sentinel.condition,
+                alias_properties,
+                sentinel_id=sid,
+                sentinel_name=label,
+                field="condition",
+            ))
+
+        links = sentinel.links or []
+        if not isinstance(links, list):
+            errors.append(_gate_error(
+                "invalid_sentinel_links", "sentinel",
+                f"哨兵「{label}」的 links 必须是数组",
+                item_id=sid, name=label, field="links"))
+            links = []
+        for index, link in enumerate(links):
+            if not isinstance(link, dict):
+                errors.append(_gate_error(
+                    "invalid_sentinel_link", "sentinel",
+                    f"哨兵「{label}」第 {index + 1} 个 link 必须是对象",
+                    item_id=sid, name=label, field=f"links[{index}]"))
+                continue
+            from_alias = str(link.get("from") or "").strip()
+            to_alias = str(link.get("to") or "").strip()
+            link_type_id = str(link.get("linkTypeId") or "").strip()
+            if from_alias not in aliases or to_alias not in aliases:
+                errors.append(_gate_error(
+                    "sentinel_link_alias_not_found", "sentinel",
+                    f"哨兵「{label}」的 link 端点必须引用已声明 alias",
+                    item_id=sid, name=label, field=f"links[{index}]"))
+            link_type = link_by_id.get(link_type_id)
+            if link_type is None:
+                errors.append(_gate_error(
+                    "sentinel_link_type_not_found", "sentinel",
+                    f"哨兵「{label}」引用的关系类型不存在: {link_type_id}",
+                    item_id=sid, name=label,
+                    field=f"links[{index}].linkTypeId"))
+            elif from_alias in aliases and to_alias in aliases and (
+                aliases[from_alias] != link_type.source_object_type_id
+                or aliases[to_alias] != link_type.target_object_type_id
+            ):
+                errors.append(_gate_error(
+                    "sentinel_link_endpoint_mismatch", "sentinel",
+                    f"哨兵「{label}」的 link 端点类型与关系类型方向不匹配",
+                    item_id=sid, name=label, field=f"links[{index}]"))
+
+        action_ids = sentinel.action_ids or []
+        if not isinstance(action_ids, list):
+            errors.append(_gate_error(
+                "invalid_sentinel_actions", "sentinel",
+                f"哨兵「{label}」的 actionIds 必须是数组",
+                item_id=sid, name=label, field="actionIds"))
+            action_ids = []
+        if len(action_ids) != len(set(str(aid) for aid in action_ids)):
+            errors.append(_gate_error(
+                "duplicate_sentinel_action", "sentinel",
+                f"哨兵「{label}」的 actionIds 存在重复",
+                item_id=sid, name=label, field="actionIds"))
+
+        all_parameters = sentinel.action_parameters or {}
+        if not isinstance(all_parameters, dict):
+            errors.append(_gate_error(
+                "invalid_sentinel_action_parameters", "sentinel",
+                f"哨兵「{label}」的 actionParameters 必须是对象",
+                item_id=sid, name=label, field="actionParameters"))
+            all_parameters = {}
+        declared_action_ids = {str(aid) for aid in action_ids}
+        for configured_id in all_parameters:
+            if str(configured_id) not in declared_action_ids:
+                errors.append(_gate_error(
+                    "orphan_sentinel_action_parameters", "sentinel",
+                    f"哨兵「{label}」为未声明动作 {configured_id} 配置了参数",
+                    item_id=sid, name=label,
+                    field=f"actionParameters.{configured_id}"))
+
+        for index, raw_action_id in enumerate(action_ids):
+            action_id = str(raw_action_id or "")
+            action = action_by_id.get(action_id)
+            if action is None:
+                errors.append(_gate_error(
+                    "sentinel_action_not_found", "sentinel",
+                    f"哨兵「{label}」引用的动作不存在: {action_id}",
+                    item_id=sid, name=label, field=f"actionIds[{index}]"))
+                continue
+            if (
+                primary_alias in aliases
+                and action.object_type_id
+                and action.object_type_id != aliases[primary_alias]
+            ):
+                errors.append(_gate_error(
+                    "sentinel_action_target_mismatch", "sentinel",
+                    f"哨兵「{label}」的动作目标类型与 primaryAlias 类型不匹配",
+                    item_id=sid, name=label, field=f"actionIds[{index}]"))
+            if getattr(sentinel, "trigger_mode", None) == "on_enter_leave":
+                from app.ontologies.formal_modeling.action_engine import (
+                    action_supports_snapshot_execution,
+                )
+
+                if not action_supports_snapshot_execution(action):
+                    errors.append(_gate_error(
+                        "sentinel_leave_action_not_snapshot_safe", "sentinel",
+                        f"哨兵「{label}」启用了离开触发，但动作"
+                        f"「{action.display_name or action.name}」依赖实时对象或关系，"
+                        "目标删除后无法仅凭命中快照执行",
+                        item_id=sid, name=label,
+                        field=f"actionIds[{index}]"))
+            configured = all_parameters.get(action_id, {})
+            if not isinstance(configured, dict):
+                errors.append(_gate_error(
+                    "invalid_sentinel_action_parameters", "sentinel",
+                    f"哨兵「{label}」为动作"
+                    f"「{action.display_name or action.name}」配置的参数必须是对象",
+                    item_id=sid, name=label,
+                    field=f"actionParameters.{action_id}"))
+                configured = {}
+            declared_parameters = {
+                str(parameter.get("name") or ""): parameter
+                for parameter in (action.parameters or [])
+                if isinstance(parameter, dict) and parameter.get("name")
+            }
+            for parameter_name, spec in configured.items():
+                if parameter_name not in declared_parameters:
+                    errors.append(_gate_error(
+                        "sentinel_action_parameter_unknown", "sentinel",
+                        f"哨兵「{label}」为动作"
+                        f"「{action.display_name or action.name}」提供了未声明参数 "
+                        f"\"{parameter_name}\"",
+                        item_id=sid, name=label,
+                        field=f"actionParameters.{action_id}.{parameter_name}"))
+                    continue
+                field = f"actionParameters.{action_id}.{parameter_name}"
+                target_parameter = declared_parameters[parameter_name]
+
+                def validate_required_property_supply(
+                    property_definition: dict,
+                    source_label: str,
+                ) -> None:
+                    if (
+                        not target_parameter.get("required")
+                        or _action_has_usable_default(target_parameter)
+                        or property_definition.get("required") is True
+                    ):
+                        return
+                    errors.append(_gate_error(
+                        "sentinel_required_parameter_optional_property",
+                        "sentinel",
+                        f"哨兵「{label}」将动作必填参数"
+                        f"「{parameter_name}」仅绑定到可选属性"
+                        f" {source_label}；真实对象缺字段时动作必然失败",
+                        item_id=sid, name=label, field=field))
+
+                def validate_binding_type(
+                    source_type: str | None,
+                    source_label: str,
+                ) -> None:
+                    if (
+                        not source_type
+                        or _sentinel_parameter_types_compatible(
+                            source_type,
+                            str(target_parameter.get("type") or "string"),
+                        )
+                    ):
+                        return
+                    errors.append(_gate_error(
+                        "sentinel_parameter_type_mismatch",
+                        "sentinel",
+                        f"哨兵「{label}」参数「{parameter_name}」绑定的"
+                        f"{source_label}类型为 {source_type}，与动作参数类型 "
+                        f"{target_parameter.get('type') or 'string'} 不兼容",
+                        item_id=sid, name=label, field=field))
+
+                if isinstance(spec, str):
+                    if "{{" not in spec and "}}" not in spec:
+                        validate_binding_type("string", "字符串常量")
+                        continue
+                    matches = list(_SENTINEL_PARAMETER_TEMPLATE.finditer(spec))
+                    remainder = _SENTINEL_PARAMETER_TEMPLATE.sub("", spec)
+                    if not matches or "{{" in remainder or "}}" in remainder:
+                        errors.append(_gate_error(
+                            "invalid_sentinel_parameter_template", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」模板格式非法: "
+                            f"{spec}",
+                            item_id=sid, name=label, field=field))
+                        continue
+                    full_match = _SENTINEL_PARAMETER_TEMPLATE.fullmatch(spec)
+                    template_source_type = (
+                        "string" if full_match is None else None)
+                    template_source_label = (
+                        "插值模板" if full_match is None else "模板来源")
+                    for match in matches:
+                        template_alias = match.group("alias")
+                        prop = match.group("property")
+                        if template_alias in {"event", "edge"}:
+                            if full_match is not None:
+                                template_source_type = "string"
+                                template_source_label = f"事件属性 {prop}"
+                            if prop not in _SENTINEL_EVENT_PROPERTIES:
+                                errors.append(_gate_error(
+                                    "sentinel_event_property_not_found",
+                                    "sentinel",
+                                    f"哨兵「{label}」参数「{parameter_name}」"
+                                    f"引用了不受支持的事件属性: {prop}",
+                                    item_id=sid, name=label, field=field))
+                            continue
+                        resolved_alias = (
+                            primary_alias
+                            if template_alias in {"primary", "target"}
+                            else template_alias
+                        )
+                        if resolved_alias not in aliases:
+                            errors.append(_gate_error(
+                                "sentinel_parameter_alias_not_found",
+                                "sentinel",
+                                f"哨兵「{label}」参数「{parameter_name}」"
+                                f"模板引用的 alias 不存在: {template_alias}",
+                                item_id=sid, name=label, field=field))
+                            continue
+                        if prop == "id":
+                            if full_match is not None:
+                                template_source_type = "string"
+                                template_source_label = (
+                                    f"实例标识 {resolved_alias}.id")
+                            continue
+                        object_type = object_by_id.get(aliases[resolved_alias])
+                        property_definitions = {
+                            str(item.get("name")): item
+                            for item in (
+                                (object_type.properties or [])
+                                if object_type is not None else []
+                            )
+                            if isinstance(item, dict) and item.get("name")
+                        }
+                        if prop not in property_definitions:
+                            errors.append(_gate_error(
+                                "sentinel_parameter_property_not_found",
+                                "sentinel",
+                                f"哨兵「{label}」参数「{parameter_name}」"
+                                "模板引用的发布属性不存在: "
+                                f"{resolved_alias}.{prop}",
+                                item_id=sid, name=label, field=field))
+                        else:
+                            property_definition = property_definitions[prop]
+                            validate_required_property_supply(
+                                property_definition,
+                                f"{resolved_alias}.{prop}",
+                            )
+                            if full_match is not None:
+                                template_source_type = str(
+                                    property_definition.get("type")
+                                    or "string")
+                                template_source_label = (
+                                    f"属性 {resolved_alias}.{prop}")
+                    validate_binding_type(
+                        template_source_type,
+                        template_source_label,
+                    )
+                    continue
+                if not isinstance(spec, dict):
+                    # Scalar/list/object literal; runtime contract validates type.
+                    continue
+                raw_source = spec.get("sourceType", spec.get("source"))
+                if raw_source is None:
+                    continue  # plain object literal
+                source = str(raw_source).strip().lower().replace("-", "_")
+                allowed_sources = {
+                    "constant", "literal", "property", "match",
+                    "match_property", "target_id", "primary_id",
+                    "event", "event_property", "edge",
+                }
+                if source not in allowed_sources:
+                    errors.append(_gate_error(
+                        "invalid_sentinel_parameter_source", "sentinel",
+                        f"哨兵「{label}」参数「{parameter_name}」"
+                        f"的绑定来源 {raw_source!r} 不受支持",
+                        item_id=sid, name=label, field=field))
+                    continue
+                if source in {"constant", "literal"}:
+                    if "value" not in spec and "sourceValue" not in spec:
+                        errors.append(_gate_error(
+                            "sentinel_constant_value_missing", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」"
+                            "的常量绑定缺少 value",
+                            item_id=sid, name=label, field=field))
+                    else:
+                        from app.ontologies.formal_modeling.action_engine import (
+                            prepare_action_parameters,
+                        )
+
+                        value = (
+                            spec.get("value")
+                            if "value" in spec
+                            else spec.get("sourceValue")
+                        )
+                        _, value_errors = prepare_action_parameters(
+                            SimpleNamespace(parameters=[
+                                declared_parameters[parameter_name]
+                            ]),
+                            {parameter_name: value},
+                        )
+                        for value_error in value_errors:
+                            errors.append(_gate_error(
+                                "sentinel_constant_parameter_invalid",
+                                "sentinel",
+                                f"哨兵「{label}」常量参数"
+                                f"「{parameter_name}」无效: {value_error}",
+                                item_id=sid, name=label, field=field))
+                    continue
+                if source in {"event", "event_property", "edge"}:
+                    prop = str(
+                        spec.get("property", spec.get("sourceValue"))
+                        or ("edge" if source == "edge" else "")
+                    ).strip()
+                    if not prop:
+                        errors.append(_gate_error(
+                            "sentinel_event_property_missing", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」"
+                            "的事件绑定缺少 property",
+                            item_id=sid, name=label, field=field))
+                    elif prop not in _SENTINEL_EVENT_PROPERTIES:
+                        errors.append(_gate_error(
+                            "sentinel_event_property_not_found", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」"
+                            f"引用了不受支持的事件属性: {prop}",
+                            item_id=sid, name=label, field=field))
+                    else:
+                        validate_binding_type("string", f"事件属性 {prop}")
+                    continue
+                raw_alias = str(
+                    spec.get("alias") or primary_alias or "").strip()
+                alias = (
+                    primary_alias
+                    if raw_alias in {"primary", "target"}
+                    else raw_alias
+                )
+                if alias not in aliases:
+                    errors.append(_gate_error(
+                        "sentinel_parameter_alias_not_found", "sentinel",
+                        f"哨兵「{label}」参数「{parameter_name}」"
+                        f"引用的 alias 不存在: {raw_alias}",
+                        item_id=sid, name=label, field=field))
+                    continue
+                if source in {"target_id", "primary_id"}:
+                    validate_binding_type("string", f"实例标识 {alias}.id")
+                    continue
+                if source in {"property", "match", "match_property"}:
+                    prop = str(
+                        spec.get("property", spec.get("sourceValue")) or ""
+                    ).strip()
+                    if not prop:
+                        errors.append(_gate_error(
+                            "sentinel_parameter_property_missing", "sentinel",
+                            f"哨兵「{label}」参数「{parameter_name}」"
+                            "的属性绑定缺少 property",
+                            item_id=sid, name=label, field=field))
+                    elif prop == "id":
+                        validate_binding_type(
+                            "string",
+                            f"实例标识 {alias}.id",
+                        )
+                    else:
+                        object_type = object_by_id.get(aliases[alias])
+                        property_definitions = {
+                            str(item.get("name")): item
+                            for item in (
+                                (object_type.properties or [])
+                                if object_type else []
+                            )
+                            if isinstance(item, dict) and item.get("name")
+                        }
+                        if prop not in property_definitions:
+                            errors.append(_gate_error(
+                                "sentinel_parameter_property_not_found",
+                                "sentinel",
+                                f"哨兵「{label}」参数「{parameter_name}」"
+                                f"绑定的属性不存在: {alias}.{prop}",
+                                item_id=sid, name=label, field=field))
+                        else:
+                            property_definition = property_definitions[prop]
+                            validate_required_property_supply(
+                                property_definition,
+                                f"{alias}.{prop}",
+                            )
+                            validate_binding_type(
+                                str(
+                                    property_definition.get("type")
+                                    or "string"
+                                ),
+                                f"属性 {alias}.{prop}",
+                            )
+            for parameter in (action.parameters or []):
+                if (
+                    not isinstance(parameter, dict)
+                    or not parameter.get("required")
+                ):
+                    continue
+                parameter_name = str(parameter.get("name") or "").strip()
+                if not parameter_name:
+                    continue
+                configured_value = configured.get(parameter_name)
+                if (
+                    _action_has_usable_default(parameter)
+                    or (
+                        parameter_name in configured
+                        and configured_value not in (None, "")
+                    )
+                ):
+                    continue
+                errors.append(_gate_error(
+                    "sentinel_required_action_parameter_missing",
+                    "sentinel",
+                    f"哨兵「{label}」未为动作"
+                    f"「{action.display_name or action.name}」提供必填参数 "
+                    f"\"{parameter_name}\"，且动作未声明默认值",
+                    item_id=sid,
+                    name=label,
+                    field=f"actionParameters.{action_id}.{parameter_name}",
+                ))
+    return errors

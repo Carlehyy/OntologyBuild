@@ -10,59 +10,122 @@
   GET    /agent/conversations/{id}/export 完整会话 JSON（不限制消息条数）
   DELETE /agent/conversations/{id}
   POST   /agent/execute-proposal   用户确认后真实执行提案（经动作引擎，HITL 闸门有效）
+
+路由保留协议签名、RBAC、异常映射与响应封装；应用查询和状态迁移由同目录的
+高内聚 service/workflow 模块承担。
 """
-import json
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, get_current_user, require_admin
 from app.models.ontology import OntologyProject
-from app.ontologies.agent_runtime import schemas as S
-from app.ontologies.agent_runtime.boundary import ToolError, build_scope, get_or_create_profile
-from app.ontologies.agent_runtime.models import (
-    AgentConversation, AgentMessage, AgentProfile,
-    AnalysisReportRun, AnalysisReportTemplate,
+from app.ontologies.access import require_ontology_access
+from app.ontologies.agent_runtime import (
+    chat_service as _chat_service,
+    conversation_service as _conversation_service,
+    dynamic_workflow as _dynamic_workflow,
+    graph_queries as _graph_queries,
+    profile_service as _profile_service,
+    proposal_service as _proposal_service,
+    report_service as _report_service,
+    reporting,
+    schemas as S,
 )
-from app.ontologies.agent_runtime.orchestrator import run_agent_turn
-from app.ontologies.release_context import current_release_context
+from app.ontologies.agent_runtime.application_errors import AgentRuntimeApplicationError
+from app.ontologies.agent_runtime.boundary import (
+    ToolError,
+    build_scope,
+    get_or_create_profile,
+)
 from app.ontologies.agent_runtime.graph_service import (
     analyze_change_impact,
     build_workspace_graph,
     find_paths,
     get_instance_detail,
 )
-from app.ontologies.agent_runtime import reporting
-from app.ontologies.access import require_ontology_access
+from app.ontologies.agent_runtime.models import (
+    AgentConversation,
+    AgentMessage,
+    AgentProfile,
+    AnalysisReportRun,
+    AnalysisReportTemplate,
+)
+from app.ontologies.agent_runtime.orchestrator import run_agent_turn
+from app.ontologies.release_context import current_release_context
 from app.ontologies.sentinels import dynamic_service
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_PROFILE_FIELDS = ["enabled", "allowed_object_type_ids", "allowed_link_type_ids",
-                   "allowed_action_ids", "allow_action_proposals",
-                   "max_rows_per_query", "max_steps", "system_prompt_extra",
-                   "default_model_id"]
-_RESETTABLE = {"allowed_object_type_ids", "allowed_link_type_ids", "allowed_action_ids"}
+# Compatibility names retained for callers and monkeypatches during migration.
+_PROFILE_FIELDS = _profile_service.PROFILE_FIELDS
+_RESETTABLE = _profile_service.RESETTABLE_FIELDS
+_profile_out = _profile_service.profile_out
+_template_out = _report_service.template_out
+_run_out = _report_service.run_out
+_message_out = _conversation_service.message_out
 
-
-def _require_ontology(db: Session, ontology_id: str) -> OntologyProject:
-    p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
-    if not p:
-        raise HTTPException(404, "Ontology not found")
-    return p
+_APPLICATION_STATUS = {
+    "not_found": 404,
+    "forbidden": 403,
+    "conflict": 409,
+    "invalid": 422,
+}
 
 
 def _ok(data):
     return {"data": data}
 
 
-def _profile_out(p: AgentProfile) -> dict:
-    return S.AgentProfileOut.model_validate(p).model_dump(by_alias=True)
+def _application_call(function, /, *args, **kwargs):
+    """Translate transport-neutral workflow failures at the HTTP boundary."""
+    try:
+        return function(*args, **kwargs)
+    except AgentRuntimeApplicationError as error:
+        raise HTTPException(
+            _APPLICATION_STATUS[error.kind], detail=error.detail
+        ) from error
+
+
+def _require_ontology(db: Session, ontology_id: str) -> OntologyProject:
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id
+    ).first()
+    if not project:
+        raise HTTPException(404, "Ontology not found")
+    return project
+
+
+def _require_report_template(db: Session, ontology_id: str, template_id: str,
+                             current_user) -> AnalysisReportTemplate:
+    return _application_call(
+        _report_service.require_template, db, ontology_id, template_id, current_user
+    )
+
+
+def _require_report_run(db: Session, ontology_id: str, run_id: str,
+                        current_user) -> AnalysisReportRun:
+    return _application_call(
+        _report_service.require_run, db, ontology_id, run_id, current_user
+    )
+
+
+def _require_conversation(db: Session, ontology_id: str, conversation_id: str,
+                          current_user) -> AgentConversation:
+    return _application_call(
+        _conversation_service.require_conversation,
+        db, ontology_id, conversation_id, current_user,
+    )
+
+
+# ---------------------------------------------------------------- Profile
 
 
 @router.get("/{ontology_id}/agent/profile")
@@ -76,16 +139,10 @@ def get_profile(ontology_id: str, db: Session = Depends(get_db),
 def update_profile(ontology_id: str, body: S.AgentProfileUpdate,
                    db: Session = Depends(get_db), _=Depends(require_admin)):
     _require_ontology(db, ontology_id)
-    profile = get_or_create_profile(db, ontology_id)
-    data = body.model_dump(exclude_unset=True, exclude={"reset_to_all"})
-    for field, value in data.items():
-        if field in _PROFILE_FIELDS:
-            setattr(profile, field, value)
-    for field in body.reset_to_all:
-        if field in _RESETTABLE:
-            setattr(profile, field, None)
-    db.commit()
-    db.refresh(profile)
+    profile = _profile_service.update_profile(
+        db, ontology_id, body, get_profile_fn=get_or_create_profile,
+        profile_fields=_PROFILE_FIELDS, resettable_fields=_RESETTABLE,
+    )
     return _ok(_profile_out(profile))
 
 
@@ -95,25 +152,26 @@ def get_capabilities(ontology_id: str, release_id: str | None = None,
                      _=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id, release_id=release_id)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-    return _ok({**scope.summary(), "skillCard": scope.skill_card(),
-                "releaseId": scope.release_id,
-                "releaseVersion": scope.release.version if scope.release else None})
+        data = _profile_service.capability_summary(
+            db, ontology_id, release_id, build_scope_fn=build_scope
+        )
+    except ToolError as error:
+        raise HTTPException(404, str(error)) from error
+    return _ok(data)
 
 
-# ---------------------------------------------------------------- 动态哨兵叠加层
+# ------------------------------------------------------- Dynamic Sentinels
 
 
 def _dynamic_context_scope(db: Session, ontology_id: str, release_id: str):
-    context = dynamic_service.require_current_release(
-        db, ontology_id, release_id)
     try:
-        _, _, scope = build_scope(db, ontology_id, release_id=context.id)
-    except ToolError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return context, scope
+        return _dynamic_workflow.context_scope(
+            db, ontology_id, release_id,
+            dynamic_service_module=dynamic_service,
+            build_scope_fn=build_scope,
+        )
+    except ToolError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 @router.get("/{ontology_id}/agent/dynamic-sentinels")
@@ -137,12 +195,11 @@ def create_dynamic_sentinel(
 ):
     require_ontology_access(db, ontology_id, current_user, write=True)
     context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
-    row = dynamic_service.create_dynamic(
-        db, context, scope,
-        body.definition.model_dump(mode="json", by_alias=True),
+    return _ok(_dynamic_workflow.create(
+        db, context, scope, body,
         str(getattr(current_user, "id", "") or "") or None,
-    )
-    return _ok(dynamic_service.serialize_dynamic(row))
+        dynamic_service_module=dynamic_service,
+    ))
 
 
 @router.post("/{ontology_id}/agent/dynamic-sentinels/execute-proposal")
@@ -154,28 +211,11 @@ def execute_dynamic_sentinel_proposal(
 ):
     require_ontology_access(db, ontology_id, current_user, write=True)
     context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
-    definition = (
-        body.definition.model_dump(mode="json", by_alias=True)
-        if body.definition is not None else None
-    )
-    if body.operation == "create":
-        row = dynamic_service.create_dynamic(
-            db, context, scope, definition or {},
-            str(getattr(current_user, "id", "") or "") or None)
-        return _ok(dynamic_service.serialize_dynamic(row))
-    if body.operation == "update":
-        row = dynamic_service.update_dynamic(
-            db, context, scope, body.sentinel_id or "",
-            body.expected_revision or 0, definition or {})
-        return _ok(dynamic_service.serialize_dynamic(row))
-    if body.operation in {"enable", "disable"}:
-        row = dynamic_service.set_enabled(
-            db, context, scope, body.sentinel_id or "",
-            body.expected_revision or 0, body.operation == "enable")
-        return _ok(dynamic_service.serialize_dynamic(row))
-    dynamic_service.retire_dynamic(
-        db, context, body.sentinel_id or "", body.expected_revision)
-    return _ok({"status": "retired", "id": body.sentinel_id})
+    return _ok(_dynamic_workflow.execute_proposal(
+        db, context, scope, body,
+        str(getattr(current_user, "id", "") or "") or None,
+        dynamic_service_module=dynamic_service,
+    ))
 
 
 @router.put("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}")
@@ -188,10 +228,10 @@ def update_dynamic_sentinel(
 ):
     require_ontology_access(db, ontology_id, current_user, write=True)
     context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
-    row = dynamic_service.update_dynamic(
-        db, context, scope, sentinel_id, body.expected_revision,
-        body.definition.model_dump(mode="json", by_alias=True))
-    return _ok(dynamic_service.serialize_dynamic(row))
+    return _ok(_dynamic_workflow.update(
+        db, context, scope, sentinel_id, body,
+        dynamic_service_module=dynamic_service,
+    ))
 
 
 @router.post("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}/trial")
@@ -204,8 +244,9 @@ def trial_dynamic_sentinel(
 ):
     require_ontology_access(db, ontology_id, current_user, write=True)
     context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
-    row = dynamic_service.run_trial(db, context, scope, sentinel_id)
-    return _ok(dynamic_service.serialize_dynamic(row))
+    return _ok(_dynamic_workflow.trial(
+        db, context, scope, sentinel_id, dynamic_service_module=dynamic_service
+    ))
 
 
 @router.post("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}/enabled")
@@ -218,9 +259,10 @@ def toggle_dynamic_sentinel(
 ):
     require_ontology_access(db, ontology_id, current_user, write=True)
     context, scope = _dynamic_context_scope(db, ontology_id, body.release_id)
-    row = dynamic_service.set_enabled(
-        db, context, scope, sentinel_id, body.expected_revision, body.enabled)
-    return _ok(dynamic_service.serialize_dynamic(row))
+    return _ok(_dynamic_workflow.toggle(
+        db, context, scope, sentinel_id, body,
+        dynamic_service_module=dynamic_service,
+    ))
 
 
 @router.delete("/{ontology_id}/agent/dynamic-sentinels/{sentinel_id}")
@@ -234,9 +276,13 @@ def delete_dynamic_sentinel(
 ):
     require_ontology_access(db, ontology_id, current_user, write=True)
     context, _ = _dynamic_context_scope(db, ontology_id, release_id)
-    dynamic_service.retire_dynamic(
-        db, context, sentinel_id, expected_revision)
-    return _ok({"status": "retired", "id": sentinel_id})
+    return _ok(_dynamic_workflow.retire(
+        db, context, sentinel_id, expected_revision,
+        dynamic_service_module=dynamic_service,
+    ))
+
+
+# ------------------------------------------------------------- Graph
 
 
 @router.get("/{ontology_id}/agent/graph")
@@ -254,17 +300,15 @@ def get_agent_graph(
     """授权范围内的渐进式数据图谱：L1 类型、L2 实例、L3 聚焦属性。"""
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id, release_id=release_id)
-        return _ok(build_workspace_graph(
-            scope,
-            depth=depth,
-            query=query,
-            object_type_ref=object_type,
-            focus_instance_id=focus_instance_id,
-            limit_per_type=limit_per_type,
-        ))
-    except ToolError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        data = _graph_queries.workspace_graph(
+            db, ontology_id, release_id, depth=depth, query=query,
+            object_type=object_type, focus_instance_id=focus_instance_id,
+            limit_per_type=limit_per_type, build_scope_fn=build_scope,
+            graph_fn=build_workspace_graph,
+        )
+    except ToolError as error:
+        raise HTTPException(422, str(error)) from error
+    return _ok(data)
 
 
 @router.get("/{ontology_id}/agent/graph/instances/{instance_id}")
@@ -277,10 +321,13 @@ def get_agent_graph_instance(
 ):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(db, ontology_id, release_id=release_id)
-        return _ok(get_instance_detail(scope, instance_id))
-    except ToolError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        data = _graph_queries.instance_detail(
+            db, ontology_id, release_id, instance_id,
+            build_scope_fn=build_scope, detail_fn=get_instance_detail,
+        )
+    except ToolError as error:
+        raise HTTPException(404, str(error)) from error
+    return _ok(data)
 
 
 @router.post("/{ontology_id}/agent/graph/paths")
@@ -292,18 +339,13 @@ def query_agent_graph_paths(
 ):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(
-            db, ontology_id, release_id=body.release_id)
-        return _ok(find_paths(
-            scope,
-            body.source_instance_id,
-            body.target_instance_id,
-            direction=body.direction,
-            max_depth=body.max_depth,
-            max_paths=body.max_paths,
-        ))
-    except ToolError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        data = _graph_queries.paths(
+            db, ontology_id, body,
+            build_scope_fn=build_scope, paths_fn=find_paths,
+        )
+    except ToolError as error:
+        raise HTTPException(422, str(error)) from error
+    return _ok(data)
 
 
 @router.post("/{ontology_id}/agent/graph/impact")
@@ -315,76 +357,23 @@ def query_agent_graph_impact(
 ):
     _require_ontology(db, ontology_id)
     try:
-        _, _, scope = build_scope(
-            db, ontology_id, release_id=body.release_id)
-        return _ok(analyze_change_impact(
-            scope,
-            body.instance_id,
-            body.property,
-            body.proposed_value,
-            direction=body.direction,
-            max_depth=body.max_depth,
-        ))
-    except ToolError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        data = _graph_queries.impact(
+            db, ontology_id, body,
+            build_scope_fn=build_scope, impact_fn=analyze_change_impact,
+        )
+    except ToolError as error:
+        raise HTTPException(422, str(error)) from error
+    return _ok(data)
 
 
-# ---------------------------------------------------------------- 分析报告模板
-
-
-def _template_out(row: AnalysisReportTemplate) -> dict:
-    return S.ReportTemplateOut.model_validate(row).model_dump(by_alias=True)
-
-
-def _run_out(row: AnalysisReportRun, *, include_html: bool = True) -> dict:
-    data = S.ReportRunOut.model_validate(row).model_dump(by_alias=True)
-    if not include_html:
-        data["htmlContent"] = ""
-        data["sectionResults"] = []
-    return data
-
-
-def _require_report_template(db: Session, ontology_id: str, template_id: str,
-                             current_user) -> AnalysisReportTemplate:
-    row = db.query(AnalysisReportTemplate).filter(
-        AnalysisReportTemplate.id == template_id,
-        AnalysisReportTemplate.ontology_id == ontology_id,
-    ).first()
-    if not row:
-        raise HTTPException(404, "分析报告模板不存在")
-    if row.status != "published" and row.created_by != getattr(current_user, "id", None) \
-            and getattr(current_user, "role", "") != "admin":
-        raise HTTPException(403, "无权访问该分析报告模板")
-    return row
-
-
-def _require_report_run(db: Session, ontology_id: str, run_id: str,
-                        current_user) -> AnalysisReportRun:
-    row = db.query(AnalysisReportRun).filter(
-        AnalysisReportRun.id == run_id,
-        AnalysisReportRun.ontology_id == ontology_id,
-    ).first()
-    if not row:
-        raise HTTPException(404, "分析报告运行记录不存在")
-    if row.created_by != getattr(current_user, "id", None) \
-            and getattr(current_user, "role", "") != "admin":
-        raise HTTPException(403, "无权访问该分析报告运行记录")
-    return row
+# ----------------------------------------------------------- Reports
 
 
 @router.get("/{ontology_id}/agent/report-templates")
 def list_report_templates(ontology_id: str, db: Session = Depends(get_db),
                           current_user=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
-    query = db.query(AnalysisReportTemplate).filter(
-        AnalysisReportTemplate.ontology_id == ontology_id)
-    if getattr(current_user, "role", "") != "admin":
-        query = query.filter(or_(
-            AnalysisReportTemplate.created_by == getattr(current_user, "id", None),
-            AnalysisReportTemplate.status == "published",
-        ))
-    rows = query.order_by(AnalysisReportTemplate.updated_at.desc()).limit(100).all()
-    return _ok([_template_out(row) for row in rows])
+    return _ok(_report_service.list_templates(db, ontology_id, current_user))
 
 
 @router.post("/{ontology_id}/agent/report-templates/ai-draft", status_code=201)
@@ -392,42 +381,11 @@ def create_ai_report_template(ontology_id: str, body: S.ReportTemplateAIDraftReq
                               db: Session = Depends(get_db),
                               current_user=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
-    brief = (body.brief or "").strip()
-    if len(brief) < 8:
-        raise HTTPException(422, "请用至少 8 个字说明报告面向谁、要回答什么问题")
-
-    context = ""
-    if body.conversation_id:
-        conversation = _require_conversation(db, ontology_id, body.conversation_id, current_user)
-        messages = (db.query(AgentMessage)
-                    .filter(AgentMessage.conversation_id == conversation.id)
-                    .order_by(AgentMessage.created_at.asc()).limit(30).all())
-        context = "\n".join(
-            f"{'用户' if item.role == 'user' else '助手'}：{(item.content or '')[:500]}"
-            for item in messages if (item.content or "").strip())
-
-    try:
-        spec = reporting.generate_template_spec(
-            db, ontology_id, brief, model_id=body.model_id,
-            conversation_context=context)
-        sections = reporting.normalize_sections(spec["sections"])
-    except (ToolError, ValueError) as exc:
-        raise HTTPException(422, str(exc))
-
-    row = AnalysisReportTemplate(
-        ontology_id=ontology_id,
-        created_by=getattr(current_user, "id", None),
-        name=spec["name"],
-        description=spec.get("description") or "",
-        source_prompt=brief,
-        generation_mode=spec.get("generationMode") or "ai",
-        sections=sections,
-        style=reporting.normalize_style(spec.get("style")),
-        default_model_id=body.model_id,
+    row = _application_call(
+        _report_service.create_ai_draft, db, ontology_id, body, current_user,
+        require_conversation_fn=_require_conversation, reporting_module=reporting,
+        tool_error_type=ToolError,
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
     return _ok(_template_out(row))
 
 
@@ -435,8 +393,8 @@ def create_ai_report_template(ontology_id: str, body: S.ReportTemplateAIDraftReq
 def get_report_template(ontology_id: str, template_id: str,
                         db: Session = Depends(get_db),
                         current_user=Depends(get_current_user)):
-    return _ok(_template_out(
-        _require_report_template(db, ontology_id, template_id, current_user)))
+    row = _require_report_template(db, ontology_id, template_id, current_user)
+    return _ok(_template_out(row))
 
 
 @router.put("/{ontology_id}/agent/report-templates/{template_id}")
@@ -445,37 +403,9 @@ def update_report_template(ontology_id: str, template_id: str,
                            db: Session = Depends(get_db),
                            current_user=Depends(get_current_user)):
     row = _require_report_template(db, ontology_id, template_id, current_user)
-    if row.status == "published":
-        raise HTTPException(409, "已发布模板不可原地修改；请基于它创建新草稿版本")
-    if body.expected_revision != row.revision:
-        raise HTTPException(409, detail={
-            "code": "report_revision_conflict",
-            "message": "模板已在其他页面更新，请刷新后再编辑，避免覆盖较新的修改",
-            "currentRevision": row.revision,
-        })
-    try:
-        sections = reporting.normalize_sections(body.sections)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    name = (body.name or "").strip()[:240]
-    if not name:
-        raise HTTPException(422, "报告名称不能为空")
-    next_state = {
-        "name": name,
-        "description": (body.description or "").strip()[:5000],
-        "sections": sections,
-        "style": reporting.normalize_style(body.style),
-        "default_model_id": body.default_model_id,
-    }
-    current_state = {key: getattr(row, key) for key in next_state}
-    if current_state != next_state:
-        for key, value in next_state.items():
-            setattr(row, key, value)
-        row.revision = (row.revision or 0) + 1
-        row.last_preview_run_id = None
-        row.last_preview_revision = None
-        db.commit()
-        db.refresh(row)
+    row = _application_call(
+        _report_service.update_template, db, row, body, reporting_module=reporting
+    )
     return _ok(_template_out(row))
 
 
@@ -484,11 +414,7 @@ def delete_report_template(ontology_id: str, template_id: str,
                            db: Session = Depends(get_db),
                            current_user=Depends(get_current_user)):
     row = _require_report_template(db, ontology_id, template_id, current_user)
-    if row.status == "published":
-        raise HTTPException(409, "已发布模板不可删除，请保留运行审计记录")
-    db.query(AnalysisReportRun).filter(AnalysisReportRun.template_id == row.id).delete()
-    db.delete(row)
-    db.commit()
+    return _application_call(_report_service.delete_template, db, row)
 
 
 @router.post("/{ontology_id}/agent/report-templates/{template_id}/preview")
@@ -497,9 +423,10 @@ def preview_report_template(ontology_id: str, template_id: str,
                             db: Session = Depends(get_db),
                             current_user=Depends(get_current_user)):
     row = _require_report_template(db, ontology_id, template_id, current_user)
-    if row.status == "published":
-        raise HTTPException(409, "已发布模板请使用正式运行入口")
-    run = reporting.execute_report(db, row, current_user, "preview", body.model_id)
+    run = _application_call(
+        _report_service.preview_template, db, row, body, current_user,
+        reporting_module=reporting,
+    )
     return _ok(_run_out(run))
 
 
@@ -508,30 +435,10 @@ def publish_report_template(ontology_id: str, template_id: str,
                             db: Session = Depends(get_db),
                             current_user=Depends(get_current_user)):
     row = _require_report_template(db, ontology_id, template_id, current_user)
-    if row.status == "published":
-        return _ok(_template_out(row))
-    if not row.last_preview_run_id or row.last_preview_revision != row.revision:
-        raise HTTPException(409, detail={
-            "code": "report_preview_required",
-            "message": "模板已变化或尚未试运行，请重新查询真实数据并确认结果后再发布",
-        })
-    run = db.query(AnalysisReportRun).filter(
-        AnalysisReportRun.id == row.last_preview_run_id,
-        AnalysisReportRun.template_id == row.id,
-    ).first()
-    if not run or run.status != "succeeded":
-        raise HTTPException(409, "最近一次真实数据试运行未成功")
-    quality = run.quality_report or {}
-    if not quality.get("passed"):
-        raise HTTPException(422, detail={
-            "code": "report_quality_gate_blocked",
-            "message": quality.get("summary") or "报告未达到汇报级发布标准",
-            "quality": quality,
-        })
-    row.status = "published"
-    row.published_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(row)
+    row = _application_call(
+        _report_service.publish_template, db, row,
+        now_fn=lambda: datetime.now(timezone.utc),
+    )
     return _ok(_template_out(row))
 
 
@@ -541,9 +448,10 @@ def run_published_report(ontology_id: str, template_id: str,
                          db: Session = Depends(get_db),
                          current_user=Depends(get_current_user)):
     row = _require_report_template(db, ontology_id, template_id, current_user)
-    if row.status != "published":
-        raise HTTPException(409, "模板尚未发布，只能先执行真实数据试运行")
-    run = reporting.execute_report(db, row, current_user, "manual", body.model_id)
+    run = _application_call(
+        _report_service.run_published, db, row, body, current_user,
+        reporting_module=reporting,
+    )
     return _ok(_run_out(run))
 
 
@@ -552,21 +460,16 @@ def list_report_runs(ontology_id: str, template_id: str,
                      db: Session = Depends(get_db),
                      current_user=Depends(get_current_user)):
     row = _require_report_template(db, ontology_id, template_id, current_user)
-    query = db.query(AnalysisReportRun).filter(AnalysisReportRun.template_id == row.id)
-    # 已发布模板可被本体用户复用，但每次运行仍属于发起者自己的审计记录。
-    # 列表与详情使用同一权限边界，避免列表展示一条随后无法打开的他人运行。
-    if getattr(current_user, "role", "") != "admin":
-        query = query.filter(
-            AnalysisReportRun.created_by == getattr(current_user, "id", None))
-    runs = query.order_by(AnalysisReportRun.started_at.desc()).limit(50).all()
-    return _ok([_run_out(run, include_html=False) for run in runs])
+    return _ok(_report_service.list_runs(db, row, current_user))
 
 
 @router.get("/{ontology_id}/agent/report-runs/{run_id}")
 def get_report_run(ontology_id: str, run_id: str,
                    db: Session = Depends(get_db),
                    current_user=Depends(get_current_user)):
-    return _ok(_run_out(_require_report_run(db, ontology_id, run_id, current_user)))
+    return _ok(_run_out(_require_report_run(
+        db, ontology_id, run_id, current_user
+    )))
 
 
 @router.get("/{ontology_id}/agent/report-runs/{run_id}/html", response_class=HTMLResponse)
@@ -576,60 +479,36 @@ def get_report_html(ontology_id: str, run_id: str,
     run = _require_report_run(db, ontology_id, run_id, current_user)
     if run.status != "succeeded" or not run.html_content:
         raise HTTPException(409, "该运行尚无可用 HTML 报告")
-    return HTMLResponse(
-        content=run.html_content,
-        headers={
-            "Content-Disposition": f'inline; filename="analysis-report-{run.id[:8]}.html"',
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    return HTMLResponse(content=run.html_content, headers={
+        "Content-Disposition": f'inline; filename="analysis-report-{run.id[:8]}.html"',
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            "img-src data:; font-src 'none'"
+        ),
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+# ----------------------------------------------------- Conversations
+
+
 @router.post("/{ontology_id}/agent/chat")
 def chat(ontology_id: str, body: S.ChatRequest,
          db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
     if not (body.message or "").strip():
         raise HTTPException(422, "message 不能为空")
-
     if not body.stream:
-        events = list(run_agent_turn(db, ontology_id, current_user, body.message,
-                                     conversation_id=body.conversation_id,
-                                     model_id=body.model_id,
-                                     release_id=body.release_id))
-        answer = next((e for e in events if e["type"] == "answer"), None)
-        error = next((e for e in events if e["type"] == "error"), None)
-        meta = next((e for e in events if e["type"] == "meta"), {})
-        steps = [e for e in events if e["type"] == "step"]
-        return _ok({
-            "conversationId": meta.get("conversationId"),
-            "model": meta.get("model"),
-            "steps": [{k: v for k, v in s.items() if k != "type"} for s in steps],
-            "content": (answer or {}).get("content"),
-            "citations": (answer or {}).get("citations") or [],
-            "proposals": (answer or {}).get("proposals") or [],
-            "usage": (answer or {}).get("usage"),
-            "error": (error or {}).get("message"),
-        })
-
-    # SSE：流式生成器的生命周期长于请求依赖，自建 session 规避 yield 依赖
-    # 在 StreamingResponse 下的提前关闭问题
-    user = current_user
-
-    def event_stream():
-        from app.database import SessionLocal
-        session = SessionLocal()
-        try:
-            for event in run_agent_turn(session, ontology_id, user, body.message,
-                                        conversation_id=body.conversation_id,
-                                        model_id=body.model_id,
-                                        release_id=body.release_id):
-                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
-        finally:
-            session.close()
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+        return _ok(_chat_service.run_sync(
+            db, ontology_id, current_user, body, run_turn_fn=run_agent_turn
+        ))
+    return StreamingResponse(
+        _chat_service.stream_events(
+            ontology_id, current_user, body, run_turn_fn=run_agent_turn
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{ontology_id}/agent/conversations")
@@ -637,54 +516,21 @@ def list_conversations(ontology_id: str, db: Session = Depends(get_db),
                        release_id: str | None = Query(default=None),
                        current_user=Depends(get_current_user)):
     _require_ontology(db, ontology_id)
-    query = db.query(AgentConversation).filter(
-        AgentConversation.ontology_id == ontology_id,
-        AgentConversation.user_id == getattr(current_user, "id", None))
-    if release_id is not None:
-        query = query.filter(AgentConversation.ontology_release_id == release_id)
-    rows = query.order_by(AgentConversation.updated_at.desc()).limit(50).all()
-    return _ok([S.ConversationOut.model_validate(c).model_dump(by_alias=True) for c in rows])
-
-
-def _require_conversation(db: Session, ontology_id: str, conversation_id: str,
-                          current_user) -> AgentConversation:
-    conv = db.query(AgentConversation).filter(
-        AgentConversation.id == conversation_id,
-        AgentConversation.ontology_id == ontology_id).first()
-    if not conv:
-        raise HTTPException(404, "会话不存在")
-    if conv.user_id and conv.user_id != getattr(current_user, "id", None) \
-            and getattr(current_user, "role", "") != "admin":
-        raise HTTPException(403, "无权访问他人会话")
-    return conv
-
-
-def _message_out(message: AgentMessage, *, display_only: bool = False) -> dict:
-    data = S.MessageOut.model_validate(message).model_dump(by_alias=True)
-    if display_only:
-        display_steps = []
-        for raw_step in data["steps"]:
-            step = dict(raw_step)
-            if "displayResult" in step:
-                step["result"] = step.pop("displayResult")
-            display_steps.append(step)
-        data["steps"] = display_steps
-    return data
+    return _ok(_conversation_service.list_conversations(
+        db, ontology_id, release_id, current_user
+    ))
 
 
 @router.get("/{ontology_id}/agent/conversations/{conversation_id}")
 def get_conversation(ontology_id: str, conversation_id: str,
                      db: Session = Depends(get_db),
                      current_user=Depends(get_current_user)):
-    conv = _require_conversation(db, ontology_id, conversation_id, current_user)
-    messages = (db.query(AgentMessage)
-                .filter(AgentMessage.conversation_id == conv.id)
-                .order_by(AgentMessage.created_at.asc())
-                .limit(200).all())
-    return _ok({
-        **S.ConversationOut.model_validate(conv).model_dump(by_alias=True),
-        "messages": [_message_out(message, display_only=True) for message in messages],
-    })
+    conversation = _require_conversation(
+        db, ontology_id, conversation_id, current_user
+    )
+    return _ok(_conversation_service.get_conversation(
+        db, conversation, message_out_fn=_message_out
+    ))
 
 
 @router.get("/{ontology_id}/agent/conversations/{conversation_id}/export")
@@ -693,100 +539,24 @@ def export_conversation(ontology_id: str, conversation_id: str,
                         current_user=Depends(get_current_user)):
     """导出会话的完整持久化内容；历史 UI 的 200 条回放上限不适用于此接口。"""
     ontology = _require_ontology(db, ontology_id)
-    conv = _require_conversation(db, ontology_id, conversation_id, current_user)
-    messages = (db.query(AgentMessage)
-                .filter(AgentMessage.conversation_id == conv.id)
-                .order_by(AgentMessage.created_at.asc(), AgentMessage.id.asc())
-                .all())
-
-    from app.ontologies.decision_simulation import schemas as DecisionSchemas
-    from app.ontologies.decision_simulation.models import DecisionSimulationRun
-
-    decision_runs = (db.query(DecisionSimulationRun)
-                     .filter(DecisionSimulationRun.conversation_id == conv.id)
-                     .order_by(DecisionSimulationRun.started_at.asc(),
-                               DecisionSimulationRun.id.asc())
-                     .all())
-    message_rows = [_message_out(message) for message in messages]
-    legacy_truncated = sum(
-        1
-        for message in message_rows
-        for step in message.get("steps", [])
-        if "displayResult" not in step
-        and isinstance(step.get("result"), dict)
-        and step["result"].get("_truncated") is True
+    conversation = _require_conversation(
+        db, ontology_id, conversation_id, current_user
     )
-    tool_steps = sum(len(message.get("steps", [])) for message in message_rows)
-    input_tokens = sum(
-        int((message.get("tokenUsage") or {}).get("inputTokens") or 0)
-        for message in message_rows
-    )
-    output_tokens = sum(
-        int((message.get("tokenUsage") or {}).get("outputTokens") or 0)
-        for message in message_rows
-    )
-
-    return _ok({
-        "schemaVersion": "openontology.agent-conversation.v1",
-        "exportedAt": datetime.now(timezone.utc),
-        "ontology": {
-            "id": ontology.id,
-            "name": ontology.name,
-            "domain": ontology.domain,
-            "version": ontology.version,
-        },
-        "conversation": {
-            "id": conv.id,
-            "ontologyId": conv.ontology_id,
-            "ontologyReleaseId": conv.ontology_release_id,
-            "userId": conv.user_id,
-            "title": conv.title,
-            "createdAt": conv.created_at,
-            "updatedAt": conv.updated_at,
-        },
-        "messages": message_rows,
-        "decisionSimulations": [
-            DecisionSchemas.DecisionSimulationOut
-            .model_validate(run, from_attributes=True)
-            .model_dump(by_alias=True)
-            for run in decision_runs
-        ],
-        "summary": {
-            "messageCount": len(message_rows),
-            "userMessageCount": sum(
-                message.get("role") == "user" for message in message_rows),
-            "assistantMessageCount": sum(
-                message.get("role") == "assistant" for message in message_rows),
-            "toolStepCount": tool_steps,
-            "decisionSimulationCount": len(decision_runs),
-            "tokenUsage": {
-                "inputTokens": input_tokens,
-                "outputTokens": output_tokens,
-            },
-            "contentCompleteness": {
-                "messageHistory": "complete",
-                "toolResults": (
-                    "complete" if legacy_truncated == 0
-                    else "contains_legacy_truncation"
-                ),
-                "legacyTruncatedToolResultCount": legacy_truncated,
-            },
-        },
-    })
+    return _ok(_conversation_service.export_conversation(
+        db, ontology, conversation,
+        now_fn=lambda: datetime.now(timezone.utc),
+        message_out_fn=_message_out,
+    ))
 
 
 @router.delete("/{ontology_id}/agent/conversations/{conversation_id}", status_code=204)
 def delete_conversation(ontology_id: str, conversation_id: str,
                         db: Session = Depends(get_db),
                         current_user=Depends(get_current_user)):
-    conv = _require_conversation(db, ontology_id, conversation_id, current_user)
-    # 推演运行记录是会话内产物；删除会话时同步清理，避免留下不可见孤儿记录。
-    from app.ontologies.decision_simulation.models import DecisionSimulationRun
-    db.query(DecisionSimulationRun).filter(
-        DecisionSimulationRun.conversation_id == conv.id).delete()
-    db.query(AgentMessage).filter(AgentMessage.conversation_id == conv.id).delete()
-    db.delete(conv)
-    db.commit()
+    conversation = _require_conversation(
+        db, ontology_id, conversation_id, current_user
+    )
+    return _conversation_service.delete_conversation(db, conversation)
 
 
 @router.post("/{ontology_id}/agent/execute-proposal")
@@ -799,30 +569,15 @@ def execute_proposal(ontology_id: str, body: S.ExecuteProposalRequest,
     事实追加），actor 记为确认执行的用户 —— agent 只提案，人签字。
     """
     _require_ontology(db, ontology_id)
-    release = current_release_context(
-        db, ontology_id, expected_release_id=body.release_id)
     try:
-        _, profile, scope = build_scope(
-            db, ontology_id, release_id=release.id)
-        if not profile.enabled:
-            raise ToolError("该本体的智能体已停用")
-        action = scope.require_action(body.action_id)
-        if body.target_instance_id:
-            from app.models.ontology_formal import ObjectInstance
-            target = db.query(ObjectInstance).filter(
-                ObjectInstance.id == body.target_instance_id).first()
-            scope.visible_instance(target)
-    except ToolError as e:
-        raise HTTPException(403, str(e))
-
-    from app.ontologies.formal_modeling.schemas import RunActionRequest
-    from app.services.formal.action_engine import execute_action
-    log = execute_action(
-        db, ontology_id,
-        RunActionRequest(action_id=action.id, parameters=body.parameters,
-                         target_instance_id=body.target_instance_id, dry_run=False,
-                         release_id=release.id),
-        actor_id=getattr(current_user, "id", None),
-        expected_release_id=release.id,
+        release, action = _proposal_service.authorize(
+            db, ontology_id, body,
+            current_release_fn=current_release_context,
+            build_scope_fn=build_scope,
+        )
+    except ToolError as error:
+        raise HTTPException(403, str(error)) from error
+    log = _proposal_service.execute(
+        db, ontology_id, body, current_user, release, action
     )
     return _ok(log)

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from starlette.datastructures import FormData, UploadFile
 
 from .. import config, db, executor, publication
-from .interfaces import _row_to_dict
+from ..interface_service import _row_to_dict
 
 admin_router = APIRouter(prefix="/proxy", tags=["api-hub-http-proxy-admin"])
 public_router = APIRouter(prefix=config.PROXY_PATH, tags=["api-hub-http-proxy"])

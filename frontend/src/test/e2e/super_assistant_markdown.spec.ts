@@ -1,8 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
+
 const now = '2026-07-19T08:00:00+00:00'
-const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
-const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
 
 const wrappedMarkdown = `\`\`\`\`markdown
 ### 三级标题
@@ -31,8 +34,8 @@ def hello():
 
 async function loginAsAdmin(page: Page) {
   await page.goto('/#/login')
-  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
-  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.locator('button[type="submit"]').click()
   await page.waitForURL('**/#/overview')
 }

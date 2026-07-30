@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.shared.deps import get_db, require_admin
+from app.deps import get_db, require_admin
 from app.settings.users.schemas import (
     RoleMenuPermissionUpdate,
     UserOut,

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-/opt/ontologybuild}"
+bash "$SCRIPT_DIR/ci/validate-deploy-app-dir.sh" "$APP_DIR"
 BRANCH="${BRANCH:-nano-ontoprompt}"
 REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
 DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-production.dependencies.env}"
 # Preserve explicit operator overrides, but defer defaults until the persistent
-# .env and production.dependencies.env have been merged. PUBLIC_PORT from that
-# manifest must drive the same endpoint that Compose will expose.
+# .env and the production dependency manifest have been merged. The current
+# deployment contract reads the repository-owner-approved tracked manifest.
+# PUBLIC_PORT from that manifest must drive the endpoint Compose will expose.
 HEALTH_URL="${HEALTH_URL:-}"
 READINESS_URL="${READINESS_URL:-}"
 RETRIES="${DEPLOY_RETRIES:-3}"
@@ -439,12 +442,29 @@ validate_required_external_dependencies
 if [ -z "$(env_value ENCRYPTION_KEY)" ]; then
   log "ENCRYPTION_KEY is empty; preserving the existing SECRET_KEY-derived encryption key"
 fi
+if [ "${STRICT_IMAGE_DIGESTS+x}" = "x" ]; then
+  strict_image_digests_value="${STRICT_IMAGE_DIGESTS}"
+else
+  strict_image_digests_value="$(env_value STRICT_IMAGE_DIGESTS)"
+fi
+case "$strict_image_digests_value" in
+  ""|0|false|FALSE|no|NO)
+    strict_image_digests_enabled=0
+    ;;
+  1|true|TRUE|yes|YES)
+    strict_image_digests_enabled=1
+    ;;
+  *)
+    log "STRICT_IMAGE_DIGESTS must be true or false"
+    exit 1
+    ;;
+esac
 check_image_digest() {
   local key="$1"
   local value
   value="$(env_value "$key")"
   if [[ ! "$value" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
-    if [ "${STRICT_IMAGE_DIGESTS:-0}" = "1" ]; then
+    if [ "$strict_image_digests_enabled" = "1" ]; then
       log "$key must be pinned to an immutable @sha256 digest"
       exit 1
     fi

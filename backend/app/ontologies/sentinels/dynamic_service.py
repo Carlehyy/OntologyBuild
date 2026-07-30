@@ -25,7 +25,10 @@ from app.models.sentinel import Sentinel, SentinelMatchState
 from app.ontologies.agent_runtime import schemas as AgentSchemas
 from app.ontologies.agent_runtime.boundary import ToolError
 from app.ontologies.release_context import CurrentReleaseContext, current_release_context
-from app.ontologies.versions.evolution_service import snapshot_models
+from app.ontologies.sentinels.validation import validate_sentinels
+from app.ontologies.versions.snapshot_contract import (
+    snapshot_models,
+)
 
 
 ORIGIN_BUILTIN = "release_builtin"
@@ -381,10 +384,8 @@ def validate_definition(db: Session, context: CurrentReleaseContext, scope,
             "name",
         ))
 
-    # Reuse the same deep release gate used by graph-editor Sentinels.  The
-    # lazy import avoids coupling router module import order at application boot.
+    # Reuse the same deep release gate used by graph-editor Sentinels.
     try:
-        from app.ontologies.versions.router import _validate_sentinels
         models = snapshot_models(context.snapshot)
         candidate = SimpleNamespace(
             id=sentinel_id or "candidate",
@@ -397,7 +398,7 @@ def validate_definition(db: Session, context: CurrentReleaseContext, scope,
             action_ids=definition["actionIds"],
             action_parameters=definition["actionParameters"],
         )
-        errors.extend(_validate_sentinels(
+        errors.extend(validate_sentinels(
             [candidate], models["objectTypes"], models["linkTypes"], models["actions"]))
         errors.extend(_dynamic_contract_errors(definition, models))
     except Exception as exc:  # fail closed if the shared governance gate changes

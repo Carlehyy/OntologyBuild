@@ -44,22 +44,24 @@ celerybeat-schedule
 
 # Test artifacts
 test-results/
+/.artifacts/
+/artifacts/
 
-# Internal / agent-only files (不进行 git 同步)
-AGENTS.md
+# Local agent state (不进行 git 同步)
 CLAUDE.md
 MEMORY.md
 memory/
-nano-ontoprompt-requirements.md
 prompt-harness-rules-for-coding-agent.md
-docs/
-pipeline-builder-redesign-plan.md
-PRD_AND_ARCHITECTURE_v1.1_logic_actions.md
-PRD_AND_ARCHITECTURE.md
-RELEASE_NOTES_*.md
+/.claude/launch.json
 
 # Test screenshots
 frontend/screenshots_*/
+frontend/*_screenshots/
+frontend/screenshots/
+frontend/test_results*.json
+frontend/domain_test_results.json
+frontend/debug_wizard.png
+frontend/scripts/*screenshots*/
 test_data/screenshots/
 
 # Tool artifacts

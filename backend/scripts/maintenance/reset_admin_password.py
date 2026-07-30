@@ -1,9 +1,9 @@
 """重置 admin 用户密码。
 
 用法:
-    python scripts/reset_admin_password.py                       # 重置为 admin123
-    python scripts/reset_admin_password.py --password <new_pwd>  # 重置为指定密码
-    python scripts/reset_admin_password.py --user <username>     # 指定用户名 (默认 admin)
+    uv run python scripts/maintenance/reset_admin_password.py --password <new_pwd>
+    uv run python scripts/maintenance/reset_admin_password.py \
+      --user <username> --password <new_pwd>
 """
 import argparse
 import sys

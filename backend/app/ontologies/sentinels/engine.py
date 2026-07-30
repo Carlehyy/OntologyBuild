@@ -22,7 +22,7 @@ from app.models.sentinel import (
 )
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
-from app.services.sentinel.evaluator import evaluate_sentinel
+from app.ontologies.sentinels.evaluator import evaluate_sentinel
 from app.ontologies.agent_runtime.boundary import build_scope
 from app.ontologies.release_context import current_release_context
 from app.ontologies.sentinels.dynamic_service import reconcile_release

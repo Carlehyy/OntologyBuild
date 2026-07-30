@@ -1,0 +1,42 @@
+import { defineConfig } from '@playwright/test'
+
+import baseConfig from './playwright.config'
+
+// Deliberately make backend access fail. A test belongs in this suite only when
+// every application request and realtime channel it uses is replaced locally.
+process.env.VITE_API_PROXY_TARGET = 'http://127.0.0.1:9'
+process.env.PLAYWRIGHT_API_URL = 'http://127.0.0.1:9'
+process.env.E2E_API_BASE = 'http://127.0.0.1:9'
+
+export default defineConfig({
+  ...baseConfig,
+  testMatch: [
+    '**/agent_header.spec.ts',
+    '**/asset_lake_tabs.spec.ts',
+    '**/community.spec.ts',
+    '**/data_mapping_preview.spec.ts',
+    '**/event_registry_edit.spec.ts',
+    '**/explore_async_isolation.spec.ts',
+    '**/explore_diagram_interaction.spec.ts',
+    '**/explore_document_risk.spec.ts',
+    '**/file_asset_links.spec.ts',
+    '**/governance_async_refresh.spec.ts',
+    '**/governance_reject_modal.spec.ts',
+    '**/instance_browser_readonly.spec.ts',
+    '**/instance_dataset_navigation.spec.ts',
+    '**/mapping_primary_key.spec.ts',
+    '**/mapping_review_automation.spec.ts',
+    '**/mcp-client-config.spec.ts',
+    '**/models.spec.ts',
+    '**/ontology_runtime_state_conflict.spec.ts',
+    '**/ontology_safe_recovery.spec.ts',
+    '**/overview.spec.ts',
+    '**/sentinel_firing_delta.spec.ts',
+    '**/sentinel_panel_loading.spec.ts',
+    '**/steward_browser_collaboration.spec.ts',
+    '**/steward_conversation_export.spec.ts',
+    '**/sync_tasks_ui.spec.ts',
+    '**/trial_action_plan_review.spec.ts',
+  ],
+  outputDir: '../.artifacts/playwright/mocked-results',
+})

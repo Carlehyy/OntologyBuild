@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.ontologies.mappings.application import rebuild_ontology_projection
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +34,7 @@ class IncrementalOrchestrator:
         an outbox retry.  Curated datasets continue to wait for version-bound
         review approval.
         """
-        from app.data_channel.datasets.version_events import (
+        from app.data_channel.datasets.automation_policy import (
             manual_dataset_automation_eligibility,
         )
         from app.models.v2.dataset import Dataset, DatasetVersion
@@ -78,10 +80,12 @@ class IncrementalOrchestrator:
         )
 
         applied = []
-        from app.services.v2.mapping.mapping_service import MappingService
         for ontology_id in sorted(ontology_ids):
-            projection = MappingService(self._db).build_all(
-                ontology_id, require_approved=True)
+            projection = rebuild_ontology_projection(
+                self._db,
+                ontology_id,
+                require_approved=True,
+            )
             sentinel_dispatch = projection.get("sentinel_dispatch") or {}
             # A replay after a process crash may find no relational delta even
             # though the previous attempt died before sentinel evaluation.  In
@@ -95,7 +99,7 @@ class IncrementalOrchestrator:
                     "拒绝用一次新的手动扫描覆盖失败证据："
                     f"{sentinel_dispatch['errors']}")
             if not sentinel_dispatch.get("runs"):
-                from app.services.sentinel.engine import run_manual
+                from app.ontologies.sentinels.engine import run_manual
                 sentinel_dispatch = run_manual(self._db, ontology_id)
             if sentinel_dispatch.get("errors"):
                 raise RuntimeError(
@@ -368,7 +372,7 @@ class IncrementalOrchestrator:
             # full evaluation before acknowledging the durable event; match
             # state and action idempotency prevent duplicate side effects.
             if not sentinel_dispatch.get("runs"):
-                from app.services.sentinel.engine import run_manual
+                from app.ontologies.sentinels.engine import run_manual
                 sentinel_dispatch = run_manual(self._db, ontology_id)
             if sentinel_dispatch.get("errors"):
                 raise RuntimeError(

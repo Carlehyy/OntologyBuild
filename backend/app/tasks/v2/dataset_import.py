@@ -89,10 +89,13 @@ def commit_dataset_import(job_id: str) -> None:
     from app.database import SessionLocal
     from app.data_channel.datasets.import_jobs import (
         read_manifest, read_metadata, source_path, update_status)
-    from app.data_channel.datasets.router import (
-        MANUAL_FIELD_CONTRACT_VERSION, CreateTableRequest,
-        _build_manual_schema, _normalize_manual_contract_upload,
-        _validate_manual_rows)
+    from app.data_channel.datasets.manual_contract import (
+        MANUAL_FIELD_CONTRACT_VERSION,
+        CreateTableRequest,
+        build_manual_schema,
+        normalize_manual_contract_upload,
+        validate_manual_rows,
+    )
     from app.data_channel.datasets.service import (
         _parse_stored_rows, stored_columns, DatasetService)
 
@@ -107,7 +110,7 @@ def commit_dataset_import(job_id: str) -> None:
         )
         manifest = read_manifest(job_id)
         body = CreateTableRequest.model_validate(read_metadata(job_id))
-        name, schema = _build_manual_schema(body, origin="upload")
+        name, schema = build_manual_schema(body, origin="upload")
         raw = source_path(job_id, manifest["extension"]).read_bytes()
         update_status(job_id, progress=40, phase="正在解析并校验全部数据")
         rows = _parse_stored_rows(raw, limit=None)
@@ -116,7 +119,7 @@ def commit_dataset_import(job_id: str) -> None:
             schema.get("manual_field_contract_version")
             == MANUAL_FIELD_CONTRACT_VERSION
         ):
-            rows, normalized_content = _normalize_manual_contract_upload(
+            rows, normalized_content = normalize_manual_contract_upload(
                 rows,
                 physical_columns,
                 schema,
@@ -131,7 +134,7 @@ def commit_dataset_import(job_id: str) -> None:
                     "上传文件列结构已发生变化"
                     f"（文件：{physical_columns}；当前设置：{expected_columns}），请重新选择文件"
                 )
-            _validate_manual_rows(
+            validate_manual_rows(
                 rows, schema, dataset_name=name, scope="上传数据")
             normalized_content = raw
         update_status(job_id, progress=75, phase="数据校验通过，正在创建数据集")

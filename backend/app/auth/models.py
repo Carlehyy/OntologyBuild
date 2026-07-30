@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import JSON, String, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
-from app.shared.database import Base
+from app.database import Base
 
 class User(Base):
     __tablename__ = "users"

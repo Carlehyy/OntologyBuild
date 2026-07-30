@@ -16,8 +16,8 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from .. import db
-from .interfaces import (
-    InterfaceIn,
+from ..interface_contracts import InterfaceIn
+from ..interface_service import (
     _check_group_name,
     _dump_kv,
     _validate_proxy_publish,

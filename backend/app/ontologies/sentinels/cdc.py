@@ -29,7 +29,7 @@ from app.models.ontology_formal import LinkInstance, ObjectInstance
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
 from app.models.sentinel import Sentinel, SentinelCdcOutbox, SentinelMatchState
-from app.services.sentinel.evaluator import in_sentinel_run
+from app.ontologies.sentinels.evaluator import in_sentinel_run
 
 logger = logging.getLogger(__name__)
 
@@ -910,7 +910,7 @@ def _execute_claimed_event(
         event_row.event_kind
         or (LINK_CHANGE if event_row.link_change else OBJECT_CHANGE)
     )
-    from app.services.sentinel.engine import (
+    from app.ontologies.sentinels.engine import (
         run_for_change,
         run_for_link_change,
         run_builtin_initialization,
@@ -2082,7 +2082,7 @@ def _legacy_dispatch(
         changes: dict, link_changes: set) -> dict:
     """Compatibility for pre-migration/tests that only populated session.info."""
     from app.database import SessionLocal
-    from app.services.sentinel.engine import (
+    from app.ontologies.sentinels.engine import (
         run_for_change, run_for_link_change,
     )
 

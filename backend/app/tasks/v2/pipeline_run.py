@@ -295,7 +295,11 @@ def _load_source_rows(db, svc, source: dict) -> list[dict]:
 
 
 def _execute_route(route: str, ctx, data: list[dict]) -> tuple[list[dict], object]:
-    from app.services.v2.pipeline.engine import execute_route_a, execute_route_b, execute_route_c
+    from app.data_channel.pipelines.route_executor import (
+        execute_route_a,
+        execute_route_b,
+        execute_route_c,
+    )
 
     if route == "B":
         return execute_route_b(ctx, data)

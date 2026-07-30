@@ -22,7 +22,9 @@ def mapping_apply_task(mapping_id: str, ontology_id: str):
     register_cdc(start_worker=False)
 
     from app.database import SessionLocal
-    from app.services.v2.mapping.mapping_service import MappingService
+    from app.ontologies.mappings.application import (
+        rebuild_ontology_projection,
+    )
     from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
 
     db = SessionLocal()
@@ -40,11 +42,14 @@ def mapping_apply_task(mapping_id: str, ontology_id: str):
             raise ValueError(
                 f"Mapping {mapping_id} not found in ontology {ontology_id}")
 
-        svc = MappingService(db)
         # A source-object delta can change inferred FK edges, manual link
         # mappings and vector documents.  Rebuild the complete ontology under
         # the project lock; object-only apply left stale downstream state.
-        result = svc.build_all(ontology_id, require_approved=True)
+        result = rebuild_ontology_projection(
+            db,
+            ontology_id,
+            require_approved=True,
+        )
         result["trigger_mapping_id"] = mapping_id
         result["trigger_mapping_kind"] = trigger_mapping_kind
         logger.info(f"Mapping applied: {result}")

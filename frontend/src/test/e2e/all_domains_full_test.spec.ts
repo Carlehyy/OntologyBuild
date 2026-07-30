@@ -1,6 +1,6 @@
 /**
  * 六领域全量测试：每个业务域分别跑 Pipeline Mapping + 简易LLM 两条路径
- * 每次运行结果截图保存到 test-results/all-domains-{timestamp}/
+ * 每次运行结果截图保存到 .artifacts/playwright/external/all-domains/
  */
 
 /// <reference types="node" />
@@ -10,6 +10,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
+
 const RUN_ALL_DOMAINS_REAL = process.env.PLAYWRIGHT_ALL_DOMAINS_REAL === '1'
 const BASE = (process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173').replace(/\/+$/, '')
 const API = (
@@ -17,8 +22,6 @@ const API = (
   || process.env.E2E_API_BASE
   || 'http://127.0.0.1:8000'
 ).replace(/\/+$/, '')
-const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
-const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname  = path.dirname(__filename)
 const TEST_DATA  = path.resolve(__dirname, '../../../../test_data')
@@ -64,8 +67,8 @@ function appUrl(route: string): string {
 
 async function login(page: Page): Promise<string> {
   await page.goto(appUrl('/login'))
-  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
-  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
   await page.waitForURL(appUrl('/overview'), { timeout: 10000 })
   const token = await page.evaluate(() => localStorage.getItem('token') || '')
@@ -281,10 +284,10 @@ async function runSimpleLLM(
 
   // 0. 把 JWT token 写入 page 的 localStorage（Playwright 每个 test 的 page 是新 context，无法共享 localStorage）
   await page.goto(appUrl('/login'))
-  await page.evaluate((tok: string) => {
+  await page.evaluate(({ tok, username }: { tok: string; username: string }) => {
     localStorage.setItem('token', tok)
-    localStorage.setItem('auth-store', JSON.stringify({ state: { token: tok, user: { username: 'admin', role: 'admin' } }, version: 0 }))
-  }, token)
+    localStorage.setItem('auth-store', JSON.stringify({ state: { token: tok, user: { username, role: 'admin' } }, version: 0 }))
+  }, { tok: token, username: STACK_ADMIN_USERNAME })
 
   // 1. 前端打开本体创建向导（截图记录 UI 状态）
   await page.goto(appUrl('/ontologies/new'))
@@ -393,7 +396,11 @@ test.describe('六领域 Pipeline Mapping + 简易LLM 全量测试', () => {
   )
 
   const ts = Date.now()
-  const outDir = path.resolve(__dirname, '../../../../test-results/all-domains', String(ts))
+  const outDir = path.resolve(
+    __dirname,
+    '../../../../.artifacts/playwright/external/all-domains',
+    String(ts),
+  )
   let token = ''
   const results: Record<string, any> = {}
 

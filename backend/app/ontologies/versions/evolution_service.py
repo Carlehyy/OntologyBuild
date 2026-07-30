@@ -19,6 +19,16 @@ from app.config import settings
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.mapping import OntologyMapping
 from app.ontologies.formal_modeling import schemas as FS
+from app.ontologies.versions.snapshot_contract import (
+    SNAPSHOT_KEYS,
+    canonical_snapshot,
+    complete_snapshot,
+    json_safe,
+    next_draft_number,
+    next_release_number,
+    snapshot_hash,
+    snapshot_models,
+)
 from app.ontologies.formal_modeling.function_engine import (
     evaluate_function_contract,
 )
@@ -42,10 +52,6 @@ from app.ontologies.versions.models import (
 )
 
 
-SNAPSHOT_KEYS = (
-    "objectTypes", "linkTypes", "actions", "functions",
-    "sentinels", "mappings", "linkMappings",
-)
 MAX_SENTINEL_TUPLES = 1000
 BUILTIN_SENTINEL_TRIGGER_MODES = frozenset({
     "on_enter", "on_enter_leave", "run_on_all",
@@ -54,14 +60,8 @@ BUILTIN_SENTINEL_SCAN_INTERVAL_MIN = 60
 BUILTIN_SENTINEL_SCAN_INTERVAL_MAX = 86_400
 
 
-def json_safe(value: Any) -> Any:
-    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
-def complete_snapshot(snapshot: dict | None) -> dict:
-    """历史快照也归一为包含全部集合的完整结构。"""
-    source = snapshot or {}
-    return {key: json_safe(source.get(key) or []) for key in SNAPSHOT_KEYS}
 
 
 def validate_builtin_sentinel_contract(sentinels: Any) -> list[dict]:
@@ -205,64 +205,14 @@ def validate_builtin_sentinel_contract(sentinels: Any) -> list[dict]:
     return errors
 
 
-def canonical_snapshot(snapshot: dict | None) -> dict:
-    normalized = complete_snapshot(snapshot)
-    for key in SNAPSHOT_KEYS:
-        normalized[key] = sorted(
-            normalized[key],
-            key=lambda item: str(item.get("id") or item.get("name") or ""),
-        )
-    return normalized
 
 
-def snapshot_hash(snapshot: dict | None) -> str:
-    payload = json.dumps(
-        canonical_snapshot(snapshot), ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), default=str,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def next_draft_number(parent_number: str, sibling_numbers: list[str]) -> str:
-    prefix = f"{parent_number}."
-    used: list[int] = []
-    for number in sibling_numbers:
-        if not number.startswith(prefix):
-            continue
-        tail = number[len(prefix):]
-        if tail.isdigit():
-            used.append(int(tail))
-    return f"{parent_number}.{max(used, default=0) + 1}"
 
 
-def next_release_number(current_number: str | None) -> str:
-    raw = str(current_number or "v0")
-    head = raw.removeprefix("v").split(".", 1)[0]
-    try:
-        major = int(head)
-    except ValueError:
-        major = 0
-    return f"v{major + 1}"
 
 
-def snapshot_models(snapshot: dict) -> dict[str, list[SimpleNamespace]]:
-    specs = (
-        ("objectTypes", FS.ObjectTypeCreate),
-        ("linkTypes", FS.LinkTypeCreate),
-        ("actions", FS.ActionTypeCreate),
-        ("functions", FS.FunctionCreate),
-    )
-    result: dict[str, list[SimpleNamespace]] = {}
-    for key, schema in specs:
-        values: list[SimpleNamespace] = []
-        for raw in complete_snapshot(snapshot)[key]:
-            parsed = schema.model_validate(raw)
-            values.append(SimpleNamespace(
-                id=str(raw.get("id") or ""),
-                **parsed.model_dump(exclude_none=False),
-            ))
-        result[key] = values
-    return result
 
 
 def validate_expression_function_contract(

@@ -4,7 +4,7 @@
 2. 孤儿 Dataset:所有版本的存储对象都已丢失(MinIO/本地都找不到),无法再被任何流程使用
 
 默认 dry-run 只打印,加 --execute 才真正删除。
-用法: python scripts/cleanup_orphan_data.py [--execute]
+用法: uv run python scripts/maintenance/cleanup_orphan_data.py [--execute]
 """
 import argparse
 import sys

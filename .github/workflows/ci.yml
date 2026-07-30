@@ -1,0 +1,141 @@
+name: Pull request validation
+
+on:
+  pull_request:
+    branches: [nano-ontoprompt]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run Markdown checker self-tests
+        run: node scripts/ci/check-markdown-links.mjs --self-test
+
+      - name: Validate documentation links and indexes
+        run: node scripts/ci/check-markdown-links.mjs
+
+      - name: Validate deployment guards
+        run: bash scripts/ci/test-deploy-guards.sh
+
+      - name: Validate repository hygiene
+        run: bash scripts/ci/check-repository-hygiene.sh
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+        working-directory: backend
+
+      - name: Run regression suite
+        run: uv run pytest -q --disable-warnings --ignore tests/v2/perf
+        working-directory: backend
+
+      - name: Validate a fresh database migration
+        run: |
+          DB_FILE="$(mktemp -u /tmp/ontologybuild-ci-XXXXXX.db)"
+          trap 'rm -f "${DB_FILE}"' EXIT
+          DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
+          test "$(uv run alembic heads | grep -c '(head)')" -eq 1
+        working-directory: backend
+
+  configuration-center:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: config/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+        working-directory: config
+
+      - name: Run regression suite
+        run: uv run pytest -q
+        working-directory: config
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Run frontend unit tests
+        run: npm run test:unit
+        working-directory: frontend
+
+      - name: Validate E2E suite classification
+        run: npm run test:e2e:classification
+        working-directory: frontend
+
+      - name: Validate frontend feature boundaries
+        run: npm run check:feature-boundaries
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Run offline E2E suite
+        run: npm run test:e2e:mocked
+        working-directory: frontend
+
+      - name: Upload Playwright evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-playwright-${{ github.run_id }}
+          path: .artifacts/playwright
+          if-no-files-found: ignore
+          retention-days: 14

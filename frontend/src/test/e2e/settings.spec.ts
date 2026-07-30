@@ -1,9 +1,14 @@
 import { test, expect } from '@playwright/test'
 
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
+
 async function login(page: any) {
   await page.goto('/#/login')
-  await page.getByLabel('用户名', { exact: true }).fill('admin')
-  await page.getByLabel('密码', { exact: true }).fill('admin123')
+  await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
   await page.waitForURL('**/#/overview')
 }

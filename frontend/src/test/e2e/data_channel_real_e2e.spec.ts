@@ -3,7 +3,18 @@
 import { createServer, type Server } from 'node:http'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
-const API = process.env.E2E_API_BASE || 'http://127.0.0.1:8000'
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
+
+const API = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.E2E_API_BASE
+  || 'http://127.0.0.1:8000'
+).replace(/\/+$/, '')
+const FIXTURE_BIND_HOST = process.env.PLAYWRIGHT_FIXTURE_BIND_HOST || '127.0.0.1'
+const FIXTURE_PUBLIC_HOST = process.env.PLAYWRIGHT_FIXTURE_HOST || FIXTURE_BIND_HOST
 
 let fixtureServer: Server
 let fixtureUrl = ''
@@ -21,8 +32,8 @@ function unwrap<T>(body: T | { data: T }): T {
 
 async function login(page: Page): Promise<string> {
   await page.goto('/#/login')
-  await page.getByLabel('用户名').fill('admin')
-  await page.locator('#login-password').fill('admin123')
+  await page.getByLabel('用户名').fill(STACK_ADMIN_USERNAME)
+  await page.locator('#login-password').fill(STACK_ADMIN_PASSWORD)
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await page.waitForURL(/\/overview$/)
   const token = await page.evaluate(() => localStorage.getItem('token') || '')
@@ -68,11 +79,11 @@ test.beforeAll(async () => {
   })
   await new Promise<void>((resolve, reject) => {
     fixtureServer.once('error', reject)
-    fixtureServer.listen(0, '127.0.0.1', () => resolve())
+    fixtureServer.listen(0, FIXTURE_BIND_HOST, () => resolve())
   })
   const address = fixtureServer.address()
   if (!address || typeof address === 'string') throw new Error('fixture server did not bind')
-  fixtureUrl = `http://127.0.0.1:${address.port}/orders`
+  fixtureUrl = `http://${FIXTURE_PUBLIC_HOST}:${address.port}/orders`
 })
 
 test.afterAll(async () => {

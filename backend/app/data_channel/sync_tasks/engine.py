@@ -287,8 +287,9 @@ def _run_pipeline_if_configured(db: Session, task: DataSyncTask) -> None:
     if not task.trigger_pipeline_id:
         return
     try:
+        from app.data_channel.pipelines.trigger_service import execute_pipeline
         from app.models.v2.pipeline import Pipeline
-        from app.services.v2.pipeline.engine import execute_pipeline
+
         pipe = db.query(Pipeline).filter(
             Pipeline.id == task.trigger_pipeline_id,
             Pipeline.status == "published",

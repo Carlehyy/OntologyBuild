@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
-from app.ontologies.versions.evolution_service import complete_snapshot, snapshot_hash
+from app.ontologies.versions.snapshot_contract import (
+    complete_snapshot,
+    snapshot_hash,
+)
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-# OpenOntology 本地配置中心
+# OntologyBuild 本地配置中心
 
 这个小工具只负责本地源码运行配置，不修改 GitHub Actions、生产部署清单或服务器环境变量。
 

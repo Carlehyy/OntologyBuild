@@ -1,2 +1,9 @@
-# re-export - real content moved to app.ontologies.sentinels.engine
-from app.ontologies.sentinels.engine import *  # noqa: F401,F403
+"""Module-alias compatibility path for the canonical Sentinel engine."""
+from __future__ import annotations
+
+import sys
+
+from app.ontologies.sentinels import engine as _canonical_engine
+
+
+sys.modules[__name__] = _canonical_engine

@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from app.shared.deps import bearer, get_db, get_current_user
-from app.shared.config import settings
-from app.auth.schemas import LoginRequest, TokenResponse, RegisterRequest, PasswordChangeRequest
-from app.settings.users.schemas import UserOut
+from app.deps import bearer, get_db, get_current_user
+from app.config import settings
+from app.auth.schemas import (
+    LoginRequest,
+    PasswordChangeRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserOut,
+)
 from app.auth.service import authenticate_user, create_access_token, hash_password, verify_password
 from app.auth.models import User
 from app.auth.permissions import get_role_menu_keys

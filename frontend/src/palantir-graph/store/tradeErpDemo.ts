@@ -37,7 +37,7 @@
  * 15. 成交结算 (成交记录、结算单、佣金)
  */
 
-import type { Property, ObjectType, LinkType, Action, OntologyNode, OntologyEdge, Ontology, OntologyFunction, ObjectInstance, FunctionParameter, LinkInstance, ActionExecutionLog } from '../types/ontology';
+import type { Property, ObjectType, LinkType, Action, OntologyNode, OntologyEdge, Ontology, OntologyFunction, ObjectInstance, FunctionParameter } from '../types/ontology';
 
 const now = () => new Date().toISOString();
 
@@ -374,21 +374,6 @@ const exchangeRateProps: Property[] = [
   { id: 'er-to', name: 'to_currency', displayName: '目标币种', type: 'string', required: true },
   { id: 'er-rate', name: 'rate', displayName: '汇率', type: 'number', required: true },
   { id: 'er-date', name: 'effective_date', displayName: '生效日期', type: 'date', required: true },
-];
-
-// 接口属性
-const _auditableProps: Property[] = [
-  { id: 'aud-created', name: 'created_at', displayName: '创建时间', type: 'datetime', required: true },
-  { id: 'aud-updated', name: 'updated_at', displayName: '更新时间', type: 'datetime', required: true },
-  { id: 'aud-created-by', name: 'created_by', displayName: '创建人', type: 'reference', required: true },
-  { id: 'aud-updated-by', name: 'updated_by', displayName: '更新人', type: 'reference', required: false },
-];
-
-const _approvableProps: Property[] = [
-  { id: 'appr-status', name: 'approval_status', displayName: '审批状态', type: 'string', required: true },
-  { id: 'appr-by', name: 'approved_by', displayName: '审批人', type: 'reference', required: false },
-  { id: 'appr-at', name: 'approved_at', displayName: '审批时间', type: 'datetime', required: false },
-  { id: 'appr-remark', name: 'approval_remark', displayName: '审批备注', type: 'string', required: false },
 ];
 
 // ============================================
@@ -1417,15 +1402,6 @@ const demoInstances: ObjectInstance[] = [
   { id: 'inst-recv-001', objectTypeId: IDS.RECEIVABLE, properties: { receivable_no: 'AR001', customer_id: 'inst-cust-001', order_id: 'inst-order-001', amount: 34200, balance: 34200, status: 'outstanding', due_date: '2025-02-15' }, createdAt: now(), updatedAt: now() },
 ];
 
-const _demoLinkInstances: LinkInstance[] = [
-  // 产品 - 分类
-  { id: 'li-001', linkTypeId: 'link-product-category', sourceObjectId: 'inst-prod-001', targetObjectId: 'inst-cat-001', properties: {}, createdAt: now() },
-  { id: 'li-002', linkTypeId: 'link-product-category', sourceObjectId: 'inst-prod-002', targetObjectId: 'inst-cat-001', properties: {}, createdAt: now() },
-  // 客户 - 订单
-  { id: 'li-003', linkTypeId: 'link-customer-order', sourceObjectId: 'inst-cust-001', targetObjectId: 'inst-order-001', properties: {}, createdAt: now() },
-  { id: 'li-004', linkTypeId: 'link-customer-order', sourceObjectId: 'inst-cust-002', targetObjectId: 'inst-order-002', properties: {}, createdAt: now() },
-];
-
 // 补充两个 Action ID 常量（如果原定义没有这些ID，我使用已有的action id映射）
 // 注意：原 demo 中 action ID 是字符串，这里确保 validationFunction 目标正确
 // 查找真实的创建订单/发货 action id
@@ -1445,8 +1421,6 @@ const _ensureActionIds = () => {
   }
 };
 _ensureActionIds();
-
-const _demoAuditLogs: ActionExecutionLog[] = [];
 
 // ============================================
 // Complete Ontology

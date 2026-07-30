@@ -11,7 +11,11 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.data_channel.datasets.edit_service import build_edited_snapshot
-from app.data_channel.datasets.router import RowEditOp, RowEditsRequest, _require_manual_dataset
+from app.data_channel.datasets.manual_contract import (
+    RowEditOp,
+    RowEditsRequest,
+    require_manual_dataset as _require_manual_dataset,
+)
 from app.data_channel.datasets.sharing_models import ManualDatasetChange, ManualDatasetShare
 from app.deps import get_current_user, get_db
 from app.models.v2.dataset import Dataset, DatasetVersion

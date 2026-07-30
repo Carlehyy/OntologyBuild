@@ -7,7 +7,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:feature-boundaries": "node scripts/check-feature-boundaries.mjs",
+    "test": "npm run test:unit && npm run test:e2e:mocked",
+    "test:unit": "node scripts/run-unit-tests.mjs",
+    "test:e2e:classification": "node scripts/check-e2e-classification.mjs",
+    "test:e2e:mocked": "playwright test --config=playwright.mocked.config.ts",
+    "test:e2e:stack": "playwright test --config=playwright.stack.config.ts",
+    "test:e2e:external": "playwright test --config=playwright.external.config.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

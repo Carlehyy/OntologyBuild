@@ -28,7 +28,7 @@ from app.data_channel.steward.node_catalog import catalog_digest
 from app.data_channel.steward.toolkit import TOOL_DEFS, ToolRunner
 from app.data_channel.steward.toolkit import API_HUB_TOOL_NAMES
 from app.auth.permissions import user_has_menu_access
-from app.exploration.web_search import WEB_SEARCH_TOOL, WebSearchError, search_web
+from app.shared.web_search import WEB_SEARCH_TOOL, WebSearchError, search_web
 
 logger = logging.getLogger(__name__)
 

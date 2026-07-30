@@ -27,6 +27,14 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 
 from . import config, db, executor, mcp_contract
+from .interface_contracts import DeleteGroupBody, InterfaceIn, KV
+from .interface_service import (
+    _row_to_dict as _iface_row_to_dict,
+    create_interface as _create_interface,
+    delete_group as _delete_group,
+    delete_interface as _delete_interface,
+    update_interface as _update_interface,
+)
 
 server = Server(config.MCP_SERVER_NAME)
 
@@ -276,15 +284,6 @@ async def handle_mcp(scope, receive, send):
 #  独立端点 /mcp/system，独立令牌 SYSTEM_MCP_TOKEN。
 # ═══════════════════════════════════════════════════════════
 
-from .routers.interfaces import (
-    InterfaceIn,
-    create_interface as _create_interface,
-    delete_group as _delete_group,
-    delete_interface as _delete_interface,
-    update_interface as _update_interface,
-    _row_to_dict as _iface_row_to_dict,
-)
-
 sys_server = Server(config.MCP_SERVER_NAME + "-system")
 
 
@@ -462,7 +461,6 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
         return [types.TextContent(type="text", text=text)]
 
     if name == "create_interface":
-        from .routers.interfaces import KV
         qp = args.get("query_params") or {}
         hd = args.get("headers") or {}
         body = InterfaceIn(
@@ -526,7 +524,6 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
             return [types.TextContent(type="text", text=json.dumps({"error": "分组名不能为空"}, ensure_ascii=False))]
         if gname == "默认分组":
             return [types.TextContent(type="text", text=json.dumps({"error": "默认分组不可删除"}, ensure_ascii=False))]
-        from .routers.interfaces import DeleteGroupBody
         result = _delete_group(DeleteGroupBody(group_name=gname))
         count = result["count"]
         return [types.TextContent(type="text", text=json.dumps({"ok": True, "deleted_group": gname, "moved_count": count}, ensure_ascii=False))]

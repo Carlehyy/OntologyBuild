@@ -1,7 +1,7 @@
 """
 引用完整性清理自检 —— 验证删除被引用实体后,悬空引用被正确清理。
 
-  python -m scripts.integrity_demo
+  cd backend && uv run python -m scripts.demos.integrity_demo
 """
 import os, sys, uuid
 _DB = "/tmp/integrity_demo.db"

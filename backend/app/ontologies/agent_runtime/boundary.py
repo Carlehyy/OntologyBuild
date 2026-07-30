@@ -24,7 +24,9 @@ from app.models.ontology_formal import (
 )
 from app.ontologies.agent_runtime.models import AgentProfile
 from app.ontologies.release_context import CurrentReleaseContext, current_release_context
-from app.ontologies.versions.evolution_service import snapshot_models
+from app.ontologies.versions.snapshot_contract import (
+    snapshot_models,
+)
 
 
 class ToolError(Exception):

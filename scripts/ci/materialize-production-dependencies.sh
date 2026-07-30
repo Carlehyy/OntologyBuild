@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+target="${1:-production.dependencies.env}"
+target_dir="$(dirname "$target")"
+mkdir -p "$target_dir"
+umask 077
+tmp_file="$(mktemp "${target}.XXXXXX")"
+trap 'rm -f "$tmp_file"' EXIT
+
+append_required() {
+  local key="$1"
+  local source_name="$2"
+  local value="${!source_name:-}"
+  if [ -z "$value" ]; then
+    echo "$source_name is required" >&2
+    exit 1
+  fi
+  case "$value" in
+    *$'\n'*|*$'\r'*)
+      echo "$source_name must be a single-line value" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+}
+
+append_port() {
+  local key="$1"
+  local source_name="$2"
+  local value="${!source_name:-}"
+  append_required "$key" "$source_name"
+  case "$value" in
+    *[!0-9]*)
+      echo "$source_name must be an integer between 1 and 65535" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    echo "$source_name must be an integer between 1 and 65535" >&2
+    exit 1
+  fi
+}
+
+append_boolean() {
+  local key="$1"
+  local source_name="$2"
+  local value="${!source_name:-}"
+  case "$value" in
+    true|false)
+      append_required "$key" "$source_name"
+      ;;
+    *)
+      echo "$source_name must be true or false" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cat >> "$tmp_file" <<'EOF'
+ENVIRONMENT=production
+STRICT_PRODUCTION_CONFIG=true
+REQUIRE_EXTERNAL_DEPENDENCIES=true
+DATASET_IMPORT_USE_CELERY=true
+STORAGE_LOCAL_FALLBACK=false
+EOF
+append_port PUBLIC_PORT PROD_PUBLIC_PORT
+append_required POSTGRES_HOST PROD_POSTGRES_HOST
+append_port POSTGRES_PORT PROD_POSTGRES_PORT
+append_required POSTGRES_DB PROD_POSTGRES_DB
+append_required POSTGRES_USER PROD_POSTGRES_USER
+append_required POSTGRES_PASSWORD PROD_POSTGRES_PASSWORD
+append_required DATABASE_URL PROD_DATABASE_URL
+append_required REDIS_URL PROD_REDIS_URL
+append_required NEO4J_URI PROD_NEO4J_URI
+append_required NEO4J_USER PROD_NEO4J_USER
+append_required NEO4J_PASSWORD PROD_NEO4J_PASSWORD
+append_required NEO4J_AUTH PROD_NEO4J_AUTH
+append_required MINIO_CONSOLE_URL PROD_MINIO_CONSOLE_URL
+append_required MINIO_ENDPOINT PROD_MINIO_ENDPOINT
+append_required MINIO_ACCESS_KEY PROD_MINIO_ACCESS_KEY
+append_required MINIO_SECRET_KEY PROD_MINIO_SECRET_KEY
+append_boolean MINIO_USE_SSL PROD_MINIO_USE_SSL
+append_required N8N_API_URL PROD_N8N_API_URL
+append_required N8N_EMAIL PROD_N8N_EMAIL
+append_required N8N_PASSWORD PROD_N8N_PASSWORD
+append_required N8N_API_KEY PROD_N8N_API_KEY
+
+chmod 600 "$tmp_file"
+mv "$tmp_file" "$target"
+trap - EXIT

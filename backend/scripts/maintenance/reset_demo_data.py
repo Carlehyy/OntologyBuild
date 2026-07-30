@@ -4,7 +4,9 @@
 生成它们的 pipeline 及上游 raw 数据集。其余 ontology/pipeline/dataset 全删。
 模型配置 (model_configs, 含 API Key) 全部清空。
 
-用法: python scripts/reset_demo_data.py --keep <ontology_id前缀> [--execute]
+用法:
+  uv run python scripts/maintenance/reset_demo_data.py \
+    --keep <ontology_id前缀> [--execute]
 """
 import argparse
 import sys

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.workflow_config import WorkflowConfig
 from app.settings.workflows.n8n_client import N8nClient, enforce_n8n_url_policy
 from app.config import settings
+from app.data_channel.pipelines.dependency_service import reject_if_sync_chain_refs
 from app.shared.encryption import decrypt
 from app.data_channel.steward.models import N8nPipeline, STATUS_ARCHIVED, STATUS_DRAFT
 
@@ -856,11 +857,10 @@ def _reject_if_shadow_referenced(db: Session, rec: N8nPipeline) -> None:
         raise StewardError(
             f"流水线已被 {len(refs)} 个调度任务引用（{names}{'…' if len(refs) > 3 else ''}），"
             f"请先在数据任务池删除或改绑这些任务。")
-    from app.data_channel.pipelines.router import _reject_if_sync_chain_refs
     from fastapi import HTTPException
 
     try:
-        _reject_if_sync_chain_refs(db, rec.pipeline_id, action="归档")
+        reject_if_sync_chain_refs(db, rec.pipeline_id, action="归档")
     except HTTPException as exc:
         raise StewardError(str(exc.detail)) from exc
 

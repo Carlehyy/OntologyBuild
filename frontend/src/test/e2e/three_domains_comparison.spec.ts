@@ -11,6 +11,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
+
 const API = (
   process.env.PLAYWRIGHT_API_URL
   || process.env.E2E_API_BASE
@@ -56,15 +61,28 @@ interface ColumnDefinition {
 
 // ── 工具 ─────────────────────────────────────────────────────────────────
 
-async function login(page: Page): Promise<string> {
-  await page.goto('/#/login')
-  await page.getByLabel('用户名', { exact: true }).fill('admin')
-  await page.getByLabel('密码', { exact: true }).fill('admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL('**/#/overview', { timeout: 10000 })
-  const token = await page.evaluate(() => localStorage.getItem('token') ?? '')
+async function loginViaApi(request: APIRequestContext): Promise<string> {
+  const response = await request.post(`${API}/api/v1/auth/login`, {
+    data: {
+      username: STACK_ADMIN_USERNAME,
+      password: STACK_ADMIN_PASSWORD,
+    },
+  })
+  expect(response.ok(), `login API returned ${response.status()}`).toBeTruthy()
+  const body = await response.json()
+  const token: string = body.data?.access_token ?? ''
   expect(token, 'JWT token must be set').toBeTruthy()
   return token
+}
+
+async function authenticatePage(page: Page, token: string): Promise<void> {
+  await page.addInitScript(({ tok, username }: { tok: string; username: string }) => {
+    localStorage.setItem('token', tok)
+    localStorage.setItem('auth-store', JSON.stringify({
+      state: { token: tok, user: { username, role: 'admin' } },
+      version: 0,
+    }))
+  }, { tok: token, username: STACK_ADMIN_USERNAME })
 }
 
 async function apiCall(
@@ -168,6 +186,7 @@ async function runPipelineMapping(
   ts: number,
   outDir: string,
 ) {
+  await authenticatePage(page, token)
   const domainDir = path.join(TEST_DATA, domain)
   const files = fs.readdirSync(domainDir).filter(f => fs.statSync(path.join(domainDir, f)).isFile()).sort()
   const sourceFile = PIPELINE_FIXTURE[domain]
@@ -247,11 +266,11 @@ async function runPipelineMapping(
     column_definitions: definitions,
   })
   const published = await apiCall(request, 'POST', `/api/v2/pipelines/${pipelineId}/publish`, token, {
-    enable: false,
+    enable: true,
   })
-  expect(published).toMatchObject({ status: 'published', enabled: false })
+  expect(published).toMatchObject({ status: 'published', enabled: true })
 
-  // 5. 发布后运行，产物才进入资产湖。
+  // 5. 启用并发布后运行，产物才进入资产湖；生产运行必须保持 fail-closed。
   console.log('    运行 Pipeline...')
   const runBody = await apiCall(request, 'POST', `/api/v2/pipelines/${pipelineId}/run-sync`, token)
   expect(runBody.status, `Pipeline 运行失败: ${JSON.stringify(runBody).slice(0, 200)}`).toBe('success')
@@ -390,7 +409,6 @@ async function runPipelineMapping(
   console.log(`    发布完成: objects=${trial.result.counts.objects}`)
 
   // 9. 前端截图本体详情 + 图谱
-  await login(page)
   await page.goto(`/#/ontologies/${ontologyId}`)
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domain}_pm_02_ontology`)
@@ -430,11 +448,7 @@ async function runSimpleLLM(
   console.log(`    本体: ${ontologyId.slice(0, 8)}`)
 
   // 2. 截图文件上传 tab
-  await page.goto('/#/login')
-  await page.evaluate((tok: string) => {
-    localStorage.setItem('token', tok)
-    localStorage.setItem('auth-store', JSON.stringify({ state: { token: tok, user: { username: 'admin', role: 'admin' } }, version: 0 }))
-  }, token)
+  await authenticatePage(page, token)
   await page.goto(`/#/ontologies/${ontologyId}?tab=files`)
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domain}_llm_01_files_tab`)
@@ -496,17 +510,19 @@ test.describe.configure({ mode: 'serial' })
 
 test.describe('三领域对比：Pipeline Mapping vs 简易 LLM', () => {
   const ts = Date.now()
-  const outDir = path.resolve(__dirname, '../../../../test-results/three-domains-comparison', String(ts))
+  const outDir = path.resolve(
+    __dirname,
+    '../../../../.artifacts/playwright/stack/three-domains-comparison',
+    String(ts),
+  )
   let token = ''
 
   interface Row { domain: string; path: string; entities: number; edges: number; logic: number; actions: number; ontologyId: string; error?: string }
   const rows: Row[] = []
 
-  test.beforeAll(async ({ browser }) => {
+  test.beforeAll(async ({ request }) => {
     fs.mkdirSync(outDir, { recursive: true })
-    const pg = await browser.newPage()
-    token = await login(pg)
-    await pg.close()
+    token = await loginViaApi(request)
     console.log(`\n输出目录: ${outDir}`)
   })
 

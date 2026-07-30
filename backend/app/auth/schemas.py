@@ -1,4 +1,18 @@
-from pydantic import BaseModel, EmailStr
+from datetime import datetime
+
+from pydantic import BaseModel, EmailStr, Field
+
+
+class UserOut(BaseModel):
+    id: str
+    username: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+    menu_permissions: list[str] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
 
 class LoginRequest(BaseModel):
     username: str

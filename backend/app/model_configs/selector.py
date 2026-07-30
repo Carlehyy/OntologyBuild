@@ -54,7 +54,7 @@ def select_llm_model_config(
     later. VLM callers pass allow_vlm=True and purpose_tags=("VLM提取",).
     """
     from app.database import SessionLocal
-    from app.models.model_config import ModelConfig
+    from app.model_configs.models import ModelConfig
 
     owns_db = db is None
     db = db or SessionLocal()

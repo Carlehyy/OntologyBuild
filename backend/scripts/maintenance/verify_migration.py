@@ -2,7 +2,7 @@
 """迁移结果验证脚本 — 对比 v1 SQLite 和 v2 PostgreSQL 的数据量
 
 用法：
-  python scripts/verify_migration.py \
+  uv run python scripts/maintenance/verify_migration.py \
     --v1-db ./ontoprompt.db \
     --pg-url postgresql://ontoprompt:ontoprompt@localhost:5432/ontoprompt
 

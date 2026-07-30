@@ -18,7 +18,7 @@ _last_error: str | None = None
 
 def _loop():
     global _last_error
-    from app.services.sentinel.engine import run_scheduled
+    from app.ontologies.sentinels.engine import run_scheduled
     from app.database import SessionLocal
     while not _stop_event.wait(TICK_SECONDS):
         db = SessionLocal()

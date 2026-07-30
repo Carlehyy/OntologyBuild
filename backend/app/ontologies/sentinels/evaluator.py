@@ -233,7 +233,9 @@ def _reload_executable_sentinel(
         return selected
 
     from app.models.ontology_version import OntologyVersion
-    from app.ontologies.versions.evolution_service import complete_snapshot
+    from app.ontologies.versions.snapshot_contract import (
+        complete_snapshot,
+    )
 
     selected_id = str(getattr(selected, "id", "") or "")
     selected_origin = str(
@@ -602,7 +604,7 @@ def _resolve_tuples(db: Session, ontology_id: str, sentinel: Sentinel,
                     errors.append("当前发布快照不存在，无法校验关系端点")
                 return []
             try:
-                from app.ontologies.versions.evolution_service import (
+                from app.ontologies.versions.snapshot_contract import (
                     snapshot_models,
                 )
                 link_types = {
@@ -905,7 +907,9 @@ def preview_sentinel(db: Session, ontology_id: str, sentinel: Sentinel,
         sentinel.bindings[0].get("alias") if sentinel.bindings else None)
     try:
         from app.models.ontology_version import OntologyVersion
-        from app.ontologies.versions.evolution_service import snapshot_models
+        from app.ontologies.versions.snapshot_contract import (
+            snapshot_models,
+        )
         release = db.query(OntologyVersion).filter(
             OntologyVersion.id == release_id,
             OntologyVersion.ontology_id == ontology_id,
@@ -1130,7 +1134,7 @@ def _run_actions(db: Session, ontology_id: str, sentinel: Sentinel,
     if expected_release_id is not None:
         try:
             from app.models.ontology_version import OntologyVersion
-            from app.ontologies.versions.evolution_service import (
+            from app.ontologies.versions.snapshot_contract import (
                 snapshot_models,
             )
             release = db.query(OntologyVersion).filter(
@@ -1489,7 +1493,7 @@ def resume_sentinel_match_claim(db: Session, ontology_id: str,
     step resolves through its linked success log; only the remaining steps run.
     This avoids both duplicate side effects and silently truncating the chain.
     """
-    from app.ontologies.mappings.mapping_service import _ontology_build_lock
+    from app.ontologies.runtime_fence import _ontology_build_lock
     with _ontology_build_lock(db, ontology_id):
         return _resume_sentinel_match_claim_locked(
             db, ontology_id, state_id)
@@ -1814,7 +1818,7 @@ def evaluate_sentinel(db: Session, ontology_id: str, sentinel: Sentinel,
         # evaluations acquire it here before the per-Sentinel lock.  This keeps
         # action Fact writes inside promotion's runtime-state serialization
         # fence without introducing the reverse Sentinel→build ABBA order.
-        from app.ontologies.mappings.mapping_service import (
+        from app.ontologies.runtime_fence import (
             _ontology_build_lock,
         )
         with _ontology_build_lock(db, ontology_id):

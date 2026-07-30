@@ -5,13 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.models import User
 from app.deps import get_current_user, get_db
-from app.super_assistant.models import SuperAssistantMcpServer
-from app.super_assistant.router import (
-    create_mcp_server as create_user_mcp_server,
-    remove_mcp_server as remove_user_mcp_server,
-    test_mcp_server as test_user_mcp_server,
-    update_mcp_server as update_user_mcp_server,
-)
+from app.super_assistant import mcp_server_service
 from app.super_assistant.schemas import (
     McpServerCreate,
     McpServerOut,
@@ -23,19 +17,16 @@ from app.super_assistant.schemas import (
 router = APIRouter()
 
 
-def _community_server(
-    db: Session,
-    owner_id: str,
-    server_id: str,
-) -> SuperAssistantMcpServer:
-    item = db.query(SuperAssistantMcpServer).filter(
-        SuperAssistantMcpServer.id == server_id,
-        SuperAssistantMcpServer.owner_id == owner_id,
-        SuperAssistantMcpServer.builtin_key.is_(None),
-    ).first()
-    if item is None:
-        raise HTTPException(status_code=404, detail="MCP Server 不存在")
-    return item
+def _mcp_http_error(
+    exc: mcp_server_service.McpServerServiceError,
+) -> HTTPException:
+    if isinstance(exc, mcp_server_service.McpServerNotFoundError):
+        status_code = 404
+    elif isinstance(exc, mcp_server_service.McpServerConflictError):
+        status_code = 409
+    else:
+        status_code = 400
+    return HTTPException(status_code=status_code, detail=str(exc))
 
 
 @router.get("/mcp-servers", response_model=list[McpServerOut])
@@ -44,10 +35,11 @@ def list_mcp_servers(
     current_user: User = Depends(get_current_user),
 ):
     """List user-added MCP servers; platform-internal tools stay out of Community."""
-    return db.query(SuperAssistantMcpServer).filter(
-        SuperAssistantMcpServer.owner_id == current_user.id,
-        SuperAssistantMcpServer.builtin_key.is_(None),
-    ).order_by(SuperAssistantMcpServer.updated_at.desc()).all()
+    return mcp_server_service.list_mcp_servers(
+        db,
+        current_user.id,
+        include_builtins=False,
+    )
 
 
 @router.post("/mcp-servers", response_model=McpServerOut, status_code=201)
@@ -56,7 +48,14 @@ def create_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return create_user_mcp_server(body=body, db=db, current_user=current_user)
+    try:
+        return mcp_server_service.create_mcp_server(
+            db,
+            current_user.id,
+            body,
+        )
+    except mcp_server_service.McpServerServiceError as exc:
+        raise _mcp_http_error(exc) from exc
 
 
 @router.patch("/mcp-servers/{server_id}", response_model=McpServerOut)
@@ -66,13 +65,16 @@ def update_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _community_server(db, current_user.id, server_id)
-    return update_user_mcp_server(
-        server_id=server_id,
-        body=body,
-        db=db,
-        current_user=current_user,
-    )
+    try:
+        return mcp_server_service.update_mcp_server(
+            db,
+            current_user.id,
+            server_id,
+            body,
+            include_builtins=False,
+        )
+    except mcp_server_service.McpServerServiceError as exc:
+        raise _mcp_http_error(exc) from exc
 
 
 @router.delete("/mcp-servers/{server_id}", status_code=204)
@@ -81,12 +83,16 @@ def remove_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    _community_server(db, current_user.id, server_id)
-    return remove_user_mcp_server(
-        server_id=server_id,
-        db=db,
-        current_user=current_user,
-    )
+    try:
+        mcp_server_service.remove_mcp_server(
+            db,
+            current_user.id,
+            server_id,
+            include_builtins=False,
+        )
+    except mcp_server_service.McpServerServiceError as exc:
+        raise _mcp_http_error(exc) from exc
+    return Response(status_code=204)
 
 
 @router.post("/mcp-servers/{server_id}/test", response_model=McpTestOut)
@@ -95,9 +101,12 @@ async def test_mcp_server(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _community_server(db, current_user.id, server_id)
-    return await test_user_mcp_server(
-        server_id=server_id,
-        db=db,
-        current_user=current_user,
-    )
+    try:
+        return await mcp_server_service.test_mcp_server(
+            db,
+            current_user.id,
+            server_id,
+            include_builtins=False,
+        )
+    except mcp_server_service.McpServerServiceError as exc:
+        raise _mcp_http_error(exc) from exc

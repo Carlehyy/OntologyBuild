@@ -1,12 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
 
-const ADMIN_USERNAME = process.env.PLAYWRIGHT_ADMIN_USER || 'admin'
-const ADMIN_PASSWORD = process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123'
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
 
 async function loginAsAdmin(page: Page) {
   await page.goto('/#/login')
-  await page.getByLabel('用户名', { exact: true }).fill(ADMIN_USERNAME)
-  await page.getByLabel('密码', { exact: true }).fill(ADMIN_PASSWORD)
+  await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.locator('button[type="submit"]').click()
   await page.waitForURL('**/#/overview')
 }

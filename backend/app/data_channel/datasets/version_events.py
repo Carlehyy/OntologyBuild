@@ -12,22 +12,18 @@ from sqlalchemy.orm import Session
 from app.data_channel.datasets.models import (
     Dataset, DatasetVersion, DatasetVersionEvent,
 )
-from app.data_channel.datasets.service import version_has_content
+from app.data_channel.datasets.automation_policy import (
+    manual_dataset_automation_eligibility,
+)
+from app.data_channel.datasets.version_event_outbox import (
+    CURATED_REVIEW_APPROVED_EVENT,
+    CURATED_REVIEW_PENDING_STATUS,
+    CURATED_REVIEW_PROCESSING_STATUS,
+    CURATED_REVIEW_RETRY_STATUS,
+    VERSION_PUBLISHED_EVENT,
+)
 
 logger = logging.getLogger(__name__)
-
-VERSION_PUBLISHED_EVENT = "version_published"
-CURATED_REVIEW_APPROVED_EVENT = "curated_review_approved"
-
-# Curated approval runs a stronger Mapping + Sentinel barrier than ordinary
-# publication.  Keep its in-flight states outside the legacy worker's
-# pending/retry/processing namespace: during a rolling deployment an older
-# backend must not claim a new approval event, nor stale-reclaim one already
-# owned by the new dispatcher.  All values fit DatasetVersionEvent.status
-# (varchar(20)); "completed" remains a shared terminal state.
-CURATED_REVIEW_PENDING_STATUS = "review_pending"
-CURATED_REVIEW_PROCESSING_STATUS = "review_processing"
-CURATED_REVIEW_RETRY_STATUS = "review_retry"
 
 _LEGACY_PENDING_STATUS = "pending"
 _LEGACY_PROCESSING_STATUS = "processing"
@@ -125,30 +121,6 @@ def _ready_event_filter(now: datetime, stale_before: datetime):
             legacy_ready,
         ),
     )
-
-
-def manual_dataset_automation_eligibility(
-    dataset: Dataset, version: DatasetVersion | None,
-) -> tuple[bool, str]:
-    """Return whether a manual version may drive ontology automation.
-
-    Origin is deliberately independent from governance.  A manual asset becomes
-    trusted only when it is truly user-maintained, has a stable primary-key
-    contract and was published as a checksummed immutable version.
-    """
-    if dataset.kind == "curated":
-        return False, "curated versions require the review-approved trigger"
-    if (dataset.source_connection_id or dataset.producer_pipeline_id
-            or dataset.name.startswith("SYNC::")):
-        return False, "dataset is maintained by a connection or pipeline"
-    schema = dataset.schema_json if isinstance(dataset.schema_json, dict) else {}
-    if not str(schema.get("primary_key") or "").strip():
-        return False, "manual dataset has no primary-key contract"
-    if version is None:
-        return False, "dataset version is missing"
-    if not version_has_content(version) or not version.checksum:
-        return False, "dataset version has no verifiable payload/checksum lineage"
-    return True, "eligible"
 
 
 def _claim_one(db: Session, event_id: str, now: datetime, stale_before: datetime) -> str | None:

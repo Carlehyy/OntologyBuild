@@ -16,10 +16,12 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from . import db, executor
-from .routers.interfaces import (
+from .interface_contracts import (
     InterfaceIn,
     InterfaceParameter,
     KV,
+)
+from .interface_service import (
     _row_to_dict,
     create_interface,
     update_interface,
@@ -636,4 +638,3 @@ def call_interface_for_agent(
 def load_interface(iid: int) -> dict:
     """Trusted internal read used by the n8n compiler and proxy router."""
     return _load(iid)
-

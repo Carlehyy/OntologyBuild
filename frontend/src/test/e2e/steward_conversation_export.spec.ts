@@ -24,7 +24,10 @@ function ok(route: Route, data: unknown) {
   })
 }
 
-async function mockSteward(page: Page) {
+async function mockSteward(
+  page: Page,
+  options: { failConversationCreation?: boolean } = {},
+) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
     localStorage.setItem('auth-store', JSON.stringify({
@@ -46,6 +49,7 @@ async function mockSteward(page: Page) {
   await page.route('**/api/v2/**', route => {
     const path = new URL(route.request().url()).pathname
     if (!path.startsWith('/api/v2/')) return route.continue()
+    const method = route.request().method()
     if (path === '/api/v2/steward/status') {
       return ok(route, {
         n8n: { configured: true, enabled: true, api_url: 'http://n8n.test', reachable: true },
@@ -55,6 +59,13 @@ async function mockSteward(page: Page) {
     }
     if (path === '/api/v2/steward/pipelines') return ok(route, [])
     if (path === '/api/v2/steward/conversations') {
+      if (method === 'POST' && options.failConversationCreation) {
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: '暂时无法创建会话' }),
+        })
+      }
       return ok(route, [currentConversation, previousConversation])
     }
     if (path === '/api/v2/steward/conversations/conversation-current') {
@@ -154,4 +165,27 @@ test('历史会话将当前标识置于最右并导出完整 JSON', async ({ pag
   expect(downloaded.conversation.messages[1].content).toBe('共有 4 条流水线。')
   expect(downloaded.conversation.messages[1].steps[0].arguments).toEqual({ includeArchived: false })
   expect(downloaded.conversation.messages[1].tokenUsage).toEqual({ inputTokens: 120, outputTokens: 24 })
+})
+
+test('创建会话失败时保留已选附件以维持原有重试语义', async ({ page }) => {
+  await mockSteward(page, { failConversationCreation: true })
+  await page.goto('/#/data/pipelines/steward', { waitUntil: 'domcontentloaded' })
+
+  const fileInput = page.locator('input[type="file"][accept*=".csv"]').first()
+  const failedCreation = page.waitForResponse(response => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v2/steward/conversations'
+  ))
+
+  await fileInput.setInputFiles({
+    name: 'retry.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('id,name\n1,retry\n'),
+  })
+  await failedCreation
+
+  await expect.poll(() => fileInput.evaluate((element: HTMLInputElement) => ({
+    count: element.files?.length ?? 0,
+    name: element.files?.[0]?.name ?? '',
+  }))).toEqual({ count: 1, name: 'retry.csv' })
 })

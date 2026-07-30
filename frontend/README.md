@@ -1,73 +1,79 @@
-# React + TypeScript + Vite
+# OntologyBuild 前端
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+前端使用 React、TypeScript、Vite 和 Tailwind CSS。当前导航事实源是
+`src/config/navigation.ts`，路由装配位于 `src/App.tsx`。
+Tailwind 只有一个配置事实源：`tailwind.config.ts`；不要新增同名 JS 配置，
+否则 PostCSS 自动发现会产生加载顺序歧义。
 
-Currently, two official plugins are available:
+## 当前结构
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```text
+src/
+├── features/
+│   └── overview/      已迁移的平台概览 canonical 实现
+├── pages/             未迁移业务入口及迁移期兼容 facade
+├── palantir-graph/    本体图谱编辑与运行视图
+├── api/               HTTP 客户端与 API 封装
+├── components/        UI 与跨页面组件
+├── config/            导航等应用配置
+├── stores/            客户端状态
+└── test/
+    ├── unit/           Node 22 纯逻辑单元测试
+    └── e2e/            Playwright 浏览器测试
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+平台概览已按
+[ADR-0002](../docs/architecture/adr/0002-frontend-overview-feature-boundary.md)
+迁入 `src/features/overview/`。`src/app/`、其余 `features/` 和 `src/shared/`
+仍是逐业务域迁移的目标结构；业务域尚未建立迁移 ADR 和目标骨架时，继续维护
+当前权威路径，不要创建第三套并行实现。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+复杂页面当前在原业务目录内按“页面编排 + 同域组件”拆分：
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- 数据管家：`pages/pipelines/steward/DataStewardPage.tsx` 保留状态、请求和
+  顶层布局，`components/` 分别承载会话时间线、目标/composer、workspace
+  弹窗、浏览器协作和受管流水线；
+- 超级助手：`pages/super-assistant/SuperAssistantPage.tsx` 保留编排，
+  `components/` 分别承载会话展示与 Skill/MCP 配置；
+- 本体助手：`pages/agent/AgentWorkbenchPage.tsx` 保留 API/流式编排，
+  `components/` 承载 workbench 展示和本体网络；其他 Agent 卡片、drawer、
+  图表与惰性视图仍在同一 `pages/agent/` 业务目录。
+- 系统设置：`pages/settings/SettingsPage.tsx` 只解析 URL/tab、调用五个能力
+  hook 并选择视图；`hooks/` 承载状态/API/副作用，`tabs/` 只接收显式
+  view-model props。
+
+精确文件与责任边界见
+[统一模块地图](../docs/architecture/module-map.md#前端复杂页面的当前内部分工)。
+
+## 开发与静态门禁
+
+```bash
+npm ci
+npm run dev
+
+npm run test:unit
+npm run check:feature-boundaries
+npm run test:e2e:classification
+npm run lint
+npm run build
 ```
+
+## 浏览器测试分组
+
+```bash
+npm run test:e2e:mocked    # 后端被故意指向不可达端口，可用于 PR
+npm run test:e2e:stack     # 需要隔离的 OntologyBuild 后端
+npm run test:e2e:external  # 需要显式开关及真实外部服务
+```
+
+每个 `*.spec.ts` 必须且只能属于一个显式分组。新增或移动用例后，
+`test:e2e:classification` 会阻止遗漏或重复分类。测试截图、trace、video 和
+HTML 报告写入仓库根目录 `.artifacts/playwright/`，不得提交。
+
+`check:feature-boundaries` 同时验证 page domain 之间没有直接依赖、生产模块
+没有循环依赖，并且除 ADR-0002 登记的 Overview 兼容入口外，全部生产
+TypeScript/TSX 都能从 `src/main.tsx` 到达。
+
+业务模块定位和真实验收条件见
+[统一模块地图](../docs/architecture/module-map.md) 与
+[测试指南](../docs/development/testing.md)。

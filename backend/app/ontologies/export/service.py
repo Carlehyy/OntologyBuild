@@ -35,7 +35,9 @@ from app.ontologies.export.schemas import (
 )
 from app.ontologies.formal_modeling import schemas as formal_schemas
 from app.ontologies.formal_modeling.validation import validate_model
-from app.ontologies.versions.evolution_service import snapshot_hash
+from app.ontologies.versions.snapshot_contract import (
+    snapshot_hash,
+)
 
 
 def _new_id() -> str:

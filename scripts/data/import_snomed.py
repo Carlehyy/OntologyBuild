@@ -1,12 +1,17 @@
 """
 导入 snomed_mental_health.csv 到 nano-ontoprompt 的医疗本体。
 
-用法：
-  python import_snomed.py [--csv PATH] [--ontology ONTOLOGY_ID] [--dry-run]
+从仓库根目录运行：
+  cd backend
+  uv run python ../scripts/data/import_snomed.py \
+    [--csv PATH] [--ontology ONTOLOGY_ID] [--dry-run]
 
 默认值：
-  --csv       ../docker/openim/snomed_mental_health.csv
+  --csv       test_data/snomed_mental_health.csv
   --ontology  o-medical-001
+
+连接配置：
+  API_BASE、ONTOLOGY_USERNAME、ONTOLOGY_PASSWORD
 """
 
 import csv

@@ -2,7 +2,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.deps import get_db, get_current_user
-from app.models.ontology import OntologyProject
+from app.ontologies.projects.models import OntologyProject
+from app.ontologies.entities.models import Entity
+from app.ontologies.logic.models import LogicRule
+from app.ontologies.actions.models import Action
 
 router = APIRouter()
 
@@ -14,10 +17,6 @@ def _safe_count(db, model):
 
 @router.get("/stats")
 def get_stats(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    from app.models.entity import Entity
-    from app.models.logic import LogicRule
-    from app.models.action import Action
-
     # Recent ontologies
     recent = db.query(OntologyProject).order_by(OntologyProject.updated_at.desc()).limit(6).all()
     recent_list = []

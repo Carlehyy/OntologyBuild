@@ -1,24 +1,10 @@
 import type { Config } from 'tailwindcss'
 
 const config: Config = {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}'],
   theme: {
     extend: {
       colors: {
-        primary: 'var(--color-primary)',
-        'primary-hover': 'var(--color-primary-hover)',
-        'primary-light': 'var(--color-primary-light)',
-        'bg-base': 'var(--color-bg-base)',
-        'bg-elevated': 'var(--color-bg-elevated)',
-        'text-primary': 'var(--color-text-primary)',
-        'text-secondary': 'var(--color-text-secondary)',
-        'text-tertiary': 'var(--color-text-tertiary)',
-        border: 'var(--color-border)',
-        success: 'var(--color-success)',
-        warning: 'var(--color-warning)',
-        danger: 'var(--color-danger)',
-        info: 'var(--color-info)',
-        // Palantir Ontology 图谱编辑器主题色
         onto: {
           50: '#f0f7ff',
           100: '#e0efff',
@@ -56,25 +42,10 @@ const config: Config = {
           700: '#a21caf',
         },
       },
-      borderRadius: {
-        sm: 'var(--radius-sm)',
-        md: 'var(--radius-md)',
-        lg: 'var(--radius-lg)',
-        xl: 'var(--radius-xl)',
-      },
-      fontSize: {
-        xs: 'var(--font-xs)',
-        sm: 'var(--font-sm)',
-        base: 'var(--font-base)',
-        md: 'var(--font-md)',
-        lg: 'var(--font-lg)',
-        xl: 'var(--font-xl)',
-        '2xl': 'var(--font-2xl)',
-      },
       fontFamily: {
-        display: ['Cabinet Grotesk', 'system-ui', 'sans-serif'],
-        body: ['Satoshi', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        display: ["'Cabinet Grotesk'", 'system-ui', 'sans-serif'],
+        body: ["'Satoshi'", 'system-ui', 'sans-serif'],
+        mono: ["'JetBrains Mono'", 'monospace'],
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',

@@ -40,7 +40,7 @@ from app.exploration.models import (ExplorationAttachment, ExplorationMessage,
 from app.exploration.skills import ExplorationSkill, exploration_skills
 from app.exploration.toolkit import (OFFICE_TOOL, TOOL_DEFS, USE_SKILL_TOOL,
                                      ExplorationToolRunner)
-from app.exploration.web_search import WEB_SEARCH_TOOL, WebSearchError, search_web
+from app.shared.web_search import WEB_SEARCH_TOOL, WebSearchError, search_web
 
 logger = logging.getLogger(__name__)
 

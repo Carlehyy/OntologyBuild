@@ -12,7 +12,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    # 首次安装 Python/Node 依赖 + 800+ 后端用例 + 迁移检查 + 前端生产构建
+    # 首次安装 Python/Node 依赖 + 完整后端回归 + 迁移检查 + 前端生产构建
     # 在冷缓存 runner 上可能超过 25 分钟；保留明确上限，避免误取消正常验证。
     timeout-minutes: 45
     steps:
@@ -32,32 +32,44 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
+          version: "0.11.16"
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: |
+            backend/uv.lock
+            config/uv.lock
 
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
+        run: uv sync --frozen --group dev
         working-directory: backend
 
       - name: Backend regression suite
-        run: pytest -q --disable-warnings --ignore tests/v2/perf
+        run: uv run pytest -q --disable-warnings --ignore tests/v2/perf
         working-directory: backend
 
       - name: Backend performance suite (informational)
         continue-on-error: true
-        run: pytest -q --disable-warnings tests/v2/perf
+        run: uv run pytest -q --disable-warnings tests/v2/perf
         working-directory: backend
 
       - name: Fresh database migration
         run: |
           DB_FILE="$(mktemp -u /tmp/ontologybuild-ci-XXXXXX.db)"
-          DATABASE_URL="sqlite:///${DB_FILE}" alembic upgrade head
-          test "$(alembic heads | grep -c '(head)')" -eq 1
+          DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
+          test "$(uv run alembic heads | grep -c '(head)')" -eq 1
           rm -f "${DB_FILE}"
         working-directory: backend
+
+      - name: Install configuration-center dependencies
+        run: uv sync --frozen --group dev
+        working-directory: config
+
+      - name: Configuration-center regression suite
+        run: uv run pytest -q
+        working-directory: config
 
       - name: Production dependency configuration gate
         run: |
@@ -75,9 +87,53 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Frontend production build
-        run: npm ci && npm run build
+      - name: Validate documentation and repository hygiene
+        run: |
+          node scripts/ci/check-markdown-links.mjs --self-test
+          node scripts/ci/check-markdown-links.mjs
+          bash scripts/ci/test-deploy-guards.sh
+          bash scripts/ci/check-repository-hygiene.sh
+
+      - name: Install frontend dependencies
+        run: npm ci
         working-directory: frontend
+
+      - name: Frontend unit tests
+        run: npm run test:unit
+        working-directory: frontend
+
+      - name: Frontend E2E classification gate
+        run: npm run test:e2e:classification
+        working-directory: frontend
+
+      - name: Frontend feature-boundary gate
+        run: npm run check:feature-boundaries
+        working-directory: frontend
+
+      - name: Frontend lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Frontend production build
+        run: npm run build
+        working-directory: frontend
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Frontend offline E2E suite
+        run: npm run test:e2e:mocked
+        working-directory: frontend
+
+      - name: Upload frontend test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-playwright-${{ github.run_id }}
+          path: .artifacts/playwright
+          if-no-files-found: ignore
+          retention-days: 14
 
   deploy:
     needs: verify
@@ -94,15 +150,23 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
         run: |
+          : "${DEPLOY_HOST:?DEPLOY_HOST secret is required}"
+          : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
+          : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
+          APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
+          bash "${GITHUB_WORKSPACE}/scripts/ci/validate-deploy-app-dir.sh" "${APP_DIR}"
           if [ -n "${DEPLOY_HOST}" ]; then echo "DEPLOY_HOST configured: yes"; else echo "DEPLOY_HOST configured: no"; fi
           if [ -n "${DEPLOY_USER}" ]; then echo "DEPLOY_USER configured: yes"; else echo "DEPLOY_USER configured: no"; fi
           if [ -n "${DEPLOY_PASSWORD}" ]; then echo "DEPLOY_PASSWORD configured: yes"; else echo "DEPLOY_PASSWORD configured: no"; fi
+          echo "DEPLOY_APP_DIR validated: yes"
 
       - name: Trust deployment host
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -T 15 -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Upload source to server
         timeout-minutes: 10
@@ -116,12 +180,13 @@ jobs:
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
           : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
           APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
+          bash "${GITHUB_WORKSPACE}/scripts/ci/validate-deploy-app-dir.sh" "${APP_DIR}"
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
-          tar --exclude='.git' --exclude='node_modules' --exclude='frontend/node_modules' --exclude='backend/.venv' -czf /tmp/ontologybuild.tar.gz .
-          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "if [ -f '${APP_DIR}/.env' ]; then cp '${APP_DIR}/.env' /tmp/ontologybuild.env; fi; rm -rf '${APP_DIR}' && mkdir -p '${APP_DIR}'"
-          sshpass -p "${DEPLOY_PASSWORD}" scp -o StrictHostKeyChecking=no -o ConnectTimeout=20 /tmp/ontologybuild.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/ontologybuild.tar.gz"
-          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "tar -xzf /tmp/ontologybuild.tar.gz -C '${APP_DIR}' && if [ -f /tmp/ontologybuild.env ]; then mv /tmp/ontologybuild.env '${APP_DIR}/.env' && chmod 600 '${APP_DIR}/.env'; fi; rm -f /tmp/ontologybuild.tar.gz"
+          bash scripts/ci/create-deployment-archive.sh /tmp/ontologybuild.tar.gz
+          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "if [ -f '${APP_DIR}/.env' ]; then cp '${APP_DIR}/.env' /tmp/ontologybuild.env; fi; rm -rf '${APP_DIR}' && mkdir -p '${APP_DIR}'"
+          sshpass -p "${DEPLOY_PASSWORD}" scp -o StrictHostKeyChecking=yes -o ConnectTimeout=20 /tmp/ontologybuild.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/ontologybuild.tar.gz"
+          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "tar -xzf /tmp/ontologybuild.tar.gz -C '${APP_DIR}' && if [ -f /tmp/ontologybuild.env ]; then mv /tmp/ontologybuild.env '${APP_DIR}/.env' && chmod 600 '${APP_DIR}/.env'; fi; rm -f /tmp/ontologybuild.tar.gz"
 
       - name: Deploy over SSH
         timeout-minutes: 25
@@ -136,6 +201,7 @@ jobs:
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
           : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
           APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
+          bash "${GITHUB_WORKSPACE}/scripts/ci/validate-deploy-app-dir.sh" "${APP_DIR}"
           if [ -n "${DEPLOY_HEALTH_URL}" ]; then
             HEALTH_URL="${DEPLOY_HEALTH_URL}"
           else
@@ -164,7 +230,11 @@ jobs:
               HEALTH_URL="http://${DEPLOY_HOST}:${PUBLIC_PORT}/"
             fi
           fi
-          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "cd '${APP_DIR}' && APP_DIR='${APP_DIR}' SKIP_GIT=1 HEALTH_URL='${HEALTH_URL}' bash scripts/deploy-prod.sh"
+          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "cd '${APP_DIR}' && APP_DIR='${APP_DIR}' SKIP_GIT=1 HEALTH_URL='${HEALTH_URL}' bash scripts/deploy-prod.sh"
+
+      - name: Remove runner deployment archive
+        if: ${{ always() }}
+        run: rm -f /tmp/ontologybuild.tar.gz
 
   report:
     if: ${{ always() }}

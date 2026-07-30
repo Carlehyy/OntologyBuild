@@ -5,6 +5,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  STACK_ADMIN_PASSWORD,
+  STACK_ADMIN_USERNAME,
+} from './support/stack-credentials'
+
 const API = (
   process.env.PLAYWRIGHT_API_URL
   || process.env.E2E_API_BASE
@@ -42,8 +47,8 @@ interface ColumnDefinition {
 
 async function login(page: Page) {
   await page.goto('/#/login')
-  await page.getByLabel('用户名', { exact: true }).fill(process.env.PLAYWRIGHT_ADMIN_USER || 'admin')
-  await page.getByLabel('密码', { exact: true }).fill(process.env.PLAYWRIGHT_ADMIN_PASSWORD || 'admin123')
+  await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
+  await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
   await page.waitForURL('**/#/overview', { timeout: 10_000 })
 }
@@ -152,9 +157,9 @@ async function createPublishedPipeline(
     column_definitions: definitions,
   })
   const published = await apiJson(request, 'POST', `/api/v2/pipelines/${pipeline.id}/publish`, token, {
-    enable: false,
+    enable: true,
   })
-  expect(published).toMatchObject({ status: 'published', enabled: false })
+  expect(published).toMatchObject({ status: 'published', enabled: true })
 
   const run = await apiJson(request, 'POST', `/api/v2/pipelines/${pipeline.id}/run-sync`, token)
   expect(run.status).toBe('success')
@@ -196,7 +201,11 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
   test('creates, runs, publishes and maps all supply-chain fixtures', async ({ page, request }) => {
     test.setTimeout(180000)
     const ts = Date.now()
-    const outDir = path.resolve(__dirname, '../../../../test-results/supply-chain-e2e', String(ts))
+    const outDir = path.resolve(
+      __dirname,
+      '../../../../.artifacts/playwright/stack/supply-chain-e2e',
+      String(ts),
+    )
     fs.mkdirSync(outDir, { recursive: true })
 
     await login(page)

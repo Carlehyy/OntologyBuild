@@ -1,19 +1,20 @@
 """
 提取后将 LLM 实体对齐到 SNOMED 锚点，合并重复节点。
 
-用法（推荐 Docker，无需本地 Python 依赖）：
-  ./link_entities.sh --dry-run
-  ./link_entities.sh --apply
+用法（从仓库根目录运行）：
+  bash scripts/data/link_entities.sh --dry-run
+  bash scripts/data/link_entities.sh --apply
 
-本地直接运行（需先 pip install -r backend/requirements.txt）：
-  python link_entities.py --dry-run
-  python link_entities.py --apply
+本地直接运行：
+  cd backend
+  uv run python ../scripts/data/link_entities.py --dry-run
+  uv run python ../scripts/data/link_entities.py --apply
 
 建议顺序：
-  1. python import_snomed.py                     # 导入 SNOMED 锚点（推荐）
+  1. 导入 SNOMED 锚点
   2. LLM 分批提取文档
-  3. python link_entities.py --dry-run           # 确认匹配
-  4. python link_entities.py --apply             # 合并
+  3. --dry-run 确认匹配
+  4. 备份数据库后以 --apply 合并
 """
 
 from __future__ import annotations
@@ -29,15 +30,22 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-BACKEND = ROOT / "backend" if (ROOT / "backend" / "app").is_dir() else ROOT
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = SCRIPT_DIR.parent.parent
+if not (REPOSITORY_ROOT / "backend" / "app").is_dir():
+    REPOSITORY_ROOT = SCRIPT_DIR
+BACKEND = (
+    REPOSITORY_ROOT / "backend"
+    if (REPOSITORY_ROOT / "backend" / "app").is_dir()
+    else REPOSITORY_ROOT
+)
 if not (BACKEND / "app").is_dir() and Path("/app/app").is_dir():
     BACKEND = Path("/app")
 sys.path.insert(0, str(BACKEND))
 
 
 def _load_env() -> None:
-    env_path = ROOT / ".env"
+    env_path = REPOSITORY_ROOT / ".env"
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -656,7 +664,7 @@ def print_report(plans: list[MatchPlan], anchors: list, orphans: list) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM 实体对齐 SNOMED 锚点并合并重复节点")
     parser.add_argument("--ontology", default="o-medical-001")
-    default_csv = ROOT / ".." / ".." / "test_data" / "snomed_mental_health.csv"
+    default_csv = REPOSITORY_ROOT / "test_data" / "snomed_mental_health.csv"
     if not default_csv.exists() and Path("/tmp/snomed_mental_health.csv").exists():
         default_csv = Path("/tmp/snomed_mental_health.csv")
     parser.add_argument(

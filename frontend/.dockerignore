@@ -1,0 +1,12 @@
+node_modules
+dist
+.env*
+src/test
+scripts
+playwright*.config.ts
+test-results
+screenshots
+*_screenshots
+*test_results*.json
+domain_test_results.json
+debug*.png

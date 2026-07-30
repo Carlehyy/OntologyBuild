@@ -9,7 +9,7 @@ from fastapi.responses import Response
 
 from .. import config, db, executor
 from ..agent_service import AgentInterfaceError, request_overrides_for_interface
-from .interfaces import _row_to_dict
+from ..interface_service import _row_to_dict
 
 router = APIRouter(prefix="/api-hub/proxy", tags=["api-hub-proxy"])
 internal_router = APIRouter(

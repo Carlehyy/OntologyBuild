@@ -120,6 +120,16 @@ def test_production_compose_shares_fallback_without_minio_startup_dependency():
     assert "uploads:/uploads" in worker["volumes"]
 
 
+def test_postgres_init_grants_litellm_to_configured_bootstrap_user():
+    init_sql = (
+        ROOT / "docker" / "postgres" / "init-litellm-db.sql"
+    ).read_text()
+
+    assert "TO ontoprompt" not in init_sql
+    assert "current_user" in init_sql
+    assert r"\gexec" in init_sql
+
+
 def test_operator_configured_public_http_n8n_is_allowed_in_production():
     assert enforce_n8n_url_policy(
         "http://n8n.example.com:5678/api/v1", environment="production"
@@ -310,6 +320,7 @@ def _run_deploy_workflow_step(
     env = os.environ.copy()
     env.update({
         "PATH": f"{fake_bin}:{env['PATH']}",
+        "GITHUB_WORKSPACE": str(ROOT),
         "DEPLOY_HOST": "203.0.113.8",
         "DEPLOY_USER": "deploy-user",
         "DEPLOY_PASSWORD": "test-password",

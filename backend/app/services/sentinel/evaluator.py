@@ -1,2 +1,9 @@
-# re-export - real content moved to app.ontologies.sentinels.evaluator
-from app.ontologies.sentinels.evaluator import *  # noqa: F401,F403
+"""Module-alias compatibility path for the canonical Sentinel evaluator."""
+from __future__ import annotations
+
+import sys
+
+from app.ontologies.sentinels import evaluator as _canonical_evaluator
+
+
+sys.modules[__name__] = _canonical_evaluator
