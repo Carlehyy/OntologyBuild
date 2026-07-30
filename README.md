@@ -77,23 +77,21 @@ OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：
 git clone --branch nano-ontoprompt https://github.com/Carlehyy/OntologyBuild.git
 cd OntologyBuild
 cp .env.example .env
-docker compose -f docker-compose.v2.yml up --build
+docker compose -f docker-compose.local.yml up --build
 ```
 
 前端默认位于 `http://localhost:5173`，后端存活检查位于
 `http://localhost:8000/health/live`。示例账号只用于本地开发，默认是
 `admin / admin123`。
 
-三份 Compose 文件用途不同，均为当前有效入口：
+两份 Compose 文件用途不同，均为当前有效入口：
 
 | 文件 | 用途 | 说明 |
 |---|---|---|
-| `docker-compose.v2.yml` | 推荐的本地核心完整栈 | PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、Browser、API、Worker、前端 |
-| `docker-compose.yml` | 扩展本地开发栈 | 在开发组合中额外包含 LiteLLM 与 Celery Beat |
+| `docker-compose.local.yml` | 推荐的本地核心完整栈 | PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、Browser、API、Worker、前端 |
 | `docker-compose.prod.yml` | 生产编排 | 生产镜像和受控依赖清单；按部署文档/工作流执行 |
 
-不要因服务集合重叠而删除任一文件，也不要用扩展开发编排推断生产依赖已经
-验证。生产步骤见[部署说明](./docs/operations/deployment.md)。
+不要用本地编排推断生产依赖已经验证。生产步骤见[部署说明](./docs/operations/deployment.md)。
 
 ### 源码开发
 
@@ -152,9 +150,8 @@ OntologyBuild/
 ├── CONTRIBUTING.md          贡献流程与验证入口
 ├── SECURITY.md              安全边界与报告方式
 ├── CHANGELOG.md             面向版本的变更摘要
-├── docker-compose.yml       含 LiteLLM/Beat 的扩展本地开发栈
-├── docker-compose.v2.yml    推荐的本地核心完整栈
-└── docker-compose.prod.yml  生产编排
+├── docker-compose.local.yml  推荐的本地核心完整栈
+└── docker-compose.prod.yml   生产编排
 ```
 
 后端已处于从传统横向目录向业务域迁移的中间状态。新同事应从

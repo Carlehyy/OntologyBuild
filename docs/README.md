@@ -102,8 +102,7 @@ docs/
 | 前端命令与依赖 | `frontend/package.json`、`frontend/package-lock.json` |
 | 浏览器测试分组 | `frontend/playwright.*.config.ts` |
 | 核心状态门与发布契约 | `backend/app/data_channel/`、`backend/app/ontologies/` 及对应测试 |
-| 推荐本地核心完整栈 | `docker-compose.v2.yml` |
-| 扩展本地开发栈 | `docker-compose.yml` |
+| 推荐本地核心完整栈 | `docker-compose.local.yml` |
 | 生产编排 | `docker-compose.prod.yml` |
 | 自动部署 | `.github/workflows/deploy-nano-ontoprompt.yml` |
 | 服务器部署行为 | `scripts/deploy-prod.sh` |

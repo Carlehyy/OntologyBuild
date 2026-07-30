@@ -2956,7 +2956,7 @@ def test_celery_delayed_tasks_and_compose_workers_use_the_same_app():
     }
 
     root = Path(__file__).resolve().parents[3]
-    for filename in ("docker-compose.yml", "docker-compose.v2.yml", "docker-compose.prod.yml"):
+    for filename in ("docker-compose.local.yml", "docker-compose.prod.yml"):
         compose = yaml.safe_load((root / filename).read_text(encoding="utf-8"))
         assert compose["services"]["celery_worker"]["command"] == (
             "celery -A app.tasks.celery_app:celery_app worker --loglevel=info"

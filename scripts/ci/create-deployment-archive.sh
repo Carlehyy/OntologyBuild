@@ -35,7 +35,6 @@ required_paths=(
   "frontend/tsconfig.node.json"
   "frontend/vite.config.ts"
   "docker/browser"
-  "docker/postgres"
   "scripts/deploy-prod.sh"
   "scripts/ci/validate-deploy-app-dir.sh"
 )

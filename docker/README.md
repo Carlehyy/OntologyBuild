@@ -3,15 +3,14 @@
 ```text
 docker/
 ├── browser/Dockerfile              数据管家浏览器运行时
-└── postgres/init-litellm-db.sql    本地 Compose 的 LiteLLM 数据库初始化
+└── README.md                       本文件
 ```
 
-根目录三份编排均为当前入口：
+根目录两份编排均为当前入口：
 
 | 文件 | 角色 |
 |---|---|
-| `docker-compose.v2.yml` | 推荐的本地核心完整栈 |
-| `docker-compose.yml` | 含 LiteLLM 和 Celery Beat 的扩展本地开发栈 |
+| `docker-compose.local.yml` | 推荐的本地核心完整栈 |
 | `docker-compose.prod.yml` | 严格生产编排 |
 
 服务集合重叠不是删除依据。修改构建上下文、服务名、volume、健康检查或相对

@@ -64,9 +64,7 @@ Agent 的 `ProposalCard`、`SentinelProposalCard`、`BoundaryDrawer`、
 - React 路由：[`frontend/src/App.tsx`](../../frontend/src/App.tsx)；
 - 导航与前端 menu key：[`frontend/src/config/navigation.ts`](../../frontend/src/config/navigation.ts)；
 - 服务端 menu key / RBAC：[`backend/app/auth/permissions.py`](../../backend/app/auth/permissions.py)；
-- 推荐本地核心完整栈：[`docker-compose.v2.yml`](../../docker-compose.v2.yml)；
-- 含 LiteLLM/Celery Beat 的扩展本地开发栈：
-  [`docker-compose.yml`](../../docker-compose.yml)；
+- 推荐本地核心完整栈：[`docker-compose.local.yml`](../../docker-compose.local.yml)；
 - 生产编排：[`docker-compose.prod.yml`](../../docker-compose.prod.yml)。
 
 ## 依赖规则

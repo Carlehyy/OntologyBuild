@@ -102,7 +102,6 @@ archive_fixture_paths=(
   "frontend/tsconfig.node.json"
   "frontend/vite.config.ts"
   "docker/browser/Dockerfile"
-  "docker/postgres/init-litellm-db.sql"
   "scripts/deploy-prod.sh"
   "scripts/ci/validate-deploy-app-dir.sh"
   "docs/should-not-deploy.md"
@@ -120,7 +119,7 @@ for required_member in \
   "backend/app/main.py" \
   "backend/scripts/maintenance/reset_admin_password.py" \
   "frontend/src/main.tsx" \
-  "docker/postgres/init-litellm-db.sql" \
+  "docker/browser/Dockerfile" \
   "production.dependencies.env"; do
   if ! grep -Fxq "$required_member" <<<"$archive_listing"; then
     printf 'deployment archive is missing required member: %s\n' \

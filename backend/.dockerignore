@@ -3,6 +3,8 @@ __pycache__
 .pytest_cache
 *.pyc
 data
+uploads
+storage
 tests
 scripts
 README.md
