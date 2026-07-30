@@ -14,16 +14,17 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Use the same Settings resolution as the application.  Keep an explicit URL
-# supplied by an embedding caller (notably migration tests) when no
-# DATABASE_URL was configured; the repository's placeholder is never usable.
+# Use the same Settings resolution as the application, but only to replace the
+# repository's committed placeholder URL.  An explicit sqlalchemy.url supplied
+# by an embedding caller (notably migration tests) is always authoritative:
+# Settings also reads local dotenv files (backend/.env), so checking whether
+# DATABASE_URL was "configured" cannot distinguish a developer's real dev
+# database from the caller's intent and would silently migrate that dev
+# database instead of the caller's target.
 from app.config import settings  # noqa: E402
 
 configured_url = config.get_main_option("sqlalchemy.url")
-if (
-    "database_url" in settings.model_fields_set
-    or configured_url.startswith("driver://")
-):
+if configured_url.startswith("driver://"):
     # Alembic's ConfigParser treats percent characters as interpolation.
     config.set_main_option(
         "sqlalchemy.url",
