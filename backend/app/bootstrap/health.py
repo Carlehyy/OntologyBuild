@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.shared.http_transport import open_with_loopback_bypass
 
 
 def liveness_payload() -> dict[str, str]:
@@ -26,7 +27,7 @@ def probe_http_service(url: str, *, timeout: float = 3.0) -> None:
     bounded and makes ownership of the socket explicit.
     """
     request = urllib.request.Request(url, headers={"Connection": "close"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with open_with_loopback_bypass(request, timeout=timeout) as response:
         if response.status >= 400:
             raise RuntimeError(f"health probe returned HTTP {response.status}")
         # Consume a bounded response so the connection can close cleanly.

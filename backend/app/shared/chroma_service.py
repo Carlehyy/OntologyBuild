@@ -1,9 +1,16 @@
 """ChromaDB 向量数据库服务"""
 from __future__ import annotations
+
 import json
 import logging
+import threading
 import time
 from typing import Any
+
+from app.shared.http_transport import (
+    is_loopback_url,
+    loopback_httpx_mounts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +21,65 @@ except ImportError:
 
 # 连接失败后多少秒内不再重试 (heartbeat 超时会阻塞每个请求数秒)
 _RETRY_INTERVAL = 60.0
+_CLIENT_CREATION_LOCK = threading.Lock()
+
+
+class _HttpxWithLoopbackBypass:
+    """Small module facade used while Chroma 0.5.20 builds its session.
+
+    The pinned Chroma client constructs ``httpx.Client`` internally and does
+    not expose transport arguments.  Replacing only Chroma's module reference
+    during client construction lets its long-lived session inherit the same
+    loopback bypass as the rest of the backend without mutating process
+    environment variables or disabling proxies for remote services.
+    """
+
+    def __init__(self, original: Any, target_url: str):
+        self._original = original
+        self._target_url = target_url
+
+    def Client(self, *args: Any, **kwargs: Any):  # noqa: N802
+        mounts = loopback_httpx_mounts(self._target_url)
+        mounts.update(kwargs.pop("mounts", {}) or {})
+        return self._original.Client(*args, mounts=mounts, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._original, name)
+
+
+def _create_chroma_client(host: str, port: int):
+    if chromadb is None:
+        raise ImportError("chromadb not installed")
+
+    raw_host = str(host).strip()
+    url_host = (
+        f"[{raw_host}]"
+        if ":" in raw_host and not raw_host.startswith("[")
+        else raw_host
+    )
+    origin = (
+        raw_host
+        if raw_host.startswith(("http://", "https://"))
+        else f"http://{url_host}:{port}"
+    )
+    if not is_loopback_url(origin):
+        return chromadb.HttpClient(host=host, port=port)
+
+    # Chroma 0.5.20 resolves this module-level ``httpx`` reference when it
+    # creates the internal FastAPI transport.  Keep the compatibility patch
+    # scoped and serialized, then restore the dependency module immediately.
+    from chromadb.api import fastapi as chroma_fastapi
+
+    with _CLIENT_CREATION_LOCK:
+        original_httpx = chroma_fastapi.httpx
+        chroma_fastapi.httpx = _HttpxWithLoopbackBypass(
+            original_httpx,
+            origin,
+        )
+        try:
+            return chromadb.HttpClient(host=host, port=port)
+        finally:
+            chroma_fastapi.httpx = original_httpx
 
 
 class ChromaService:
@@ -47,7 +113,7 @@ class ChromaService:
         try:
             if chromadb is None:
                 raise ImportError("chromadb not installed")
-            client = chromadb.HttpClient(host=self._host, port=self._port)
+            client = _create_chroma_client(self._host, self._port)
             client.heartbeat()
             self._client = client
             self._available = True

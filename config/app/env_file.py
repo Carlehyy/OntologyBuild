@@ -49,6 +49,23 @@ SECRET_FIELDS: dict[str, tuple[str, str]] = {
     ),
 }
 
+REQUIRED_SECRET_FIELDS = frozenset(
+    {
+        "platform.first_admin_password",
+        "platform.secret_key",
+        "platform.encryption_key",
+        "postgres.password",
+        "redis.password",
+        "neo4j.password",
+        "minio.access_key",
+        "minio.secret_key",
+        "n8n.api_key",
+        "advanced.api_hub_mcp_token",
+        "advanced.api_hub_system_mcp_token",
+        "advanced.api_hub_internal_proxy_token",
+    }
+)
+
 
 @dataclass(frozen=True)
 class WriteResult:
@@ -57,30 +74,41 @@ class WriteResult:
 
 
 class LocalEnvStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, defaults_path: Path | None = None):
         self.path = path
+        self.defaults_path = defaults_path or path.with_name("defaults.env")
+        self._fresh_defaults = default_profile()
 
     @property
     def exists(self) -> bool:
         return self.path.is_file()
 
+    @property
+    def defaults_exists(self) -> bool:
+        return self.defaults_path.is_file()
+
     def read_values(self) -> dict[str, str]:
-        if not self.exists:
+        source = self.path if self.exists else self.defaults_path
+        if not source.is_file():
             return {}
         return {
             key: str(value)
-            for key, value in dotenv_values(self.path, interpolate=False).items()
+            for key, value in dotenv_values(source, interpolate=False).items()
             if value is not None
         }
 
     def load_profile(self) -> ConfigProfile:
         values = self.read_values()
         if not values:
-            return default_profile()
+            return self._fresh_defaults.model_copy(deep=True)
 
-        defaults = default_profile()
+        defaults = self._fresh_defaults
+        loading_defaults = not self.exists and self.defaults_exists
         database = _parse_database_url(values.get("DATABASE_URL", ""))
         redis = _parse_redis_url(values.get("REDIS_URL", ""))
+        default_secret = (
+            (lambda value: value) if loading_defaults else (lambda _value: "")
+        )
 
         return ConfigProfile(
             platform=PlatformConfig(
@@ -99,24 +127,66 @@ class LocalEnvStore:
                 first_admin_user=values.get(
                     "FIRST_ADMIN_USER", defaults.platform.first_admin_user
                 ),
-                first_admin_password=values.get("FIRST_ADMIN_PASSWORD", ""),
-                secret_key=values.get("SECRET_KEY", ""),
-                encryption_key=values.get("ENCRYPTION_KEY", ""),
+                first_admin_password=values.get(
+                    "FIRST_ADMIN_PASSWORD",
+                    default_secret(defaults.platform.first_admin_password),
+                ),
+                secret_key=values.get(
+                    "SECRET_KEY",
+                    default_secret(defaults.platform.secret_key),
+                ),
+                encryption_key=values.get(
+                    "ENCRYPTION_KEY",
+                    default_secret(defaults.platform.encryption_key),
+                ),
             ),
             postgres=PostgresConfig(
-                host=database.get("host", defaults.postgres.host),
-                port=int(database.get("port", defaults.postgres.port)),
-                database=database.get("database", defaults.postgres.database),
-                username=database.get("username", defaults.postgres.username),
-                password=database.get("password", ""),
+                host=values.get(
+                    "LOCAL_POSTGRES_HOST",
+                    database.get("host", defaults.postgres.host),
+                ),
+                port=_int_value(
+                    values,
+                    "LOCAL_POSTGRES_PORT",
+                    int(database.get("port", defaults.postgres.port)),
+                ),
+                database=values.get(
+                    "LOCAL_POSTGRES_DATABASE",
+                    database.get("database", defaults.postgres.database),
+                ),
+                username=values.get(
+                    "LOCAL_POSTGRES_USER",
+                    database.get("username", defaults.postgres.username),
+                ),
+                password=values.get(
+                    "LOCAL_POSTGRES_PASSWORD",
+                    database.get("password", ""),
+                ),
                 ssl_mode=database.get("ssl_mode", defaults.postgres.ssl_mode),
             ),
             redis=RedisConfig(
-                host=redis.get("host", defaults.redis.host),
-                port=int(redis.get("port", defaults.redis.port)),
-                database=int(redis.get("database", defaults.redis.database)),
-                username=redis.get("username", defaults.redis.username),
-                password=redis.get("password", ""),
+                host=values.get(
+                    "LOCAL_REDIS_HOST",
+                    redis.get("host", defaults.redis.host),
+                ),
+                port=_int_value(
+                    values,
+                    "LOCAL_REDIS_PORT",
+                    int(redis.get("port", defaults.redis.port)),
+                ),
+                database=_int_value(
+                    values,
+                    "LOCAL_REDIS_DATABASE",
+                    int(redis.get("database", defaults.redis.database)),
+                ),
+                username=values.get(
+                    "LOCAL_REDIS_USER",
+                    redis.get("username", defaults.redis.username),
+                ),
+                password=values.get(
+                    "LOCAL_REDIS_PASSWORD",
+                    redis.get("password", ""),
+                ),
                 use_tls=redis.get("use_tls", defaults.redis.use_tls),
             ),
             neo4j=Neo4jConfig(
@@ -180,12 +250,19 @@ class LocalEnvStore:
                 w3_login_url=values.get(
                     "W3_LOGIN_URL", defaults.advanced.w3_login_url
                 ),
-                api_hub_mcp_token=values.get("API_HUB_MCP_TOKEN", ""),
+                api_hub_mcp_token=values.get(
+                    "API_HUB_MCP_TOKEN",
+                    default_secret(defaults.advanced.api_hub_mcp_token),
+                ),
                 api_hub_system_mcp_token=values.get(
-                    "API_HUB_SYSTEM_MCP_TOKEN", ""
+                    "API_HUB_SYSTEM_MCP_TOKEN",
+                    default_secret(defaults.advanced.api_hub_system_mcp_token),
                 ),
                 api_hub_internal_proxy_token=values.get(
-                    "API_HUB_INTERNAL_PROXY_TOKEN", ""
+                    "API_HUB_INTERNAL_PROXY_TOKEN",
+                    default_secret(
+                        defaults.advanced.api_hub_internal_proxy_token
+                    ),
                 ),
             ),
         )
@@ -205,14 +282,19 @@ class LocalEnvStore:
             )
         payload = profile.model_dump()
         present: dict[str, bool] = {}
+        has_saved_values = self.exists or self.defaults_exists
         for field, (section, key) in SECRET_FIELDS.items():
-            present[field] = warning is None and bool(payload[section][key])
-            if self.exists and warning is None:
+            present[field] = (
+                has_saved_values
+                and warning is None
+                and bool(payload[section][key])
+            )
+            if has_saved_values and warning is None:
                 payload[section][key] = ""
         return ConfigProfile.model_validate(payload), present, warning
 
     def _existing_profile_payload(self) -> dict[str, object]:
-        if not self.exists:
+        if not self.exists and not self.defaults_exists:
             return {}
         try:
             return self.load_profile().model_dump()
@@ -235,7 +317,8 @@ class LocalEnvStore:
                 continue
             if field == "advanced.w3_password" and not payload["advanced"]["w3_username"]:
                 continue
-            missing.append(field)
+            if field in REQUIRED_SECRET_FIELDS or field == "advanced.w3_password":
+                missing.append(field)
 
         if missing:
             labels = ", ".join(missing)

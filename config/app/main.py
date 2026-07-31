@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .env_file import LocalEnvStore
+from .http_transport import loopback_httpx_mounts
 from .models import ConfigProfile
 from .probes import PROBES, ProbeResult, run_probe
 from .security import LocalRequestGuardMiddleware
@@ -31,8 +32,21 @@ from .security import LocalRequestGuardMiddleware
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parents[1] / "static"
 DEFAULT_ENV_PATH = PROJECT_ROOT / "config" / "generated" / "local" / ".env"
+DEFAULT_CONFIG_PORT = 8888
 RECEIPT_TTL_SECONDS = 15 * 60
-REQUIRED_SERVICES = tuple(PROBES)
+AVAILABLE_SERVICES = tuple(PROBES)
+REQUIRED_SERVICES = (
+    "postgres",
+    "redis",
+    "neo4j",
+    "minio",
+    "browser",
+    "n8n",
+)
+OPTIONAL_SERVICES = tuple(
+    service for service in AVAILABLE_SERVICES if service not in REQUIRED_SERVICES
+)
+OPTIONAL_RUNTIME_DEPENDENCIES = frozenset({"chroma"})
 
 
 class ConfigCenterState:
@@ -139,13 +153,15 @@ def create_app(
             "commands": startup_commands(),
             "guides": service_guides(),
             "required_services": list(REQUIRED_SERVICES),
+            "optional_services": list(OPTIONAL_SERVICES),
+            "defaults_loaded": state.store.defaults_exists and not state.store.exists,
             "generated_path": "config/generated/local/.env",
             "production_isolated": True,
         }
 
     @app.post("/api/test/{service}")
     async def test_service(service: str, profile: ConfigProfile) -> dict[str, Any]:
-        if service not in REQUIRED_SERVICES:
+        if service not in AVAILABLE_SERVICES:
             raise HTTPException(status_code=404, detail="未知的测试项目")
         try:
             resolved = state.store.resolve_service_secrets(profile, service)
@@ -488,23 +504,44 @@ async def run_runtime_checks(
 
 def _check_backend_runtime(url: str) -> dict[str, Any]:
     try:
-        with httpx.Client(timeout=8, follow_redirects=False) as client:
+        with httpx.Client(
+            timeout=8,
+            follow_redirects=False,
+            mounts=loopback_httpx_mounts(url),
+        ) as client:
             response = client.get(url)
             response.raise_for_status()
             payload = response.json()
-        unavailable = payload.get("unavailable") or []
-        if payload.get("status") != "ok" or unavailable:
+        unavailable = [str(item) for item in payload.get("unavailable") or []]
+        required_unavailable = [
+            item for item in unavailable if item not in OPTIONAL_RUNTIME_DEPENDENCIES
+        ]
+        if (
+            payload.get("status") not in {"ok", "degraded"}
+            or required_unavailable
+        ):
             return {
                 "id": "backend",
-                "label": "后端完整就绪",
+                "label": "后端核心就绪",
                 "ok": False,
-                "detail": f"后端仍有未就绪项目: {', '.join(map(str, unavailable))}",
+                "detail": (
+                    "后端仍有必选项目未就绪: "
+                    + ", ".join(required_unavailable or unavailable)
+                ),
             }
+        optional_unavailable = [
+            item for item in unavailable if item in OPTIONAL_RUNTIME_DEPENDENCIES
+        ]
         return {
             "id": "backend",
-            "label": "后端完整就绪",
+            "label": "后端核心就绪",
             "ok": True,
-            "detail": "数据库和核心第三方依赖均已就绪",
+            "detail": (
+                "数据库和核心第三方依赖均已就绪；"
+                f"可选增强暂不可用: {', '.join(optional_unavailable)}"
+                if optional_unavailable
+                else "数据库和核心第三方依赖均已就绪"
+            ),
         }
     except Exception as exc:  # noqa: BLE001
         return {
@@ -517,7 +554,11 @@ def _check_backend_runtime(url: str) -> dict[str, Any]:
 
 def _check_frontend_runtime(url: str) -> dict[str, Any]:
     try:
-        with httpx.Client(timeout=8, follow_redirects=False) as client:
+        with httpx.Client(
+            timeout=8,
+            follow_redirects=False,
+            mounts=loopback_httpx_mounts(url),
+        ) as client:
             response = client.get(url)
             response.raise_for_status()
         if "text/html" not in response.headers.get("content-type", ""):
@@ -656,7 +697,9 @@ def run() -> None:
     import uvicorn
 
     host = "127.0.0.1"
-    port = int(os.getenv("OPENONTOLOGY_CONFIG_PORT", "8765"))
+    port = int(
+        os.getenv("OPENONTOLOGY_CONFIG_PORT", str(DEFAULT_CONFIG_PORT))
+    )
     if not _port_is_free(host, port):
         raise SystemExit(
             f"Port {port} is already in use. "

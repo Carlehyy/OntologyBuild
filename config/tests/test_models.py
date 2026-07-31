@@ -22,6 +22,14 @@ def test_default_profile_generates_stable_security_material() -> None:
     assert profile.advanced.api_hub_system_mcp_token
     assert profile.platform.backend_host == "127.0.0.1"
     assert profile.platform.frontend_host == "127.0.0.1"
+    assert profile.postgres.host == "127.0.0.1"
+    assert profile.postgres.port == 5432
+    assert profile.postgres.database == "openontology"
+    assert profile.postgres.username == "postgres"
+    assert profile.redis.host == "localhost"
+    assert profile.neo4j.uri == "neo4j://localhost:7687"
+    assert profile.minio.endpoint == "localhost:9000"
+    assert profile.minio.access_key == "admin"
 
 
 @pytest.mark.parametrize(
@@ -77,3 +85,24 @@ def test_profile_rejects_dotenv_interpolation_and_short_admin_password() -> None
     payload["platform"]["encryption_key"] = "not-a-fernet-key"
     with pytest.raises(ValidationError, match="Fernet"):
         ConfigProfile.model_validate(payload)
+
+
+def test_optional_sections_accept_blank_form_values_and_use_safe_defaults() -> None:
+    payload = default_profile().model_dump()
+    payload["chroma"] = {"host": "", "port": None}
+    payload["llm"].update(
+        {
+            "name": "",
+            "provider": "",
+            "api_base": "",
+            "api_key": "",
+            "model": "",
+        }
+    )
+
+    profile = ConfigProfile.model_validate(payload)
+
+    assert profile.chroma.host == "127.0.0.1"
+    assert profile.chroma.port == 8001
+    assert profile.llm.api_key == ""
+    assert profile.llm.api_base == "https://api.openai.com/v1"

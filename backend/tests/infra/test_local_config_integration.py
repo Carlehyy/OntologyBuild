@@ -239,6 +239,18 @@ def test_managed_runtime_config_never_runs_in_production(db):
     assert db.query(ModelConfig).filter_by(id=MANAGED_LLM_ID).count() == 0
 
 
+def test_managed_runtime_config_allows_optional_llm_to_be_omitted(db):
+    current = _managed_settings(local_llm_api_key="")
+
+    assert sync_local_managed_runtime_config(db, current) is True
+    db.commit()
+
+    workflow = db.query(WorkflowConfig).filter_by(id="default").one()
+    assert workflow.enabled is True
+    assert decrypt(workflow.api_key_encrypted) == "n8n-secret"
+    assert db.query(ModelConfig).filter_by(id=MANAGED_LLM_ID).count() == 0
+
+
 def test_managed_runtime_config_fails_closed_when_incomplete(db, admin_user):
     current = _managed_settings(local_llm_model="")
 

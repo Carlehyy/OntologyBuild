@@ -3,10 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.main import REQUIRED_SERVICES, create_app
+from app.main import (
+    AVAILABLE_SERVICES,
+    DEFAULT_CONFIG_PORT,
+    OPTIONAL_SERVICES,
+    REQUIRED_SERVICES,
+    create_app,
+)
 from app.models import ConfigProfile
 from app.probes import ProbeResult
 
@@ -44,6 +51,29 @@ def _client(tmp_path: Path) -> tuple[TestClient, Path]:
         ),
         env_path,
     )
+
+
+def test_config_center_default_port_avoids_platform_service_ports() -> None:
+    assert DEFAULT_CONFIG_PORT == 8888
+
+
+def test_run_starts_config_center_on_default_port(
+    monkeypatch,
+) -> None:
+    seen = {}
+    monkeypatch.delenv("OPENONTOLOGY_CONFIG_PORT", raising=False)
+    monkeypatch.setenv("OPENONTOLOGY_CONFIG_NO_BROWSER", "1")
+    monkeypatch.setattr(main_module, "_port_is_free", lambda *_args: True)
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda _app, **kwargs: seen.update(kwargs),
+    )
+
+    main_module.run()
+
+    assert seen["host"] == "127.0.0.1"
+    assert seen["port"] == 8888
 
 
 def test_env_target_cannot_escape_project_root(tmp_path: Path) -> None:
@@ -90,14 +120,18 @@ def test_local_guard_blocks_bad_host_origin_and_missing_csrf(
     )
 
 
-def test_all_successful_probes_are_required_before_atomic_generation(
+def test_only_required_successful_probes_gate_atomic_generation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     client, env_path = _client(tmp_path)
     bootstrap = client.get("/api/bootstrap").json()
     profile = _complete_payload(bootstrap["profile"])
+    profile["llm"]["api_key"] = ""
     csrf = bootstrap["csrf_token"]
+    assert bootstrap["required_services"] == list(REQUIRED_SERVICES)
+    assert bootstrap["optional_services"] == list(OPTIONAL_SERVICES)
+    assert set(AVAILABLE_SERVICES) == set(REQUIRED_SERVICES) | set(OPTIONAL_SERVICES)
 
     monkeypatch.setattr(
         main_module,
@@ -135,6 +169,39 @@ def test_all_successful_probes_are_required_before_atomic_generation(
     assert generated.status_code == 200
     assert generated.json()["ok"] is True
     assert env_path.is_file()
+
+
+def test_optional_probes_remain_available_without_gating_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, _ = _client(tmp_path)
+    bootstrap = client.get("/api/bootstrap").json()
+    profile = _complete_payload(bootstrap["profile"])
+    csrf = bootstrap["csrf_token"]
+    monkeypatch.setattr(
+        main_module,
+        "run_probe",
+        lambda service, _profile: ProbeResult(True, service, "mocked", 1),
+    )
+
+    for service in OPTIONAL_SERVICES:
+        response = client.post(
+            f"/api/test/{service}",
+            json=profile,
+            headers={"x-csrf-token": csrf},
+        )
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+    assert (
+        client.post(
+            "/api/test/not-a-service",
+            json=profile,
+            headers={"x-csrf-token": csrf},
+        ).status_code
+        == 404
+    )
 
 
 def test_only_changed_service_invalidates_its_probe_receipt(
@@ -256,3 +323,34 @@ def test_invalid_existing_env_can_be_repaired(
     assert "old-secret-must-not-leak" not in env_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_runtime_check_accepts_optional_chroma_outage(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"status": "degraded", "unavailable": ["chroma"]}
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url: str) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(main_module.httpx, "Client", FakeClient)
+
+    result = main_module._check_backend_runtime(
+        "http://127.0.0.1:8000/health/ready"
+    )
+
+    assert result["ok"] is True
+    assert "chroma" in result["detail"]

@@ -150,7 +150,7 @@ def test_minio_probe_is_read_only_and_reports_bucket(monkeypatch) -> None:
 
     assert message == "MinIO 连接正常"
     assert "当前可见 1 个桶" in detail
-    assert seen["endpoint"] == "127.0.0.1:9000"
+    assert seen["endpoint"] == "localhost:9000"
     assert seen["secret_key"] == "minio-password"
 
 
@@ -213,8 +213,8 @@ def test_n8n_probe_uses_api_key_header(monkeypatch) -> None:
     seen = {}
 
     class Client:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            seen["client_kwargs"] = kwargs
 
         def __enter__(self):
             return self
@@ -235,14 +235,16 @@ def test_n8n_probe_uses_api_key_header(monkeypatch) -> None:
     assert seen["url"].endswith("/api/v1/workflows")
     assert seen["params"] == {"limit": 1}
     assert seen["headers"]["X-N8N-API-KEY"] == "n8n-key"
+    assert seen["client_kwargs"]["mounts"]["all://127.0.0.1"] is None
+    assert "trust_env" not in seen["client_kwargs"]
 
 
 def test_openai_compatible_probe_sends_minimal_request(monkeypatch) -> None:
     seen = {}
 
     class Client:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            seen["client_kwargs"] = kwargs
 
         def __enter__(self):
             return self
@@ -264,6 +266,8 @@ def test_openai_compatible_probe_sends_minimal_request(monkeypatch) -> None:
     assert seen["url"] == "https://api.openai.com/v1/chat/completions"
     assert seen["headers"]["Authorization"] == "Bearer llm-key"
     assert seen["json"]["max_tokens"] == 1
+    assert seen["client_kwargs"]["mounts"]["all://127.0.0.1"] is None
+    assert "trust_env" not in seen["client_kwargs"]
 
 
 def test_llm_probe_rejects_unrelated_success_json(monkeypatch) -> None:

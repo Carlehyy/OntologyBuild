@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from app.shared.http_transport import loopback_httpx_mounts
+
 
 class N8nApiError(Exception):
     """Raised when the n8n API returns a non-success response."""
@@ -51,7 +53,10 @@ class N8nClient:
             raise ValueError("n8n API key is required")
 
         url = f"{self.api_base}{path}"
-        with httpx.Client(timeout=float(self.timeout_seconds)) as client:
+        with httpx.Client(
+            timeout=float(self.timeout_seconds),
+            mounts=loopback_httpx_mounts(url),
+        ) as client:
             resp = client.request(
                 method,
                 url,
@@ -187,7 +192,10 @@ class N8nClient:
         """
         url = f"{self.instance_root}/webhook/{webhook_path.lstrip('/')}"
         safe_headers = self.sanitize_webhook_headers(headers)
-        with httpx.Client(timeout=timeout_seconds or float(self.timeout_seconds)) as client:
+        with httpx.Client(
+            timeout=timeout_seconds or float(self.timeout_seconds),
+            mounts=loopback_httpx_mounts(url),
+        ) as client:
             resp = client.post(
                 url,
                 json=payload if payload is not None else {},

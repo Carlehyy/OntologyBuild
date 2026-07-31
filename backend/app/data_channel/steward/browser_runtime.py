@@ -28,6 +28,7 @@ from urllib.parse import parse_qsl, unquote, unquote_to_bytes, urlparse, urlunpa
 
 from app.config import settings
 from app.data_channel.steward import workspace
+from app.shared.http_transport import open_with_loopback_bypass
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ def probe_browser_cdp(timeout: float = 1.5) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{endpoint}/json/version", headers={"Connection": "close"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with open_with_loopback_bypass(request, timeout=timeout) as response:
             payload = json.loads(response.read(64_000).decode("utf-8"))
         websocket_url = str(payload.get("webSocketDebuggerUrl") or "")
         if not websocket_url.startswith(("ws://", "wss://")):

@@ -13,6 +13,7 @@ import urllib3
 from minio import Minio
 from neo4j import GraphDatabase, Query
 
+from .http_transport import loopback_httpx_mounts
 from .models import ConfigProfile
 
 
@@ -140,7 +141,11 @@ def probe_chroma(profile: ConfigProfile) -> tuple[str, str]:
     config = profile.chroma
     origin = f"http://{_http_host(config.host)}:{config.port}"
     attempted: list[str] = []
-    with httpx.Client(timeout=6, follow_redirects=False) as client:
+    with httpx.Client(
+        timeout=6,
+        follow_redirects=False,
+        mounts=loopback_httpx_mounts(origin),
+    ) as client:
         for path in ("/api/v2/heartbeat", "/api/v1/heartbeat", "/api/v1/version"):
             attempted.append(path)
             response = client.get(f"{origin}{path}")
@@ -153,7 +158,11 @@ def probe_chroma(profile: ConfigProfile) -> tuple[str, str]:
 
 def probe_browser(profile: ConfigProfile) -> tuple[str, str]:
     url = f"{profile.browser.cdp_url.rstrip('/')}/json/version"
-    with httpx.Client(timeout=6, follow_redirects=False) as client:
+    with httpx.Client(
+        timeout=6,
+        follow_redirects=False,
+        mounts=loopback_httpx_mounts(url),
+    ) as client:
         response = client.get(url)
         response.raise_for_status()
         payload = response.json()
@@ -167,7 +176,11 @@ def probe_browser(profile: ConfigProfile) -> tuple[str, str]:
 def probe_n8n(profile: ConfigProfile) -> tuple[str, str]:
     config = profile.n8n
     url = f"{config.api_url.rstrip('/')}/api/v1/workflows"
-    with httpx.Client(timeout=config.timeout_seconds, follow_redirects=False) as client:
+    with httpx.Client(
+        timeout=config.timeout_seconds,
+        follow_redirects=False,
+        mounts=loopback_httpx_mounts(url),
+    ) as client:
         response = client.get(
             url,
             params={"limit": 1},
@@ -183,7 +196,11 @@ def probe_n8n(profile: ConfigProfile) -> tuple[str, str]:
 def probe_llm(profile: ConfigProfile) -> tuple[str, str]:
     config = profile.llm
     base = config.api_base.rstrip("/")
-    with httpx.Client(timeout=30, follow_redirects=False) as client:
+    with httpx.Client(
+        timeout=30,
+        follow_redirects=False,
+        mounts=loopback_httpx_mounts(base),
+    ) as client:
         if config.provider == "anthropic":
             response = client.post(
                 f"{base}/messages",

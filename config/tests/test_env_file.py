@@ -77,6 +77,19 @@ def test_public_profile_masks_saved_secrets_and_blank_preserves_them(
     assert resolved.llm.api_key == original.llm.api_key
 
 
+def test_fresh_defaults_are_visible_but_not_marked_as_retained(
+    tmp_path: Path,
+) -> None:
+    store = LocalEnvStore(tmp_path / "generated" / ".env")
+
+    public, present, warning = store.public_profile()
+
+    assert warning is None
+    assert public.minio.access_key == "admin"
+    assert present["minio.access_key"] is False
+    assert present["platform.secret_key"] is False
+
+
 def test_rewrite_creates_single_backup_and_uses_restricted_permissions(
     tmp_path: Path,
 ) -> None:
@@ -112,7 +125,7 @@ def test_missing_required_external_secret_fails_closed(tmp_path: Path) -> None:
 
     assert "postgres.password" in message
     assert "redis.password" in message
-    assert "llm.api_key" in message
+    assert "llm.api_key" not in message
 
 
 def test_individual_probe_only_requires_its_own_credentials(
@@ -136,3 +149,49 @@ def test_individual_probe_only_requires_its_own_credentials(
         assert "redis.password" in str(exc)
     else:
         raise AssertionError("Redis 单项测试缺少自身密码时必须拒绝")
+
+
+def test_ignored_local_defaults_are_loaded_and_secrets_stay_masked(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / "config" / "generated" / "local" / ".env"
+    defaults_path = env_path.with_name("defaults.env")
+    defaults_path.parent.mkdir(parents=True)
+    defaults_path.write_text(
+        "LOCAL_POSTGRES_HOST=127.0.0.1\n"
+        "LOCAL_POSTGRES_PORT=5432\n"
+        "LOCAL_POSTGRES_DATABASE=openontology\n"
+        "LOCAL_POSTGRES_USER=postgres\n"
+        "LOCAL_POSTGRES_PASSWORD=postgres-local-secret\n"
+        "LOCAL_REDIS_HOST=localhost\n"
+        "LOCAL_REDIS_PASSWORD=redis-local-secret\n"
+        "NEO4J_URI=neo4j://localhost:7687\n"
+        "NEO4J_USER=neo4j\n"
+        "NEO4J_PASSWORD=neo4j-local-secret\n"
+        "MINIO_ENDPOINT=localhost:9000\n"
+        "MINIO_ACCESS_KEY=admin\n"
+        "MINIO_SECRET_KEY=minio-local-secret\n"
+        "LOCAL_N8N_API_URL=http://127.0.0.1:5678\n"
+        "LOCAL_N8N_API_KEY=n8n-local-secret\n",
+        encoding="utf-8",
+    )
+    store = LocalEnvStore(env_path)
+
+    public, present, warning = store.public_profile()
+    resolved = store.resolve_secrets(public)
+
+    assert store.exists is False
+    assert store.defaults_exists is True
+    assert warning is None
+    assert public.postgres.host == "127.0.0.1"
+    assert public.postgres.database == "openontology"
+    assert public.postgres.username == "postgres"
+    assert public.postgres.password == ""
+    assert public.redis.host == "localhost"
+    assert public.neo4j.uri == "neo4j://localhost:7687"
+    assert public.minio.endpoint == "localhost:9000"
+    assert public.minio.access_key == ""
+    assert present["postgres.password"] is True
+    assert present["minio.access_key"] is True
+    assert resolved.postgres.password == "postgres-local-secret"
+    assert resolved.llm.api_key == ""

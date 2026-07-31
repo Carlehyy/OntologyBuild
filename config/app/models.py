@@ -8,7 +8,14 @@ from base64 import b64decode
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 def _random_password(length: int = 20) -> str:
@@ -144,6 +151,16 @@ class ChromaConfig(StrictModel):
     host: str = Field(default="127.0.0.1", min_length=1, max_length=253)
     port: int = Field(default=8001, ge=1, le=65535)
 
+    @field_validator("host", mode="before")
+    @classmethod
+    def default_blank_host(cls, value: object) -> object:
+        return "127.0.0.1" if value is None or str(value).strip() == "" else value
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def default_blank_port(cls, value: object) -> object:
+        return 8001 if value is None or str(value).strip() == "" else value
+
 
 class BrowserConfig(StrictModel):
     cdp_url: str = Field(default="http://127.0.0.1:9222", min_length=1, max_length=500)
@@ -171,6 +188,22 @@ class LlmConfig(StrictModel):
     api_base: str = Field(default="https://api.openai.com/v1", min_length=1, max_length=500)
     api_key: str = Field(default="", min_length=0, max_length=2000)
     model: str = Field(default="gpt-4.1-mini", min_length=1, max_length=200)
+
+    @field_validator("name", "provider", "api_base", "model", mode="before")
+    @classmethod
+    def default_blank_fields(
+        cls,
+        value: object,
+        info: ValidationInfo,
+    ) -> object:
+        if value is not None and str(value).strip():
+            return value
+        return {
+            "name": "OpenOntology 本地默认模型",
+            "provider": "openai",
+            "api_base": "https://api.openai.com/v1",
+            "model": "gpt-4.1-mini",
+        }[info.field_name]
 
     @model_validator(mode="after")
     def validate_llm(self) -> "LlmConfig":
@@ -252,10 +285,24 @@ def default_profile() -> ConfigProfile:
             secret_key=_random_token(),
             encryption_key=_fernet_key(),
         ),
-        postgres=PostgresConfig(password=""),
-        redis=RedisConfig(password=""),
-        neo4j=Neo4jConfig(password=""),
-        minio=MinioConfig(access_key="", secret_key=""),
+        postgres=PostgresConfig(
+            host="127.0.0.1",
+            port=5432,
+            database="openontology",
+            username="postgres",
+            password="",
+        ),
+        redis=RedisConfig(host="localhost", port=6379, password=""),
+        neo4j=Neo4jConfig(
+            uri="neo4j://localhost:7687",
+            username="neo4j",
+            password="",
+        ),
+        minio=MinioConfig(
+            endpoint="localhost:9000",
+            access_key="admin",
+            secret_key="",
+        ),
         n8n=N8nConfig(api_key=""),
         llm=LlmConfig(api_key=""),
         advanced=AdvancedConfig(

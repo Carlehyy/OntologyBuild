@@ -29,5 +29,6 @@ YYYY/YYYY-MM-DD-short-topic.md
 ## 当前记录
 
 - [2026 年索引](./2026/README.md)
+  - [2026-07-31：Windows 回环代理绕行、配置中心门禁与默认值优化](./2026/2026-07-31-loopback-proxy-bypass.md)
   - [2026-07-30：仓库目录与交付治理](./2026/2026-07-30-repository-governance.md)
   - [2026-07-30：Alembic env.py 修复调用方显式 URL 被本地 .env 覆盖](./2026/2026-07-30-alembic-env-url-resolution.md)

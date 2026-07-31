@@ -31,6 +31,15 @@
     guides: {},
     commands: {},
     requirements: [],
+    requiredServices: [
+      "postgres",
+      "redis",
+      "neo4j",
+      "minio",
+      "browser",
+      "n8n",
+    ],
+    optionalServices: ["chroma", "llm"],
     tests: Object.fromEntries(SERVICES.map((service) => [service, "idle"])),
     fingerprints: Object.fromEntries(SERVICES.map((service) => [service, ""])),
     generated: false,
@@ -469,15 +478,34 @@
       state.requirements = Array.isArray(payload.requirements)
         ? payload.requirements
         : [];
+      state.requiredServices = normalizeServiceList(
+        payload.required_services,
+        state.requiredServices,
+      );
+      state.optionalServices = normalizeServiceList(
+        payload.optional_services,
+        SERVICES.filter((service) => !state.requiredServices.includes(service)),
+      );
 
       populateProfile(payload.profile || payload.config || {});
       applySecretRetention();
 
-      if (!state.hasConfig) {
+      if (!state.hasConfig && !payload.defaults_loaded) {
         generateSecretValues();
       }
 
-      elements.existingNotice.hidden = !state.hasConfig;
+      elements.existingNotice.hidden = !state.hasConfig && !payload.defaults_loaded;
+      if (payload.defaults_loaded) {
+        const title = elements.existingNotice.querySelector("strong");
+        const copy = elements.existingNotice.querySelector("span");
+        if (title) {
+          title.textContent = "已加载本机默认值";
+        }
+        if (copy) {
+          copy.textContent =
+            "固定参数已预填；已保存的密码仍保持遮蔽，生成后会写入正式本地配置。";
+        }
+      }
       if (payload.config_warning) {
         elements.globalError.className = "notice notice-warning";
         elements.globalError.textContent = String(payload.config_warning);
@@ -485,9 +513,11 @@
       }
       elements.saveState.textContent = state.hasConfig
         ? "已加载本地配置"
-        : payload.config_warning
-          ? "现有配置需要修复"
-          : "尚未生成配置";
+        : payload.defaults_loaded
+          ? "已加载本机默认值"
+          : payload.config_warning
+            ? "现有配置需要修复"
+            : "尚未生成配置";
       elements.loading.hidden = true;
       elements.appShell.hidden = false;
       elements.stickyActions.hidden = false;
@@ -504,6 +534,17 @@
     const params = new URLSearchParams(window.location.hash.slice(1));
     const token = params.get("access_token") || "";
     return /^[A-Za-z0-9_-]{32,256}$/.test(token) ? token : "";
+  }
+
+  function normalizeServiceList(candidate, fallback) {
+    if (!Array.isArray(candidate)) {
+      return [...fallback];
+    }
+    const normalized = candidate.filter(
+      (service, index) =>
+        SERVICES.includes(service) && candidate.indexOf(service) === index,
+    );
+    return normalized.length ? normalized : [...fallback];
   }
 
   function bindEvents() {
@@ -993,11 +1034,13 @@
     }
 
     state.busyAll = true;
-    setButtonBusy(elements.testAll, true, "正在测试全部");
+    setButtonBusy(elements.testAll, true, "正在测试必选项");
     setButtonBusy(elements.stickyTestAll, true, "正在测试");
 
     const results = await Promise.all(
-      SERVICES.map((service) => testService(service, { quiet: true })),
+      state.requiredServices.map((service) =>
+        testService(service, { quiet: true }),
+      ),
     );
 
     state.busyAll = false;
@@ -1005,11 +1048,11 @@
     setButtonBusy(elements.stickyTestAll, false);
 
     const passed = results.filter(Boolean).length;
-    if (passed === SERVICES.length) {
-      showToast("全部依赖连接成功，现在可以生成配置。", "success");
+    if (passed === state.requiredServices.length) {
+      showToast("全部必选依赖连接成功，现在可以生成配置。", "success");
     } else {
       showToast(
-        `${passed} 项通过，${SERVICES.length - passed} 项需要处理。`,
+        `${passed} 项通过，${state.requiredServices.length - passed} 项需要处理。`,
         "error",
       );
     }
@@ -1131,7 +1174,7 @@
   }
 
   function allTestsPassed() {
-    return SERVICES.every(
+    return state.requiredServices.every(
       (service) =>
         state.tests[service] === "success" &&
         state.fingerprints[service] === fingerprintService(service),
@@ -1139,35 +1182,46 @@
   }
 
   function updateSummary() {
-    const passed = SERVICES.filter(
+    const passed = state.requiredServices.filter(
       (service) => state.tests[service] === "success",
     ).length;
+    const requiredCount = state.requiredServices.length;
+    elements.progress.max = requiredCount;
     elements.progress.value = passed;
-    elements.progress.textContent = `${passed} / ${SERVICES.length}`;
-    elements.progressCount.textContent = `${passed} / ${SERVICES.length}`;
-    elements.stickyCopy.textContent = `${passed} / ${SERVICES.length} 项已通过`;
+    elements.progress.textContent = `${passed} / ${requiredCount}`;
+    elements.progressCount.textContent = `${passed} / ${requiredCount}`;
+    elements.stickyCopy.textContent = `${passed} / ${requiredCount} 项必选测试已通过`;
 
     const ready = allTestsPassed();
     elements.generate.disabled = !ready;
     elements.stickyGenerate.disabled = !ready;
     elements.generateHelp.textContent = ready
-      ? "全部依赖已通过，可以安全生成本地配置。"
-      : `还需通过 ${SERVICES.length - passed} 项连通性测试。`;
+      ? "全部必选依赖已通过，可以安全生成本地配置。"
+      : `还需通过 ${requiredCount - passed} 项必选连通性测试。`;
     elements.stickyTitle.textContent = ready
-      ? "全部依赖已通过"
-      : "还未完成连通性测试";
+      ? "全部必选依赖已通过"
+      : "还未完成必选测试";
 
     renderRequirements();
   }
 
   function renderRequirements() {
     const fragment = document.createDocumentFragment();
-    SERVICES.forEach((service) => {
+    state.requiredServices.forEach((service) => {
       const item = document.createElement("div");
       const success = state.tests[service] === "success";
       item.className = `requirement-item${success ? " requirement-success" : ""}`;
       item.textContent = `${SERVICE_LABELS[service]} ${
         success ? "已通过" : "需要通过连通性测试"
+      }`;
+      fragment.appendChild(item);
+    });
+    state.optionalServices.forEach((service) => {
+      const item = document.createElement("div");
+      const success = state.tests[service] === "success";
+      item.className = `requirement-item${success ? " requirement-success" : ""}`;
+      item.textContent = `${SERVICE_LABELS[service]} ${
+        success ? "可选测试已通过" : "可选，不阻止生成配置"
       }`;
       fragment.appendChild(item);
     });
@@ -1215,7 +1269,7 @@
     }
 
     if (!allTestsPassed()) {
-      showToast("配置已变化或测试未完成，请先测试全部依赖。", "error");
+      showToast("配置已变化或测试未完成，请先测试全部必选依赖。", "error");
       return;
     }
 
@@ -1237,6 +1291,15 @@
       state.hasConfig = true;
       state.commands = payload.commands || state.commands;
       elements.existingNotice.hidden = false;
+      const noticeTitle = elements.existingNotice.querySelector("strong");
+      const noticeCopy = elements.existingNotice.querySelector("span");
+      if (noticeTitle) {
+        noticeTitle.textContent = "已发现本地配置";
+      }
+      if (noticeCopy) {
+        noticeCopy.textContent =
+          "页面已加载可安全展示的内容。密码框留空表示继续使用原密码。";
+      }
       elements.generatedResult.hidden = false;
       elements.generatedPath.textContent =
         payload.message ||

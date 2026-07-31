@@ -66,10 +66,11 @@ def sync_local_managed_runtime_config(
     db: Session,
     current: Settings = settings,
 ) -> bool:
-    """Apply the local n8n and default LLM records.
+    """Apply the required local n8n record and an optional default LLM.
 
     Returns ``True`` only when local management is active.  The caller owns the
-    transaction so startup can commit both records atomically.
+    transaction so startup can commit the selected records atomically.  A blank
+    ``LOCAL_LLM_API_KEY`` means that no managed default model was requested.
     """
 
     if current.environment.strip().lower() != "development":
@@ -90,32 +91,6 @@ def sync_local_managed_runtime_config(
         raise RuntimeError(f"LOCAL_N8N_API_URL 无效: {exc}") from exc
     n8n_key = _required(current.local_n8n_api_key, "LOCAL_N8N_API_KEY")
 
-    provider = _required(
-        current.local_llm_provider,
-        "LOCAL_LLM_PROVIDER",
-    ).lower()
-    if provider not in SUPPORTED_LLM_PROVIDERS:
-        supported = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
-        raise RuntimeError(
-            f"LOCAL_LLM_PROVIDER 仅支持: {supported}"
-        )
-    llm_name = _required(current.local_llm_name, "LOCAL_LLM_NAME")
-    llm_api_base = _validated_http_url(
-        current.local_llm_api_base,
-        "LOCAL_LLM_API_BASE",
-    )
-    llm_key = _required(current.local_llm_api_key, "LOCAL_LLM_API_KEY")
-    llm_model = _required(current.local_llm_model, "LOCAL_LLM_MODEL")
-
-    admin = (
-        db.query(User)
-        .filter(User.role == "admin", User.is_active.is_(True))
-        .order_by(User.created_at.asc())
-        .first()
-    )
-    if admin is None:
-        raise RuntimeError("本地托管配置需要至少一个已启用的管理员账号")
-
     workflow = (
         db.query(WorkflowConfig)
         .filter(WorkflowConfig.id == "default")
@@ -131,6 +106,35 @@ def sync_local_managed_runtime_config(
         workflow.api_key_encrypted,
         n8n_key,
     )
+
+    llm_key = str(current.local_llm_api_key or "").strip()
+    if not llm_key:
+        return True
+
+    provider = _required(
+        current.local_llm_provider,
+        "LOCAL_LLM_PROVIDER",
+    ).lower()
+    if provider not in SUPPORTED_LLM_PROVIDERS:
+        supported = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
+        raise RuntimeError(
+            f"LOCAL_LLM_PROVIDER 仅支持: {supported}"
+        )
+    llm_name = _required(current.local_llm_name, "LOCAL_LLM_NAME")
+    llm_api_base = _validated_http_url(
+        current.local_llm_api_base,
+        "LOCAL_LLM_API_BASE",
+    )
+    llm_model = _required(current.local_llm_model, "LOCAL_LLM_MODEL")
+
+    admin = (
+        db.query(User)
+        .filter(User.role == "admin", User.is_active.is_(True))
+        .order_by(User.created_at.asc())
+        .first()
+    )
+    if admin is None:
+        raise RuntimeError("本地托管配置需要至少一个已启用的管理员账号")
 
     managed_llm = (
         db.query(ModelConfig)
