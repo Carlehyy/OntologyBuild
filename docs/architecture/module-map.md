@@ -16,7 +16,7 @@
 | Skill 社区 | `community.skills` / `/community/skills` | [`SkillCommunityPage.tsx`](../../frontend/src/pages/community/SkillCommunityPage.tsx) | 当前无社区 Skill 后端；超级助手 Skill 属于另一能力 | 无 | [`community.spec.ts`](../../frontend/src/test/e2e/community.spec.ts) 固定维护中占位 |
 | Plugin 社区 | `community.plugins` / `/community/plugins` | [`PluginCommunityPage.tsx`](../../frontend/src/pages/community/PluginCommunityPage.tsx) | [`app/community/`](../../backend/app/community/) 适配到 [`mcp_server_service.py`](../../backend/app/super_assistant/mcp_server_service.py) | `/api/v2/community` | [`community.spec.ts`](../../frontend/src/test/e2e/community.spec.ts)、[`tests/auth/test_user_rbac.py`](../../backend/tests/auth/test_user_rbac.py) |
 | 模型配置 | `models` / `/models` | [`pages/models/`](../../frontend/src/pages/models/) | [`app/model_configs/`](../../backend/app/model_configs/) | `/api/v1/models` | [`model_configs/test_router.py`](../../backend/tests/model_configs/test_router.py)、[`models.spec.ts`](../../frontend/src/test/e2e/models.spec.ts) |
-| 系统设置 | `system_settings` / `/settings/...` | [`pages/settings/`](../../frontend/src/pages/settings/) | [`app/settings/`](../../backend/app/settings/)；规则、Agent 配置和工作流配置由 [`settings/rules/`](../../backend/app/settings/rules/) 三类 service 承接，旧聚合入口仍保留 | `/api/v1/settings`、`/api/v1/users`、`/api/v1/prompts`、`/api/v1/domains`、`/api/v1/mcp` | [`tests/settings/`](../../backend/tests/settings/)、[`test_settings_rules_router_boundaries.py`](../../backend/tests/architecture/test_settings_rules_router_boundaries.py)、[`tests/auth/`](../../backend/tests/auth/)、[`settings.spec.ts`](../../frontend/src/test/e2e/settings.spec.ts) |
+| 系统设置 | `system_settings` / `/settings/...` | [`pages/settings/`](../../frontend/src/pages/settings/) | [`app/settings/`](../../backend/app/settings/)；[`settings/rules/`](../../backend/app/settings/rules/) 现只承接 Agent 与工作流配置，用户、MinIO 和领域由同域模块所有 | `/api/v1/settings`、`/api/v1/users`、`/api/v1/domains` | [`tests/settings/`](../../backend/tests/settings/)、[`test_settings_rules_router_boundaries.py`](../../backend/tests/architecture/test_settings_rules_router_boundaries.py)、[`test_retired_legacy_extraction_contract.py`](../../backend/tests/architecture/test_retired_legacy_extraction_contract.py)、[`tests/auth/`](../../backend/tests/auth/)、[`settings.spec.ts`](../../frontend/src/test/e2e/settings.spec.ts) |
 | 支撑能力 | 登录、收件箱、分享与下载 | [支撑页面](../../frontend/src/pages/)与组件 | [`app/auth/`](../../backend/app/auth/)、[`app/inbox/`](../../backend/app/inbox/) 及相关领域 | `/api/v1/auth`、`/api/v2/inbox`、`/api/public/...` | [`tests/auth/`](../../backend/tests/auth/)、[`tests/inbox/`](../../backend/tests/inbox/)、[分享/下载 Playwright](../../frontend/src/test/e2e/) |
 
 表中的 Playwright 文件都位于 `frontend/src/test/e2e/`；后端测试以
@@ -29,10 +29,10 @@ Curated review 或 Mapping；前端只有 API client 定义，没有从当前可
 
 系统设置的 HTTP 装配仍经
 [`app/routers/settings.py`](../../backend/app/routers/settings.py) 聚合
-rules 与 object storage，再挂载到 `/api/v1/settings`。其中 rules router 只做
-鉴权依赖、请求/响应适配和调用时兼容注入；规则持久化、QwenPaw Agent
-连通性及 n8n 工作流策略分别由同域三个 service 所有。不要因为 handler 已经
-变薄就提前删除旧聚合入口或 helper/monkeypatch 路径。
+settings router 与 object storage，再挂载到 `/api/v1/settings`。其中
+`settings/rules/router.py` 的历史目录名暂未改变，但只装配 QwenPaw Agent 与
+n8n 工作流配置；旧规则持久化、提示词和开放接口已经按 ADR-0003 删除。系统
+设置“开放接口”退役不影响 API Hub、MinIO MCP、Plugin 社区或超级助手 MCP。
 
 ## 前端复杂页面的当前内部分工
 
@@ -44,7 +44,7 @@ rules 与 object storage，再挂载到 `/api/v1/settings`。其中 rules router
 | [`DataStewardPage.tsx`](../../frontend/src/pages/pipelines/steward/DataStewardPage.tsx) | 页面状态、SSE/上传/轮询请求编排和顶层布局 | [`ConversationTimeline.tsx`](../../frontend/src/pages/pipelines/steward/components/ConversationTimeline.tsx) 负责消息/工具轨迹/上传时间线；[`StewardComposer.tsx`](../../frontend/src/pages/pipelines/steward/components/StewardComposer.tsx) 负责目标选择、输入和历史跳转；[`WorkspaceModal.tsx`](../../frontend/src/pages/pipelines/steward/components/WorkspaceModal.tsx) 负责 workspace 创建/编辑；[`BrowserCollaboration.tsx`](../../frontend/src/pages/pipelines/steward/components/BrowserCollaboration.tsx) 负责浏览器接管与协作展示；[`ManagedPipelinesPanel.tsx`](../../frontend/src/pages/pipelines/steward/components/ManagedPipelinesPanel.tsx) 负责受管流水线面板 |
 | [`SuperAssistantPage.tsx`](../../frontend/src/pages/super-assistant/SuperAssistantPage.tsx) | 页面状态、请求编排和顶层布局 | [`AssistantConversation.tsx`](../../frontend/src/pages/super-assistant/components/AssistantConversation.tsx) 负责消息、Markdown、工具轨迹、上下文用量和确认卡；[`AssistantConfiguration.tsx`](../../frontend/src/pages/super-assistant/components/AssistantConfiguration.tsx) 负责 Skill/MCP 配置与创建/编辑弹窗 |
 | [`AgentWorkbenchPage.tsx`](../../frontend/src/pages/agent/AgentWorkbenchPage.tsx) | React Query/API/流式状态编排和顶层 workbench | [`AgentWorkbenchPresentation.tsx`](../../frontend/src/pages/agent/components/AgentWorkbenchPresentation.tsx) 负责消息、步骤/溯源/调用链、导出和分栏交互；[`OntologyNetworkView.tsx`](../../frontend/src/pages/agent/components/OntologyNetworkView.tsx) 负责类型网络、viewport、对象卡片、实例表和导出 |
-| [`SettingsPage.tsx`](../../frontend/src/pages/settings/SettingsPage.tsx) | URL/tab 解析、固定顺序调用五个能力 hook、选择当前视图；复用现有用户和 MinIO 面板 | [`hooks/`](../../frontend/src/pages/settings/hooks/) 分别承载规则、提示词、Agent、工作流和领域的状态/API/副作用；[`tabs/`](../../frontend/src/pages/settings/tabs/) 是接收显式 view-model props 的展示层 |
+| [`SettingsPage.tsx`](../../frontend/src/pages/settings/SettingsPage.tsx) | URL/tab 解析、固定顺序调用 Agent、工作流和领域三个能力 hook、选择当前视图；复用用户和 MinIO 面板 | [`hooks/`](../../frontend/src/pages/settings/hooks/) 分别承载 Agent、工作流和领域的状态/API/副作用；[`tabs/`](../../frontend/src/pages/settings/tabs/) 是接收显式 view-model props 的展示层 |
 | [`Panel.tsx`](../../frontend/src/palantir-graph/components/Panel.tsx) | 按选中定义类型分发编辑器，并保留只读入口 | [`editors/`](../../frontend/src/palantir-graph/components/editors/) 分别承载 Object、Link、Action、Function 编辑器；`DefinitionPanelShell.tsx` 只共享面板壳，不隐藏领域状态 |
 
 Agent 的 `ProposalCard`、`SentinelProposalCard`、`BoundaryDrawer`、

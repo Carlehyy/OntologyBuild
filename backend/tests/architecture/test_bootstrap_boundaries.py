@@ -124,7 +124,6 @@ async def test_lifespan_wrapper_resolves_legacy_seed_alias_at_call_time(
 async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
     monkeypatch,
 ):
-    from app import mcp_server as platform_mcp
     from app.api_hub import db as api_hub_db
     from app.api_hub import mcp_server as api_hub_mcp
     from app.api_hub import scheduler as api_hub_scheduler
@@ -162,7 +161,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
             events.append("data_scheduler.shutdown")
 
     scheduler = Scheduler()
-    platform_manager = Manager("platform_mcp")
     minio_manager = Manager("minio_mcp")
     api_hub_public = Manager("api_hub_public_mcp")
     api_hub_system = Manager("api_hub_system_mcp")
@@ -223,11 +221,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         or (api_hub_public, api_hub_system),
     )
     monkeypatch.setattr(
-        platform_mcp,
-        "reset_session_manager",
-        lambda: events.append("platform_mcp.reset") or platform_manager,
-    )
-    monkeypatch.setattr(
         minio_mcp,
         "reset_session_manager",
         lambda: events.append("minio_mcp.reset") or minio_manager,
@@ -270,8 +263,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "data_scheduler.start",
         "api_hub_mcp.reset",
         "file_cleanup.create",
-        "platform_mcp.reset",
-        "platform_mcp.enter",
         "minio_mcp.reset",
         "minio_mcp.enter",
         "api_hub_public_mcp.enter",
@@ -280,7 +271,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "api_hub_system_mcp.exit",
         "api_hub_public_mcp.exit",
         "minio_mcp.exit",
-        "platform_mcp.exit",
         "browser.close_all",
         "data_scheduler.shutdown",
         "sentinel_scan.stop",

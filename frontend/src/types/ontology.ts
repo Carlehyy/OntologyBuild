@@ -74,26 +74,6 @@ export interface Action {
   updated_at: string
 }
 
-export interface UploadedFile {
-  id: string
-  ontology_id: string
-  filename: string
-  file_size: number
-  mime_type?: string
-  created_at: string
-}
-
-export interface Prompt {
-  id: string
-  name: string
-  domain: string
-  content: string
-  version: string
-  created_by: string
-  created_at: string
-  updated_at: string
-}
-
 export interface ModelConfig {
   id: string
   name: string

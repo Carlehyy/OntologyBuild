@@ -18,8 +18,13 @@ v1 (SQLite) → v2 (PostgreSQL + Neo4j + ChromaDB) 数据迁移脚本
     - source (TEXT) → source_entity (TEXT)
     - target (TEXT) → target_entity (TEXT)
     - 新增 properties 字段，默认 {}
-  users / ontology_projects / prompts / model_configs:
+  users / model_configs:
     - 字段完全兼容，直接迁移
+  ontology_projects:
+    - 旧库无 build_mode 或值为 simple_llm 时写入 manual
+
+提示词模板、旧本体上传文件和抽取任务已随文档→本体链路退役，不迁移到
+目标库；如需留档，请在执行本脚本前单独导出源库。
 """
 from __future__ import annotations
 
@@ -42,8 +47,6 @@ class MigrationStats:
     ontologies: int = 0
     entities: int = 0
     relations: int = 0
-    files: int = 0
-    prompts: int = 0
     model_configs: int = 0
     neo4j_nodes: int = 0
     neo4j_edges: int = 0
@@ -59,8 +62,6 @@ class MigrationStats:
                 "ontologies": self.ontologies,
                 "entities": self.entities,
                 "relations": self.relations,
-                "files": self.files,
-                "prompts": self.prompts,
                 "model_configs": self.model_configs,
                 "neo4j_nodes": self.neo4j_nodes,
                 "neo4j_edges": self.neo4j_edges,
@@ -94,7 +95,7 @@ class V1ToV2Migrator:
 
     迁移流程：
     1. 连接 v1 SQLite 和 v2 PostgreSQL
-    2. 按依赖顺序迁移：users → prompts → model_configs → ontologies+entities+relations
+    2. 按依赖顺序迁移：users → model_configs → ontologies+entities+relations
     3. 对每个本体，额外将实体/关系同步至 Neo4j 和 ChromaDB（可选，失败仅记录警告）
     """
 
@@ -116,7 +117,6 @@ class V1ToV2Migrator:
             self._connect_v1()
             self._connect_v2()
             self._migrate_users()
-            self._migrate_prompts()
             self._migrate_model_configs()
             self._migrate_ontologies_and_entities()
             logger.info("迁移完成")
@@ -178,27 +178,6 @@ class V1ToV2Migrator:
 
         self.stats.users = len(rows)
 
-    def _migrate_prompts(self):
-        """迁移提示词表 — 字段完全兼容，失败仅记录警告"""
-        try:
-            cursor = self._v1_conn.execute("SELECT * FROM prompts")
-            rows = cursor.fetchall()
-            logger.info(f"迁移提示词: {len(rows)} 条")
-
-            if not self.dry_run and rows:
-                from app.models.prompt import Prompt
-
-                for row in rows:
-                    existing = self._v2_session.query(Prompt).filter(Prompt.id == row["id"]).first()
-                    if not existing:
-                        self._v2_session.merge(Prompt(**dict(row)))
-                self._v2_session.commit()
-
-            self.stats.prompts = len(rows)
-        except Exception as e:
-            self.stats.warnings.append(f"提示词迁移部分失败: {e}")
-            logger.warning(f"提示词迁移部分失败: {e}")
-
     def _migrate_model_configs(self):
         """迁移模型配置表 — 字段完全兼容，失败仅记录警告"""
         try:
@@ -251,7 +230,8 @@ class V1ToV2Migrator:
                         .first()
                     )
                     if not existing:
-                        self._v2_session.merge(OntologyProject(**dict(ont)))
+                        ontology_data = self._map_ontology(dict(ont))
+                        self._v2_session.merge(OntologyProject(**ontology_data))
                     self._v2_session.commit()
                 self.stats.ontologies += 1
 
@@ -299,6 +279,18 @@ class V1ToV2Migrator:
                 logger.warning(f"本体 {ont_id} 迁移失败: {e}")
 
     # ── 字段映射工具 ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _map_ontology(row: dict) -> dict:
+        """Normalize retired or missing construction modes during migration."""
+        raw_mode = row.get("build_mode")
+        normalized = raw_mode.strip() if isinstance(raw_mode, str) else ""
+        row["build_mode"] = (
+            "manual"
+            if not normalized or normalized == "simple_llm"
+            else normalized
+        )
+        return row
 
     @staticmethod
     def _map_entity(row: dict) -> dict:

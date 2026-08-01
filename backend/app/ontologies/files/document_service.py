@@ -1,12 +1,6 @@
 import os
 from dataclasses import dataclass
 
-CONVERSION_ERROR_MARKERS = (
-    "[File conversion failed:",
-    "[Text read failed:",
-    "[CSV read failed:",
-)
-
 
 @dataclass
 class ConversionResult:
@@ -16,29 +10,6 @@ class ConversionResult:
     @property
     def ok(self) -> bool:
         return self.error is None and bool(self.content and self.content.strip())
-
-
-def is_usable_converted_text(text: str | None) -> bool:
-    if not text or not text.strip():
-        return False
-    stripped = text.strip()
-    return not any(stripped.startswith(marker) for marker in CONVERSION_ERROR_MARKERS)
-
-
-def combine_converted_files(files) -> tuple[str | None, str | None]:
-    """Return (combined_text, error_message). error_message is set when no usable content."""
-    usable = [f for f in files if is_usable_converted_text(getattr(f, "converted_md", None))]
-    if not usable:
-        bad_names = [getattr(f, "filename", "?") for f in files]
-        return None, f"以下文件无法用于提取（转换失败或无文本内容）：{', '.join(bad_names)}"
-
-    combined = "\n\n---\n\n".join(
-        f"【来源文件】{getattr(f, 'filename', 'unknown')}\n\n{f.converted_md.strip()}"
-        for f in usable
-    )
-    if not combined.strip():
-        return None, "上传的文件中没有可用于提取的文本内容"
-    return combined, None
 
 
 def convert_document(file_path: str, mime_type: str | None = None) -> ConversionResult:

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def get_celery_app():
     try:
-        from app.tasks.extraction import celery_app
+        from app.tasks.celery_app import celery_app
         return celery_app
     except Exception:
         return None

@@ -25,7 +25,7 @@ class OntologyProject(Base):
         ),
         nullable=True,
     )
-    build_mode: Mapped[str] = mapped_column(String(30), default="simple_llm", nullable=True)
+    build_mode: Mapped[str] = mapped_column(String(30), default="manual", nullable=True)
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

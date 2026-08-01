@@ -274,11 +274,28 @@ def _build_object_type_properties(
 
     返回 (properties, primary_key_property_id)。
     """
+    pk_fields = ([str(item) for item in pk_field if str(item)]
+                 if isinstance(pk_field, list)
+                 else [part.strip() for part in str(pk_field or "").split(",")
+                       if part.strip()])
+    # Entity's compatibility envelope also owns keys such as id/name. Explicit
+    # field mappings are the authority that distinguishes same-named business
+    # properties restored from __business_properties__ from that metadata.
+    explicit_business_keys = set(pk_fields)
+    for item in (property_mappings or []):
+        if not isinstance(item, dict):
+            continue
+        property_name = (
+            item.get("property") or item.get("name") or item.get("column")
+        )
+        if property_name:
+            explicit_business_keys.add(str(property_name))
+
     # 收集所有出现过的业务属性键 + 样本值
     samples: dict[str, list[Any]] = {}
     for ent in entities:
         for k, v in ent.items():
-            if k in _RESERVED_PROP_KEYS:
+            if k in _RESERVED_PROP_KEYS and k not in explicit_business_keys:
                 continue
             samples.setdefault(k, []).append(v)
 
@@ -290,10 +307,6 @@ def _build_object_type_properties(
         if prop_name:
             meta_by_name[prop_name] = pm
 
-    pk_fields = ([str(item) for item in pk_field if str(item)]
-                 if isinstance(pk_field, list)
-                 else [part.strip() for part in str(pk_field or "").split(",")
-                       if part.strip()])
     pk_rank = {name: index + 1 for index, name in enumerate(pk_fields)}
     synthetic_composite = (
         "__composite_identity__" if len(pk_fields) > 1

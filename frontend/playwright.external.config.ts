@@ -8,7 +8,6 @@ export default defineConfig({
   ...baseConfig,
   testMatch: [
     '**/agent_decision_real.spec.ts',
-    '**/all_domains_full_test.spec.ts',
   ],
   outputDir: '../.artifacts/playwright/external-results',
 })

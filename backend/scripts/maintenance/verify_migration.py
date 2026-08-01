@@ -47,7 +47,6 @@ def verify(v1_db: str, pg_url: str) -> dict:
         ("ontology_projects", "ontology_projects"),
         ("entities", "entities"),
         ("relations", "relations"),
-        ("prompts", "prompts"),
         ("model_configs", "model_configs"),
     ]
 

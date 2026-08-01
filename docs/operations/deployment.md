@@ -28,6 +28,12 @@
 PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执行
 文档/仓库卫生、后端、配置中心和前端门禁，但不会执行部署。
 
+生产 Nginx 对 `/api/`、`/api-hub/` 和 `/proxy/` 使用各自的后端代理契约。
+独立的 MinIO Streamable HTTP 服务继续通过 `/mcp/minio` 代理到 backend；
+已经退役的通用 `/mcp`（以及除 MinIO 外的 `/mcp/` 子路径）必须直接返回
+404，不能落入 SPA 的 `index.html`。`scripts/ci/test-deploy-guards.sh` 固定这条
+生产路由边界。
+
 ## 首次登录与管理员密码恢复
 
 首次部署且服务器尚无 `.env` 时，部署脚本从 `.env.example` 创建持久配置：
@@ -92,6 +98,27 @@ admin 时的 seed 输入，编辑它不会修改已经存在的管理员密码�
 
 这些缺口在目录移动前必须逐步关闭。生产部署最终应只消费 CI 构建并签名/标记
 的不可变镜像。
+
+## Contract migration 的停机与失败恢复
+
+会删除或收紧旧应用仍在使用的 schema 的 Alembic 迁移属于 contract
+migration。此类部署必须先记录升级前正在运行的 backend、Celery worker 和
+frontend，再停止这些 runtime，然后才能运行迁移。不得在旧 API/worker
+仍可访问数据库时删表。这一顺序意味着 contract migration 有明确的短暂停机窗口。
+
+失败恢复同时以迁移是否到达 head、数据库 revision 是否变化为界：
+
+- 迁移失败、未到达 head，且数据库 revision 与停机前记录完全相同时，才只
+  重启本次部署前确实在运行的旧服务；
+- revision 无法读取或已经变化（即使还没到 head）时，拒绝自动重启旧服务，
+  避免旧二进制连接部分升级的 schema；
+- 迁移已成功，但新服务启动或健康检查失败时，禁止把旧应用接到新
+  schema。部署脚本会停止任何已部分启动的新版 runtime；必须保持停机，
+  恢复部署前同一时间点的数据库与文件备份并部署旧镜像，或执行经批准的
+  前向修复。
+
+脚本自动恢复不可代替备份与恢复演练。对删表迁移，Alembic downgrade 只恢复
+空 schema，不恢复已删行或物理文件。
 
 ## 部署前检查
 

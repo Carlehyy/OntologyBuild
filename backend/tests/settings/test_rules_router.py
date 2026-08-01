@@ -1,4 +1,4 @@
-"""Behavioral contracts for split Settings rules application services."""
+"""Behavioral contracts for Settings Agent and workflow services."""
 
 from __future__ import annotations
 
@@ -15,10 +15,8 @@ from app.settings.agents.schemas import (
 from app.settings.rules import (
     agent_config_service,
     router,
-    rules_service,
     workflow_config_service,
 )
-from app.settings.rules.models import RulesConfig
 from app.settings.workflows.models import WorkflowConfig
 from app.settings.workflows.n8n_client import N8nApiError
 from app.settings.workflows.schemas import (
@@ -65,46 +63,6 @@ class _HttpxModule:
                 return owner._get(url, **kwargs)
 
         return Client()
-
-
-def test_rules_service_preserves_sorting_and_editable_update(db):
-    editable = RulesConfig(
-        rule_key="b",
-        rule_value="old",
-        rule_label_cn="可编辑",
-        rule_label_en="Editable",
-        editable=True,
-    )
-    locked = RulesConfig(
-        rule_key="a",
-        rule_value="locked",
-        rule_label_cn="只读",
-        rule_label_en="Locked",
-        editable=False,
-    )
-    db.add_all([editable, locked])
-    db.commit()
-
-    listed = rules_service.get_rules(db)
-    assert [item["rule_key"] for item in listed["data"]] == ["a", "b"]
-
-    result = rules_service.update_rules(
-        [
-            router.RuleUpdate(rule_key="a", rule_value="changed"),
-            router.RuleUpdate(rule_key="b", rule_value="updated"),
-            router.RuleUpdate(rule_key="missing", rule_value="ignored"),
-        ],
-        db,
-    )
-    db.expire_all()
-
-    assert result == {"message": "Rules updated"}
-    assert db.query(RulesConfig).filter_by(rule_key="a").one().rule_value == (
-        "locked"
-    )
-    assert db.query(RulesConfig).filter_by(rule_key="b").one().rule_value == (
-        "updated"
-    )
 
 
 def test_single_row_helpers_keep_create_commit_refresh_order(

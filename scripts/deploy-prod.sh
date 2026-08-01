@@ -15,6 +15,11 @@ HEALTH_URL="${HEALTH_URL:-}"
 READINESS_URL="${READINESS_URL:-}"
 RETRIES="${DEPLOY_RETRIES:-3}"
 SLEEP_SECONDS="${DEPLOY_RETRY_SLEEP:-10}"
+previous_runtime_services=()
+runtime_stopped_for_migration=0
+migration_completed=0
+migration_head_revision=""
+pre_migration_revision=""
 log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 run_with_retry() {
   local attempt=1
@@ -36,6 +41,56 @@ compose() {
   else
     log "Docker Compose is not installed"
     return 1
+  fi
+}
+database_current_revision() {
+  local current_output current_revision
+  if ! current_output="$(
+    compose run --rm --no-deps backend alembic current 2>/dev/null
+  )"; then
+    return 1
+  fi
+  current_revision="$(
+    awk '$1 ~ /^[0-9][0-9][0-9][0-9]_[[:alnum:]_]+$/ { print $1; exit }' \
+      <<<"$current_output"
+  )"
+  [ -n "$current_revision" ] || return 1
+  printf '%s\n' "$current_revision"
+}
+restore_previous_runtime_on_exit() {
+  local exit_status=$?
+  local current_revision
+  if [ "$runtime_stopped_for_migration" = "1" ] \
+      && [ "$migration_completed" = "0" ] \
+      && [ "${#previous_runtime_services[@]}" -gt 0 ]; then
+    if ! current_revision="$(database_current_revision)"; then
+      log "could not prove the database revision after migration failure; refusing an unsafe runtime restart"
+      log "inspect the migration revision before taking operator action"
+      return "$exit_status"
+    fi
+    if [ "$current_revision" = "$migration_head_revision" ]; then
+      log "migration reached head; refusing to restart the previous runtime against the new schema"
+      log "restore the pre-deploy backup or apply a forward fix"
+      return "$exit_status"
+    fi
+    if [ -z "$pre_migration_revision" ] \
+        || [ "$current_revision" != "$pre_migration_revision" ]; then
+      log "database revision changed from ${pre_migration_revision:-unknown} to ${current_revision}; refusing to restart the previous runtime"
+      log "restore the pre-deploy backup or inspect compatibility before operator action"
+      return "$exit_status"
+    fi
+    log "migration failed without changing the database revision; restarting the previous runtime"
+    if ! compose start "${previous_runtime_services[@]}"; then
+      log "failed to restart the previous runtime; operator intervention is required"
+    fi
+  fi
+  return "$exit_status"
+}
+trap restore_previous_runtime_on_exit EXIT
+stop_new_runtime_after_failed_deploy() {
+  log "stopping the partially started new runtime after a post-migration failure"
+  if ! compose stop --timeout 30 frontend celery_worker backend; then
+    log "failed to stop the new runtime completely; operator intervention is required"
   fi
 }
 assert_asset() {
@@ -502,13 +557,42 @@ if [ "$HEAD_COUNT" -ne 1 ]; then
   log "migration graph must have exactly one head, found ${HEAD_COUNT}"
   exit 1
 fi
+migration_head_revision="$(
+  printf '%s\n' "$MIGRATION_HEADS" | awk '/\(head\)/ { print $1; exit }'
+)"
+[ -n "$migration_head_revision" ] || {
+  log "could not resolve the migration head revision"
+  exit 1
+}
+running_services="$(compose ps --services --filter status=running 2>/dev/null || true)"
+for runtime_service in backend celery_worker frontend; do
+  if grep -Fxq "$runtime_service" <<<"$running_services"; then
+    previous_runtime_services+=("$runtime_service")
+  fi
+done
+if [ "${#previous_runtime_services[@]}" -gt 0 ]; then
+  if ! pre_migration_revision="$(database_current_revision)"; then
+    log "could not record the pre-migration database revision; refusing to stop the current runtime"
+    exit 1
+  fi
+  log "stopping frontend, worker and API before the schema migration"
+  runtime_stopped_for_migration=1
+  compose stop --timeout 30 frontend celery_worker backend
+fi
 log "  upgrading to head"
-run_with_retry compose run --rm --no-deps backend alembic upgrade head
+if ! run_with_retry compose run --rm --no-deps backend alembic upgrade head; then
+  log "database migration failed; checking the current revision before any runtime restart"
+  exit 1
+fi
+migration_completed=1
 log "starting services"
 if ! run_with_retry compose up -d --remove-orphans; then
   log "service startup failed; printing redacted backend diagnostics"
   compose ps || true
   redact_backend_failure_logs || true
+  stop_new_runtime_after_failed_deploy
+  log "migration reached head; do not restart the previous application against the new schema"
+  log "restore the pre-deploy database/files backup before rolling back the application"
   exit 1
 fi
 log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"
@@ -526,4 +610,6 @@ done
 log "deployment health check failed"
 compose ps || true
 redact_compose_logs backend browser frontend || true
+stop_new_runtime_after_failed_deploy
+log "migration reached head; restore the pre-deploy backup before rolling back the application"
 exit 1

@@ -17,3 +17,4 @@ ADR-NNNN`。复制 [template.md](./template.md) 创建新记录。
 
 - [ADR-0001：按稳定业务能力组织源码](./0001-business-domain-structure.md)
 - [ADR-0002：平台概览采用前端 feature 边界](./0002-frontend-overview-feature-boundary.md)
+- [ADR-0003：退役文档到本体的遗留抽取链路](./0003-retire-legacy-document-ontology-extraction.md)

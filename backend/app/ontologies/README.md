@@ -18,8 +18,9 @@ ontologies/
 ├── graph/                Neo4j/NetworkX 查询、分析与 NL-to-Cypher
 ├── agent_runtime/        本体 Agent 编排、工具、边界和报告
 ├── decision_simulation/  决策模拟
-├── extraction/           文档/LLM 抽取及 legacy bridge
-├── files|export|audit/   文件、导出与审计
+├── extraction/           供模型调用/迁移脚本复用的 LLM 与图/向量 bridge；无抽取 API
+├── files/                供业务探索/数据管家复用的通用文档转换器；无本体文件 API
+├── export|audit/         导出与审计
 └── entities|relations|logic|actions|inference|attribute_schemas/
                           迁移期 v1 兼容 API/模型或专项能力
 ```
@@ -47,6 +48,9 @@ ontologies/
 - `entities/relations/logic/actions` 中仍有迁移兼容表和接口；生产写入限制、Formal
   投影和删除条件必须以源码守卫与测试为依据，不能把它们误认成第二套 canonical
   运行时。
+- 旧文档 → 本体链路的 files/execute/v2 extraction API 与专用表已按 ADR-0003
+  退役。不得把保留的通用文档转换器、LLM gateway 或 legacy 图/向量迁移 bridge
+  重新解释为可公开调用的本体抽取流程。
 
 包含函数内延迟 import 的完整生产依赖图只保留一个被精确锁定的运行期环：
 `sentinels.cdc ↔ sentinels.engine ↔ sentinels.dynamic_service`。四条允许边分别

@@ -183,8 +183,7 @@ export default function EntityDetailPage() {
   const incomingEdges = edges.filter(e => e.data.target === eid)
   const outgoingEdges = edges.filter(e => e.data.source === eid)
 
-  // linked_entities 可能存实体显示名(简易 LLM)或实体类型名(Pipeline Mapping),
-  // 两者都匹配。
+  // linked_entities 兼容历史显示名及当前实体类型名。
   const matchKeys = [entity.name_cn, entity.name_en, entity.type].filter(Boolean) as string[]
   const linkedHit = (linked?: string[]) => (linked ?? []).some(x => matchKeys.includes(x))
 

@@ -1,7 +1,7 @@
 /**
  * 三领域对比测试：供应链 / 医疗 / 财务
- * 每个业务域跑 Pipeline Mapping + 简易 LLM 两条路径，
- * 最终输出实体数、边数、逻辑数、动作数汇总表。
+ * 每个业务域跑 Pipeline Mapping 路径，最终输出实体数、边数、逻辑数、
+ * 动作数汇总表。
  */
 
 /// <reference types="node" />
@@ -27,21 +27,10 @@ const TEST_DATA  = path.resolve(__dirname, '../../../../test_data')
 
 const DOMAINS = ['供应链', '医疗', '财务'] as const
 type Domain = typeof DOMAINS[number]
-const RUN_REAL_LLM = process.env.PLAYWRIGHT_THREE_DOMAINS_REAL === '1'
 const PIPELINE_FIXTURE: Record<Domain, string> = {
   供应链: 'logistics_performance.csv',
   医疗: 'adverse_events.csv',
   财务: 'cash_flow.csv',
-}
-
-// ── 固定 ID（匹配当前 DB 状态） ───────────────────────────────────────────
-const MODEL_ID   = '8f347f97-e844-4d62-b81b-8c655cd3b410'   // deepseek
-const MODEL_NAME = 'deepseek-v4-flash'
-
-const PROMPT_BY_DOMAIN: Record<Domain, string> = {
-  '供应链': '9dad1123-72eb-4b9b-b5b3-1777c54ca3cd',
-  '医疗':   'd9bf7a9a-5313-4be3-b941-88c33f280566',
-  '财务':   'bff40feb-6f53-460e-97d1-b5e8d4f4a9be',
 }
 
 interface DryRunOutput {
@@ -156,24 +145,6 @@ async function collectStats(request: APIRequestContext, token: string, ontologyI
     logic: (snapshot.functions ?? []).length,
     actions: (snapshot.actions ?? []).length,
   }
-}
-
-async function pollExtraction(
-  request: APIRequestContext,
-  token: string,
-  ontologyId: string,
-  taskId: string,
-  timeoutMs = 360_000,
-): Promise<string> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 4000))
-    const body = await apiCall(request, 'GET', `/api/v1/ontologies/${ontologyId}/execute/status?task_id=${taskId}`, token)
-    const status: string = body.data?.status ?? body.status
-    console.log(`    polling: status=${status} pct=${body.data?.progress?.pct ?? 0}%`)
-    if (status === 'completed' || status === 'failed') return status
-  }
-  throw new Error('LLM extraction timed out')
 }
 
 // ── Pipeline Mapping 路径 ─────────────────────────────────────────────────
@@ -422,93 +393,11 @@ async function runPipelineMapping(
   return { pipelineId, ontologyId, stats }
 }
 
-// ── 简易 LLM 路径 ────────────────────────────────────────────────────────
-
-async function runSimpleLLM(
-  page: Page,
-  request: APIRequestContext,
-  token: string,
-  domain: Domain,
-  ts: number,
-  outDir: string,
-) {
-  const domainDir = path.join(TEST_DATA, domain)
-  const files = fs.readdirSync(domainDir).filter(f => fs.statSync(path.join(domainDir, f)).isFile()).sort()
-  console.log(`\n  [${domain}][简易LLM] 文件数: ${files.length}`)
-
-  // 1. 创建本体
-  const ontoBody = await apiCall(request, 'POST', '/api/v1/ontologies', token, {
-    name:        `E2E_${domain}_SimpleLLM_${ts}`,
-    domain,
-    description: `三领域对比 — ${domain} 简易LLM`,
-    build_mode:  'simple_llm',
-  })
-  const ontologyId: string = ontoBody.data?.id ?? ontoBody.id
-  expect(ontologyId).toBeTruthy()
-  console.log(`    本体: ${ontologyId.slice(0, 8)}`)
-
-  // 2. 截图文件上传 tab
-  await authenticatePage(page, token)
-  await page.goto(`/#/ontologies/${ontologyId}?tab=files`)
-  await page.waitForTimeout(1500)
-  await shot(page, outDir, `${domain}_llm_01_files_tab`)
-
-  // 3. 上传所有领域文件
-  const fileIds: string[] = []
-  for (const filename of files) {
-    const res = await request.post(`${API}/api/v1/ontologies/${ontologyId}/files`, {
-      headers: { Authorization: `Bearer ${token}` },
-      multipart: { file: { name: filename, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(domainDir, filename)) } },
-    })
-    const body = await res.json()
-    expect(res.ok(), `upload ${filename}: ${JSON.stringify(body)}`).toBeTruthy()
-    fileIds.push(body.data.id)
-  }
-  console.log(`    上传完成: ${fileIds.length} 个文件`)
-
-  await page.reload(); await page.waitForTimeout(1000)
-  await shot(page, outDir, `${domain}_llm_02_files_uploaded`)
-
-  // 4. 触发 LLM 提取
-  const execBody = await apiCall(request, 'POST', `/api/v1/ontologies/${ontologyId}/execute`, token, {
-    prompt_id:  PROMPT_BY_DOMAIN[domain],
-    model_id:   MODEL_ID,
-    model_name: MODEL_NAME,
-    file_ids:   fileIds,
-    constraints: [],
-  })
-  const taskId: string = execBody.data?.task_id ?? execBody.task_id
-  expect(taskId).toBeTruthy()
-  console.log(`    提取任务: ${taskId.slice(0, 8)}, 等待完成...`)
-
-  // 截图提取中
-  await page.goto(`/#/ontologies/${ontologyId}?tab=files`)
-  await page.waitForTimeout(1000)
-  await shot(page, outDir, `${domain}_llm_03_extracting`)
-
-  // 5. 轮询
-  const finalStatus = await pollExtraction(request, token, ontologyId, taskId, 1800_000)
-  console.log(`    提取结果: ${finalStatus}`)
-
-  // 6. 前端截图结果
-  await page.goto(`/#/ontologies/${ontologyId}`)
-  await page.waitForTimeout(1500)
-  await shot(page, outDir, `${domain}_llm_04_ontology`)
-
-  await page.goto(`/#/ontologies/${ontologyId}?tab=graph`)
-  await page.waitForTimeout(3000)
-  await shot(page, outDir, `${domain}_llm_05_graph`)
-
-  // 7. 统计
-  const stats = await collectStats(request, token, ontologyId)
-  return { ontologyId, taskId, finalStatus, stats }
-}
-
 // ── 测试入口 ──────────────────────────────────────────────────────────────
 
 test.describe.configure({ mode: 'serial' })
 
-test.describe('三领域对比：Pipeline Mapping vs 简易 LLM', () => {
+test.describe('三领域 Pipeline Mapping 对比', () => {
   const ts = Date.now()
   const outDir = path.resolve(
     __dirname,
@@ -566,24 +455,4 @@ test.describe('三领域对比：Pipeline Mapping vs 简易 LLM', () => {
     })
   }
 
-  // ── 简易 LLM 路径（3个域）─────────────────────────────────────────────
-  for (const domain of DOMAINS) {
-    test(`简易 LLM — ${domain}`, async ({ page, request }) => {
-      test.skip(
-        !RUN_REAL_LLM,
-        '需要 PLAYWRIGHT_THREE_DOMAINS_REAL=1、固定模型/提示词夹具及真实付费外部 LLM',
-      )
-      test.setTimeout(3_600_000) // 60 min: deepseek processes 8 files × ~3 min each
-      try {
-        const result = await runSimpleLLM(page, request, token, domain, ts, outDir)
-        rows.push({ domain, path: '简易 LLM', ...result.stats, ontologyId: result.ontologyId })
-        expect(result.finalStatus, '提取应成功').toBe('completed')
-        expect(result.stats.entities, '应有至少 1 个实体').toBeGreaterThan(0)
-      } catch (err: any) {
-        rows.push({ domain, path: '简易 LLM', entities: 0, edges: 0, logic: 0, actions: 0, ontologyId: '', error: err.message })
-        await page.screenshot({ path: path.join(outDir, `${domain}_llm_ERROR.jpg`), type: 'jpeg', quality: 75 }).catch(() => {})
-        throw err
-      }
-    })
-  }
 })

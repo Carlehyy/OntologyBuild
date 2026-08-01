@@ -5,7 +5,9 @@ on:
   workflow_dispatch:
 concurrency:
   group: deploy-nano-ontoprompt
-  cancel-in-progress: true
+  # A deployment may include a contract/drop migration. Queue a later push so
+  # it cannot interrupt the remote host between migration and readiness.
+  cancel-in-progress: false
 permissions:
   contents: read
   statuses: write
@@ -15,6 +17,20 @@ jobs:
     # 首次安装 Python/Node 依赖 + 完整后端回归 + 迁移检查 + 前端生产构建
     # 在冷缓存 runner 上可能超过 25 分钟；保留明确上限，避免误取消正常验证。
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ontologybuild_ci
+          POSTGRES_USER: ontologybuild_ci
+          POSTGRES_PASSWORD: ontologybuild_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ontologybuild_ci -d ontologybuild_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Mark deployment pending
         uses: actions/github-script@v7
@@ -56,11 +72,13 @@ jobs:
         working-directory: backend
 
       - name: Fresh database migration
+        env:
+          DATABASE_URL: postgresql://ontologybuild_ci:ontologybuild_ci@127.0.0.1:5432/ontologybuild_ci
         run: |
-          DB_FILE="$(mktemp -u /tmp/ontologybuild-ci-XXXXXX.db)"
-          DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
+          uv run alembic upgrade head
           test "$(uv run alembic heads | grep -c '(head)')" -eq 1
-          rm -f "${DB_FILE}"
+          uv run alembic downgrade 0054_fact_lineage_indexes
+          uv run alembic upgrade head
         working-directory: backend
 
       - name: Install configuration-center dependencies

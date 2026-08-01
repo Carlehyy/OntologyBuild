@@ -3,7 +3,7 @@ OntoPrompt API v2
 
 架构：FastAPI + PostgreSQL + Neo4j + ChromaDB + MinIO + Celery/Redis
 v2 新增：Pipelines 全链路（Connection→Dataset→Transform→Curated→Mapping）
-v1 兼容：/api/v1/* 路由全部保留
+v1 兼容：仅保留仍在支持范围内的 /api/v1/* 路由
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
@@ -20,10 +20,9 @@ from app.config import settings
 from app.bootstrap import health as bootstrap_health
 from app.bootstrap.lifecycle import application_lifespan
 from app.bootstrap.seeding import seed_database
-from app.routers import auth, users, ontologies, files, entities, logic, actions, extraction, graph, settings as settings_router, export, audit, mcp as mcp_router, domains
+from app.routers import auth, users, ontologies, entities, logic, actions, graph, settings as settings_router, export, audit, domains
 from app.model_configs.router import router as model_configs_router
 from app.platform.router import router as overview_router
-from app.settings.prompts.router import router as prompts_router
 from app.routers import formal as formal_router
 from app.routers import sentinel as sentinel_router
 from app.routers import collectors as collectors_router
@@ -39,7 +38,6 @@ from app.routers.v2 import logic_actions as logic_actions_v2
 from app.routers.v2 import versions as versions_v2
 from app.routers.v2 import attribute_schemas as attr_schemas_v2
 from app.routers.v2 import inference as inference_v2
-from app.routers.v2 import extraction as extraction_v2
 from app.routers.v2 import sync_tasks as sync_tasks_v2
 from app.data_channel.pipeline_tasks import router as pipeline_tasks_v2
 from app.data_channel.steward import router as steward_v2
@@ -62,9 +60,6 @@ async def lifespan(app: FastAPI):
         yield
 
 app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
-
-from app import mcp_server
-mcp_server.bind_app(app)
 
 @app.get("/health/live", tags=["health"])
 def liveness():
@@ -160,23 +155,6 @@ class McpMiddleware:
             minio_scope["raw_path"] = b"/"
             await minio_mcp.handle_mcp(minio_scope, receive, send)
             return
-        if path == "/mcp" or path.startswith("/mcp/"):
-            headers = dict(scope.get("headers") or [])
-            auth = headers.get(b"authorization", b"").decode("latin-1")
-            if not auth.startswith("Bearer "):
-                await _send_json(send, 401, {"detail": "Missing Bearer token"})
-                return
-            token = auth.removeprefix("Bearer ").strip()
-            try:
-                mcp_server.validate_bearer_token(token)
-            except HTTPException as exc:
-                await _send_json(send, exc.status_code, {"detail": exc.detail})
-                return
-            scope = dict(scope)
-            scope["path"] = "/"
-            scope["raw_path"] = b"/"
-            await mcp_server.handle_mcp(scope, receive, send, bearer_token=token)
-            return
         await self.app(scope, receive, send)
 
 
@@ -227,19 +205,15 @@ app.include_router(
 app.include_router(ontologies.router, prefix="/api/v1/ontologies", tags=["ontologies"], dependencies=ontology_guard)
 legacy_write_guard = [Depends(legacy_ontology_write_guard)]
 legacy_ontology_guard = [*legacy_write_guard, *ontology_guard]
-app.include_router(files.router, prefix="/api/v1/ontologies/{ontology_id}/files", tags=["files"], dependencies=legacy_ontology_guard)
 app.include_router(entities.router, prefix="/api/v1/ontologies/{ontology_id}/entities", tags=["entities"], dependencies=legacy_ontology_guard)
 app.include_router(logic.router, prefix="/api/v1/ontologies/{ontology_id}/logic", tags=["logic"], dependencies=legacy_ontology_guard)
 app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/actions", tags=["actions"], dependencies=legacy_ontology_guard)
-app.include_router(extraction.router, prefix="/api/v1/ontologies/{ontology_id}/execute", tags=["extraction"], dependencies=legacy_ontology_guard)
 app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"], dependencies=ontology_guard)
 app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"], dependencies=ontology_guard)
 app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"], dependencies=ontology_guard)
-app.include_router(prompts_router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(model_configs_router, prefix="/api/v1/models", tags=["models"], dependencies=models_guard)
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"], dependencies=admin_guard)
-app.include_router(mcp_router.router, prefix="/api/v1/mcp", tags=["mcp"])
 
 # 接口代理（API-Hub）管理面统一沿用平台 JWT；对 Agent 的 MCP 端点在
 # /api-hub/mcp 与 /api-hub/mcp/system，继续使用各自独立 token。
@@ -301,7 +275,6 @@ app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["
 app.include_router(versions_v2.router, prefix="/api/v2/ontologies", tags=["v2-versions"], dependencies=ontology_guard)
 app.include_router(attr_schemas_v2.router, prefix="/api/v2/ontologies", tags=["v2-attributes"], dependencies=ontology_guard)
 app.include_router(inference_v2.router, prefix="/api/v2/ontologies", tags=["v2-inference"], dependencies=ontology_guard)
-app.include_router(extraction_v2.router, prefix="/api/v2/ontologies", tags=["v2-extraction"], dependencies=legacy_ontology_guard)
 app.include_router(sync_tasks_v2.router, prefix="/api/v2/sync-tasks", tags=["v2-sync-tasks"], dependencies=asset_lake_guard)
 app.include_router(pipeline_tasks_v2.router, prefix="/api/v2/pipeline-tasks", tags=["v2-pipeline-tasks"], dependencies=asset_lake_guard)
 from app.inbox import router as inbox_router

@@ -2961,3 +2961,13 @@ def test_celery_delayed_tasks_and_compose_workers_use_the_same_app():
         assert compose["services"]["celery_worker"]["command"] == (
             "celery -A app.tasks.celery_app:celery_app worker --loglevel=info"
         )
+
+
+def test_retired_extraction_task_acknowledges_old_queued_messages():
+    from app.tasks.extraction import run_extraction
+
+    assert run_extraction.run("legacy-task-id") == {
+        "status": "retired",
+        "task_id": "legacy-task-id",
+        "message": "Ontology document extraction has been retired",
+    }

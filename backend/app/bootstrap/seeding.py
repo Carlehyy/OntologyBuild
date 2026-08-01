@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 
 from sqlalchemy import inspect, text
 
@@ -19,13 +18,11 @@ _main_logger = logging.getLogger("app.main")
 
 def seed_database() -> None:
     from app.services.auth_service import seed_admin
-    from app.models.rules_config import RulesConfig
 
     db = SessionLocal()
     try:
         # Import all models to ensure tables are created
-        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, audit_task, mcp, domain
-        from app.models import user, ontology, file, prompt, model_config, entity, logic as logic_model, action, relation, extraction_task, rules_config, mcp, domain
+        from app.models import user, ontology, model_config, entity, logic as logic_model, action, relation, audit_task, domain  # noqa: F401
         from app.models.v2 import dataset as v2_dataset, pipeline as v2_pipeline, connection as v2_connection  # noqa: F401
         from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine  # noqa: F401
         from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
@@ -90,15 +87,6 @@ def seed_database() -> None:
                 if repaired:
                     _main_logger.warning(
                         "已修复开发数据库缺失字段: %s", ", ".join(repaired))
-                columns = {
-                    col["name"]
-                    for col in inspect(conn).get_columns("extraction_tasks")
-                }
-                if "validation_report" not in columns:
-                    conn.execute(text(
-                        "ALTER TABLE extraction_tasks "
-                        "ADD COLUMN validation_report JSON"))
-                    conn.commit()
                 entity_columns = {
                     col["name"] for col in inspect(conn).get_columns("entities")
                 }
@@ -121,7 +109,7 @@ def seed_database() -> None:
                 "ALTER TABLE model_configs ADD COLUMN options JSON DEFAULT '{}'",
                 "ALTER TABLE model_configs ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
                 "ALTER TABLE model_configs ADD COLUMN is_default BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE ontology_projects ADD COLUMN build_mode VARCHAR(30) DEFAULT 'simple_llm'",
+                "ALTER TABLE ontology_projects ADD COLUMN build_mode VARCHAR(30) DEFAULT 'manual'",
                 "ALTER TABLE ontology_projects ADD COLUMN icon VARCHAR(50)",
                 "ALTER TABLE ontology_projects ADD COLUMN current_release_id VARCHAR",
                 "ALTER TABLE v2_pipelines ADD COLUMN domain VARCHAR(100) DEFAULT '通用'",
@@ -279,63 +267,5 @@ def seed_database() -> None:
             db.rollback()
             _main_logger.warning("n8n 影子流水线回填失败", exc_info=True)
 
-        # 重启时清理遗留的 running 任务 — daemon 线程被杀后 task 会永久卡在 85%
-        from app.models.extraction_task import ExtractionTask
-
-        stale = db.query(ExtractionTask).filter(
-            ExtractionTask.status == "running",
-        ).all()
-        for task in stale:
-            task.status = "failed"
-            task.error = "服务重启，任务中断。请重新触发提取。"
-        if stale:
-            db.commit()
-
-        # Seed confidence rules
-        if db.query(RulesConfig).count() == 0:
-            rules = [
-                ("confidence_entity_min", "0.5", "实体最低置信度", "Entity min confidence"),
-                ("confidence_logic_min", "0.6", "逻辑规则最低置信度", "Logic rule min confidence"),
-                ("confidence_action_min", "0.6", "动作最低置信度", "Action min confidence"),
-                ("confidence_relation_min", "0.5", "关系最低置信度", "Relation min confidence"),
-                ("confidence_high_threshold", "0.9", "高置信度阈值", "High confidence threshold"),
-                ("confidence_medium_threshold", "0.7", "中置信度阈值", "Medium confidence threshold"),
-                ("confidence_low_threshold", "0.5", "低置信度阈值", "Low confidence threshold"),
-                ("confidence_display_dashed_below", "0.7", "低于此值显示虚线边", "Show dashed edge below threshold"),
-            ]
-            for key, value, label_cn, label_en in rules:
-                db.add(RulesConfig(
-                    id=str(uuid.uuid4()),
-                    rule_key=key,
-                    rule_value=value,
-                    rule_label_cn=label_cn,
-                    rule_label_en=label_en,
-                ))
-            db.commit()
-
-        # Seed / update builtin prompts (upsert by name)
-        from app.settings.prompts.models import Prompt
-        from app.models.user import User
-        from app.settings.prompts.templates import BUILTIN_PROMPTS
-
-        admin = db.query(User).filter(User.role == "admin").first()
-        if admin:
-            for prompt_config in BUILTIN_PROMPTS:
-                existing = db.query(Prompt).filter(
-                    Prompt.name == prompt_config["name"],
-                ).first()
-                if existing:
-                    existing.content = prompt_config["content"]
-                    existing.domain = prompt_config["domain"]
-                else:
-                    db.add(Prompt(
-                        id=str(uuid.uuid4()),
-                        name=prompt_config["name"],
-                        domain=prompt_config["domain"],
-                        content=prompt_config["content"],
-                        version="v1.0",
-                        created_by=admin.id,
-                    ))
-            db.commit()
     finally:
         db.close()

@@ -41,8 +41,8 @@ npm run test:e2e:mocked
 
 - `test:e2e:mocked`：26 个完全离线 spec；配置会把后端地址指向不可达端口；
 - `test:e2e:stack`：21 个需要隔离 OntologyBuild 后端的 spec；
-- `test:e2e:external`：2 个需要显式开关及真实 LLM/外部服务的 spec；
-- `test:e2e:classification`：保证全部 49 个 spec 恰好属于一组。
+- `test:e2e:external`：1 个需要显式开关及真实 LLM/外部服务的 spec；
+- `test:e2e:classification`：保证全部 48 个 spec 恰好属于一组。
 
 新增测试必须先分类。不能通过文件名含 `real`、grep 排除或“默认 skip”来假装
 完成分类。`stack` 和 `external` 只在隔离环境执行；external 所需开关与秘密

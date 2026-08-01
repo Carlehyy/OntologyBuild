@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import logging
 
+from app.ontologies.mappings.neo4j_projection_contract import (
+    neo4j_entity_properties,
+    neo4j_safe_value,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,7 +19,19 @@ class ProjectionAdapterMixin:
             from app.services.v2.graph.neo4j_service import Neo4jService
             neo = Neo4jService()
             if neo.available:
-                count = neo.batch_upsert_entities(entity_class, entities)
+                safe_entities = [
+                    neo4j_entity_properties(
+                        entity,
+                        entity_id=entity.get("id"),
+                        ontology_id=entity.get("ontology_id"),
+                    )
+                    for entity in entities
+                ]
+                count = neo.batch_upsert_entities(
+                    entity_class,
+                    safe_entities,
+                    replace_properties=True,
+                )
                 neo.close()
                 return count
         except Exception as e:
@@ -58,11 +75,18 @@ class ProjectionAdapterMixin:
                 Entity.ontology_id == ontology_id).all()
             by_type: dict[str, list[dict]] = {}
             for entity in entities:
-                props = {"id": entity.id, "ontology_id": ontology_id,
-                         **dict(entity.properties or {})}
+                props = neo4j_entity_properties(
+                    entity.properties,
+                    entity_id=entity.id,
+                    ontology_id=ontology_id,
+                )
                 by_type.setdefault(entity.type or "Object", []).append(props)
             for label, rows in by_type.items():
-                neo.batch_upsert_entities(label, rows)
+                neo.batch_upsert_entities(
+                    label,
+                    rows,
+                    replace_properties=True,
+                )
             entity_type = {entity.id: entity.type or "Object" for entity in entities}
             for relation in self._db.query(Relation).filter(
                     Relation.ontology_id == ontology_id).all():
@@ -73,9 +97,15 @@ class ProjectionAdapterMixin:
                 neo.upsert_relation(
                     src_type, relation.source_entity, tgt_type,
                     relation.target_entity, relation.type,
-                    props={"id": relation.id, "ontology_id": ontology_id,
-                           "confidence": relation.confidence,
-                           **dict(relation.properties or {})})
+                    props={
+                        key: neo4j_safe_value(value)
+                        for key, value in {
+                            **dict(relation.properties or {}),
+                            "id": relation.id,
+                            "ontology_id": ontology_id,
+                            "confidence": relation.confidence,
+                        }.items()
+                    })
             return True
         except Exception as e:
             logger.warning("Neo4j projection rebuild failed: %s", e)

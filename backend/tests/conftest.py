@@ -34,8 +34,8 @@ def _cleanup_test_db():
 @pytest.fixture(autouse=True)
 def setup_db():
     # Import all models
-    from app.models import user, ontology, file, prompt, model_config, entity
-    from app.models import logic, action, relation, extraction_task, rules_config
+    from app.models import user, ontology, model_config, entity
+    from app.models import logic, action, relation
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)

@@ -97,6 +97,77 @@ def test_batch_upsert_unavailable_returns_zero():
         assert count == 0
 
 
+@pytest.mark.parametrize(
+    ("replace_properties", "expected_assignment", "unexpected_assignment"),
+    [
+        (False, "SET n += e.props", "SET n = e.props"),
+        (True, "SET n = e.props", "SET n += e.props"),
+    ],
+)
+def test_batch_upsert_property_assignment_is_explicit(
+    replace_properties,
+    expected_assignment,
+    unexpected_assignment,
+):
+    with patch("app.services.v2.graph.neo4j_service.GraphDatabase") as mock_gdb:
+        mock_driver, session = make_mock_driver()
+        mock_gdb.driver.return_value = mock_driver
+
+        from app.services.v2.graph.neo4j_service import Neo4jService
+
+        svc = Neo4jService(
+            uri="bolt://localhost:7687",
+            user="neo4j",
+            password="test",
+        )
+        assert svc.batch_upsert_entities(
+            "Entity",
+            [{"id": "e1", "name": "replacement"}],
+            replace_properties=replace_properties,
+        ) == 1
+
+    query = " ".join(session.run.call_args.args[0].split())
+    assert f"{expected_assignment} SET n.updated_at = datetime()" in query
+    assert unexpected_assignment not in query
+    assert session.run.call_args.kwargs["batch"] == [{
+        "key": "e1",
+        "props": {"id": "e1", "name": "replacement"},
+    }]
+
+
+def test_networkx_batch_replace_removes_stale_properties_but_default_merges():
+    import networkx as nx
+
+    from app.services.v2.graph.networkx_service import NetworkXGraphService
+
+    svc = object.__new__(NetworkXGraphService)
+    svc._g = nx.DiGraph()
+    assert svc.batch_upsert_entities(
+        "Entity",
+        [{"id": "e1", "name": "old", "stale": "remove-me"}],
+    ) == 1
+
+    assert svc.batch_upsert_entities(
+        "Entity",
+        [{"id": "e1", "name": "merged"}],
+    ) == 1
+    assert svc._g.nodes["e1"]["properties"] == {
+        "id": "e1",
+        "name": "merged",
+        "stale": "remove-me",
+    }
+
+    assert svc.batch_upsert_entities(
+        "Entity",
+        [{"id": "e1", "name": "replacement"}],
+        replace_properties=True,
+    ) == 1
+    assert svc._g.nodes["e1"]["properties"] == {
+        "id": "e1",
+        "name": "replacement",
+    }
+
+
 def test_legacy_bridge_sync_unavailable_graceful():
     """Neo4j 미연결 시 bridge sync가 오류 없이 처리"""
     with patch("app.services.v2.graph.neo4j_service.GraphDatabase") as mock_gdb:

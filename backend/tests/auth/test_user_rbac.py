@@ -87,7 +87,10 @@ def test_role_menu_permissions_protect_pages_and_apis(client, admin_user, auth_h
     assert allowed.status_code == 200
 
     # System configuration is administrator-only even when called directly.
-    settings = client.get("/api/v1/settings/rules", headers=editor_headers)
+    settings = client.get(
+        "/api/v1/settings/agent-config",
+        headers=editor_headers,
+    )
     assert settings.status_code == 403
 
 

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import SessionLocal
 # 注册全部表, 否则 SQLAlchemy 在 flush 时无法解析 FK
-from app.models import user, ontology, entity, relation, logic, action, file, prompt, model_config, extraction_task, rules_config  # noqa: F401
+from app.models import user, ontology, entity, relation, logic, action, model_config  # noqa: F401
 from app.models.v2 import connection, curated, mapping, logic as v2_logic, action as v2_action  # noqa: F401
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion

@@ -14,7 +14,8 @@ Agent 看到的工具数量都不变：
 - 工具面恒定且极小（2 个），上下文友好；接口增减只改变 list 的返回内容，不改变工具签名。
 - “开放”用的就是接口的 open_enabled 标记，网页里勾选即时生效（每次调用都实时查库）。
 - 执行仍走平台已有的 executor，自动带 W3 登录态、自动透明重登。
-- 传输用 Streamable HTTP（无状态 + JSON 响应），挂在主服务的 /mcp 路径上。
+- 传输用 Streamable HTTP（无状态 + JSON 响应），挂在主服务的
+  `/api-hub/mcp` 路径上。
 """
 import json
 import re
@@ -56,7 +57,7 @@ def _published() -> list[dict]:
 
 
 def published_tools() -> list[dict]:
-    """给前端 /api/mcp/info 用：已发布为独立 MCP 工具的接口及其可读引用。"""
+    """给前端 `/api/api-hub/mcp/info` 提供已发布接口及其可读引用。"""
     return [{"id": r["id"], "name": r["name"], "tool_name": tool_name(r["name"], r["id"])}
             for r in _published()]
 
@@ -281,7 +282,7 @@ async def handle_mcp(scope, receive, send):
 
 # ═══════════════════════════════════════════════════════════
 #  系统管理 MCP —— 供其它 Agent 管理接口与分组
-#  独立端点 /mcp/system，独立令牌 SYSTEM_MCP_TOKEN。
+#  独立端点 /api-hub/mcp/system，独立令牌 SYSTEM_MCP_TOKEN。
 # ═══════════════════════════════════════════════════════════
 
 sys_server = Server(config.MCP_SERVER_NAME + "-system")

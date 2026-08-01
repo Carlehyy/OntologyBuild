@@ -134,7 +134,13 @@ class NetworkXGraphService:
             )
         return True
 
-    def batch_upsert_entities(self, label: str, entities: list[dict], key_field: str = "id") -> int:
+    def batch_upsert_entities(
+        self,
+        label: str,
+        entities: list[dict],
+        key_field: str = "id",
+        replace_properties: bool = False,
+    ) -> int:
         """批量 MERGE"""
         count = 0
         for e in entities:
@@ -145,7 +151,10 @@ class NetworkXGraphService:
             if self._g.has_node(element_id):
                 existing = self._g.nodes[element_id]
                 existing["labels"] = list(set(existing.get("labels", []) + [label]))
-                existing["properties"].update(e)
+                if replace_properties:
+                    existing["properties"] = dict(e)
+                else:
+                    existing["properties"].update(e)
             else:
                 self._g.add_node(element_id, labels=[label], properties=dict(e))
             count += 1

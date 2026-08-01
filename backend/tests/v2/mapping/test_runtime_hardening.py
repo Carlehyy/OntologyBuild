@@ -1617,3 +1617,28 @@ def test_mapping_task_missing_mapping_is_hard_failure():
         with pytest.raises(ValueError, match="not found in ontology"):
             mapping_apply_task.run("missing-map", "ont-1")
     fake_db.close.assert_called_once()
+
+
+def test_formal_projection_preserves_explicit_reserved_business_properties():
+    """Explicit id/name mappings must outrank the legacy Entity envelope."""
+    from app.ontologies.mappings.formal_projection import (
+        _build_object_type_properties,
+    )
+
+    properties, primary_property = _build_object_type_properties(
+        [{
+            "id": "ORDER-1",
+            "name": "First order",
+            "source_id": "platform-row-identity",
+        }],
+        ["id"],
+        [
+            {"column": "id", "property": "id"},
+            {"column": "name", "property": "name"},
+        ],
+    )
+
+    by_name = {item["name"]: item for item in properties}
+    assert set(by_name) == {"id", "name"}
+    assert primary_property == by_name["id"]["id"]
+    assert by_name["id"]["primaryKeyPart"] == 1

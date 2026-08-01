@@ -7,6 +7,7 @@ APP_DIR_VALIDATOR="$SCRIPT_DIR/validate-deploy-app-dir.sh"
 DEPLOY_SCRIPT="$REPO_ROOT/scripts/deploy-prod.sh"
 DEPLOY_WORKFLOW="$REPO_ROOT/.github/workflows/deploy-nano-ontoprompt.yml"
 ARCHIVE_SCRIPT="$SCRIPT_DIR/create-deployment-archive.sh"
+NGINX_CONFIG="$REPO_ROOT/frontend/nginx/default.conf"
 
 assert_accepted() {
   local value="$1"
@@ -40,6 +41,23 @@ if grep -q 'StrictHostKeyChecking=no' "$DEPLOY_WORKFLOW"; then
   printf 'deployment workflow must not bypass SSH host-key verification\n' >&2
   exit 1
 fi
+if ! grep -Fq 'cancel-in-progress: false' "$DEPLOY_WORKFLOW"; then
+  printf 'deployment workflow must queue rather than cancel an in-flight migration\n' >&2
+  exit 1
+fi
+if ! grep -Fq 'location = /mcp {' "$NGINX_CONFIG" \
+    || ! grep -Fq 'location /mcp/ {' "$NGINX_CONFIG"; then
+  printf 'retired generic MCP paths must return an explicit production 404\n' >&2
+  exit 1
+fi
+minio_mcp_proxy_block="$(
+  sed -n '/location \^~ \/mcp\/minio {/,/^[[:space:]]*}/p' "$NGINX_CONFIG"
+)"
+if ! grep -Fq 'proxy_pass http://backend:8000;' <<<"$minio_mcp_proxy_block" \
+    || ! grep -Fq 'proxy_buffering off;' <<<"$minio_mcp_proxy_block"; then
+  printf 'production Nginx must stream the preserved MinIO MCP to backend\n' >&2
+  exit 1
+fi
 sshpass_command_count="$(grep -c 'sshpass -p' "$DEPLOY_WORKFLOW")"
 strict_sshpass_command_count="$(
   grep -c 'sshpass -p.*StrictHostKeyChecking=yes' "$DEPLOY_WORKFLOW"
@@ -66,6 +84,42 @@ if grep -Eq '^[[:space:]]+environment:[[:space:]]+production[[:space:]]*$' \
     || grep -Fq '${{ vars.' "$DEPLOY_WORKFLOW" \
     || grep -Fq 'materialize-production-dependencies.sh' "$DEPLOY_WORKFLOW"; then
   printf 'deployment configuration source changed without an explicit migration\n' >&2
+  exit 1
+fi
+
+stop_line="$(grep -nF \
+  'compose stop --timeout 30 frontend celery_worker backend' \
+  "$DEPLOY_SCRIPT" | tail -n1 | cut -d: -f1)"
+migration_line="$(grep -nF \
+  'run_with_retry compose run --rm --no-deps backend alembic upgrade head' \
+  "$DEPLOY_SCRIPT" | cut -d: -f1)"
+startup_line="$(grep -nF \
+  'run_with_retry compose up -d --remove-orphans' \
+  "$DEPLOY_SCRIPT" | cut -d: -f1)"
+if [ -z "$stop_line" ] || [ -z "$migration_line" ] || [ -z "$startup_line" ] \
+    || [ "$stop_line" -ge "$migration_line" ] \
+    || [ "$migration_line" -ge "$startup_line" ]; then
+  printf 'runtime must stop before migration and restart only after migration\n' >&2
+  exit 1
+fi
+if ! grep -Fq 'compose start "${previous_runtime_services[@]}"' \
+    "$DEPLOY_SCRIPT" \
+    || ! grep -Fq 'migration_completed=1' "$DEPLOY_SCRIPT" \
+    || ! grep -Fq 'pre_migration_revision="$(database_current_revision)"' \
+      "$DEPLOY_SCRIPT" \
+    || ! grep -Fq '"$current_revision" != "$pre_migration_revision"' \
+      "$DEPLOY_SCRIPT"; then
+  printf 'migration failure may restore the previous runtime only when the database revision is unchanged\n' >&2
+  exit 1
+fi
+post_migration_stop_count="$(
+  grep -cF 'stop_new_runtime_after_failed_deploy' "$DEPLOY_SCRIPT"
+)"
+if [ "$post_migration_stop_count" -ne 3 ] \
+    || ! grep -Fq \
+      'if ! compose stop --timeout 30 frontend celery_worker backend; then' \
+      "$DEPLOY_SCRIPT"; then
+  printf 'post-migration startup/readiness failures must stop the new runtime\n' >&2
   exit 1
 fi
 

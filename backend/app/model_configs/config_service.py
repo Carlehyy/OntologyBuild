@@ -15,7 +15,6 @@ from app.model_configs.schemas import (
     ModelConfigImportRequest,
     ModelConfigUpdate,
 )
-from app.models.extraction_task import ExtractionTask
 from app.services.encryption_service import encrypt
 
 
@@ -276,12 +275,6 @@ def update_model(
 
 def delete_model(db: Session, model_id: str) -> None:
     config = require_config(db, model_id)
-    db.query(ExtractionTask).filter(
-        ExtractionTask.model_id == model_id,
-    ).update(
-        {ExtractionTask.model_id: None},
-        synchronize_session=False,
-    )
     was_default = config.is_default
     db.delete(config)
     if was_default:

@@ -229,7 +229,7 @@ export default function OverviewPage() {
     { icon: Activity, c: '#d97706', title: '规则命中', detail: '循环担保风险规则触发', time: '刚刚', to: '/agent' },
     { icon: Target, c: '#e11d48', title: '决策执行', detail: '自动审批采购单 #PO-2048', time: '38秒前', to: '/agent' },
     { icon: GitBranch, c: '#6366f1', title: '本体发布', detail: 'v1.2 供应链本体已发布', time: '2分钟前', to: '/ontologies' },
-    { icon: ShieldCheck, c: '#16a34a', title: '影子试跑', detail: '3 条规则待人工复核', time: '6分钟前', to: '/settings/extraction' },
+    { icon: ShieldCheck, c: '#16a34a', title: '影子试跑', detail: '3 条规则待人工复核', time: '6分钟前', to: '/agent' },
   ]
 
   /* 顶部：面向治理的 actionable 指标（看了能行动，而非原始计数） */

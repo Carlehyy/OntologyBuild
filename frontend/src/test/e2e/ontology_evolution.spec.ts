@@ -27,6 +27,49 @@ async function api<T>(request: APIRequestContext, token: string, method: 'get' |
   return body.data ?? body
 }
 
+async function waitForPublishedDatasetProjection(
+  request: APIRequestContext,
+  token: string,
+  datasetId: string,
+  versionNo: number,
+  ontologyId: string,
+  mappingId: string,
+) {
+  let automation: any
+  await expect.poll(async () => {
+    const versions = await api<any[]>(request, token, 'get', `/api/v2/datasets/${datasetId}/versions`)
+    automation = versions.find(version => version.version_no === versionNo)?.automation
+    return automation?.status
+  }, {
+    message: `dataset version ${versionNo} automation must finish before runtime actions`,
+    timeout: 60_000,
+    intervals: [250, 500, 1_000, 2_000],
+  }).toBe('completed')
+  expect(automation?.last_error).toBeNull()
+  expect(automation?.result?.manual_mapping?.status).toBe('applied')
+  expect(automation?.result?.manual_mapping?.ontologies?.some(
+    (item: any) => item.ontology_id === ontologyId,
+  )).toBe(true)
+
+  await waitForMappingApplied(request, token, ontologyId, mappingId)
+}
+
+async function waitForMappingApplied(
+  request: APIRequestContext,
+  token: string,
+  ontologyId: string,
+  mappingId: string,
+) {
+  await expect.poll(async () => {
+    const mappings = await api<any[]>(request, token, 'get', `/api/v2/ontologies/${ontologyId}/mappings`)
+    return mappings.find(mapping => mapping.id === mappingId)?.status
+  }, {
+    message: `mapping ${mappingId} must remain applied after dataset automation`,
+    timeout: 30_000,
+    intervals: [250, 500, 1_000],
+  }).toBe('applied')
+}
+
 async function verifyWorkspaceStagePosition(page: Page) {
   const stage = page.getByTestId('graph-workspace-stage')
   await expect(stage).toBeVisible()
@@ -125,7 +168,7 @@ async function verifyReadonlyGraphInspection(page: Page, objectTypeId: string) {
 }
 
 test('complete branch → real-data trial → reviewed release works in the browser', async ({ page, request }) => {
-  test.setTimeout(180_000)
+  test.setTimeout(240_000)
   const token = await login(page)
   const suffix = Date.now().toString(36)
   const objectTypeId = `ot-browser-order-${suffix}`
@@ -212,11 +255,13 @@ test('complete branch → real-data trial → reviewed release works in the brow
       },
     },
   })
-  expect(upload.ok(), await upload.text()).toBeTruthy()
+  const uploadText = await upload.text()
+  expect(upload.ok(), uploadText).toBeTruthy()
+  const mappingId = `map-browser-order-${suffix}`
   await api<any>(request, token, 'put', `/api/v2/ontologies/${ontology.id}/versions/${draft.id}/workspace/mappings`, {
     baseRevision: saved.revision,
     mappings: [{
-      id: `map-browser-order-${suffix}`, curatedDatasetId: dataset.id,
+      id: mappingId, curatedDatasetId: dataset.id,
       entityClass: 'BrowserOrder', targetObjectTypeId: objectTypeId,
       fieldMapping: {
         id: 'id',
@@ -526,6 +571,26 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect(evolvedVersionOrder.slice(0, 3)).toEqual(['v0', 'v0.1', 'v1'])
 
   const releasedTree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
+  await waitForMappingApplied(request, token, ontology.id, mappingId)
+  const publishedUpload = await request.post(`${API}/api/v2/datasets/${dataset.id}/upload`, {
+    headers: { Authorization: `Bearer ${token}` },
+    multipart: {
+      file: {
+        name: 'orders-after-publish.csv', mimeType: 'text/csv',
+        buffer: Buffer.from('id,name\nE2E-1,真机一号\nE2E-2,真机二号\n'),
+      },
+    },
+  })
+  const publishedUploadText = await publishedUpload.text()
+  expect(publishedUpload.ok(), publishedUploadText).toBeTruthy()
+  const publishedUploadBody = JSON.parse(publishedUploadText)
+  const publishedVersionNo = Number(
+    (publishedUploadBody.data ?? publishedUploadBody).version_no,
+  )
+  expect(Number.isInteger(publishedVersionNo)).toBeTruthy()
+  await waitForPublishedDatasetProjection(
+    request, token, dataset.id, publishedVersionNo, ontology.id, mappingId,
+  )
   await api<any>(request, token, 'put', `/api/v2/formal/ontologies/${ontology.id}/agent/profile`, {
     allowedActionIds: [`act-browser-order-${suffix}`],
   })

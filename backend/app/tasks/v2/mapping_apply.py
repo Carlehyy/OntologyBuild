@@ -63,7 +63,7 @@ def mapping_apply_task(mapping_id: str, ontology_id: str):
 
 # Celery 注册（可选）
 try:
-    from app.tasks.extraction import celery_app
+    from app.tasks.celery_app import celery_app
     mapping_apply_task = celery_app.task(mapping_apply_task)
 except Exception:
     pass

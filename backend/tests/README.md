@@ -51,8 +51,8 @@ migrations/models/perf/pipeline/search/services` 等明确二级目录。若某�
 - Plugin 社区由 `frontend/src/test/e2e/community.spec.ts` 覆盖用户可见契约，
   `tests/auth/test_user_rbac.py` 覆盖独立 MCP 权限边界；Skill 社区用例固定当前
   维护中占位。尚无独立 `tests/community/`，新增同域后端实现测试时再建立；
-- `tests/settings/test_prompts.py`：提示词 CRUD、内置模板 checksum、旧 facade
-  与 OpenAPI 契约；
+- `tests/architecture/test_retired_legacy_extraction_contract.py`：精确固定 22 个
+  已退役 OpenAPI operation、raw `/mcp` 和独立 MCP 能力的保留边界；
 - `tests/settings/test_n8n_client.py`：工作流客户端错误契约；
 - `tests/model_configs/`：模型配置行为、旧 facade、selector patch 路径与
   OpenAPI 契约；

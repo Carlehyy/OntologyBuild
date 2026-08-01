@@ -18,7 +18,6 @@ import {
   PlugZap,
   Repeat,
   Settings,
-  Sparkles,
   Table2,
   Waypoints,
   Workflow,
@@ -85,14 +84,11 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'models', to: '/models', icon: Cpu, label: '模型配置', description: '模型提供商与运行配置' },
   {
     key: 'system_settings', to: '/settings', icon: Settings, label: '系统设置', adminOnly: true, subItems: [
-      { key: 'settings.extraction', to: '/settings/extraction', icon: Sparkles, label: '规则设置', adminOnly: true },
       { key: 'settings.users', to: '/settings/users', icon: Network, label: '用户管理', adminOnly: true },
-      { key: 'settings.prompts', to: '/settings/prompts', icon: Sparkles, label: '提示词模板', adminOnly: true },
       { key: 'settings.agents', to: '/settings/agents', icon: Bot, label: '智能体配置', adminOnly: true },
       { key: 'settings.workflows', to: '/settings/workflows', icon: Workflow, label: '工作流配置', adminOnly: true },
       { key: 'settings.minio', to: '/settings/minio', icon: HardDrive, label: 'MinIO 存储', adminOnly: true },
       { key: 'settings.domains', to: '/settings/domains', icon: Globe, label: '领域设置', adminOnly: true },
-      { key: 'settings.open_interfaces', to: '/settings/open-interfaces', icon: PlugZap, label: '开放接口', adminOnly: true },
     ],
   },
 ]

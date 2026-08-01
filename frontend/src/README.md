@@ -51,7 +51,7 @@ pages/agent/
 └── components/                 workbench 展示、本体网络
 pages/settings/
 ├── SettingsPage.tsx            URL/tab 解析、能力 hook 调用、视图选择
-├── hooks/                      五个设置能力的状态、API 与副作用
+├── hooks/                      Agent、工作流与领域设置的状态、API 与副作用
 └── tabs/                       接收显式 view-model props 的展示层
 palantir-graph/components/
 ├── Panel.tsx                   选中定义类型的 dispatcher 与只读入口

@@ -6,11 +6,6 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 APP_DIR = BACKEND_DIR / "app"
 
 SCOPED_FORBIDDEN_IMPORTS = {
-    APP_DIR / "settings" / "prompts": {
-        "app.models.prompt",
-        "app.routers.prompts",
-        "app.schemas.prompt",
-    },
     APP_DIR / "model_configs": {
         "app.models.model_config",
         "app.routers.models",
@@ -134,7 +129,7 @@ def test_main_assembles_migrated_canonical_routers_directly():
     imports = _absolute_imports(APP_DIR / "main.py")
     imported_modules = {module for _, module in imports}
 
-    assert "app.settings.prompts.router" in imported_modules
+    assert "app.settings.prompts.router" not in imported_modules
     assert "app.model_configs.router" in imported_modules
 
     tree = ast.parse((APP_DIR / "main.py").read_text(encoding="utf-8"))

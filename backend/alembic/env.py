@@ -12,7 +12,10 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Alembic is also invoked programmatically by tests and maintenance tools.
+    # Do not disable application loggers that were already created by the host
+    # process; otherwise later requests can silently lose operational logs.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Use the same Settings resolution as the application, but only to replace the
 # repository's committed placeholder URL.  An explicit sqlalchemy.url supplied

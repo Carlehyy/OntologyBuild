@@ -71,16 +71,6 @@ def create_v1_db(db_path: str):
             properties TEXT,
             created_at TEXT
         );
-        CREATE TABLE prompts (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            domain TEXT,
-            content TEXT,
-            version TEXT DEFAULT 'v1.0',
-            created_by TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        );
         CREATE TABLE model_configs (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -111,10 +101,6 @@ def create_v1_db(db_path: str):
         );
         INSERT INTO relations VALUES (
             'r-1', 'o-1', 'e-1', 'e-2', 'COMPETES', 0.8, '{}', datetime('now')
-        );
-        INSERT INTO prompts VALUES (
-            'p-1', '供应链提示词', '供应链', '提取供应链实体', 'v1.0', 'u-1',
-            datetime('now'), datetime('now')
         );
     """)
     conn.commit()
@@ -157,9 +143,30 @@ def test_migration_stats_structure():
     assert d["migrated"]["ontologies"] == 2
     assert d["migrated"]["entities"] == 20
     assert d["migrated"]["relations"] == 0
-    assert d["migrated"]["files"] == 0
-    assert d["migrated"]["prompts"] == 0
     assert d["migrated"]["model_configs"] == 0
+    assert "files" not in d["migrated"]
+    assert "prompts" not in d["migrated"]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ({"id": "old-no-mode"}, "manual"),
+        ({"id": "old-llm", "build_mode": " simple_llm "}, "manual"),
+        (
+            {"id": "mapping", "build_mode": " pipeline_mapping "},
+            "pipeline_mapping",
+        ),
+    ],
+)
+def test_ontology_migration_normalizes_retired_or_missing_build_mode(
+    source,
+    expected,
+):
+    from scripts.migrations.migrate_v1_to_v2 import V1ToV2Migrator
+
+    mapped = V1ToV2Migrator._map_ontology(dict(source))
+    assert mapped["build_mode"] == expected
 
 
 def test_migration_dry_run(v1_db):
@@ -178,7 +185,6 @@ def test_migration_dry_run(v1_db):
         with patch.object(migrator, "_connect_v2", return_value=None):
             migrator._connect_v1()
             migrator._migrate_users()
-            migrator._migrate_prompts()
             migrator._migrate_ontologies_and_entities()
     finally:
         # 确保 SQLite 连接被关闭（Windows 文件锁兼容）
@@ -193,7 +199,6 @@ def test_migration_dry_run(v1_db):
     assert migrator.stats.ontologies == 1
     assert migrator.stats.entities == 2
     assert migrator.stats.relations == 1
-    assert migrator.stats.prompts == 1
 
 
 def test_migration_counts_entities(v1_db):

@@ -39,6 +39,13 @@ def test_fresh_upgrade_builds_data_management_contract(tmp_path, monkeypatch):
 
     engine = create_engine(f"sqlite:///{db_path}")
     inspector = inspect(engine)
+    assert {
+        "rules_config",
+        "extraction_tasks",
+        "prompts",
+        "uploaded_files",
+        "mcp_interface_configs",
+    }.isdisjoint(inspector.get_table_names())
     with engine.connect() as conn:
         custom_menu_keys = conn.execute(text(
             "SELECT menu_keys FROM role_menu_permissions WHERE role = 'custom'"

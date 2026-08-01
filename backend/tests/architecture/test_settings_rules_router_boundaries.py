@@ -1,4 +1,4 @@
-"""Protect Settings rules, Agent, and workflow HTTP boundaries."""
+"""Protect the remaining Settings Agent and workflow HTTP boundaries."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from app.settings.agents import schemas as agent_schemas
 from app.settings.rules import (
     agent_config_service,
     router as settings_router,
-    rules_service,
     workflow_config_service,
 )
 from app.settings.workflows import schemas as workflow_schemas
@@ -18,14 +17,11 @@ from app.settings.workflows import schemas as workflow_schemas
 
 ROUTER_PATH = Path(settings_router.__file__).resolve()
 SERVICE_PATHS = (
-    Path(rules_service.__file__).resolve(),
     Path(agent_config_service.__file__).resolve(),
     Path(workflow_config_service.__file__).resolve(),
 )
 
 DELEGATES = {
-    "get_rules": ("rules_service", "get_rules"),
-    "update_rules": ("rules_service", "update_rules"),
     "get_agent_config": (
         "agent_config_service",
         "get_agent_config",
@@ -57,18 +53,6 @@ DELEGATES = {
 }
 
 ROUTE_CONTRACT = {
-    "get_rules": (
-        "/rules",
-        {"GET"},
-        None,
-        ("db", "_"),
-    ),
-    "update_rules": (
-        "/rules",
-        {"PUT"},
-        None,
-        ("body", "db", "_"),
-    ),
     "get_agent_config": (
         "/agent-config",
         {"GET"},
@@ -174,7 +158,7 @@ def test_settings_handlers_are_thin_named_service_adapters():
     assert len(source.splitlines()) <= 220
 
 
-def test_settings_route_contract_is_unchanged():
+def test_remaining_settings_route_contract_is_explicit():
     routes = {route.name: route for route in settings_router.router.routes}
     assert set(routes) == set(ROUTE_CONTRACT)
 

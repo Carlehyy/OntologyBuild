@@ -207,6 +207,7 @@ def test_mapping_extracted_modules_do_not_depend_on_facade_or_http_router():
         "entity_reconciliation.py",
         "errors.py",
         "identity_metadata.py",
+        "neo4j_projection_contract.py",
         "projection_adapter.py",
         "relation_processing.py",
     ):
@@ -228,6 +229,7 @@ def test_mapping_facade_and_extracted_modules_stay_bounded():
         "candidate_discovery.py": 450,
         "entity_reconciliation.py": 180,
         "identity_metadata.py": 600,
+        "neo4j_projection_contract.py": 100,
         "projection_adapter.py": 180,
         "relation_processing.py": 850,
     }

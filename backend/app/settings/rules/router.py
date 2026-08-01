@@ -2,11 +2,8 @@ import httpx
 import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import List
-from pydantic import BaseModel
 from app.deps import get_db, get_current_user, require_admin
 from app.config import settings
-from app.models.rules_config import RulesConfig
 from app.models.agent_config import AgentConfig
 from app.models.workflow_config import WorkflowConfig
 from app.services.encryption_service import encrypt, decrypt
@@ -32,7 +29,6 @@ from app.services.workflow.n8n_client import (
 )
 from app.settings.rules import (
     agent_config_service,
-    rules_service,
     workflow_config_service,
 )
 
@@ -46,28 +42,6 @@ _normalize_base_url = agent_config_service._normalize_base_url
 _build_qwenpaw_api_base = agent_config_service._build_qwenpaw_api_base
 _login_qwenpaw = agent_config_service._login_qwenpaw
 _get_workflow_config = workflow_config_service._get_workflow_config
-
-
-class RuleUpdate(BaseModel):
-    rule_key: str
-    rule_value: str
-
-
-@router.get("/rules")
-def get_rules(
-    db: Session = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    return rules_service.get_rules(db)
-
-
-@router.put("/rules")
-def update_rules(
-    body: List[RuleUpdate],
-    db: Session = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    return rules_service.update_rules(body, db)
 
 
 @router.get("/agent-config", response_model=AgentConfigResponse)

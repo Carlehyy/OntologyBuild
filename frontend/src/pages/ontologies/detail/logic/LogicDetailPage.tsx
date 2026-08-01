@@ -145,7 +145,7 @@ export default function LogicDetailPage() {
   if (isLoading) return <div className="p-6 text-gray-400">加载中...</div>
   if (!rule) return <div className="p-6 text-red-500">逻辑规则未找到</div>
 
-  // linked_entities 可能是实体显示名(简易 LLM)或实体类型名(Pipeline Mapping)
+  // linked_entities 兼容历史显示名及当前实体类型名。
   const linkedKeys = new Set(rule.linked_entities ?? [])
   const entityHit = (e: Entity) =>
     linkedKeys.has(e.name_cn) || (e.type ? linkedKeys.has(e.type) : false) || (e.name_en ? linkedKeys.has(e.name_en) : false)

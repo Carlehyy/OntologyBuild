@@ -15,15 +15,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import SessionLocal
-from app.models import user, ontology, entity, relation, logic, action, file, prompt, model_config, extraction_task, rules_config  # noqa: F401
+from app.models import user, ontology, entity, relation, logic, action, model_config  # noqa: F401
 from app.models.v2 import connection, curated, mapping as v2_mapping, logic as v2_logic, action as v2_action  # noqa: F401
 from app.models.ontology import OntologyProject
 from app.models.entity import Entity
 from app.models.relation import Relation
 from app.models.logic import LogicRule
 from app.models.action import Action
-from app.models.file import UploadedFile
-from app.models.extraction_task import ExtractionTask
 from app.models.model_config import ModelConfig
 from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
@@ -71,7 +69,6 @@ def main(keep_prefix: str, execute: bool):
             for model_, col in [
                 (Relation, Relation.ontology_id), (Entity, Entity.ontology_id),
                 (LogicRule, LogicRule.ontology_id), (Action, Action.ontology_id),
-                (UploadedFile, UploadedFile.ontology_id), (ExtractionTask, ExtractionTask.ontology_id),
                 (OntologyMapping, OntologyMapping.ontology_id),
                 (OntologyLinkMapping, OntologyLinkMapping.ontology_id),
                 (OntologyLogicRule, OntologyLogicRule.ontology_id),

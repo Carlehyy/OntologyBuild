@@ -15,7 +15,7 @@
 | `events` | 事件登记、附件、审计和第三方 ingest |
 | `inbox` | 跨业务收件箱契约 |
 | `community` | Plugin 社区 MCP 适配入口；Skill 社区当前无同域后端 |
-| `settings` | 规则、用户、提示词、工作流、存储、领域和开放接口 |
+| `settings` | 用户、Agent、工作流、存储和领域设置 |
 
 ## 迁移期兼容层
 
@@ -32,11 +32,8 @@
 facade 处理：
 
 ```text
-app/routers/extraction.py
 app/routers/settings.py
-app/models/extraction_task.py
 app/models/__init__.py
-app/schemas/extraction.py
 app/services/local_config_sync.py
 app/services/storage_service.py
 ```
@@ -65,8 +62,9 @@ app/services/v2/vector/chroma_service.py
 `app/services/model_config_selector.py` 是一个纯转发 facade，但部分调用方会在
 函数执行时从该路径导入，以保留既有 monkeypatch/扩展点。`model_configs`
 自身的 models、schemas 和 selector 必须使用 canonical import；上述动态调用
-点在兼容测试迁移前不得批量替换。提示词生成同理继续保留
-`app.services.llm_service._call_llm` patch 路径。
+点在兼容测试迁移前不得批量替换。`app.services.llm_service._call_llm` 仍被
+模型配置、Agent、业务探索和数据管家等存量调用方作为 patch seam 使用；这与
+已删除的系统设置提示词模板不是同一能力，不能因名称相近而移除。
 
 迁移顺序必须是：
 
@@ -80,6 +78,7 @@ app/services/v2/vector/chroma_service.py
 
 | 日期 | 业务域 | 收口内容 | 保留兼容 | 证据 |
 |---|---|---|---|---|
+| 2026-08-02 | 遗留文档本体抽取 | 删除 settings rules/prompts/open interfaces、v1 files/execute、v2 extraction 的 HTTP/ORM/seed/facade；0055 删除五张专用表 | `app.tasks.extraction.run_extraction` 仅保留 retired tombstone；通用文档转换器与图/向量迁移 bridge 继续供其他业务域/维护脚本使用 | 精确删除 22 个 OpenAPI operation；迁移 0054→head→0054→head；API Hub/MinIO/community/super-assistant MCP 正向保留 |
 | 2026-07-30 | `platform/overview` | `main.py` 直接装配 canonical router；4 个 ORM import 收口；测试移入 `tests/platform/` | `app/routers/overview.py` | 平台/RBAC 定向 12 passed；归一化 OpenAPI hash 未变化；Alembic head `0054_fact_lineage_indexes` |
 | 2026-07-30 | `settings/prompts` | 模板从 router 提取到 `templates.py`；router/model/schema 与 seed 改用 canonical import；测试移入 `tests/settings/` | `app/routers/prompts.py`、`app/models/prompt.py`、`app/schemas/prompt.py`、`app.services.llm_service` patch 路径 | 定向 8 passed；8 个 OpenAPI operation/tag 固定；8 份内置模板 SHA-256 固定 |
 | 2026-07-30 | `model_configs` | 配置生命周期/默认选择、连通性探测、调用统计查询和安全序列化分别进入 `config_service.py`、`connectivity_service.py`、`usage_query_service.py`、`presentation.py`；router 587→175 行 | 旧 model/schema/router/selector facade 与 11 个 router helper 对象 | 行为 26、边界联合 29 passed；11 个 OpenAPI operation/tag 与全应用指纹稳定 |
@@ -125,8 +124,10 @@ app/services/v2/vector/chroma_service.py
   薄 handler、调用时 patch 和事务/调度边界；
 - `test_events_router_boundaries.py` 固定 Event Registry 查询、附件、ingest
   分层与时间/临时文件兼容 seam；
-- `test_settings_rules_router_boundaries.py` 固定规则、Agent 配置和工作流配置的
-  三类 service、9 个薄 handler、路由契约、旧 helper 对象及请求时依赖注入；
+- `test_settings_rules_router_boundaries.py` 固定剩余 Agent 配置和工作流配置的
+  两类 service、7 个薄 handler、路由契约、旧 helper 对象及请求时依赖注入；
+- `test_retired_legacy_extraction_contract.py` 精确拒绝 22 个退役 operation 和
+  raw `/mcp`，并正向固定 API Hub、MinIO、社区和超级助手 MCP；
 - `test_exploration_router_boundaries.py`、
   `test_super_assistant_router_boundaries.py` 和
   `test_agent_runtime_router_boundaries.py` 固定三个复杂 API 聚合面的单一委派、

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-供应链全流程脚本 v2
+供应链数据接入与映射全流程脚本 v2
 - Pipeline: connector(8文件) → storage → transform(deepseek LLM + mimo-omni VLM) → output
-- Ontology: 由 pipeline mapping + LLM extraction 自动生成（不手动创建实体）
+- Ontology: 创建手工建模项目，再由 pipeline mapping 写入实例数据
 - Neo4j: mapping apply 时自动写入图数据库
+
+本脚本不会调用已退役的 Prompt、旧本体文件上传或文档→本体抽取接口。
 """
-import json, sys, os, time
+import sys, os
 import httpx
 
 BASE_URL = "http://localhost:8000"
@@ -203,8 +205,8 @@ def create_ontology(c, token):
     r = c.post("/api/v1/ontologies", headers=h(token), json={
         "name": "供应链知识本体 v2",
         "domain": "供应链",
-        "description": "由Pipeline Mapping + LLM自动提取生成的供应链知识图谱本体",
-        "build_mode": "simple_llm",
+        "description": "手工建模后由 Pipeline Mapping 写入实例数据的供应链知识本体",
+        "build_mode": "manual",
     })
     r.raise_for_status()
     oid = r.json()["data"]["id"]
@@ -212,98 +214,7 @@ def create_ontology(c, token):
     return oid
 
 
-# ─── Step 5: LLM 提取（从 curated 数据中提取本体）────────────
-def run_llm_extraction(c, token, ontology_id, model_id, model_name, prompt_id):
-    """先上传 curated 数据为文件，再触发 LLM 提取"""
-    # 获取 curated datasets
-    curated_list = c.get("/api/v2/curated", headers=h(token)).json()
-    print(f"  [INFO] 共 {len(curated_list)} 个 curated datasets 可用")
-
-    # 收集文本内容用于 LLM 提取
-    all_text_parts = []
-    for ds in curated_list[:6]:  # 最多6个，避免超长
-        cid = ds["id"]
-        rows = c.get(f"/api/v2/datasets/{cid}/versions/1/preview?limit=20", headers=h(token))
-        if rows.status_code != 200:
-            continue
-        data = rows.json()
-        if not data:
-            continue
-        name = ds["name"]
-        # 转成文本摘要
-        cols = list(data[0].keys()) if data else []
-        sample = json.dumps(data[:5], ensure_ascii=False)
-        all_text_parts.append(f"## {name}\n列：{cols}\n样本数据：\n{sample}\n")
-
-    if not all_text_parts:
-        print("  [WARN] 无 curated 数据可用于提取")
-        return None
-
-    combined = "\n\n".join(all_text_parts)
-
-    # 上传为临时文件到 ontology
-    import io
-    file_content = combined.encode("utf-8")
-    r = c.post(
-        f"/api/v1/ontologies/{ontology_id}/files",
-        headers=h(token),
-        files={"file": ("supply_chain_curated_summary.md", file_content, "text/markdown")},
-    )
-    if r.status_code not in (200, 201):
-        print(f"  [WARN] 上传摘要文件失败: {r.status_code} {r.text[:100]}")
-        return None
-    print("  [OK] 已上传 curated 数据摘要文件")
-
-    # 触发 LLM 提取
-    r = c.post(
-        f"/api/v1/ontologies/{ontology_id}/execute",
-        headers=h(token),
-        json={
-            "prompt_id": prompt_id,
-            "model_id":  model_id,
-            "model_name": model_name,
-            "constraints": [
-                "领域：供应链",
-                "必须提取：供应商、物料、采购订单、库存交易、物流运单、仓库、承运商、质量检验",
-                "逻辑规则需包含：库存预警、供应商评级、采购审批",
-                "Action 需包含：补货申请、供应商绩效更新、物流告警",
-            ],
-        },
-        timeout=300,
-    )
-    if r.status_code not in (200, 201):
-        print(f"  [WARN] 提取请求失败: {r.status_code} {r.text[:200]}")
-        return None
-    task_id = r.json()["data"]["task_id"]
-    print(f"  [OK] 提取任务 task_id={task_id}")
-    return task_id
-
-
-def poll_extraction(c, token, ontology_id, task_id, timeout=180):
-    """轮询提取任务直到完成"""
-    start = time.time()
-    while time.time() - start < timeout:
-        r = c.get(f"/api/v1/ontologies/{ontology_id}/execute/status?task_id={task_id}", headers=h(token))
-        if r.status_code != 200:
-            time.sleep(3)
-            continue
-        task = r.json()["data"]
-        status = task.get("status")
-        pct = task.get("progress", {}).get("pct", 0)
-        stage = task.get("progress", {}).get("stage", "")
-        print(f"  ... {status} {pct}% [{stage}]")
-        if status in ("completed", "failed"):
-            if status == "failed":
-                print(f"  [FAIL] {task.get('error')}")
-            else:
-                print(f"  [OK] LLM 提取完成")
-            return status
-        time.sleep(5)
-    print("  [TIMEOUT] 提取超时")
-    return "timeout"
-
-
-# ─── Step 6: 自动映射 ────────────────────────────────────────
+# ─── Step 5: 自动映射 ────────────────────────────────────────
 def auto_map_and_create(c, token, ontology_id):
     """对每个 curated dataset 调用 suggest + create mapping"""
     curated_list = c.get("/api/v2/curated", headers=h(token)).json()
@@ -372,7 +283,7 @@ def auto_map_and_create(c, token, ontology_id):
     return mappings_created
 
 
-# ─── Step 7: Apply Mappings → Neo4j ──────────────────────────
+# ─── Step 6: Apply Mappings → Neo4j ──────────────────────────
 def apply_mappings_to_neo4j(c, token, ontology_id, mappings):
     """触发 apply-from-dataset，直接从 curated dataset 读取并写入 Neo4j"""
     all_mappings = c.get(f"/api/v2/ontologies/{ontology_id}/mappings", headers=h(token)).json()
@@ -403,7 +314,7 @@ def apply_mappings_to_neo4j(c, token, ontology_id, mappings):
     return applied
 
 
-# ─── Step 8: 验证 ────────────────────────────────────────────
+# ─── Step 7: 验证 ────────────────────────────────────────────
 def verify(c, token, ontology_id):
     entities = c.get(f"/api/v1/ontologies/{ontology_id}/entities", headers=h(token)).json()
     logic    = c.get(f"/api/v1/ontologies/{ontology_id}/logic",    headers=h(token)).json()
@@ -440,7 +351,6 @@ def verify(c, token, ontology_id):
     print()
     checks = [
         ("知识图谱网络状结构(≥5实体)", n_e >= 5),
-        ("实体/逻辑/Action均有数据", n_e > 0 and n_l > 0 and n_a > 0),
         ("映射关系建立(≥1条)", n_m >= 1),
         ("Neo4j 图数据写入", neo4j_ok),
     ]
@@ -476,19 +386,9 @@ def main():
             print(f"[ERROR] 未找到模型配置. LLM={llm_cfg is not None} VLM={vlm_cfg is not None}")
             sys.exit(1)
         llm_id    = llm_cfg["id"]
-        llm_model = (llm_cfg.get("models") or ["deepseek-v4-flash"])[0]
         vlm_id    = vlm_cfg["id"]
-        print(f"  LLM: {llm_cfg['name']} / {llm_model}")
+        print(f"  LLM: {llm_cfg['name']} / {(llm_cfg.get('models') or ['?'])[0]}")
         print(f"  VLM: {vlm_cfg['name']} / {(vlm_cfg.get('models') or ['?'])[0]}")
-
-        # 获取供应链 prompt
-        prompts = c.get("/api/v1/prompts", headers=h(token)).json()
-        prompt_items = prompts.get("data", []) if isinstance(prompts, dict) else prompts
-        sc_prompt = next((p for p in prompt_items if "供应链" in p["name"]), None)
-        if not sc_prompt:
-            sc_prompt = next((p for p in prompt_items if "通用" in p["name"]), prompt_items[0] if prompt_items else None)
-        prompt_id = sc_prompt["id"] if sc_prompt else None
-        print(f"  Prompt: {sc_prompt['name'] if sc_prompt else 'None'}")
 
         print("\n[Step 0] 清理旧供应链数据...")
         cleanup_old_data(c, token)
@@ -506,24 +406,15 @@ def main():
         print("\n[Step 4] 创建本体项目...")
         ontology_id = create_ontology(c, token)
 
-        if prompt_id:
-            print("\n[Step 5] LLM 提取本体 (deepseek)...")
-            task_id = run_llm_extraction(c, token, ontology_id, llm_id, llm_model, prompt_id)
-            if task_id:
-                status = poll_extraction(c, token, ontology_id, task_id, timeout=240)
-                print(f"  提取状态: {status}")
-        else:
-            print("\n[Step 5] 跳过 LLM 提取（无 prompt）")
-
-        print("\n[Step 6] LLM 自动映射 (deepseek)...")
+        print("\n[Step 5] LLM 自动映射 (deepseek)...")
         mappings = auto_map_and_create(c, token, ontology_id)
         print(f"  [OK] 创建 {len(mappings)} 条映射")
 
-        print("\n[Step 7] Apply Mappings → Neo4j...")
+        print("\n[Step 6] Apply Mappings → Neo4j...")
         applied = apply_mappings_to_neo4j(c, token, ontology_id, mappings)
         print(f"  [OK] {applied} 条映射已写入 Neo4j")
 
-        print("\n[Step 8] 验证...")
+        print("\n[Step 7] 验证...")
         result = verify(c, token, ontology_id)
 
         print("\n" + "=" * 60)

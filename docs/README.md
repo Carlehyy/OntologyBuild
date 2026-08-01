@@ -52,6 +52,7 @@ docs/
 - [后端模块边界](./architecture/backend-modules.md)
 - [前端路由与权限](./architecture/frontend-routing.md)
 - [ADR 目录与模板](./architecture/adr/README.md)
+- [退役遗留文档本体抽取 ADR](./architecture/adr/0003-retire-legacy-document-ontology-extraction.md)
 
 ### 开发
 
@@ -74,6 +75,7 @@ docs/
 ### 迭代与参考
 
 - [迭代规则与模板](./iterations/README.md)
+- [当前遗留文档本体抽取退役迭代](./iterations/2026/2026-08-02-retire-legacy-document-ontology-extraction.md)
 - [当前仓库治理迭代](./iterations/2026/2026-07-30-repository-governance.md)
 - [参考目录](./reference/README.md)
 - [Ontology 架构参考](./reference/ontology.md)

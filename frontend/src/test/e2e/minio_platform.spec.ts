@@ -27,7 +27,6 @@ test('管理员测试并保存 MinIO 后只显示一次外部 MCP 配置', async
   let connected = false
   await page.route('**/api/v1/**', route => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/v1/settings/rules') return json(route, [])
     if (path === '/api/v1/settings/minio-config' && route.request().method() === 'GET') return json(route, {
       enabled: connected,
       endpoint: connected ? 'minio.example:9000' : '',

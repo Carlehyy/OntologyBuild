@@ -5,7 +5,7 @@
 | 状态 | Accepted（现状证据基线，不代表新增产品意图） |
 | 负责人 | 未在仓库可核验来源中声明 |
 | 评审人 | 未在仓库可核验来源中声明 |
-| 日期 | 2026-07-30 |
+| 日期 | 2026-08-02 |
 | 关联 Issue | 无可核验记录 |
 | 目标版本 | 当前实现；无可核验版本号 |
 
@@ -36,6 +36,8 @@
 | E7 | [`backend/app/settings/users/router.py`](../../../backend/app/settings/users/router.py) 与 [`schemas.py`](../../../backend/app/settings/users/schemas.py) | 单角色类型、非管理员角色权限配置 API、管理员保护 |
 | E8 | [`backend/tests/auth/test_user_rbac.py`](../../../backend/tests/auth/test_user_rbac.py) | RBAC、父子归一化、跨域只读和管理员保护的可执行断言 |
 | E9 | [`frontend/src/test/e2e/file_asset_links.spec.ts`](../../../frontend/src/test/e2e/file_asset_links.spec.ts) | 登录下载深链保留 `returnTo` 并在登录后返回原地址 |
+| E10 | [`backend/tests/architecture/test_retired_legacy_extraction_contract.py`](../../../backend/tests/architecture/test_retired_legacy_extraction_contract.py) | 22 个遗留 operation/raw `/mcp` 的退役，以及独立 MCP 能力保留 |
+| E11 | [ADR-0003](../../architecture/adr/0003-retire-legacy-document-ontology-extraction.md) | 文档本体抽取退役范围、兼容与数据回滚决策 |
 
 ## 当前角色模型
 
@@ -95,17 +97,23 @@
 
 ### 管理员专属系统设置
 
-E1 另定义 9 个 admin-only key，它们不属于上述可配置集合：
+E1 另定义 6 个 admin-only key，它们不属于上述可配置集合：
 
-`system_settings`、`settings.extraction`、`settings.users`、
-`settings.prompts`、`settings.agents`、`settings.workflows`、
-`settings.minio`、`settings.domains`、`settings.open_interfaces`。
+`system_settings`、`settings.users`、`settings.agents`、
+`settings.workflows`、`settings.minio`、`settings.domains`。
 
 前端对所有 `/settings` 深链统一按 `system_settings` 判断，并对非 admin
 直接拒绝。后端 `/api/v1/settings` router 使用 `require_admin`；用户和角色权限
 管理 API 也在各端点使用 `require_admin`。editor 即使直接请求
-`/api/v1/settings/rules` 仍得到 403。证据：E1、E4、E5、E7；E8 的
+`/api/v1/settings/agent-config` 仍得到 403。证据：E1、E4、E5、E7；E8 的
 `test_role_menu_permissions_protect_pages_and_apis`。
+
+规则设置、提示词模板和系统设置“开放接口”已按 ADR-0003 退役。这里的开放
+接口专指旧 `/api/v1/mcp` 与 raw `/mcp`；API Hub、MinIO MCP、Plugin 社区和
+超级助手 MCP 不属于该模块，继续使用各自独立权限与协议。
+生产入口同样必须让 `/mcp` 明确返回 404，并把保留的 `/mcp/minio` 流式代理
+到 backend，避免任一路径被前端 SPA fallback 掩盖。
+证据：E10、E11。
 
 ### 父子 key 归一化
 
@@ -145,7 +153,9 @@ E1 另定义 9 个 admin-only key，它们不属于上述可配置集合：
    - `/data` → `/data/pipelines`；
    - `/api-hub` → `/api-hub/interfaces`；
    - `/community` → `/community/skills`；
-   - `/settings`、`/settings/skills` → `/settings/extraction`；
+   - `/settings`、`/settings/skills` → `/settings/users`；
+   - `/settings/extraction`、`/settings/rules`、`/settings/prompts`、
+     `/settings/open-interfaces` → `/settings/users`；
    - `/pipelines` 及其深链 → `/data/pipelines`；
    - `/rag` → `/agent`。
    证据：E2。
@@ -223,12 +233,13 @@ E4 当前明确注册的主要边界为：
 
 - menu key 是前端、后端和数据库角色权限记录共同使用的持久化契约；重命名或
   拆分必须附数据迁移和兼容读取，不能作为纯目录调整处理。
-- Hash 深链、`returnTo`、上述旧路径重定向和后端 router prefix 是当前入口
-  契约；移动模块时应保持外部路径不变。
-- 本文没有变更接口、角色或默认权限，只记录当前可核验行为。
+- Hash 深链、`returnTo`、上述旧路径重定向和其余后端 router prefix 是当前
+  入口契约；移动模块时应保持外部路径不变。
+- 本文随 ADR-0003 更新系统设置当前集合；退役 API 不再是应保持的兼容入口。
 
 ## 关联 ADR 与迭代记录
 
 - 目录治理决策：[`docs/architecture/adr/0001-business-domain-structure.md`](../../architecture/adr/0001-business-domain-structure.md)
+- 遗留抽取退役决策：[`docs/architecture/adr/0003-retire-legacy-document-ontology-extraction.md`](../../architecture/adr/0003-retire-legacy-document-ontology-extraction.md)
 - 当前目录整理迭代：
   [`docs/iterations/2026/2026-07-30-repository-governance.md`](../../iterations/2026/2026-07-30-repository-governance.md)

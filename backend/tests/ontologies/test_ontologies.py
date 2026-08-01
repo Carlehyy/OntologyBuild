@@ -45,6 +45,32 @@ def test_update_ontology(client, auth_headers):
     assert r2.json()["data"]["description"] == "updated desc"
 
 
+def test_retired_simple_llm_build_mode_normalizes_on_create_and_update(
+    client,
+    auth_headers,
+):
+    created = client.post(
+        "/api/v1/ontologies",
+        json={
+            "name": "旧客户端兼容本体",
+            "domain": "供应链",
+            "build_mode": "simple_llm",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    ontology = created.json()["data"]
+    assert ontology["build_mode"] == "manual"
+
+    updated = client.put(
+        f"/api/v1/ontologies/{ontology['id']}",
+        json={"build_mode": " simple_llm "},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["build_mode"] == "manual"
+
+
 def test_ontology_card_metadata_uses_configured_domain(client, auth_headers):
     domain_response = client.post(
         "/api/v1/domains",

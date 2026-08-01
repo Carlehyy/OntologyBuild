@@ -76,7 +76,6 @@ async def application_lifespan(
         if settings.environment == "production":
             raise RuntimeError("Data scheduler failed to initialize") from exc
         _main_logger.warning(f"SyncScheduler 启动失败: {exc}")
-    from app import mcp_server as _mcp_server
     from app.api_hub import mcp_server as api_hub_mcp
     from app.settings.object_storage import mcp_server as minio_mcp
 
@@ -87,7 +86,6 @@ async def application_lifespan(
     file_cleanup_task = asyncio.create_task(file_asset_cleanup_loop())
     try:
         async with (
-            _mcp_server.reset_session_manager().run(),
             minio_mcp.reset_session_manager().run(),
             api_hub_public.run(),
             api_hub_system.run(),

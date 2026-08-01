@@ -129,14 +129,30 @@ class Neo4jService:
             result = session.run(query, src_key=src_key, tgt_key=tgt_key, props=props or {})
             return result.single() is not None
 
-    def batch_upsert_entities(self, label: str, entities: list[dict], key_field: str = "id") -> int:
-        """批量 MERGE — 每批 1000 条"""
+    def batch_upsert_entities(
+        self,
+        label: str,
+        entities: list[dict],
+        key_field: str = "id",
+        replace_properties: bool = False,
+    ) -> int:
+        """批量 MERGE — 每批 1000 条。
+
+        默认保持已有节点的未提交属性；派生投影可显式选择以当前
+        权威行完整替换属性，避免已删业务字段滞留在图中。
+        """
         if not self._available or not entities:
             return 0
+        property_assignment = (
+            "SET n = e.props"
+            if replace_properties
+            else "SET n += e.props"
+        )
         query = f"""
         UNWIND $batch AS e
         MERGE (n:{label} {{{key_field}: e.key}})
-        SET n += e.props, n.updated_at = datetime()
+        {property_assignment}
+        SET n.updated_at = datetime()
         """
         count = 0
         chunk_size = 1000

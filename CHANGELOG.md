@@ -27,8 +27,8 @@
   Event Registry、模型配置和 web search 按稳定职责拆入 canonical service，
   HTTP router 保留鉴权、协议适配和兼容注入。
 - Pipeline A/B/C 纯执行与同步触发分别进入 `route_executor.py` 和
-  `trigger_service.py`，旧 `engine.py` 保持兼容 facade；Settings 的规则、
-  QwenPaw Agent 配置和 n8n 工作流配置分别由三个同域 service 承接。
+  `trigger_service.py`，旧 `engine.py` 保持兼容 facade；Settings 保留的 QwenPaw
+  Agent 配置和 n8n 工作流配置分别由两个同域 service 承接。
 - Data Steward、Super Assistant、Agent Workbench 与 Settings 在现有页面
   业务域内拆成“页面编排 + 同域组件”，没有改变路由、menu key 或公开 API。
 - 复盘修正 Data Steward 附件清空时机、Tailwind 全局 token、动态 Sentinel
@@ -38,8 +38,11 @@
   测试顺序和默认 SQLite 状态依赖。
 - 资产湖离线 E2E 从同一 UTC 原值计算浏览器本地时间断言，不再把东八区显示
   结果写死为所有 runner 的期望。
-- 前端 49 个 Playwright spec 明确分为 mocked、stack、external 三组。
+- 前端 48 个 Playwright spec 明确分为 mocked、stack、external 三组。
 - 手工浏览器脚本的资源定位和运行证据统一指向仓库根与 `.artifacts/`。
+- Mapping 显式业务 `id/name` 不再被旧实体信封误过滤；Neo4j 派生投影在保留
+  稳定图身份的同时安全承载冲突字段、嵌套 JSON 和超 Int64 整数，并以完整
+  属性替换消除增量写入后的旧字段残留。
 
 ### Infrastructure
 
@@ -57,5 +60,8 @@
 
 ### Removed
 
+- 退役系统设置中的规则设置、提示词模板和旧开放接口，以及它们专用的 v1
+  本体文件/execute、v2 extraction、22 个 OpenAPI operation 和五张数据库表；
+  API Hub、MinIO、Plugin 社区、超级助手 MCP 与手工/业务探索建模保持不变。
 - 移除已确认无运行时消费者的截图、HTML/JSON 测试结果等过程产物。
 - 前端依赖管理统一为 npm，移除未被构建与 CI 使用的 Bun/pnpm 锁文件。

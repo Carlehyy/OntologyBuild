@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { OntologyListItem, OntologyDetail, Entity, LogicRule, Action, UploadedFile, Prompt, ModelConfig, ModelCallLogPage } from '@/types/ontology'
+import type { OntologyListItem, OntologyDetail, Entity, LogicRule, Action, ModelConfig, ModelCallLogPage } from '@/types/ontology'
 
 export interface OntologyImportResult {
   ontology: OntologyDetail
@@ -32,10 +32,6 @@ export const ontologyApi = {
   delete: (id: string) => apiClient.delete(`/ontologies/${id}`),
   importStructure: (body: unknown) => apiClient.post<OntologyImportResult>('/ontologies/import', body),
 
-  // Files
-  listFiles: (oid: string) => apiClient.get<UploadedFile[]>(`/ontologies/${oid}/files`),
-  deleteFile: (oid: string, fid: string) => apiClient.delete(`/ontologies/${oid}/files/${fid}`),
-
   // Graph
   getGraph: (oid: string) => apiClient.get<{ nodes: object[]; edges: object[]; meta: object }>(`/ontologies/${oid}/graph`),
   createRelation: (oid: string, body: object) => apiClient.post(`/ontologies/${oid}/graph/relations`, body),
@@ -61,12 +57,6 @@ export const ontologyApi = {
   updateAction: (oid: string, aid: string, body: Partial<Action>) => apiClient.put<Action>(`/ontologies/${oid}/actions/${aid}`, body),
   deleteAction: (oid: string, aid: string) => apiClient.delete(`/ontologies/${oid}/actions/${aid}`),
 
-  // Extraction
-  startExtraction: (oid: string, body: { prompt_id: string; model_id: string; model_name: string; constraints?: string[] }) =>
-    apiClient.post<{ task_id: string }>(`/ontologies/${oid}/execute`, body),
-  getExtractionStatus: (oid: string, task_id: string) =>
-    apiClient.get(`/ontologies/${oid}/execute/status?task_id=${task_id}`),
-
   // Export (must use authenticated request — plain links omit Bearer token)
   exportOntology: async (oid: string, name: string, version: string) => {
     const blob = (await apiClient.get(`/ontologies/${oid}/export`, {
@@ -88,17 +78,6 @@ export const ontologyApi = {
     apiClient.post<{ task_id: string }>(`/ontologies/${oid}/audit`, body),
   getAuditStatus: (oid: string, task_id: string) =>
     apiClient.get(`/ontologies/${oid}/audit/status?task_id=${task_id}`),
-}
-
-export const promptApi = {
-  list: (domain?: string) => apiClient.get<Prompt[]>('/prompts', { params: domain ? { domain } : {} }),
-  getTemplates: () => apiClient.get<{ name: string; domain: string; content: string }[]>('/prompts/templates'),
-  create: (body: Partial<Prompt>) => apiClient.post<Prompt>('/prompts', body),
-  get: (id: string) => apiClient.get<Prompt>(`/prompts/${id}`),
-  update: (id: string, body: Partial<Prompt>) => apiClient.put<Prompt>(`/prompts/${id}`, body),
-  delete: (id: string) => apiClient.delete(`/prompts/${id}`),
-  generateTemplate: (domain: string) =>
-    apiClient.post<{ domain: string; content: string }>(`/prompts/generate-template?domain=${encodeURIComponent(domain)}&style=ontology_extraction`, {}),
 }
 
 export const modelApi = {
@@ -147,9 +126,6 @@ export interface MinioConfig {
 }
 
 export const settingsApi = {
-  getRules: () => apiClient.get<{ rule_key: string; rule_value: string; rule_label_cn: string; rule_label_en: string; editable: boolean }[]>('/settings/rules'),
-  updateRules: (rules: { rule_key: string; rule_value: string }[]) => apiClient.put('/settings/rules', rules),
-
   // Agent config
   getAgentConfig: () => apiClient.get<{
     base_url: string; auth_enabled: boolean; username: string;
