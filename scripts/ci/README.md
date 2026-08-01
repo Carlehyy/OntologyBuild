@@ -2,7 +2,9 @@
 
 - `materialize-production-dependencies.sh`：为后续迁移或人工校验保留的可选
   工具，从逐项环境变量原子生成权限为 `0600` 的生产依赖 manifest；当前
-  自动部署不调用它。
+  自动部署不调用它。生成结果只保留运行时消费的 PostgreSQL URL/数据库字段、
+  Redis URL 和 MinIO S3 API 端点，不再生成重复的 PostgreSQL host/port 或
+  MinIO console URL；`N8N_TIMEOUT_SECONDS` 默认 30 秒。
 - `check-markdown-links.mjs`：零第三方依赖检查仓库 Markdown 链接、GitHub
   锚点、路径大小写、文档入口可达性和索引/模板契约。归档文档的问题默认
   为 warning；发布前可用 `--strict-archive` 提升为 error。

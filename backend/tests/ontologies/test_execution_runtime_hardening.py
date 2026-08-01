@@ -2951,6 +2951,7 @@ def test_celery_delayed_tasks_and_compose_workers_use_the_same_app():
         "app.tasks.extraction.run_extraction",
         "app.tasks.v2.dataset_import.commit_dataset_import",
         "app.tasks.v2.dataset_import.inspect_dataset_import",
+        "app.tasks.v2.connection_sync.sync_connection",
         "app.tasks.v2.mapping_apply.mapping_apply_task",
         "app.tasks.v2.pipeline_run.pipeline_run_task",
     }

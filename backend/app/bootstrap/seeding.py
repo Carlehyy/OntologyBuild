@@ -72,17 +72,17 @@ def seed_database() -> None:
         from app.inbox.models import (  # noqa: F401
             InboxItem, InboxDelivery, InboxEventReceipt, InboxOutboxEvent,
         )
-        # 生产 schema 只认 Alembic。create_all 会把漏跑迁移伪装成“可启动”，
-        # 却没有回填、外键与唯一约束；开发/测试仍保留零配置建库便利。
-        if settings.environment != "production":
+        # Every real runtime schema is owned by Alembic. ``create_all`` would
+        # disguise a missed migration and omit data backfills/constraints, so
+        # it is reserved for isolated unit tests only.
+        if settings.environment == "test":
             Base.metadata.create_all(bind=engine)
 
         # Lightweight column migrations — create_all skips existing tables
         with engine.connect() as conn:
-            if settings.environment != "production":
-                # Legacy local SQLite databases are intentionally allowed to run
-                # without an Alembic revision. Keep late, additive model changes
-                # usable after an ordinary backend restart.
+            if settings.environment == "test":
+                # Test SQLite fixtures have no Alembic revision. Keep their
+                # narrow additive repair path without weakening real startup.
                 repaired = repair_development_schema(conn)
                 if repaired:
                     _main_logger.warning(
@@ -102,9 +102,9 @@ def seed_database() -> None:
                     conn.execute(text(
                         "ALTER TABLE entities ADD COLUMN canonical_id VARCHAR(200)"))
                     conn.commit()
-            # 这些历史兼容 DDL 只服务未迁移的开发库；生产部署已在启动前执行
-            # ``alembic upgrade head``，不得再由应用逐条 ALTER 并吞掉失败。
-            for stmt in ([] if settings.environment == "production" else [
+            # These compatibility DDL statements exist only for test fixtures;
+            # every real environment runs ``alembic upgrade head`` beforehand.
+            for stmt in ([
                 "ALTER TABLE model_configs ADD COLUMN config_type VARCHAR(30) DEFAULT 'llm'",
                 "ALTER TABLE model_configs ADD COLUMN options JSON DEFAULT '{}'",
                 "ALTER TABLE model_configs ADD COLUMN enabled BOOLEAN DEFAULT TRUE",
@@ -182,7 +182,7 @@ def seed_database() -> None:
                 " ORDER BY v.version_no DESC LIMIT 1)"
                 " WHERE latest_version_id IS NULL AND EXISTS ("
                 " SELECT 1 FROM v2_dataset_versions v2 WHERE v2.dataset_id = v2_datasets.id)",
-            ]):
+            ] if settings.environment == "test" else []):
                 try:
                     conn.execute(text(stmt))
                     conn.commit()
@@ -204,10 +204,9 @@ def seed_database() -> None:
 
         seed_admin(db)
 
-        # The standalone local configuration center stores ordinary startup
-        # values in the shared env file. n8n and LLM settings are database
-        # backed, so development may explicitly opt in to an idempotent sync.
-        # The service has a second production guard to prevent accidental use.
+        # n8n is a required startup integration but its runtime client reads the
+        # encrypted database record. Provision that record idempotently from the
+        # environment; LLM providers remain post-start model configuration.
         from app.services.local_config_sync import (
             sync_local_managed_runtime_config,
         )
@@ -230,7 +229,7 @@ def seed_database() -> None:
 
         drain_storage_deletion_outbox(
             db,
-            strict_schema=settings.environment == "production",
+            strict_schema=settings.environment != "test",
         )
 
         # 回填：存量 n8n 治理记录补建影子流水线行（创建即在列表可见的新规则）

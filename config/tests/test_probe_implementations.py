@@ -14,7 +14,6 @@ def _profile() -> ConfigProfile:
     payload["minio"]["access_key"] = "minio-access"
     payload["minio"]["secret_key"] = "minio-password"
     payload["n8n"]["api_key"] = "n8n-key"
-    payload["llm"]["api_key"] = "llm-key"
     return ConfigProfile.model_validate(payload)
 
 
@@ -154,35 +153,10 @@ def test_minio_probe_is_read_only_and_reports_bucket(monkeypatch) -> None:
     assert seen["secret_key"] == "minio-password"
 
 
-def test_chroma_probe_supports_v1_fallback(monkeypatch) -> None:
-    requested: list[str] = []
-
-    class Client:
-        def __init__(self, **_kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def get(self, url, **_kwargs):
-            requested.append(url)
-            return FakeResponse(
-                {},
-                404 if url.endswith("/api/v2/heartbeat") else 200,
-            )
-
-    monkeypatch.setattr(probes.httpx, "Client", Client)
-    message, detail = probes.probe_chroma(_profile())
-
-    assert message == "Chroma 连接正常"
-    assert detail.endswith("/api/v1/heartbeat 返回成功")
-    assert len(requested) == 2
-
-
 def test_browser_probe_requires_websocket_debugger_url(monkeypatch) -> None:
+    profile = _profile()
+    profile.browser.cdp_url = "http://127.0.0.1:9222/"
+
     class Client:
         def __init__(self, **_kwargs):
             pass
@@ -203,7 +177,7 @@ def test_browser_probe_requires_websocket_debugger_url(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(probes.httpx, "Client", Client)
-    message, detail = probes.probe_browser(_profile())
+    message, detail = probes.probe_browser(profile)
 
     assert message == "浏览器控制接口正常"
     assert detail == "已识别 Chrome/140"
@@ -237,58 +211,3 @@ def test_n8n_probe_uses_api_key_header(monkeypatch) -> None:
     assert seen["headers"]["X-N8N-API-KEY"] == "n8n-key"
     assert seen["client_kwargs"]["mounts"]["all://127.0.0.1"] is None
     assert "trust_env" not in seen["client_kwargs"]
-
-
-def test_openai_compatible_probe_sends_minimal_request(monkeypatch) -> None:
-    seen = {}
-
-    class Client:
-        def __init__(self, **kwargs):
-            seen["client_kwargs"] = kwargs
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def post(self, url, *, headers, json):
-            seen["url"] = url
-            seen["headers"] = headers
-            seen["json"] = json
-            return FakeResponse({"choices": [{"message": {"content": "P"}}]})
-
-    monkeypatch.setattr(probes.httpx, "Client", Client)
-    message, detail = probes.probe_llm(_profile())
-
-    assert message == "默认模型连接正常"
-    assert "极少量费用" in detail
-    assert seen["url"] == "https://api.openai.com/v1/chat/completions"
-    assert seen["headers"]["Authorization"] == "Bearer llm-key"
-    assert seen["json"]["max_tokens"] == 1
-    assert seen["client_kwargs"]["mounts"]["all://127.0.0.1"] is None
-    assert "trust_env" not in seen["client_kwargs"]
-
-
-def test_llm_probe_rejects_unrelated_success_json(monkeypatch) -> None:
-    class Client:
-        def __init__(self, **_kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def post(self, *_args, **_kwargs):
-            return FakeResponse({"status": "ok"})
-
-    monkeypatch.setattr(probes.httpx, "Client", Client)
-
-    try:
-        probes.probe_llm(_profile())
-    except RuntimeError as exc:
-        assert "choices" in str(exc)
-    else:
-        raise AssertionError("无模型响应内容时不能误判连接成功")

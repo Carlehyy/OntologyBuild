@@ -359,7 +359,7 @@ def _execute_sync_task_legacy(task_id: str, trigger_type: str = "MANUAL") -> dic
             resource = resources[0] if resources else ""
 
         # 文件 Connector：将文件名解析为完整的对象存储 URI。
-        # s3:// 表示 MinIO，local:// 表示持久化本地降级卷。
+        # s3:// 表示 MinIO；local:// 仅用于读取旧版本遗留对象。
         # 找不到时抛错走统一失败路径——直接 return 会把已 commit 的
         # RUNNING 状态永久留在任务与历史上
         if (

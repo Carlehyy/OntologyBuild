@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next'
-import { Check, Loader2, Wifi, Workflow } from 'lucide-react'
+import { Loader2, LockKeyhole, Wifi, Workflow } from 'lucide-react'
 import type { WorkflowSettingsViewModel } from '../hooks/useWorkflowSettings'
 
 type WorkflowSettingsTabProps = {
@@ -10,18 +10,12 @@ type WorkflowSettingsTabProps = {
 export default function WorkflowSettingsTab({ settings, t }: WorkflowSettingsTabProps) {
   const {
     workflowEnabled,
-    setWorkflowEnabled,
     workflowApiUrl,
-    setWorkflowApiUrl,
-    workflowApiKey,
-    setWorkflowApiKey,
     workflowHasSavedApiKey,
     workflowTimeoutSeconds,
-    setWorkflowTimeoutSeconds,
     workflowMsg,
     workflowMsgOk,
     workflowTesting,
-    handleSaveWorkflowConfig,
     handleTestWorkflowConnection,
   } = settings
 
@@ -35,53 +29,65 @@ export default function WorkflowSettingsTab({ settings, t }: WorkflowSettingsTab
             </div>
             <p className="text-xs text-gray-500 mb-4">{t('settings.workflows_desc')}</p>
 
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              <LockKeyhole size={14} className="mt-0.5 shrink-0" />
+              <span>{t('settings.workflow_environment_managed')}</span>
+            </div>
+
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   id="workflow-enabled-toggle"
                   checked={workflowEnabled}
-                  onChange={e => setWorkflowEnabled(e.target.checked)}
+                  disabled
                   className="rounded"
                 />
                 <label htmlFor="workflow-enabled-toggle" className="text-sm text-gray-700">{t('settings.workflow_enabled')}</label>
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('settings.workflow_url')}</label>
+                <label htmlFor="workflow-api-url" className="block text-xs text-gray-500 mb-1">{t('settings.workflow_url')}</label>
                 <input
+                  id="workflow-api-url"
                   value={workflowApiUrl}
-                  onChange={e => setWorkflowApiUrl(e.target.value)}
-                  placeholder={t('settings.workflow_url_placeholder')}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  readOnly
+                  aria-readonly="true"
+                  className="w-full border rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
                 />
-                <p className="text-xs text-gray-400 mt-1">{t('settings.workflow_url_hint')}</p>
+                <p className="text-xs text-gray-400 mt-1">{t('settings.workflow_url_managed_hint')}</p>
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('settings.workflow_api_key')}</label>
+                <label htmlFor="workflow-api-key" className="block text-xs text-gray-500 mb-1">{t('settings.workflow_api_key')}</label>
                 <input
+                  id="workflow-api-key"
                   type="password"
-                  value={workflowApiKey}
-                  onChange={e => setWorkflowApiKey(e.target.value)}
-                  placeholder={workflowHasSavedApiKey ? t('settings.workflow_api_key_saved') : t('settings.workflow_api_key_placeholder')}
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value=""
+                  readOnly
+                  aria-readonly="true"
+                  placeholder={workflowHasSavedApiKey
+                    ? t('settings.workflow_api_key_managed')
+                    : t('settings.workflow_api_key_unavailable')}
+                  className="w-full border rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
                 />
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">{t('settings.workflow_timeout')}</label>
+                <label htmlFor="workflow-timeout-seconds" className="block text-xs text-gray-500 mb-1">{t('settings.workflow_timeout')}</label>
                 <input
+                  id="workflow-timeout-seconds"
                   type="number"
                   min={1}
                   max={120}
                   value={workflowTimeoutSeconds}
-                  onChange={e => setWorkflowTimeoutSeconds(Number(e.target.value) || 10)}
-                  className="w-40 border rounded-lg px-3 py-2 text-sm"
+                  readOnly
+                  aria-readonly="true"
+                  className="w-40 border rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
                 />
               </div>
 
-              <div className="flex gap-2">
+              <div>
                 <button
                   type="button"
                   onClick={handleTestWorkflowConnection}
@@ -90,15 +96,6 @@ export default function WorkflowSettingsTab({ settings, t }: WorkflowSettingsTab
                 >
                   {workflowTesting ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
                   {workflowTesting ? t('settings.testing') : t('settings.test_connection')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveWorkflowConfig}
-                  disabled={workflowTesting}
-                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-                >
-                  {workflowTesting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                  {t('settings.workflow_save_config')}
                 </button>
               </div>
 

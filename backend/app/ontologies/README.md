@@ -15,10 +15,10 @@ ontologies/
 ├── versions/             快照契约、Draft、Trial、Impact、Release 与 Rollback
 ├── mappings/             数据集到 Object/Link 的映射、对账与查询投影
 ├── sentinels/            定义、CDC、评估、扫描、动态策略与触发记录
-├── graph/                Neo4j/NetworkX 查询、分析与 NL-to-Cypher
+├── graph/                Neo4j 查询、分析与 NL-to-Cypher
 ├── agent_runtime/        本体 Agent 编排、工具、边界和报告
 ├── decision_simulation/  决策模拟
-├── extraction/           供模型调用/迁移脚本复用的 LLM 与图/向量 bridge；无抽取 API
+├── extraction/           供现存模型调用复用的 LLM gateway；无抽取 API 或图/向量 bridge
 ├── files/                供业务探索/数据管家复用的通用文档转换器；无本体文件 API
 ├── export|audit/         导出与审计
 └── entities|relations|logic|actions|inference|attribute_schemas/
@@ -49,8 +49,8 @@ ontologies/
   投影和删除条件必须以源码守卫与测试为依据，不能把它们误认成第二套 canonical
   运行时。
 - 旧文档 → 本体链路的 files/execute/v2 extraction API 与专用表已按 ADR-0003
-  退役。不得把保留的通用文档转换器、LLM gateway 或 legacy 图/向量迁移 bridge
-  重新解释为可公开调用的本体抽取流程。
+  退役。不得把保留的通用文档转换器或 LLM gateway 重新解释为可公开调用的
+  本体抽取流程；已无运行时引用的 legacy 图/向量 bridge 也不再保留。
 
 包含函数内延迟 import 的完整生产依赖图只保留一个被精确锁定的运行期环：
 `sentinels.cdc ↔ sentinels.engine ↔ sentinels.dynamic_service`。四条允许边分别

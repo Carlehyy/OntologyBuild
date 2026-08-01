@@ -453,8 +453,7 @@ def test_version_publish_snapshots_formal_and_rollback(
     monkeypatch.setattr(
         version_router, "_rebuild_required_query_projections",
         lambda *_args, **_kwargs: {
-            "ready": True, "neo4j": "ok", "chroma": "ok",
-            "chroma_count": 0,
+            "ready": True, "neo4j": "ok",
         },
     )
 

@@ -2,7 +2,7 @@
 数据管家 — 服务层
 
 集中三件事，router / toolkit / runner 都只经这里触碰状态：
-  1. 从系统设置加载 n8n 客户端（解密 API Key，未配置给出可操作的报错）
+  1. 正常运行从启动环境加载 n8n 客户端；测试环境允许数据库注入
   2. 受管记录的生命周期辅助（创建/纳管登记影子行、归档、发布封版守卫）
   3. 发布与启停时的 n8n 远端状态同步（发布是单向封版，数据管家只编排草稿）
 """
@@ -54,6 +54,15 @@ def canonical_json_hash(value) -> str:
 # ── n8n 客户端 ────────────────────────────────────────────────────
 
 def n8n_config_status(db: Session) -> dict:
+    if settings.environment.strip().lower() != "test":
+        return {
+            "configured": bool(
+                settings.n8n_api_url.strip()
+                and settings.n8n_api_key.strip()
+            ),
+            "enabled": True,
+            "api_url": settings.n8n_api_url.strip(),
+        }
     cfg = db.query(WorkflowConfig).filter(WorkflowConfig.id == "default").first()
     return {
         "configured": bool(cfg and cfg.api_url and cfg.api_key_encrypted),
@@ -63,15 +72,37 @@ def n8n_config_status(db: Session) -> dict:
 
 
 def get_n8n_client(db: Session) -> N8nClient:
+    if settings.environment.strip().lower() != "test":
+        try:
+            api_url = enforce_n8n_url_policy(
+                settings.n8n_api_url,
+                environment=settings.environment,
+            )
+        except ValueError as exc:
+            raise StewardError(
+                f"启动环境中的 n8n 地址不符合安全策略：{exc}"
+            ) from exc
+        api_key = settings.n8n_api_key.strip()
+        if not api_url or not api_key:
+            raise StewardError(
+                "启动环境缺少 N8N_API_URL 或 N8N_API_KEY；"
+                "请通过配置中心补齐并重启平台。"
+            )
+        return N8nClient(
+            api_url=api_url,
+            api_key=api_key,
+            timeout_seconds=settings.n8n_timeout_seconds,
+        )
+
     cfg = db.query(WorkflowConfig).filter(WorkflowConfig.id == "default").first()
     if not cfg or not cfg.api_url or not cfg.api_key_encrypted:
-        raise StewardError("尚未配置 n8n：请到「系统设置 → 工作流引擎」填写 n8n 地址与 API Key 并通过连接测试。")
+        raise StewardError("测试环境尚未注入 n8n 配置。")
     if not cfg.enabled:
-        raise StewardError("n8n 集成当前处于停用状态：请到「系统设置 → 工作流引擎」启用后再使用数据管家。")
+        raise StewardError("测试环境注入的 n8n 集成当前处于停用状态。")
     try:
         api_key = decrypt(cfg.api_key_encrypted)
     except Exception as exc:  # noqa: BLE001 — Fernet key 变更等
-        raise StewardError("已保存的 n8n API Key 无法解密，请到系统设置重新保存。") from exc
+        raise StewardError("测试环境注入的 n8n API Key 无法解密。") from exc
     try:
         api_url = enforce_n8n_url_policy(
             cfg.api_url, environment=settings.environment)
@@ -416,8 +447,11 @@ def require_orchestrable(db: Session, rec: N8nPipeline, client: N8nClient) -> No
     require_unpublished(db, rec)
     try:
         active = bool(client.get_workflow(rec.n8n_workflow_id).get("active"))
-    except Exception:  # noqa: BLE001 — n8n 不可达时不因探测失败误伤编排
-        active = False
+    except Exception as exc:  # noqa: BLE001 - remote state is a safety fence
+        raise StewardError(
+            f"无法确认流水线「{rec.name}」在 n8n 侧的启用状态，"
+            "平台已安全中止编排；请检查 n8n 连通性后重试。"
+        ) from exc
     if active:
         raise StewardError(
             f"流水线「{rec.name}」在 n8n 侧处于已启用状态，数据管家只能编排未启用的流水线。"

@@ -55,7 +55,7 @@ def test_officecli_subprocess_does_not_receive_platform_secrets(
         monkeypatch):
     monkeypatch.setenv("PATH", "/safe/bin")
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret@db/app")
-    monkeypatch.setenv("LOCAL_LLM_API_KEY", "llm-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "llm-secret")
     monkeypatch.setenv("API_HUB_SYSTEM_MCP_TOKEN", "mcp-secret")
     monkeypatch.setenv("FIRST_ADMIN_PASSWORD", "admin-secret")
 
@@ -64,7 +64,7 @@ def test_officecli_subprocess_does_not_receive_platform_secrets(
     assert environment["PATH"] == "/safe/bin"
     assert environment["OFFICECLI_SKIP_UPDATE"] == "1"
     assert "DATABASE_URL" not in environment
-    assert "LOCAL_LLM_API_KEY" not in environment
+    assert "OPENAI_API_KEY" not in environment
     assert "API_HUB_SYSTEM_MCP_TOKEN" not in environment
     assert "FIRST_ADMIN_PASSWORD" not in environment
 

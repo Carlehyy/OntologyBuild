@@ -97,10 +97,20 @@ def probe_browser_cdp(timeout: float = 1.5) -> dict[str, Any]:
     if not configured:
         return {"configured": False, "reachable": False, "error": "CDP URL 未配置"}
     endpoint = _resolve_cdp_endpoint(settings.steward_browser_cdp_url).rstrip("/")
-    if urlparse(endpoint).scheme not in {"http", "https"}:
+    parsed_endpoint = urlparse(endpoint)
+    if (
+        parsed_endpoint.scheme not in {"http", "https"}
+        or not parsed_endpoint.hostname
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.path not in {"", "/"}
+        or parsed_endpoint.params
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
         return {
             "configured": True, "reachable": False,
-            "error": "浏览器健康检查要求 http/https CDP 地址",
+            "error": "浏览器健康检查要求 http/https CDP 服务根地址",
         }
     request = urllib.request.Request(
         f"{endpoint}/json/version", headers={"Connection": "close"})

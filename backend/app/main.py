@@ -1,7 +1,7 @@
 """
 OntoPrompt API v2
 
-架构：FastAPI + PostgreSQL + Neo4j + ChromaDB + MinIO + Celery/Redis
+架构：FastAPI + PostgreSQL + Neo4j + MinIO + Celery/Redis + n8n + Chromium CDP
 v2 新增：Pipelines 全链路（Connection→Dataset→Transform→Curated→Mapping）
 v1 兼容：仅保留仍在支持范围内的 /api/v1/* 路由
 

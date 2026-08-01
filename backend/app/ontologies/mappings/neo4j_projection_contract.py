@@ -9,13 +9,31 @@ _NEO4J_INT64_MIN = -(1 << 63)
 _NEO4J_INT64_MAX = (1 << 63) - 1
 
 
-def neo4j_safe_value(value: Any) -> Any:
-    """Return one value accepted by Neo4j's property-value contract.
+def neo4j_projection_properties(
+    properties: dict | None,
+    envelope: dict,
+    *,
+    reserved_keys: tuple[str, ...] = ("updated_at",),
+) -> dict:
+    """Overlay graph metadata without discarding same-named business values."""
+    source = {str(key): value for key, value in (properties or {}).items()}
+    projected = dict(source)
+    normalized_envelope = {str(key): value for key, value in envelope.items()}
+    collided = False
+    for key in (*normalized_envelope, *reserved_keys):
+        if key in projected:
+            collided = True
+            value = projected.pop(key)
+            alias = f"business_{key}"
+            projected.setdefault(alias, value)
+    if collided:
+        projected.setdefault("__business_properties_json__", source)
+    projected.update(normalized_envelope)
+    return projected
 
-    SQL JSON columns may contain objects or nested/heterogeneous arrays, while
-    Neo4j properties only accept scalars and homogeneous scalar arrays. Keep
-    queryable scalar arrays native and encode other structures as stable JSON.
-    """
+
+def neo4j_safe_value(value: Any) -> Any:
+    """Return a Neo4j value, JSON-encoding unsupported SQL JSON shapes."""
     if value is None or isinstance(value, (str, bool, float)):
         return value
     if isinstance(value, int):
@@ -40,10 +58,8 @@ def neo4j_safe_value(value: Any) -> Any:
             )
         ):
             return value
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True,
-        separators=(",", ":"), default=str,
-    )
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), default=str)
 
 
 def neo4j_entity_properties(
@@ -51,13 +67,12 @@ def neo4j_entity_properties(
     *,
     entity_id: Any,
     ontology_id: Any,
+    updated_at: Any = None,
+    encode_values: bool = True,
 ) -> dict:
     """Flatten a legacy Entity envelope without corrupting graph identity.
 
-    Business values reach this bucket precisely because their modeled names
-    collide with the legacy Entity envelope. They use ``business_*`` aliases in
-    this derived graph, while Formal instances retain their modeled names. The
-    complete bucket is kept as JSON so alias collisions cannot lose data.
+    Reserved business values use aliases; the complete bucket remains as JSON.
     """
     projected = dict(properties or {})
     business = projected.pop("__business_properties__", None)
@@ -71,10 +86,14 @@ def neo4j_entity_properties(
     elif business is not None:
         projected["__business_properties_json__"] = business
 
-    # These are graph identity/scope keys, not modeled business properties.
-    projected["id"] = entity_id
-    projected["ontology_id"] = ontology_id
-    return {
-        str(key): neo4j_safe_value(value)
-        for key, value in projected.items()
-    }
+    envelope = {"id": entity_id, "ontology_id": ontology_id}
+    if updated_at is not None:
+        envelope["updated_at"] = updated_at
+    normalized = neo4j_projection_properties(projected, envelope)
+    if not encode_values:
+        # The canonical full rebuild delegates reversible property encoding to
+        # Neo4jService, so graph reads can recover nested JSON values.  Keep the
+        # legacy encoded form as the default for external compatibility users.
+        return normalized
+    return {key: neo4j_safe_value(value)
+            for key, value in normalized.items()}

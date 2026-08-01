@@ -8,9 +8,9 @@ REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
 DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-production.dependencies.env}"
 # Preserve explicit operator overrides, but defer defaults until the persistent
-# .env and the production dependency manifest have been merged. The current
-# deployment contract reads the repository-owner-approved tracked manifest.
-# PUBLIC_PORT from that manifest must drive the endpoint Compose will expose.
+# .env and the production dependency manifest have been merged. The dependency
+# manifest is mandatory and must configure every external runtime service.
+# PUBLIC_PORT from that manifest drives the endpoint Compose will expose.
 HEALTH_URL="${HEALTH_URL:-}"
 READINESS_URL="${READINESS_URL:-}"
 RETRIES="${DEPLOY_RETRIES:-3}"
@@ -33,11 +33,66 @@ run_with_retry() {
     sleep "$SLEEP_SECONDS"
   done
 }
+compose_environment() {
+  # Docker Compose gives exported shell variables precedence over the project
+  # .env file. The manifest has already been validated and persisted into
+  # .env, so clear every interpolation/config authority that could otherwise
+  # make the containers differ from what this script validated. Values are
+  # deliberately named here rather than printed or dynamically expanded.
+  env \
+    -u ENVIRONMENT \
+    -u PUBLIC_PORT \
+    -u POSTGRES_DB \
+    -u POSTGRES_USER \
+    -u POSTGRES_PASSWORD \
+    -u DATABASE_URL \
+    -u REDIS_PASSWORD \
+    -u REDIS_URL \
+    -u NEO4J_URI \
+    -u NEO4J_USER \
+    -u NEO4J_PASSWORD \
+    -u NEO4J_AUTH \
+    -u MINIO_ENDPOINT \
+    -u MINIO_ACCESS_KEY \
+    -u MINIO_SECRET_KEY \
+    -u MINIO_USE_SSL \
+    -u N8N_API_URL \
+    -u N8N_API_KEY \
+    -u N8N_TIMEOUT_SECONDS \
+    -u STEWARD_BROWSER_CDP_URL \
+    -u CORS_ALLOWED_ORIGINS \
+    -u UPLOADS_DIR \
+    -u PIPELINE_FILE_GATEWAY_BASE_URL \
+    -u PIPELINE_FILE_PUBLIC_APP_BASE_URL \
+    -u PIPELINE_FILE_PUBLIC_API_BASE_URL \
+    -u STEWARD_BROWSER_HTTP_LEASE_SECONDS \
+    -u STEWARD_BROWSER_HTTP_FRAME_INTERVAL_MS \
+    -u STEWARD_BROWSER_MAX_SESSIONS \
+    -u STEWARD_BROWSER_MAX_SESSIONS_PER_USER \
+    -u STEWARD_BROWSER_IDLE_TIMEOUT_SECONDS \
+    -u STEWARD_BROWSER_REAPER_INTERVAL_SECONDS \
+    -u POSTGRES_IMAGE \
+    -u REDIS_IMAGE \
+    -u NEO4J_IMAGE \
+    -u MINIO_IMAGE \
+    -u BROWSER_IMAGE \
+    -u PYTHON_BASE_IMAGE \
+    -u NODE_BASE_IMAGE \
+    -u NGINX_BASE_IMAGE \
+    -u STRICT_IMAGE_DIGESTS \
+    -u COMPOSE_DISABLE_ENV_FILE \
+    -u COMPOSE_ENV_FILES \
+    -u COMPOSE_FILE \
+    -u COMPOSE_PATH_SEPARATOR \
+    -u COMPOSE_PROFILES \
+    -u COMPOSE_PROJECT_NAME \
+    "$@"
+}
 compose() {
-  if docker compose version >/dev/null 2>&1; then
-    docker compose -f "$COMPOSE_FILE" "$@"
+  if compose_environment docker compose version >/dev/null 2>&1; then
+    compose_environment docker compose -f "$COMPOSE_FILE" "$@"
   elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose -f "$COMPOSE_FILE" "$@"
+    compose_environment docker-compose -f "$COMPOSE_FILE" "$@"
   else
     log "Docker Compose is not installed"
     return 1
@@ -142,6 +197,20 @@ check_action_worker() {
     celery -A app.tasks.celery_app:celery_app inspect ping --timeout=5 \
     >/dev/null
 }
+start_required_dependency_services() {
+  # CDP must be configured and is checked by deep readiness, but an unhealthy
+  # browser must not prevent the API process from starting for diagnostics.
+  compose up -d browser
+  if compose up --help 2>&1 | grep -q -- '--wait'; then
+    compose up -d --wait \
+      --wait-timeout "${DEPENDENCY_WAIT_TIMEOUT:-180}" \
+      db redis neo4j minio
+  else
+    # Legacy Compose has no --wait. The mandatory connectivity probe below is
+    # retried and remains the authoritative availability gate.
+    compose up -d db redis neo4j minio
+  fi
+}
 if [ "${SKIP_GIT:-0}" != "1" ]; then
   command -v git >/dev/null 2>&1 || { log "git is not installed"; exit 1; }
   mkdir -p "$APP_DIR"
@@ -178,8 +247,9 @@ set_env_value() {
 bootstrap_production_env() {
   log "production .env is missing; creating a persistent server-side runtime configuration"
   cp .env.example .env
-  local db_password neo4j_password minio_access minio_secret
+  local db_password redis_password neo4j_password minio_access minio_secret
   db_password="$(random_hex 24)"
+  redis_password="$(random_hex 24)"
   neo4j_password="$(random_hex 24)"
   minio_access="onto$(random_hex 10)"
   minio_secret="$(random_hex 24)"
@@ -190,15 +260,17 @@ bootstrap_production_env() {
   set_env_value FIRST_ADMIN_PASSWORD "$(random_hex 24)"
   set_env_value POSTGRES_PASSWORD "$db_password"
   set_env_value DATABASE_URL "postgresql://ontoprompt:${db_password}@db:5432/ontoprompt"
+  set_env_value REDIS_PASSWORD "$redis_password"
+  set_env_value REDIS_URL "redis://:${redis_password}@redis:6379/0"
   set_env_value NEO4J_PASSWORD "$neo4j_password"
   set_env_value NEO4J_AUTH "neo4j/${neo4j_password}"
   set_env_value MINIO_ACCESS_KEY "$minio_access"
   set_env_value MINIO_SECRET_KEY "$minio_secret"
-  set_env_value STORAGE_LOCAL_FALLBACK true
+  # Keep the historical local:// root readable during migration. New writes
+  # are always sent to MinIO and never fall back to this directory.
   set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
   set_env_value ALLOW_PUBLIC_REGISTRATION false
   set_env_value API_HUB_SYSTEM_MCP_TOKEN "$(random_hex 32)"
-  set_env_value STRICT_PRODUCTION_CONFIG false
   chmod 600 .env
   log "generated runtime secrets were stored in ${APP_DIR}/.env (values are not printed to CI logs)"
 }
@@ -206,13 +278,27 @@ bootstrap_production_env() {
 
 dependency_key_allowed() {
   case "$1" in
-    ENVIRONMENT|PUBLIC_PORT|STRICT_PRODUCTION_CONFIG|REQUIRE_EXTERNAL_DEPENDENCIES|\
-    POSTGRES_HOST|POSTGRES_PORT|POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD|\
-    DATABASE_URL|REDIS_URL|DATASET_IMPORT_USE_CELERY|\
+    ENVIRONMENT|PUBLIC_PORT|\
+    POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD|DATABASE_URL|REDIS_URL|\
     NEO4J_URI|NEO4J_USER|NEO4J_PASSWORD|NEO4J_AUTH|\
-    MINIO_CONSOLE_URL|MINIO_ENDPOINT|MINIO_ACCESS_KEY|MINIO_SECRET_KEY|\
-    MINIO_USE_SSL|STORAGE_LOCAL_FALLBACK|\
-    N8N_API_URL|N8N_EMAIL|N8N_PASSWORD|N8N_API_KEY)
+    MINIO_ENDPOINT|MINIO_ACCESS_KEY|MINIO_SECRET_KEY|MINIO_USE_SSL|\
+    N8N_API_URL|N8N_API_KEY|N8N_TIMEOUT_SECONDS)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+dependency_key_ignored_legacy() {
+  # The protected production manifest may still contain these historical
+  # fields. Accept them read-only during the migration, but never write them
+  # into .env and never let them control runtime behavior.
+  case "$1" in
+    POSTGRES_HOST|POSTGRES_PORT|MINIO_CONSOLE_URL|\
+    STRICT_PRODUCTION_CONFIG|REQUIRE_EXTERNAL_DEPENDENCIES|\
+    DATASET_IMPORT_USE_CELERY|STORAGE_LOCAL_FALLBACK|\
+    N8N_EMAIL|N8N_PASSWORD)
       return 0
       ;;
     *)
@@ -221,23 +307,14 @@ dependency_key_allowed() {
   esac
 }
 apply_production_dependency_config() {
-  local raw key value applied=0 current_required
+  local raw key value applied=0
   if [ ! -f "$DEPENDENCY_CONFIG_FILE" ]; then
-    current_required="$(
-      awk -F= '$1 == "REQUIRE_EXTERNAL_DEPENDENCIES" {
-        print substr($0, index($0, "=") + 1)
-      }' .env | tail -n1
-    )"
-    case "$current_required" in
-      1|true|TRUE|yes|YES)
-        log "$DEPENDENCY_CONFIG_FILE is required by the current production .env"
-        exit 1
-        ;;
-      *)
-        return
-        ;;
-    esac
+    log "$DEPENDENCY_CONFIG_FILE is required for production deployment"
+    exit 1
   fi
+  # The tracked manifest is a temporary compatibility exception containing
+  # real connection credentials. Restrict the unpacked copy before reading it.
+  chmod 600 "$DEPENDENCY_CONFIG_FILE"
 
   while IFS= read -r raw || [ -n "$raw" ]; do
     raw="${raw%$'\r'}"
@@ -250,8 +327,15 @@ apply_production_dependency_config() {
     fi
     key="${raw%%=*}"
     value="${raw#*=}"
-    if [[ ! "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] \
-        || ! dependency_key_allowed "$key"; then
+    if [[ ! "$key" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+      log "$DEPENDENCY_CONFIG_FILE contains unsupported key: $key"
+      exit 1
+    fi
+    if dependency_key_ignored_legacy "$key"; then
+      log "ignored deprecated production dependency setting: $key"
+      continue
+    fi
+    if ! dependency_key_allowed "$key"; then
       log "$DEPENDENCY_CONFIG_FILE contains unsupported key: $key"
       exit 1
     fi
@@ -259,14 +343,31 @@ apply_production_dependency_config() {
       log "$DEPENDENCY_CONFIG_FILE contains an empty required value: $key"
       exit 1
     fi
+    if [ "$key" = "DATABASE_URL" ]; then
+      case "$value" in
+        postgres://*)
+          value="postgresql://${value#postgres://}"
+          log "normalized legacy postgres:// DATABASE_URL to postgresql://"
+          ;;
+        postgresql+psycopg2://*)
+          value="postgresql://${value#postgresql+psycopg2://}"
+          log "normalized driver-qualified DATABASE_URL to postgresql://"
+          ;;
+      esac
+    fi
     set_env_value "$key" "$value"
     applied=$((applied + 1))
   done < "$DEPENDENCY_CONFIG_FILE"
-  chmod 600 "$DEPENDENCY_CONFIG_FILE"
   log "applied ${applied} production dependency settings (values are not printed)"
 }
 apply_production_dependency_config
 chmod 600 .env
+# Chromium is bundled with the production Compose stack. Pin the internal CDP
+# URL so existing server-side .env files receive the newly required setting.
+set_env_value STEWARD_BROWSER_CDP_URL http://browser:9222
+if [ -z "$(awk -F= '$1 == "N8N_TIMEOUT_SECONDS" {print substr($0, index($0,"=")+1)}' .env | tail -n1)" ]; then
+  set_env_value N8N_TIMEOUT_SECONDS 30
+fi
 if [ -z "$(awk -F= '$1 == "API_HUB_SYSTEM_MCP_TOKEN" {print substr($0, index($0,"=")+1)}' .env | tail -n1)" ]; then
   set_env_value API_HUB_SYSTEM_MCP_TOKEN "$(random_hex 32)"
 fi
@@ -279,14 +380,154 @@ env_value() {
     END { gsub(/\r$/, "", value); print value }
   ' .env
 }
-if [ "${PUBLIC_PORT+x}" = "x" ]; then
-  # Match Compose's `${PUBLIC_PORT:-80}` interpolation exactly: an explicitly
-  # exported empty value selects the default instead of the project .env.
-  effective_public_port="${PUBLIC_PORT:-80}"
-else
-  effective_public_port="$(env_value PUBLIC_PORT)"
-  effective_public_port="${effective_public_port:-80}"
-fi
+redis_password_is_compose_safe() {
+  local value="$1"
+  [ "$value" != "ontopromptredis123" ] \
+    && [[ "$value" =~ ^[A-Za-z0-9._~-]{16,}$ ]]
+}
+configure_redis_auth() {
+  local redis_url service_password url_password
+  redis_url="$(env_value REDIS_URL)"
+  service_password="$(env_value REDIS_PASSWORD)"
+
+  case "$redis_url" in
+    redis://redis:6379/0)
+      # Compatibility for the exact historical bundled URL. Reuse a strong
+      # persistent service secret when present; otherwise create one once.
+      if ! redis_password_is_compose_safe "$service_password"; then
+        service_password="$(random_hex 24)"
+      fi
+      set_env_value REDIS_PASSWORD "$service_password"
+      set_env_value REDIS_URL \
+        "redis://:${service_password}@redis:6379/0"
+      log "upgraded the legacy bundled Redis URL to authenticated mode"
+      ;;
+    redis://:*@redis:6379/[0-9]|redis://:*@redis:6379/[0-9][0-9])
+      # REDIS_URL is the manifest authority. For the bundled service, derive
+      # requirepass from that same URL so client and server cannot diverge.
+      url_password="${redis_url#redis://:}"
+      url_password="${url_password%@redis:6379/*}"
+      if ! redis_password_is_compose_safe "$url_password"; then
+        log "bundled Redis URL must use an unescaped 16+ character password containing only letters, digits, '.', '_', '~' or '-'"
+        exit 1
+      fi
+      set_env_value REDIS_PASSWORD "$url_password"
+      log "synchronized the bundled Redis service password from REDIS_URL"
+      ;;
+    redis://*@redis:*|redis://*@redis/*|redis://redis:*|redis://redis/*|\
+    rediss://*@redis:*|rediss://*@redis/*|rediss://redis:*|rediss://redis/*)
+      log "bundled Redis URL must use redis://:<password>@redis:6379/<numeric-db>; use an external host for TLS or other connection modes"
+      exit 1
+      ;;
+    *)
+      # An external REDIS_URL remains untouched. The bundled container still
+      # receives its own strong password, but backend/worker do not use it.
+      if ! redis_password_is_compose_safe "$service_password"; then
+        set_env_value REDIS_PASSWORD "$(random_hex 24)"
+      fi
+      log "preserved the external Redis URL; bundled Redis credentials are not used by clients"
+      ;;
+  esac
+}
+configure_redis_auth
+percent_decode_url_component() {
+  local encoded="$1" decoded="" prefix hex byte
+  while [[ "$encoded" == *%* ]]; do
+    prefix="${encoded%%\%*}"
+    decoded+="$prefix"
+    encoded="${encoded#*%}"
+    if [ "${#encoded}" -lt 2 ]; then
+      return 1
+    fi
+    hex="${encoded:0:2}"
+    if [[ ! "$hex" =~ ^[0-9A-Fa-f]{2}$ ]]; then
+      return 1
+    fi
+    printf -v byte '%b' "\\x${hex}"
+    decoded+="$byte"
+    encoded="${encoded:2}"
+  done
+  printf '%s' "${decoded}${encoded}"
+}
+bundled_postgres_url_matches_service() {
+  local database_url="$1" remainder authority encoded_database
+  local userinfo hostport encoded_user encoded_password
+  local decoded_user decoded_password decoded_database
+
+  remainder="${database_url#*://}"
+  if [ "$remainder" = "$database_url" ] || [[ "$remainder" != */* ]]; then
+    return 1
+  fi
+  authority="${remainder%%/*}"
+  encoded_database="${remainder#*/}"
+  if [[ "$encoded_database" == *\?* ]] \
+      || [[ "$encoded_database" == *\#* ]] \
+      || [[ "$encoded_database" == */* ]]; then
+    return 1
+  fi
+  hostport="${authority##*@}"
+  userinfo="${authority%@*}"
+  if [ "$userinfo" = "$authority" ] || [ "$hostport" != "db:5432" ] \
+      || [[ "$userinfo" != *:* ]]; then
+    return 1
+  fi
+  encoded_user="${userinfo%%:*}"
+  encoded_password="${userinfo#*:}"
+  decoded_user="$(percent_decode_url_component "$encoded_user")" \
+    || return 1
+  decoded_password="$(percent_decode_url_component "$encoded_password")" \
+    || return 1
+  decoded_database="$(percent_decode_url_component "$encoded_database")" \
+    || return 1
+  [ "$decoded_user" = "$(env_value POSTGRES_USER)" ] \
+    && [ "$decoded_password" = "$(env_value POSTGRES_PASSWORD)" ] \
+    && [ "$decoded_database" = "$(env_value POSTGRES_DB)" ]
+}
+validate_bundled_service_authority() {
+  local database_url neo4j_uri expected_neo4j_auth
+  database_url="$(env_value DATABASE_URL)"
+  case "$database_url" in
+    postgresql://*'@db:5432/'*)
+      if ! bundled_postgres_url_matches_service "$database_url"; then
+        log "bundled DATABASE_URL must exactly match decoded POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB and db:5432"
+        exit 1
+      fi
+      log "validated bundled PostgreSQL service credentials against DATABASE_URL"
+      ;;
+    postgresql://*'@db:'*|postgresql://*'@db/'*)
+      log "bundled DATABASE_URL must use the canonical db:5432 endpoint"
+      exit 1
+      ;;
+  esac
+
+  case "$(env_value NEO4J_AUTH)" in
+    ""|none|NONE|None)
+      log "NEO4J_AUTH must enable authentication for the bundled Neo4j service"
+      exit 1
+      ;;
+    */*) ;;
+    *) log "NEO4J_AUTH must use username/password format"; exit 1 ;;
+  esac
+  neo4j_uri="$(env_value NEO4J_URI)"
+  case "$neo4j_uri" in
+    bolt://neo4j:7687|neo4j://neo4j:7687)
+      expected_neo4j_auth="$(env_value NEO4J_USER)/$(env_value NEO4J_PASSWORD)"
+      if [ "$(env_value NEO4J_AUTH)" != "$expected_neo4j_auth" ]; then
+        log "bundled NEO4J_AUTH must match NEO4J_USER/NEO4J_PASSWORD"
+        exit 1
+      fi
+      log "validated bundled Neo4j service credentials against client settings"
+      ;;
+    bolt://neo4j:*|neo4j://neo4j:*|bolt+s://neo4j:*|neo4j+s://neo4j:*|\
+    bolt+ssc://neo4j:*|neo4j+ssc://neo4j:*)
+      log "bundled NEO4J_URI must use bolt://neo4j:7687 or neo4j://neo4j:7687"
+      exit 1
+      ;;
+  esac
+}
+validate_bundled_service_authority
+effective_public_port="$(env_value PUBLIC_PORT)"
+effective_public_port="${effective_public_port:-80}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${effective_public_port}/}"
 READINESS_URL="${READINESS_URL:-${HEALTH_URL%/}/api/health}"
 redact_compose_logs() {
@@ -296,9 +537,9 @@ redact_compose_logs() {
   tail_lines="${COMPOSE_LOG_TAIL:-200}"
   for key in \
     SECRET_KEY ENCRYPTION_KEY FIRST_ADMIN_PASSWORD POSTGRES_PASSWORD \
-    DATABASE_URL REDIS_URL NEO4J_PASSWORD NEO4J_AUTH \
+    DATABASE_URL REDIS_PASSWORD REDIS_URL NEO4J_PASSWORD NEO4J_AUTH \
     MINIO_ACCESS_KEY MINIO_SECRET_KEY API_HUB_SYSTEM_MCP_TOKEN \
-    N8N_PASSWORD N8N_API_KEY; do
+    N8N_API_KEY; do
     value="$(env_value "$key")"
     [ -z "$value" ] || sensitive_values+=("$value")
   done
@@ -325,42 +566,7 @@ redact_backend_failure_logs() {
     }
   '
 }
-configure_storage_fallback() {
-  local current enabled
-  enabled="$(env_value STORAGE_LOCAL_FALLBACK)"
-  case "$enabled" in
-    0|false|FALSE|no|NO)
-      set_env_value STORAGE_LOCAL_FALLBACK false
-      log "local object-storage fallback is disabled"
-      return
-      ;;
-    ""|1|true|TRUE|yes|YES) ;;
-    *)
-      log "STORAGE_LOCAL_FALLBACK must be true or false"
-      exit 1
-      ;;
-  esac
-  current="$(env_value STORAGE_LOCAL_DIR)"
-  case "$current" in
-    ""|storage|./storage)
-      set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
-      log "configured STORAGE_LOCAL_DIR on the shared persistent uploads volume"
-      ;;
-    /uploads/object-storage) ;;
-    /*)
-      set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
-      log "normalized STORAGE_LOCAL_DIR to the production Compose shared volume"
-      ;;
-    *)
-      log "STORAGE_LOCAL_DIR must be an absolute persistent path in production"
-      exit 1
-      ;;
-  esac
-  # The production containers share the uploads volume, so fallback is durable
-  # and is safe to enable even when MinIO is temporarily or permanently absent.
-  set_env_value STORAGE_LOCAL_FALLBACK true
-}
-configure_storage_fallback
+set_env_value STORAGE_LOCAL_DIR /uploads/object-storage
 configure_pipeline_file_gateway() {
   local current default_url public_url
   current="$(env_value PIPELINE_FILE_GATEWAY_BASE_URL)"
@@ -431,15 +637,8 @@ check_secret() {
   local value
   value="$(env_value "$key")"
   if [ -z "$value" ] || [ "$value" = "$insecure" ]; then
-    case "${STRICT_PRODUCTION_CONFIG:-$(env_value STRICT_PRODUCTION_CONFIG)}" in
-      1|true|TRUE|yes|YES)
-        log "$key is missing or still uses an example credential"
-        exit 1
-        ;;
-      *)
-        log "warning: $key is missing or still uses an example credential; deployment continues in compatibility mode"
-        ;;
-    esac
+    log "$key is missing or still uses an example credential"
+    exit 1
   fi
 }
 check_secret SECRET_KEY dev-secret-key
@@ -451,39 +650,28 @@ check_secret NEO4J_PASSWORD ontoprompt123
 check_secret NEO4J_AUTH neo4j/ontoprompt123
 check_secret MINIO_ACCESS_KEY minioadmin
 check_secret MINIO_SECRET_KEY minioadmin
-validate_required_external_dependencies() {
+validate_required_runtime_dependencies() {
   local key
-  case "$(env_value REQUIRE_EXTERNAL_DEPENDENCIES)" in
-    1|true|TRUE|yes|YES) ;;
-    *) return ;;
-  esac
   for key in \
     DATABASE_URL REDIS_URL NEO4J_URI NEO4J_USER NEO4J_PASSWORD \
-    MINIO_ENDPOINT MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
+    MINIO_ENDPOINT MINIO_ACCESS_KEY MINIO_SECRET_KEY \
+    N8N_API_URL N8N_API_KEY STEWARD_BROWSER_CDP_URL; do
     require_secret "$key"
   done
   case "$(env_value ENVIRONMENT)" in
     production) ;;
     *) log "ENVIRONMENT=production is required"; exit 1 ;;
   esac
-  case "$(env_value STORAGE_LOCAL_FALLBACK)" in
-    0|false|FALSE|no|NO) ;;
-    *) log "STORAGE_LOCAL_FALLBACK=false is required"; exit 1 ;;
-  esac
-  case "$(env_value DATASET_IMPORT_USE_CELERY)" in
-    1|true|TRUE|yes|YES) ;;
-    *) log "DATASET_IMPORT_USE_CELERY=true is required"; exit 1 ;;
-  esac
   case "$(env_value DATABASE_URL)" in
-    postgresql://*|postgres://*) ;;
-    *) log "DATABASE_URL must use PostgreSQL"; exit 1 ;;
+    postgresql://*) ;;
+    *) log "DATABASE_URL must use the canonical postgresql:// scheme"; exit 1 ;;
   esac
   case "$(env_value REDIS_URL)" in
     redis://:*@*|rediss://:*@*) ;;
     *) log "REDIS_URL must use single-password authentication"; exit 1 ;;
   esac
   case "$(env_value NEO4J_URI)" in
-    bolt://*|bolt+s://*|neo4j://*|neo4j+s://*) ;;
+    bolt://*|bolt+s://*|bolt+ssc://*|neo4j://*|neo4j+s://*|neo4j+ssc://*) ;;
     *) log "NEO4J_URI must use a supported Neo4j scheme"; exit 1 ;;
   esac
   case "$(env_value MINIO_ENDPOINT)" in
@@ -492,16 +680,33 @@ validate_required_external_dependencies() {
     *:*) ;;
     *) log "MINIO_ENDPOINT must include the S3 API port"; exit 1 ;;
   esac
+  case "$(env_value N8N_API_URL)" in
+    http://*|https://*) ;;
+    *) log "N8N_API_URL must be an absolute HTTP(S) URL"; exit 1 ;;
+  esac
+  case "$(env_value N8N_TIMEOUT_SECONDS)" in
+    ""|*[!0-9]*)
+      log "N8N_TIMEOUT_SECONDS must be an integer between 3 and 120"
+      exit 1
+      ;;
+    *)
+      if [ "$(env_value N8N_TIMEOUT_SECONDS)" -lt 3 ] \
+          || [ "$(env_value N8N_TIMEOUT_SECONDS)" -gt 120 ]; then
+        log "N8N_TIMEOUT_SECONDS must be an integer between 3 and 120"
+        exit 1
+      fi
+      ;;
+  esac
+  case "$(env_value STEWARD_BROWSER_CDP_URL)" in
+    http://*|https://*) ;;
+    *) log "STEWARD_BROWSER_CDP_URL must be an absolute HTTP(S) URL"; exit 1 ;;
+  esac
 }
-validate_required_external_dependencies
+validate_required_runtime_dependencies
 if [ -z "$(env_value ENCRYPTION_KEY)" ]; then
   log "ENCRYPTION_KEY is empty; preserving the existing SECRET_KEY-derived encryption key"
 fi
-if [ "${STRICT_IMAGE_DIGESTS+x}" = "x" ]; then
-  strict_image_digests_value="${STRICT_IMAGE_DIGESTS}"
-else
-  strict_image_digests_value="$(env_value STRICT_IMAGE_DIGESTS)"
-fi
+strict_image_digests_value="$(env_value STRICT_IMAGE_DIGESTS)"
 case "$strict_image_digests_value" in
   ""|0|false|FALSE|no|NO)
     strict_image_digests_enabled=0
@@ -527,7 +732,7 @@ check_image_digest() {
   fi
 }
 for image_key in \
-  POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE CHROMA_IMAGE BROWSER_IMAGE \
+  POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE BROWSER_IMAGE \
   PYTHON_BASE_IMAGE NODE_BASE_IMAGE NGINX_BASE_IMAGE; do
   check_image_digest "$image_key"
 done
@@ -538,14 +743,16 @@ fi
 command -v docker >/dev/null 2>&1 || { log "docker is not installed"; exit 1; }
 log "building images"
 run_with_retry compose build --pull
-if case "$(env_value REQUIRE_EXTERNAL_DEPENDENCIES)" in
-    1|true|TRUE|yes|YES) true ;;
-    *) false ;;
-  esac; then
-  log "verifying required production dependency connectivity"
-  run_with_retry compose run --rm --no-deps \
-    backend python -m app.shared.dependency_probe
-fi
+log "starting required dependency services"
+run_with_retry start_required_dependency_services
+log "verifying required production dependency connectivity"
+run_with_retry compose run --rm --no-deps \
+  backend python -m app.shared.dependency_probe
+log "stopping backend and Celery worker before database migrations"
+# Revision 0055 changes the projection readiness contract. Old application
+# processes do not understand that fence, so no API/worker writer may remain
+# active while Alembic upgrades the database.
+run_with_retry compose stop -t 30 backend celery_worker
 log "running database migrations"
 # Never rewrite Alembic history during a normal deploy.  If a legacy database
 # needs a one-off baseline stamp it must be an explicit, audited operation.

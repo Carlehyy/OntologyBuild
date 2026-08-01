@@ -45,6 +45,7 @@ app/
 
 ```bash
 uv sync --frozen --group dev
+# 该入口先执行 alembic upgrade head；迁移失败时不会启动 API
 uv run python -m app.dev_server
 ```
 
@@ -60,9 +61,11 @@ uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 uv run pytest -q --disable-warnings --ignore tests/v2/perf
 uv run pytest -q --disable-warnings tests/v2/perf
 
+# 仅用于隔离迁移 fixture；真实非测试启动只支持 PostgreSQL。
 DB_FILE="$(mktemp -u /tmp/ontologybuild-XXXXXX.db)"
-DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
-uv run alembic heads
+ENVIRONMENT=test DATABASE_URL="sqlite:///${DB_FILE}" \
+  uv run alembic upgrade head
+ENVIRONMENT=test uv run alembic heads
 rm -f "${DB_FILE}"
 ```
 

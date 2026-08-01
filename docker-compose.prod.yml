@@ -16,8 +16,14 @@ services:
 
   redis:
     image: ${REDIS_IMAGE:-redis:7-alpine}
+    environment:
+      # deploy-prod.sh derives this from the bundled REDIS_URL. With an
+      # external REDIS_URL it is only a private password for this unused local
+      # container and is deliberately not bound to provider credentials.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-ontopromptredis123}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$${REDIS_PASSWORD}\""]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -51,17 +57,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  chromadb:
-    image: ${CHROMA_IMAGE:-chromadb/chroma:0.5.20}
-    volumes:
-      - chroma_data:/chroma/chroma
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
   browser:
     image: ontologybuild-browser:local
     build:
@@ -70,6 +65,14 @@ services:
         BROWSER_BASE_IMAGE: ${BROWSER_IMAGE:-chromedp/headless-shell:latest}
     command: ["--no-sandbox", "--disable-dev-shm-usage"]
     shm_size: 2gb
+    healthcheck:
+      # The browser image intentionally has no curl/wget. Bash's TCP socket
+      # support verifies the real CDP endpoint without adding another package.
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9222 && printf 'GET /json/version HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q 'webSocketDebuggerUrl' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   backend:
@@ -88,23 +91,15 @@ services:
       # Empty is intentional and means same-origin only. Existing production
       # .env files therefore do not need a breaking CORS migration.
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-      STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
-      REQUIRE_EXTERNAL_DEPENDENCIES: ${REQUIRE_EXTERNAL_DEPENDENCIES:-false}
-      DATASET_IMPORT_USE_CELERY: ${DATASET_IMPORT_USE_CELERY:-false}
-      # Compatibility deployments can still use the shared persistent volume.
-      # Required-dependency mode sets this false and the application/deploy
-      # gates reject any attempt to turn the local fallback back on.
-      STORAGE_LOCAL_FALLBACK: ${STORAGE_LOCAL_FALLBACK:-true}
+      # Retained only so historical local:// objects remain readable during
+      # migration. New object writes always require MinIO.
       STORAGE_LOCAL_DIR: /uploads/object-storage
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_URL: ${REDIS_URL:-redis://:ontopromptredis123@redis:6379/0}
+      N8N_TIMEOUT_SECONDS: ${N8N_TIMEOUT_SECONDS:-30}
       NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      CHROMA_HOST: ${CHROMA_HOST:-chromadb}
-      # Service-to-service port is fixed inside the Compose network; a host-side
-      # development CHROMA_PORT (often 8001) must not leak into production.
-      CHROMA_PORT: "8000"
       UPLOADS_DIR: ${UPLOADS_DIR:-/uploads}
       API_HUB_DATA_DIR: /api-hub-data
       STEWARD_WORKSPACE_ROOT: /uploads/steward-sessions
@@ -127,8 +122,11 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-      chromadb:
+      minio:
         condition: service_healthy
+      # CDP availability participates in deep readiness and deployment
+      # preflight, but does not prevent the API process from starting so an
+      # operator can still inspect diagnostics when Chromium is unhealthy.
       browser:
         condition: service_started
     volumes:
@@ -138,7 +136,7 @@ services:
     healthcheck:
       # Liveness must stay dependency-free.  Deep readiness is checked once by
       # deploy-prod.sh via /api/health; probing every dependency every 15s can
-      # amplify a slow downstream service and previously leaked Chroma sockets.
+      # amplify a slow downstream service and leak client connections.
       test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://localhost:8000/health/live', timeout=5); r.close()\""]
       interval: 15s
       timeout: 10s
@@ -160,18 +158,16 @@ services:
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-      STRICT_PRODUCTION_CONFIG: ${STRICT_PRODUCTION_CONFIG:-false}
-      REQUIRE_EXTERNAL_DEPENDENCIES: ${REQUIRE_EXTERNAL_DEPENDENCIES:-false}
-      DATASET_IMPORT_USE_CELERY: ${DATASET_IMPORT_USE_CELERY:-false}
-      STORAGE_LOCAL_FALLBACK: ${STORAGE_LOCAL_FALLBACK:-true}
+      # Retained only so historical local:// objects remain readable during
+      # migration. New object writes always require MinIO.
       STORAGE_LOCAL_DIR: /uploads/object-storage
       ALLOW_PUBLIC_REGISTRATION: "false"
       DATABASE_URL: ${DATABASE_URL:-postgresql://ontoprompt:ontoprompt@db:5432/ontoprompt}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_URL: ${REDIS_URL:-redis://:ontopromptredis123@redis:6379/0}
+      N8N_TIMEOUT_SECONDS: ${N8N_TIMEOUT_SECONDS:-30}
       NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      CHROMA_HOST: ${CHROMA_HOST:-chromadb}
-      CHROMA_PORT: "8000"
+      STEWARD_BROWSER_CDP_URL: http://browser:9222
       UPLOADS_DIR: ${UPLOADS_DIR:-/uploads}
       PIPELINE_FILE_PUBLIC_APP_BASE_URL: ${PIPELINE_FILE_PUBLIC_APP_BASE_URL:-http://localhost:5173}
       PIPELINE_FILE_PUBLIC_API_BASE_URL: ${PIPELINE_FILE_PUBLIC_API_BASE_URL:-http://localhost:8000}
@@ -216,6 +212,5 @@ volumes:
   postgres_data:
   neo4j_data:
   minio_data:
-  chroma_data:
   uploads:
   api_hub_data:

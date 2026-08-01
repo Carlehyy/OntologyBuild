@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | Complete（本地实现；上线验收待 staging/canary） |
+| 状态 | Validated（本地实现与合并回归通过；上线验收待 staging/canary） |
 | 日期 | 2026-08-02 |
 | 负责人 | Codex |
 | 评审人 | 未单独指定 |
@@ -123,7 +123,7 @@ Neo4j 派生投影又会因原样接收嵌套 `__business_properties__` Map 而�
 |---|---|---|---|
 | 迁移专项 | `cd backend && uv run pytest -q tests/migrations/test_retire_legacy_extraction_migration.py --disable-warnings` | 1 passed | 本地 SQLite，覆盖 0054 → head → 0054 → head |
 | 后端退役契约 | `cd backend && uv run pytest -q tests/architecture/test_retired_legacy_extraction_contract.py --disable-warnings` | 4 passed | 本地隔离 SQLite |
-| PostgreSQL 迁移 | 本地隔离 PostgreSQL 16：空库 → 0055；另建 0054 副本并向五张退役表各插入有效关联行，再执行 upgrade → downgrade → re-upgrade | passed；唯一 head 为 `0055_retire_legacy_extraction` | 本地预验收；五张表按预期删除/空表恢复，保留核心表；staging artifact 待补 |
+| PostgreSQL 迁移 | 本地隔离 PostgreSQL 16：空库 → 0055；另建 0054 副本并向五张退役表各插入有效关联行，再执行 upgrade → downgrade → re-upgrade | 本提交独立预验收 passed；当时唯一 head 为 `0055_retire_legacy_extraction`，合并后的后继迁移为 `0056_ontology_projection_fence` | 五张退役表按预期删除/空表恢复，保留核心表；最终单 head 与完整迁移链见同日稳定依赖迭代记录 |
 | Mapping 回归 | `cd backend && uv run pytest -q tests/v2/graph/test_neo4j_service.py tests/v2/mapping/test_projection_adapter.py tests/v2/mapping/test_runtime_hardening.py tests/architecture/test_canonical_import_boundaries.py tests/architecture/test_retired_legacy_extraction_contract.py tests/migrations/test_retire_legacy_extraction_migration.py --disable-warnings` | 64 passed；其中 graph service + projection adapter 核心组合 17 passed | 覆盖增量/全量实体、关系属性、稳定图身份、业务 `id/name`、Int64 边界及两次写入删除旧属性 |
 | 配置与前端单元 | `cd config && uv run pytest -q`；`cd frontend && npm run test:unit` | 44 passed；12 passed | 本地 |
 | 前端静态门禁 | `npm run check:feature-boundaries`；`npm run lint`；`npm run build` | 214 个生产模块无孤儿/环；lint passed；production build passed | Vite 仅保留既有 chunk size warning |

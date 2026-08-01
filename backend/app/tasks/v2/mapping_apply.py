@@ -2,9 +2,12 @@
 from __future__ import annotations
 import logging
 
+from app.tasks.celery_app import celery_app
+
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(name="app.tasks.v2.mapping_apply.mapping_apply_task")
 def mapping_apply_task(mapping_id: str, ontology_id: str):
     """
     异步执行 Mapping 并写入 Neo4j。
@@ -43,7 +46,7 @@ def mapping_apply_task(mapping_id: str, ontology_id: str):
                 f"Mapping {mapping_id} not found in ontology {ontology_id}")
 
         # A source-object delta can change inferred FK edges, manual link
-        # mappings and vector documents.  Rebuild the complete ontology under
+        # mappings and the Neo4j query projection. Rebuild the complete ontology under
         # the project lock; object-only apply left stale downstream state.
         result = rebuild_ontology_projection(
             db,
@@ -59,11 +62,3 @@ def mapping_apply_task(mapping_id: str, ontology_id: str):
         raise
     finally:
         db.close()
-
-
-# Celery 注册（可选）
-try:
-    from app.tasks.celery_app import celery_app
-    mapping_apply_task = celery_app.task(mapping_apply_task)
-except Exception:
-    pass

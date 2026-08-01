@@ -133,7 +133,9 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
     from app.services import sentinel
     from app.services.v2 import sync_scheduler
     from app.services.v2.graph import index_setup
+    from app.shared import dependency_probe
     from app.settings.object_storage import mcp_server as minio_mcp
+    from app.ontologies import projection_state
 
     events: list[str] = []
 
@@ -166,6 +168,11 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
     api_hub_system = Manager("api_hub_system_mcp")
 
     monkeypatch.setattr(lifecycle.settings, "environment", "development")
+    monkeypatch.setattr(
+        dependency_probe,
+        "probe_startup_dependencies",
+        lambda: events.append("dependencies.probe"),
+    )
     monkeypatch.setattr(
         api_hub_db,
         "init_db",
@@ -208,6 +215,11 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "setup_indexes",
         lambda: events.append("neo4j_indexes.setup")
         or {"status": "done", "results": []},
+    )
+    monkeypatch.setattr(
+        projection_state,
+        "repair_unready_projections",
+        lambda: events.append("neo4j_projections.repair") or 0,
     )
     monkeypatch.setattr(
         sync_scheduler,
@@ -255,11 +267,13 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
 
     assert events == [
         "database.seed",
+        "dependencies.probe",
+        "neo4j_indexes.setup",
+        "neo4j_projections.repair",
         "api_hub_db.init",
         "api_hub_scheduler.start",
         "sentinel_cdc.register:True",
         "sentinel_scan.start",
-        "neo4j_indexes.setup",
         "data_scheduler.start",
         "api_hub_mcp.reset",
         "file_cleanup.create",
@@ -273,6 +287,133 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "minio_mcp.exit",
         "browser.close_all",
         "data_scheduler.shutdown",
+        "sentinel_scan.stop",
+        "sentinel_cdc.stop",
+        "api_hub_scheduler.shutdown",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_dependency_failure_starts_no_background_resources(
+    monkeypatch,
+):
+    from app.api_hub import scheduler as api_hub_scheduler
+    from app.bootstrap import lifecycle
+    from app.services import sentinel
+    from app.shared import dependency_probe
+
+    events: list[str] = []
+
+    monkeypatch.setattr(lifecycle.settings, "environment", "development")
+
+    def reject_dependencies():
+        events.append("dependencies.probe")
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(
+        dependency_probe,
+        "probe_startup_dependencies",
+        reject_dependencies,
+    )
+    monkeypatch.setattr(
+        api_hub_scheduler,
+        "start",
+        lambda: events.append("api_hub_scheduler.start"),
+    )
+    monkeypatch.setattr(
+        sentinel,
+        "register_cdc",
+        lambda **_kwargs: events.append("sentinel.start"),
+    )
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        async with lifecycle.application_lifespan(
+            object(),
+            seed_database=lambda: events.append("database.seed"),
+        ):
+            pytest.fail("lifespan must not enter")
+
+    assert events == ["database.seed", "dependencies.probe"]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_partial_startup_failure_cleans_started_resources(
+    monkeypatch,
+):
+    from app.api_hub import db as api_hub_db
+    from app.api_hub import scheduler as api_hub_scheduler
+    from app.bootstrap import lifecycle
+    from app.ontologies import projection_state
+    from app.services import sentinel
+    from app.services.v2.graph import index_setup
+    from app.shared import dependency_probe
+
+    events: list[str] = []
+
+    monkeypatch.setattr(lifecycle.settings, "environment", "production")
+    monkeypatch.setattr(
+        dependency_probe,
+        "probe_startup_dependencies",
+        lambda: events.append("dependencies.probe"),
+    )
+    monkeypatch.setattr(
+        index_setup,
+        "setup_indexes",
+        lambda: events.append("neo4j_indexes.setup")
+        or {"status": "done", "results": []},
+    )
+    monkeypatch.setattr(
+        projection_state,
+        "repair_unready_projections",
+        lambda: events.append("neo4j_projections.repair") or 0,
+    )
+    monkeypatch.setattr(
+        api_hub_db,
+        "init_db",
+        lambda: events.append("api_hub_db.init"),
+    )
+    monkeypatch.setattr(
+        api_hub_scheduler,
+        "start",
+        lambda: events.append("api_hub_scheduler.start"),
+    )
+    monkeypatch.setattr(
+        api_hub_scheduler,
+        "shutdown",
+        lambda: events.append("api_hub_scheduler.shutdown"),
+    )
+
+    def fail_sentinel(*, start_worker):
+        events.append(f"sentinel.register:{start_worker}")
+        raise RuntimeError("injected sentinel startup failure")
+
+    monkeypatch.setattr(sentinel, "register_cdc", fail_sentinel)
+    monkeypatch.setattr(
+        sentinel,
+        "stop_scan_worker",
+        lambda: events.append("sentinel_scan.stop"),
+    )
+    monkeypatch.setattr(
+        sentinel,
+        "stop_cdc_worker",
+        lambda: events.append("sentinel_cdc.stop"),
+    )
+
+    with pytest.raises(RuntimeError, match="Sentinel engine"):
+        async with lifecycle.application_lifespan(
+            object(),
+            seed_database=lambda: events.append("database.seed"),
+        ):
+            pytest.fail("lifespan must not enter")
+
+    assert events == [
+        "database.seed",
+        "dependencies.probe",
+        "neo4j_indexes.setup",
+        "neo4j_projections.repair",
+        "api_hub_db.init",
+        "api_hub_scheduler.start",
+        "sentinel.register:True",
         "sentinel_scan.stop",
         "sentinel_cdc.stop",
         "api_hub_scheduler.shutdown",

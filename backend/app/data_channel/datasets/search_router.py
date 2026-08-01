@@ -1,7 +1,7 @@
-"""v2 Search API — 关键词/语义统一搜索"""
+"""v2 Search API — PostgreSQL keyword search and retired semantic search."""
 from __future__ import annotations
-import json
-from fastapi import APIRouter, Depends, Query
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import cast, or_, String as SAString
 from sqlalchemy.orm import Session
@@ -27,8 +27,19 @@ class SearchRequest(BaseModel):
     n_results: int = 10
 
 
+def _raise_semantic_search_unsupported() -> None:
+    """Expose the retired capability explicitly instead of returning false success."""
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "code": "semantic_search_unsupported",
+            "message": "语义搜索已停用；当前仅支持 PostgreSQL 关键词搜索",
+        },
+    )
+
+
 def _sql_keyword_search(db: Session, ontology_id: str, q: str, n: int) -> list[dict]:
-    """SQL 关键词回退搜索 — ChromaDB 不可用时按名称/描述/属性模糊匹配"""
+    """Search entity names, descriptions, and properties in PostgreSQL."""
     pattern = f"%{q}%"
     rows = db.query(Entity).filter(
         Entity.ontology_id == ontology_id,
@@ -61,14 +72,9 @@ def keyword_search(
     n: int = Query(20, description="结果数"),
     db: Session = Depends(get_db),
 ):
-    """关键词搜索 — 优先 ChromaDB，不可用时回退 SQL"""
-    from app.services.v2.vector.chroma_service import ChromaService
-    svc = ChromaService()
-    if not svc.available:
-        results = _sql_keyword_search(db, ontology_id, q, n)
-        return {"results": results, "chroma_available": False, "query": q}
-    results = svc.keyword_search(ontology_id, q, n_results=n)
-    return {"results": results, "chroma_available": True, "query": q}
+    """关键词搜索 — PostgreSQL is the sole runtime search backend."""
+    results = _sql_keyword_search(db, ontology_id, q, n)
+    return {"results": results, "query": q, "search_backend": "postgresql"}
 
 
 @router.get("/{ontology_id}/search/semantic")
@@ -78,33 +84,19 @@ def semantic_search(
     n: int = Query(10, description="结果数"),
     entity_type: str | None = Query(None, description="实体类型过滤"),
 ):
-    """语义搜索（向量相似度）"""
-    from app.services.v2.vector.chroma_service import ChromaService
-    svc = ChromaService()
-    if not svc.available:
-        return {"results": [], "chroma_available": False}
-    results = svc.semantic_search(ontology_id, q, n_results=n, entity_type=entity_type)
-    return {"results": results, "chroma_available": True, "query": q}
+    """Return an explicit unsupported response for the retired vector API."""
+    del ontology_id, q, n, entity_type
+    _raise_semantic_search_unsupported()
 
 
 @router.post("/{ontology_id}/search")
 def unified_search(ontology_id: str, body: SearchRequest, db: Session = Depends(get_db)):
     """统一搜索端点"""
-    from app.services.v2.vector.chroma_service import ChromaService
-    svc = ChromaService()
-    if not svc.available:
-        if body.mode == "keyword":
-            results = _sql_keyword_search(db, ontology_id, body.query, body.n_results)
-            return {"results": results, "chroma_available": False, "mode": body.mode}
-        return {"results": [], "chroma_available": False, "mode": body.mode}
-
     if body.mode == "semantic":
-        results = svc.semantic_search(
-            ontology_id, body.query,
-            n_results=body.n_results,
-            entity_type=body.entity_type,
-        )
-    else:
-        results = svc.keyword_search(ontology_id, body.query, n_results=body.n_results)
-
-    return {"results": results, "chroma_available": True, "mode": body.mode}
+        _raise_semantic_search_unsupported()
+    results = _sql_keyword_search(db, ontology_id, body.query, body.n_results)
+    return {
+        "results": results,
+        "mode": body.mode,
+        "search_backend": "postgresql",
+    }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import logging
 from collections.abc import Callable
 
 import psycopg2
@@ -11,6 +12,9 @@ from minio import Minio
 from neo4j import GraphDatabase
 
 from app.config import settings
+
+
+logger = logging.getLogger("app.bootstrap.dependencies")
 
 
 def probe_postgresql() -> None:
@@ -81,22 +85,67 @@ def probe_minio() -> None:
         http.clear()
 
 
+def probe_n8n() -> None:
+    from app.settings.workflows.n8n_client import test_n8n_connection
+
+    result = test_n8n_connection(
+        settings.n8n_api_url,
+        settings.n8n_api_key,
+        timeout_seconds=min(settings.n8n_timeout_seconds, 10),
+    )
+    if not result.ok:
+        raise RuntimeError("n8n readiness returned an invalid result")
+
+
+def probe_browser() -> None:
+    from app.data_channel.steward.browser_runtime import probe_browser_cdp
+
+    result = probe_browser_cdp()
+    if not result.get("reachable"):
+        raise RuntimeError("Chromium CDP is unavailable")
+
+
 PROBES: tuple[tuple[str, Callable[[], None]], ...] = (
     ("PostgreSQL", probe_postgresql),
     ("Redis", probe_redis),
     ("Neo4j", probe_neo4j),
     ("MinIO", probe_minio),
+    ("n8n", probe_n8n),
+    ("Chromium CDP", probe_browser),
 )
+NON_BLOCKING_PROBES = frozenset({"Chromium CDP"})
+
+
+def probe_startup_dependencies() -> None:
+    """Verify runtime dependencies before any owned worker starts.
+
+    CDP is deliberately advisory: its endpoint must be configured, and deep
+    readiness reports it, but a temporarily unavailable browser must not hide
+    the API diagnostics needed to repair that browser. All other configured
+    services are part of the process-start contract.
+    """
+    failed: list[str] = []
+    for name, probe in PROBES:
+        try:
+            probe()
+        except Exception as exc:
+            if name in NON_BLOCKING_PROBES:
+                logger.warning(
+                    "%s is unavailable during startup (%s); "
+                    "API startup will continue but deep readiness will fail",
+                    name,
+                    type(exc).__name__,
+                )
+            else:
+                failed.append(name)
+
+    if failed:
+        raise RuntimeError(
+            "Required startup dependencies unavailable: " + ", ".join(failed)
+        )
 
 
 def main() -> int:
-    if not settings.require_external_dependencies:
-        print(
-            "Required dependency mode is disabled; refusing production preflight",
-            file=sys.stderr,
-        )
-        return 2
-
     failed: list[str] = []
     for name, probe in PROBES:
         try:
@@ -105,8 +154,16 @@ def main() -> int:
             # Never render connection strings or exception messages: driver
             # errors may embed credentials. Component and exception type are
             # enough to diagnose the failed boundary without leaking secrets.
-            print(f"{name}: unavailable ({type(exc).__name__})", file=sys.stderr)
-            failed.append(name)
+            suffix = (
+                " advisory; API may start but readiness will fail"
+                if name in NON_BLOCKING_PROBES else ""
+            )
+            print(
+                f"{name}: unavailable ({type(exc).__name__}){suffix}",
+                file=sys.stderr,
+            )
+            if name not in NON_BLOCKING_PROBES:
+                failed.append(name)
         else:
             print(f"{name}: ok")
 

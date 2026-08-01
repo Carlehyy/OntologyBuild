@@ -28,7 +28,7 @@ class N8nConnectionResult:
 class N8nClient:
     """Small HTTP client for the n8n public REST API."""
 
-    def __init__(self, api_url: str, api_key: str, timeout_seconds: int = 10):
+    def __init__(self, api_url: str, api_key: str, timeout_seconds: int = 30):
         self.api_base = normalize_n8n_api_base(api_url)
         self.api_key = api_key.strip()
         self.timeout_seconds = timeout_seconds
@@ -278,6 +278,6 @@ def enforce_n8n_url_policy(raw: str, *, environment: str = "development") -> str
     return api_base
 
 
-def test_n8n_connection(api_url: str, api_key: str, timeout_seconds: int = 10) -> N8nConnectionResult:
+def test_n8n_connection(api_url: str, api_key: str, timeout_seconds: int = 30) -> N8nConnectionResult:
     client = N8nClient(api_url=api_url, api_key=api_key, timeout_seconds=timeout_seconds)
     return client.test_connection()

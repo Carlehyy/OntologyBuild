@@ -18,6 +18,7 @@ class DocumentToMarkdownStep(PipelineStep):
       model_id: str — VLM 策略使用的模型 ID (vlm 策略必填)
 
     input: data 的每个 row 形如 {"storage_uri": "s3://..."/"local://...", "filename": "..."}
+    ``local://`` 仅用于兼容读取旧版本遗留对象；新对象必须写入 MinIO。
     output: 每个 row 增加 "markdown_text" 字段
     """
 

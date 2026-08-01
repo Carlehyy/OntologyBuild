@@ -1,7 +1,9 @@
 """Neo4j 图数据库服务"""
 from __future__ import annotations
+import json
 import logging
 import time
+from base64 import b64decode, b64encode
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -13,6 +15,81 @@ except ImportError:  # pragma: no cover
 
 # 连接失败后多少秒内不再重试（避免每个请求都白等连接超时）
 _RETRY_INTERVAL = 60.0
+_JSON_FIELDS_KEY = "__ontology_json_fields"
+_JSON_VALUE_PREFIX = "__ONTOLOGY_JSON_V1__:"
+_ESCAPED_STRING_PREFIX = "__ONTOLOGY_STRING_V1__:"
+_NEO4J_INT64_MIN = -(1 << 63)
+_NEO4J_INT64_MAX = (1 << 63) - 1
+
+
+def _encode_properties(properties: dict) -> dict:
+    """Convert nested SQL JSON values to Neo4j-supported property values."""
+    encoded: dict[str, Any] = {}
+    for raw_key, value in dict(properties or {}).items():
+        key = str(raw_key)
+        if isinstance(value, str):
+            if value.startswith((_JSON_VALUE_PREFIX, _ESCAPED_STRING_PREFIX)):
+                encoded[key] = _ESCAPED_STRING_PREFIX + b64encode(
+                    value.encode("utf-8"),
+                ).decode("ascii")
+            else:
+                encoded[key] = value
+            continue
+        if value is None or isinstance(value, (float, bool)):
+            encoded[key] = value
+            continue
+        if isinstance(value, int):
+            # Neo4j integers are signed 64-bit. Preserve an oversized SQL JSON
+            # integer as text instead of letting the driver reject the entire
+            # projection rebuild.
+            encoded[key] = (
+                value
+                if _NEO4J_INT64_MIN <= value <= _NEO4J_INT64_MAX
+                else str(value)
+            )
+            continue
+        encoded[key] = _JSON_VALUE_PREFIX + json.dumps(
+            value, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), default=str,
+        )
+    return encoded
+
+
+def _decode_properties(properties: dict) -> dict:
+    decoded = dict(properties or {})
+    # Read compatibility for projections written by the short-lived metadata
+    # encoding before every upgraded ontology is synchronously rebuilt.
+    legacy_fields = decoded.get(_JSON_FIELDS_KEY)
+    if isinstance(legacy_fields, list):
+        decoded.pop(_JSON_FIELDS_KEY, None)
+    else:
+        legacy_fields = []
+    for key in legacy_fields:
+        value = decoded.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            decoded[key] = json.loads(value)
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"Neo4j projection property {key!r} contains invalid JSON"
+            )
+    for key, value in list(decoded.items()):
+        if not isinstance(value, str):
+            continue
+        try:
+            if value.startswith(_JSON_VALUE_PREFIX):
+                decoded[key] = json.loads(value[len(_JSON_VALUE_PREFIX):])
+            elif value.startswith(_ESCAPED_STRING_PREFIX):
+                decoded[key] = b64decode(
+                    value[len(_ESCAPED_STRING_PREFIX):],
+                    validate=True,
+                ).decode("utf-8")
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise RuntimeError(
+                f"Neo4j projection property {key!r} has invalid type encoding"
+            ) from exc
+    return decoded
 
 
 def _port_open(uri: str, timeout: float = 0.5) -> bool:
@@ -42,6 +119,11 @@ class Neo4jService:
 
     _shared_driver = None
     _shared_unavailable_until: float = 0.0
+
+    @classmethod
+    def clear_unavailable_backoff(cls) -> None:
+        """Let the next business request reconnect after a successful probe."""
+        cls._shared_unavailable_until = 0.0
 
     def __init__(self, uri: str | None = None, user: str | None = None, password: str | None = None):
         from app.config import settings
@@ -102,14 +184,23 @@ class Neo4jService:
         """实体 MERGE — 存在则更新, 不存在则创建"""
         if not self._available:
             return None
+        from app.services.v2.graph.cypher_builder import validate_label
+
+        label = validate_label(label)
+        key_field = validate_label(key_field)
         query = f"""
         MERGE (n:{label} {{{key_field}: $key}})
         SET n += $props,
-            n.updated_at = datetime()
+            n.updated_at = coalesce($props.updated_at, datetime())
         RETURN elementId(n) AS eid
         """
+        encoded_props = _encode_properties(props)
         with self._driver.session() as session:
-            result = session.run(query, key=props.get(key_field), props=props)
+            result = session.run(
+                query,
+                key=encoded_props.get(key_field),
+                props=encoded_props,
+            )
             record = result.single()
             return record["eid"] if record else None
 
@@ -118,15 +209,35 @@ class Neo4jService:
         """关系 MERGE"""
         if not self._available:
             return False
+        from app.services.v2.graph.cypher_builder import validate_label
+
+        src_label = validate_label(src_label)
+        tgt_label = validate_label(tgt_label)
+        rel_type = validate_label(rel_type)
+        key_field = validate_label(key_field)
+        relationship_props = _encode_properties(props or {})
+        relationship_id = relationship_props.get("id")
+        merge_clause = (
+            f"MERGE (s)-[r:{rel_type} {{id: $relationship_id}}]->(t)"
+            if relationship_id is not None
+            else f"MERGE (s)-[r:{rel_type}]->(t)"
+        )
         query = f"""
         MATCH (s:{src_label} {{{key_field}: $src_key}})
         MATCH (t:{tgt_label} {{{key_field}: $tgt_key}})
-        MERGE (s)-[r:{rel_type}]->(t)
-        SET r += $props, r.updated_at = datetime()
+        {merge_clause}
+        SET r += $props,
+            r.updated_at = coalesce($props.updated_at, datetime())
         RETURN r
         """
         with self._driver.session() as session:
-            result = session.run(query, src_key=src_key, tgt_key=tgt_key, props=props or {})
+            result = session.run(
+                query,
+                src_key=src_key,
+                tgt_key=tgt_key,
+                relationship_id=relationship_id,
+                props=relationship_props,
+            )
             return result.single() is not None
 
     def batch_upsert_entities(
@@ -143,6 +254,10 @@ class Neo4jService:
         """
         if not self._available or not entities:
             return 0
+        from app.services.v2.graph.cypher_builder import validate_label
+
+        label = validate_label(label)
+        key_field = validate_label(key_field)
         property_assignment = (
             "SET n = e.props"
             if replace_properties
@@ -152,14 +267,20 @@ class Neo4jService:
         UNWIND $batch AS e
         MERGE (n:{label} {{{key_field}: e.key}})
         {property_assignment}
-        SET n.updated_at = datetime()
+        SET n.updated_at = coalesce(e.props.updated_at, datetime())
         """
         count = 0
         chunk_size = 1000
         with self._driver.session() as session:
             for i in range(0, len(entities), chunk_size):
                 chunk = entities[i:i + chunk_size]
-                batch = [{"key": e.get(key_field), "props": e} for e in chunk]
+                batch = []
+                for entity in chunk:
+                    encoded = _encode_properties(entity)
+                    batch.append({
+                        "key": encoded.get(key_field),
+                        "props": encoded,
+                    })
                 session.run(query, batch=batch)
                 count += len(chunk)
         return count
@@ -195,23 +316,37 @@ class Neo4jService:
         if not self._available:
             return {"nodes": [], "edges": []}
 
-        label_clause = f":{label_filter}" if label_filter else ""
-
         with self._driver.session() as session:
             # Step 1: 获取节点
-            node_query = f"""
-            MATCH (n{label_clause})
+            node_query = """
+            MATCH (n:OntologyEntity)
             WHERE n.ontology_id = $ontology_id
+              AND ($type_filter IS NULL OR n.type = $type_filter)
             RETURN n
             LIMIT $limit
             """
             nodes_map = {}
-            node_result = session.run(node_query, ontology_id=ontology_id, limit=limit)
+            node_result = session.run(
+                node_query,
+                ontology_id=ontology_id,
+                type_filter=label_filter,
+                limit=limit,
+            )
             for record in node_result:
                 nd = record.get("n")
                 if nd:
-                    nid = nd.element_id
-                    nodes_map[nid] = {"id": nid, "labels": list(nd.labels), "properties": dict(nd)}
+                    properties = _decode_properties(dict(nd))
+                    nid = properties.get("id")
+                    if not nid:
+                        raise RuntimeError(
+                            "Neo4j projection node is missing stable id; rebuild required"
+                        )
+                    nid = str(nid)
+                    nodes_map[nid] = {
+                        "id": nid,
+                        "labels": list(nd.labels),
+                        "properties": properties,
+                    }
 
             # Step 2: 获取这些节点之间的边
             if nodes_map:
@@ -229,17 +364,38 @@ class Neo4jService:
                     n2 = record.get("n")
                     m2 = record.get("m")
                     if r and n2 and m2:
-                        if n2.element_id in node_id_set or m2.element_id in node_id_set:
-                            if n2.element_id not in nodes_map:
-                                nodes_map[n2.element_id] = {"id": n2.element_id, "labels": list(n2.labels), "properties": dict(n2)}
-                            if m2.element_id not in nodes_map:
-                                nodes_map[m2.element_id] = {"id": m2.element_id, "labels": list(m2.labels), "properties": dict(m2)}
+                        n_props = _decode_properties(dict(n2))
+                        m_props = _decode_properties(dict(m2))
+                        source_id = n_props.get("id")
+                        target_id = m_props.get("id")
+                        rel_props = _decode_properties(dict(r))
+                        relationship_id = rel_props.get("id")
+                        if not source_id or not target_id or not relationship_id:
+                            raise RuntimeError(
+                                "Neo4j projection relationship is missing stable ids; rebuild required"
+                            )
+                        source_id = str(source_id)
+                        target_id = str(target_id)
+                        relationship_id = str(relationship_id)
+                        if source_id in node_id_set or target_id in node_id_set:
+                            if source_id not in nodes_map:
+                                nodes_map[source_id] = {
+                                    "id": source_id,
+                                    "labels": list(n2.labels),
+                                    "properties": n_props,
+                                }
+                            if target_id not in nodes_map:
+                                nodes_map[target_id] = {
+                                    "id": target_id,
+                                    "labels": list(m2.labels),
+                                    "properties": m_props,
+                                }
                             edges.append({
-                                "id": r.element_id,
-                                "source": r.start_node.element_id,
-                                "target": r.end_node.element_id,
-                                "type": r.type,
-                                "properties": dict(r),
+                                "id": relationship_id,
+                                "source": source_id,
+                                "target": target_id,
+                                "type": rel_props.get("semantic_type") or r.type,
+                                "properties": rel_props,
                             })
             else:
                 edges = []

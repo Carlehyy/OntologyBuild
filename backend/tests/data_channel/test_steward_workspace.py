@@ -269,6 +269,8 @@ def test_internal_cdp_hostname_resolves_to_ip_for_chromium_host_validation(monke
 
 
 def test_browser_cdp_probe_validates_websocket_endpoint(monkeypatch):
+    requested = {}
+
     class FakeResponse:
         def __enter__(self):
             return self
@@ -282,14 +284,19 @@ def test_browser_cdp_probe_validates_websocket_endpoint(monkeypatch):
                 "webSocketDebuggerUrl": "ws://172.19.0.10:9222/devtools/browser/test",
             }).encode()
 
-    monkeypatch.setattr(settings, "steward_browser_cdp_url", "http://browser:9222")
+    monkeypatch.setattr(settings, "steward_browser_cdp_url", "http://browser:9222/")
     monkeypatch.setattr(
         "app.data_channel.steward.browser_runtime.socket.getaddrinfo",
         lambda *_args, **_kwargs: [(None, None, None, None, ("172.19.0.10", 9222))],
     )
+    def fake_urlopen(request, timeout):
+        requested["url"] = request.full_url
+        requested["timeout"] = timeout
+        return FakeResponse()
+
     monkeypatch.setattr(
         "app.data_channel.steward.browser_runtime.urllib.request.urlopen",
-        lambda request, timeout: FakeResponse(),
+        fake_urlopen,
     )
 
     status = probe_browser_cdp()
@@ -297,6 +304,26 @@ def test_browser_cdp_probe_validates_websocket_endpoint(monkeypatch):
     assert status == {
         "configured": True, "reachable": True,
         "browser": "Chrome/Test", "protocolVersion": "1.3",
+    }
+    assert requested == {
+        "url": "http://172.19.0.10:9222/json/version",
+        "timeout": 1.5,
+    }
+
+
+def test_browser_cdp_probe_rejects_precomposed_discovery_path(monkeypatch):
+    monkeypatch.setattr(
+        settings,
+        "steward_browser_cdp_url",
+        "http://127.0.0.1:9222/json/version",
+    )
+
+    status = probe_browser_cdp()
+
+    assert status == {
+        "configured": True,
+        "reachable": False,
+        "error": "浏览器健康检查要求 http/https CDP 服务根地址",
     }
 
 

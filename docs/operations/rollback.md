@@ -9,15 +9,23 @@
 2. 确认数据库迁移是否已经执行；
 3. 选择最后一个已验证 commit/镜像；
 4. 恢复与该版本匹配的 Compose 和环境契约；
-5. 启动后检查 API、Celery、前端资源和关键业务旅程；
+5. 启动后检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、
+   MinIO、n8n、Chromium CDP、前端资源和关键业务旅程；
 6. 记录回滚原因和遗留数据处理。
 
 ## 数据库约束
 
 - 不默认执行 Alembic downgrade；
+- 标准部署会在 Alembic 前停止 backend 与 Celery worker；迁移失败时二者保持
+  停止，必须先确认数据库实际 revision 和目标版本的 schema 兼容性，再决定
+  恢复或继续升级，不能直接把旧写入进程拉起；
 - destructive migration 必须采用 expand/migrate/contract 或双读写方案；
 - 只有经过副本验证且明确安全时才允许 downgrade；
-- 无法安全降级时，应回滚应用到兼容新 schema 的版本。
+- 无法安全执行 schema downgrade 时，应回滚应用到兼容新 schema 的版本。
+
+回滚不能通过重新启用平台 SQLite、API 线程任务、NetworkX/SQL 图、本地对象
+存储或已移除的向量服务来“恢复可用”。目标版本必须满足同一必需依赖契约；
+如上一版本依赖不同外部系统，应把依赖迁移作为单独、经验证的回滚步骤。
 
 ## 目录治理期间
 

@@ -725,9 +725,9 @@ def test_real_manual_version_to_sentinel_notification_closed_loop(
 ):
     """Exercise the real relational Mapping, CDC, sentinel and action sinks.
 
-    Neo4j/Chroma are rebuildable query projections and are replaced with their
-    successful adapters here; every authoritative database transition and the
-    notification side effect runs through production code.
+    Neo4j is a rebuildable query projection and is replaced with its successful
+    adapter here; every authoritative database transition and the notification
+    side effect runs through production code.
     """
     from app.models.ontology import OntologyProject
     from app.models.ontology_formal import ActionType, ObjectInstance, ObjectType
@@ -744,8 +744,6 @@ def test_real_manual_version_to_sentinel_notification_closed_loop(
         "app.database.SessionLocal", sessionmaker(bind=db.get_bind()))
     monkeypatch.setattr(
         MappingService, "_rebuild_neo4j_projection", lambda *_args: True)
-    monkeypatch.setattr(
-        MappingService, "_rebuild_chroma_projection", lambda *_args: 1)
     # Mapping owns a synchronous CDC barrier in this test; a second background
     # consumer would only race it for the same SQLite outbox row.
     register_cdc(start_worker=False)

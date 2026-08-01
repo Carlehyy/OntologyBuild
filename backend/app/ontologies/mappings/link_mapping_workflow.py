@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Callable
 
 from fastapi import HTTPException
@@ -9,6 +10,17 @@ from sqlalchemy.orm import Session
 
 
 Rule = Callable[..., Any]
+
+
+def _projection_locked_writer(func):
+    @wraps(func)
+    def wrapped(db: Session, ontology_id: str, *args, **kwargs):
+        from app.ontologies.runtime_fence import _ontology_build_lock
+
+        with _ontology_build_lock(db, ontology_id):
+            return func(db, ontology_id, *args, **kwargs)
+
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -414,6 +426,7 @@ def update_link_mapping_automation(
     }
 
 
+@_projection_locked_writer
 def delete_link_mapping(
     db: Session,
     ontology_id: str,
@@ -443,9 +456,25 @@ def delete_link_mapping(
     try:
         service.remove_link_mapping_projection(link_mapping)
         db.delete(link_mapping)
+        from app.ontologies.projection_state import mark_projecting
+        mark_projecting(db, ontology_id)
         db.commit()
     except MappingApplyError as exc:
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
-    service._rebuild_neo4j_projection(ontology_id)
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        rebuild_after_commit,
+    )
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_failed",
+            "message": (
+                "关系 Mapping 已从关系型真相删除，但 Neo4j 对账失败；"
+                "图读取已阻断，请执行图修复"
+            ),
+            "ontology_id": ontology_id,
+        }) from exc
     return None

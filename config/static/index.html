@@ -42,15 +42,15 @@
       <aside class="sidebar" aria-label="配置项目">
         <div class="sidebar-intro">
           <p class="sidebar-title">完整功能检查</p>
-          <p>必选依赖通过测试后即可生成；增强能力可以稍后配置。</p>
+          <p>五项阻塞依赖通过后即可生成；CDP 地址必填，连通性可稍后修复。</p>
         </div>
 
         <div class="progress-summary" aria-labelledby="progress-label">
           <div class="progress-copy">
             <span id="progress-label">连通性进度</span>
-            <strong id="progress-count">0 / 6</strong>
+            <strong id="progress-count">0 / 5</strong>
           </div>
-          <progress id="test-progress" value="0" max="6">0 / 6</progress>
+          <progress id="test-progress" value="0" max="5">0 / 5</progress>
         </div>
 
         <nav class="section-nav">
@@ -74,10 +74,6 @@
             <span>MinIO</span>
             <span class="nav-status status-idle">待测试</span>
           </a>
-          <a href="#chroma-section" data-nav-section="chroma">
-            <span>Chroma</span>
-            <span class="nav-status status-idle">可选</span>
-          </a>
           <a href="#browser-section" data-nav-section="browser">
             <span>Chromium CDP</span>
             <span class="nav-status status-idle">待测试</span>
@@ -85,10 +81,6 @@
           <a href="#n8n-section" data-nav-section="n8n">
             <span>n8n</span>
             <span class="nav-status status-idle">待测试</span>
-          </a>
-          <a href="#llm-section" data-nav-section="llm">
-            <span>默认大模型</span>
-            <span class="nav-status status-idle">可选</span>
           </a>
           <a href="#advanced-section" data-nav-section="advanced">
             <span>安全与目录</span>
@@ -377,45 +369,12 @@
             <div class="test-message" data-test-message="minio" aria-live="polite"></div>
           </section>
 
-          <section id="chroma-section" class="config-section" data-section="chroma" aria-labelledby="chroma-title">
-            <div class="section-heading">
-              <div>
-                <p class="section-purpose">可选增强：支持语义检索与向量查询</p>
-                <h2 id="chroma-title">Chroma 向量数据库</h2>
-                <p>项目确实使用 Chroma 提供语义检索；它不可用时核心平台仍可启动，可稍后再测试和启用。</p>
-              </div>
-              <span class="section-state status-idle" data-section-status="chroma">
-                <span class="status-indicator" aria-hidden="true"></span>
-                <span>可选</span>
-              </span>
-            </div>
-            <div class="field-grid">
-              <div class="field">
-                <label for="chroma-host">服务器地址</label>
-                <input id="chroma-host" data-path="chroma.host" name="chroma.host" type="text" value="127.0.0.1" autocomplete="hostname">
-                <p class="field-help">本机安装时通常填 127.0.0.1。</p>
-                <p class="field-error" data-error-for="chroma.host"></p>
-              </div>
-              <div class="field">
-                <label for="chroma-port">端口</label>
-                <input id="chroma-port" data-path="chroma.port" name="chroma.port" type="number" min="1" max="65535" value="8001" inputmode="numeric">
-                <p class="field-help">本项目本机映射默认使用 8001。</p>
-                <p class="field-error" data-error-for="chroma.port"></p>
-              </div>
-            </div>
-            <div class="section-actions">
-              <button class="secondary-button help-button" type="button" data-guide="chroma">我不知道如何启动 Chroma</button>
-              <button class="primary-button test-button" type="button" data-test-service="chroma">测试 Chroma</button>
-            </div>
-            <div class="test-message" data-test-message="chroma" aria-live="polite"></div>
-          </section>
-
           <section id="browser-section" class="config-section" data-section="browser" aria-labelledby="browser-title">
             <div class="section-heading">
               <div>
                 <p class="section-purpose">允许数据管家安全访问网页</p>
                 <h2 id="browser-title">Chromium CDP 浏览器</h2>
-                <p>CDP 是浏览器的远程控制接口。请为它使用单独的相对数据目录，不要复用日常浏览器资料。</p>
+                <p>CDP 是浏览器的远程控制接口。地址是启动必填配置；连通测试失败不阻止生成配置和 API 进程启动，但平台深度 readiness 会保持失败。请为它使用单独的相对数据目录，不要复用日常浏览器资料。</p>
               </div>
               <span class="section-state status-idle" data-section-status="browser">
                 <span class="status-indicator" aria-hidden="true"></span>
@@ -479,64 +438,6 @@
             <div class="test-message" data-test-message="n8n" aria-live="polite"></div>
           </section>
 
-          <section id="llm-section" class="config-section" data-section="llm" aria-labelledby="llm-title">
-            <div class="section-heading">
-              <div>
-                <p class="section-purpose">可选增强：提供文本理解与生成能力</p>
-                <h2 id="llm-title">默认大模型</h2>
-                <p>可以稍后在平台中配置模型。留空 API Key 不会阻止生成配置或启动核心平台。</p>
-              </div>
-              <span class="section-state status-idle" data-section-status="llm">
-                <span class="status-indicator" aria-hidden="true"></span>
-                <span>可选</span>
-              </span>
-            </div>
-            <div class="field-grid">
-              <div class="field">
-                <label for="llm-provider">服务类型</label>
-                <select id="llm-provider" data-path="llm.provider" name="llm.provider">
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="compatible">兼容 OpenAI 的服务</option>
-                </select>
-                <p class="field-help">Ollama、LiteLLM 等通常选择兼容 OpenAI 的服务。</p>
-                <p class="field-error" data-error-for="llm.provider"></p>
-              </div>
-              <div class="field">
-                <label for="llm-name">配置名称</label>
-                <input id="llm-name" data-path="llm.name" name="llm.name" type="text" value="本地默认模型" autocomplete="off">
-                <p class="field-help">会显示在平台的模型配置列表中。</p>
-                <p class="field-error" data-error-for="llm.name"></p>
-              </div>
-              <div class="field">
-                <label for="llm-model">默认模型名称</label>
-                <input id="llm-model" data-path="llm.model" name="llm.model" type="text" value="gpt-4.1-mini" autocomplete="off">
-                <p class="field-help">必须与服务端提供的模型名称完全一致。</p>
-                <p class="field-error" data-error-for="llm.model"></p>
-              </div>
-              <div class="field field-span-two">
-                <label for="llm-api-base">API 地址</label>
-                <input id="llm-api-base" data-path="llm.api_base" name="llm.api_base" type="url" value="https://api.openai.com/v1" autocomplete="url">
-                <p class="field-help">OpenAI 默认是 https://api.openai.com/v1，本地服务可填 http://127.0.0.1:4000/v1。</p>
-                <p class="field-error" data-error-for="llm.api_base"></p>
-              </div>
-              <div class="field">
-                <label for="llm-api-key">API Key</label>
-                <div class="secret-control">
-                  <input id="llm-api-key" data-path="llm.api_key" data-secret="llm.api_key" name="llm.api_key" type="password" autocomplete="new-password">
-                  <button class="text-button secret-toggle" type="button" data-toggle-secret="llm-api-key" aria-label="显示大模型 API Key">显示</button>
-                </div>
-                <p class="field-help secret-help">仅保存在本地配置文件中，不会显示在测试结果里。</p>
-                <p class="field-error" data-error-for="llm.api_key"></p>
-              </div>
-            </div>
-            <div class="section-actions">
-              <button class="secondary-button help-button" type="button" data-guide="llm">我不知道如何获取 API Key</button>
-              <button class="primary-button test-button" type="button" data-test-service="llm">测试默认大模型</button>
-            </div>
-            <div class="test-message" data-test-message="llm" aria-live="polite"></div>
-          </section>
-
           <section id="advanced-section" class="config-section" data-section="advanced" aria-labelledby="advanced-title">
             <div class="section-heading">
               <div>
@@ -594,9 +495,9 @@
                 <p class="field-error" data-error-for="advanced.uploads_dir"></p>
               </div>
               <div class="field">
-                <label for="storage-dir">本地存储目录</label>
-                <input id="storage-dir" data-path="advanced.storage_local_dir" name="advanced.storage_local_dir" type="text" value="./runtime/storage" required autocomplete="off">
-                <p class="field-help">外部存储短暂不可用时只用于诊断，不作为功能降级存储。</p>
+                <label for="storage-dir">历史本地对象目录</label>
+                <input id="storage-dir" data-path="advanced.storage_local_dir" name="advanced.storage_local_dir" type="text" value="./runtime/object-storage" required autocomplete="off">
+                <p class="field-help">仅用于读取和迁移旧版本 local:// 对象；新对象只写入 MinIO。</p>
                 <p class="field-error" data-error-for="advanced.storage_local_dir"></p>
               </div>
               <div class="field">
@@ -677,7 +578,7 @@
               <div>
                 <p class="section-purpose">最后检查并写入本地文件</p>
                 <h2 id="finish-title">生成与启动</h2>
-                <p>生成前必须完成六项必选连通性测试。Chroma 和默认大模型可单独测试，但不会阻止生成。</p>
+                <p>生成前必须完成五项阻塞依赖测试，并填写 CDP 地址；CDP 连通性可稍后修复。大模型请在平台启动后通过“模型配置”页面按需添加。</p>
               </div>
               <span class="section-state status-idle" data-section-status="finish">
                 <span class="status-indicator" aria-hidden="true"></span>
@@ -693,7 +594,7 @@
               <button id="test-all" class="secondary-button large-button" type="button">测试全部必选依赖</button>
               <button id="generate-config" class="primary-button large-button" type="button" disabled>生成本地配置文件</button>
             </div>
-            <p id="generate-help" class="action-help">请先填写并通过六项必选测试。</p>
+            <p id="generate-help" class="action-help">请先填写并通过五项阻塞依赖测试。</p>
 
             <div id="generated-result" class="generated-result" hidden>
               <div class="result-heading">
@@ -722,7 +623,7 @@
     <div id="sticky-actions" class="sticky-actions" hidden>
       <div>
         <strong id="sticky-title">还未完成连通性测试</strong>
-        <span id="sticky-copy">0 / 6 项必选测试已通过</span>
+        <span id="sticky-copy">0 / 5 项必选测试已通过</span>
       </div>
       <button id="sticky-test-all" class="secondary-button" type="button">测试必选项</button>
       <button id="sticky-generate" class="primary-button" type="button" disabled>生成配置</button>

@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.models import (
     AdvancedConfig,
+    BrowserConfig,
     ConfigProfile,
     MinioConfig,
     PlatformConfig,
@@ -68,6 +69,14 @@ def test_minio_rejects_console_port_and_scheme() -> None:
         MinioConfig(endpoint="http://127.0.0.1:9000")
 
 
+def test_browser_cdp_url_accepts_only_service_root() -> None:
+    assert BrowserConfig(cdp_url="https://browser.example:9222/").cdp_url == (
+        "https://browser.example:9222/"
+    )
+    with pytest.raises(ValidationError, match="只填写服务根地址"):
+        BrowserConfig(cdp_url="https://browser.example:9222/json/version")
+
+
 def test_profile_rejects_dotenv_interpolation_and_short_admin_password() -> None:
     profile = default_profile()
     payload = profile.model_dump()
@@ -85,24 +94,3 @@ def test_profile_rejects_dotenv_interpolation_and_short_admin_password() -> None
     payload["platform"]["encryption_key"] = "not-a-fernet-key"
     with pytest.raises(ValidationError, match="Fernet"):
         ConfigProfile.model_validate(payload)
-
-
-def test_optional_sections_accept_blank_form_values_and_use_safe_defaults() -> None:
-    payload = default_profile().model_dump()
-    payload["chroma"] = {"host": "", "port": None}
-    payload["llm"].update(
-        {
-            "name": "",
-            "provider": "",
-            "api_base": "",
-            "api_key": "",
-            "model": "",
-        }
-    )
-
-    profile = ConfigProfile.model_validate(payload)
-
-    assert profile.chroma.host == "127.0.0.1"
-    assert profile.chroma.port == 8001
-    assert profile.llm.api_key == ""
-    assert profile.llm.api_base == "https://api.openai.com/v1"

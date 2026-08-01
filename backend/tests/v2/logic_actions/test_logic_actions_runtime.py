@@ -1,6 +1,12 @@
+from contextlib import contextmanager
+
+import pytest
+from fastapi import HTTPException
+
 from app.models.entity import Entity
 from app.models.action import Action
 from app.models.logic import LogicRule
+from app.models.ontology import OntologyProject
 from app.models.v2.logic import OntologyLogicRule
 from app.models.v2.action import OntologyActionRun, OntologyActionType
 from app.routers.actions import publish_actions
@@ -17,8 +23,49 @@ from app.routers.v2.logic_actions import (
 )
 
 
-def test_run_published_set_property_action(db):
+def _project(ontology_id: str) -> OntologyProject:
+    return OntologyProject(
+        id=ontology_id,
+        name=ontology_id,
+        domain="logic-action-tests",
+        created_by="tests",
+    )
+
+
+def test_run_published_set_property_action(db, monkeypatch):
+    from app.ontologies import projection_state, runtime_fence
+
     ontology_id = "ont-runtime-1"
+    events: list[str] = []
+    lock_held = {"value": False}
+    original_rebuild = projection_state.rebuild_after_commit
+
+    @contextmanager
+    def observed_lock(_db, target_ontology_id):
+        assert target_ontology_id == ontology_id
+        lock_held["value"] = True
+        events.append("lock-enter")
+        try:
+            yield
+        finally:
+            events.append("lock-exit")
+            lock_held["value"] = False
+
+    def observed_rebuild(session, target_ontology_id):
+        assert lock_held["value"] is True
+        events.append("rebuild")
+        return original_rebuild(session, target_ontology_id)
+
+    monkeypatch.setattr(
+        runtime_fence,
+        "_ontology_build_lock",
+        observed_lock,
+    )
+    monkeypatch.setattr(
+        projection_state,
+        "rebuild_after_commit",
+        observed_rebuild,
+    )
     entity = Entity(
         id="entity-1",
         ontology_id=ontology_id,
@@ -38,6 +85,7 @@ def test_run_published_set_property_action(db):
         status="published",
         enabled=True,
     )
+    db.add(_project(ontology_id))
     db.add(entity)
     db.add(action)
     db.commit()
@@ -56,6 +104,78 @@ def test_run_published_set_property_action(db):
     assert run.status == "completed"
     assert run.before_snapshot[entity.id]["status"] == "pending"
     assert run.after_snapshot[entity.id]["status"] == "approved"
+    project = db.query(OntologyProject).filter_by(id=ontology_id).one()
+    assert project.projection_status == "ready"
+    assert events == ["lock-enter", "rebuild", "lock-exit"]
+
+
+def test_legacy_action_keeps_committed_truth_when_projection_rebuild_fails(
+    db, monkeypatch,
+):
+    from app.ontologies import projection_state
+
+    ontology_id = "ont-runtime-projection-failure"
+    entity = Entity(
+        id="entity-projection-failure",
+        ontology_id=ontology_id,
+        name_cn="Order",
+        name_en="Order",
+        type="Order",
+        properties={"status": "pending"},
+    )
+    action = OntologyActionType(
+        id="action-projection-failure",
+        ontology_id=ontology_id,
+        name="Change status",
+        action_category="state_transition",
+        target_entity_type="Order",
+        parameters=[{"name": "status", "type": "string", "required": True}],
+        effects=[{"action": "set_property", "property": "status"}],
+        status="published",
+        enabled=True,
+    )
+    db.add_all([_project(ontology_id), entity, action])
+    db.commit()
+
+    original_rebuild = projection_state.rebuild_after_commit
+
+    def fail_rebuild(session, target_ontology_id):
+        return original_rebuild(
+            session,
+            target_ontology_id,
+            rebuild=lambda _ontology_id: False,
+            run_in_test=True,
+        )
+
+    monkeypatch.setattr(
+        projection_state,
+        "rebuild_after_commit",
+        fail_rebuild,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        run_action_type(
+            ontology_id,
+            action.id,
+            ActionRunRequest(
+                target_object_id=entity.id,
+                parameters={"status": "approved"},
+            ),
+            db,
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 503
+    assert exc_info.value.detail["code"] == "ontology_projection_failed"
+    db.expire_all()
+    assert db.query(Entity).filter_by(id=entity.id).one().properties == {
+        "status": "approved",
+    }
+    run = db.query(OntologyActionRun).filter_by(
+        ontology_id=ontology_id,
+    ).one()
+    assert run.status == "completed"
+    project = db.query(OntologyProject).filter_by(id=ontology_id).one()
+    assert project.projection_status == "failed"
+    assert "incomplete" in (project.projection_error or "")
 
 
 def test_logic_review_and_executable_test(db):
@@ -122,6 +242,7 @@ def test_action_review_updates_submission_criteria(db):
 
 
 def test_action_runtime_rejects_missing_required_parameter(db):
+    db.add(_project("ont-runtime-4"))
     action = OntologyActionType(
         id="action-criteria-1",
         ontology_id="ont-runtime-4",

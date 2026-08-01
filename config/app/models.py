@@ -12,8 +12,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationInfo,
-    field_validator,
     model_validator,
 )
 
@@ -147,21 +145,6 @@ class MinioConfig(StrictModel):
         return self
 
 
-class ChromaConfig(StrictModel):
-    host: str = Field(default="127.0.0.1", min_length=1, max_length=253)
-    port: int = Field(default=8001, ge=1, le=65535)
-
-    @field_validator("host", mode="before")
-    @classmethod
-    def default_blank_host(cls, value: object) -> object:
-        return "127.0.0.1" if value is None or str(value).strip() == "" else value
-
-    @field_validator("port", mode="before")
-    @classmethod
-    def default_blank_port(cls, value: object) -> object:
-        return 8001 if value is None or str(value).strip() == "" else value
-
-
 class BrowserConfig(StrictModel):
     cdp_url: str = Field(default="http://127.0.0.1:9222", min_length=1, max_length=500)
 
@@ -182,37 +165,6 @@ class N8nConfig(StrictModel):
         return self
 
 
-class LlmConfig(StrictModel):
-    name: str = Field(default="OpenOntology 本地默认模型", min_length=1, max_length=200)
-    provider: str = "openai"
-    api_base: str = Field(default="https://api.openai.com/v1", min_length=1, max_length=500)
-    api_key: str = Field(default="", min_length=0, max_length=2000)
-    model: str = Field(default="gpt-4.1-mini", min_length=1, max_length=200)
-
-    @field_validator("name", "provider", "api_base", "model", mode="before")
-    @classmethod
-    def default_blank_fields(
-        cls,
-        value: object,
-        info: ValidationInfo,
-    ) -> object:
-        if value is not None and str(value).strip():
-            return value
-        return {
-            "name": "OpenOntology 本地默认模型",
-            "provider": "openai",
-            "api_base": "https://api.openai.com/v1",
-            "model": "gpt-4.1-mini",
-        }[info.field_name]
-
-    @model_validator(mode="after")
-    def validate_llm(self) -> "LlmConfig":
-        if self.provider not in {"openai", "anthropic", "compatible"}:
-            raise ValueError("模型服务类型无效")
-        _validate_http_origin(self.api_base, "模型 API 地址", allow_path=True)
-        return self
-
-
 class AdvancedConfig(StrictModel):
     uploads_dir: str = "./runtime/uploads"
     storage_local_dir: str = "./runtime/object-storage"
@@ -230,7 +182,7 @@ class AdvancedConfig(StrictModel):
     def validate_paths_and_url(self) -> "AdvancedConfig":
         for label, raw in (
             ("上传目录", self.uploads_dir),
-            ("本地对象目录", self.storage_local_dir),
+            ("历史本地对象目录", self.storage_local_dir),
             ("API Hub 数据目录", self.api_hub_data_dir),
             ("超级助手技能目录", self.super_assistant_skill_root),
             ("数据管家工作区", self.steward_workspace_root),
@@ -246,10 +198,8 @@ class ConfigProfile(StrictModel):
     redis: RedisConfig = Field(default_factory=RedisConfig)
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
     minio: MinioConfig = Field(default_factory=MinioConfig)
-    chroma: ChromaConfig = Field(default_factory=ChromaConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     n8n: N8nConfig = Field(default_factory=N8nConfig)
-    llm: LlmConfig = Field(default_factory=LlmConfig)
     advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
 
     @model_validator(mode="after")
@@ -264,7 +214,6 @@ class ConfigProfile(StrictModel):
             ("MinIO Access Key", self.minio.access_key),
             ("MinIO Secret Key", self.minio.secret_key),
             ("n8n API Key", self.n8n.api_key),
-            ("模型 API Key", self.llm.api_key),
             ("API Hub MCP Token", self.advanced.api_hub_mcp_token),
             ("API Hub System MCP Token", self.advanced.api_hub_system_mcp_token),
             ("API Hub Internal Proxy Token", self.advanced.api_hub_internal_proxy_token),
@@ -304,7 +253,6 @@ def default_profile() -> ConfigProfile:
             secret_key="",
         ),
         n8n=N8nConfig(api_key=""),
-        llm=LlmConfig(api_key=""),
         advanced=AdvancedConfig(
             api_hub_mcp_token=_random_token(),
             api_hub_system_mcp_token=_random_token(),

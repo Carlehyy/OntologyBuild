@@ -1,8 +1,8 @@
 """Release activation support shared by promotion and rollback.
 
 SQL mutations in this module deliberately stop at the caller-owned transaction
-boundary. Query-store rebuilds reconcile Neo4j and Chroma from committed SQL
-truth and report readiness without changing HTTP behavior.
+boundary. Query-store rebuilds reconcile Neo4j from committed SQL truth and
+report readiness without changing HTTP behavior.
 """
 
 from __future__ import annotations
@@ -30,12 +30,9 @@ def rebuild_required_query_projections(
         mapping_service_factory = MappingService
     service = mapping_service_factory(db)
     neo4j_ok = service._rebuild_neo4j_projection(ontology_id)
-    chroma_count = service._rebuild_chroma_projection(ontology_id)
     return {
-        "ready": bool(neo4j_ok and chroma_count is not None),
+        "ready": bool(neo4j_ok),
         "neo4j": "ok" if neo4j_ok else "error",
-        "chroma": "ok" if chroma_count is not None else "error",
-        "chroma_count": chroma_count or 0,
     }
 
 

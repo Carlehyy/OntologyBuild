@@ -11,11 +11,8 @@ from app.shared.config import (
 )
 from app.models.model_config import ModelConfig
 from app.models.workflow_config import WorkflowConfig
-from app.services.encryption_service import decrypt
-from app.services.local_config_sync import (
-    MANAGED_LLM_ID,
-    sync_local_managed_runtime_config,
-)
+from app.services.encryption_service import decrypt, encrypt
+from app.services.local_config_sync import sync_local_managed_runtime_config
 from app.shared import env_files
 
 
@@ -70,18 +67,18 @@ def test_clean_checkout_production_uses_process_environment(
         "REDIS_URL": (
             "rediss://:strong-password@redis.example.test:6380/0"
         ),
-        "DATASET_IMPORT_USE_CELERY": "true",
         "SECRET_KEY": "a-secure-production-secret-key-over-32-characters",
         "FIRST_ADMIN_PASSWORD": "a-secure-admin-password",
         "CORS_ALLOWED_ORIGINS": "",
-        "REQUIRE_EXTERNAL_DEPENDENCIES": "true",
         "NEO4J_URI": "neo4j+s://neo4j.example.test:7687",
         "NEO4J_USER": "neo4j-app",
         "NEO4J_PASSWORD": "a-secure-neo4j-password",
         "MINIO_ENDPOINT": "minio.example.test:9000",
         "MINIO_ACCESS_KEY": "ontology-minio",
         "MINIO_SECRET_KEY": "a-secure-minio-password",
-        "STORAGE_LOCAL_FALLBACK": "false",
+        "STEWARD_BROWSER_CDP_URL": "https://browser.example.test:9222",
+        "N8N_API_URL": "https://n8n.example.test",
+        "N8N_API_KEY": "a-secure-n8n-api-key",
         "PIPELINE_FILE_PUBLIC_APP_BASE_URL": "https://app.example.test",
         "PIPELINE_FILE_PUBLIC_API_BASE_URL": "https://api.example.test",
         "ALLOW_PUBLIC_REGISTRATION": "false",
@@ -152,15 +149,9 @@ def test_api_hub_relative_data_dir_is_anchored_to_backend():
 def _managed_settings(**overrides) -> Settings:
     values = {
         "environment": "development",
-        "local_config_managed": True,
-        "local_n8n_api_url": "http://127.0.0.1:5678",
-        "local_n8n_api_key": "n8n-secret",
-        "local_n8n_timeout_seconds": 12,
-        "local_llm_name": "本地默认模型",
-        "local_llm_provider": "compatible",
-        "local_llm_api_base": "http://127.0.0.1:4000/v1",
-        "local_llm_api_key": "llm-secret",
-        "local_llm_model": "local-model",
+        "n8n_api_url": "http://127.0.0.1:5678",
+        "n8n_api_key": "n8n-secret",
+        "n8n_timeout_seconds": 12,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -191,68 +182,66 @@ def test_managed_runtime_config_is_idempotent_and_encrypts_secrets(
     db.commit()
 
     workflow = db.query(WorkflowConfig).filter_by(id="default").one()
-    managed_llm = db.query(ModelConfig).filter_by(id=MANAGED_LLM_ID).one()
     workflow_ciphertext = workflow.api_key_encrypted
-    llm_ciphertext = managed_llm.api_key_encrypted
 
     assert workflow.enabled is True
     assert workflow.api_url == "http://127.0.0.1:5678/api/v1"
     assert workflow.timeout_seconds == 12
     assert workflow.api_key_encrypted != "n8n-secret"
     assert decrypt(workflow.api_key_encrypted) == "n8n-secret"
-    assert managed_llm.enabled is True
-    assert managed_llm.is_default is True
-    assert managed_llm.models == ["local-model"]
-    assert managed_llm.api_key_encrypted != "llm-secret"
-    assert decrypt(managed_llm.api_key_encrypted) == "llm-secret"
     db.refresh(existing_default)
-    assert existing_default.is_default is False
+    assert existing_default.is_default is True
+
+    assert sync_local_managed_runtime_config(db, current) is True
+    db.commit()
+    db.expire_all()
+    assert db.query(WorkflowConfig).count() == 1
+    assert (
+        db.query(WorkflowConfig).filter_by(id="default").one().api_key_encrypted
+        == workflow_ciphertext
+    )
+
+    # A stale database/UI value is never allowed to become a second runtime
+    # authority.  Every non-test startup restores the environment-managed row.
+    workflow = db.query(WorkflowConfig).filter_by(id="default").one()
+    workflow.enabled = False
+    workflow.api_url = "https://stale.example.test/api/v1"
+    workflow.timeout_seconds = 99
+    workflow.api_key_encrypted = encrypt("stale-key")
+    db.commit()
 
     assert sync_local_managed_runtime_config(db, current) is True
     db.commit()
     db.expire_all()
 
     assert db.query(WorkflowConfig).count() == 1
-    assert db.query(ModelConfig).filter_by(id=MANAGED_LLM_ID).count() == 1
-    assert (
-        db.query(WorkflowConfig).filter_by(id="default").one().api_key_encrypted
-        == workflow_ciphertext
-    )
-    assert (
-        db.query(ModelConfig)
-        .filter_by(id=MANAGED_LLM_ID)
-        .one()
-        .api_key_encrypted
-        == llm_ciphertext
-    )
+    restored = db.query(WorkflowConfig).filter_by(id="default").one()
+    assert restored.enabled is True
+    assert restored.api_url == "http://127.0.0.1:5678/api/v1"
+    assert restored.timeout_seconds == 12
+    assert decrypt(restored.api_key_encrypted) == "n8n-secret"
 
 
-def test_managed_runtime_config_never_runs_in_production(db):
+def test_managed_runtime_config_runs_in_production(db):
     current = _managed_settings(
         environment="production",
-        local_n8n_api_key="",
-        local_llm_api_key="",
+        n8n_api_url="https://n8n.example.test",
     )
-
-    assert sync_local_managed_runtime_config(db, current) is False
-    assert db.query(WorkflowConfig).count() == 0
-    assert db.query(ModelConfig).filter_by(id=MANAGED_LLM_ID).count() == 0
-
-
-def test_managed_runtime_config_allows_optional_llm_to_be_omitted(db):
-    current = _managed_settings(local_llm_api_key="")
 
     assert sync_local_managed_runtime_config(db, current) is True
     db.commit()
-
-    workflow = db.query(WorkflowConfig).filter_by(id="default").one()
-    assert workflow.enabled is True
-    assert decrypt(workflow.api_key_encrypted) == "n8n-secret"
-    assert db.query(ModelConfig).filter_by(id=MANAGED_LLM_ID).count() == 0
+    assert db.query(WorkflowConfig).filter_by(id="default").one().enabled is True
 
 
-def test_managed_runtime_config_fails_closed_when_incomplete(db, admin_user):
-    current = _managed_settings(local_llm_model="")
+def test_managed_runtime_config_skips_explicit_test_environment(db):
+    current = _managed_settings(environment="test")
 
-    with pytest.raises(RuntimeError, match="LOCAL_LLM_MODEL"):
+    assert sync_local_managed_runtime_config(db, current) is False
+    assert db.query(WorkflowConfig).count() == 0
+
+
+def test_managed_runtime_config_fails_closed_when_incomplete(db):
+    current = _managed_settings(n8n_api_key="")
+
+    with pytest.raises(RuntimeError, match="N8N_API_KEY"):
         sync_local_managed_runtime_config(db, current)

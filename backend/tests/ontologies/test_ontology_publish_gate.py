@@ -2,18 +2,24 @@
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+
 from app.models.ontology import OntologyProject
 from app.models.ontology_formal import (
     ObjectType, LinkType, ActionType, OntologyFunction,
     ObjectInstance,
 )
 from app.models.sentinel import Sentinel
-from app.models.ontology_version import OntologyVersion
+from app.models.ontology_version import OntologyTrialRun, OntologyVersion
 from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.curated import CuratedReview
 from app.ontologies.versions import router as version_router
-from app.ontologies.versions.evolution_service import snapshot_hash
+from app.ontologies.versions.evolution_service import (
+    complete_snapshot,
+    impact_report,
+    snapshot_hash,
+)
 
 
 def _versions(ontology_id: str) -> str:
@@ -56,6 +62,37 @@ def _object_type(ontology_id: str, *, item_id: str = "ot-order",
         primary_key=primary_key, properties=properties,
         interfaces=[], position_x=0, position_y=0,
     )
+
+
+def _rollback_release_pair(db, ontology_id: str, *, prefix: str):
+    project = db.query(OntologyProject).filter_by(id=ontology_id).one()
+    object_type = _object_type(ontology_id)
+    object_type.display_name = "历史订单"
+    db.add(object_type)
+    db.flush()
+    target = _release_node(
+        db,
+        project,
+        item_id=f"{prefix}-v1",
+        number="v1",
+        snapshot=version_router._snapshot_formal(db, ontology_id),
+        parent_id=project.current_release_id,
+    )
+    object_type.display_name = "当前订单"
+    db.flush()
+    current = _release_node(
+        db,
+        project,
+        item_id=f"{prefix}-v2",
+        number="v2",
+        snapshot=version_router._snapshot_formal(db, ontology_id),
+        parent_id=target.id,
+    )
+    project.current_release_id = current.id
+    project.version = current.version_number
+    project.status = "published"
+    db.commit()
+    return target, current, object_type
 
 
 def _editor_headers(client, editor_user) -> dict:
@@ -288,8 +325,7 @@ def test_snapshot_diff_and_rollback_restore_configs_without_deleting_instances(
     monkeypatch.setattr(
         version_router, "_rebuild_required_query_projections",
         lambda *_args, **_kwargs: {
-            "ready": True, "neo4j": "ok", "chroma": "ok",
-            "chroma_count": 1,
+            "ready": True, "neo4j": "ok",
         },
     )
 
@@ -361,8 +397,9 @@ def test_rollback_is_atomic_when_snapshot_rejects_retained_instance(
     assert unchanged_project.current_release_id == current_id
 
 
-def test_production_rollback_projection_failure_keeps_previous_activation(
-        client, auth_headers, ontology, db, monkeypatch):
+@pytest.mark.parametrize("runtime_environment", ["development", "production"])
+def test_runtime_rollback_projection_failure_keeps_previous_activation(
+        client, auth_headers, ontology, db, monkeypatch, runtime_environment):
     oid = ontology["id"]
     project = db.query(OntologyProject).filter_by(id=oid).one()
     object_type = _object_type(oid)
@@ -388,12 +425,12 @@ def test_production_rollback_projection_failure_keeps_previous_activation(
     current_id = current.id
     version_count = db.query(OntologyVersion).filter_by(
         ontology_id=oid).count()
-    monkeypatch.setattr(version_router.settings, "environment", "production")
+    monkeypatch.setattr(
+        version_router.settings, "environment", runtime_environment)
     monkeypatch.setattr(
         version_router, "_rebuild_required_query_projections",
         lambda *_args, **_kwargs: {
-            "ready": False, "neo4j": "error", "chroma": "ok",
-            "chroma_count": 0,
+            "ready": False, "neo4j": "error",
         },
     )
 
@@ -406,6 +443,246 @@ def test_production_rollback_projection_failure_keeps_previous_activation(
     project = db.query(OntologyProject).filter_by(id=oid).one()
     assert project.current_release_id == current_id
     assert project.version == "v2"
+    assert db.query(ObjectType).filter_by(
+        id=object_type.id).one().display_name == "当前订单"
+    assert db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count() == version_count
+
+
+@pytest.mark.parametrize("compensation_ready", [True, False])
+def test_promotion_post_fence_preparation_failure_is_compensated(
+        client, auth_headers, ontology, db, admin_user, monkeypatch,
+        compensation_ready):
+    """An expired-row/query failure after the fence must never strand it."""
+    oid = ontology["id"]
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    current = db.query(OntologyVersion).filter_by(
+        id=project.current_release_id).one()
+    current_id = current.id
+    candidate = complete_snapshot(current.snapshot_formal)
+    candidate_hash = snapshot_hash(candidate)
+    report = impact_report(current.snapshot_formal, candidate)
+    draft = OntologyVersion(
+        id="promotion-fence-gap-draft",
+        ontology_id=oid,
+        version_number="v0.1",
+        version_label="故障注入草稿",
+        parent_version_id=current.id,
+        base_release_id=current.id,
+        node_kind="draft",
+        lifecycle_status="trial_ready",
+        revision=0,
+        snapshot_formal=candidate,
+        snapshot_hash=candidate_hash,
+        created_by=admin_user.id,
+    )
+    run = OntologyTrialRun(
+        id="promotion-fence-gap-run",
+        ontology_id=oid,
+        version_id=draft.id,
+        revision=0,
+        snapshot_hash=candidate_hash,
+        base_release_id=current.id,
+        status="passed",
+        dataset_versions=[],
+        result_json={
+            "counts": {"objects": 0, "links": 0},
+            "errors": [],
+        },
+        impact_hash=report["impactHash"],
+        created_by=admin_user.id,
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add_all([draft, run])
+    db.commit()
+    version_count = db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count()
+
+    observations = []
+
+    def compensate(session, ontology_id):
+        persisted = session.query(OntologyProject).filter_by(
+            id=ontology_id).one()
+        observations.append((
+            persisted.current_release_id,
+            persisted.projection_status,
+        ))
+        return {
+            "ready": compensation_ready,
+            "neo4j": "ok" if compensation_ready else "error",
+            **({} if compensation_ready else {
+                "error": "injected promotion compensation failure",
+            }),
+        }
+
+    def fail_after_fence(*_args, **_kwargs):
+        raise RuntimeError("injected promotion post-fence preparation failure")
+
+    monkeypatch.setattr(version_router.settings, "environment", "development")
+    # Keep this test focused on the durable post-fence boundary rather than the
+    # normal trial mapping gate; the injected failure occurs before restoration.
+    monkeypatch.setattr(
+        version_router, "validate_release_mapping_contract", lambda _snap: [])
+    monkeypatch.setattr(
+        version_router, "_verify_trial_dataset_pins", lambda *_args: [])
+    monkeypatch.setattr(
+        version_router, "_runtime_state_conflicts",
+        lambda *_args, **_kwargs: {"totalCount": 0, "items": []},
+    )
+    monkeypatch.setattr(
+        version_router, "_next_release_activation_number", fail_after_fence)
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections", compensate)
+
+    response = client.post(
+        f"{_versions(oid)}/{draft.id}/promote",
+        headers=auth_headers,
+        json={
+            "trialRunId": run.id,
+            "impactHash": report["impactHash"],
+        },
+    )
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "promotion_failed"
+    assert detail["compensation"]["ready"] is compensation_ready
+    assert observations == [(current_id, "projecting")]
+    db.expire_all()
+    persisted = db.query(OntologyProject).filter_by(id=oid).one()
+    assert persisted.current_release_id == current_id
+    assert persisted.projection_status == (
+        "ready" if compensation_ready else "failed")
+    assert db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count() == version_count
+
+
+def test_rollback_post_fence_preparation_failure_is_compensated(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    target, current, object_type = _rollback_release_pair(
+        db, oid, prefix="rollback-fence-gap")
+    version_count = db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count()
+    observations = []
+
+    def compensate(session, ontology_id):
+        persisted = session.query(OntologyProject).filter_by(
+            id=ontology_id).one()
+        current_type = session.query(ObjectType).filter_by(
+            id=object_type.id).one()
+        observations.append((
+            persisted.current_release_id,
+            persisted.projection_status,
+            current_type.display_name,
+        ))
+        return {"ready": True, "neo4j": "ok"}
+
+    def fail_after_fence(*_args, **_kwargs):
+        raise RuntimeError("injected rollback post-fence preparation failure")
+
+    monkeypatch.setattr(version_router.settings, "environment", "development")
+    monkeypatch.setattr(
+        version_router, "_next_release_activation_number", fail_after_fence)
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections", compensate)
+
+    response = client.post(
+        f"{_versions(oid)}/{target.id}/rollback", headers=auth_headers)
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "rollback_restore_failed"
+    assert detail["compensation"]["ready"] is True
+    assert observations == [(current.id, "projecting", "当前订单")]
+    db.expire_all()
+    persisted = db.query(OntologyProject).filter_by(id=oid).one()
+    assert persisted.current_release_id == current.id
+    assert persisted.projection_status == "ready"
+    assert db.query(ObjectType).filter_by(
+        id=object_type.id).one().display_name == "当前订单"
+    assert db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count() == version_count
+
+
+@pytest.mark.parametrize("compensation_ready", [True, False])
+def test_rollback_final_commit_failure_reprojects_durable_sql_before_ready(
+        client, auth_headers, ontology, db, monkeypatch, compensation_ready):
+    """Candidate Neo4j must be compensated if the SQL activation rolls back."""
+    oid = ontology["id"]
+    target, current, object_type = _rollback_release_pair(
+        db, oid, prefix="rollback-final-commit")
+    version_count = db.query(OntologyVersion).filter_by(
+        ontology_id=oid).count()
+    projected_release = {"id": current.id}
+    observations = []
+
+    def rebuild(session, ontology_id):
+        persisted = session.query(OntologyProject).filter_by(
+            id=ontology_id).one()
+        current_type = session.query(ObjectType).filter_by(
+            id=object_type.id).one()
+        call_no = len(observations) + 1
+        ready = True if call_no == 1 else compensation_ready
+        observations.append((
+            persisted.current_release_id,
+            persisted.projection_status,
+            current_type.display_name,
+            ready,
+        ))
+        if ready:
+            projected_release["id"] = persisted.current_release_id
+        return {
+            "ready": ready,
+            "neo4j": "ok" if ready else "error",
+            **({} if ready else {
+                "error": "injected rollback compensation failure",
+            }),
+        }
+
+    original_commit = db.commit
+    commit_calls = 0
+
+    def fail_candidate_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            raise RuntimeError("injected rollback activation commit failure")
+        return original_commit()
+
+    monkeypatch.setattr(version_router.settings, "environment", "development")
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections", rebuild)
+    monkeypatch.setattr(db, "commit", fail_candidate_commit)
+
+    response = client.post(
+        f"{_versions(oid)}/{target.id}/rollback", headers=auth_headers)
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "rollback_restore_failed"
+    assert detail["compensation"]["ready"] is compensation_ready
+    assert commit_calls == 3
+    assert len(observations) == 2
+    candidate_release_id, candidate_status, candidate_name, candidate_ready = (
+        observations[0]
+    )
+    assert candidate_release_id != current.id
+    assert (candidate_status, candidate_name, candidate_ready) == (
+        "projecting", "历史订单", True)
+    assert observations[1] == (
+        current.id,
+        "projecting",
+        "当前订单",
+        compensation_ready,
+    )
+    db.expire_all()
+    persisted = db.query(OntologyProject).filter_by(id=oid).one()
+    assert persisted.current_release_id == current.id
+    assert persisted.projection_status == (
+        "ready" if compensation_ready else "failed")
+    assert projected_release["id"] == (
+        current.id if compensation_ready else candidate_release_id)
     assert db.query(ObjectType).filter_by(
         id=object_type.id).one().display_name == "当前订单"
     assert db.query(OntologyVersion).filter_by(
@@ -426,8 +703,7 @@ def test_production_publish_requires_current_approved_applied_mapping(
     monkeypatch.setattr(
         version_router, "_rebuild_required_query_projections",
         lambda *_args, **_kwargs: {
-            "ready": True, "neo4j": "ok", "chroma": "ok",
-            "chroma_count": 1,
+            "ready": True, "neo4j": "ok",
         })
 
     codes = {
@@ -518,8 +794,7 @@ def test_production_publish_accepts_governed_manual_version_subscription(
     monkeypatch.setattr(
         version_router, "_rebuild_required_query_projections",
         lambda *_args, **_kwargs: {
-            "ready": True, "neo4j": "ok", "chroma": "ok",
-            "chroma_count": 1,
+            "ready": True, "neo4j": "ok",
         },
     )
 
@@ -537,8 +812,7 @@ def test_retired_publish_endpoint_never_rebuilds_or_switches_projection(
     def unexpected_rebuild(*_args, **_kwargs):
         calls.append(True)
         return {
-            "ready": False, "neo4j": "error", "chroma": "ok",
-            "chroma_count": 0,
+            "ready": False, "neo4j": "error",
         }
 
     monkeypatch.setattr(

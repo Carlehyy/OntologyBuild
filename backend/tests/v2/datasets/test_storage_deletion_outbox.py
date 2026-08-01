@@ -34,6 +34,11 @@ class FakeStorage:
     def get_object(self, uri: str) -> bytes:
         return self.objects[uri]
 
+    def object_exists(self, uri: str) -> bool:
+        if self.fail_deletes:
+            raise ConnectionError("object store unavailable")
+        return uri in self.objects
+
     def delete_object(self, uri: str) -> None:
         if self.fail_deletes:
             raise ConnectionError("object store unavailable")
@@ -193,20 +198,29 @@ def test_drain_defers_uri_still_referenced_by_an_asset(db, fake_storage):
     assert "仍被资产元数据引用" in (queued.last_error or "")
 
 
-def test_legacy_dataset_deletion_cleans_internal_and_managed_minio(
+def test_environment_object_deletion_does_not_touch_legacy_duplicate(
     db, monkeypatch,
 ):
-    """Regression-era dataset keys may exist in either MinIO endpoint."""
+    """An authoritative object must hide any same-key regression-era copy."""
     from app.data_channel.datasets import service
+    from app.shared import storage as shared_storage
 
     internal = FakeStorage()
     managed = FakeStorage()
     uri = "s3://raw-datasets/datasets/legacy/object.bin"
     internal.objects[uri] = b"old"
     managed.objects[uri] = b"regression-era-copy"
+    legacy_resolutions = 0
+
+    def resolve_legacy():
+        nonlocal legacy_resolutions
+        legacy_resolutions += 1
+        return shared_storage.LegacyManagedStorageAccess(managed)
+
+    platform = shared_storage.PlatformStorageAccess(internal)
+    monkeypatch.setattr(service, "get_storage_service", lambda: platform)
     monkeypatch.setattr(
-        service, "get_environment_storage_service", lambda: internal)
-    monkeypatch.setattr(service, "get_storage_service", lambda: managed)
+        shared_storage, "get_legacy_managed_storage_access", resolve_legacy)
     db.add(StorageDeletionOutbox(storage_uri=uri))
     db.commit()
 
@@ -214,5 +228,34 @@ def test_legacy_dataset_deletion_cleans_internal_and_managed_minio(
 
     assert result == {"deleted": 1, "failed": 0, "deferred": 0}
     assert uri in internal.deleted
+    assert uri not in managed.deleted
+    assert legacy_resolutions == 0
+    assert db.query(StorageDeletionOutbox).count() == 0
+
+
+def test_legacy_managed_object_deletion_requires_authoritative_miss(
+    db, monkeypatch,
+):
+    from app.data_channel.datasets import service
+    from app.shared import storage as shared_storage
+
+    internal = FakeStorage()
+    managed = FakeStorage()
+    uri = "s3://media/pipeline-files/legacy/object.bin"
+    managed.objects[uri] = b"regression-era-file-asset"
+    platform = shared_storage.PlatformStorageAccess(internal)
+    monkeypatch.setattr(service, "get_storage_service", lambda: platform)
+    monkeypatch.setattr(
+        shared_storage,
+        "get_legacy_managed_storage_access",
+        lambda: shared_storage.LegacyManagedStorageAccess(managed),
+    )
+    db.add(StorageDeletionOutbox(storage_uri=uri))
+    db.commit()
+
+    result = drain_storage_deletion_outbox(db)
+
+    assert result == {"deleted": 1, "failed": 0, "deferred": 0}
+    assert uri not in internal.deleted
     assert uri in managed.deleted
     assert db.query(StorageDeletionOutbox).count() == 0

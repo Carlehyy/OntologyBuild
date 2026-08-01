@@ -358,6 +358,10 @@ def test_dataset_services_keep_patchable_runtime_imports_local():
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert "app.data_channel.datasets.import_jobs" in dispatch_imports
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "add_task"
+        for node in ast.walk(functions["dispatch_dataset_import_task"])
+    )
 
 
 def test_dataset_services_never_import_the_http_router():

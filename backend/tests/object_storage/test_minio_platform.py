@@ -90,6 +90,56 @@ class FakeMinio:
         return f"https://storage.invalid/{bucket}/{key}?put=1"
 
 
+class _ObjectMiss(RuntimeError):
+    code = "NoSuchKey"
+
+
+class _PlatformStore:
+    """Small contract fake for the shared platform-storage routing boundary."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.calls: list[tuple[str, tuple]] = []
+        self.failures: dict[str, Exception] = {}
+        self.exists = True
+
+    def _record(self, method: str, *args):
+        self.calls.append((method, args))
+        failure = self.failures.get(method)
+        if failure is not None:
+            raise failure
+
+    def ensure_bucket(self, bucket: str) -> None:
+        self._record("ensure_bucket", bucket)
+
+    def put_bytes(self, bucket: str, key: str, data: bytes, content_type: str):
+        self._record("put_bytes", bucket, key, data, content_type)
+        return f"s3://{bucket}/{key}"
+
+    def get_object(self, uri: str) -> bytes:
+        self._record("get_object", uri)
+        return f"{self.name}:bytes".encode()
+
+    def get_stream(self, uri: str):
+        self._record("get_stream", uri)
+        return io.BytesIO(f"{self.name}:stream".encode())
+
+    def presigned_get(self, uri: str, expires_seconds: int = 3600) -> str:
+        self._record("presigned_get", uri, expires_seconds)
+        return f"https://{self.name}.invalid/object"
+
+    def list_prefix(self, bucket: str, prefix: str) -> list[str]:
+        self._record("list_prefix", bucket, prefix)
+        return [f"s3://{bucket}/{self.name}/{prefix}object.bin"]
+
+    def object_exists(self, uri: str) -> bool:
+        self._record("object_exists", uri)
+        return self.exists
+
+    def delete_object(self, uri: str) -> None:
+        self._record("delete_object", uri)
+
+
 def _config(**overrides):
     values = {
         "id": "default",
@@ -168,24 +218,315 @@ def test_mcp_tool_round_trip_writes_audit(tmp_path, monkeypatch):
         assert audits[-1].success is False
 
 
-def test_managed_storage_fails_closed_when_credentials_cannot_decrypt(tmp_path, monkeypatch):
-    engine = create_engine(f"sqlite:///{tmp_path / 'storage.db'}")
+def test_platform_storage_never_uses_database_managed_minio(monkeypatch):
+    authoritative = _PlatformStore("environment")
+    legacy_resolutions = 0
+
+    def resolve_legacy():
+        nonlocal legacy_resolutions
+        legacy_resolutions += 1
+        raise AssertionError("new writes must not resolve database-managed MinIO")
+
+    monkeypatch.setattr(shared_storage, "_storage_service", None)
+    monkeypatch.setattr(
+        shared_storage,
+        "get_environment_storage_service",
+        lambda: authoritative,
+    )
+    monkeypatch.setattr(
+        shared_storage, "get_legacy_managed_storage_access", resolve_legacy,
+    )
+
+    platform = shared_storage.get_storage_service()
+
+    assert isinstance(platform, shared_storage.PlatformStorageAccess)
+    assert platform.put_bytes(
+        "media", "new/report.pdf", b"%PDF", "application/pdf",
+    ) == "s3://media/new/report.pdf"
+    platform.ensure_bucket("media")
+    assert authoritative.calls == [
+        (
+            "put_bytes",
+            ("media", "new/report.pdf", b"%PDF", "application/pdf"),
+        ),
+        ("ensure_bucket", ("media",)),
+    ]
+    assert legacy_resolutions == 0
+
+
+def test_platform_storage_uses_legacy_reads_only_after_authoritative_miss(
+    monkeypatch,
+):
+    uri = "s3://media/regression/object.bin"
+    authoritative = _PlatformStore("environment")
+    authoritative.failures.update({
+        "get_object": _ObjectMiss("missing"),
+        "get_stream": _ObjectMiss("missing"),
+    })
+    authoritative.exists = False
+    legacy_store = _PlatformStore("legacy")
+    legacy = shared_storage.LegacyManagedStorageAccess(legacy_store)
+    monkeypatch.setattr(
+        shared_storage, "get_legacy_managed_storage_access", lambda: legacy,
+    )
+    platform = shared_storage.PlatformStorageAccess(authoritative)
+
+    assert platform.get_object(uri) == b"legacy:bytes"
+    with platform.get_stream(uri) as stream:
+        assert stream.read() == b"legacy:stream"
+    assert platform.object_exists(uri) is True
+    assert platform.presigned_get(uri, 45) == "https://legacy.invalid/object"
+    assert platform.list_prefix("media", "regression/") == [
+        "s3://media/environment/regression/object.bin",
+        "s3://media/legacy/regression/object.bin",
+    ]
+    platform.delete_object(uri)
+
+    assert ("delete_object", (uri,)) not in authoritative.calls
+    assert ("delete_object", (uri,)) in legacy_store.calls
+
+
+@pytest.mark.parametrize(
+    ("operation", "failing_method", "authoritative_exists"),
+    [
+        ("get", "get_object", True),
+        ("stream", "get_stream", True),
+        ("exists", "object_exists", True),
+        ("list", "list_prefix", True),
+        ("presign_stat", "object_exists", True),
+        ("presign", "presigned_get", True),
+        ("delete_stat", "object_exists", True),
+        ("delete", "delete_object", True),
+    ],
+)
+def test_platform_storage_operational_failure_never_uses_legacy_endpoint(
+    operation, failing_method, authoritative_exists, monkeypatch,
+):
+    uri = "s3://media/current/object.bin"
+    authoritative = _PlatformStore("environment")
+    authoritative.exists = authoritative_exists
+    authoritative.failures[failing_method] = PermissionError(
+        "environment MinIO rejected request")
+    legacy_resolutions = 0
+
+    def resolve_legacy():
+        nonlocal legacy_resolutions
+        legacy_resolutions += 1
+        return shared_storage.LegacyManagedStorageAccess(
+            _PlatformStore("legacy"))
+
+    monkeypatch.setattr(
+        shared_storage, "get_legacy_managed_storage_access", resolve_legacy,
+    )
+    platform = shared_storage.PlatformStorageAccess(authoritative)
+    calls = {
+        "get": lambda: platform.get_object(uri),
+        "stream": lambda: platform.get_stream(uri),
+        "exists": lambda: platform.object_exists(uri),
+        "list": lambda: platform.list_prefix("media", "current/"),
+        "presign_stat": lambda: platform.presigned_get(uri),
+        "presign": lambda: platform.presigned_get(uri),
+        "delete_stat": lambda: platform.delete_object(uri),
+        "delete": lambda: platform.delete_object(uri),
+    }
+
+    with pytest.raises(PermissionError, match="environment MinIO rejected"):
+        calls[operation]()
+
+    assert legacy_resolutions == 0
+
+
+def test_platform_storage_authoritative_hit_hides_legacy_duplicate(monkeypatch):
+    uri = "s3://media/current/object.bin"
+    authoritative = _PlatformStore("environment")
+    legacy_resolutions = 0
+
+    def resolve_legacy():
+        nonlocal legacy_resolutions
+        legacy_resolutions += 1
+        return shared_storage.LegacyManagedStorageAccess(
+            _PlatformStore("legacy"))
+
+    monkeypatch.setattr(
+        shared_storage, "get_legacy_managed_storage_access", resolve_legacy,
+    )
+    platform = shared_storage.PlatformStorageAccess(authoritative)
+
+    assert platform.get_object(uri) == b"environment:bytes"
+    with platform.get_stream(uri) as stream:
+        assert stream.read() == b"environment:stream"
+    assert platform.object_exists(uri) is True
+    assert platform.presigned_get(uri) == "https://environment.invalid/object"
+    platform.delete_object(uri)
+
+    assert legacy_resolutions == 0
+    assert ("delete_object", (uri,)) in authoritative.calls
+
+
+@pytest.mark.parametrize(
+    ("operation", "legacy_method"),
+    [
+        ("get", "get_object"),
+        ("stream", "get_stream"),
+        ("exists", "object_exists"),
+        ("list", "list_prefix"),
+        ("presign", "presigned_get"),
+        ("delete", "delete_object"),
+    ],
+)
+def test_legacy_endpoint_failure_never_returns_a_partial_compatibility_result(
+    operation, legacy_method, monkeypatch,
+):
+    uri = "s3://media/regression/object.bin"
+    authoritative = _PlatformStore("environment")
+    authoritative.exists = False
+    authoritative.failures.update({
+        "get_object": _ObjectMiss("missing"),
+        "get_stream": _ObjectMiss("missing"),
+    })
+    legacy_store = _PlatformStore("legacy")
+    legacy_store.failures[legacy_method] = ConnectionError(
+        "legacy MinIO migration endpoint unavailable")
+    monkeypatch.setattr(
+        shared_storage,
+        "get_legacy_managed_storage_access",
+        lambda: shared_storage.LegacyManagedStorageAccess(legacy_store),
+    )
+    platform = shared_storage.PlatformStorageAccess(authoritative)
+    calls = {
+        "get": lambda: platform.get_object(uri),
+        "stream": lambda: platform.get_stream(uri),
+        "exists": lambda: platform.object_exists(uri),
+        "list": lambda: platform.list_prefix("media", "regression/"),
+        "presign": lambda: platform.presigned_get(uri),
+        "delete": lambda: platform.delete_object(uri),
+    }
+
+    with pytest.raises(ConnectionError, match="migration endpoint unavailable"):
+        calls[operation]()
+
+
+def test_platform_storage_local_uri_never_resolves_database_endpoint(monkeypatch):
+    uri = "local://media/legacy/object.bin"
+    authoritative = _PlatformStore("environment")
+    authoritative.exists = False
+    authoritative.failures["get_object"] = FileNotFoundError(uri)
+    legacy_resolutions = 0
+
+    def resolve_legacy():
+        nonlocal legacy_resolutions
+        legacy_resolutions += 1
+        return shared_storage.LegacyManagedStorageAccess(
+            _PlatformStore("legacy"))
+
+    monkeypatch.setattr(
+        shared_storage, "get_legacy_managed_storage_access", resolve_legacy,
+    )
+    platform = shared_storage.PlatformStorageAccess(authoritative)
+
+    with pytest.raises(FileNotFoundError):
+        platform.get_object(uri)
+    assert platform.object_exists(uri) is False
+    platform.delete_object(uri)
+
+    assert legacy_resolutions == 0
+
+
+def test_legacy_managed_storage_access_exposes_only_read_and_delete(
+    tmp_path, monkeypatch,
+):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-storage.db'}")
     Base.metadata.create_all(bind=engine, tables=[MinioConfig.__table__])
     Session = sessionmaker(bind=engine)
     with Session() as db:
-        db.add(_config(access_key_encrypted="invalid", secret_key_encrypted="invalid"))
+        db.add(_config())
         db.commit()
 
+    class LegacyClient:
+        def __init__(self):
+            self.deleted: list[str] = []
+
+        def get_object(self, uri: str) -> bytes:
+            return f"legacy:{uri}".encode()
+
+        def get_stream(self, uri: str):
+            return io.BytesIO(f"stream:{uri}".encode())
+
+        def presigned_get(self, uri: str, expires_seconds: int = 3600):
+            return f"https://legacy.invalid/{expires_seconds}"
+
+        def list_prefix(self, bucket: str, prefix: str) -> list[str]:
+            return [f"s3://{bucket}/{prefix}legacy.bin"]
+
+        def object_exists(self, uri: str) -> bool:
+            return uri.endswith("legacy.bin")
+
+        def delete_object(self, uri: str) -> None:
+            self.deleted.append(uri)
+
+    legacy_client = LegacyClient()
+    constructor_options = {}
+
+    def build_legacy_client(**options):
+        constructor_options.update(options)
+        return legacy_client
+
     monkeypatch.setattr("app.database.SessionLocal", Session)
-    monkeypatch.setattr(shared_storage.settings, "storage_local_fallback", True)
-    shared_storage.reset_storage_service()
-    try:
-        service = shared_storage.get_storage_service()
-        assert service.available is False
-        with pytest.raises(RuntimeError, match="禁止本地文件回退"):
-            service.put_bytes("raw-datasets", "must-not-write.txt", b"data")
-    finally:
-        shared_storage.reset_storage_service()
+    monkeypatch.setattr(
+        "app.services.encryption_service.decrypt", lambda _value: "decrypted")
+    monkeypatch.setattr(shared_storage, "StorageService", build_legacy_client)
+    monkeypatch.setattr(shared_storage, "_legacy_managed_storage_access", None)
+    monkeypatch.setattr(shared_storage, "_legacy_managed_storage_resolved", False)
+
+    access = shared_storage.get_legacy_managed_storage_access()
+
+    assert access is not None
+    assert access.get_object("s3://raw-datasets/legacy.bin") == (
+        b"legacy:s3://raw-datasets/legacy.bin")
+    with access.get_stream("s3://raw-datasets/legacy.bin") as stream:
+        assert stream.read() == b"stream:s3://raw-datasets/legacy.bin"
+    assert access.presigned_get(
+        "s3://raw-datasets/legacy.bin", 45,
+    ) == "https://legacy.invalid/45"
+    assert access.list_prefix("raw-datasets", "old/") == [
+        "s3://raw-datasets/old/legacy.bin"]
+    assert access.object_exists("s3://raw-datasets/legacy.bin") is True
+    access.delete_object("s3://raw-datasets/legacy.bin")
+    assert legacy_client.deleted == ["s3://raw-datasets/legacy.bin"]
+    assert not hasattr(access, "put_object")
+    assert not hasattr(access, "put_bytes")
+    assert constructor_options == {
+        "endpoint": "minio.invalid:9000",
+        "access_key": "decrypted",
+        "secret_key": "decrypted",
+        "secure": False,
+        "region": "us-east-1",
+    }
+
+
+def test_legacy_storage_resolution_failure_is_not_cached_as_absent(
+    monkeypatch,
+):
+    attempts = 0
+
+    def unavailable_session():
+        nonlocal attempts
+        attempts += 1
+        raise ConnectionError("database unavailable with secret material")
+
+    monkeypatch.setattr("app.database.SessionLocal", unavailable_session)
+    monkeypatch.setattr(shared_storage, "_legacy_managed_storage_access", None)
+    monkeypatch.setattr(shared_storage, "_legacy_managed_storage_resolved", False)
+
+    for _ in range(2):
+        with pytest.raises(
+            RuntimeError,
+            match="Legacy managed MinIO configuration is unavailable",
+        ):
+            shared_storage.get_legacy_managed_storage_access()
+
+    assert attempts == 2
+    assert shared_storage._legacy_managed_storage_resolved is False
 
 
 def test_admin_connection_saves_encrypted_credentials_and_token_once(tmp_path, monkeypatch):

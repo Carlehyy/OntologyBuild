@@ -63,11 +63,22 @@ OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：
 
 - 后端：FastAPI、Python 3.12、SQLAlchemy、Alembic、Celery；
 - 前端：React、TypeScript、Vite、Tailwind CSS；
-- 数据与中间件：PostgreSQL、Redis、Neo4j、MinIO、ChromaDB；
+- 数据与中间件：PostgreSQL、Redis、Neo4j、MinIO；
+- 工作流与浏览器：n8n、Chromium CDP；
 - 交付：Docker Compose、GitHub Actions。
 
-开发环境允许部分依赖降级；生产依赖和兼容/严格开关以受控部署清单为准，
-不得据此推断生产依赖可选。
+正常启动采用同一套 fail-closed 依赖契约：PostgreSQL、Redis、Celery worker、
+Neo4j、MinIO 和 n8n 必须完成配置且真实就绪；Chromium CDP 必须在
+启动配置中明确提供，暂时不可达不会伪装成进程崩溃，但会使深度 readiness
+失败。后端不会在依赖
+失败时静默切换到平台 SQLite、API 进程任务、内存图或本地对象存储；已有显式
+同步接口保持其公开语义。API Hub 自有
+SQLite、测试环境 SQLite，以及历史 `local://` 对象的只读迁移兼容不属于运行时
+降级。
+
+ChromaDB 已从平台移除。关键词搜索继续由 PostgreSQL 提供；语义搜索及统一搜索
+的 semantic 模式明确返回 `501 semantic_search_unsupported`。LLM 不是启动依赖，
+平台启动后由管理员在“模型配置”页面按需添加提供商和模型。
 
 ## 快速开始
 
@@ -77,26 +88,30 @@ OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：
 git clone --branch nano-ontoprompt https://github.com/Carlehyy/OntologyBuild.git
 cd OntologyBuild
 cp .env.example .env
+# 填写并验证外部 n8n 地址与凭据后再启动
 docker compose -f docker-compose.local.yml up --build
 ```
 
 前端默认位于 `http://localhost:5173`，后端存活检查位于
 `http://localhost:8000/health/live`。示例账号只用于本地开发，默认是
-`admin / admin123`。
+`admin / admin123`。`/health/live` 只表示 API 进程存活；完整平台可用性还必须
+通过 `/health/ready` 和 Celery worker 检查。
 
 两份 Compose 文件用途不同，均为当前有效入口：
 
 | 文件 | 用途 | 说明 |
 |---|---|---|
-| `docker-compose.local.yml` | 推荐的本地核心完整栈 | PostgreSQL、Redis、Neo4j、MinIO、ChromaDB、Browser、API、Worker、前端 |
-| `docker-compose.prod.yml` | 生产编排 | 生产镜像和受控依赖清单；按部署文档/工作流执行 |
+| `docker-compose.local.yml` | 推荐的本地核心栈 | PostgreSQL、Redis、Neo4j、MinIO、Chromium CDP、API、Worker、前端；n8n 作为启动前必须就绪的外部依赖接入 |
+| `docker-compose.prod.yml` | 生产编排 | 同一必需依赖契约、生产镜像和受控依赖清单；按部署文档/工作流执行 |
 
 不要用本地编排推断生产依赖已经验证。生产步骤见[部署说明](./docs/operations/deployment.md)。
 
 ### 源码开发
 
-前置要求：Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 22 和 npm。
-完整功能建议先运行本地配置中心：
+前置要求：Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 22、npm，以及
+已经启动的 PostgreSQL、Redis、Neo4j、MinIO 和 n8n。Chromium CDP 地址必须
+配置；它暂时不可达时仍可启动 API 用于诊断，但深度 readiness 保持失败。先运行
+本地配置中心并通过所有阻塞型外部依赖连通性检查：
 
 ```bash
 ./config/start.sh
@@ -106,6 +121,7 @@ Windows 使用 `config/start.bat`。配置通过后，分别启动：
 
 ```bash
 uv sync --directory backend --frozen --group dev
+# app.dev_server 会先执行 alembic upgrade head，再启动热重载服务
 uv run --directory backend python -m app.dev_server
 
 uv run --directory backend \
@@ -115,8 +131,10 @@ npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-配置中心生成的 `config/generated/local/.env` 不进入 Git。最小降级模式、端口
-和外部依赖说明见 [开发环境](./docs/development/setup.md) 与
+配置中心生成的 `config/generated/local/.env` 不进入 Git。平台启动后再从
+“启动后复检”确认后端深度 readiness、前端与 Celery worker，再从“模型配置”
+页面按需配置 LLM。完整依赖、端口和例外边界见
+[开发环境](./docs/development/setup.md) 与
 [config/README.md](./config/README.md)。
 
 ## 仓库结构

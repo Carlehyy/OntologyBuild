@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
@@ -14,8 +15,10 @@ from app.models.v2.dataset import (
     Dataset, DatasetVersion, DatasetVersionEvent, StorageDeletionOutbox,
 )
 from app.services.storage_service import (
+    LegacyManagedStorageAccess,
     StorageService,
     get_environment_storage_service,
+    get_legacy_managed_storage_access,
     get_storage_service,
 )
 
@@ -28,6 +31,11 @@ class DatasetReadError(RuntimeError):
     与「数据集还没有数据」（返回空列表）严格区分：合并基座等场景把读失败
     当空列表处理，会让 append/upsert 把湖中存量折叠成本次增量。
     """
+
+
+def _is_legacy_object_miss(exc: Exception) -> bool:
+    """Whether a healthy object store positively reported an absent object."""
+    return isinstance(exc, FileNotFoundError) or StorageService._is_not_found_error(exc)
 
 
 def dataset_kind_uses_database(kind: str | None) -> bool:
@@ -501,26 +509,21 @@ def _storage_uri_is_referenced(db: Session, storage_uri: str) -> bool:
 
 
 def _deletion_storage_candidates(
-    storage_uri: str, storage: StorageService | None,
-) -> list[StorageService]:
+    storage: StorageService | None,
+) -> list[StorageService | LegacyManagedStorageAccess]:
     """Resolve the store(s) that may own an outbox object.
 
-    File assets are always managed-MinIO objects.  A historical dataset object
-    can predate or postdate the configurable-MinIO regression and therefore may
-    exist in either endpoint; delete it from both before acknowledging the task.
-    An explicit storage override preserves deterministic test/caller behavior.
+    Current objects live only in the authoritative environment MinIO. All
+    regression-era platform objects use the shared compatibility boundary,
+    which consults the old configurable endpoint only after an authoritative
+    miss. An explicit override keeps tests/callers deterministic.
     """
     if storage is not None:
         candidates = [storage]
-    elif storage_uri.startswith("s3://raw-datasets/datasets/"):
-        candidates = [
-            get_environment_storage_service(),
-            get_storage_service(),
-        ]
     else:
         candidates = [get_storage_service()]
 
-    unique: list[StorageService] = []
+    unique: list[StorageService | LegacyManagedStorageAccess] = []
     seen: set[int] = set()
     for candidate in candidates:
         if id(candidate) in seen:
@@ -568,7 +571,7 @@ def drain_storage_deletion_outbox(
                 continue
 
             failures: list[str] = []
-            for candidate in _deletion_storage_candidates(storage_uri, storage):
+            for candidate in _deletion_storage_candidates(storage):
                 try:
                     candidate.delete_object(storage_uri)
                 except Exception as exc:
@@ -611,33 +614,37 @@ class DatasetService:
         self._legacy_storages_override = legacy_storages
 
     def _object_storage(self) -> StorageService:
-        """Managed MinIO used only for genuine file payloads."""
+        """Authoritative environment MinIO for genuine file payloads."""
         return self._storage_override or get_storage_service()
 
-    def _legacy_storage_candidates(self) -> list[StorageService]:
+    def _legacy_storage_candidates(
+        self,
+    ) -> Iterator[StorageService | LegacyManagedStorageAccess]:
         """Stores that may contain a pre-database DatasetVersion.
 
-        Versions created before configurable MinIO used the deployment endpoint;
-        versions created during the regression may live in managed MinIO.  Try
-        both, in that order, and de-duplicate the common no-managed-config case.
+        The environment endpoint is always authoritative and is yielded first.
+        The former managed-endpoint regression adapter is resolved lazily only
+        after that endpoint positively misses or returns a checksum mismatch;
+        an environment connectivity failure must never trigger this path.
         """
         if self._legacy_storages_override is not None:
-            candidates = list(self._legacy_storages_override)
+            candidates = self._legacy_storages_override
         elif self._storage_override is not None:
             candidates = [self._storage_override]
         else:
-            candidates = [
-                get_environment_storage_service(),
-                get_storage_service(),
-            ]
-        unique: list[StorageService] = []
+            environment = get_environment_storage_service()
+            yield environment
+            legacy = get_legacy_managed_storage_access()
+            if legacy is not None and legacy is not environment:
+                yield legacy
+            return
+
         seen: set[int] = set()
         for candidate in candidates:
             if id(candidate) in seen:
                 continue
             seen.add(id(candidate))
-            unique.append(candidate)
-        return unique
+            yield candidate
 
     def create_dataset(self, name: str, kind: str, connection_id: str | None = None,
                        schema_json: dict | None = None, *,
@@ -670,8 +677,8 @@ class DatasetService:
         """原子发布 DatasetVersion。
 
         结构化、半结构化和成品数据把完整版本载荷与版本元数据放在同一个数据库
-        事务中；只有非结构化文件继续写入管理员配置的 MinIO。这样文件存储配置
-        变化不会再改变数据流水线与资产湖之间的持久化位置。
+        事务中；只有非结构化文件继续写入部署环境的权威 MinIO。系统设置里的
+        MinIO 管理端点不会改变数据流水线与资产湖之间的持久化位置。
 
         ``_lock_held`` 仅供已经覆盖完整读改写临界区的调用方使用；普通调用一律
         通过数据库锁串行化版本号分配。
@@ -915,6 +922,11 @@ class DatasetService:
                     raw = storage.get_object(ver.storage_uri)
                 except Exception as exc:
                     failures.append(f"{type(exc).__name__}: {exc}")
+                    if index == 1 and not _is_legacy_object_miss(exc):
+                        # The first candidate is authoritative. Trying an old
+                        # managed endpoint during an outage would reintroduce
+                        # precisely the split-brain degradation being removed.
+                        break
                     continue
                 if self._checksum_matches(raw, ver.checksum):
                     return raw

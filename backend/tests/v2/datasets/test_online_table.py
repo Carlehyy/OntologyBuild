@@ -288,7 +288,6 @@ def test_async_import_stages_file_and_normalizes_source_headers_to_field_keys(
     from app.tasks.v2 import dataset_import as import_tasks
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
-    monkeypatch.setattr(settings, "dataset_import_use_celery", True)
     inspection_jobs = []
     monkeypatch.setattr(
         import_tasks.inspect_dataset_import,
@@ -640,32 +639,21 @@ def test_online_table_bindable_to_ontology_mapping(api, auth_headers, ontology):
     assert r.json()["mapping_id"]
 
 
-def test_async_import_uses_local_background_tasks_without_broker_by_default(
-    api, auth_headers, db, monkeypatch, tmp_path,
+def test_async_import_always_dispatches_celery(
+    api, auth_headers, monkeypatch, tmp_path,
 ):
-    """A plain Uvicorn install never probes Redis/Celery for spreadsheet imports."""
-    from sqlalchemy.orm import sessionmaker
-
-    from app import database as database_module
+    """Spreadsheet imports always use the registered Celery task."""
     from app.config import settings
     from app.tasks.v2 import dataset_import as import_tasks
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    dispatched = []
+
     monkeypatch.setattr(
-        database_module,
-        "SessionLocal",
-        sessionmaker(bind=db.get_bind()),
+        import_tasks.inspect_dataset_import,
+        "delay",
+        lambda job_id: dispatched.append(job_id),
     )
-
-    monkeypatch.setattr(settings, "dataset_import_use_celery", False)
-
-    def celery_must_not_be_called(*_args, **_kwargs):
-        raise AssertionError("local mode must not contact the Celery broker")
-
-    monkeypatch.setattr(
-        import_tasks.inspect_dataset_import, "delay", celery_must_not_be_called)
-    monkeypatch.setattr(
-        import_tasks.commit_dataset_import, "delay", celery_must_not_be_called)
 
     started = api.post(
         "/api/v2/datasets/imports",
@@ -679,92 +667,25 @@ def test_async_import_uses_local_background_tasks_without_broker_by_default(
     assert started.status_code == 202, started.text
     queued = started.json()["data"]
     assert queued["status"] == "queued"
-    assert queued["execution_mode"] == "local"
+    assert queued["execution_mode"] == "celery"
+    assert dispatched == [queued["job_id"]]
 
     inspected = api.get(
         f"/api/v2/datasets/imports/{queued['job_id']}",
         headers=auth_headers,
     )
     assert inspected.status_code == 200
-    ready = inspected.json()["data"]
-    assert ready["status"] == "ready"
-    assert ready["progress"] == 100
-    assert ready["phase"] == "表格解析完成"
-
-    committed = api.post(
-        f"/api/v2/datasets/imports/{queued['job_id']}/commit",
-        json={
-            "name": "单机降级导入",
-            "columns": [
-                {"name": "id", "type": "string", "nullable": False},
-                {"name": "name", "type": "string", "nullable": True},
-            ],
-            "primary_key": "id",
-        },
-        headers=auth_headers,
-    )
-    assert committed.status_code == 202, committed.text
-    assert committed.json()["data"]["execution_mode"] == "local"
-
-    completed = api.get(
-        f"/api/v2/datasets/imports/{queued['job_id']}",
-        headers=auth_headers,
-    )
-    assert completed.status_code == 200
-    result = completed.json()["data"]
-    assert result["status"] == "completed"
-    assert result["progress"] == 100
-    assert result["result"]["rowcount"] == 1
+    assert inspected.json()["data"]["status"] == "queued"
 
 
-def test_async_import_falls_back_to_local_when_enabled_broker_is_down(
+def test_async_import_fails_closed_when_broker_is_down(
     api, auth_headers, monkeypatch, tmp_path, caplog,
 ):
-    """An opted-in Celery deployment still survives a temporary broker outage."""
+    """Broker failure never starts an API-process background task."""
     from app.config import settings
     from app.tasks.v2 import dataset_import as import_tasks
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
-    monkeypatch.setattr(settings, "dataset_import_use_celery", True)
-
-    def broker_down(*_args, **_kwargs):
-        raise RuntimeError("redis unavailable")
-
-    monkeypatch.setattr(import_tasks.inspect_dataset_import, "delay", broker_down)
-    caplog.set_level("WARNING", logger="app.data_channel.datasets.router")
-
-    started = api.post(
-        "/api/v2/datasets/imports",
-        files={"file": (
-            "broker-fallback.csv",
-            io.BytesIO("id,name\nA1,泵机\n".encode("utf-8")),
-            "text/csv",
-        )},
-        headers=auth_headers,
-    )
-    assert started.status_code == 202, started.text
-    queued = started.json()["data"]
-    assert queued["execution_mode"] == "local"
-
-    inspected = api.get(
-        f"/api/v2/datasets/imports/{queued['job_id']}",
-        headers=auth_headers,
-    )
-    assert inspected.status_code == 200
-    assert inspected.json()["data"]["status"] == "ready"
-    assert "已降级为 API 进程内后台任务" in caplog.text
-
-
-def test_async_import_required_mode_fails_closed_when_broker_is_down(
-    api, auth_headers, monkeypatch, tmp_path, caplog,
-):
-    """Required production dependencies must never fall back into the API."""
-    from app.config import settings
-    from app.tasks.v2 import dataset_import as import_tasks
-
-    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
-    monkeypatch.setattr(settings, "dataset_import_use_celery", True)
-    monkeypatch.setattr(settings, "require_external_dependencies", True)
 
     def broker_down(*_args, **_kwargs):
         raise RuntimeError("redis unavailable")
@@ -775,18 +696,18 @@ def test_async_import_required_mode_fails_closed_when_broker_is_down(
     started = api.post(
         "/api/v2/datasets/imports",
         files={"file": (
-            "broker-required.csv",
+            "broker-fallback.csv",
             io.BytesIO("id,name\nA1,泵机\n".encode("utf-8")),
             "text/csv",
         )},
         headers=auth_headers,
     )
-
     assert started.status_code == 503, started.text
     assert started.json()["detail"] == (
-        "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行")
-    assert "生产强制依赖模式禁止降级" in caplog.text
-    assert "已降级为 API 进程内后台任务" not in caplog.text
+        "Redis/Celery 后台任务服务不可用，数据集导入任务未投递")
+    assert "任务未执行" in caplog.text
+    assert "已降级" not in caplog.text
+    assert "redis unavailable" not in caplog.text
 
 
 def _upload_stable_manual_contract(api, auth_headers):

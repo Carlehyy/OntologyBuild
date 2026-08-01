@@ -25,45 +25,31 @@ def dispatch_dataset_import_task(
     settings_obj: Any,
     logger_obj: Any,
 ) -> dict:
-    """Dispatch one import task without making optional Celery a hard dependency."""
+    """Dispatch one import task through the required Celery worker."""
     from app.data_channel.datasets.import_jobs import update_status
-
-    if not settings_obj.dataset_import_use_celery:
-        background_tasks.add_task(task.run, job_id)
-        return update_status(job_id, execution_mode="local")
 
     try:
         task.delay(job_id)
-        execution_mode = "celery"
-    except Exception as exc:  # noqa: BLE001 - policy decides fallback behavior
-        if settings_obj.require_external_dependencies:
-            update_status(
-                job_id,
-                status="failed",
-                execution_mode="celery",
-                progress=5,
-                phase="后台任务投递失败",
-                error="Redis/Celery 后台任务服务不可用",
-            )
-            logger_obj.error(
-                "Celery 无法投递数据集%s任务 %s；生产强制依赖模式禁止降级",
-                operation,
-                job_id,
-                exc_info=True,
-            )
-            raise HTTPException(
-                503,
-                "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行",
-            ) from exc
-        logger_obj.warning(
-            "Celery 无法投递数据集%s任务 %s，已降级为 API 进程内后台任务",
+    except Exception as exc:  # noqa: BLE001 - dispatch failures are fail-closed
+        update_status(
+            job_id,
+            status="failed",
+            execution_mode="celery",
+            progress=5,
+            phase="后台任务投递失败",
+            error="Redis/Celery 后台任务服务不可用",
+        )
+        logger_obj.error(
+            "Celery 无法投递数据集%s任务 %s；任务未执行（%s）",
             operation,
             job_id,
-            exc_info=True,
+            type(exc).__name__,
         )
-        background_tasks.add_task(task.run, job_id)
-        execution_mode = "local"
-    return update_status(job_id, execution_mode=execution_mode)
+        raise HTTPException(
+            503,
+            "Redis/Celery 后台任务服务不可用，数据集导入任务未投递",
+        ) from exc
+    return update_status(job_id, execution_mode="celery")
 
 
 def check_upload_file(filename: str | None, content: bytes) -> str:

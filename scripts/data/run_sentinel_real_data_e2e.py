@@ -171,11 +171,6 @@ def assert_dispatch_success(result: dict) -> None:
         result.get("neo4j_projection_rebuilt") is True,
         f"Neo4j projection was not rebuilt: {result}",
     )
-    chroma_count = result.get("chroma_entities_written")
-    require(
-        isinstance(chroma_count, int) and chroma_count > 0,
-        f"Chroma projection did not contain real entities: {result}",
-    )
     dispatch = result.get("sentinel_dispatch")
     require(isinstance(dispatch, dict), "build-all did not report sentinel_dispatch")
     errors = dispatch.get("errors")
@@ -739,8 +734,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         query_projection = release.get("query_projection") or {}
         require(
             query_projection.get("ready") is True
-            and query_projection.get("neo4j") == "ok"
-            and query_projection.get("chroma") == "ok",
+            and query_projection.get("neo4j") == "ok",
             f"promotion query projections were not ready: {query_projection}",
         )
         superseded_draft = api.request(
@@ -1396,7 +1390,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 for item in cdc_events
             ),
             "neo4jProjection": query_projection.get("neo4j"),
-            "chromaProjection": query_projection.get("chroma"),
         }
     finally:
         api.close()

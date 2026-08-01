@@ -16,6 +16,13 @@ class OntologyProject(Base):
     icon: Mapped[str | None] = mapped_column(String(50), nullable=True)
     version: Mapped[str] = mapped_column(String(20), default="v0")
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    # PostgreSQL/Formal 是运行时真相，Neo4j 是可重建查询投影。任何会改变图
+    # 当前态的事务都先把该围栏置为 projecting；只有经校验的全量重建成功后
+    # 才能恢复 ready。失败状态必须耐久化，避免图接口读取陈旧或半成品数据。
+    projection_status: Mapped[str] = mapped_column(
+        String(20), default="ready", server_default="ready", nullable=False,
+    )
+    projection_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 运行时唯一读取指针。不要再通过“最大的版本号”推断当前发布版。
     current_release_id: Mapped[str | None] = mapped_column(
         String,

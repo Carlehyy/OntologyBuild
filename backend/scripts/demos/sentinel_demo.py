@@ -19,6 +19,7 @@ import uuid
 _DB = "/tmp/sentinel_demo.db"
 if os.path.exists(_DB):
     os.remove(_DB)
+os.environ["ENVIRONMENT"] = "test"
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB}"
 os.environ["SENTINEL_AUTO_DISPATCH"] = "0"   # 确定性：演示里显式调用变化驱动
 os.environ["SENTINEL_SCAN_ENABLED"] = "0"    # 不起后台线程，手动调 run_scheduled

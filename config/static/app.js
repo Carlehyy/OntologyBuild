@@ -6,10 +6,8 @@
     "redis",
     "neo4j",
     "minio",
-    "chroma",
     "browser",
     "n8n",
-    "llm",
   ];
 
   const SERVICE_LABELS = {
@@ -17,10 +15,8 @@
     redis: "Redis",
     neo4j: "Neo4j",
     minio: "MinIO",
-    chroma: "Chroma",
     browser: "Chromium CDP",
     n8n: "n8n",
-    llm: "默认大模型",
   };
 
   const state = {
@@ -36,10 +32,8 @@
       "redis",
       "neo4j",
       "minio",
-      "browser",
       "n8n",
     ],
-    optionalServices: ["chroma", "llm"],
     tests: Object.fromEntries(SERVICES.map((service) => [service, "idle"])),
     fingerprints: Object.fromEntries(SERVICES.map((service) => [service, ""])),
     generated: false,
@@ -202,35 +196,6 @@
         ],
       },
     },
-    chroma: {
-      title: "启动并确认 Chroma 端口",
-      intro:
-        "Chroma 提供向量检索服务。项目默认使用本机 8001 端口，容器内部端口通常是 8000。",
-      warning: "不要把 Chroma 端口直接暴露到公网。远程部署时应使用防火墙、加密连接和访问控制。",
-      platforms: {
-        Windows: [
-          { command: "docker compose ps" },
-          { command: "docker ps --filter name=chroma" },
-          {
-            text: "在 Docker Desktop 的容器端口列表中确认是否映射为 8001:8000。",
-          },
-        ],
-        Ubuntu: [
-          { command: "docker compose ps" },
-          { command: "docker ps --filter name=chroma" },
-          {
-            text: "如果端口映射不同，把页面中的端口改成冒号左侧的主机端口。",
-          },
-        ],
-        macOS: [
-          { command: "docker compose ps" },
-          { command: "docker ps --filter name=chroma" },
-          {
-            text: "在 Docker Desktop 中也可以查看容器的 Ports 信息。",
-          },
-        ],
-      },
-    },
     browser: {
       title: "用独立资料目录启动 Chromium CDP",
       intro:
@@ -303,47 +268,6 @@
           },
           {
             text: "复制后立即保存到此页面，n8n 可能不会再次显示完整 Key。",
-          },
-        ],
-      },
-    },
-    llm: {
-      title: "找到大模型 API Key 和模型名称",
-      intro:
-        "云端服务需要在供应商控制台创建 API Key。本地 Ollama、LiteLLM 等服务可能使用自定义 Key 或无需真实 Key。",
-      warning: "测试会产生一次很小的模型请求，云端供应商可能收取极少量费用。API Key 不要发给任何人。",
-      platforms: {
-        Windows: [
-          {
-            text: "OpenAI 或 Anthropic 用户请登录官方控制台创建 API Key，并确认账号有可用额度。",
-          },
-          {
-            text: "使用本地兼容服务时，API 地址示例是 http://127.0.0.1:4000/v1。",
-          },
-          {
-            command: "docker compose ps",
-          },
-        ],
-        Ubuntu: [
-          {
-            text: "远程模型网关应使用 HTTPS，并限制只有 OntologyBuild 所在服务器可以访问。",
-          },
-          {
-            text: "模型名称必须与服务提供的名称完全一致，包括大小写和前缀。",
-          },
-          {
-            command: "docker compose ps",
-          },
-        ],
-        macOS: [
-          {
-            text: "本地模型服务启动后，先用它自带的命令确认模型已经下载完成。",
-          },
-          {
-            text: "Ollama 或 LiteLLM 使用兼容接口时，选择“兼容 OpenAI 的服务”。",
-          },
-          {
-            command: "docker compose ps",
           },
         ],
       },
@@ -482,11 +406,6 @@
         payload.required_services,
         state.requiredServices,
       );
-      state.optionalServices = normalizeServiceList(
-        payload.optional_services,
-        SERVICES.filter((service) => !state.requiredServices.includes(service)),
-      );
-
       populateProfile(payload.profile || payload.config || {});
       applySecretRetention();
 
@@ -621,7 +540,6 @@
       showToast("已生成新值。生成配置前请确认你确实需要更换密钥。", "success");
     });
 
-    document.querySelector("#llm-provider").addEventListener("change", updateLlmDefaults);
   }
 
   function closeDialogFromBackdrop(event) {
@@ -657,34 +575,6 @@
 
     updateLocalSectionStates();
     updateSummary();
-  }
-
-  function updateLlmDefaults(event) {
-    const apiBase = document.querySelector("#llm-api-base");
-    const model = document.querySelector("#llm-model");
-    const knownUrls = [
-      "https://api.openai.com/v1",
-      "https://api.anthropic.com/v1",
-      "http://127.0.0.1:4000/v1",
-    ];
-
-    if (!knownUrls.includes(apiBase.value.trim())) {
-      return;
-    }
-
-    if (event.target.value === "anthropic") {
-      apiBase.value = "https://api.anthropic.com/v1";
-      if (model.value === "gpt-4.1-mini") {
-        model.value = "claude-sonnet-4-20250514";
-      }
-    } else if (event.target.value === "compatible") {
-      apiBase.value = "http://127.0.0.1:4000/v1";
-    } else {
-      apiBase.value = "https://api.openai.com/v1";
-      if (model.value.startsWith("claude-")) {
-        model.value = "gpt-4.1-mini";
-      }
-    }
   }
 
   function populateProfile(profile) {
@@ -893,7 +783,6 @@
       ["platform.frontend_port", "前端端口", "platform.frontend_host"],
       ["postgres.port", "PostgreSQL 端口", "postgres.host"],
       ["redis.port", "Redis 端口", "redis.host"],
-      ["chroma.port", "Chroma 端口", "chroma.host"],
     ];
     const used = new Map();
     let valid = true;
@@ -1216,16 +1105,6 @@
       }`;
       fragment.appendChild(item);
     });
-    state.optionalServices.forEach((service) => {
-      const item = document.createElement("div");
-      const success = state.tests[service] === "success";
-      item.className = `requirement-item${success ? " requirement-success" : ""}`;
-      item.textContent = `${SERVICE_LABELS[service]} ${
-        success ? "可选测试已通过" : "可选，不阻止生成配置"
-      }`;
-      fragment.appendChild(item);
-    });
-
     state.requirements
       .filter((requirement) => {
         const key =

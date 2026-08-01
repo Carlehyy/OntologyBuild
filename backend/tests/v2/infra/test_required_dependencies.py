@@ -21,35 +21,25 @@ MATERIALIZER = ROOT / "scripts" / "ci" / "materialize-production-dependencies.sh
 MATERIALIZED_KEYS = {
     "ENVIRONMENT",
     "PUBLIC_PORT",
-    "STRICT_PRODUCTION_CONFIG",
-    "REQUIRE_EXTERNAL_DEPENDENCIES",
-    "POSTGRES_HOST",
-    "POSTGRES_PORT",
     "POSTGRES_DB",
     "POSTGRES_USER",
     "POSTGRES_PASSWORD",
     "DATABASE_URL",
     "REDIS_URL",
-    "DATASET_IMPORT_USE_CELERY",
     "NEO4J_URI",
     "NEO4J_USER",
     "NEO4J_PASSWORD",
     "NEO4J_AUTH",
-    "MINIO_CONSOLE_URL",
     "MINIO_ENDPOINT",
     "MINIO_ACCESS_KEY",
     "MINIO_SECRET_KEY",
     "MINIO_USE_SSL",
-    "STORAGE_LOCAL_FALLBACK",
     "N8N_API_URL",
-    "N8N_EMAIL",
-    "N8N_PASSWORD",
     "N8N_API_KEY",
+    "N8N_TIMEOUT_SECONDS",
 }
 MATERIALIZER_SOURCE_VALUES = {
     "PROD_PUBLIC_PORT": "8080",
-    "PROD_POSTGRES_HOST": "pg.example.com",
-    "PROD_POSTGRES_PORT": "5432",
     "PROD_POSTGRES_DB": "ontology",
     "PROD_POSTGRES_USER": "ontology",
     "PROD_POSTGRES_PASSWORD": "synthetic-postgres-password",
@@ -64,14 +54,11 @@ MATERIALIZER_SOURCE_VALUES = {
     "PROD_NEO4J_USER": "neo4j",
     "PROD_NEO4J_PASSWORD": "synthetic-neo4j-password",
     "PROD_NEO4J_AUTH": "neo4j/synthetic-neo4j-password",
-    "PROD_MINIO_CONSOLE_URL": "https://objects.example.com",
     "PROD_MINIO_ENDPOINT": "objects.example.com:9000",
     "PROD_MINIO_ACCESS_KEY": "synthetic-minio-access",
     "PROD_MINIO_SECRET_KEY": "synthetic-minio-secret",
     "PROD_MINIO_USE_SSL": "true",
     "PROD_N8N_API_URL": "https://n8n.example.com/api/v1",
-    "PROD_N8N_EMAIL": "automation@example.com",
-    "PROD_N8N_PASSWORD": "synthetic-n8n-password",
     "PROD_N8N_API_KEY": "synthetic-n8n-api-key",
 }
 
@@ -79,13 +66,10 @@ MATERIALIZER_SOURCE_VALUES = {
 def _required_settings(**updates) -> Settings:
     values = {
         "environment": "production",
-        "strict_production_config": True,
-        "require_external_dependencies": True,
         "database_url": (
             "postgresql://ontology:strong-password@pg.example.com:5432/ontology"
         ),
         "redis_url": "redis://:strong-password@redis.example.com:6379/0",
-        "dataset_import_use_celery": True,
         "secret_key": "0123456789abcdef0123456789abcdef",
         "cors_allowed_origins": "",
         "first_admin_password": "strong-admin-password",
@@ -95,7 +79,9 @@ def _required_settings(**updates) -> Settings:
         "minio_endpoint": "objects.example.com:9000",
         "minio_access_key": "ontology-minio",
         "minio_secret_key": "strong-minio-password",
-        "storage_local_fallback": False,
+        "steward_browser_cdp_url": "http://browser:9222",
+        "n8n_api_url": "https://n8n.example.com/api/v1",
+        "n8n_api_key": "strong-n8n-api-key",
         "pipeline_file_public_app_base_url": "https://platform.example.com",
         "pipeline_file_public_api_base_url": "https://api.example.com",
         "allow_public_registration": False,
@@ -119,13 +105,7 @@ def _run_materializer(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(MATERIALIZER_SOURCE_VALUES)
-    # These values must never be caller-controlled, even if they are present.
-    env.update({
-        "PROD_STRICT_PRODUCTION_CONFIG": "false",
-        "PROD_REQUIRE_EXTERNAL_DEPENDENCIES": "false",
-        "PROD_DATASET_IMPORT_USE_CELERY": "false",
-        "PROD_STORAGE_LOCAL_FALLBACK": "true",
-    })
+    env["PROD_N8N_TIMEOUT_SECONDS"] = "30"
     for key, value in (overrides or {}).items():
         if value is None:
             env.pop(key, None)
@@ -141,13 +121,12 @@ def _run_materializer(
     )
 
 
-def test_required_external_dependency_mode_accepts_complete_configuration():
+def test_required_runtime_stack_accepts_complete_configuration():
     assert production_config_errors(_required_settings()) == []
 
 
-def test_required_dependency_gate_is_independent_from_legacy_app_secrets():
+def test_runtime_dependency_gate_is_independent_from_application_secrets():
     current = _required_settings(
-        strict_production_config=False,
         secret_key="dev-secret-key",
         first_admin_password="admin123",
     )
@@ -157,23 +136,45 @@ def test_required_dependency_gate_is_independent_from_legacy_app_secrets():
     assert "FIRST_ADMIN_PASSWORD" in production_config_errors(current)
 
 
-def test_required_mode_rejects_every_degraded_dependency_path():
+def test_runtime_gate_rejects_invalid_dependency_configuration():
     errors = production_config_errors(_required_settings(
-        database_url="postgresql://app:password@db:5432/app",
-        redis_url="redis://redis:6379/0",
-        dataset_import_use_celery=False,
-        neo4j_uri="bolt://neo4j:7687",
+        database_url="sqlite:////tmp/fallback.db",
+        redis_url="redis://redis/0",
+        neo4j_uri="http://neo4j:7474",
         minio_endpoint="minio:9001",
-        storage_local_fallback=True,
-        storage_local_dir="/uploads/object-storage",
+        n8n_api_key="",
+        steward_browser_cdp_url="ws://browser:9222",
     ))
 
-    assert any("STORAGE_LOCAL_FALLBACK=false" in item for item in errors)
-    assert any("DATASET_IMPORT_USE_CELERY=true" in item for item in errors)
-    assert any("authenticated external PostgreSQL" in item for item in errors)
-    assert any("authenticated external Redis" in item for item in errors)
-    assert any("external Neo4j" in item for item in errors)
-    assert any("S3 API endpoint" in item for item in errors)
+    assert any("authenticated PostgreSQL" in item for item in errors)
+    assert any("explicit port" in item for item in errors)
+    assert any("reference Neo4j" in item for item in errors)
+    assert any("S3 API" in item for item in errors)
+    assert any("configure n8n" in item for item in errors)
+    assert any("CDP_URL" in item for item in errors)
+
+
+def test_runtime_gate_rejects_cdp_discovery_path_but_accepts_root_slash():
+    errors = required_dependency_config_errors(_required_settings(
+        steward_browser_cdp_url="https://browser.example.com/json/version",
+    ))
+
+    assert errors == [
+        "STEWARD_BROWSER_CDP_URL must be an absolute HTTP(S) origin/root URL"
+    ]
+    assert required_dependency_config_errors(_required_settings(
+        steward_browser_cdp_url="https://browser.example.com/",
+    )) == []
+
+
+def test_runtime_gate_rejects_empty_database_and_redis_passwords():
+    errors = required_dependency_config_errors(_required_settings(
+        database_url="postgresql://ontology:@pg.example.com:5432/ontology",
+        redis_url="redis://:@redis.example.com:6379/0",
+    ))
+
+    assert any("authenticated PostgreSQL" in item for item in errors)
+    assert any("authenticated Redis" in item for item in errors)
 
 
 def test_committed_manifest_template_declares_contract_without_secrets():
@@ -182,10 +183,7 @@ def test_committed_manifest_template_declares_contract_without_secrets():
 
     assert set(manifest) == MATERIALIZED_KEYS
     assert manifest["ENVIRONMENT"] == "production"
-    assert manifest["STRICT_PRODUCTION_CONFIG"] == "true"
-    assert manifest["REQUIRE_EXTERNAL_DEPENDENCIES"] == "true"
-    assert manifest["DATASET_IMPORT_USE_CELERY"] == "true"
-    assert manifest["STORAGE_LOCAL_FALLBACK"] == "false"
+    assert manifest["N8N_TIMEOUT_SECONDS"] == "30"
     assert not manifest["MINIO_ENDPOINT"].endswith(":9001")
     secret_keys = {
         "POSTGRES_PASSWORD",
@@ -195,8 +193,6 @@ def test_committed_manifest_template_declares_contract_without_secrets():
         "NEO4J_AUTH",
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
-        "N8N_EMAIL",
-        "N8N_PASSWORD",
         "N8N_API_KEY",
     }
     assert all(manifest[key] == "" for key in secret_keys)
@@ -212,14 +208,21 @@ def test_materializer_writes_exact_fail_closed_contract(tmp_path):
     manifest = _read_env(target)
     assert set(manifest) == MATERIALIZED_KEYS
     assert manifest["ENVIRONMENT"] == "production"
-    assert manifest["STRICT_PRODUCTION_CONFIG"] == "true"
-    assert manifest["REQUIRE_EXTERNAL_DEPENDENCIES"] == "true"
-    assert manifest["DATASET_IMPORT_USE_CELERY"] == "true"
-    assert manifest["STORAGE_LOCAL_FALLBACK"] == "false"
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     output = result.stdout + result.stderr
     assert "synthetic-" not in output
-    assert "automation@example.com" not in output
+
+
+def test_materializer_accepts_bounded_n8n_timeout_override(tmp_path):
+    target = tmp_path / "production.dependencies.env"
+
+    result = _run_materializer(
+        target,
+        {"PROD_N8N_TIMEOUT_SECONDS": "45"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _read_env(target)["N8N_TIMEOUT_SECONDS"] == "45"
 
 
 def test_materializer_rejects_each_missing_value_without_overwrite(tmp_path):
@@ -254,11 +257,11 @@ def test_materializer_rejects_multiline_values_without_overwrite(tmp_path):
         ("PROD_PUBLIC_PORT", "0"),
         ("PROD_PUBLIC_PORT", "65536"),
         ("PROD_PUBLIC_PORT", "not-a-port"),
-        ("PROD_POSTGRES_PORT", "0"),
-        ("PROD_POSTGRES_PORT", "65536"),
-        ("PROD_POSTGRES_PORT", "5432/tcp"),
         ("PROD_MINIO_USE_SSL", "TRUE"),
         ("PROD_MINIO_USE_SSL", "1"),
+        ("PROD_N8N_TIMEOUT_SECONDS", "2"),
+        ("PROD_N8N_TIMEOUT_SECONDS", "121"),
+        ("PROD_N8N_TIMEOUT_SECONDS", "slow"),
     ],
 )
 def test_materializer_validates_typed_values(
@@ -274,7 +277,7 @@ def test_materializer_validates_typed_values(
     assert not target.exists()
 
 
-def test_deploy_merges_manifest_and_disables_local_fallback(tmp_path):
+def test_deploy_merges_required_runtime_manifest(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     manifest_path = tmp_path / "production.dependencies.env"
     materialized = _run_materializer(manifest_path)
@@ -313,11 +316,6 @@ def test_dependency_probe_never_logs_driver_error_details(monkeypatch, capsys):
         raise RuntimeError("driver exposed should-never-appear")
 
     monkeypatch.setattr(
-        dependency_probe.settings,
-        "require_external_dependencies",
-        True,
-    )
-    monkeypatch.setattr(
         dependency_probe,
         "PROBES",
         (("PostgreSQL", fail_with_secret),),
@@ -329,15 +327,70 @@ def test_dependency_probe_never_logs_driver_error_details(monkeypatch, capsys):
     assert "should-never-appear" not in captured.err
 
 
-def test_required_mode_makes_environment_minio_authoritative(monkeypatch):
+def test_dependency_preflight_reports_cdp_without_blocking_api_start(
+    monkeypatch,
+    capsys,
+):
+    from app.shared import dependency_probe
+
+    monkeypatch.setattr(
+        dependency_probe,
+        "PROBES",
+        (("Chromium CDP", lambda: (_ for _ in ()).throw(
+            RuntimeError("browser unavailable"))),),
+    )
+
+    assert dependency_probe.main() == 0
+    captured = capsys.readouterr()
+    assert "advisory; API may start" in captured.err
+
+
+def test_startup_dependency_probe_fails_closed_except_for_cdp(monkeypatch):
+    from app.shared import dependency_probe
+
+    def reject_redis():
+        raise RuntimeError("redis secret must not be rendered")
+
+    def reject_browser():
+        raise RuntimeError("browser detail must not be rendered")
+
+    monkeypatch.setattr(
+        dependency_probe,
+        "PROBES",
+        (
+            ("Redis", reject_redis),
+            ("Chromium CDP", reject_browser),
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        dependency_probe.probe_startup_dependencies()
+
+    assert str(exc_info.value) == (
+        "Required startup dependencies unavailable: Redis"
+    )
+    assert "secret" not in str(exc_info.value)
+
+
+def test_startup_dependency_probe_treats_cdp_as_advisory(monkeypatch):
+    from app.shared import dependency_probe
+
+    def reject_browser():
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(
+        dependency_probe,
+        "PROBES",
+        (("Chromium CDP", reject_browser),),
+    )
+
+    dependency_probe.probe_startup_dependencies()
+
+
+def test_environment_minio_is_always_authoritative(monkeypatch):
     from app.shared import storage
 
     sentinel = object()
-    monkeypatch.setattr(
-        storage.settings,
-        "require_external_dependencies",
-        True,
-    )
     monkeypatch.setattr(
         storage,
         "get_environment_storage_service",
@@ -345,4 +398,6 @@ def test_required_mode_makes_environment_minio_authoritative(monkeypatch):
     )
     monkeypatch.setattr(storage, "_storage_service", None)
 
-    assert storage.get_storage_service() is sentinel
+    platform = storage.get_storage_service()
+    assert isinstance(platform, storage.PlatformStorageAccess)
+    assert platform._authoritative is sentinel

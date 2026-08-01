@@ -4,7 +4,7 @@ Connection 同步 — 把连接器数据落地为 Dataset 版本
 把已配置的 Connection 通过其 Connector 拉取数据，序列化为 JSON 落成
 Dataset + DatasetVersion，作为数据流水线的原始输入。
 
-可同步执行（Celery/Redis 不可用时直接调用），也可作为 Celery 任务派发。
+支持调用方显式同步执行，也支持通过已配置的 Celery worker 异步派发。
 """
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import hashlib
 import json
 import logging
 from contextlib import nullcontext
+
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ def _decrypt_config(conn) -> dict:
         return conn.config or {}
 
 
+@celery_app.task(name="app.tasks.v2.connection_sync.sync_connection")
 def sync_connection(connection_id: str, mode: str = "full",
                     resource: str | None = None, db=None) -> dict:
     """

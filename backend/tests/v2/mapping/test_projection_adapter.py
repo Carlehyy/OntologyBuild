@@ -1,11 +1,11 @@
 """Contracts for rebuildable graph projection serialization."""
 
 import json
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.ontologies.mappings.neo4j_projection_contract import (
     neo4j_entity_properties,
+    neo4j_projection_properties,
     neo4j_safe_value,
 )
 from app.ontologies.mappings.projection_adapter import ProjectionAdapterMixin
@@ -74,91 +74,86 @@ def test_neo4j_projection_stringifies_integers_outside_int64_range():
     assert neo4j_safe_value(int64_min - 1) == str(int64_min - 1)
 
 
-def test_incremental_neo4j_write_uses_the_same_safe_projection_boundary():
-    neo = MagicMock(available=True)
-    neo.batch_upsert_entities.return_value = 1
-    entity = {
+def test_full_rebuild_can_defer_reversible_value_encoding_to_neo4j_service():
+    projected = neo4j_entity_properties(
+        {
+            "nested": {"region": "华东"},
+            "__mapping_ids__": ["mapping-1"],
+            "__business_properties__": {
+                "id": "ORDER-1",
+                "name": "Order 1",
+            },
+        },
+        entity_id="stable-id",
+        ontology_id="ontology-1",
+        encode_values=False,
+    )
+
+    assert projected == {
         "id": "stable-id",
         "ontology_id": "ontology-1",
-        "name": "runtime name",
-        "__mapping_ids__": ["mapping-1"],
-        "__business_properties__": {"id": "ORDER-1", "name": "Order 1"},
-    }
-
-    with patch(
-        "app.services.v2.graph.neo4j_service.Neo4jService",
-        return_value=neo,
-    ):
-        count = ProjectionAdapterMixin()._write_neo4j("Order", [entity])
-
-    assert count == 1
-    rows = neo.batch_upsert_entities.call_args.args[1]
-    assert rows == [{
-        "id": "stable-id",
-        "ontology_id": "ontology-1",
-        "name": "runtime name",
+        "nested": {"region": "华东"},
         "business_id": "ORDER-1",
         "business_name": "Order 1",
-        "__business_properties_json__": '{"id":"ORDER-1","name":"Order 1"}',
-    }]
-    assert neo.batch_upsert_entities.call_args.kwargs == {
-        "replace_properties": True,
+        "__business_properties_json__": {
+            "id": "ORDER-1",
+            "name": "Order 1",
+        },
     }
-    neo.close.assert_called_once_with()
 
 
-def test_full_neo4j_rebuild_sanitizes_entities_and_relation_properties():
-    entity = SimpleNamespace(
-        id="stable-id",
-        ontology_id="ontology-1",
-        type="Order",
-        properties={
-            "source_id": "stable-id",
-            "__business_properties__": {"id": "ORDER-1"},
-            "nested": {"region": "华东"},
+def test_projection_envelope_preserves_reserved_business_aliases():
+    business = {
+        "id": "ORDER-001",
+        "ontology_id": "business-scope",
+        "updated_at": "business-timestamp",
+        "name": "Order one",
+    }
+    projected = neo4j_projection_properties(
+        business,
+        {
+            "id": "formal-instance-id",
+            "ontology_id": "ontology-1",
+            "name": "Display name",
         },
     )
-    relation = SimpleNamespace(
-        id="relation-1",
-        ontology_id="ontology-1",
-        source_entity="stable-id",
-        target_entity="stable-id",
-        type="SELF",
-        confidence=1.0,
-        properties={"evidence": {"source": "manual"}},
+
+    assert projected == {
+        "id": "formal-instance-id",
+        "ontology_id": "ontology-1",
+        "name": "Display name",
+        "business_id": "ORDER-001",
+        "business_ontology_id": "business-scope",
+        "business_updated_at": "business-timestamp",
+        "business_name": "Order one",
+        "__business_properties_json__": business,
+    }
+
+
+def test_projection_alias_collision_keeps_complete_business_snapshot():
+    business = {
+        "id": "ORDER-001",
+        "business_id": "modeled-business-id",
+    }
+    projected = neo4j_projection_properties(
+        business,
+        {"id": "formal-instance-id"},
     )
+    merged = {"business_id": "stale-legacy-id", **projected}
 
-    class _Query:
-        def __init__(self, rows):
-            self.rows = rows
+    assert merged["business_id"] == "modeled-business-id"
+    assert merged["__business_properties_json__"] == business
+    assert merged["__business_properties_json__"]["id"] == "ORDER-001"
 
-        def filter(self, *_args):
-            return self
 
-        def all(self):
-            return self.rows
-
-    class _DB:
-        def query(self, model):
-            return _Query([entity] if model.__tablename__ == "entities" else [relation])
-
-    neo = MagicMock(available=True)
+def test_projection_adapter_delegates_to_authoritative_full_rebuild():
+    db = object()
     service = ProjectionAdapterMixin()
-    service._db = _DB()
+    service._db = db
     with patch(
-        "app.services.v2.graph.neo4j_service.Neo4jService",
-        return_value=neo,
-    ):
+        "app.ontologies.mappings.projection_adapter.rebuild_neo4j_projection",
+        return_value=True,
+    ) as rebuild:
         assert service._rebuild_neo4j_projection("ontology-1") is True
 
-    node = neo.batch_upsert_entities.call_args.args[1][0]
-    assert node["id"] == "stable-id"
-    assert node["business_id"] == "ORDER-1"
-    assert node["nested"] == '{"region":"华东"}'
-    assert neo.batch_upsert_entities.call_args.kwargs == {
-        "replace_properties": True,
-    }
-    relation_props = neo.upsert_relation.call_args.kwargs["props"]
-    assert relation_props["evidence"] == '{"source":"manual"}'
-    assert relation_props["id"] == "relation-1"
-    neo.close.assert_called_once_with()
+    rebuild.assert_called_once_with(db, "ontology-1")

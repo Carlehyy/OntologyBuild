@@ -2,12 +2,15 @@ from pydantic import BaseModel, Field
 
 
 class WorkflowConfigUpdate(BaseModel):
-    """Request to save workflow/n8n configuration."""
+    """Legacy update shape; the runtime endpoint rejects persisted overrides."""
 
     enabled: bool = Field(default=False)
-    api_url: str = Field(default="", description="n8n API URL, e.g. http://127.0.0.1:5678/api/v1")
+    api_url: str = Field(
+        default="",
+        description="n8n service root URL, e.g. http://127.0.0.1:5678",
+    )
     api_key: str = Field(default="", description="Plaintext n8n API key; encrypted on save")
-    timeout_seconds: int = Field(default=10, ge=1, le=120)
+    timeout_seconds: int = Field(default=30, ge=1, le=120)
 
 
 class WorkflowConfigResponse(BaseModel):
@@ -16,16 +19,21 @@ class WorkflowConfigResponse(BaseModel):
     enabled: bool = False
     api_url: str = ""
     has_api_key: bool = False
-    timeout_seconds: int = 10
+    timeout_seconds: int = 30
 
 
 class WorkflowConnectionTestRequest(BaseModel):
-    """Request to test connectivity to n8n and save it after success."""
+    """Request shape retained for the n8n connectivity endpoint.
+
+    Normal runtimes ignore these candidate values and test the environment-
+    managed configuration.  ``ENVIRONMENT=test`` retains the historical
+    injectable behavior for deterministic tests.
+    """
 
     enabled: bool = Field(default=False)
     api_url: str
     api_key: str = ""
-    timeout_seconds: int = Field(default=10, ge=1, le=120)
+    timeout_seconds: int = Field(default=30, ge=1, le=120)
 
 
 class WorkflowConnectionTestResponse(BaseModel):

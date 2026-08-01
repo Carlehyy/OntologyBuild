@@ -325,7 +325,7 @@ def test_activation_and_snapshot_adapters_forward_current_dependencies(
     )
 
 
-def test_projection_rebuild_preserves_store_order_and_readiness_payload():
+def test_projection_rebuild_reports_neo4j_readiness():
     events: list[tuple] = []
     db_marker = object()
 
@@ -337,10 +337,6 @@ def test_projection_rebuild_preserves_store_order_and_readiness_payload():
             events.append(("neo4j", ontology_id))
             return True
 
-        def _rebuild_chroma_projection(self, ontology_id):
-            events.append(("chroma", ontology_id))
-            return 3
-
     result = release_activation_service.rebuild_required_query_projections(
         db_marker,
         "ontology-id",
@@ -350,13 +346,10 @@ def test_projection_rebuild_preserves_store_order_and_readiness_payload():
     assert result == {
         "ready": True,
         "neo4j": "ok",
-        "chroma": "ok",
-        "chroma_count": 3,
     }
     assert events == [
         ("init", db_marker),
         ("neo4j", "ontology-id"),
-        ("chroma", "ontology-id"),
     ]
 
 

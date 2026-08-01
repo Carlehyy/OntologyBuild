@@ -73,6 +73,7 @@ jobs:
 
       - name: Fresh database migration
         env:
+          ENVIRONMENT: test
           DATABASE_URL: postgresql://ontologybuild_ci:ontologybuild_ci@127.0.0.1:5432/ontologybuild_ci
         run: |
           uv run alembic upgrade head

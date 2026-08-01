@@ -65,6 +65,24 @@ from app.ontologies.formal_modeling.validation import (
 )
 
 
+_GRAPH_MUTATING_EFFECTS = {
+    "create_object",
+    "update_property",
+    "create_link",
+    "delete_link",
+}
+
+
+def _result_changes_graph(result: dict[str, Any]) -> bool:
+    if str(result.get("status") or "").lower() != "success":
+        return False
+    return any(
+        str(effect.get("type") or "") in _GRAPH_MUTATING_EFFECTS
+        for effect in (result.get("effects") or [])
+        if isinstance(effect, dict)
+    )
+
+
 def execute_action(db: Session, ontology_id: str, body,
                    actor_id: Optional[str] = None,
                    caused_by_fact: Optional[str] = None,
@@ -97,19 +115,76 @@ def execute_action(db: Session, ontology_id: str, body,
             preview_context=preview_context,
             expected_release_id=expected_release_id,
         )
+    from app.config import settings
     from app.ontologies.runtime_fence import _ontology_build_lock
     with _ontology_build_lock(db, ontology_id):
-        return _execute_action_locked(
-            db,
-            ontology_id,
-            body,
-            actor_id=actor_id,
-            caused_by_fact=caused_by_fact,
-            skip_approval=skip_approval,
-            preview_only=preview_only,
-            preview_context=preview_context,
-            expected_release_id=expected_release_id,
+        needs_projection = (
+            settings.environment != "test"
+            and not effective_preview_only
+            and not bool(getattr(body, "dry_run", False))
+            and hasattr(db, "info")
+            and hasattr(db, "commit")
         )
+        projection_owner_key = "ontology_projection_action_owner"
+        if needs_projection:
+            from app.ontologies.projection_state import (
+                mark_projecting,
+                snapshot,
+            )
+
+            current_projection = snapshot(db, ontology_id)
+            if not current_projection.ready:
+                # Let the normal action validation path return its established
+                # fail-closed response shape; it will observe this external
+                # (not self-owned) fence below.
+                return _execute_action_locked(
+                    db,
+                    ontology_id,
+                    body,
+                    actor_id=actor_id,
+                    caused_by_fact=caused_by_fact,
+                    skip_approval=skip_approval,
+                    preview_only=preview_only,
+                    preview_context=preview_context,
+                    expected_release_id=expected_release_id,
+                )
+            mark_projecting(db, ontology_id)
+            db.commit()
+            db.info[projection_owner_key] = str(ontology_id)
+        try:
+            result = _execute_action_locked(
+                db,
+                ontology_id,
+                body,
+                actor_id=actor_id,
+                caused_by_fact=caused_by_fact,
+                skip_approval=skip_approval,
+                preview_only=preview_only,
+                preview_context=preview_context,
+                expected_release_id=expected_release_id,
+            )
+        except Exception as exc:
+            if needs_projection:
+                from app.ontologies.projection_state import mark_failed
+
+                db.rollback()
+                mark_failed(db, ontology_id, exc)
+                db.commit()
+            raise
+        finally:
+            if hasattr(db, "info"):
+                db.info.pop(projection_owner_key, None)
+        if needs_projection:
+            if _result_changes_graph(result):
+                from app.ontologies.projection_state import rebuild_after_commit
+
+                rebuild_after_commit(db, ontology_id)
+            else:
+                from app.ontologies.projection_state import mark_ready
+
+                mark_ready(db, ontology_id)
+                db.commit()
+        return result
 
 
 def _resolve_action_execution_definition(
@@ -418,13 +493,15 @@ def _prepare_action_execution_request(
 
     if not body.dry_run:
         from app.config import settings
-        if settings.environment == "production":
-            from app.models.v2.mapping import OntologyMapping
-            unhealthy_mappings = db.query(OntologyMapping).filter(
-                OntologyMapping.ontology_id == ontology_id,
-                OntologyMapping.status != "applied",
-            ).count()
-            if unhealthy_mappings:
+        if settings.environment != "test":
+            from app.ontologies.projection_state import snapshot
+
+            state = snapshot(db, ontology_id)
+            self_owned = (
+                db.info.get("ontology_projection_action_owner")
+                == str(ontology_id)
+            )
+            if not state.ready and not self_owned:
                 return _fail_log(
                     db, ontology_id, action, body, start,
                     "本体数据投影正在更新或处于失败态，真实动作已阻断；请先完成全量映射对账",

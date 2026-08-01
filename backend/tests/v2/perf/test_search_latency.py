@@ -2,7 +2,7 @@
 搜索延迟基准测试
 
 目标：
-- 关键词搜索（ChromaDB 不可用时）延迟 < 50ms
+- 已退役语义搜索必须在 50ms 内显式拒绝
 - StorageService URI 解析 10万次 < 100ms
 """
 import time
@@ -28,23 +28,22 @@ def test_storage_uri_parse_100k():
     )
 
 
-def test_search_api_unavailable_response_time():
-    """ChromaDB 不可用时，搜索 API 响应时间 < 50ms（快速失败）"""
-    from unittest.mock import patch
-    from app.services.v2.vector.chroma_service import ChromaService
+def test_retired_semantic_search_response_time():
+    """Retired semantic search fails explicitly without external I/O."""
+    from fastapi import HTTPException
+    from app.data_channel.datasets.search_router import (
+        _raise_semantic_search_unsupported,
+    )
 
-    with patch("app.services.v2.vector.chroma_service.chromadb") as mock_chroma:
-        mock_chroma.HttpClient.side_effect = Exception("offline")
+    start = time.perf_counter()
+    with pytest.raises(HTTPException) as raised:
+        _raise_semantic_search_unsupported()
+    elapsed_ms = (time.perf_counter() - start) * 1000
 
-        svc = ChromaService(host="bad", port=0)
-
-        start = time.perf_counter()
-        result = svc.semantic_search("ont-1", "test query")
-        elapsed_ms = (time.perf_counter() - start) * 1000
-
-    assert result == []
+    assert raised.value.status_code == 501
+    assert raised.value.detail["code"] == "semantic_search_unsupported"
     assert elapsed_ms < SEARCH_FALLBACK_THRESHOLD_MS, (
-        f"ChromaDB 不可用时搜索响应 {elapsed_ms:.1f}ms，超过阈值 {SEARCH_FALLBACK_THRESHOLD_MS}ms"
+        f"语义搜索退役响应 {elapsed_ms:.1f}ms，超过阈值 {SEARCH_FALLBACK_THRESHOLD_MS}ms"
     )
 
 

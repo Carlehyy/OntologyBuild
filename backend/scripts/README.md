@@ -13,6 +13,11 @@ uv run python scripts/<script>.py --help
 API key、连接串、临时数据库或报告提交到 Git。任何新增、移动或删除的脚本都
 必须同步更新本页。
 
+表中临时 SQLite 只服务于隔离脚本或 API Hub，不是平台运行时降级。正常平台
+验收仍要求 PostgreSQL、Redis/Celery worker、Neo4j、MinIO、n8n 和 Chromium
+CDP 全部就绪。LLM 在平台启动后按脚本需要配置；ChromaDB 不再是任何脚本的
+运行依赖。
+
 ## 真实链路验收
 
 | 入口 | 运行方式与依赖 | 数据/外部影响与清理 |
@@ -54,7 +59,7 @@ n8n workflow/credential、对象存储和数据库残留。
 
 | 入口 | 运行方式与依赖 | 写入与回滚 |
 |---|---|---|
-| `migrations/migrate_v1_to_v2.py` | 先执行 `uv run python scripts/migrations/migrate_v1_to_v2.py --v1-db <sqlite> --pg-url <postgres-url> --dry-run`；正式模式还会使用当前 Neo4j/ChromaDB 配置 | 非 dry-run 会写 PostgreSQL，并尝试同步 Neo4j、ChromaDB；必须使用备份副本演练、保存脱敏报告并准备按备份整体回滚 |
+| `migrations/migrate_v1_to_v2.py` | 先停止 API 和全部 worker，再执行 `uv run python scripts/migrations/migrate_v1_to_v2.py --v1-db <sqlite> --pg-url <postgres-url> --dry-run`；正式模式要求当前 Neo4j 配置真实可用 | 每个本体在同一 PostgreSQL 事务中写项目、Entity、Relation 与 `projecting` 围栏，提交后调用平台统一全量投影；成功才转为 `ready`。投影失败立即停止并返回非零，已提交项目保持非 ready，可在修复 Neo4j 后幂等重跑，或按迁移前备份恢复 |
 | `seed_deepseek_models.py` | `uv run python scripts/seed_deepseek_models.py <api-key>` 幂等创建/更新两个 DeepSeek 模型配置 | 写当前数据库；legacy CLI 只能从 argv 接收 key，可能暴露在历史/进程列表。优先使用受控 UI/API，只能在隔离管理终端执行本入口 |
 
 `migrations/migrate_v1_to_v2.py` 仍被
@@ -62,6 +67,12 @@ n8n workflow/credential、对象存储和数据库残留。
 直接验证，不能作为“零引用脚本”删除。生产迁移还必须遵循
 [`docs/operations/backup-restore.md`](../../docs/operations/backup-restore.md)和
 [`docs/operations/rollback.md`](../../docs/operations/rollback.md)。
+
+正式迁移期间不得让旧版 API/worker 与脚本并发写图：旧版本不了解新版投影围栏，
+可能在 PostgreSQL 提交与 Neo4j 重建之间制造不可对账数据。脚本会校验每条 Relation
+的 `source`/`target` 都能映射到同一本体内的 Entity ID；无法解析的端点在 SQL
+提交前显式失败。迁移报告中的 PostgreSQL 计数代表已经耐久提交的权威数据，
+Neo4j 计数仅在统一全量投影成功后增加，不能把非 ready 项目当作迁移成功。
 
 ## 已删除的陈旧入口
 

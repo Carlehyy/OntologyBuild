@@ -39,10 +39,10 @@ npm run test:e2e:mocked
 覆盖无 DOM、无网络依赖的业务纯逻辑；新增纯函数必须优先放入
 `frontend/src/test/unit/<domain>/`。浏览器测试采用显式 allowlist：
 
-- `test:e2e:mocked`：26 个完全离线 spec；配置会把后端地址指向不可达端口；
+- `test:e2e:mocked`：27 个完全离线 spec；配置会把后端地址指向不可达端口；
 - `test:e2e:stack`：21 个需要隔离 OntologyBuild 后端的 spec；
 - `test:e2e:external`：1 个需要显式开关及真实 LLM/外部服务的 spec；
-- `test:e2e:classification`：保证全部 48 个 spec 恰好属于一组。
+- `test:e2e:classification`：保证全部 49 个 spec 恰好属于一组。
 
 新增测试必须先分类。不能通过文件名含 `real`、grep 排除或“默认 skip”来假装
 完成分类。`stack` 和 `external` 只在隔离环境执行；external 所需开关与秘密
@@ -84,6 +84,18 @@ git diff --check
 
 完整强制矩阵见仓库根目录 [AGENTS.md](../../AGENTS.md)。
 
+## 必需依赖验收
+
+正常启动的 PostgreSQL、Redis/Celery worker、Neo4j、MinIO 和 n8n 必须在隔离
+真实环境验收；Chromium CDP 也必须用真实服务验证完整 readiness，但其连通失败
+不应终止 API 进程。`ENVIRONMENT=test` 下的 SQLite、mock broker、临时对象目录
+或假的 CDP/n8n 响应只证明确定性契约，不证明真实服务 ready。
+
+必须覆盖失败关闭行为：数据库不切 SQLite、入队失败不切 API 线程、图失败不切
+NetworkX/SQL、对象写入失败不切本地目录。关键词搜索应验证 PostgreSQL 后端；
+语义及统一 semantic 模式应验证 `501 semantic_search_unsupported`。LLM 独立于
+启动门禁，在模型配置页完成配置后再运行对应 external E2E。
+
 ## 变更类型矩阵
 
 | 变更类型 | 强制门禁 | 额外证据 |
@@ -104,6 +116,7 @@ git diff --check
 - 数据管家浏览器：`backend/scripts/steward_companion_e2e.py`；
 - n8n/LLM：`backend/scripts/steward_live_e2e.py`、
   `steward_api_hub_live_e2e.py`；
+- Chromium CDP：`backend/scripts/steward_companion_e2e.py`；
 - 探索真实 LLM：`backend/scripts/exploration_live_e2e.py`；
 - 文件网关/MinIO：`backend/scripts/steward_file_asset_live_e2e.py`；
 - Sentinel：`scripts/data/run_sentinel_real_data_e2e.py`；

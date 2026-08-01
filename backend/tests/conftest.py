@@ -3,6 +3,11 @@ import base64
 import os
 import tempfile
 from pathlib import Path
+
+# Production/development startup requires the real external stack. Tests opt
+# into the only supported SQLite profile before importing application modules.
+os.environ["ENVIRONMENT"] = "test"
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

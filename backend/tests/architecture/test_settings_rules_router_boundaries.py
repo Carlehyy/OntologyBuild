@@ -323,6 +323,11 @@ def test_workflow_dependencies_are_resolved_at_request_time(
     assert captured["args"] == (body, database)
     assert captured["kwargs"] == {
         "environment": settings_router.settings.environment,
+        "managed_api_url": settings_router.settings.n8n_api_url,
+        "managed_api_key": settings_router.settings.n8n_api_key,
+        "managed_timeout_seconds": (
+            settings_router.settings.n8n_timeout_seconds
+        ),
         "get_workflow_config_fn": seams[
             "_get_workflow_config"
         ],

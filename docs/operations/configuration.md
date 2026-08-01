@@ -10,9 +10,79 @@
 - `production.dependencies.env`：当前自动部署读取的生产第三方依赖清单；
 - `production.dependencies.example.env`：不含秘密的人工校验与后续迁移模板。
 
-系统环境变量优先级最高。本地完整模式由配置中心生成统一环境文件；生产部署
-会先保留服务器已有 `.env`，再把当前版本中的 `production.dependencies.env`
-合并进去。
+直接启动应用进程时，系统环境变量仍按框架规则具有最高优先级。本地完整模式由
+配置中心生成统一环境文件；生产部署则先保留服务器已有 `.env`，再把当前版本
+中的 `production.dependencies.env` 合并进去，并以合并后的 `.env` 作为唯一
+Compose 权威。`scripts/deploy-prod.sh` 的所有 Compose 调用都会清除宿主 shell
+中同名的环境、端口、依赖、镜像及严格镜像校验变量，避免已验证配置被临时
+`export` 静默覆盖。
+
+生产清单只保留运行时实际消费的连接事实：PostgreSQL 以 `DATABASE_URL` 为
+连接权威，且服务器最终 `.env` 统一使用 `postgresql://`；部署入口会兼容读取
+旧清单中的 `postgres://` 与 `postgresql+psycopg2://`，但在校验和启动前规范化
+为 `postgresql://`，不会把别名继续写入运行配置。MinIO 以
+`MINIO_ENDPOINT`（S3 API 端口）为连接权威；历史
+`POSTGRES_HOST`、`POSTGRES_PORT`、`MINIO_CONSOLE_URL` 字段部署时仅为旧清单
+兼容而忽略，不再写入运行环境。n8n 调用超时由 `N8N_TIMEOUT_SECONDS` 控制，
+生产模板和 Compose 默认均为 30 秒。
+
+Redis 客户端连接以 `REDIS_URL` 为唯一清单权威。使用随 Compose 启动的 Redis
+时填写 `redis://:<password>@redis:6379/0`，部署脚本从同一 URL 推导服务端
+`requirepass`；内置密码必须至少 16 位，并只使用字母、数字、`.`、`_`、`~`、
+`-`，无需 URL 转义。旧清单中精确的 `redis://redis:6379/0` 会在服务器生成态
+安全升级并同时持久化服务密码和带密码 URL。外部 Redis（包括 `rediss://`）的
+URL 保持原样；Compose 仍启动的内置 Redis 使用独立本地密码，但 backend 和
+worker 不会连接它。
+
+## 必需运行依赖
+
+| 依赖 | 运行责任 | 未就绪行为 |
+|---|---|---|
+| PostgreSQL | 平台主数据库、Alembic、发布与审计事实 | 启动/readiness 失败；不切平台 SQLite |
+| Redis + Celery worker | durable 入队、异步调度和后台执行 | readiness/入队失败；异步路径不自动改在 API 线程执行，显式同步 API 保持原契约 |
+| Neo4j | 图查询、分析和可重建发布投影 | 图接口返回明确 503，发布/投影 fail closed；不切 NetworkX/SQL 图 |
+| MinIO | 新文件与对象的权威对象存储 | 写入失败；不切本地对象目录 |
+| n8n | 数据管家工作流执行 | 启动/readiness 失败，不按可选增强跳过 |
+| Chromium CDP | 浏览器接管与数据管家浏览器会话 | `STEWARD_BROWSER_CDP_URL` 只接受 HTTP(S) 服务根地址；启动配置必需，不可达不杀死 API liveness，但 readiness 失败，不用 mock 冒充就绪 |
+
+外部依赖必须在本地配置中心或生产只读校验中提供完整配置，并以真实服务探针
+验证；API 与 worker 启动后还必须通过 `/health/ready` 和 Celery ping。
+`/health/live` 只证明 API 进程存活，不能替代上述检查。
+
+ChromaDB 已从依赖、配置模型和运行链路移除。旧 Chroma 配置不应继续复制到新
+环境；关键词搜索使用 PostgreSQL，语义搜索和统一 semantic 模式返回 501。
+LLM 不参与启动门禁：平台就绪后，管理员在“模型配置”页面按需添加提供商、
+模型和凭据。
+
+n8n 在非测试环境中只有一个配置权威：启动环境中的 `N8N_API_URL`、
+`N8N_API_KEY` 与 `N8N_TIMEOUT_SECONDS`（本地由配置中心生成）。启动同步仅将
+这组值镜像到历史数据库记录，运行时客户端、系统设置读取和“测试连接”均使用
+启动值；`PUT /api/v1/settings/workflow-config` 返回 409，不允许用数据库/UI
+覆盖。系统设置的“工作流配置”页因此只读展示脱敏状态并保留连接测试。修改后
+必须重启 API 与 worker，使所有进程同时切换到同一配置。只有
+`ENVIRONMENT=test` 可注入并持久化隔离 n8n 配置，以支持确定性测试。
+`N8N_API_URL` 的新模板统一填写 n8n 服务根地址（例如
+`https://n8n.example.com`）；运行时会规范化为 `/api/v1`。历史清单中已经带
+`/api/v1` 的地址继续兼容，不要求为本次升级改写。
+
+非测试 API 的 lifespan 会先完成 PostgreSQL、Redis、Neo4j、MinIO、n8n 的
+真实连接探测，再初始化 Neo4j 索引、修复非 ready 本体投影，最后才启动 API
+Hub、Sentinel、数据调度器和 MCP 会话。任一阻塞型依赖或投影修复失败都不会
+留下后台 worker。Chromium CDP 同样会在此时探测，但只记录提示并允许 API
+进程提供诊断；`/health/ready` 在 CDP 恢复前仍返回 503。
+CDP 配置只填写服务根地址（例如 `http://browser:9222`）；平台会自行请求
+`/json/version`。带该 discovery 路径、查询参数、fragment 或 URL 用户信息的
+地址会在配置阶段被拒绝，避免配置校验通过后实际探测到重复路径。
+
+明确例外只有：API Hub 自有 SQLite；`ENVIRONMENT=test` 的隔离 SQLite 与 n8n
+配置注入；历史 `local://` 对象的只读读取/迁移。新平台数据不写入这些兼容路径。
+
+早期开发模式曾有一段时间会把 DatasetVersion、FileAsset、Media、FileConnector
+等平台对象写到数据库中“系统设置”保存的 MinIO 端点。该端点现在只通过显式的
+legacy read/list/delete 适配器参与回归时代对象迁移：仅当权威环境 MinIO 已正常
+响应“对象不存在”（DatasetVersion 还允许 checksum 不匹配）时才会尝试，环境
+MinIO 连接/鉴权/服务故障不会触发它。适配器不暴露上传能力；迁移完旧对象并核验
+内容后，所有新对象继续只写环境 `MINIO_*` 所指向的端点。
 
 ## 当前自动部署兼容策略
 
@@ -67,8 +137,9 @@ Environment Secrets/Variables 时，使用
 [部署手册](./deployment.md#首次登录与管理员密码恢复)。
 
 镜像变量来自服务器最终合并后的 `.env`。其中
-`STRICT_IMAGE_DIGESTS=true` 会要求全部镜像使用 `@sha256`；只有显式导出同名
-进程环境变量时才覆盖 `.env`，合法值为 `true/false`、`yes/no` 或 `1/0`。
+`STRICT_IMAGE_DIGESTS=true` 会要求全部镜像使用 `@sha256`，合法值为
+`true/false`、`yes/no` 或 `1/0`。部署入口不接受宿主 shell 中的同名变量覆盖
+`.env`；如需改变策略，必须先修改持久配置并重新执行完整校验。
 
 ## 安全要求
 
@@ -76,5 +147,8 @@ Environment Secrets/Variables 时，使用
 - 现有跟踪清单只作为仓库所有者批准的临时兼容例外，不得复制到其他文件；
 - 新增或轮换凭据时应优先规划逐项 Secret，使其可独立轮换和撤销；
 - 生产依赖变化必须同时更新部署验证和本说明；
+- 内置 Redis 的 `REDIS_URL` 与 `requirepass` 必须由部署脚本一次性规范化，
+  禁止在服务器 `.env` 中手工维护两份不一致的密码；
+- 不得用测试 SQLite、API Hub SQLite 或历史 `local://` 兼容路径绕过必需依赖；
 - 删除当前文件前必须先完成新配置源迁移和部署验证；删除工作树文件不会清理
   Git 历史。

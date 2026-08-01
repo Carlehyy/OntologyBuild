@@ -7,12 +7,16 @@ logger = logging.getLogger(__name__)
 
 # 核心索引定义
 INDEXES = [
-    # 按 ontology_id 过滤（所有 Entity 节点都有此属性）
-    "CREATE INDEX entity_ontology_id IF NOT EXISTS FOR (n:Entity) ON (n.ontology_id)",
-    # 按实体 id 查找（MERGE 主键）
-    "CREATE INDEX entity_id IF NOT EXISTS FOR (n:Entity) ON (n.id)",
+    # 全量重建只写 OntologyEntity；projection_key 是跨本体安全的 MERGE 键。
+    "CREATE INDEX ontology_entity_projection_key IF NOT EXISTS FOR (n:OntologyEntity) ON (n.projection_key)",
+    # 按 ontology_id 过滤单个本体。
+    "CREATE INDEX ontology_entity_ontology_id IF NOT EXISTS FOR (n:OntologyEntity) ON (n.ontology_id)",
+    # id 是对外稳定身份，只在本体内唯一。
+    "CREATE INDEX ontology_entity_id IF NOT EXISTS FOR (n:OntologyEntity) ON (n.id)",
     # 按名称搜索（关键词查找）
-    "CREATE INDEX entity_name_cn IF NOT EXISTS FOR (n:Entity) ON (n.name_cn)",
+    "CREATE INDEX ontology_entity_name_cn IF NOT EXISTS FOR (n:OntologyEntity) ON (n.name_cn)",
+    # label_filter 的对外语义是业务对象类型，实际按 type 属性过滤。
+    "CREATE INDEX ontology_entity_type IF NOT EXISTS FOR (n:OntologyEntity) ON (n.type)",
 ]
 
 # Neo4j 的属性范围索引必须指定节点标签。不能用

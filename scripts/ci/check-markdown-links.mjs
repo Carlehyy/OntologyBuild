@@ -421,7 +421,12 @@ function discoverMarkdownFiles(startDirectory) {
       }
       const absolutePath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!ignoredDirectoryNames.has(entry.name)) {
+        const repositoryPath = normalizeRepositoryPath(absolutePath);
+        // Claude/Codex local worktree snapshots are excluded from Git and may
+        // contain documentation from unrelated branches. They are not part of
+        // the repository being validated.
+        const isLocalAgentWorktreeRoot = repositoryPath === '.claude/worktrees';
+        if (!ignoredDirectoryNames.has(entry.name) && !isLocalAgentWorktreeRoot) {
           visit(absolutePath);
         }
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {

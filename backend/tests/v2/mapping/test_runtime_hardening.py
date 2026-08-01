@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -170,6 +171,216 @@ def test_postgres_mapping_build_lock_spans_business_commits_on_dedicated_connect
     assert connection.closed is True
 
 
+def test_postgres_mapping_build_lock_never_waits_on_business_pool(monkeypatch):
+    from app.ontologies import runtime_fence
+    from sqlalchemy.pool import NullPool
+
+    calls: list[tuple[object, str, dict]] = []
+
+    class Result:
+        @staticmethod
+        def scalar():
+            return True
+
+    class FakeConnection:
+        def execute(self, statement, params):
+            calls.append((self, str(statement), params))
+            return Result()
+
+        @staticmethod
+        def commit():
+            return None
+
+        @staticmethod
+        def invalidate():
+            return None
+
+        @staticmethod
+        def close():
+            return None
+
+    connection = FakeConnection()
+    source_creator = object()
+
+    class DedicatedEngine:
+        @staticmethod
+        def connect():
+            return connection
+
+    class BusinessEngine:
+        dialect = SimpleNamespace(name="postgresql")
+        url = object()
+        pool = SimpleNamespace(_creator=source_creator)
+
+        @staticmethod
+        def connect():
+            raise AssertionError("business pool must not provide advisory owner")
+
+    business_engine = BusinessEngine()
+
+    class FakeSession:
+        @staticmethod
+        def get_bind():
+            return business_engine
+
+    created: list[tuple[object, dict]] = []
+
+    def fake_create_engine(url, **kwargs):
+        created.append((url, kwargs))
+        return DedicatedEngine()
+
+    monkeypatch.setattr(runtime_fence, "create_engine", fake_create_engine)
+    runtime_fence._dispose_advisory_engines()
+
+    with _ontology_build_lock(FakeSession(), "ontology-null-pool-lock"):
+        pass
+
+    assert len(created) == 1
+    assert created[0][0] is business_engine.url
+    assert created[0][1]["creator"] is source_creator
+    assert created[0][1]["poolclass"] is NullPool
+    assert len(calls) == 2
+
+
+def test_postgres_mapping_build_lock_bounds_and_disposes_dedicated_connections(
+    monkeypatch,
+):
+    from app.ontologies import runtime_fence
+
+    runtime_fence._dispose_advisory_engines()
+    monkeypatch.setattr(
+        runtime_fence,
+        "_ADVISORY_CONNECTION_SLOTS",
+        threading.BoundedSemaphore(2),
+    )
+
+    state_guard = threading.Lock()
+    two_connections_open = threading.Event()
+    release_owners = threading.Event()
+    start_barrier = threading.Barrier(5)
+    state = {
+        "active": 0,
+        "maximum": 0,
+        "connects": 0,
+        "disposed": 0,
+    }
+
+    class Result:
+        @staticmethod
+        def scalar():
+            return True
+
+    class FakeConnection:
+        closed = False
+
+        @staticmethod
+        def execute(_statement, _params):
+            return Result()
+
+        @staticmethod
+        def commit():
+            return None
+
+        @staticmethod
+        def invalidate():
+            return None
+
+        def close(self):
+            if self.closed:
+                return
+            self.closed = True
+            with state_guard:
+                state["active"] -= 1
+
+    class DedicatedEngine:
+        def connect(self):
+            with state_guard:
+                state["active"] += 1
+                state["connects"] += 1
+                state["maximum"] = max(
+                    state["maximum"],
+                    state["active"],
+                )
+                if state["active"] == 2:
+                    two_connections_open.set()
+            return FakeConnection()
+
+        @staticmethod
+        def dispose():
+            with state_guard:
+                state["disposed"] += 1
+
+    source_creator = object()
+
+    class BusinessEngine:
+        dialect = SimpleNamespace(name="postgresql")
+        url = object()
+        pool = SimpleNamespace(_creator=source_creator)
+
+        @staticmethod
+        def connect():
+            raise AssertionError(
+                "business pool must not provide advisory owner"
+            )
+
+    business_engine = BusinessEngine()
+
+    class FakeSession:
+        @staticmethod
+        def get_bind():
+            return business_engine
+
+    dedicated_engine = DedicatedEngine()
+    create_calls = 0
+
+    def fake_create_engine(_url, **_kwargs):
+        nonlocal create_calls
+        create_calls += 1
+        return dedicated_engine
+
+    monkeypatch.setattr(runtime_fence, "create_engine", fake_create_engine)
+    errors: list[BaseException] = []
+
+    def lock_one(index: int) -> None:
+        try:
+            start_barrier.wait(timeout=5)
+            with runtime_fence._ontology_build_lock(
+                FakeSession(),
+                f"bounded-advisory-{index}",
+            ):
+                if not release_owners.wait(timeout=5):
+                    raise TimeoutError("test did not release advisory owners")
+        except BaseException as exc:  # keep thread failures visible to pytest
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=lock_one, args=(index,))
+        for index in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    start_barrier.wait(timeout=5)
+    assert two_connections_open.wait(timeout=5)
+    with state_guard:
+        assert state["maximum"] == 2
+        assert state["active"] == 2
+
+    release_owners.set()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert errors == []
+    assert create_calls == 1
+    assert state["connects"] == 4
+    assert state["maximum"] == 2
+    assert state["active"] == 0
+
+    runtime_fence._dispose_advisory_engines()
+    assert state["disposed"] == 1
+    assert runtime_fence._ADVISORY_ENGINES == {}
+
+
 def test_strict_mapping_source_has_no_ten_thousand_row_cap(
         db, admin_user, lake_storage):
     rows = [{"id": str(i), "value": f"v-{i}"} for i in range(10_001)]
@@ -209,13 +420,11 @@ def test_build_all_does_not_slice_strict_source_rows(db, admin_user, lake_storag
     with patch(
         "app.ontologies.mappings.mapping_service.load_mapping_source_rows",
         return_value=(rows, version),
-    ), patch.object(MappingService, "_write_neo4j", return_value=len(rows)), \
-         patch.object(MappingService, "_write_v1_entities", return_value=len(rows)), \
+    ), patch.object(MappingService, "_write_v1_entities", return_value=len(rows)), \
          patch.object(MappingService, "_infer_and_write_relations", return_value=[]), \
          patch.object(MappingService, "_process_link_mappings", return_value=[]), \
          patch.object(MappingService, "_discover_logic_rules", return_value={"total_v2": 0}), \
          patch.object(MappingService, "_discover_action_types", return_value={"total_v2": 0}), \
-         patch("app.services.v2.vector.chroma_service.ChromaService", return_value=MagicMock()), \
          patch(
              "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
              return_value={"instances": len(rows)},
@@ -279,42 +488,40 @@ def test_mapping_reapply_reconciles_deleted_source_rows_with_tombstone(
     db.commit()
 
     service = MappingService(db)
-    with patch.object(MappingService, "_write_neo4j", return_value=0), \
-         patch.object(MappingService, "_delete_neo4j_entities", return_value=1):
-        service.apply_mapping(mapping.id, [
-            {"id": "A", "value": "old-a"},
-            {"id": "B", "value": "old-b"},
-        ])
-        stale_id = service._stable_row_id(mapping, {"id": "A"}, "id")
-        formal_instance_id = db.query(ObjectInstance).filter(
-            ObjectInstance.ontology_id == ontology.id,
-            ObjectInstance.external_id == stale_id,
-        ).one().id
+    service.apply_mapping(mapping.id, [
+        {"id": "A", "value": "old-a"},
+        {"id": "B", "value": "old-b"},
+    ])
+    stale_id = service._stable_row_id(mapping, {"id": "A"}, "id")
+    formal_instance_id = db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == ontology.id,
+        ObjectInstance.external_id == stale_id,
+    ).one().id
 
-        result = service.apply_mapping(mapping.id, [
-            {"id": "B", "value": "new-b"},
-            {"id": "C", "value": "new-c"},
-        ])
-        assert result["stale_entities_removed"] == 1
-        assert db.query(Entity).filter(Entity.id == stale_id).first() is None
-        assert db.query(ObjectInstance).filter(
-            ObjectInstance.id == formal_instance_id,
-        ).first() is None
+    result = service.apply_mapping(mapping.id, [
+        {"id": "B", "value": "new-b"},
+        {"id": "C", "value": "new-c"},
+    ])
+    assert result["stale_entities_removed"] == 1
+    assert db.query(Entity).filter(Entity.id == stale_id).first() is None
+    assert db.query(ObjectInstance).filter(
+        ObjectInstance.id == formal_instance_id,
+    ).first() is None
 
-        service.apply_mapping(mapping.id, [
-            {"id": "A", "value": "restored-a"},
-            {"id": "B", "value": "new-b"},
-            {"id": "C", "value": "new-c"},
-        ])
-        assert db.query(ObjectInstance).filter(
-            ObjectInstance.id == formal_instance_id,
-        ).one().properties["value"] == "restored-a"
+    service.apply_mapping(mapping.id, [
+        {"id": "A", "value": "restored-a"},
+        {"id": "B", "value": "new-b"},
+        {"id": "C", "value": "new-c"},
+    ])
+    assert db.query(ObjectInstance).filter(
+        ObjectInstance.id == formal_instance_id,
+    ).one().properties["value"] == "restored-a"
 
-        second_delete = service.apply_mapping(mapping.id, [
-            {"id": "B", "value": "new-b"},
-            {"id": "C", "value": "new-c"},
-        ])
-        assert second_delete["stale_entities_removed"] == 1
+    second_delete = service.apply_mapping(mapping.id, [
+        {"id": "B", "value": "new-b"},
+        {"id": "C", "value": "new-c"},
+    ])
+    assert second_delete["stale_entities_removed"] == 1
 
     existence_facts = db.query(PropertyFact).filter(
         PropertyFact.ontology_id == ontology.id,
@@ -381,8 +588,7 @@ def test_formal_projection_failure_marks_mapping_failed(
     ontology, _, mapping = _source_graph(db, admin_user, rows=[{"id": "1"}])
     service = MappingService(db)
 
-    with patch.object(MappingService, "_write_neo4j", return_value=1), \
-         patch.object(MappingService, "_write_v1_entities", return_value=1), \
+    with patch.object(MappingService, "_write_v1_entities", return_value=1), \
          patch(
              "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
              side_effect=RuntimeError("formal unavailable"),
@@ -414,8 +620,6 @@ def test_applied_projection_with_sentinel_failure_is_not_reported_success(
     }
 
     with patch.object(
-        MappingService, "_write_neo4j", return_value=1,
-    ), patch.object(
         MappingService, "_write_v1_entities", return_value=1,
     ), patch(
         "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
@@ -479,8 +683,6 @@ def test_unexpected_sentinel_dispatch_exception_preserves_applied_projection(
         db, admin_user, rows=[{"id": "1"}])
 
     with patch.object(
-        MappingService, "_write_neo4j", return_value=1,
-    ), patch.object(
         MappingService, "_write_v1_entities", return_value=1,
     ), patch(
         "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
@@ -538,20 +740,18 @@ def test_build_all_failure_rolls_back_entities_and_stale_relation_deletes(
     assert "formal validation rejected" in failed.field_mapping["__last_apply_error__"]
 
 
-def test_production_derived_projection_failure_leaves_repairable_fence(
-        db, admin_user, lake_storage, monkeypatch):
+@pytest.mark.parametrize("runtime_environment", ["development", "production"])
+def test_runtime_derived_projection_failure_leaves_repairable_fence(
+        db, admin_user, lake_storage, monkeypatch, runtime_environment):
     from app.config import settings
     from app.models.entity import Entity
 
     ontology, _, mapping = _source_graph(
         db, admin_user, rows=[{"id": "1", "value": "committed"}])
-    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "environment", runtime_environment)
     monkeypatch.setattr(
         MappingService, "_rebuild_neo4j_projection",
         lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        MappingService, "_rebuild_chroma_projection",
-        lambda *_args, **_kwargs: 1)
 
     with pytest.raises(MappingApplyError, match="已阻断发布和动作执行"):
         MappingService(db).build_all(
@@ -560,6 +760,35 @@ def test_production_derived_projection_failure_leaves_repairable_fence(
     db.expire_all()
     # SQL/Formal is the committed repair source; the failed status is the fence
     # that keeps runtime consumers away until an idempotent rebuild succeeds.
+    assert db.query(Entity).filter(
+        Entity.ontology_id == ontology.id).count() == 1
+    failed = db.query(OntologyMapping).filter_by(id=mapping.id).one()
+    assert failed.status == "failed"
+    assert "Neo4j projection rebuild failed" in failed.field_mapping["__last_apply_error__"]
+
+
+def test_development_single_apply_keeps_repairable_fence_when_neo4j_fails(
+        db, admin_user, lake_storage, monkeypatch):
+    from app.config import settings
+    from app.models.entity import Entity
+
+    ontology, _, mapping = _source_graph(
+        db, admin_user, rows=[{"id": "1", "value": "committed"}])
+    monkeypatch.setattr(settings, "environment", "development")
+
+    with patch.object(
+        MappingService,
+        "_rebuild_neo4j_projection",
+        return_value=False,
+    ):
+        with pytest.raises(MappingApplyError, match="已阻断发布和动作执行"):
+            MappingService(db).apply_mapping(
+                mapping.id,
+                [{"id": "1", "value": "committed"}],
+                ontology_id=ontology.id,
+            )
+
+    db.expire_all()
     assert db.query(Entity).filter(
         Entity.ontology_id == ontology.id).count() == 1
     failed = db.query(OntologyMapping).filter_by(id=mapping.id).one()
@@ -1184,8 +1413,7 @@ def test_apply_refuses_stale_source_version_after_concurrent_publish(
         dataset.id, _csv_bytes([{"id": "1", "value": "v2"}]), rowcount=1)
     service = MappingService(db)
 
-    with patch.object(MappingService, "_write_neo4j", return_value=1), \
-         patch.object(MappingService, "_write_v1_entities", return_value=1), \
+    with patch.object(MappingService, "_write_v1_entities", return_value=1), \
          patch(
              "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
              return_value={"instances": 1},
@@ -1516,8 +1744,6 @@ def test_mapping_task_cold_worker_path_runs_real_build_all(
         "app.database.SessionLocal", side_effect=worker_session_factory,
     ), patch.object(
         MappingService, "_rebuild_neo4j_projection", return_value=True,
-    ), patch.object(
-        MappingService, "_rebuild_chroma_projection", return_value=1,
     ):
         # high establishes the entered edge.
         mapping_apply_task.run(mapping.id, ontology.id)

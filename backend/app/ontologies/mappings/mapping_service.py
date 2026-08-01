@@ -1,4 +1,4 @@
-"""Ontology Mapping 执行服务 — PRD v1.1: Entity Mapping + Relation推断 + ChromaDB写入"""
+"""Ontology Mapping 执行服务 — Entity Mapping + Relation inference."""
 from __future__ import annotations
 import logging
 from sqlalchemy.orm import Session
@@ -414,7 +414,12 @@ class MappingService(
             # transaction.  A mid-flight commit used to leave partial entities
             # behind when formal validation failed, even though the mapping was
             # marked failed.
-            mapping.status = "applied"
+            # The relational/Formal source is durable before the external
+            # projection runs, but runtime readers must see a fence until
+            # Neo4j has been reconciled successfully.
+            mapping.status = "projecting"
+            from app.ontologies.projection_state import mark_projecting
+            mark_projecting(self._db, mapping.ontology_id)
             fm = dict(mapping.field_mapping or {})
             fm.pop("__last_apply_error__", None)
             if source_dataset_version_id:
@@ -437,12 +442,44 @@ class MappingService(
             raise MappingApplyError(
                 f"Mapping {mapping_id} 正规投影失败，未标记为 applied：{e}") from e
 
-        # Neo4j is a rebuildable read projection, not the commit authority.
-        # Write it only after the relational source-of-truth transaction commits;
-        # failure is observable as a warning and can be repaired idempotently.
-        neo4j_deleted = self._delete_neo4j_entities(
-            mapping.ontology_id, stale_entity_ids)
-        neo4j_count = self._write_neo4j(mapping.entity_class, entities)
+        # Neo4j cannot participate in the SQL transaction. Reconcile it only
+        # after truth commits, and keep the mapping fenced until it succeeds.
+        # Do not expose a partial per-label write between SQL commit and the
+        # validated full rebuild. The durable project fence blocks readers.
+        neo4j_deleted = len(stale_entity_ids)
+        neo4j_count = 0
+        from app.config import settings
+        projection_ready = True
+        if settings.environment != "test":
+            projection_ready = self._rebuild_neo4j_projection(
+                mapping.ontology_id)
+        if not projection_ready:
+            message = "Neo4j projection rebuild failed"
+            from app.ontologies.sentinels.cdc import discard_captured_changes
+            discard_captured_changes(self._db)
+            failed = self._db.query(OntologyMapping).filter(
+                OntologyMapping.id == mapping_id).first()
+            if failed is not None:
+                failed.status = "failed"
+                fm = dict(failed.field_mapping or {})
+                fm["__last_apply_error__"] = message
+                failed.field_mapping = fm
+            from app.ontologies.projection_state import mark_failed
+            mark_failed(self._db, mapping.ontology_id, message)
+            self._db.commit()
+            raise MappingApplyError(
+                "关系型/Formal 投影已提交，但 Neo4j 查询投影未完成；"
+                "已阻断发布和动作执行，重试映射即可修复")
+
+        applied = self._db.query(OntologyMapping).filter(
+            OntologyMapping.id == mapping_id).first()
+        if applied is not None:
+            applied.status = "applied"
+        from app.ontologies.projection_state import mark_ready
+        mark_ready(self._db, mapping.ontology_id)
+        self._db.commit()
+        if projection_ready:
+            neo4j_count = len(entities)
         sentinel_dispatch = self._dispatch_captured_sentinel_changes(
             mapping.ontology_id)
 
@@ -453,8 +490,13 @@ class MappingService(
                 "stale_neo4j_nodes_removed": neo4j_deleted,
                 "source_dataset_version_id": source_dataset_version_id,
                 "sentinel_dispatch": sentinel_dispatch,
-                "warnings": (["Neo4j 不可用或未写入节点，正规本体投影已完成"]
-                             if entities and neo4j_count == 0 else []),
+                "warnings": (
+                    ["测试环境未写入 Neo4j 查询投影"]
+                    if settings.environment == "test"
+                    and entities
+                    and neo4j_count == 0
+                    else []
+                ),
                 "errors": 0, "total_rows": len(data)}
 
     def _dispatch_captured_sentinel_changes(
@@ -488,15 +530,15 @@ class MappingService(
             raise MappingSentinelDispatchError(ontology_id, dispatch)
         return dispatch
 
-    # ── 全量构建：Entity → Relation → ChromaDB ────────────────────────
+    # ── 全量构建：Entity → Relation → Formal/Neo4j ────────────────────
 
     def build_all(self, ontology_id: str, *, require_approved: bool = False) -> dict:
         """Rebuild one ontology as one relational transaction.
 
         The ontology project row is the serialization point shared with release
         publication.  Entity, relation, discovered rule/action and Formal writes
-        either commit together or are rolled back together.  Neo4j/Chroma are
-        rebuilt only from the committed relational truth afterwards.
+        either commit together or are rolled back together. Neo4j is rebuilt
+        only from the committed relational truth afterwards.
         """
         with _ontology_build_lock(self._db, ontology_id):
             return self._build_all_locked(
@@ -676,8 +718,8 @@ class MappingService(
             logic_result = {"total_v2": 0, "skipped": "released_schema"}
             action_result = {"total_v2": 0, "skipped": "released_schema"}
 
-        # Chroma/Neo4j are derived projections.  They are rebuilt only after the
-        # relational + Formal transaction succeeds below, never mid-transaction.
+        # Neo4j is a derived projection. It is rebuilt only after the relational
+        # + Formal transaction succeeds below, never mid-transaction.
 
         # Phase 5: 投影到正规本体 (Projection to Formal Ontology)
         # 把已落地的 Entity / Relation 投影成 ObjectType / ObjectInstance /
@@ -704,17 +746,15 @@ class MappingService(
                 if source_version_id:
                     fm["__applied_dataset_version_id__"] = source_version_id
                 applied.field_mapping = fm
+        from app.ontologies.projection_state import mark_projecting
+        mark_projecting(self._db, ontology_id)
         self._db.commit()
         neo4j_rebuilt = self._rebuild_neo4j_projection(ontology_id)
-        chroma_result = self._rebuild_chroma_projection(ontology_id)
-        chroma_count = chroma_result if chroma_result is not None else 0
         from app.config import settings
         projection_errors = []
         if not neo4j_rebuilt:
             projection_errors.append("Neo4j projection rebuild failed")
-        if chroma_result is None:
-            projection_errors.append("Chroma projection rebuild failed")
-        if projection_errors and settings.environment == "production":
+        if projection_errors and settings.environment != "test":
             message = "; ".join(projection_errors)
             for mapping_id in mapping_meta:
                 failed = self._db.query(OntologyMapping).filter(
@@ -724,6 +764,8 @@ class MappingService(
                     fm = dict(failed.field_mapping or {})
                     fm["__last_apply_error__"] = message
                     failed.field_mapping = fm
+            from app.ontologies.projection_state import mark_failed
+            mark_failed(self._db, ontology_id, message)
             self._db.commit()
             raise MappingApplyError(
                 "关系型/Formal 投影已提交，但派生查询投影未完成；"
@@ -734,6 +776,8 @@ class MappingService(
                 OntologyMapping.id == mapping_id).first()
             if applied is not None:
                 applied.status = "applied"
+        from app.ontologies.projection_state import mark_ready
+        mark_ready(self._db, ontology_id)
         self._db.commit()
         sentinel_dispatch = self._dispatch_captured_sentinel_changes(
             ontology_id)
@@ -748,7 +792,6 @@ class MappingService(
             "logic_discovery": logic_result,
             "action_discovery": action_result,
             "formal_projection": formal_projection,
-            "chroma_entities_written": chroma_count,
             "neo4j_projection_rebuilt": neo4j_rebuilt,
             "projection_warnings": projection_errors,
             "sentinel_dispatch": sentinel_dispatch,

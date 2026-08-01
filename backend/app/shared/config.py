@@ -1,5 +1,4 @@
 import ipaddress
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import Field
@@ -20,36 +19,20 @@ class Settings(BaseSettings):
     local_frontend_host: str = "127.0.0.1"
     local_frontend_port: int = Field(default=5173, ge=1, le=65535)
 
-    # The local configuration center may manage these two database-backed
-    # integrations.  They remain disabled unless explicitly opted in and are
-    # ignored outside the development environment.
-    local_config_managed: bool = False
-    local_n8n_api_url: str = ""
-    local_n8n_api_key: str = ""
-    local_n8n_timeout_seconds: int = Field(default=10, ge=1, le=300)
-    local_llm_name: str = "OpenOntology Local Default"
-    local_llm_provider: str = "compatible"
-    local_llm_api_base: str = ""
-    local_llm_api_key: str = ""
-    local_llm_model: str = ""
+    # The configuration center provisions the required n8n integration into
+    # its database-backed runtime record during startup. LLM providers are
+    # intentionally configured later through the model-management UI.
+    n8n_api_url: str = ""
+    n8n_api_key: str = ""
+    n8n_timeout_seconds: int = Field(default=30, ge=3, le=120)
 
+    # SQLite is retained only for the explicit test environment. Every normal
+    # application startup validates PostgreSQL before importing the app.
     database_url: str = "sqlite:////tmp/ontoprompt.db"
     redis_url: str = "redis://localhost:6379/0"
-    # Redis/Celery is optional. Spreadsheet imports run in the API process by
-    # default so a plain Uvicorn installation never waits for a broker timeout.
-    # Set DATASET_IMPORT_USE_CELERY=true only when a worker is deployed.
-    dataset_import_use_celery: bool = False
     secret_key: str = "dev-secret-key"
     encryption_key: str = ""
     cors_allowed_origins: str = "*"
-    # Compatibility-first rollout: existing installations may still have the
-    # historical example credentials. Enable only after rotating server .env
-    # values and, when applicable, re-encrypting stored connector credentials.
-    strict_production_config: bool = False
-    # Dedicated production deployments can make PostgreSQL, Redis, Neo4j and
-    # MinIO mandatory. In this mode startup and deployment fail closed instead
-    # of silently selecting SQLite, synchronous jobs or local object storage.
-    require_external_dependencies: bool = False
     first_admin_user: str = "admin"
     first_admin_password: str = "admin123"
     uploads_dir: str = "./uploads"
@@ -142,11 +125,8 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_use_ssl: bool = False
-    # MinIO remains preferred.  When enabled, local fallback must point to a
-    # durable shared volume in production (the production Compose default is
-    # /uploads/object-storage, mounted by both backend and Celery).
-    storage_local_fallback: bool = True
-    # Relative paths are resolved against the backend project root.
+    # Retained only so legacy local:// objects can be migrated/read. New writes
+    # always require MinIO and never select this directory as a fallback.
     storage_local_dir: str = "storage"
 
     # n8n never receives long-lived MinIO credentials.  Every invocation gets
@@ -176,9 +156,6 @@ class Settings(BaseSettings):
     # provision users through authenticated administrative flows.
     allow_public_registration: bool = True
 
-    chroma_host: str = "localhost"
-    chroma_port: int = 8001
-
     model_config = SettingsConfigDict(
         # Later dotenv files override earlier ones.  Real process environment
         # variables still have the highest pydantic-settings priority.
@@ -188,45 +165,9 @@ class Settings(BaseSettings):
     )
 
 
-_LOCAL_DEPENDENCY_HOSTS = {
-    "localhost",
-    "db",
-    "redis",
-    "neo4j",
-    "minio",
-}
-
-
-def _is_local_dependency_host(hostname: str | None) -> bool:
-    if not hostname:
-        return True
-    host = hostname.strip().lower()
-    if host in _LOCAL_DEPENDENCY_HOSTS:
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return address.is_loopback or address.is_unspecified
-
-
 def required_dependency_config_errors(current: Settings) -> list[str]:
-    """Return errors that would allow required services to degrade locally."""
-    if not current.require_external_dependencies:
-        return []
-
+    """Validate the required runtime stack for every non-test startup."""
     errors: list[str] = []
-    if current.storage_local_fallback:
-        errors.append(
-            "STORAGE_LOCAL_FALLBACK=false when "
-            "REQUIRE_EXTERNAL_DEPENDENCIES=true"
-        )
-    if not current.dataset_import_use_celery:
-        errors.append(
-            "DATASET_IMPORT_USE_CELERY=true when "
-            "REQUIRE_EXTERNAL_DEPENDENCIES=true"
-        )
-
     try:
         database = urlsplit(current.database_url)
         database.port
@@ -234,15 +175,15 @@ def required_dependency_config_errors(current: Settings) -> list[str]:
         database = None
     if (
         database is None
-        or database.scheme not in {"postgresql", "postgres"}
-        or _is_local_dependency_host(database.hostname)
+        or database.scheme != "postgresql"
+        or not database.hostname
         or not database.username
-        or database.password is None
+        or not database.password
         or database.path in {"", "/"}
     ):
         errors.append(
-            "DATABASE_URL must reference an authenticated external "
-            "PostgreSQL database"
+            "DATABASE_URL must use postgresql:// and reference an "
+            "authenticated PostgreSQL database"
         )
 
     try:
@@ -253,11 +194,12 @@ def required_dependency_config_errors(current: Settings) -> list[str]:
     if (
         redis_url is None
         or redis_url.scheme not in {"redis", "rediss"}
-        or _is_local_dependency_host(redis_url.hostname)
-        or redis_url.password is None
+        or not redis_url.hostname
+        or redis_url.port is None
+        or not redis_url.password
     ):
         errors.append(
-            "REDIS_URL must reference an authenticated external Redis"
+            "REDIS_URL must reference authenticated Redis with an explicit port"
         )
 
     try:
@@ -267,14 +209,15 @@ def required_dependency_config_errors(current: Settings) -> list[str]:
         neo4j = None
     if (
         neo4j is None
-        or neo4j.scheme not in {"bolt", "bolt+s", "neo4j", "neo4j+s"}
-        or _is_local_dependency_host(neo4j.hostname)
+        or neo4j.scheme not in {
+            "bolt", "bolt+s", "bolt+ssc", "neo4j", "neo4j+s", "neo4j+ssc"
+        }
+        or not neo4j.hostname
+        or neo4j.port is None
         or not current.neo4j_user
         or not current.neo4j_password
     ):
-        errors.append(
-            "NEO4J_URI/NEO4J credentials must reference an external Neo4j"
-        )
+        errors.append("NEO4J_URI/NEO4J credentials must reference Neo4j")
 
     raw_minio = str(current.minio_endpoint or "").strip()
     try:
@@ -287,15 +230,52 @@ def required_dependency_config_errors(current: Settings) -> list[str]:
         not raw_minio
         or "://" in raw_minio
         or minio is None
-        or _is_local_dependency_host(minio.hostname)
+        or not minio.hostname
+        or minio_port is None
         or minio_port == 9001
         or not current.minio_access_key
         or not current.minio_secret_key
     ):
         errors.append(
-            "MINIO_ENDPOINT/MINIO credentials must reference an external "
-            "S3 API endpoint, not the browser console"
+            "MINIO_ENDPOINT/MINIO credentials must reference the S3 API, "
+            "not the browser console"
         )
+
+    try:
+        browser = urlsplit(str(current.steward_browser_cdp_url or "").strip())
+        browser.port
+    except ValueError:
+        browser = None
+    if (
+        browser is None
+        or browser.scheme not in {"http", "https"}
+        or not browser.hostname
+        or browser.username is not None
+        or browser.password is not None
+        or browser.path not in {"", "/"}
+        or browser.query
+        or browser.fragment
+    ):
+        errors.append(
+            "STEWARD_BROWSER_CDP_URL must be an absolute HTTP(S) origin/root URL"
+        )
+
+    try:
+        n8n = urlsplit(str(current.n8n_api_url or "").strip())
+        n8n.port
+    except ValueError:
+        n8n = None
+    if (
+        n8n is None
+        or n8n.scheme not in {"http", "https"}
+        or not n8n.hostname
+        or n8n.username is not None
+        or n8n.password is not None
+        or n8n.query
+        or n8n.fragment
+        or not str(current.n8n_api_key or "").strip()
+    ):
+        errors.append("N8N_API_URL/N8N_API_KEY must configure n8n")
     return errors
 
 
@@ -319,8 +299,8 @@ def production_config_errors(current: Settings) -> list[str]:
         _insecure.append("MINIO_ACCESS_KEY/MINIO_SECRET_KEY")
     if "ontoprompt:ontoprompt@" in current.database_url:
         _insecure.append("DATABASE_URL credentials")
-    if not current.database_url.lower().startswith("postgresql"):
-        _insecure.append("DATABASE_URL must use PostgreSQL")
+    if urlsplit(current.database_url).scheme.lower() != "postgresql":
+        _insecure.append("DATABASE_URL must use canonical postgresql://")
     if current.neo4j_password == "ontoprompt123":
         _insecure.append("NEO4J_PASSWORD")
     if current.encryption_key:
@@ -333,28 +313,6 @@ def production_config_errors(current: Settings) -> list[str]:
     # Empty means same-origin only and is safe. Wildcard remains forbidden.
     if "*" in origins:
         _insecure.append("CORS_ALLOWED_ORIGINS")
-    if current.storage_local_fallback:
-        raw_local_dir = str(current.storage_local_dir or "").strip()
-        local_dir = Path(raw_local_dir).expanduser()
-        if not raw_local_dir or not local_dir.is_absolute():
-            _insecure.append(
-                "STORAGE_LOCAL_DIR must be an absolute persistent path "
-                "when STORAGE_LOCAL_FALLBACK=true"
-            )
-        else:
-            resolved = local_dir.resolve()
-            temporary_roots = {
-                Path("/tmp"),
-                Path("/var/tmp"),
-                Path("/private/tmp"),
-            }
-            if resolved == Path("/") or any(
-                resolved == root or root in resolved.parents
-                for root in temporary_roots
-            ):
-                _insecure.append(
-                    "STORAGE_LOCAL_DIR must use a persistent non-temporary volume"
-                )
     _insecure.extend(required_dependency_config_errors(current))
     for key, value in (
         ("PIPELINE_FILE_PUBLIC_APP_BASE_URL",
@@ -406,21 +364,18 @@ def production_config_errors(current: Settings) -> list[str]:
 
 settings = Settings()
 
-if settings.environment == "production":
+if settings.environment != "test":
     _dependency_errors = required_dependency_config_errors(settings)
     if _dependency_errors:
         raise RuntimeError(
-            "ENVIRONMENT=production 第三方依赖强制配置无效: "
+            "平台必需运行时依赖配置无效: "
             f"{', '.join(_dependency_errors)}"
         )
+
+if settings.environment == "production":
     _insecure = production_config_errors(settings)
     if _insecure:
-        message = (
+        raise RuntimeError(
             "ENVIRONMENT=production 检测到不安全或旧版配置: "
-            f"{', '.join(_insecure)}")
-        if settings.strict_production_config:
-            raise RuntimeError(message)
-        import logging
-        logging.getLogger(__name__).warning(
-            "%s。当前以兼容模式启动；完成服务器 .env 轮换后设置 "
-            "STRICT_PRODUCTION_CONFIG=true 可恢复强制门禁。", message)
+            f"{', '.join(_insecure)}"
+        )

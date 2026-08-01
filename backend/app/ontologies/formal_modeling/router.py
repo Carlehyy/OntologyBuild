@@ -14,7 +14,7 @@ from app.models.ontology_formal import (
     ObjectType, LinkType, ActionType, OntologyFunction,
     ObjectInstance, LinkInstance, ActionExecutionLog,
 )
-from app.ontologies.mappings.mapping_service import _ontology_build_lock
+from app.ontologies.runtime_fence import _ontology_build_lock
 from app.ontologies.formal_modeling import (
     action_workflow_service,
     dashboard_queries,

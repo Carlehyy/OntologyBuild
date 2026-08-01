@@ -13,16 +13,19 @@
 
 1. 使用 Python 3.12 和各自 `uv.lock` 执行后端、配置中心回归；
 2. 运行 Alembic 新库升级与单 head 检查；
-3. 使用当前已跟踪的生产依赖清单验证部署配置；
+3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis/Celery worker、
+   Neo4j、MinIO、n8n 和 Chromium CDP 配置；
 4. 执行文档链接、目录索引与仓库卫生守卫；
 5. 执行前端单元测试、feature boundary、E2E 分类、lint、生产构建和离线
    Playwright 回归；
 6. 构建生产镜像，将本次作业扫描到的 SSH host key 写入 `known_hosts` 并强制
    校验，同时在任何远端命令前校验部署目录；
 7. 将当前版本中的 `production.dependencies.env` 作为受控部署输入；
-8. 通过受测试的运行时白名单生成部署包并上传；服务器部署入口再次校验目录后
-   执行迁移和 Compose 启动；
-9. 检查 API readiness、Celery worker 和前端静态资源；
+8. 通过受测试的运行时白名单生成部署包并上传；服务器部署入口再次校验目录，
+   完成依赖探测后先停止旧 backend 与 Celery worker，再执行迁移和 Compose
+   启动；
+9. 检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、MinIO、
+   n8n、Chromium CDP 和前端静态资源；
 10. 无论成功失败，清理 runner 上的上传压缩包。
 
 PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执行
@@ -33,6 +36,19 @@ PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执
 已经退役的通用 `/mcp`（以及除 MinIO 外的 `/mcp/` 子路径）必须直接返回
 404，不能落入 SPA 的 `index.html`。`scripts/ci/test-deploy-guards.sh` 固定这条
 生产路由边界。
+
+## 数据库迁移停机边界
+
+生产迁移是一次有意的短暂停机。依赖连接预检通过后，`scripts/deploy-prod.sh`
+会先对 `backend` 和 `celery_worker` 执行带 30 秒宽限期的停止，再检查 Alembic
+单 head 并升级。这样旧版本进程不会在新投影状态迁移期间继续读写数据库。
+前端可能仍能提供静态文件，但 API 在迁移和新版本就绪前不可用。
+
+如果迁移图校验或 `alembic upgrade head` 失败，部署会立即失败，并保持 API 与
+worker 停止；这是保护数据一致性的预期行为。此时先保留日志、判断迁移是否已
+部分执行并按回滚方案处理，不能直接重启不理解新 schema 的旧进程。任何人工或
+staging Alembic 升级也必须遵循同一顺序：先停止所有 API/worker 写入者，确认
+没有遗留任务执行，再校验 head 和升级，最后才启动与该 schema 兼容的版本。
 
 ## 首次登录与管理员密码恢复
 
@@ -99,12 +115,12 @@ admin 时的 seed 输入，编辑它不会修改已经存在的管理员密码�
 这些缺口在目录移动前必须逐步关闭。生产部署最终应只消费 CI 构建并签名/标记
 的不可变镜像。
 
-## Contract migration 的停机与失败恢复
+## Contract migration 的额外失败恢复边界
 
-会删除或收紧旧应用仍在使用的 schema 的 Alembic 迁移属于 contract
-migration。此类部署必须先记录升级前正在运行的 backend、Celery worker 和
-frontend，再停止这些 runtime，然后才能运行迁移。不得在旧 API/worker
-仍可访问数据库时删表。这一顺序意味着 contract migration 有明确的短暂停机窗口。
+上一节的停机顺序适用于全部生产迁移。会删除或收紧旧应用仍在使用的 schema
+的 Alembic 迁移属于 contract migration；此类部署还必须记录升级前正在运行的
+backend、Celery worker 和 frontend，且不得在旧 API/worker 仍可访问数据库时
+删表。
 
 失败恢复同时以迁移是否到达 head、数据库 revision 是否变化为界：
 
@@ -123,15 +139,28 @@ frontend，再停止这些 runtime，然后才能运行迁移。不得在旧 API
 ## 部署前检查
 
 - 当前版本中的 `production.dependencies.env` 存在且通过只读配置校验；
+- `DATABASE_URL` 的持久运行值为 `postgresql://`；旧清单里的 `postgres://` 或
+  `postgresql+psycopg2://` 只由部署入口在写入 `.env` 时一次性规范化；
+- 若 `REDIS_URL` 指向 Compose 服务 `redis:6379`，确认它使用未转义的 16 位以上
+  密码；部署会从该 URL 同步 Redis `requirepass`。精确旧地址
+  `redis://redis:6379/0` 会自动迁移，外部 Redis URL 不会被改写；
 - 既有 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_PASSWORD`、
   `DEPLOY_APP_DIR`、`DEPLOY_HEALTH_URL` Repository Secrets 可用；
 - `DEPLOY_APP_DIR` 通过 `bash scripts/ci/validate-deploy-app-dir.sh
   "${DEPLOY_APP_DIR:-/opt/ontologybuild}"`；
 - 如启用 `STRICT_IMAGE_DIGESTS`，最终服务器 `.env` 的全部镜像引用均已固定
   到不可变 `@sha256`；
+- 服务器 shell 中没有被当作临时部署配置的同名依赖、端口或镜像变量；部署入口
+  会隔离这些变量，配置变更应落到持久 `.env`/受控清单后重新校验；
 - 数据库备份完成且恢复演练有效；
 - Alembic 新库与现存库副本升级通过；
 - staging 与关键真实 E2E 通过；
+- 必需依赖全部真实就绪，且失败演练没有切换 SQLite、API 线程任务、内存/SQL
+  图或本地对象存储；
+- PostgreSQL 关键词搜索通过，语义及统一 semantic 模式返回预期 501；
 - 上一版本镜像、Compose 配置和回滚负责人已确认。
+
+LLM 不属于部署启动门禁。基础平台发布成功后，再由管理员在模型配置页添加并
+测试所需提供商；不得为了通过平台 readiness 预置或回显真实模型凭据。
 
 配置清单见 [配置说明](./configuration.md)，回滚见 [回滚说明](./rollback.md)。

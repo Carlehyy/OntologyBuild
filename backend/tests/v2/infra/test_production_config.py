@@ -1,10 +1,11 @@
-"""Backward-compatible production configuration gates."""
+"""Fail-closed production configuration and deployment gates."""
 
 import os
 from pathlib import Path
 import shutil
 import stat
 import subprocess
+import tomllib
 
 import pytest
 import yaml
@@ -24,10 +25,15 @@ def _production_settings(**updates):
         "encryption_key": "",
         "cors_allowed_origins": "",
         "first_admin_password": "strong-admin-password",
+        "redis_url": "redis://:strong-password@redis:6379/0",
+        "neo4j_uri": "bolt://neo4j:7687",
         "neo4j_password": "strong-neo4j-password",
+        "minio_endpoint": "minio:9000",
         "minio_access_key": "ontology-minio",
         "minio_secret_key": "strong-minio-password",
-        "storage_local_fallback": False,
+        "steward_browser_cdp_url": "http://browser:9222",
+        "n8n_api_url": "https://n8n.example.com/api/v1",
+        "n8n_api_key": "strong-n8n-api-key",
         "pipeline_file_public_app_base_url": "https://platform.example.com",
         "pipeline_file_public_api_base_url": "https://api.example.com",
         "allow_public_registration": False,
@@ -40,8 +46,19 @@ def test_existing_production_can_keep_secret_key_derived_encryption():
     assert production_config_errors(_production_settings()) == []
 
 
-def test_production_strict_mode_is_opt_in_for_existing_installations():
-    assert Settings().strict_production_config is False
+@pytest.mark.parametrize(
+    "scheme",
+    ["postgres", "postgresql+psycopg2"],
+)
+def test_production_rejects_noncanonical_postgres_schemes(scheme):
+    settings = _production_settings(
+        database_url=f"{scheme}://app:strong-password@db:5432/app"
+    )
+
+    assert any(
+        "canonical postgresql://" in error
+        for error in production_config_errors(settings)
+    )
 
 
 def test_explicit_encryption_key_must_still_be_valid_fernet():
@@ -79,45 +96,106 @@ def test_production_rejects_non_public_or_malformed_file_link_origins():
                for error in with_path)
 
 
-def test_production_allows_fallback_on_absolute_persistent_volume():
-    errors = production_config_errors(_production_settings(
-        storage_local_fallback=True,
-        storage_local_dir="/uploads/object-storage",
-    ))
-    assert not any("STORAGE_LOCAL" in error for error in errors)
-
-
-def test_production_rejects_relative_or_temporary_fallback_paths():
-    relative = production_config_errors(_production_settings(
-        storage_local_fallback=True,
-        storage_local_dir="storage",
-    ))
-    temporary = production_config_errors(_production_settings(
-        storage_local_fallback=True,
-        storage_local_dir="/tmp/object-storage",
-    ))
-    assert any("absolute persistent path" in error for error in relative)
-    assert any("persistent non-temporary volume" in error for error in temporary)
-
-
-def test_production_compose_shares_fallback_without_minio_startup_dependency():
+def test_production_compose_requires_real_stack_without_chroma_or_fallbacks():
     compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
     backend = compose["services"]["backend"]
     worker = compose["services"]["celery_worker"]
 
-    assert "minio" not in backend["depends_on"]
-    assert backend["environment"]["STORAGE_LOCAL_FALLBACK"] == (
-        "${STORAGE_LOCAL_FALLBACK:-true}")
-    assert worker["environment"]["STORAGE_LOCAL_FALLBACK"] == (
-        "${STORAGE_LOCAL_FALLBACK:-true}")
+    assert "chromadb" not in compose["services"]
+    assert "chroma_data" not in compose["volumes"]
+    for service in (backend, worker):
+        environment = service["environment"]
+        assert "STORAGE_LOCAL_FALLBACK" not in environment
+        assert "DATASET_IMPORT_USE_CELERY" not in environment
+        assert "REQUIRE_EXTERNAL_DEPENDENCIES" not in environment
+        assert "STRICT_PRODUCTION_CONFIG" not in environment
+    assert backend["depends_on"]["minio"]["condition"] == "service_healthy"
+    assert backend["depends_on"]["browser"]["condition"] == "service_started"
+    assert "webSocketDebuggerUrl" in compose["services"]["browser"][
+        "healthcheck"
+    ]["test"][-1]
     assert backend["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
     assert worker["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
+    assert worker["environment"]["STEWARD_BROWSER_CDP_URL"] == (
+        "http://browser:9222"
+    )
+    assert backend["environment"]["N8N_TIMEOUT_SECONDS"] == (
+        "${N8N_TIMEOUT_SECONDS:-30}"
+    )
+    assert worker["environment"]["N8N_TIMEOUT_SECONDS"] == (
+        "${N8N_TIMEOUT_SECONDS:-30}"
+    )
+    assert "--requirepass" in compose["services"]["redis"]["command"][-1]
     assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in backend["environment"]
     assert "PIPELINE_FILE_PUBLIC_API_BASE_URL" in backend["environment"]
     assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in worker["environment"]
     assert "PIPELINE_FILE_PUBLIC_API_BASE_URL" in worker["environment"]
     assert "uploads:/uploads" in backend["volumes"]
     assert "uploads:/uploads" in worker["volumes"]
+
+
+def test_removed_graph_fallback_dependencies_are_not_packaged():
+    project = tomllib.loads(
+        (ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    dependencies = project["project"]["dependencies"]
+
+    assert not any(item.startswith("chromadb") for item in dependencies)
+    assert not any(item.startswith("networkx") for item in dependencies)
+    assert not (
+        ROOT / "backend" / "app" / "ontologies" / "graph"
+        / "networkx_service.py"
+    ).exists()
+    assert not (
+        ROOT / "backend" / "app" / "shared" / "chroma_service.py"
+    ).exists()
+
+
+def test_local_compose_requires_real_stack_without_chroma():
+    compose = yaml.safe_load((ROOT / "docker-compose.local.yml").read_text())
+    backend = compose["services"]["backend"]
+    worker = compose["services"]["celery_worker"]
+    migrate = compose["services"]["migrate"]
+
+    assert "chromadb" not in compose["services"]
+    assert "chroma_data" not in compose["volumes"]
+    for dependency in ("db", "redis", "neo4j", "minio"):
+        assert backend["depends_on"][dependency]["condition"] == (
+            "service_healthy"
+        )
+        assert worker["depends_on"][dependency]["condition"] == (
+            "service_healthy"
+        )
+    assert backend["depends_on"]["browser"]["condition"] == "service_started"
+    assert migrate["command"] == "alembic upgrade head"
+    assert migrate["depends_on"]["db"]["condition"] == "service_healthy"
+    assert backend["depends_on"]["migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert worker["depends_on"]["migrate"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert "webSocketDebuggerUrl" in compose["services"]["browser"][
+        "healthcheck"
+    ]["test"][-1]
+    assert "--requirepass" in compose["services"]["redis"]["command"][-1]
+
+
+def test_deploy_probes_dependencies_after_start_and_before_migrations():
+    script = (ROOT / "scripts" / "deploy-prod.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "compose up -d --wait" in script
+    start = script.index("run_with_retry start_required_dependency_services")
+    probe = script.index("backend python -m app.shared.dependency_probe")
+    migrate = script.index('log "running database migrations"')
+    assert start < probe < migrate
+    assert "compose up -d browser" in script
+    wait_block = script[script.index("compose up -d --wait"):script.index(
+        "else", script.index("compose up -d --wait"))]
+    assert "db redis neo4j minio" in wait_block
+    assert "db redis neo4j minio browser" not in wait_block
 
 
 def test_operator_configured_public_http_n8n_is_allowed_in_production():
@@ -167,18 +245,60 @@ def test_secret_key_derived_encryption_remains_decryptable(monkeypatch):
 
 
 def _run_deploy_validation(app_dir: Path, *, health_url: str | None = None):
+    manifest = app_dir / "production.dependencies.env"
+    if not manifest.exists():
+        _write_valid_dependency_manifest(manifest)
     env = os.environ.copy()
     env.update({
         "APP_DIR": str(app_dir),
         "SKIP_GIT": "1",
         "DEPLOY_VALIDATE_ONLY": "1",
-        "STRICT_PRODUCTION_CONFIG": "0",
     })
     if health_url is not None:
         env["HEALTH_URL"] = health_url
     return subprocess.run(
         ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=20,
+    )
+
+
+def _write_valid_dependency_manifest(
+    path: Path,
+    *,
+    public_port: str = "80",
+    redis_url: str = (
+        "redis://:synthetic-redis-password@redis.example.com:6379/0"
+    ),
+    database_url: str = (
+        "postgresql://ontology:synthetic-postgres-password"
+        "@pg.example.com:5432/ontology"
+    ),
+    neo4j_uri: str = "bolt+s://graph.example.com:7687",
+    neo4j_auth: str = "neo4j/synthetic-neo4j-password",
+    postgres_user: str = "ontology",
+    postgres_password: str = "synthetic-postgres-password",
+    postgres_db: str = "ontology",
+) -> None:
+    path.write_text(
+        "ENVIRONMENT=production\n"
+        f"PUBLIC_PORT={public_port}\n"
+        f"POSTGRES_DB={postgres_db}\n"
+        f"POSTGRES_USER={postgres_user}\n"
+        f"POSTGRES_PASSWORD={postgres_password}\n"
+        f"DATABASE_URL={database_url}\n"
+        f"REDIS_URL={redis_url}\n"
+        f"NEO4J_URI={neo4j_uri}\n"
+        "NEO4J_USER=neo4j\n"
+        "NEO4J_PASSWORD=synthetic-neo4j-password\n"
+        f"NEO4J_AUTH={neo4j_auth}\n"
+        "MINIO_ENDPOINT=objects.example.com:9000\n"
+        "MINIO_ACCESS_KEY=synthetic-minio-access\n"
+        "MINIO_SECRET_KEY=synthetic-minio-secret\n"
+        "MINIO_USE_SSL=true\n"
+        "N8N_API_URL=https://n8n.example.com/api/v1\n"
+        "N8N_API_KEY=synthetic-n8n-api-key\n"
+        "N8N_TIMEOUT_SECONDS=30\n",
+        encoding="utf-8",
     )
 
 
@@ -206,9 +326,9 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
     assert generated["NEO4J_AUTH"] == f"neo4j/{generated['NEO4J_PASSWORD']}"
     assert generated["MINIO_ACCESS_KEY"] != "minioadmin"
     assert generated["MINIO_SECRET_KEY"] != "minioadmin"
-    assert generated["STORAGE_LOCAL_FALLBACK"] == "true"
+    assert generated["REDIS_PASSWORD"] != "ontopromptredis123"
     assert generated["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
-    assert generated["STRICT_PRODUCTION_CONFIG"] == "false"
+    assert generated["STEWARD_BROWSER_CDP_URL"] == "http://browser:9222"
     assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
         "http://127.0.0.1:80/api/v2/file-transfer")
     assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
@@ -217,31 +337,267 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
         "http://127.0.0.1:80")
     assert generated["SECRET_KEY"] not in result.stdout
     assert stat.S_IMODE(generated_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(
+        (tmp_path / "production.dependencies.env").stat().st_mode
+    ) == 0o600
 
 
-def test_existing_example_env_warns_but_does_not_block_deploy(tmp_path):
+def test_deploy_upgrades_exact_legacy_bundled_redis_url(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env",
+        redis_url="redis://redis:6379/0",
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    password = generated["REDIS_PASSWORD"]
+    assert password != "ontopromptredis123"
+    assert generated["REDIS_URL"] == f"redis://:{password}@redis:6379/0"
+    assert "upgraded the legacy bundled Redis URL" in result.stdout
+    assert password not in result.stdout + result.stderr
+
+
+def test_deploy_derives_bundled_redis_requirepass_from_client_url(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    password = "synthetic-bundled-redis-password"
+    redis_url = f"redis://:{password}@redis:6379/0"
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env",
+        redis_url=redis_url,
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["REDIS_PASSWORD"] == password
+    assert generated["REDIS_URL"] == redis_url
+    assert "synchronized the bundled Redis service password" in result.stdout
+    assert password not in result.stdout + result.stderr
+
+
+def test_deploy_preserves_external_redis_url_without_binding_local_password(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    redis_url = (
+        "rediss://:synthetic-provider-password@cache.example.com:6380/0"
+    )
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env",
+        redis_url=redis_url,
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["REDIS_URL"] == redis_url
+    assert generated["REDIS_PASSWORD"] not in redis_url
+    assert "preserved the external Redis URL" in result.stdout
+    assert "synthetic-provider-password" not in result.stdout + result.stderr
+
+
+def test_deploy_validates_bundled_postgres_and_neo4j_authorities(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    manifest = tmp_path / "production.dependencies.env"
+    _write_valid_dependency_manifest(
+        manifest,
+        database_url=(
+            "postgresql://ontology:synthetic-postgres-password"
+            "@db:5432/ontology"
+        ),
+        neo4j_uri="bolt://neo4j:7687",
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "validated bundled PostgreSQL" in result.stdout
+    assert "validated bundled Neo4j" in result.stdout
+
+
+def test_deploy_compares_decoded_bundled_postgres_authority(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env",
+        database_url=(
+            "postgres://onto%40logy:synthetic%3Apostgres-password"
+            "@db:5432/onto%2Flogy"
+        ),
+        postgres_user="onto@logy",
+        postgres_password="synthetic:postgres-password",
+        postgres_db="onto/logy",
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "validated bundled PostgreSQL" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("database_url", "neo4j_uri", "neo4j_auth", "message"),
+    [
+        (
+            "postgresql://ontology:wrong-password@db:5432/ontology",
+            "bolt+s://graph.example.com:7687",
+            "neo4j/synthetic-neo4j-password",
+            "bundled DATABASE_URL must exactly match",
+        ),
+        (
+            "postgresql://ontology:synthetic-postgres-password@pg.example.com:5432/ontology",
+            "bolt://neo4j:7687",
+            "neo4j/wrong-password",
+            "bundled NEO4J_AUTH must match",
+        ),
+        (
+            "postgresql://ontology:synthetic-postgres-password@pg.example.com:5432/ontology",
+            "bolt+s://graph.example.com:7687",
+            "none",
+            "NEO4J_AUTH must enable authentication",
+        ),
+    ],
+)
+def test_deploy_rejects_mismatched_or_disabled_bundled_auth(
+    tmp_path,
+    database_url,
+    neo4j_uri,
+    neo4j_auth,
+    message,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env",
+        database_url=database_url,
+        neo4j_uri=neo4j_uri,
+        neo4j_auth=neo4j_auth,
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    assert message in result.stdout + result.stderr
+
+
+def test_deploy_rejects_encoded_password_for_bundled_redis(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env",
+        redis_url="redis://:encoded%40password@redis:6379/0",
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "bundled Redis URL must use an unescaped" in output
+    assert "encoded%40password" not in output
+
+
+def test_existing_insecure_example_env_is_rejected(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     shutil.copy(ROOT / ".env.example", tmp_path / ".env")
 
     result = _run_deploy_validation(tmp_path)
 
+    assert result.returncode != 0
+    assert "SECRET_KEY is missing or still uses an example credential" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_deploy_requires_dependency_manifest(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env = os.environ.copy()
+    env.update({
+        "APP_DIR": str(tmp_path),
+        "SKIP_GIT": "1",
+        "DEPLOY_VALIDATE_ONLY": "1",
+        "DEPENDENCY_CONFIG_FILE": "missing-production-dependencies.env",
+    })
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert "is required for production deployment" in result.stdout
+
+
+def test_deploy_ignores_legacy_manifest_switches_without_reenabling_them(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    manifest = tmp_path / "production.dependencies.env"
+    _write_valid_dependency_manifest(manifest)
+    with manifest.open("a", encoding="utf-8") as stream:
+        stream.write(
+            "POSTGRES_HOST=ignored.example.com\n"
+            "POSTGRES_PORT=5432\n"
+            "MINIO_CONSOLE_URL=https://ignored.example.com\n"
+            "STRICT_PRODUCTION_CONFIG=false\n"
+            "REQUIRE_EXTERNAL_DEPENDENCIES=false\n"
+            "DATASET_IMPORT_USE_CELERY=false\n"
+            "STORAGE_LOCAL_FALLBACK=true\n"
+            "N8N_EMAIL=\n"
+            "N8N_PASSWORD=\n"
+        )
+
+    result = _run_deploy_validation(tmp_path)
+
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "warning: SECRET_KEY" in result.stdout
-    assert "production environment validation succeeded" in result.stdout
     generated = _read_env(tmp_path / ".env")
-    assert generated["STORAGE_LOCAL_FALLBACK"] == "true"
-    assert generated["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
-    assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
-        "http://127.0.0.1:80/api/v2/file-transfer")
-    assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
-        "http://127.0.0.1:80")
-    assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
-        "http://127.0.0.1:80")
+    for key in (
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "MINIO_CONSOLE_URL",
+        "STRICT_PRODUCTION_CONFIG",
+        "REQUIRE_EXTERNAL_DEPENDENCIES",
+        "DATASET_IMPORT_USE_CELERY",
+        "STORAGE_LOCAL_FALLBACK",
+        "N8N_EMAIL",
+        "N8N_PASSWORD",
+    ):
+        assert key not in generated
+        assert f"ignored deprecated production dependency setting: {key}" in (
+            result.stdout
+        )
+
+
+def test_deploy_backfills_n8n_timeout_for_existing_env_and_old_manifest(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    first = _run_deploy_validation(tmp_path)
+    assert first.returncode == 0, first.stdout + first.stderr
+
+    for filename in (".env", "production.dependencies.env"):
+        path = tmp_path / filename
+        path.write_text(
+            "\n".join(
+                line for line in path.read_text(encoding="utf-8").splitlines()
+                if not line.startswith("N8N_TIMEOUT_SECONDS=")
+            ) + "\n",
+            encoding="utf-8",
+        )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _read_env(tmp_path / ".env")["N8N_TIMEOUT_SECONDS"] == "30"
 
 
 def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
-    shutil.copy(ROOT / ".env.example", tmp_path / ".env")
 
     result = _run_deploy_validation(
         tmp_path, health_url="https://platform.example.com/")
@@ -258,10 +614,8 @@ def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path)
 
 def test_deploy_uses_manifest_public_port_for_default_health_origin(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
-    shutil.copy(ROOT / ".env.example", tmp_path / ".env")
-    (tmp_path / "production.dependencies.env").write_text(
-        "PUBLIC_PORT=8123\n",
-        encoding="utf-8",
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env", public_port="8123"
     )
 
     result = _run_deploy_validation(tmp_path)
@@ -374,14 +728,12 @@ def test_deploy_workflow_rejects_invalid_manifest_public_port(
     assert "ssh -o StrictHostKeyChecking" not in result.stdout
 
 
-def test_deploy_empty_exported_public_port_matches_compose_default(
+def test_deploy_ignores_empty_exported_public_port_and_uses_validated_env(
     tmp_path, monkeypatch,
 ):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
-    shutil.copy(ROOT / ".env.example", tmp_path / ".env")
-    (tmp_path / "production.dependencies.env").write_text(
-        "PUBLIC_PORT=8123\n",
-        encoding="utf-8",
+    _write_valid_dependency_manifest(
+        tmp_path / "production.dependencies.env", public_port="8123"
     )
     monkeypatch.setenv("PUBLIC_PORT", "")
 
@@ -391,11 +743,11 @@ def test_deploy_empty_exported_public_port_matches_compose_default(
     generated = _read_env(tmp_path / ".env")
     assert generated["PUBLIC_PORT"] == "8123"
     assert generated["PIPELINE_FILE_GATEWAY_BASE_URL"] == (
-        "http://127.0.0.1:80/api/v2/file-transfer")
+        "http://127.0.0.1:8123/api/v2/file-transfer")
     assert generated["PIPELINE_FILE_PUBLIC_APP_BASE_URL"] == (
-        "http://127.0.0.1:80")
+        "http://127.0.0.1:8123")
     assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
-        "http://127.0.0.1:80")
+        "http://127.0.0.1:8123")
 
 
 def test_deploy_preserves_explicit_pipeline_file_gateway(tmp_path):
@@ -404,7 +756,6 @@ def test_deploy_preserves_explicit_pipeline_file_gateway(tmp_path):
         "PIPELINE_FILE_GATEWAY_BASE_URL=https://platform.example.com/api/v2/file-transfer",
     )
     (tmp_path / ".env.example").write_text(content)
-    (tmp_path / ".env").write_text(content)
 
     result = _run_deploy_validation(tmp_path)
 
@@ -424,7 +775,6 @@ def test_deploy_preserves_explicit_public_file_origins(tmp_path):
         "PIPELINE_FILE_PUBLIC_API_BASE_URL=https://files.example.com",
     )
     (tmp_path / ".env.example").write_text(content)
-    (tmp_path / ".env").write_text(content)
 
     result = _run_deploy_validation(
         tmp_path, health_url="https://platform.example.com/")
@@ -443,7 +793,6 @@ def test_deploy_rejects_malformed_public_file_origin(tmp_path):
         "PIPELINE_FILE_PUBLIC_API_BASE_URL=https://user@example.com/files?x=1",
     )
     (tmp_path / ".env.example").write_text(content)
-    (tmp_path / ".env").write_text(content)
 
     result = _run_deploy_validation(tmp_path)
 
@@ -451,27 +800,12 @@ def test_deploy_rejects_malformed_public_file_origin(tmp_path):
     assert "PIPELINE_FILE_PUBLIC_API_BASE_URL must be an absolute" in result.stdout
 
 
-def test_deploy_rejects_custom_relative_storage_fallback_path(tmp_path):
+def test_deploy_pins_legacy_storage_read_root_to_shared_volume(tmp_path):
     content = (ROOT / ".env.example").read_text().replace(
         "STORAGE_LOCAL_DIR=storage",
         "STORAGE_LOCAL_DIR=relative/object-storage",
     )
     (tmp_path / ".env.example").write_text(content)
-    (tmp_path / ".env").write_text(content)
-
-    result = _run_deploy_validation(tmp_path)
-
-    assert result.returncode != 0
-    assert "STORAGE_LOCAL_DIR must be an absolute persistent path" in result.stdout
-
-
-def test_deploy_normalizes_custom_absolute_storage_path_to_shared_volume(tmp_path):
-    content = (ROOT / ".env.example").read_text().replace(
-        "STORAGE_LOCAL_DIR=storage",
-        "STORAGE_LOCAL_DIR=/var/lib/private-object-storage",
-    )
-    (tmp_path / ".env.example").write_text(content)
-    (tmp_path / ".env").write_text(content)
 
     result = _run_deploy_validation(tmp_path)
 

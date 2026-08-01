@@ -189,18 +189,44 @@ def _promote_draft_locked(
             "runtimeStateConflicts": runtime_conflicts,
         })
 
-    old_objects = db.query(FoObjectInstance).filter(
-        FoObjectInstance.ontology_id == ontology_id).all()
-    old_links = db.query(FoLinkInstance).filter(
-        FoLinkInstance.ontology_id == ontology_id).all()
-    old_object_by_id = {item.id: item for item in old_objects}
-    candidate_ids = {item.object_id for item in trial_objects}
-    candidate_link_ids = {item.link_id for item in trial_links}
-    release_id = str(uuid.uuid4())
-    release_number = _next_release_activation_number(db, ontology_id)
-    source = f"ontology-release://{release_id}"
+    from app.ontologies.projection_state import snapshot as projection_snapshot
+    current_projection = projection_snapshot(db, ontology_id)
+    if current_projection.status != "ready":
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_not_ready",
+            "message": "当前本体查询投影未就绪，禁止发布；请先执行图修复",
+            "projectionStatus": current_projection.status,
+        })
 
+    # Persist a project-level fence before the non-transactional candidate
+    # projection can become visible. The advisory ontology lock remains held
+    # across this commit, so no other runtime mutation can enter the gap.
+    current_version_number = current.version_number
+    from app.ontologies.projection_state import mark_projecting
+    mark_projecting(db, ontology_id)
+    db.commit()
     try:
+        # Everything after the durable fence commit belongs to one compensation
+        # domain.  SQLAlchemy expires loaded ORM rows on commit, so even these
+        # apparently read-only preparations can perform I/O and fail.  Leaving
+        # them outside this ``try`` would strand the project in ``projecting``.
+        project = db.query(OntologyProject).filter(
+            OntologyProject.id == ontology_id,
+        ).with_for_update().first()
+        if project is None:
+            raise HTTPException(404, "Ontology not found")
+
+        old_objects = db.query(FoObjectInstance).filter(
+            FoObjectInstance.ontology_id == ontology_id).all()
+        old_links = db.query(FoLinkInstance).filter(
+            FoLinkInstance.ontology_id == ontology_id).all()
+        old_object_by_id = {item.id: item for item in old_objects}
+        candidate_ids = {item.object_id for item in trial_objects}
+        candidate_link_ids = {item.link_id for item in trial_links}
+        release_id = str(uuid.uuid4())
+        release_number = _next_release_activation_number(db, ontology_id)
+        source = f"ontology-release://{release_id}"
+
         _restore_formal_snapshot(db, ontology_id, snap)
         pinned = {str(item.get("datasetId")): item for item in (run.dataset_versions or [])}
         for mapping in db.query(OntologyMapping).filter(
@@ -374,25 +400,43 @@ def _promote_draft_locked(
         ))
         db.flush()
         projection_check = None
-        if settings.environment == "production":
+        if settings.environment != "test":
             projection_check = _rebuild_required_query_projections(db, ontology_id)
             if not projection_check["ready"]:
-                raise RuntimeError("Neo4j/Chroma candidate projection is not ready")
+                raise RuntimeError("Neo4j candidate projection is not ready")
+        from app.ontologies.projection_state import mark_ready
+        mark_ready(db, ontology_id)
         db.commit()
     except HTTPException:
         db.rollback()
+        from app.ontologies.projection_state import mark_ready
+        mark_ready(db, ontology_id)
+        db.commit()
         raise
     except Exception as exc:
         db.rollback()
         compensation = None
-        if settings.environment == "production":
+        if settings.environment != "test":
             try:
                 compensation = _rebuild_required_query_projections(db, ontology_id)
             except Exception as compensation_exc:  # noqa: BLE001
                 compensation = {"ready": False, "error": str(compensation_exc)}
+        from app.ontologies.projection_state import mark_failed, mark_ready
+        if settings.environment == "test" or (
+            compensation is not None and compensation.get("ready")
+        ):
+            mark_ready(db, ontology_id)
+        else:
+            mark_failed(
+                db,
+                ontology_id,
+                (compensation or {}).get("error")
+                or "Neo4j compensation rebuild failed",
+            )
+        db.commit()
         raise HTTPException(503, detail={
             "code": "promotion_failed",
-            "message": f"发布事务已回滚，当前发布版保持 {current.version_number}: {exc}",
+            "message": f"发布事务已回滚，当前发布版保持 {current_version_number}: {exc}",
             "compensation": compensation,
         }) from exc
 

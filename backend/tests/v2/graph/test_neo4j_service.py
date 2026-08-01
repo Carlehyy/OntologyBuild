@@ -1,6 +1,6 @@
 """Neo4jService 단위 테스트 — 실제 Neo4j 없이 mock 사용"""
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 
 def make_mock_driver():
@@ -122,58 +122,111 @@ def test_batch_upsert_property_assignment_is_explicit(
         )
         assert svc.batch_upsert_entities(
             "Entity",
-            [{"id": "e1", "name": "replacement"}],
+            [{
+                "id": "e1",
+                "name": "replacement",
+                "updated_at": "2026-07-01T02:03:04Z",
+            }],
             replace_properties=replace_properties,
         ) == 1
 
     query = " ".join(session.run.call_args.args[0].split())
-    assert f"{expected_assignment} SET n.updated_at = datetime()" in query
+    assert (
+        f"{expected_assignment} SET n.updated_at = "
+        "coalesce(e.props.updated_at, datetime())"
+    ) in query
     assert unexpected_assignment not in query
     assert session.run.call_args.kwargs["batch"] == [{
         "key": "e1",
-        "props": {"id": "e1", "name": "replacement"},
+        "props": {
+            "id": "e1",
+            "name": "replacement",
+            "updated_at": "2026-07-01T02:03:04Z",
+        },
     }]
 
 
-def test_networkx_batch_replace_removes_stale_properties_but_default_merges():
-    import networkx as nx
-
-    from app.services.v2.graph.networkx_service import NetworkXGraphService
-
-    svc = object.__new__(NetworkXGraphService)
-    svc._g = nx.DiGraph()
-    assert svc.batch_upsert_entities(
-        "Entity",
-        [{"id": "e1", "name": "old", "stale": "remove-me"}],
-    ) == 1
-
-    assert svc.batch_upsert_entities(
-        "Entity",
-        [{"id": "e1", "name": "merged"}],
-    ) == 1
-    assert svc._g.nodes["e1"]["properties"] == {
-        "id": "e1",
-        "name": "merged",
-        "stale": "remove-me",
-    }
-
-    assert svc.batch_upsert_entities(
-        "Entity",
-        [{"id": "e1", "name": "replacement"}],
-        replace_properties=True,
-    ) == 1
-    assert svc._g.nodes["e1"]["properties"] == {
-        "id": "e1",
-        "name": "replacement",
-    }
-
-
-def test_legacy_bridge_sync_unavailable_graceful():
-    """Neo4j 미연결 시 bridge sync가 오류 없이 처리"""
+def test_single_entity_upsert_preserves_authoritative_updated_at():
     with patch("app.services.v2.graph.neo4j_service.GraphDatabase") as mock_gdb:
-        mock_gdb.driver.side_effect = Exception("offline")
+        mock_driver, session = make_mock_driver()
+        session.run.return_value.single.return_value = {"eid": "node-1"}
+        mock_gdb.driver.return_value = mock_driver
 
-        from app.services.v2.legacy_extraction_bridge import LegacyExtractionBridge
-        bridge = LegacyExtractionBridge()
-        # 오류 없이 실행되어야 함
-        bridge.sync_to_neo4j("ont-1", [{"id": "e1", "type": "Entity"}], [])
+        from app.services.v2.graph.neo4j_service import Neo4jService
+
+        svc = Neo4jService(
+            uri="bolt://localhost:7687",
+            user="neo4j",
+            password="test",
+        )
+        assert svc.upsert_entity("Entity", {
+            "id": "e1",
+            "updated_at": "2026-07-01T02:03:04Z",
+        }) == "node-1"
+
+    query = " ".join(session.run.call_args.args[0].split())
+    assert (
+        "n.updated_at = coalesce($props.updated_at, datetime())" in query
+    )
+    assert "n.updated_at = datetime()" not in query
+    assert session.run.call_args.kwargs["props"]["updated_at"] == (
+        "2026-07-01T02:03:04Z"
+    )
+
+
+def test_relation_upsert_preserves_authoritative_updated_at():
+    with patch("app.services.v2.graph.neo4j_service.GraphDatabase") as mock_gdb:
+        mock_driver, session = make_mock_driver()
+        session.run.return_value.single.return_value = {"r": object()}
+        mock_gdb.driver.return_value = mock_driver
+
+        from app.services.v2.graph.neo4j_service import Neo4jService
+
+        svc = Neo4jService(
+            uri="bolt://localhost:7687",
+            user="neo4j",
+            password="test",
+        )
+        assert svc.upsert_relation(
+            "Entity",
+            "e1",
+            "Entity",
+            "e2",
+            "OWNS",
+            {"id": "r1", "updated_at": "2026-07-02T02:03:04Z"},
+        ) is True
+
+    query = " ".join(session.run.call_args.args[0].split())
+    assert (
+        "r.updated_at = coalesce($props.updated_at, datetime())" in query
+    )
+    assert "r.updated_at = datetime()" not in query
+    assert session.run.call_args.kwargs["props"]["updated_at"] == (
+        "2026-07-02T02:03:04Z"
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        ("upsert_entity", ("Entity`) DETACH DELETE n //", {"id": "e1"})),
+        (
+            "batch_upsert_entities",
+            ("Entity", [{"id": "e1"}], "id}) DETACH DELETE n //"),
+        ),
+        (
+            "upsert_relation",
+            ("Entity", "e1", "Entity", "e2", "REL`) DELETE r //"),
+        ),
+    ],
+)
+def test_write_identifiers_reject_cypher_injection(method, args):
+    from app.services.v2.graph.neo4j_service import Neo4jService
+
+    svc = object.__new__(Neo4jService)
+    svc._available = True
+    svc._driver = MagicMock()
+
+    with pytest.raises(ValueError, match="Invalid Neo4j label"):
+        getattr(svc, method)(*args)
+    svc._driver.session.assert_not_called()

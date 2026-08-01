@@ -39,6 +39,25 @@ def get_db():
         db.close()
 
 
+def _finish_legacy_action_projection(db: Session, ontology_id: str) -> None:
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        rebuild_after_commit,
+    )
+
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_failed",
+            "message": (
+                "旧版动作结果已保存到关系型真相，但 Neo4j 图投影失败；"
+                "图读取已阻断，请执行图修复"
+            ),
+            "ontology_id": ontology_id,
+        }) from exc
+
+
 # ── Logic Rules ─────────────────────────────────────────────────
 
 class LogicRuleCreate(BaseModel):
@@ -444,8 +463,34 @@ def run_action_type(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.ontologies.runtime_fence import _ontology_build_lock
+
+    with _ontology_build_lock(db, ontology_id):
+        return _run_action_type_locked(
+            ontology_id,
+            action_id,
+            body,
+            db,
+            current_user,
+        )
+
+
+def _run_action_type_locked(
+    ontology_id: str,
+    action_id: str,
+    body: ActionRunRequest,
+    db: Session,
+    current_user: User,
+):
     from app.models.entity import Entity
+    from app.models.ontology import OntologyProject
     from app.models.relation import Relation
+
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id,
+    ).with_for_update().first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
 
     action = db.query(OntologyActionType).filter(
         OntologyActionType.id == action_id,
@@ -477,6 +522,7 @@ def run_action_type(
     before_snapshot = {}
     after_snapshot = {}
     side_effect_results = []
+    graph_changed = False
     try:
         params = body.parameters or {}
         for effect in action.effects or []:
@@ -499,6 +545,7 @@ def run_action_type(
                 entity.updated_at = datetime.now(timezone.utc)
                 after_snapshot[target_id] = props
                 side_effect_results.append({"action": effect_name, "target_id": target_id, "property": prop})
+                graph_changed = True
 
             elif effect_name == "create_object":
                 data = dict(params.get("data") or {})
@@ -516,6 +563,7 @@ def run_action_type(
                 db.add(entity)
                 after_snapshot[entity_id] = data
                 side_effect_results.append({"action": effect_name, "entity_id": entity_id, "entity_type": entity_type})
+                graph_changed = True
 
             elif effect_name in ("merge_relationship", "delete_relationship"):
                 source_id = params.get("source_id")
@@ -535,6 +583,7 @@ def run_action_type(
                     )
                     db.merge(relation)
                     side_effect_results.append({"action": effect_name, "relation_type": rel_type})
+                    graph_changed = True
                 else:
                     deleted = db.query(Relation).filter(
                         Relation.ontology_id == ontology_id,
@@ -543,6 +592,7 @@ def run_action_type(
                         Relation.type == rel_type,
                     ).delete()
                     side_effect_results.append({"action": effect_name, "relation_type": rel_type, "deleted": deleted})
+                    graph_changed = graph_changed or bool(deleted)
 
             else:
                 side_effect_results.append({"action": effect_name or "unknown", "status": "skipped"})
@@ -552,8 +602,11 @@ def run_action_type(
         run.after_snapshot = after_snapshot
         run.side_effect_results = side_effect_results
         run.completed_at = datetime.now(timezone.utc)
+        if graph_changed:
+            from app.ontologies.projection_state import mark_projecting
+
+            mark_projecting(db, ontology_id)
         db.commit()
-        return {"run_id": run.id, "status": run.status, "side_effect_results": side_effect_results}
     except Exception as e:
         db.rollback()
         db.add(run)
@@ -565,6 +618,16 @@ def run_action_type(
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
         raise HTTPException(400, {"run_id": run.id, "error": str(e)})
+    if graph_changed:
+        # Projection failure is not an action rollback: SQL truth and the
+        # completed run are already durable, while the project fence is
+        # persisted as failed by rebuild_after_commit.
+        _finish_legacy_action_projection(db, ontology_id)
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "side_effect_results": side_effect_results,
+    }
 
 
 def _evaluate_logic_rule(rule: OntologyLogicRule, row: dict, parameters: dict) -> dict:

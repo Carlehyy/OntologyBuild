@@ -527,14 +527,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if settings.environment != "production":
             raise RuntimeError("this acceptance script requires ENVIRONMENT=production")
-        if not settings.require_external_dependencies:
-            raise RuntimeError(
-                "REQUIRE_EXTERNAL_DEPENDENCIES must be enabled; fallback mode is rejected"
-            )
-        if settings.storage_local_fallback:
-            raise RuntimeError(
-                "STORAGE_LOCAL_FALLBACK must be false; local object fallback is rejected"
-            )
 
         _verify_public_health(
             args.public_root, timeout=min(float(args.wait_seconds), 30.0)

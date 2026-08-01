@@ -113,9 +113,7 @@ def test_supply_chain_mapping_golden_prd_242_semantics(db, admin_user):
 
     service = MappingService(db)
     with patch("app.services.v2.dataset_service.DatasetService.load_all_rows", side_effect=lambda dataset_id, *_args, **_kwargs: rows_by_dataset[dataset_id]), \
-         patch.object(MappingService, "_write_neo4j", side_effect=lambda _self, _entity_class, entities: len(entities), autospec=True), \
-         patch.object(MappingService, "_write_neo4j_relations", return_value=None), \
-         patch("app.services.v2.vector.chroma_service.ChromaService.upsert_entities", return_value=None):
+         patch.object(MappingService, "_rebuild_neo4j_projection", return_value=True):
         result = service.build_all(ontology.id)
 
     assert result["total_entities"] == sum(len(rows) for rows in rows_by_dataset.values())

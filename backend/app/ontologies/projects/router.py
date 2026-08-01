@@ -14,6 +14,8 @@ from app.ontologies.versions.release_service import resolve_current_release
 from app.ontologies.access import require_ontology_access
 from app.ontologies.export.schemas import OntologyStructurePackage
 from app.ontologies.export.service import import_structure_package
+from app.ontologies.projection_state import mark_failed, mark_projecting
+from app.ontologies.runtime_fence import _ontology_build_lock
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
 import uuid
 
@@ -198,5 +200,68 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
 
 @router.delete("/{ontology_id}", status_code=204)
 def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    p = require_ontology_access(db, ontology_id, current_user, write=True)
-    db.delete(p); db.commit()
+    with _ontology_build_lock(db, ontology_id):
+        p = require_ontology_access(
+            db,
+            ontology_id,
+            current_user,
+            write=True,
+        )
+        # Commit the durable read fence before deleting the derived graph.
+        # If SQL deletion later fails, readers remain blocked until retry or
+        # startup repair reconstructs the still-authoritative SQL truth.
+        mark_projecting(db, ontology_id)
+        db.commit()
+
+        from app.services.v2.graph.neo4j_service import Neo4jService
+
+        neo4j = Neo4jService()
+        try:
+            if not neo4j.available:
+                raise RuntimeError("Neo4j is unavailable")
+            neo4j.delete_by_ontology(ontology_id)
+        except Exception as exc:
+            db.rollback()
+            mark_failed(
+                db,
+                ontology_id,
+                f"Neo4j ontology deletion failed: {type(exc).__name__}",
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "ontology_projection_delete_failed",
+                    "message": "Neo4j 本体投影删除失败，SQL 本体已保留",
+                },
+            ) from exc
+        finally:
+            neo4j.close()
+
+        try:
+            db.delete(p)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            persisted = db.query(OntologyProject).filter(
+                OntologyProject.id == ontology_id,
+            ).first()
+            if persisted is None:
+                # Database drivers may report a connection/commit error after
+                # PostgreSQL has durably accepted the DELETE. Neo4j was already
+                # cleared above, so an absent authoritative row is the complete
+                # requested outcome and must converge to the normal 204 result.
+                return None
+            mark_failed(
+                db,
+                ontology_id,
+                f"SQL ontology deletion failed: {type(exc).__name__}",
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "ontology_delete_incomplete",
+                    "message": "本体删除未完成，已阻断图读取，请重试",
+                },
+            ) from exc

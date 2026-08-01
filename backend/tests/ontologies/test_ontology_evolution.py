@@ -4952,8 +4952,6 @@ def test_production_promotion_observes_restored_mapping_before_runtime_gate(
         lambda *_args, **_kwargs: {
             "ready": True,
             "neo4j": "ok",
-            "chroma": "ok",
-            "chroma_count": 2,
         },
     )
     run_response = client.post(
@@ -5174,8 +5172,7 @@ def test_rollback_creates_new_activation_and_preserves_historical_runtime_lineag
     monkeypatch.setattr(
         version_router, "_rebuild_required_query_projections",
         lambda *_args, **_kwargs: {
-            "ready": True, "neo4j": "ok", "chroma": "ok",
-            "chroma_count": 2,
+            "ready": True, "neo4j": "ok",
         },
     )
 

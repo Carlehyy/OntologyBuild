@@ -29,6 +29,12 @@ service 或 router。
 占位状态。超级助手自己的 Skill 管理 API 位于 `/api/v2/super-assistant`，不能
 据此把社区 Skill 页面描述成已接通。
 
+“模型配置”是平台启动后的提供商配置入口，不是启动依赖探针。正常启动先要求
+PostgreSQL、Redis/Celery worker、Neo4j、MinIO 和 n8n 全部就绪，并提供
+Chromium CDP 地址；CDP 暂时不可达时 API 可以提供诊断，但平台深度 readiness
+保持失败。管理员随后按需添加 LLM。搜索能力当前只支持 PostgreSQL 关键词搜索；
+语义搜索及统一搜索的 semantic 模式明确返回 501，不存在隐藏的向量库降级。
+
 包含路由、API 和测试入口的完整定位表见
 [统一模块地图](../architecture/module-map.md)。本表回答“入口属于哪个业务域”；
 数据生产、定义发布和刷新顺序见[核心数据流](../architecture/data-flow.md)。

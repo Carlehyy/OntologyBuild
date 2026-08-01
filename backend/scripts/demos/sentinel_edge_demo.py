@@ -8,6 +8,7 @@
 import os, sys, uuid
 _DB = "/tmp/sentinel_edge_demo.db"
 if os.path.exists(_DB): os.remove(_DB)
+os.environ["ENVIRONMENT"] = "test"
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB}"
 os.environ["SENTINEL_AUTO_DISPATCH"] = "0"
 os.environ["SENTINEL_SCAN_ENABLED"] = "0"

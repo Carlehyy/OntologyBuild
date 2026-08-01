@@ -27,6 +27,10 @@ from app.shared.encryption import decrypt, encrypt
 logger = logging.getLogger(__name__)
 
 
+def _is_environment_managed(environment: str) -> bool:
+    return str(environment or "").strip().lower() != "test"
+
+
 def _get_workflow_config(db: Session) -> WorkflowConfig:
     """Get or create the single-row workflow/n8n config after successful validation."""
     cfg = (
@@ -42,7 +46,33 @@ def _get_workflow_config(db: Session) -> WorkflowConfig:
     return cfg
 
 
-def get_workflow_config(db: Session) -> WorkflowConfigResponse:
+def get_workflow_config(
+    db: Session,
+    *,
+    environment: str,
+    managed_api_url: str = "",
+    managed_api_key: str = "",
+    managed_timeout_seconds: int = 30,
+    enforce_url_policy_fn: Callable[..., str] = enforce_n8n_url_policy,
+) -> WorkflowConfigResponse:
+    if _is_environment_managed(environment):
+        try:
+            api_base = enforce_url_policy_fn(
+                managed_api_url,
+                environment=environment,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"启动环境中的 n8n 配置无效: {exc}",
+            ) from exc
+        return WorkflowConfigResponse(
+            enabled=True,
+            api_url=api_base,
+            has_api_key=bool(str(managed_api_key or "").strip()),
+            timeout_seconds=managed_timeout_seconds,
+        )
+
     cfg = (
         db.query(WorkflowConfig)
         .filter(WorkflowConfig.id == "default")
@@ -60,8 +90,11 @@ def get_workflow_config(db: Session) -> WorkflowConfigResponse:
 
 def reject_direct_update() -> None:
     raise HTTPException(
-        status_code=400,
-        detail="请使用测试连接接口；n8n 配置仅在连接测试成功后保存",
+        status_code=409,
+        detail=(
+            "n8n 配置由启动环境/配置中心托管，运行时不允许覆盖；"
+            "请修改 N8N_* 配置并重启服务"
+        ),
     )
 
 
@@ -70,6 +103,9 @@ def test_workflow_connection(
     db: Session,
     *,
     environment: str,
+    managed_api_url: str = "",
+    managed_api_key: str = "",
+    managed_timeout_seconds: int = 30,
     get_workflow_config_fn: Callable[[Session], WorkflowConfig] = (
         _get_workflow_config
     ),
@@ -81,16 +117,29 @@ def test_workflow_connection(
     httpx_module: Any = httpx,
     log: logging.Logger = logger,
 ) -> WorkflowConnectionTestResponse:
+    environment_managed = _is_environment_managed(environment)
+    candidate_url = (
+        managed_api_url if environment_managed else body.api_url
+    )
+    timeout_seconds = (
+        managed_timeout_seconds
+        if environment_managed
+        else body.timeout_seconds
+    )
     try:
         api_base = enforce_url_policy_fn(
-            body.api_url,
+            candidate_url,
             environment=environment,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    api_key = body.api_key.strip()
-    if not api_key:
+    api_key = (
+        str(managed_api_key or "").strip()
+        if environment_managed
+        else body.api_key.strip()
+    )
+    if not api_key and not environment_managed:
         cfg = (
             db.query(WorkflowConfig)
             .filter(WorkflowConfig.id == "default")
@@ -120,7 +169,7 @@ def test_workflow_connection(
         result = test_connection_fn(
             api_url=api_base,
             api_key=api_key,
-            timeout_seconds=body.timeout_seconds,
+            timeout_seconds=timeout_seconds,
         )
     except n8n_api_error_type as exc:
         return WorkflowConnectionTestResponse(
@@ -153,16 +202,21 @@ def test_workflow_connection(
             api_base=api_base,
         )
 
-    cfg = get_workflow_config_fn(db)
-    cfg.enabled = body.enabled
-    cfg.api_url = result.api_base
-    cfg.timeout_seconds = body.timeout_seconds
-    if body.api_key:
-        cfg.api_key_encrypted = encrypt_fn(body.api_key)
-    db.commit()
+    if not environment_managed:
+        cfg = get_workflow_config_fn(db)
+        cfg.enabled = body.enabled
+        cfg.api_url = result.api_base
+        cfg.timeout_seconds = body.timeout_seconds
+        if body.api_key:
+            cfg.api_key_encrypted = encrypt_fn(body.api_key)
+        db.commit()
 
     return WorkflowConnectionTestResponse(
         ok=result.ok,
-        message="n8n 连接成功",
+        message=(
+            "n8n 环境托管配置连接成功"
+            if environment_managed
+            else "n8n 连接成功"
+        ),
         api_base=result.api_base,
     )

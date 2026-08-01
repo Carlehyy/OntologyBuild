@@ -5,6 +5,7 @@
 - PostgreSQL；
 - Neo4j；
 - MinIO/对象存储；
+- n8n workflow 定义及其受控凭据备份策略；
 - API Hub 独立数据目录；
 - 共享 uploads；
 - 服务器 `.env` 与部署所需非秘密配置；
@@ -19,8 +20,9 @@ Redis 队列是否需要持久恢复取决于任务幂等与业务 RPO，必须�
 
 1. 恢复数据；
 2. 运行 Alembic 到目标版本；
-3. 启动 API 和 worker；
-4. 校验对象附件、图关系、任务与 API Hub 配置；
+3. 启动 API 和 worker，并验证 PostgreSQL、Redis、Neo4j、MinIO、n8n 与
+   Chromium CDP readiness；
+4. 校验对象附件、图关系、任务、n8n workflow 与 API Hub 配置；
 5. 执行关键只读和写入旅程；
 6. 记录 RPO、RTO 和失败项。
 

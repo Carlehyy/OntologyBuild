@@ -47,7 +47,6 @@ PUBLIC_SIGNATURES = {
 # their implementations move to cohesive same-domain modules.
 PATCH_COMPAT_METHODS = {
     "_build_all_transaction",
-    "_delete_neo4j_entities",
     "_detect_alt_key_columns",
     "_discover_action_types",
     "_discover_logic_rules",
@@ -56,13 +55,10 @@ PATCH_COMPAT_METHODS = {
     "_llm_detect_fk",
     "_normalize_mapping",
     "_process_link_mappings",
-    "_rebuild_chroma_projection",
     "_rebuild_neo4j_projection",
     "_row_identity_value",
     "_rows_to_entities",
     "_stable_row_id",
-    "_write_neo4j",
-    "_write_neo4j_relations",
     "_write_v1_entities",
 }
 
@@ -111,11 +107,7 @@ EXTRACTED_METHODS = {
         "_rows_to_entities",
     },
     projection_adapter.ProjectionAdapterMixin: {
-        "_write_neo4j",
-        "_delete_neo4j_entities",
         "_rebuild_neo4j_projection",
-        "_rebuild_chroma_projection",
-        "_write_neo4j_relations",
     },
     relation_processing.RelationProcessingMixin: {
         "_infer_and_write_relations",
@@ -209,6 +201,7 @@ def test_mapping_extracted_modules_do_not_depend_on_facade_or_http_router():
         "identity_metadata.py",
         "neo4j_projection_contract.py",
         "projection_adapter.py",
+        "projection_rebuild.py",
         "relation_processing.py",
     ):
         path = MAPPING_DIR / filename
@@ -231,6 +224,7 @@ def test_mapping_facade_and_extracted_modules_stay_bounded():
         "identity_metadata.py": 600,
         "neo4j_projection_contract.py": 100,
         "projection_adapter.py": 180,
+        "projection_rebuild.py": 340,
         "relation_processing.py": 850,
     }
     for filename, maximum in limits.items():
