@@ -358,41 +358,45 @@ def test_full_incremental_chain():
     assert approve_result["triggered_mappings"][0]["dispatch_mode"] == "synchronous"
 
 
-def test_pipeline_dispatch_fails_closed_in_required_dependency_mode(monkeypatch):
-    from app.config import settings
-
+def test_pipeline_dispatch_fails_closed_in_compatibility_mode(monkeypatch):
     db = MagicMock()
     db.refresh.side_effect = lambda row: setattr(row, "id", "run-strict")
-    monkeypatch.setattr(settings, "require_external_dependencies", True)
     orch = IncrementalOrchestrator(db)
 
     with patch(
         "app.tasks.v2.pipeline_run.pipeline_run_task.delay",
         side_effect=ConnectionError("broker secret"),
-    ), pytest.raises(RuntimeError, match="Pipeline 未执行") as exc_info:
+    ), patch(
+        "app.tasks.v2.pipeline_run.pipeline_run_task.run",
+    ) as synchronous_fallback, pytest.raises(
+        RuntimeError, match="Pipeline 未执行"
+    ) as exc_info:
         orch._trigger_pipeline("pipeline-strict")
 
     run = db.add.call_args.args[0]
     assert run.status == "failed"
-    assert "禁止降级" in run.error_log
+    assert "Pipeline 未执行" in run.error_log
     assert "broker secret" not in run.error_log
     assert "broker secret" not in str(exc_info.value)
+    synchronous_fallback.assert_not_called()
 
 
-def test_mapping_dispatch_fails_closed_in_required_dependency_mode(monkeypatch):
-    from app.config import settings
-
+def test_mapping_dispatch_fails_closed_in_compatibility_mode(monkeypatch):
     db = MagicMock()
-    monkeypatch.setattr(settings, "require_external_dependencies", True)
     orch = IncrementalOrchestrator(db)
 
     with patch(
         "app.tasks.v2.mapping_apply.mapping_apply_task.delay",
         side_effect=ConnectionError("broker secret"),
-    ), pytest.raises(RuntimeError, match="Mapping 未执行") as exc_info:
+    ), patch(
+        "app.tasks.v2.mapping_apply.mapping_apply_task.run",
+    ) as synchronous_fallback, pytest.raises(
+        RuntimeError, match="Mapping 未执行"
+    ) as exc_info:
         orch._trigger_mapping_apply("mapping-strict", "ontology-strict")
 
     assert "broker secret" not in str(exc_info.value)
+    synchronous_fallback.assert_not_called()
 
 
 def test_synchronous_mapping_replay_requires_edge_safe_sentinel_barrier():

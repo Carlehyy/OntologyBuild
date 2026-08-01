@@ -5,7 +5,7 @@ StorageService 단위 테스트.
 from __future__ import annotations
 
 import io
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from minio.error import S3Error
@@ -156,34 +156,36 @@ def test_binary_roundtrip(storage, mock_minio):
     assert retrieved == content
 
 
-def _local_only_storage(tmp_path, monkeypatch):
+def _unavailable_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "app.shared.storage.settings.storage_local_dir", str(tmp_path))
-    svc = StorageService.__new__(StorageService)
-    svc._available = False
-    svc._client = None
-    svc._allow_local_fallback = True
-    svc._connection_options = None
-    svc._is_default = False
-    svc._next_reconnect_at = float("inf")
-    return svc
+    return StorageService.unavailable()
 
 
-def test_local_fallback_returns_explicit_uri_and_roundtrips(tmp_path, monkeypatch):
-    storage = _local_only_storage(tmp_path, monkeypatch)
+def _seed_legacy_local(
+    tmp_path, bucket: str, key: str, content: bytes,
+) -> str:
+    path = tmp_path / bucket / key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return f"local://{bucket}/{key}"
 
-    uri = storage.put_bytes("media", "pipeline/report.pdf", b"%PDF")
 
-    assert uri == "local://media/pipeline/report.pdf"
-    assert storage.get_object(uri) == b"%PDF"
-    assert storage.object_exists(uri) is True
-    assert storage.list_prefix("media", "pipeline/") == [uri]
+def test_unavailable_minio_rejects_new_write_without_local_side_effect(
+    tmp_path, monkeypatch,
+):
+    storage = _unavailable_storage(tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="MinIO 对象存储不可用"):
+        storage.put_bytes("media", "pipeline/report.pdf", b"%PDF")
+
+    assert not (tmp_path / "media").exists()
 
 
 def test_cross_bucket_local_key_is_rejected_without_touching_target(
     tmp_path, monkeypatch,
 ):
-    storage = _local_only_storage(tmp_path, monkeypatch)
+    storage = _unavailable_storage(tmp_path, monkeypatch)
     target = tmp_path / "raw-datasets" / "x"
     target.parent.mkdir(parents=True)
     target.write_bytes(b"sentinel")
@@ -210,12 +212,13 @@ def test_symlinked_bucket_cannot_escape_local_storage_root(tmp_path, monkeypatch
     base.mkdir()
     outside.mkdir()
     (base / "media").symlink_to(outside, target_is_directory=True)
-    storage = _local_only_storage(base, monkeypatch)
+    storage = _unavailable_storage(base, monkeypatch)
 
     operations = [
-        lambda: storage.ensure_bucket("media"),
-        lambda: storage.put_bytes("media", "escaped.txt", b"must stay inside"),
-        lambda: storage.list_prefix("media", ""),
+        lambda: storage.get_object("local://media/escaped.txt"),
+        lambda: storage.get_stream("local://media/escaped.txt"),
+        lambda: storage.delete_object("local://media/escaped.txt"),
+        lambda: storage.object_exists("local://media/escaped.txt"),
     ]
     for operation in operations:
         with pytest.raises(ValueError, match="escapes bucket root"):
@@ -224,12 +227,34 @@ def test_symlinked_bucket_cannot_escape_local_storage_root(tmp_path, monkeypatch
     assert not (outside / "escaped.txt").exists()
 
 
+def test_legacy_local_uri_remains_readable_and_deletable_without_minio(
+    tmp_path, monkeypatch,
+):
+    storage = _unavailable_storage(tmp_path, monkeypatch)
+    uri = _seed_legacy_local(
+        tmp_path, "media", "attachment.txt", b"local copy")
+
+    assert storage.get_object(uri) == b"local copy"
+    stream = storage.get_stream(uri)
+    try:
+        assert stream.read() == b"local copy"
+    finally:
+        stream.close()
+    assert storage.object_exists(uri) is True
+
+    storage.delete_object(uri)
+
+    assert storage.object_exists(uri) is False
+
+
 def test_local_uri_stays_local_after_minio_recovers(
     tmp_path, monkeypatch,
 ):
-    storage = _local_only_storage(tmp_path, monkeypatch)
-    uri = storage.put_bytes("media", "attachment.txt", b"local copy")
+    storage = _unavailable_storage(tmp_path, monkeypatch)
+    uri = _seed_legacy_local(
+        tmp_path, "media", "attachment.txt", b"local copy")
     recovered_minio = MagicMock()
+    recovered_minio.list_objects.return_value = []
     storage._client = recovered_minio
     storage._available = True
 
@@ -242,16 +267,18 @@ def test_local_uri_stays_local_after_minio_recovers(
     assert storage.list_prefix("media", "") == [uri]
     recovered_minio.get_object.assert_not_called()
     recovered_minio.stat_object.assert_not_called()
+    recovered_minio.list_objects.assert_called_once()
 
 
 def test_historical_s3_label_can_read_local_object_after_recovery(
     tmp_path, monkeypatch,
 ):
-    storage = _local_only_storage(tmp_path, monkeypatch)
-    local_uri = storage.put_bytes("media", "legacy.txt", b"legacy local")
+    storage = _unavailable_storage(tmp_path, monkeypatch)
+    local_uri = _seed_legacy_local(
+        tmp_path, "media", "legacy.txt", b"legacy local")
     recovered_minio = MagicMock()
-    recovered_minio.get_object.side_effect = RuntimeError("not in MinIO")
-    recovered_minio.stat_object.side_effect = RuntimeError("not in MinIO")
+    recovered_minio.get_object.side_effect = _not_found_error()
+    recovered_minio.stat_object.side_effect = _not_found_error()
     storage._client = recovered_minio
     storage._available = True
 
@@ -260,8 +287,24 @@ def test_historical_s3_label_can_read_local_object_after_recovery(
     assert storage.object_exists(historical_uri) is True
 
 
+def test_s3_operational_failure_never_reads_mislabeled_local_object(
+    tmp_path, monkeypatch,
+):
+    storage = _unavailable_storage(tmp_path, monkeypatch)
+    _seed_legacy_local(tmp_path, "media", "legacy.txt", b"legacy local")
+    recovered_minio = MagicMock()
+    recovered_minio.get_object.side_effect = RuntimeError("MinIO outage")
+    storage._client = recovered_minio
+    storage._available = True
+
+    with pytest.raises(RuntimeError, match="MinIO outage"):
+        storage.get_object("s3://media/legacy.txt")
+
+    assert (tmp_path / "media" / "legacy.txt").read_bytes() == b"legacy local"
+
+
 def test_reconnect_switches_new_writes_back_to_minio(tmp_path, monkeypatch):
-    storage = _local_only_storage(tmp_path, monkeypatch)
+    storage = _unavailable_storage(tmp_path, monkeypatch)
     storage._connection_options = {
         "endpoint": "minio:9000",
         "access_key": "test",
@@ -281,7 +324,7 @@ def test_reconnect_switches_new_writes_back_to_minio(tmp_path, monkeypatch):
     recovered_minio.put_object.assert_called_once()
 
 
-def test_seekable_stream_rewinds_when_minio_upload_fails(
+def test_seekable_stream_upload_failure_is_explicit_and_never_writes_local(
     storage, mock_minio, tmp_path,
 ):
     def consume_then_fail(_bucket, _key, source, **_kwargs):
@@ -290,11 +333,11 @@ def test_seekable_stream_rewinds_when_minio_upload_fails(
 
     mock_minio.put_object.side_effect = consume_then_fail
 
-    uri = storage.put_object(
-        "media", "fallback/seekable.bin", io.BytesIO(b"seekable"), length=8)
+    with pytest.raises(RuntimeError, match="MinIO outage"):
+        storage.put_object(
+            "media", "fallback/seekable.bin", io.BytesIO(b"seekable"), length=8)
 
-    assert uri == "local://media/fallback/seekable.bin"
-    assert (tmp_path / "media" / "fallback" / "seekable.bin").read_bytes() == b"seekable"
+    assert not (tmp_path / "media").exists()
 
 
 class _NonSeekableStream:
@@ -311,7 +354,7 @@ class _NonSeekableStream:
         raise OSError("not seekable")
 
 
-def test_non_seekable_stream_is_staged_for_successful_minio_upload(
+def test_non_seekable_stream_is_uploaded_directly_to_minio(
     storage, mock_minio,
 ):
     uploaded = []
@@ -327,7 +370,7 @@ def test_non_seekable_stream_is_staged_for_successful_minio_upload(
     assert uploaded == [b"streamed"]
 
 
-def test_non_seekable_stream_is_staged_for_failed_minio_upload(
+def test_non_seekable_stream_failure_is_explicit_and_never_writes_local(
     storage, mock_minio, tmp_path,
 ):
     def consume_then_fail(_bucket, _key, source, **_kwargs):
@@ -335,11 +378,12 @@ def test_non_seekable_stream_is_staged_for_failed_minio_upload(
         raise RuntimeError("MinIO outage")
 
     mock_minio.put_object.side_effect = consume_then_fail
-    uri = storage.put_object(
-        "media", "stream/fallback.bin", _NonSeekableStream(b"streamed"), length=8)
+    with pytest.raises(RuntimeError, match="MinIO outage"):
+        storage.put_object(
+            "media", "stream/fallback.bin",
+            _NonSeekableStream(b"streamed"), length=8)
 
-    assert uri == "local://media/stream/fallback.bin"
-    assert (tmp_path / "media" / "stream" / "fallback.bin").read_bytes() == b"streamed"
+    assert not (tmp_path / "media").exists()
 
 
 @pytest.mark.parametrize(
@@ -353,11 +397,12 @@ def test_runtime_minio_failure_opens_circuit_breaker(
 
     if operation == "ensure":
         mock_minio.bucket_exists.side_effect = failure
-        storage.ensure_bucket("media")
+        with pytest.raises(RuntimeError, match="connection timeout"):
+            storage.ensure_bucket("media")
     elif operation == "put":
         mock_minio.put_object.side_effect = failure
-        assert storage.put_bytes("media", "breaker/put.bin", b"data").startswith(
-            "local://")
+        with pytest.raises(RuntimeError, match="connection timeout"):
+            storage.put_bytes("media", "breaker/put.bin", b"data")
     elif operation == "get":
         mock_minio.get_object.side_effect = failure
         with pytest.raises(RuntimeError, match="connection timeout"):
@@ -368,10 +413,12 @@ def test_runtime_minio_failure_opens_circuit_breaker(
             storage.get_stream("s3://media/breaker/stream.bin")
     elif operation == "list":
         mock_minio.list_objects.side_effect = failure
-        assert storage.list_prefix("media", "breaker/") == []
+        with pytest.raises(RuntimeError, match="connection timeout"):
+            storage.list_prefix("media", "breaker/")
     else:
         mock_minio.stat_object.side_effect = failure
-        assert storage.object_exists("s3://media/breaker/exists.bin") is False
+        with pytest.raises(RuntimeError, match="connection timeout"):
+            storage.object_exists("s3://media/breaker/exists.bin")
 
     assert storage._available is False
     assert storage._client is None
@@ -387,11 +434,11 @@ def test_runtime_failure_clears_shared_client_and_throttles_followup(
     mock_minio.put_object.side_effect = RuntimeError("service unavailable")
 
     with patch("app.shared.storage.Minio") as reconnect:
-        first = storage.put_bytes("media", "breaker/first.bin", b"first")
-        second = storage.put_bytes("media", "breaker/second.bin", b"second")
+        with pytest.raises(RuntimeError, match="service unavailable"):
+            storage.put_bytes("media", "breaker/first.bin", b"first")
+        with pytest.raises(RuntimeError, match="MinIO 对象存储不可用"):
+            storage.put_bytes("media", "breaker/second.bin", b"second")
 
-    assert first.startswith("local://")
-    assert second.startswith("local://")
     assert mock_minio.put_object.call_count == 1
     reconnect.assert_not_called()
     assert StorageService._shared_client is None
@@ -401,7 +448,7 @@ def test_runtime_failure_clears_shared_client_and_throttles_followup(
 def test_failed_reconnect_probe_runs_once_per_backoff_window(
     tmp_path, monkeypatch,
 ):
-    storage = _local_only_storage(tmp_path, monkeypatch)
+    storage = _unavailable_storage(tmp_path, monkeypatch)
     storage._connection_options = {
         "endpoint": "minio:9000",
         "access_key": "test",
@@ -417,11 +464,11 @@ def test_failed_reconnect_probe_runs_once_per_backoff_window(
         "app.shared.storage.Minio",
         return_value=unavailable_client,
     ) as reconnect:
-        first = storage.put_bytes("media", "retry/first.bin", b"first")
-        second = storage.put_bytes("media", "retry/second.bin", b"second")
+        with pytest.raises(RuntimeError, match="MinIO 对象存储不可用"):
+            storage.put_bytes("media", "retry/first.bin", b"first")
+        with pytest.raises(RuntimeError, match="MinIO 对象存储不可用"):
+            storage.put_bytes("media", "retry/second.bin", b"second")
 
-    assert first.startswith("local://")
-    assert second.startswith("local://")
     reconnect.assert_called_once()
     unavailable_client.list_buckets.assert_called_once()
 
@@ -430,8 +477,8 @@ def test_runtime_breaker_recovers_and_new_writes_return_to_minio(
     storage, mock_minio,
 ):
     mock_minio.put_object.side_effect = RuntimeError("temporary outage")
-    assert storage.put_bytes("media", "recover/local.bin", b"local").startswith(
-        "local://")
+    with pytest.raises(RuntimeError, match="temporary outage"):
+        storage.put_bytes("media", "recover/failed.bin", b"failed")
 
     recovered_minio = MagicMock()
     recovered_minio.bucket_exists.return_value = True

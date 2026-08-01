@@ -483,50 +483,31 @@ def test_permanent_public_share_can_be_revoked_and_rotated(
     assert authenticated.content == b"shared-payload"
 
 
-def test_public_gateway_streams_durable_local_fallback_without_minio(
+def test_public_gateway_upload_fails_without_minio_and_writes_no_local_asset(
     client, db, admin_user, managed_pipeline, monkeypatch, tmp_path,
 ):
     pipeline, binding = managed_pipeline
-    monkeypatch.setattr(settings, "storage_local_dir", str(tmp_path / "objects"))
+    local_root = tmp_path / "objects"
+    monkeypatch.setattr(settings, "storage_local_dir", str(local_root))
     storage = StorageService.unavailable()
-    storage._allow_local_fallback = True
     monkeypatch.setattr(
         "app.data_channel.file_assets.service.get_storage_service", lambda: storage)
     monkeypatch.setattr(
         "app.data_channel.file_assets.router.get_storage_service", lambda: storage)
     token, _claims_data = _claims(pipeline, binding, admin_user.id)
 
-    uploaded = client.post(
-        "/api/v2/file-transfer/upload",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("fallback.txt", b"local-only-payload", "text/plain")},
-        data={"idempotency_key": "local-only-share"},
-    )
-    assert uploaded.status_code == 201
-    upload_ref = uploaded.json()["file_ref"]
-    assert upload_ref["share_url"] is None
-    asset = db.query(PipelineFileAsset).filter(
-        PipelineFileAsset.id == upload_ref["id"]).one()
-    assert asset.storage_uri.startswith("local://")
+    with pytest.raises(RuntimeError, match="MinIO 对象存储不可用"):
+        client.post(
+            "/api/v2/file-transfer/upload",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("no-minio.txt", b"must-not-persist", "text/plain")},
+            data={"idempotency_key": "no-minio"},
+        )
 
-    rows, ids = validate_and_canonicalize_refs(
-        db,
-        [{"attachment": upload_ref}],
-        pipeline_id=pipeline.id,
-        invocation_id="inv-1",
-    )
-    reconcile_invocation(
-        db,
-        pipeline_id=pipeline.id,
-        invocation_id="inv-1",
-        referenced_ids=ids,
-        pin_referenced=True,
-    )
-
-    shared = client.get(urlsplit(rows[0]["attachment"]["share_url"]).path)
-    assert shared.status_code == 200
-    assert shared.content == b"local-only-payload"
-    assert shared.headers["content-disposition"].endswith("fallback.txt")
+    assert db.query(PipelineFileAsset).filter(
+        PipelineFileAsset.pipeline_id == pipeline.id,
+    ).count() == 0
+    assert not local_root.exists()
 
 
 def test_legacy_asset_without_token_gets_share_on_demand(

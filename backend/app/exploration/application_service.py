@@ -16,10 +16,30 @@ from app.ontologies.access import (
     require_ontology_create_access,
 )
 from app.ontologies.release_context import create_initial_release
+from app.ontologies.projection_state import (
+    ProjectionRebuildError,
+    mark_projecting,
+    rebuild_after_commit,
+)
+from app.ontologies.runtime_fence import _ontology_build_lock
 from app.ontologies.versions.release_service import (
     collect_publishable_snapshot,
     resolve_current_release,
 )
+
+
+def _finish_projection(db: Session, ontology_id: str) -> None:
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_failed",
+            "message": (
+                "业务探索草稿已保存到关系型真相，但 Neo4j 图投影失败；"
+                "图读取已阻断，请执行图修复"
+            ),
+            "ontology_id": ontology_id,
+        }) from exc
 
 
 def apply_draft(
@@ -136,38 +156,75 @@ def apply_draft(
         db.flush()
         created_project = True
 
-    if not created_project:
-        # Freeze legacy structure before merging outside its current release.
-        resolve_current_release_fn(db, project)
+    with _ontology_build_lock(db, project.id):
+        # Re-resolve and lock the project after acquiring the canonical
+        # ontology fence.  The access/selection preflight above deliberately
+        # happens before any write, but another writer could have changed the
+        # target structure while this request was waiting for the lock.
+        locked_project = db.query(project_model).filter(
+            project_model.id == project.id,
+        ).with_for_update().first()
+        if locked_project is None:
+            raise HTTPException(404, "目标本体不存在（可能已被删除）")
+        project = locked_project
 
-    result = converter_module.apply_draft(
-        db,
-        draft.draft or {},
-        body.selected_keys,
-        project.id,
-        lineage={
-            "sessionId": draft.session_id,
-            "documentId": draft.document_id,
-            "draftId": draft.id,
-        },
-    )
-    if created_project:
-        create_initial_release_fn(
-            db,
-            project,
-            snapshot=collect_publishable_snapshot_fn(
-                db,
-                project.id,
-            ),
-            created_by=getattr(current_user, "id", None),
-            version_label="业务探索初始基线",
-            description="由业务探索草稿生成的完整发布基线",
+        locked_validation = converter_module.validate_draft_selection(
+            draft.draft or {},
+            body.selected_keys,
+            existing=converter_module.existing_name_sets(db, project.id),
         )
-    draft.status = "applied"
-    draft.applied_ontology_id = project.id
-    db.commit()
-    return ok_fn({
-        "ontologyId": project.id,
-        "ontologyName": project.name,
-        **result,
-    })
+        if not locked_validation["valid"]:
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "draft_validation_failed",
+                    "message": (
+                        "本体草稿选择集锁内复检未通过"
+                        f"（{len(locked_validation['errors'])} 项错误），已拒绝落地"
+                    ),
+                    "validation": locked_validation,
+                },
+            )
+
+        if not created_project:
+            # Freeze legacy structure before merging outside its current
+            # release while no other graph-truth writer can interleave.
+            resolve_current_release_fn(db, project)
+
+        result = converter_module.apply_draft(
+            db,
+            draft.draft or {},
+            body.selected_keys,
+            project.id,
+            lineage={
+                "sessionId": draft.session_id,
+                "documentId": draft.document_id,
+                "draftId": draft.id,
+            },
+        )
+        if created_project:
+            create_initial_release_fn(
+                db,
+                project,
+                snapshot=collect_publishable_snapshot_fn(
+                    db,
+                    project.id,
+                ),
+                created_by=getattr(current_user, "id", None),
+                version_label="业务探索初始基线",
+                description="由业务探索草稿生成的完整发布基线",
+            )
+        draft.status = "applied"
+        draft.applied_ontology_id = project.id
+        # Schema types affect how current and future runtime rows are labelled
+        # in Neo4j.  Persist the fence atomically with the reviewed draft even
+        # on an idempotent re-apply, so retrying a prior failed response repairs
+        # the complete projection instead of reporting a false success.
+        mark_projecting(db, project.id)
+        db.commit()
+        _finish_projection(db, project.id)
+        return ok_fn({
+            "ontologyId": project.id,
+            "ontologyName": project.name,
+            **result,
+        })

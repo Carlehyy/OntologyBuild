@@ -782,7 +782,7 @@ function PipelineCreateModal({
               ? '名称和描述始终可修改；发布后仅编排与字段契约封版。'
               : n8nReady
                 ? '推荐使用 n8n 流水线。系统流水线为旧版能力，仅保留兼容入口。'
-                : 'n8n 可用后将作为推荐入口；当前可先使用兼容画布，或前往系统设置完成配置。'}
+                : 'n8n 当前不可用；请检查启动配置与服务连通性后再创建 n8n 流水线。'}
           </p>
           <div className="flex gap-3 shrink-0">
             <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">

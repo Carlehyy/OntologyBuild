@@ -11,7 +11,8 @@
 6. [系统架构](./architecture/overview.md)：进程、存储和外部依赖；
 7. [本地开发](./development/setup.md)与[测试指南](./development/testing.md)：
    如何启动并证明改动安全；
-8. [部署说明](./operations/deployment.md)：自动部署边界；
+8. [配置说明](./operations/configuration.md)与[部署说明](./operations/deployment.md)：
+   必需运行依赖、无降级边界和自动部署；
 9. [迭代记录](./iterations/README.md)：最近发生了什么。
 
 仓库级强制开发规则见 [AGENTS.md](../AGENTS.md)。
@@ -74,7 +75,7 @@ docs/
 ### 迭代与参考
 
 - [迭代规则与模板](./iterations/README.md)
-- [当前仓库治理迭代](./iterations/2026/2026-07-30-repository-governance.md)
+- [当前稳定版依赖迭代](./iterations/2026/2026-08-02-required-runtime-dependencies.md)
 - [参考目录](./reference/README.md)
 - [Ontology 架构参考](./reference/ontology.md)
 - [Sentinel Engine 参考](./reference/sentinel-engine.md)
@@ -107,6 +108,12 @@ docs/
 | 自动部署 | `.github/workflows/deploy-nano-ontoprompt.yml` |
 | 服务器部署行为 | `scripts/deploy-prod.sh` |
 | 本地配置中心 | `config/README.md` |
+
+正常启动的阻塞型依赖是 PostgreSQL、Redis、Celery worker、Neo4j、MinIO 和
+n8n；Chromium CDP 地址配置必需，但连通失败只让深度 readiness 失败，不终止
+API。LLM 在平台启动后从模型配置页按需配置。当前搜索、存储和兼容例外的准确
+边界见[系统架构](./architecture/overview.md)与
+[配置说明](./operations/configuration.md)。
 
 文档描述必须来自源码、可执行配置、测试或已接受的 ADR。若这些事实互相矛盾，
 应记录矛盾和验证结果，不能用推测填空。

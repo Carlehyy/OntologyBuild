@@ -1,3 +1,6 @@
+from contextlib import ExitStack
+from collections.abc import Callable
+
 from app.tasks.celery_app import celery_app
 
 # 确保 Celery worker 在 fork 前加载所有模型映射, 避免子进程缺少模型注册
@@ -215,6 +218,116 @@ def _fuzzy_resolve_entity(name: str, name_to_id: dict) -> str | None:
     return candidates[0][1]
 
 
+def _record_extraction_failure(
+    db,
+    task_id: str,
+    error: Exception,
+    *,
+    stage: str,
+    preserve_existing: bool = False,
+) -> None:
+    """Persist a durable task fence after rolling back the failed transaction."""
+    from app.models.extraction_task import ExtractionTask
+
+    db.rollback()
+    task = db.query(ExtractionTask).filter(
+        ExtractionTask.id == task_id,
+    ).with_for_update().first()
+    if task is None or (preserve_existing and task.status == "failed"):
+        return
+    was_projecting = task.status == "projecting"
+    task.status = "failed"
+    task.error = str(error)
+    task.progress = {"stage": stage, "pct": 95}
+    if stage in {"projection_failed", "completion_commit_failed"} or was_projecting:
+        from app.ontologies.projection_state import mark_failed
+
+        mark_failed(db, task.ontology_id, error)
+    db.commit()
+
+
+def _commit_truth_and_rebuild_projection(
+    db,
+    task_id: str,
+    ontology_id: str,
+    *,
+    rebuild_projection: Callable[[object, str], None] | None = None,
+) -> None:
+    """Commit SQL truth behind a fence, then rebuild Neo4j idempotently.
+
+    Neo4j is deliberately invoked only after the relational transaction has
+    committed.  ``projecting`` is committed in that same transaction, so
+    readers can remain fenced until the rebuild and final status transition
+    have both completed.  Re-running this function repairs a failed projection
+    from the already committed SQL source of truth.
+    """
+    from app.models.extraction_task import ExtractionTask
+    from app.models.ontology import OntologyProject
+
+    task = db.query(ExtractionTask).filter(
+        ExtractionTask.id == task_id,
+    ).with_for_update().first()
+    if task is None:
+        raise RuntimeError(f"extraction_task_not_found:{task_id}")
+
+    task.status = "projecting"
+    task.error = None
+    task.progress = {"stage": "rebuilding graph projection", "pct": 95}
+    from app.ontologies.projection_state import mark_projecting
+    mark_projecting(db, ontology_id)
+    try:
+        # All pending Entity/Relation/Logic/Action/project writes and the
+        # durable fence become visible atomically before Neo4j is touched.
+        db.commit()
+    except Exception as exc:
+        _record_extraction_failure(
+            db,
+            task_id,
+            exc,
+            stage="relational_commit_failed",
+        )
+        raise
+
+    rebuild = rebuild_projection or _sync_neo4j
+    try:
+        rebuild(db, ontology_id)
+    except Exception as exc:
+        _record_extraction_failure(
+            db,
+            task_id,
+            exc,
+            stage="projection_failed",
+        )
+        raise
+
+    task = db.query(ExtractionTask).filter(
+        ExtractionTask.id == task_id,
+    ).with_for_update().first()
+    if task is None:
+        raise RuntimeError(f"extraction_task_not_found:{task_id}")
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id,
+    ).with_for_update().first()
+    if project is None:
+        raise RuntimeError(f"ontology_not_found:{ontology_id}")
+    task.status = "completed"
+    task.error = None
+    task.progress = {"stage": "done", "pct": 100}
+    project.status = "created"
+    from app.ontologies.projection_state import mark_ready
+    mark_ready(db, ontology_id)
+    try:
+        db.commit()
+    except Exception as exc:
+        _record_extraction_failure(
+            db,
+            task_id,
+            exc,
+            stage="completion_commit_failed",
+        )
+        raise
+
+
 @celery_app.task(bind=True)
 def run_extraction(self, task_id: str):
     import app.models  # noqa: F401 — register all tables for FK resolution
@@ -233,12 +346,14 @@ def run_extraction(self, task_id: str):
     import uuid
 
     db = SessionLocal()
+    projection_fence = ExitStack()
     try:
         task = db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
         if not task:
             return
 
         task.status = "running"
+        task.error = None
         task.progress = {"stage": "loading files", "pct": 10}
         db.commit()
 
@@ -370,6 +485,19 @@ def run_extraction(self, task_id: str):
         task.progress = {"stage": "saving results", "pct": 85}
         db.commit()
 
+        # Use the same cross-process lock order as Mapping, release promotion,
+        # rollback, and real Action execution.  The progress commit above ends
+        # the previous transaction before the advisory lock is acquired.
+        from app.ontologies.runtime_fence import _ontology_build_lock
+        projection_fence.enter_context(
+            _ontology_build_lock(db, task.ontology_id),
+        )
+        project = db.query(OntologyProject).filter(
+            OntologyProject.id == task.ontology_id,
+        ).with_for_update().first()
+        if project is None:
+            raise RuntimeError(f"ontology_not_found:{task.ontology_id}")
+
         # ── Cleanup pre-existing duplicates (keep best, delete extras) ────────
         _dedup_existing(db, task.ontology_id, Entity, "name_cn")
         _dedup_existing(db, task.ontology_id, LogicRule, "name_cn")
@@ -427,8 +555,9 @@ def run_extraction(self, task_id: str):
             if e_data.get("name_en"):
                 entity_name_to_id[e_data["name_en"]] = eid
 
-        # 实体写完先 commit 一次，缩短大事务窗口，避免 saving 阶段 SQLite 写冲突
-        db.commit()
+        # Keep entities in the same relational transaction as relations,
+        # rules, actions, project status, and the durable projection fence.
+        db.flush()
 
         # ── Fix 2+4: upsert relations (by source_id, target_id, type) ────────
         existing_rels    = db.query(Relation).filter(Relation.ontology_id == task.ontology_id).all()
@@ -572,84 +701,34 @@ def run_extraction(self, task_id: str):
                 db.add(act)
                 existing_action_map[name_cn] = act
 
-        project = db.query(OntologyProject).filter(OntologyProject.id == task.ontology_id).first()
-        if project:
-            project.status = "created"
-
-        task.status   = "completed"
-        task.progress = {"stage": "done", "pct": 100}
-        db.commit()
-
-        # 同步到 Neo4j（非致命，失败不影响任务成功状态）
-        _sync_neo4j(db, task.ontology_id)
+        # SQL is the sole source of truth.  It commits atomically with a
+        # ``projecting`` fence, then Neo4j is rebuilt from that committed state.
+        _commit_truth_and_rebuild_projection(
+            db,
+            task_id,
+            task.ontology_id,
+        )
 
     except Exception as e:
         try:
-            db.rollback()  # 清除错误态，确保后续 query/commit 可用
-            task = db.query(ExtractionTask).filter(ExtractionTask.id == task_id).first()
-            if task:
-                task.status = "failed"
-                task.error  = str(e)
-                db.commit()
+            _record_extraction_failure(
+                db,
+                task_id,
+                e,
+                stage="failed",
+                preserve_existing=True,
+            )
         except Exception:
             pass  # 数据库完全不可用时静默跳过，避免掩盖原始异常
+        raise
     finally:
+        projection_fence.close()
         db.close()
 
 
 def _sync_neo4j(db, ontology_id: str) -> None:
-    """把 SQLite 里的实体/关系批量同步到 Neo4j。Neo4j 不可用或出错时静默跳过。"""
-    try:
-        from app.services.v2.graph.neo4j_service import Neo4jService
-        from app.models.entity import Entity
-        from app.models.relation import Relation
+    """Rebuild the idempotent Neo4j projection from committed SQL truth."""
+    from app.ontologies.mappings.mapping_service import MappingService
 
-        svc = Neo4jService()
-        if not svc.available:
-            return
-
-        entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
-        if not entities:
-            svc.close()
-            return
-
-        # 按 type 分组批量 upsert（label = entity.type）
-        from collections import defaultdict
-        by_type: dict = defaultdict(list)
-        entity_type_map: dict[str, str] = {}  # id → type
-        for e in entities:
-            label = e.type or "OntologyEntity"
-            entity_type_map[e.id] = label
-            props = {
-                **(e.properties or {}),
-                "id": e.id,
-                "ontology_id": ontology_id,
-                "name_cn": e.name_cn or "",
-                "name_en": e.name_en or "",
-                "name": e.name_cn or e.name_en or e.id,
-                "display_name": e.name_cn or e.name_en or e.id,
-                "type": label,
-                "description": e.description or "",
-                "confidence": e.confidence or 0.85,
-            }
-            by_type[label].append(props)
-
-        for label, batch in by_type.items():
-            svc.batch_upsert_entities(label, batch, key_field="id")
-
-        # 写关系（逐条 MERGE，避免类型不匹配导致批量失败）
-        relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-        for r in relations:
-            src_type = entity_type_map.get(r.source_entity, "OntologyEntity")
-            tgt_type = entity_type_map.get(r.target_entity, "OntologyEntity")
-            rel_type = (r.type or "RELATED").upper().replace(" ", "_").replace("-", "_")
-            svc.upsert_relation(
-                src_label=src_type, src_key=r.source_entity,
-                tgt_label=tgt_type, tgt_key=r.target_entity,
-                rel_type=rel_type,
-                props={"id": r.id, "ontology_id": ontology_id, "confidence": r.confidence or 0.85},
-            )
-
-        svc.close()
-    except Exception:
-        pass  # Neo4j 同步失败不影响提取结果
+    if not MappingService(db)._rebuild_neo4j_projection(ontology_id):
+        raise RuntimeError("neo4j_projection_rebuild_failed")

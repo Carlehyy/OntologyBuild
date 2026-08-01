@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from app.config import settings
 from app.database import SessionLocal
 from app.deps import get_current_user
 from app.models.v2.connection import Connection
@@ -159,7 +158,7 @@ def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_d
 class SyncBody(BaseModel):
     mode: str = "full"           # full | delta
     resource: Optional[str] = None
-    async_mode: bool = False     # True 时尝试派发 Celery，否则同步执行
+    async_mode: bool = False     # True 时派发 Celery，否则按用户选择同步执行
 
 
 @router.post("/{connection_id}/sync")
@@ -167,9 +166,8 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
                  db: Session = Depends(get_db)):
     """手动触发数据同步，把连接数据落地为 Dataset 版本。
 
-    默认同步执行（Celery/Redis 不可用也能跑通）；async_mode=True 时尝试派发
-    Celery 任务。开发环境派发失败可回退同步执行；生产强依赖模式会显式
-    返回 503，避免 API 把未进入可靠任务队列的工作误报为已触发。
+    ``async_mode=False`` 是用户显式选择的同步执行；``async_mode=True`` 必须
+    成功投递 Celery，失败时返回 503，不能擅自改成 API 进程内执行。
     """
     conn = db.query(Connection).filter(Connection.id == connection_id).first()
     if not conn:
@@ -181,39 +179,23 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
         try:
             from app.tasks.celery_app import celery_app  # noqa: F401
             from app.tasks.v2.connection_sync import sync_connection as _sync
-            # 若已注册为 Celery 任务则派发，否则落到同步
             delay = getattr(_sync, "delay", None)
-            if callable(delay):
-                # 异步入口也必须透传 resource；丢失它会退回“第一个资源”，使调用
-                # 者请求的资源与最终 Dataset 身份不一致。
-                delay(connection_id, body.mode, body.resource)
-                return {"connection_id": connection_id, "status": "sync_triggered"}
-        except Exception as e:
-            if settings.require_external_dependencies:
-                logger.error(
-                    "Connection %s 异步同步任务投递失败；生产强依赖模式禁止降级",
-                    connection_id,
-                    exc_info=True,
-                )
-                raise HTTPException(
-                    503,
-                    "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行",
-                ) from e
-            logger.warning(
-                "Connection %s 异步同步任务投递失败，回退同步执行",
+            if not callable(delay):
+                raise RuntimeError("Connection 同步任务未注册")
+            # 异步入口也必须透传 resource；丢失它会退回“第一个资源”，使调用
+            # 者请求的资源与最终 Dataset 身份不一致。
+            delay(connection_id, body.mode, body.resource)
+        except Exception as exc:
+            logger.error(
+                "Connection %s 异步同步任务投递失败；任务未执行（%s）",
                 connection_id,
-                exc_info=True,
+                type(exc).__name__,
             )
-            logger_detail = "任务投递失败，已回退同步执行"
-        else:
-            if settings.require_external_dependencies:
-                raise HTTPException(
-                    503,
-                    "Connection 同步任务未注册，生产环境禁止降级执行",
-                )
-            logger_detail = "未注册为 Celery 任务，回退同步执行"
-    else:
-        logger_detail = None
+            raise HTTPException(
+                503,
+                "Redis/Celery 后台任务服务不可用，异步同步任务未投递",
+            ) from exc
+        return {"connection_id": connection_id, "status": "sync_triggered"}
 
     # 同步执行
     from app.tasks.v2.connection_sync import sync_connection
@@ -222,6 +204,4 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
     if result.get("status") == "error":
         raise HTTPException(502, result.get("error") or "连接同步失败")
     result["connection_id"] = connection_id
-    if logger_detail:
-        result["dispatch_note"] = logger_detail
     return result

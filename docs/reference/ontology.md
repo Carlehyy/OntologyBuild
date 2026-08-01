@@ -21,14 +21,13 @@ flowchart TB
   Runtime --> Sentinel["Sentinel evaluation"]
   Sentinel --> Actions["ActionExecutionLog / HITL / effects"]
   Runtime --> Neo4j["Neo4j query projection"]
-  Release --> Chroma["Chroma vector projection"]
 ```
 
 必须区分三层：
 
 1. **发布定义**：不可变 `OntologyVersion.snapshot_formal`；
 2. **当前运行投影**：PostgreSQL `fo_*` 表中的对象、关系和执行状态；
-3. **查询投影**：Neo4j/ChromaDB，可从前两层重建。
+3. **查询投影**：Neo4j 图视图，可从前两层重建。
 
 `OntologyProject.current_release_id` 是唯一权威发布指针。`project.status`、
 兼容 `version` 字段、可变 `fo_*` 定义投影或外部查询库都不能替代它。
@@ -39,7 +38,7 @@ flowchart TB
 
 | 模型/表 | 责任 |
 |---|---|
-| `OntologyProject` / `ontology_projects` | 项目元数据和 `current_release_id` |
+| `OntologyProject` / `ontology_projects` | 项目元数据、`current_release_id` 和持久化图投影围栏 |
 | `OntologyVersion` / `ontology_versions` | 完整 draft/release 快照树 |
 | `OntologyTrialRun` / `ontology_trial_runs` | 固定 revision/hash/base release/data pins 的试跑 |
 | `OntologyTrialObject` / `ontology_trial_objects` | 隔离试跑对象投影 |
@@ -130,7 +129,7 @@ canonical 建模边界，迁移规则见
 
 通过后在同一 SQL 事务中恢复 Formal 定义、激活试跑 Object/Link、写
 PropertyFact lineage、创建新 release、更新指针并使旧 draft superseded。
-production 还要求 Neo4j/Chroma 候选投影 ready；失败则 SQL 回滚并重建旧查询
+production 还要求 Neo4j 候选投影 ready；失败则 SQL 回滚并重建旧查询
 投影作为补偿。
 
 ### 3.5 Rollback
@@ -182,6 +181,23 @@ Mapping 应用与发布/Action 共用 ontology build lock，避免投影被并�
 运行写入覆盖。Formal 投影提交后，Sentinel CDC 屏障必须成功，才可把上游刷新
 标记成功。
 
+`OntologyProject.projection_status` 是 SQL 与 Neo4j 之间的持久化围栏：
+
+- 任何改变 Entity/Relation 或 Formal Object/Link 当前态的事务，在同一
+  SQL 提交中设为 `projecting`；
+- SQL 主事实提交后才全量删除并重建 Neo4j，节点/关系数量与端点
+  完整性校验通过后才设为 `ready`；
+- 投影失败持久化为 `failed`，图读取、Action 与发布不得读取旧图或
+  半成品图；显式 graph sync 从 SQL/Formal 主事实完整修复。
+- 删除本体先提交 `projecting`，再删除 Neo4j 投影，最后删除 SQL 项目；Neo4j
+  失败时保留 SQL 真相，SQL 最终提交失败时保留 `failed` 围栏，由重试或启动
+  修复重建，避免留下可读的孤儿图或把仍存在的 SQL 本体误标为 ready。
+
+Alembic `0055_ontology_projection_fence` 不猜测升级前图是否符合新契约：存量项目
+先标记为 `repair_required`。非测试 API 在 Neo4j 索引初始化后、后台 worker
+启动前，逐个本体同步执行全量对账；任意一个无法校验就阻断该次 API
+启动并保留 `failed` 证据。运行中断后留下的 `projecting` 也在下次启动重建。
+
 实现：
 [`mappings/models.py`](../../backend/app/ontologies/mappings/models.py)、
 [`mapping_service.py`](../../backend/app/ontologies/mappings/mapping_service.py)、
@@ -214,13 +230,22 @@ Action/Sentinel 细节见
 
 | 系统 | 用途 | 权威性 |
 |---|---|---|
-| PostgreSQL | 发布、定义、运行实例、Fact、outbox、审计 | 权威 |
+| PostgreSQL | 发布、定义、运行实例、Fact、outbox、审计、关键词搜索 | 权威 |
 | Neo4j | 当前对象/关系图查询 | 可重建投影 |
-| ChromaDB | 当前发布内容的向量检索 | 可重建投影 |
 
-生产 promote/rollback 把两种查询投影的 ready 状态当作发布门，是为了防止对外
-暴露半切换版本；这不意味着图或向量库成为主事实。Redis/Celery 也只负责传输、
-调度和执行，不拥有发布状态。
+生产 promote/rollback 把 Neo4j 图投影的 ready 状态当作发布门，是为了防止
+对外暴露半切换版本；这不意味着图数据库成为主事实。Redis/Celery 也只负责
+传输、调度和执行，不拥有发布状态。图查询失败会显式失败，不回退到 SQL 或
+内存图。
+
+Neo4j 对外节点/边 ID 来自 SQL/Formal 稳定标识，不暴露 Neo4j
+`elementId`。内部 MERGE 键同时包含 ontology id，避免两个本体的业务 ID
+相同时相互覆盖。图读在 PostgreSQL 上持有共享项目行锁直到 Neo4j 查询
+完成，写者只能在已开始的读取结束后切换到 `projecting` 并重建，从而避免
+删除/重建窗口被并发请求读到。
+
+ChromaDB 与向量检索已移除。`/search/keyword` 及统一搜索 keyword 模式使用
+PostgreSQL；语义搜索端点及统一搜索 semantic 模式返回 501。
 
 ## 7. API 与代码入口
 
@@ -243,7 +268,7 @@ FastAPI 的真实装配以
 - 绕过 `current_release_id` 从 live 表推断发布定义；
 - 在 published 项目上原地改变 Mapping/Sentinel 结构；
 - 用最新数据集指针替代 trial 固定版本；
-- 把 Neo4j/ChromaDB 当主事实；
+- 把 Neo4j 当主事实或为其增加 SQL/内存图运行时兜底；
 - 复用历史 release id 做回滚；
 - 让 Action、Sentinel 或审批跨 release 延续；
 - 只测试成功路径而不覆盖并发、重试、漂移与投影失败。

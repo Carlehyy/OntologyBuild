@@ -15,7 +15,7 @@ ontologies/
 ├── versions/             快照契约、Draft、Trial、Impact、Release 与 Rollback
 ├── mappings/             数据集到 Object/Link 的映射、对账与查询投影
 ├── sentinels/            定义、CDC、评估、扫描、动态策略与触发记录
-├── graph/                Neo4j/NetworkX 查询、分析与 NL-to-Cypher
+├── graph/                Neo4j 查询、分析与 NL-to-Cypher
 ├── agent_runtime/        本体 Agent 编排、工具、边界和报告
 ├── decision_simulation/  决策模拟
 ├── extraction/           文档/LLM 抽取及 legacy bridge

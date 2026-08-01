@@ -48,7 +48,9 @@ def _args() -> argparse.Namespace:
 
 
 def _configure_process(temp_root: Path) -> None:
-    os.environ["ENVIRONMENT"] = "development"
+    # This live external-service check deliberately uses an isolated SQLite
+    # fixture; it is not a normal platform startup or full-stack readiness test.
+    os.environ["ENVIRONMENT"] = "test"
     os.environ["DATABASE_URL"] = f"sqlite:///{temp_root / 'platform.db'}"
     os.environ["UPLOADS_DIR"] = str(temp_root / "uploads")
     os.environ["STEWARD_WORKSPACE_ROOT"] = str(temp_root / "sessions")

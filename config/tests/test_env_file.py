@@ -20,7 +20,6 @@ def complete_profile() -> ConfigProfile:
     payload["minio"]["access_key"] = "ontology-access"
     payload["minio"]["secret_key"] = "Minio@pass:word/#%"
     payload["n8n"]["api_key"] = "n8n-local-key"
-    payload["llm"]["api_key"] = "llm-local-key"
     return ConfigProfile.model_validate(payload)
 
 
@@ -39,13 +38,13 @@ def test_env_round_trip_keeps_complete_mode_and_special_credentials(
     assert result.backup_path is None
     assert loaded == original
     assert parsed["ENVIRONMENT"] == "development"
-    assert parsed["REQUIRE_EXTERNAL_DEPENDENCIES"] == "true"
-    assert parsed["DATASET_IMPORT_USE_CELERY"] == "true"
-    assert parsed["STORAGE_LOCAL_FALLBACK"] == "false"
+    assert parsed["N8N_API_KEY"] == "n8n-local-key"
+    assert parsed["REDIS_PASSWORD"] == "Redis@pass:word/#%"
+    assert parsed["REDIS_PASSWORD"] not in parsed["REDIS_URL"]
     assert parsed["LOCAL_CONFIG_MANAGED"] == "true"
     assert parsed["UPLOADS_DIR"] == "./runtime/uploads"
     assert "sqlite" not in parsed["DATABASE_URL"].lower()
-    assert parsed["DATABASE_URL"].startswith("postgresql+psycopg2://")
+    assert parsed["DATABASE_URL"].startswith("postgresql://")
     assert "Pg@pass:word" not in parsed["DATABASE_URL"]
     assert env_path.read_text(encoding="utf-8").startswith(
         "# 由 OpenOntology 本地配置中心生成"
@@ -63,9 +62,7 @@ def test_public_profile_masks_saved_secrets_and_blank_preserves_them(
     public, present, warning = store.public_profile()
     assert warning is None
     assert public.postgres.password == ""
-    assert public.llm.api_key == ""
     assert present["postgres.password"] is True
-    assert present["llm.api_key"] is True
 
     payload = public.model_dump()
     payload["platform"]["frontend_port"] = 5199
@@ -74,7 +71,6 @@ def test_public_profile_masks_saved_secrets_and_blank_preserves_them(
 
     assert resolved.platform.frontend_port == 5199
     assert resolved.postgres.password == original.postgres.password
-    assert resolved.llm.api_key == original.llm.api_key
 
 
 def test_fresh_defaults_are_visible_but_not_marked_as_retained(
@@ -125,7 +121,7 @@ def test_missing_required_external_secret_fails_closed(tmp_path: Path) -> None:
 
     assert "postgres.password" in message
     assert "redis.password" in message
-    assert "llm.api_key" not in message
+    assert "n8n.api_key" in message
 
 
 def test_individual_probe_only_requires_its_own_credentials(
@@ -141,7 +137,7 @@ def test_individual_probe_only_requires_its_own_credentials(
 
     assert postgres.postgres.password == "postgres-only-password"
     assert postgres.redis.password == ""
-    assert browser.llm.api_key == ""
+    assert browser.browser.cdp_url == "http://127.0.0.1:9222"
 
     try:
         store.resolve_service_secrets(profile, "redis")
@@ -171,8 +167,8 @@ def test_ignored_local_defaults_are_loaded_and_secrets_stay_masked(
         "MINIO_ENDPOINT=localhost:9000\n"
         "MINIO_ACCESS_KEY=admin\n"
         "MINIO_SECRET_KEY=minio-local-secret\n"
-        "LOCAL_N8N_API_URL=http://127.0.0.1:5678\n"
-        "LOCAL_N8N_API_KEY=n8n-local-secret\n",
+        "N8N_API_URL=http://127.0.0.1:5678\n"
+        "N8N_API_KEY=n8n-local-secret\n",
         encoding="utf-8",
     )
     store = LocalEnvStore(env_path)
@@ -194,4 +190,4 @@ def test_ignored_local_defaults_are_loaded_and_secrets_stay_masked(
     assert present["postgres.password"] is True
     assert present["minio.access_key"] is True
     assert resolved.postgres.password == "postgres-local-secret"
-    assert resolved.llm.api_key == ""
+    assert resolved.n8n.api_key == "n8n-local-secret"

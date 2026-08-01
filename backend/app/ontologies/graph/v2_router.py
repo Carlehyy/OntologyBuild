@@ -1,44 +1,66 @@
 """v2 Graph API — 基于 Neo4j"""
 from __future__ import annotations
+from typing import NoReturn
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.deps import get_current_user
+from sqlalchemy.orm import Session
+from app.deps import get_current_user, get_db, require_admin
 from app.database import SessionLocal
+from app.ontologies.access import ontology_access_guard
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def get_neo4j():
-    """Return the concrete Neo4j service used by status and graph routing.
-
-    Keeping this small factory separate from the fallback selector lets the
-    integration endpoint report a Neo4j outage instead of accidentally
-    presenting an available NetworkX fallback as a healthy Neo4j connection.
-    """
+    """Return the concrete Neo4j service used by graph routes."""
     from app.services.v2.graph.neo4j_service import Neo4jService
 
     return Neo4jService()
 
 
 def get_graph_service():
-    """
-    获取图服务：优先 Neo4j，不可用时自动回退 NetworkX。
-    两个服务返回兼容的数据格式，业务层无感知。
-    """
-    neo = get_neo4j()
-    if neo.available:
-        return neo
-    neo.close()
-    from app.services.v2.graph.networkx_service import NetworkXGraphService
-    return NetworkXGraphService()
-
-
-def get_db():
-    db = SessionLocal()
+    """Return Neo4j or fail explicitly; graph reads have no local fallback."""
     try:
-        yield db
-    finally:
-        db.close()
+        neo = get_neo4j()
+    except Exception:
+        _raise_neo4j_unavailable()
+    if not neo.available:
+        neo.close()
+        _raise_neo4j_unavailable()
+    return neo
+
+
+def _raise_neo4j_unavailable() -> NoReturn:
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "neo4j_unavailable",
+            "message": "Neo4j 图数据库不可用，请检查服务与连接配置",
+        },
+    )
+
+
+def _require_projection_ready(db: Session, ontology_id: str) -> None:
+    """Block graph reads while the SQL-to-Neo4j projection is incomplete."""
+    from app.ontologies.projection_state import not_ready_detail, snapshot
+
+    state = snapshot(db, ontology_id, lock_for_read=True)
+    if not state.ready:
+        raise HTTPException(
+            status_code=503,
+            detail=not_ready_detail(state),
+        )
+
+
+def _raise_neo4j_operation_failed(operation: str) -> NoReturn:
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "neo4j_operation_failed",
+            "message": f"Neo4j {operation}失败，请检查服务状态",
+        },
+    )
 
 
 class CypherRequest(BaseModel):
@@ -47,73 +69,23 @@ class CypherRequest(BaseModel):
 
 
 @router.get("/{ontology_id}/graph")
-def get_graph(ontology_id: str, limit: int = 200, label_filter: str | None = None):
+def get_graph(
+    ontology_id: str,
+    limit: int = 200,
+    label_filter: str | None = None,
+    db: Session = Depends(get_db),
+):
     """返回本体图谱数据 (Neovis.js 兼容格式)"""
+    _require_projection_ready(db, ontology_id)
     svc = get_graph_service()
     try:
         data = svc.get_graph_data(ontology_id, limit=limit, label_filter=label_filter)
     except Exception:
-        svc.close()
-        return _sqlite_graph_data(ontology_id, limit=limit, label_filter=label_filter)
-    svc.close()
-    # 图服务无数据 → 回退 SQLite
-    if not data.get("nodes"):
-        return _sqlite_graph_data(ontology_id, limit=limit, label_filter=label_filter)
-    data["graph_service"] = "neo4j" if svc.__class__.__name__ == "Neo4jService" else "networkx"
-    return data
-
-
-def _sqlite_graph_data(ontology_id: str, limit: int = 200, label_filter: str | None = None) -> dict:
-    from app.models.entity import Entity
-    from app.models.relation import Relation
-
-    db = SessionLocal()
-    try:
-        query = db.query(Entity).filter(Entity.ontology_id == ontology_id)
-        if label_filter:
-            query = query.filter(Entity.type == label_filter)
-        entities = query.limit(limit).all()
-        entity_ids = {e.id for e in entities}
-        relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-        edges = [
-            {
-                "id": r.id,
-                "source": r.source_entity,
-                "target": r.target_entity,
-                "type": r.type or "RELATED",
-                "properties": r.properties or {},
-            }
-            for r in relations
-            if r.source_entity in entity_ids and r.target_entity in entity_ids
-        ]
-        nodes = [
-            {
-                "id": e.id,
-                "labels": [e.type or "OntologyEntity"],
-                "properties": {
-                    **(e.properties or {}),
-                    "id": e.id,
-                    "source_id": e.id,
-                    "ontology_id": ontology_id,
-                    "name_cn": e.name_cn or "",
-                    "name_en": e.name_en or "",
-                    "name": e.name_cn or e.name_en or e.id,
-                    "type": e.type or "",
-                    "description": e.description or "",
-                    "confidence": e.confidence or 1.0,
-                    "version": e.version or "v0.1",
-                },
-            }
-            for e in entities
-        ]
-        return {
-            "nodes": nodes,
-            "edges": edges,
-            "neo4j_available": False,
-            "fallback": "sqlite",
-        }
+        _raise_neo4j_operation_failed("图查询")
     finally:
-        db.close()
+        svc.close()
+    data["graph_service"] = "Neo4jService"
+    return data
 
 
 @router.get("/{ontology_id}/graph/quality")
@@ -168,38 +140,36 @@ def graph_quality(ontology_id: str):
 
 
 @router.get("/{ontology_id}/integrations/status")
-def integration_status(ontology_id: str):
-    neo = get_neo4j()
+def integration_status(ontology_id: str, db: Session = Depends(get_db)):
+    _require_projection_ready(db, ontology_id)
+    try:
+        neo = get_neo4j()
+    except Exception:
+        _raise_neo4j_unavailable()
     neo_available = bool(neo.available)
     neo.close()
-
-    if neo_available:
-        graph_type = "Neo4jService"
-        graph_available = True
-    else:
-        from app.services.v2.graph.networkx_service import NetworkXGraphService
-
-        fallback = NetworkXGraphService()
-        graph_type = fallback.__class__.__name__
-        graph_available = bool(fallback.available)
-        fallback.close()
-
-    from app.services.v2.vector.chroma_service import ChromaService
-    chroma = ChromaService()
+    if not neo_available:
+        _raise_neo4j_unavailable()
     return {
         "ontology_id": ontology_id,
-        "neo4j": {"available": neo_available},
+        "neo4j": {"available": True},
         "graph_service": {
-            "type": graph_type,
-            "available": graph_available,
-            "fallback": not neo_available,
+            "type": "Neo4jService",
+            "available": True,
+            "fallback": False,
         },
-        "chroma": {"available": chroma.available, "entity_count": chroma.count(ontology_id)},
     }
 
 
-@router.post("/{ontology_id}/graph/cypher")
-def run_cypher(ontology_id: str, body: CypherRequest):
+@router.post(
+    "/{ontology_id}/graph/cypher",
+    dependencies=[Depends(require_admin)],
+)
+def run_cypher(
+    ontology_id: str,
+    body: CypherRequest,
+    db: Session = Depends(get_db),
+):
     """执行 Cypher 查询 (只读校验 + 强制 ontology_id 过滤)"""
     from app.services.v2.graph.cypher_builder import validate_readonly_cypher
 
@@ -207,26 +177,42 @@ def run_cypher(ontology_id: str, body: CypherRequest):
     if error:
         raise HTTPException(400, error)
 
+    _require_projection_ready(db, ontology_id)
     svc = get_graph_service()
     params = dict(body.params or {})
     params["ontology_id"] = ontology_id  # 供查询中的 $ontology_id 使用, 防跨本体读取
-    results = svc.run_cypher(body.query, params)
-    svc.close()
-    return {"results": results, "graph_service": svc.__class__.__name__}
+    try:
+        results = svc.run_cypher(body.query, params)
+    except Exception:
+        _raise_neo4j_operation_failed("查询")
+    finally:
+        svc.close()
+    return {"results": results, "graph_service": "Neo4jService"}
 
 
 @router.get("/{ontology_id}/graph/neighbors/{node_id}")
-def get_neighbors(ontology_id: str, node_id: str, depth: int = 1):
+def get_neighbors(
+    ontology_id: str,
+    node_id: str,
+    depth: int = 1,
+    db: Session = Depends(get_db),
+):
     """查询节点邻居"""
+    _require_projection_ready(db, ontology_id)
     svc = get_graph_service()
+    depth = max(1, min(depth, 5))
     query = f"""
-    MATCH (n)-[r*1..{min(depth, 5)}]-(m)
-    WHERE elementId(n) = $node_id AND n.ontology_id = $ontology_id
+    MATCH (n)-[r*1..{depth}]-(m)
+    WHERE n.id = $node_id AND n.ontology_id = $ontology_id
     RETURN n, r, m LIMIT 100
     """
-    results = svc.run_cypher(query, {"node_id": node_id, "ontology_id": ontology_id})
-    svc.close()
-    return {"results": results, "graph_service": svc.__class__.__name__}
+    try:
+        results = svc.run_cypher(query, {"node_id": node_id, "ontology_id": ontology_id})
+    except Exception:
+        _raise_neo4j_operation_failed("邻居查询")
+    finally:
+        svc.close()
+    return {"results": results, "graph_service": "Neo4jService"}
 
 
 # ── 自然语言查询 ──────────────────────────────────────────────────────
@@ -237,188 +223,178 @@ class NLQueryRequest(BaseModel):
 
 
 @router.post("/{ontology_id}/graph/ask")
-def nl_query(ontology_id: str, body: NLQueryRequest):
-    """自然语言 → Cypher → 图数据 (LLM翻译 + 确定性搜索兜底)"""
+def nl_query(
+    ontology_id: str,
+    body: NLQueryRequest,
+    db: Session = Depends(get_db),
+):
+    """自然语言 → Cypher → Neo4j 图数据。"""
     from app.services.v2.graph.nl2cypher import NL2CypherService
-    from app.database import SessionLocal
-    from app.models.entity import Entity
 
+    _require_projection_ready(db, ontology_id)
     nl_svc = NL2CypherService()
     plan = nl_svc.translate(body.question, body.schema)
 
     svc = get_graph_service()
-    results = []
     try:
         results = svc.run_cypher(plan.cypher, {"ontology_id": ontology_id})
     except Exception:
-        pass
-    svc.close()
-
-    # 兜底：Cypher无结果时，用关键词搜索实体
-    if not results:
-        db = SessionLocal()
-        try:
-            q = body.question.lower()
-            entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
-            matched = []
-            # Smart keyword extraction
-            keywords = [kw for kw in q.replace('旗下', ' ').replace('有哪些', ' ').replace('关系', ' ').replace('的', ' ').replace('是', ' ').split() if len(kw) >= 2]
-            # Also extract company/person names directly
-            for e in entities:
-                e_text = f"{e.name_cn or ''} {e.name_en or ''} {e.type or ''} {e.description or ''} {str(e.properties or {})}".lower()
-                # Direct name match (partial)
-                if any(kw in e_text for kw in keywords):
-                    matched.append({
-                        "n": {"element_id": e.id, "labels": [e.type or "Entity"],
-                              "properties": {"name_cn": e.name_cn, "name_en": e.name_en,
-                                           "type": e.type, **(e.properties or {})}},
-                    })
-                    continue
-                # Check relations for this entity
-                from app.models.relation import Relation
-                rels = db.query(Relation).filter(
-                    ((Relation.source_entity == e.id) | (Relation.target_entity == e.id)) &
-                    (Relation.ontology_id == ontology_id)
-                ).all()
-                rel_text = ' '.join([r.type for r in rels]).lower()
-                if any(kw in rel_text for kw in keywords):
-                    matched.append({
-                        "n": {"element_id": e.id, "labels": [e.type or "Entity"],
-                              "properties": {"name_cn": e.name_cn, "name_en": e.name_en,
-                                           "type": e.type, **(e.properties or {})}},
-                    })
-                    continue
-            # If still no match, do fuzzy partial name matching
-            if not matched:
-                for e in entities:
-                    name = (e.name_cn or '').lower()
-                    if any(kw in name or name in kw for kw in keywords if len(kw) >= 3):
-                        matched.append({
-                            "n": {"element_id": e.id, "labels": [e.type or "Entity"],
-                                  "properties": {"name_cn": e.name_cn, "name_en": e.name_en,
-                                               "type": e.type, **(e.properties or {})}},
-                        })
-            if matched:
-                # Remove duplicates
-                seen = set()
-                unique = []
-                for m in matched:
-                    eid = m["n"]["properties"].get("name_cn", "")
-                    if eid not in seen:
-                        seen.add(eid)
-                        unique.append(m)
-                matched = unique[:20]
-            if matched:
-                return {
-                    "results": matched,
-                    "cypher": plan.cypher,
-                    "explanation": f"关键词匹配: 找到 {len(matched)} 个相关实体",
-                    "confidence": 0.7,
-                    "graph_service": svc.__class__.__name__,
-                    "fallback": "entity_search",
-                }
-        finally:
-            db.close()
+        _raise_neo4j_operation_failed("自然语言图查询")
+    finally:
+        svc.close()
 
     return {
         "results": results,
         "cypher": plan.cypher,
         "explanation": plan.explanation,
         "confidence": plan.confidence,
-        "graph_service": svc.__class__.__name__,
+        "graph_service": "Neo4jService",
     }
 
 
 # ── 高级图分析 ─────────────────────────────────────────────────────────
 
 @router.get("/{ontology_id}/graph/path")
-def graph_path(ontology_id: str, src: str, tgt: str):
+def graph_path(
+    ontology_id: str,
+    src: str,
+    tgt: str,
+    db: Session = Depends(get_db),
+):
     """两节点间最短路径"""
     from app.services.v2.graph.graph_analytics import GraphAnalyticsService
-    svc = GraphAnalyticsService()
-    return svc.shortest_path(ontology_id, src, tgt)
+    _require_projection_ready(db, ontology_id)
+    svc = None
+    try:
+        svc = GraphAnalyticsService()
+        return svc.shortest_path(ontology_id, src, tgt)
+    except Exception:
+        _raise_neo4j_operation_failed("最短路径查询")
+    finally:
+        if svc is not None:
+            svc.close()
 
 
 @router.get("/{ontology_id}/graph/degree/{node_id}")
-def node_degree(ontology_id: str, node_id: str):
+def node_degree(
+    ontology_id: str,
+    node_id: str,
+    db: Session = Depends(get_db),
+):
     """查询节点度数（入度 + 出度）"""
     from app.services.v2.graph.graph_analytics import GraphAnalyticsService
-    svc = GraphAnalyticsService()
-    return svc.node_degree(ontology_id, node_id)
+    _require_projection_ready(db, ontology_id)
+    svc = None
+    try:
+        svc = GraphAnalyticsService()
+        return svc.node_degree(ontology_id, node_id)
+    except Exception:
+        _raise_neo4j_operation_failed("节点度数查询")
+    finally:
+        if svc is not None:
+            svc.close()
 
 
 @router.get("/{ontology_id}/graph/top-nodes")
-def top_nodes(ontology_id: str, limit: int = 10):
+def top_nodes(
+    ontology_id: str,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
     """返回连接数最多的 Top-N 节点"""
     from app.services.v2.graph.graph_analytics import GraphAnalyticsService
-    svc = GraphAnalyticsService()
-    return {"nodes": svc.top_connected_nodes(ontology_id, limit)}
+    _require_projection_ready(db, ontology_id)
+    svc = None
+    try:
+        svc = GraphAnalyticsService()
+        return {"nodes": svc.top_connected_nodes(ontology_id, limit)}
+    except Exception:
+        _raise_neo4j_operation_failed("Top-N 节点查询")
+    finally:
+        if svc is not None:
+            svc.close()
 
 
-@router.post("/{ontology_id}/graph/sync")
+@router.post(
+    "/{ontology_id}/graph/sync",
+    dependencies=[Depends(ontology_access_guard)],
+)
 def sync_graph(ontology_id: str):
-    """将 SQLite 实体/关系全量同步到 Neo4j"""
+    """Repair Neo4j from committed PostgreSQL/Formal truth."""
     from app.database import SessionLocal
+    from app.models.ontology import OntologyProject
     from app.models.entity import Entity
     from app.models.relation import Relation
-
-    neo = get_graph_service()
-    if not neo.available:
-        return {"synced": False, "reason": "Graph service unavailable"}
+    from app.models.ontology_formal import ObjectInstance, LinkInstance
+    from app.ontologies.mappings.mapping_service import MappingService
+    from app.ontologies.mappings.projection_adapter import projection_node_id
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        mark_projecting,
+        rebuild_after_commit,
+    )
+    from app.ontologies.runtime_fence import _ontology_build_lock
 
     db = SessionLocal()
     try:
-        entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).all()
-        relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-
-        # Build entity id -> neo4j label map (use type as label, fallback Entity)
-        entity_label_map: dict[str, str] = {}
-
-        # Batch upsert entities
-        batch = []
-        for e in entities:
-            label = (e.type or "Entity").replace(" ", "_")
-            entity_label_map[e.id] = label
-            props = {
-                **(e.properties or {}),
-                "id": e.id,           # SQLite UUID 优先，覆盖 properties 里的 id
-                "source_id": e.id,
-                "ontology_id": ontology_id,
-                "name_cn": e.name_cn or "",
-                "name": e.name_cn or "",
-                "name_en": e.name_en or "",
-                "type": e.type or "",
-                "description": e.description or "",
-                "confidence": e.confidence or 1.0,
-                "version": e.version or "v0.1",
-            }
-            # Use generic label for batch
-            batch.append(props)
-
-        # Upsert all as generic "OntologyEntity" first (fast batch)
-        synced_entities = neo.batch_upsert_entities("OntologyEntity", batch, key_field="id")
-
-        # Upsert relations
-        synced_relations = 0
-        for r in relations:
-            src_label = entity_label_map.get(r.source_entity, "OntologyEntity")
-            tgt_label = entity_label_map.get(r.target_entity, "OntologyEntity")
-            rel_type = (r.type or "RELATED").upper().replace(" ", "_").replace("-", "_")
-            ok = neo.upsert_relation(
-                "OntologyEntity", r.source_entity,
-                "OntologyEntity", r.target_entity,
-                rel_type,
-                props={"ontology_id": ontology_id, "confidence": r.confidence or 1.0},
+        project = db.query(OntologyProject).filter(
+            OntologyProject.id == ontology_id,
+        ).first()
+        if project is None:
+            raise HTTPException(404, "Ontology not found")
+        with _ontology_build_lock(db, ontology_id):
+            mark_projecting(db, ontology_id)
+            db.commit()
+            service = MappingService(db)
+            result = rebuild_after_commit(
+                db,
+                ontology_id,
+                rebuild=service._rebuild_neo4j_projection,
+                run_in_test=True,
             )
-            if ok:
-                synced_relations += 1
-
-        neo.close()
+        legacy_entity_ids = {
+            str(row[0])
+            for row in db.query(Entity.id).filter(
+                Entity.ontology_id == ontology_id,
+            ).all()
+        }
+        stable_node_ids = set(legacy_entity_ids)
+        stable_node_ids.update(
+            projection_node_id(
+                instance_id,
+                external_id,
+                legacy_entity_ids,
+            )
+            for instance_id, external_id in db.query(
+                ObjectInstance.id,
+                ObjectInstance.external_id,
+            ).filter(ObjectInstance.ontology_id == ontology_id).all()
+        )
+        represented_relations = {
+            str(row[0])
+            for row in db.query(LinkInstance.source_relation_id).filter(
+                LinkInstance.ontology_id == ontology_id,
+                LinkInstance.source_relation_id.is_not(None),
+            ).all()
+        }
+        relational_edges = db.query(Relation.id).filter(
+            Relation.ontology_id == ontology_id,
+        ).all()
+        formal_edge_count = db.query(LinkInstance).filter(
+            LinkInstance.ontology_id == ontology_id,
+        ).count()
+        edge_count = formal_edge_count + sum(
+            1 for (relation_id,) in relational_edges
+            if str(relation_id) not in represented_relations
+        )
         return {
             "synced": True,
-            "entities": synced_entities,
-            "relations": synced_relations,
+            "entities": len(stable_node_ids),
+            "relations": edge_count,
             "ontology_id": ontology_id,
+            "projection": result,
         }
+    except ProjectionRebuildError:
+        _raise_neo4j_operation_failed("图同步")
     finally:
         db.close()

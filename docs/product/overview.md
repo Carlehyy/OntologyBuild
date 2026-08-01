@@ -31,11 +31,19 @@ OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：
 - React/Vite 前端；
 - FastAPI API；
 - Celery worker；
-- PostgreSQL 主数据；
-- PostgreSQL 主事实、MinIO 非结构化对象；
-- Redis/Celery 执行通道、Neo4j/ChromaDB 可重建查询投影；
+- PostgreSQL 主数据与主事实；
+- MinIO 非结构化对象；
+- Redis/Celery 执行通道、Neo4j 可重建图查询投影；
+- n8n 工作流和 Chromium CDP 浏览器运行时；
 - 本地配置中心；
 - GitHub Actions 与 Docker Compose 生产部署。
+
+这些运行组件采用 fail-closed 契约：正常启动必须真实配置并验证 PostgreSQL、
+Redis、Celery worker、Neo4j、MinIO 和 n8n，不切换到 SQLite、API 线程任务、
+内存图或本地对象存储。Chromium CDP 地址必须配置；服务不可达不终止 API，
+但深度 readiness 返回 503。ChromaDB 已移除；关键词搜索由 PostgreSQL 提供，
+semantic 模式明确返回 501。LLM 在平台启动后通过模型配置页按需配置，不阻断
+基础平台启动。
 
 下一步按需要进入：
 [导航与业务能力](./navigation-business-map.md)、

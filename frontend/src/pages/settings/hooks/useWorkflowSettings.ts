@@ -6,9 +6,8 @@ import { settingsApi } from '@/api/ontologies'
 export function useWorkflowSettings(activeTab: string, t: TFunction) {
   const [workflowEnabled, setWorkflowEnabled] = useState(false)
   const [workflowApiUrl, setWorkflowApiUrl] = useState('')
-  const [workflowApiKey, setWorkflowApiKey] = useState('')
   const [workflowHasSavedApiKey, setWorkflowHasSavedApiKey] = useState(false)
-  const [workflowTimeoutSeconds, setWorkflowTimeoutSeconds] = useState(10)
+  const [workflowTimeoutSeconds, setWorkflowTimeoutSeconds] = useState(30)
   const [workflowMsg, setWorkflowMsg] = useState('')
   const [workflowMsgOk, setWorkflowMsgOk] = useState(true)
   const [workflowTesting, setWorkflowTesting] = useState(false)
@@ -25,39 +24,24 @@ export function useWorkflowSettings(activeTab: string, t: TFunction) {
     if (!cfg) return
     setWorkflowEnabled(Boolean(cfg.enabled))
     setWorkflowApiUrl(cfg.api_url || '')
-    setWorkflowApiKey('')
     setWorkflowHasSavedApiKey(Boolean(cfg.has_api_key))
-    setWorkflowTimeoutSeconds(cfg.timeout_seconds || 10)
+    setWorkflowTimeoutSeconds(cfg.timeout_seconds || 30)
     setWorkflowMsg('')
   }, [workflowConfigData])
 
-  async function handleSaveWorkflowConfig() {
-    await handleTestWorkflowConnection()
-  }
-
   async function handleTestWorkflowConnection() {
-    if (!workflowApiUrl.trim()) {
-      setWorkflowMsg(t('settings.workflow_url_placeholder'))
-      setWorkflowMsgOk(false)
-      return
-    }
-
     setWorkflowTesting(true)
     setWorkflowMsg('')
     try {
       const res = await settingsApi.testWorkflowConnection({
         enabled: workflowEnabled,
         api_url: workflowApiUrl.trim(),
-        api_key: workflowApiKey,
+        api_key: '',
         timeout_seconds: workflowTimeoutSeconds,
       }) as any
       setWorkflowMsg(res.message || (res.ok ? t('settings.connection_success') : t('settings.workflow_connection_failed')))
       setWorkflowMsgOk(Boolean(res.ok))
       if (res.api_base) setWorkflowApiUrl(res.api_base)
-      if (res.ok && workflowApiKey) {
-        setWorkflowHasSavedApiKey(true)
-        setWorkflowApiKey('')
-      }
     } catch (e: any) {
       setWorkflowMsg(e?.detail || t('settings.workflow_connection_failed'))
       setWorkflowMsgOk(false)
@@ -68,18 +52,12 @@ export function useWorkflowSettings(activeTab: string, t: TFunction) {
 
   return {
     workflowEnabled,
-    setWorkflowEnabled,
     workflowApiUrl,
-    setWorkflowApiUrl,
-    workflowApiKey,
-    setWorkflowApiKey,
     workflowHasSavedApiKey,
     workflowTimeoutSeconds,
-    setWorkflowTimeoutSeconds,
     workflowMsg,
     workflowMsgOk,
     workflowTesting,
-    handleSaveWorkflowConfig,
     handleTestWorkflowConnection,
   }
 }

@@ -61,8 +61,8 @@ jobs:
         run: |
           DB_FILE="$(mktemp -u /tmp/ontologybuild-ci-XXXXXX.db)"
           trap 'rm -f "${DB_FILE}"' EXIT
-          DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
-          test "$(uv run alembic heads | grep -c '(head)')" -eq 1
+          ENVIRONMENT=test DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
+          test "$(ENVIRONMENT=test uv run alembic heads | grep -c '(head)')" -eq 1
         working-directory: backend
 
   configuration-center:

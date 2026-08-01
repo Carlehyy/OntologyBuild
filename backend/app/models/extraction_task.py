@@ -11,7 +11,11 @@ class ExtractionTask(Base):
     ontology_id: Mapped[str] = mapped_column(String, ForeignKey("ontology_projects.id", ondelete="CASCADE"), nullable=False)
     prompt_id: Mapped[str] = mapped_column(String, ForeignKey("prompts.id", ondelete="SET NULL"), nullable=True)
     model_id: Mapped[str] = mapped_column(String, ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|completed|failed
+    # ``projecting`` is a durable SQL→Neo4j fence.  SQL truth has committed,
+    # but graph reads/runtime actions must wait until the full rebuild succeeds.
+    status: Mapped[str] = mapped_column(
+        String(20), default="queued",
+    )  # queued|running|projecting|completed|failed
     parameters: Mapped[dict] = mapped_column(JSON, default=dict)
     progress: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str] = mapped_column(Text, nullable=True)

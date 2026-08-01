@@ -12,7 +12,6 @@ def _profile_with_secrets() -> ConfigProfile:
     payload["minio"]["access_key"] = "minio-secret-access"
     payload["minio"]["secret_key"] = "minio-super-secret"
     payload["n8n"]["api_key"] = "n8n-super-secret"
-    payload["llm"]["api_key"] = "llm-super-secret"
     return ConfigProfile.model_validate(payload)
 
 
@@ -30,7 +29,6 @@ def test_probe_errors_redact_every_known_secret(monkeypatch) -> None:
                     current.minio.access_key,
                     current.minio.secret_key,
                     current.n8n.api_key,
-                    current.llm.api_key,
                 ]
             )
         )

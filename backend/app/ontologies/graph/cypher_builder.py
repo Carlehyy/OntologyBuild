@@ -51,7 +51,19 @@ def validate_readonly_cypher(query: str) -> str | None:
     m = _WRITE_KEYWORD.search(query)
     if m:
         return f"Write queries not allowed via this endpoint: {m.group(1).upper()}"
-    if "ontology_id" not in query:
+    scoped_property = re.search(
+        r"\b[A-Za-z_][A-Za-z0-9_]*\.ontology_id\s*=\s*\$ontology_id\b"
+        r"|\$ontology_id\s*=\s*"
+        r"[A-Za-z_][A-Za-z0-9_]*\.ontology_id\b",
+        query,
+        flags=re.IGNORECASE,
+    )
+    scoped_map = re.search(
+        r"\{[^{}]*\bontology_id\s*:\s*\$ontology_id\b[^{}]*\}",
+        query,
+        flags=re.IGNORECASE,
+    )
+    if scoped_property is None and scoped_map is None:
         return ("Query must filter by ontology_id, e.g. "
                 "MATCH (n) WHERE n.ontology_id = $ontology_id RETURN n LIMIT 25")
     return None

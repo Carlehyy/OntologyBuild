@@ -13,9 +13,7 @@ from dotenv import dotenv_values
 from .models import (
     AdvancedConfig,
     BrowserConfig,
-    ChromaConfig,
     ConfigProfile,
-    LlmConfig,
     MinioConfig,
     N8nConfig,
     Neo4jConfig,
@@ -36,7 +34,6 @@ SECRET_FIELDS: dict[str, tuple[str, str]] = {
     "minio.access_key": ("minio", "access_key"),
     "minio.secret_key": ("minio", "secret_key"),
     "n8n.api_key": ("n8n", "api_key"),
-    "llm.api_key": ("llm", "api_key"),
     "advanced.w3_password": ("advanced", "w3_password"),
     "advanced.api_hub_mcp_token": ("advanced", "api_hub_mcp_token"),
     "advanced.api_hub_system_mcp_token": (
@@ -202,30 +199,19 @@ class LocalEnvStore:
                     values, "MINIO_USE_SSL", defaults.minio.secure
                 ),
             ),
-            chroma=ChromaConfig(
-                host=values.get("CHROMA_HOST", defaults.chroma.host),
-                port=_int_value(values, "CHROMA_PORT", defaults.chroma.port),
-            ),
             browser=BrowserConfig(
                 cdp_url=values.get(
                     "STEWARD_BROWSER_CDP_URL", defaults.browser.cdp_url
                 )
             ),
             n8n=N8nConfig(
-                api_url=values.get("LOCAL_N8N_API_URL", defaults.n8n.api_url),
-                api_key=values.get("LOCAL_N8N_API_KEY", ""),
+                api_url=values.get("N8N_API_URL", defaults.n8n.api_url),
+                api_key=values.get("N8N_API_KEY", ""),
                 timeout_seconds=_int_value(
                     values,
-                    "LOCAL_N8N_TIMEOUT_SECONDS",
+                    "N8N_TIMEOUT_SECONDS",
                     defaults.n8n.timeout_seconds,
                 ),
-            ),
-            llm=LlmConfig(
-                name=values.get("LOCAL_LLM_NAME", defaults.llm.name),
-                provider=values.get("LOCAL_LLM_PROVIDER", defaults.llm.provider),
-                api_base=values.get("LOCAL_LLM_API_BASE", defaults.llm.api_base),
-                api_key=values.get("LOCAL_LLM_API_KEY", ""),
-                model=values.get("LOCAL_LLM_MODEL", defaults.llm.model),
             ),
             advanced=AdvancedConfig(
                 uploads_dir=values.get(
@@ -397,7 +383,7 @@ def render_env(profile: ConfigProfile) -> str:
         f"{profile.platform.frontend_port}"
     )
     database_url = (
-        "postgresql+psycopg2://"
+        "postgresql://"
         f"{quote(pg.username, safe='')}:{quote(pg.password, safe='')}@"
         f"{_url_host(pg.host)}:{pg.port}/{quote(pg.database, safe='')}"
         f"?sslmode={quote(pg.ssl_mode, safe='')}"
@@ -420,8 +406,6 @@ def render_env(profile: ConfigProfile) -> str:
                 ("LOCAL_CONFIG_SCHEMA_VERSION", "1"),
                 ("LOCAL_CONFIG_MANAGED", True),
                 ("ENVIRONMENT", "development"),
-                ("STRICT_PRODUCTION_CONFIG", False),
-                ("REQUIRE_EXTERNAL_DEPENDENCIES", True),
             ],
         ),
         (
@@ -455,8 +439,8 @@ def render_env(profile: ConfigProfile) -> str:
         (
             "Redis 与 Celery。请另外启动 Celery worker",
             [
+                ("REDIS_PASSWORD", redis.password),
                 ("REDIS_URL", redis_url),
-                ("DATASET_IMPORT_USE_CELERY", True),
             ],
         ),
         (
@@ -474,15 +458,7 @@ def render_env(profile: ConfigProfile) -> str:
                 ("MINIO_ACCESS_KEY", profile.minio.access_key),
                 ("MINIO_SECRET_KEY", profile.minio.secret_key),
                 ("MINIO_USE_SSL", profile.minio.secure),
-                ("STORAGE_LOCAL_FALLBACK", False),
                 ("STORAGE_LOCAL_DIR", profile.advanced.storage_local_dir),
-            ],
-        ),
-        (
-            "Chroma 向量数据库",
-            [
-                ("CHROMA_HOST", profile.chroma.host),
-                ("CHROMA_PORT", profile.chroma.port),
             ],
         ),
         (
@@ -499,21 +475,11 @@ def render_env(profile: ConfigProfile) -> str:
             ],
         ),
         (
-            "本地托管的 n8n 配置。后端启动后加密写入平台数据库",
+            "n8n 启动配置。后端启动后加密写入平台数据库",
             [
-                ("LOCAL_N8N_API_URL", profile.n8n.api_url),
-                ("LOCAL_N8N_API_KEY", profile.n8n.api_key),
-                ("LOCAL_N8N_TIMEOUT_SECONDS", profile.n8n.timeout_seconds),
-            ],
-        ),
-        (
-            "本地托管的默认模型。后端启动后加密写入平台数据库",
-            [
-                ("LOCAL_LLM_NAME", profile.llm.name),
-                ("LOCAL_LLM_PROVIDER", profile.llm.provider),
-                ("LOCAL_LLM_API_BASE", profile.llm.api_base),
-                ("LOCAL_LLM_API_KEY", profile.llm.api_key),
-                ("LOCAL_LLM_MODEL", profile.llm.model),
+                ("N8N_API_URL", profile.n8n.api_url),
+                ("N8N_API_KEY", profile.n8n.api_key),
+                ("N8N_TIMEOUT_SECONDS", profile.n8n.timeout_seconds),
             ],
         ),
         (

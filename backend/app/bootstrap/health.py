@@ -1,7 +1,6 @@
 """Process liveness and dependency-readiness implementation."""
 from __future__ import annotations
 
-import tempfile
 import urllib.request
 from collections.abc import Callable
 
@@ -20,11 +19,8 @@ def liveness_payload() -> dict[str, str]:
 def probe_http_service(url: str, *, timeout: float = 3.0) -> None:
     """Probe an internal HTTP service without leaving a pooled socket behind.
 
-    Readiness runs repeatedly in production.  Constructing a new Chroma
-    ``HttpClient`` for every probe leaked its underlying HTTP connection into
-    CLOSE_WAIT until the backend exhausted its 1024 file descriptors.  A
-    short-lived stdlib request with ``Connection: close`` keeps this path
-    bounded and makes ownership of the socket explicit.
+    A short-lived stdlib request with ``Connection: close`` keeps repeated
+    readiness probes bounded and makes ownership of the socket explicit.
     """
     request = urllib.request.Request(url, headers={"Connection": "close"})
     with open_with_loopback_bypass(request, timeout=timeout) as response:
@@ -43,11 +39,12 @@ def readiness_response(
         "status": "ok",
         "db": "unknown",
         "redis": "unknown",
+        "celery": "unknown",
         "neo4j": "unknown",
         "minio": "unknown",
         "object_storage": "unknown",
-        "chroma": "unknown",
         "browser": "unknown",
+        "n8n": "unknown",
         "sentinel_scheduler": "unknown",
         "sentinel_cdc": "unknown",
         "data_scheduler": "unknown",
@@ -66,14 +63,29 @@ def readiness_response(
     try:
         import redis
 
-        redis.Redis.from_url(
+        redis_client = redis.Redis.from_url(
             settings.redis_url,
             socket_connect_timeout=1.5,
             socket_timeout=1.5,
-        ).ping()
+        )
+        try:
+            if redis_client.ping() is not True:
+                raise RuntimeError("Redis PING returned an invalid result")
+        finally:
+            redis_client.close()
         checks["redis"] = "ok"
     except Exception:
         checks["redis"] = "unavailable"
+
+    # A healthy broker does not prove that any worker can consume registered
+    # tasks. Keep the ping bounded and require at least one worker response.
+    try:
+        from app.tasks.celery_app import celery_app
+
+        replies = celery_app.control.ping(timeout=1.5)
+        checks["celery"] = "ok" if replies else "unavailable"
+    except Exception:
+        checks["celery"] = "unavailable"
 
     # Neo4j check
     driver = None
@@ -85,6 +97,9 @@ def readiness_response(
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
         driver.verify_connectivity()
+        from app.services.v2.graph.neo4j_service import Neo4jService
+
+        Neo4jService.clear_unavailable_backoff()
         checks["neo4j"] = "ok"
     except Exception:
         checks["neo4j"] = "unavailable"
@@ -95,62 +110,21 @@ def readiness_response(
             except Exception:
                 pass
 
-    # MinIO check. Prefer the administrator-managed endpoint when enabled.
-    # The unauthenticated liveness endpoint is sufficient here:
-    # credential correctness is exercised by real storage operations, while
-    # readiness must not create a new unclosed urllib3 pool every few seconds.
+    # MinIO readiness performs a new bounded, authenticated request on every
+    # call. The process-scoped storage client's cached ``available`` flag is
+    # deliberately insufficient: MinIO may have failed since it connected.
+    # No local filesystem or legacy managed endpoint can satisfy readiness.
     try:
-        from app.settings.object_storage.models import MinioConfig
+        from app.shared.dependency_probe import probe_minio
+        from app.shared.storage import clear_environment_storage_backoff
 
-        managed = None
-        if not settings.require_external_dependencies:
-            managed = db.query(MinioConfig).filter(
-                MinioConfig.id == "default",
-                MinioConfig.enabled.is_(True),
-                MinioConfig.connected.is_(True),
-            ).first()
-        minio_endpoint = (
-            managed.endpoint if managed else settings.minio_endpoint
-        ).rstrip("/")
-        if "://" not in minio_endpoint:
-            scheme = (
-                "https"
-                if (managed.secure if managed else settings.minio_use_ssl)
-                else "http"
-            )
-            minio_endpoint = f"{scheme}://{minio_endpoint}"
-        probe(f"{minio_endpoint}/minio/health/live")
+        probe_minio()
+        clear_environment_storage_backoff()
         checks["minio"] = "ok"
         checks["object_storage"] = "minio"
     except Exception:
         checks["minio"] = "unavailable"
-        if settings.storage_local_fallback:
-            try:
-                from app.shared.storage import StorageService
-
-                local_base = StorageService._configured_local_base()
-                local_base.mkdir(parents=True, exist_ok=True)
-                # os.access is unreliable for root; a same-directory temp file
-                # verifies that the mounted fallback is actually writable.
-                with tempfile.NamedTemporaryFile(dir=local_base):
-                    pass
-                checks["object_storage"] = "local"
-            except Exception:
-                checks["object_storage"] = "unavailable"
-        else:
-            checks["object_storage"] = "unavailable"
-
-    # ChromaDB check. Do not instantiate chromadb.HttpClient here: Chroma
-    # 0.5.x does not expose deterministic client shutdown and repeated health
-    # probes accumulate CLOSE_WAIT sockets.
-    try:
-        probe(
-            f"http://{settings.chroma_host}:"
-            f"{settings.chroma_port}/api/v1/heartbeat"
-        )
-        checks["chroma"] = "ok"
-    except Exception:
-        checks["chroma"] = "unavailable"
+        checks["object_storage"] = "unavailable"
 
     # Data-steward Chromium/CDP readiness. A running container is insufficient:
     # the image may be alive while its internal CDP bridge is misconfigured.
@@ -162,6 +136,16 @@ def readiness_response(
         )
     except Exception:
         checks["browser"] = "unavailable"
+
+    # n8n is environment-managed. Readiness uses a dedicated short timeout so
+    # a slow business workflow cannot occupy health-check worker threads.
+    try:
+        from app.shared.dependency_probe import probe_n8n
+
+        probe_n8n()
+        checks["n8n"] = "ok"
+    except Exception:
+        checks["n8n"] = "unavailable"
 
     try:
         from app.ontologies.sentinels.scan_worker import scan_worker_status
@@ -228,7 +212,11 @@ def readiness_response(
         ]
         unhealthy = 0
         if published_ids:
-            unhealthy = (
+            unhealthy = db.query(OntologyProject).filter(
+                OntologyProject.id.in_(published_ids),
+                OntologyProject.projection_status != "ready",
+            ).count()
+            unhealthy += (
                 db.query(OntologyMapping)
                 .filter(
                     OntologyMapping.ontology_id.in_(published_ids),
@@ -245,27 +233,20 @@ def readiness_response(
     service_keys = (
         "db",
         "redis",
+        "celery",
         "neo4j",
         "minio",
-        "chroma",
         "browser",
+        "n8n",
         "sentinel_scheduler",
         "data_scheduler",
         "sentinel_cdc",
         "ontology_projection",
     )
     unavailable = [name for name in service_keys if checks[name] != "ok"]
-    # MinIO is optional when the configured durable fallback is writable.
-    # Keep ``minio=unavailable`` for observability without making deployment
-    # readiness depend on an intentionally absent service.
-    if checks["object_storage"] == "local":
-        unavailable = [name for name in unavailable if name != "minio"]
-    strict = settings.environment == "production"
-    checks["status"] = (
-        "ok" if not unavailable else ("error" if strict else "degraded")
-    )
+    checks["status"] = "ok" if not unavailable else "error"
     checks["unavailable"] = unavailable
     return JSONResponse(
-        status_code=503 if strict and unavailable else 200,
+        status_code=503 if unavailable else 200,
         content=checks,
     )

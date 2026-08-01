@@ -5,6 +5,7 @@ from app import dev_server
 
 def test_dev_server_uses_local_settings(monkeypatch: pytest.MonkeyPatch):
     called = {}
+    order = []
 
     monkeypatch.setattr(dev_server.settings, "environment", "development")
     monkeypatch.setattr(
@@ -14,10 +15,16 @@ def test_dev_server_uses_local_settings(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(dev_server.settings, "local_backend_port", 8123)
     monkeypatch.setattr(
+        dev_server,
+        "upgrade_local_schema",
+        lambda: order.append("migrate"),
+    )
+    monkeypatch.setattr(
         dev_server.uvicorn,
         "run",
-        lambda *args, **kwargs: called.update(
-            {"args": args, "kwargs": kwargs}
+        lambda *args, **kwargs: (
+            order.append("serve"),
+            called.update({"args": args, "kwargs": kwargs}),
         ),
     )
 
@@ -31,10 +38,19 @@ def test_dev_server_uses_local_settings(monkeypatch: pytest.MonkeyPatch):
             "reload": True,
         },
     }
+    assert order == ["migrate", "serve"]
 
 
 def test_dev_server_refuses_production(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(dev_server.settings, "environment", "production")
+    migration_called = False
+
+    def unexpected_migration():
+        nonlocal migration_called
+        migration_called = True
+
+    monkeypatch.setattr(dev_server, "upgrade_local_schema", unexpected_migration)
 
     with pytest.raises(RuntimeError, match="仅用于本地开发"):
         dev_server.main()
+    assert migration_called is False

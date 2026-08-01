@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-v1 (SQLite) → v2 (PostgreSQL + Neo4j + ChromaDB) 数据迁移脚本
+v1 (SQLite) → v2 (PostgreSQL + Neo4j) 数据迁移脚本
 
 用法：
   uv run python scripts/migrations/migrate_v1_to_v2.py \
@@ -17,7 +17,7 @@ v1 (SQLite) → v2 (PostgreSQL + Neo4j + ChromaDB) 数据迁移脚本
   relations:
     - source (TEXT) → source_entity (TEXT)
     - target (TEXT) → target_entity (TEXT)
-    - 新增 properties 字段，默认 {}
+    - properties (TEXT) → properties (JSON / dict)，缺失时默认 {}
   users / ontology_projects / prompts / model_configs:
     - 字段完全兼容，直接迁移
 """
@@ -47,7 +47,6 @@ class MigrationStats:
     model_configs: int = 0
     neo4j_nodes: int = 0
     neo4j_edges: int = 0
-    chroma_docs: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -64,7 +63,6 @@ class MigrationStats:
                 "model_configs": self.model_configs,
                 "neo4j_nodes": self.neo4j_nodes,
                 "neo4j_edges": self.neo4j_edges,
-                "chroma_docs": self.chroma_docs,
             },
             "errors": self.errors,
             "warnings": self.warnings,
@@ -95,7 +93,9 @@ class V1ToV2Migrator:
     迁移流程：
     1. 连接 v1 SQLite 和 v2 PostgreSQL
     2. 按依赖顺序迁移：users → prompts → model_configs → ontologies+entities+relations
-    3. 对每个本体，额外将实体/关系同步至 Neo4j 和 ChromaDB（可选，失败仅记录警告）
+    3. 对每个本体，在同一 PostgreSQL 事务中写入项目、实体、关系和
+       ``projecting`` 围栏，提交后再通过统一全量投影重建 Neo4j
+    4. 投影失败时保留非 ready 围栏，停止迁移并返回非零
     """
 
     def __init__(self, v1_db_path: str, pg_url: str, dry_run: bool = False):
@@ -225,14 +225,14 @@ class V1ToV2Migrator:
             logger.warning(f"模型配置迁移部分失败: {e}")
 
     def _migrate_ontologies_and_entities(self):
-        """迁移本体及其实体、关系，同时写入 Neo4j 和 ChromaDB（可选）
+        """迁移本体及其实体、关系，同时写入必需 Neo4j。
 
         字段映射：
           entities.properties_json (TEXT) → properties (dict)
           entities 补充 version='v0.1', updated_at=created_at
           relations.source → source_entity
           relations.target → target_entity
-          relations 补充 properties={}
+          relations.properties (TEXT) → properties (dict)
         """
         cursor = self._v1_conn.execute("SELECT * FROM ontology_projects")
         ontologies = cursor.fetchall()
@@ -241,62 +241,141 @@ class V1ToV2Migrator:
         for ont in ontologies:
             ont_id = ont["id"]
             try:
-                # 1. 写入 PostgreSQL（ontology_projects 字段兼容）
-                if not self.dry_run:
-                    from app.models.ontology import OntologyProject
-
-                    existing = (
-                        self._v2_session.query(OntologyProject)
-                        .filter(OntologyProject.id == ont_id)
-                        .first()
-                    )
-                    if not existing:
-                        self._v2_session.merge(OntologyProject(**dict(ont)))
-                    self._v2_session.commit()
-                self.stats.ontologies += 1
-
-                # 2. 查询该本体的实体（v1 表结构）
+                # 1. 查询该本体的实体（v1 表结构）
                 ent_cursor = self._v1_conn.execute(
                     "SELECT * FROM entities WHERE ontology_id = ?", (ont_id,)
                 )
                 entities = ent_cursor.fetchall()
 
-                # 3. 查询该本体的关系（v1 表结构）
+                # 2. 查询该本体的关系（v1 表结构）
                 rel_cursor = self._v1_conn.execute(
                     "SELECT * FROM relations WHERE ontology_id = ?", (ont_id,)
                 )
                 relations = rel_cursor.fetchall()
 
-                if not self.dry_run:
-                    # 4. 写入 PostgreSQL 实体（处理字段差异）
-                    from app.models.entity import Entity
+                if self.dry_run:
+                    self.stats.ontologies += 1
+                    self.stats.entities += len(entities)
+                    self.stats.relations += len(relations)
+                    continue
 
-                    for ent in entities:
-                        existing = (
-                            self._v2_session.query(Entity)
-                            .filter(Entity.id == ent["id"])
-                            .first()
-                        )
-                        if not existing:
-                            ent_data = self._map_entity(dict(ent))
-                            self._v2_session.merge(Entity(**ent_data))
-                    self._v2_session.commit()
+                from app.ontologies.runtime_fence import _ontology_build_lock
 
-                    # 5. 写入 Neo4j（失败仅警告）
-                    self._sync_to_neo4j(ont_id, list(entities), list(relations))
+                # 迁移入口原则上只应在 API/worker 停止后运行。运行时围栏再提供
+                # 一层串行化保护，覆盖误操作时与新版本写入者的并发窗口。
+                with _ontology_build_lock(self._v2_session, str(ont_id)):
+                    self._persist_ontology_truth(ont, entities, relations)
 
-                    # 6. 写入 ChromaDB（失败仅警告）
-                    self._sync_to_chroma(ont_id, list(entities))
+                    # SQL 已耐久提交；计数必须如实反映已写入的权威数据，即使
+                    # 随后的外部投影失败，也不能把已提交事实伪装成“未迁移”。
+                    self.stats.ontologies += 1
+                    self.stats.entities += len(entities)
+                    self.stats.relations += len(relations)
 
-                self.stats.entities += len(entities)
-                self.stats.relations += len(relations)
+                    self._rebuild_projection(
+                        str(ont_id),
+                        entity_count=len(entities),
+                        relation_count=len(relations),
+                    )
+
                 logger.info(
                     f"  本体 {ont_id}: {len(entities)} 实体，{len(relations)} 关系"
                 )
 
             except Exception as e:
-                self.stats.errors.append(f"本体 {ont_id} 迁移失败: {e}")
-                logger.warning(f"本体 {ont_id} 迁移失败: {e}")
+                if self._v2_session is not None:
+                    self._v2_session.rollback()
+                logger.error(f"本体 {ont_id} 迁移失败，迁移已停止: {e}")
+                raise RuntimeError(f"本体 {ont_id} 迁移失败: {e}") from e
+
+    def _persist_ontology_truth(self, ontology, entities, relations) -> None:
+        """Atomically persist one ontology's complete PostgreSQL truth.
+
+        A relationship is accepted only when both endpoints belong to the
+        source ontology being migrated. This prevents a legacy ID collision
+        from silently creating a cross-ontology edge in PostgreSQL.
+        """
+        from app.models.entity import Entity
+        from app.models.ontology import OntologyProject
+        from app.models.relation import Relation
+        from app.ontologies.projection_state import PROJECTING, mark_projecting
+
+        ontology_data = dict(ontology)
+        ontology_id = str(ontology_data["id"])
+        entity_rows = [self._map_entity(dict(row)) for row in entities]
+        entity_ids = {str(row["id"]) for row in entity_rows}
+        relation_rows = [self._map_relation(dict(row)) for row in relations]
+
+        for row in entity_rows:
+            if str(row.get("ontology_id")) != ontology_id:
+                raise ValueError(
+                    f"实体 {row.get('id')} 不属于本体 {ontology_id}"
+                )
+        for row in relation_rows:
+            relation_id = row.get("id")
+            if str(row.get("ontology_id")) != ontology_id:
+                raise ValueError(f"关系 {relation_id} 不属于本体 {ontology_id}")
+            source = str(row.get("source_entity"))
+            target = str(row.get("target_entity"))
+            missing = [
+                endpoint
+                for endpoint in (source, target)
+                if endpoint not in entity_ids
+            ]
+            if missing:
+                raise ValueError(
+                    f"关系 {relation_id} 存在本体内无法解析的端点: "
+                    + ", ".join(missing)
+                )
+
+        existing_project = (
+            self._v2_session.query(OntologyProject)
+            .filter(OntologyProject.id == ontology_id)
+            .first()
+        )
+        if existing_project is None:
+            ontology_data["projection_status"] = PROJECTING
+            ontology_data["projection_error"] = None
+            self._v2_session.merge(OntologyProject(**ontology_data))
+
+        for row in entity_rows:
+            existing = (
+                self._v2_session.query(Entity)
+                .filter(Entity.id == row["id"])
+                .first()
+            )
+            if existing is None:
+                self._v2_session.merge(Entity(**row))
+            elif str(existing.ontology_id) != ontology_id:
+                raise ValueError(
+                    f"实体 ID {row['id']} 已被其他本体占用"
+                )
+
+        for row in relation_rows:
+            existing = (
+                self._v2_session.query(Relation)
+                .filter(Relation.id == row["id"])
+                .first()
+            )
+            if existing is None:
+                self._v2_session.merge(Relation(**row))
+            elif str(existing.ontology_id) != ontology_id:
+                raise ValueError(
+                    f"关系 ID {row['id']} 已被其他本体占用"
+                )
+            elif (
+                str(existing.source_entity) != str(row["source_entity"])
+                or str(existing.target_entity) != str(row["target_entity"])
+            ):
+                raise ValueError(
+                    f"关系 ID {row['id']} 的既有端点与 v1 源数据不一致；"
+                    "请先人工解决冲突，迁移不会静默改写"
+                )
+
+        # The same commit makes every source row and its non-ready fence
+        # durable. No graph consumer can observe the old projection as ready.
+        mark_projecting(self._v2_session, ontology_id)
+        self._v2_session.commit()
 
     # ── 字段映射工具 ─────────────────────────────────────────────────
 
@@ -339,16 +418,19 @@ class V1ToV2Migrator:
         - 补充 properties 字段（若缺失）
         - 补充 created_at 字段（若缺失）
         """
-        # source → source_entity
-        if "source" in row and "source_entity" not in row:
-            row["source_entity"] = row.pop("source")
-        # target → target_entity
-        if "target" in row and "target_entity" not in row:
-            row["target_entity"] = row.pop("target")
+        # source/target are legacy column names. Always remove them so they
+        # cannot leak into the v2 ORM constructor when a mixed schema exposes
+        # both old and new columns.
+        legacy_source = row.pop("source", None)
+        legacy_target = row.pop("target", None)
+        if row.get("source_entity") is None:
+            row["source_entity"] = legacy_source
+        if row.get("target_entity") is None:
+            row["target_entity"] = legacy_target
 
-        # 补充 properties
-        if "properties" not in row or row.get("properties") is None:
-            row["properties"] = {}
+        # v1 commonly stored relation properties as JSON text.
+        raw_properties = row.pop("properties_json", row.get("properties"))
+        row["properties"] = _parse_properties_json(raw_properties)
 
         # 补充 created_at
         if "created_at" not in row or row.get("created_at") is None:
@@ -356,35 +438,34 @@ class V1ToV2Migrator:
 
         return row
 
-    # ── Neo4j / ChromaDB 同步 ────────────────────────────────────────
+    # ── Neo4j 统一投影 ───────────────────────────────────────────────
 
-    def _sync_to_neo4j(self, ontology_id: str, entities: list, relations: list):
-        """将实体和关系同步至 Neo4j，失败仅记录警告"""
+    def _rebuild_projection(
+        self,
+        ontology_id: str,
+        *,
+        entity_count: int,
+        relation_count: int,
+    ) -> None:
+        """Run the canonical full rebuild after committed SQL truth."""
+        from app.ontologies.projection_state import rebuild_after_commit
+
         try:
-            from app.services.v2.legacy_extraction_bridge import LegacyExtractionBridge
-
-            bridge = LegacyExtractionBridge()
-            ent_dicts = [dict(e) for e in entities]
-            rel_dicts = [dict(r) for r in relations]
-            bridge.sync_to_neo4j(ontology_id, ent_dicts, rel_dicts)
-            self.stats.neo4j_nodes += len(entities)
-            self.stats.neo4j_edges += len(relations)
+            # A migration must never use the test-environment projection skip;
+            # it is explicitly validating the real external dependency.
+            rebuild_after_commit(
+                self._v2_session,
+                ontology_id,
+                run_in_test=True,
+            )
         except Exception as e:
-            self.stats.warnings.append(f"Neo4j 同步失败（{ontology_id}）: {e}")
-            logger.warning(f"Neo4j 同步失败（{ontology_id}）: {e}")
-
-    def _sync_to_chroma(self, ontology_id: str, entities: list):
-        """将实体同步至 ChromaDB 向量库，失败仅记录警告"""
-        try:
-            from app.services.v2.legacy_extraction_bridge import LegacyExtractionBridge
-
-            bridge = LegacyExtractionBridge()
-            ent_dicts = [dict(e) for e in entities]
-            bridge.sync_to_chroma(ontology_id, ent_dicts)
-            self.stats.chroma_docs += len(entities)
-        except Exception as e:
-            self.stats.warnings.append(f"ChromaDB 同步失败（{ontology_id}）: {e}")
-            logger.warning(f"ChromaDB 同步失败（{ontology_id}）: {e}")
+            raise RuntimeError(
+                f"Neo4j 全量投影失败（{ontology_id}）: {e}；PostgreSQL 权威数据"
+                "已提交，项目保持非 ready。修复 Neo4j 后可重新运行本脚本完成"
+                "幂等补投影，或按迁移前备份恢复"
+            ) from e
+        self.stats.neo4j_nodes += entity_count
+        self.stats.neo4j_edges += relation_count
 
 
 def main():

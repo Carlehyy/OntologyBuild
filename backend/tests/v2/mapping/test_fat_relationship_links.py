@@ -40,10 +40,11 @@ def _build_twice(db, onto_id, rows_by_ds):
     svc = MappingService(db)
     with patch("app.services.v2.dataset_service.DatasetService.load_all_rows",
                side_effect=lambda dataset_id, *a, **k: rows_by_ds[dataset_id]), \
-         patch.object(MappingService, "_write_neo4j",
-                      side_effect=lambda _s, _c, ents: len(ents), autospec=True), \
-         patch.object(MappingService, "_write_neo4j_relations", return_value=None), \
-         patch("app.services.v2.vector.chroma_service.ChromaService.upsert_entities", return_value=None):
+         patch.object(
+             MappingService,
+             "_rebuild_neo4j_projection",
+             return_value=True,
+         ):
         svc.build_all(onto_id)
         svc.build_all(onto_id)  # 幂等：确定性 id 去重，重跑不应翻倍
 

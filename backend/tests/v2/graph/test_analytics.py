@@ -1,6 +1,6 @@
 """GraphAnalyticsService 单元测试（Neo4j Mock）"""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 from app.services.v2.graph.graph_analytics import GraphAnalyticsService
 
 
@@ -13,29 +13,39 @@ def make_analytics(available=False):
 
 def test_get_neighbors_unavailable():
     svc, _ = make_analytics(available=False)
-    result = svc.get_neighbors("ont-1", "node-1", depth=1)
-    assert result["neo4j_available"] is False
-    assert result["nodes"] == []
+    with pytest.raises(RuntimeError, match="neo4j_unavailable"):
+        svc.get_neighbors("ont-1", "node-1", depth=1)
 
 
 def test_shortest_path_unavailable():
     svc, _ = make_analytics(available=False)
-    result = svc.shortest_path("ont-1", "src-1", "tgt-1")
-    assert result["neo4j_available"] is False
-    assert result["length"] == -1
+    with pytest.raises(RuntimeError, match="neo4j_unavailable"):
+        svc.shortest_path("ont-1", "src-1", "tgt-1")
 
 
 def test_node_degree_unavailable():
     svc, _ = make_analytics(available=False)
-    result = svc.node_degree("ont-1", "node-1")
-    assert result["neo4j_available"] is False
-    assert result["in_degree"] == 0
+    with pytest.raises(RuntimeError, match="neo4j_unavailable"):
+        svc.node_degree("ont-1", "node-1")
 
 
 def test_top_connected_nodes_unavailable():
     svc, _ = make_analytics(available=False)
-    result = svc.top_connected_nodes("ont-1")
-    assert result == []
+    with pytest.raises(RuntimeError, match="neo4j_unavailable"):
+        svc.top_connected_nodes("ont-1")
+
+
+def test_runtime_construction_keeps_unavailable_neo4j_without_networkx_fallback():
+    mock_neo4j = MagicMock(available=False)
+    with patch(
+        "app.services.v2.graph.neo4j_service.Neo4jService",
+        return_value=mock_neo4j,
+    ):
+        svc = GraphAnalyticsService()
+
+    assert svc._svc is mock_neo4j
+    with pytest.raises(RuntimeError, match="neo4j_unavailable"):
+        svc.top_connected_nodes("ont-1")
 
 
 def test_shortest_path_no_result():
@@ -63,3 +73,17 @@ def test_node_degree_with_result():
     result = svc.node_degree("ont-1", "node-1")
     assert result["in_degree"] == 3
     assert result["out_degree"] == 7
+
+
+def test_query_error_is_not_converted_to_an_empty_result():
+    svc, mock_neo4j = make_analytics(available=True)
+    mock_neo4j.run_cypher.side_effect = RuntimeError("driver failure")
+
+    with pytest.raises(RuntimeError, match="driver failure"):
+        svc.top_connected_nodes("ont-1")
+
+
+def test_close_closes_injected_neo4j_service():
+    svc, mock_neo4j = make_analytics(available=True)
+    svc.close()
+    mock_neo4j.close.assert_called_once()

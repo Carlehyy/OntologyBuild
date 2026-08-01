@@ -66,7 +66,8 @@ def _read_tunnel_url(process: subprocess.Popen[str], timeout: int = 90) -> str:
 
 def _configure_process(temp_root: Path, proxy_token: str, credential_name: str) -> None:
     os.environ.update({
-        "ENVIRONMENT": "development",
+        # Explicit test-only SQLite fixture; external n8n/LLM remain real.
+        "ENVIRONMENT": "test",
         "DATABASE_URL": f"sqlite:///{temp_root / 'platform.db'}",
         "UPLOADS_DIR": str(temp_root / "uploads"),
         "STEWARD_WORKSPACE_ROOT": str(temp_root / "sessions"),

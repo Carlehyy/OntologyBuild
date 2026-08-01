@@ -2,12 +2,13 @@
 """
 Infrastructure health-check tests for the /health endpoint.
 
-These tests run against the FastAPI TestClient (no real Docker services
-needed). External services (Neo4j, MinIO, ChromaDB) will be reported as
-"unavailable" in a pure-unit context — that is the expected, safe fallback.
+These tests run against the FastAPI TestClient. Required external services that
+are absent in a pure-unit context must make readiness fail closed with 503;
+process liveness remains dependency-independent.
 """
 from fastapi.testclient import TestClient
 from app.main import app, _probe_http_service
+from app.shared import dependency_probe
 
 client = TestClient(app)
 
@@ -21,14 +22,14 @@ def test_liveness_endpoint_is_dependency_independent():
     assert response.json() == {"status": "ok"}
 
 
-def test_health_endpoint_returns_200():
+def test_health_endpoint_returns_readiness_status():
     response = client.get("/health")
-    assert response.status_code == 200
+    assert response.status_code in {200, 503}
 
 
 def test_health_endpoint_returns_ok():
     response = client.get("/health")
-    assert response.status_code == 200
+    assert response.status_code in {200, 503}
     data = response.json()
     assert "status" in data
     assert "db" in data
@@ -41,11 +42,12 @@ def test_health_db_key_present():
 
 
 def test_health_all_service_keys_present():
-    """All four service keys must be present in the response."""
+    """Every required dependency and internal runtime key is present."""
     response = client.get("/health")
     data = response.json()
     for key in (
-        "db", "redis", "neo4j", "minio", "object_storage", "chroma", "browser",
+        "db", "redis", "celery", "neo4j", "minio", "object_storage",
+        "browser", "n8n",
         "sentinel_scheduler", "sentinel_cdc", "data_scheduler",
         "ontology_projection",
     ):
@@ -58,14 +60,14 @@ def test_health_service_states_are_valid():
     data = response.json()
     assert data["db"] in VALID_DB_STATES
     for key in (
-        "redis", "neo4j", "minio", "chroma", "browser",
+        "redis", "celery", "neo4j", "minio", "browser", "n8n",
         "sentinel_scheduler", "sentinel_cdc", "data_scheduler",
         "ontology_projection",
     ):
         assert data[key] in VALID_SERVICE_STATES, (
             f"{key} has unexpected state: {data[key]}"
         )
-    assert data["object_storage"] in ("minio", "local", "unavailable", "unknown")
+    assert data["object_storage"] in ("minio", "unavailable", "unknown")
 
 
 def test_public_health_does_not_expose_raw_cdc_errors():
@@ -78,26 +80,68 @@ def test_public_health_does_not_expose_raw_cdc_errors():
     assert "error_code" in detail
 
 
-def test_minio_outage_uses_writable_local_storage_readiness():
+def test_minio_outage_fails_object_storage_readiness():
     response = client.get("/health")
     data = response.json()
     if data["minio"] == "unavailable":
-        assert data["object_storage"] == "local"
-        assert "minio" not in data["unavailable"]
+        assert data["object_storage"] == "unavailable"
+        assert "minio" in data["unavailable"]
+
+
+def test_minio_readiness_runs_a_fresh_authenticated_probe(monkeypatch):
+    calls = []
+
+    def probe_minio():
+        calls.append("authenticated")
+
+    monkeypatch.setattr(dependency_probe, "probe_minio", probe_minio)
+    monkeypatch.setattr(
+        "app.shared.storage.clear_environment_storage_backoff",
+        lambda: calls.append("reset-backoff"),
+    )
+
+    responses = [client.get("/health/ready"), client.get("/health/ready")]
+
+    assert calls == [
+        "authenticated",
+        "reset-backoff",
+        "authenticated",
+        "reset-backoff",
+    ]
+    assert all(response.json()["minio"] == "ok" for response in responses)
+    assert all(
+        response.json()["object_storage"] == "minio"
+        for response in responses
+    )
+
+
+def test_minio_authenticated_probe_failure_fails_readiness(monkeypatch):
+    def reject_credentials():
+        raise PermissionError("invalid MinIO credentials")
+
+    monkeypatch.setattr(
+        dependency_probe, "probe_minio", reject_credentials,
+    )
+
+    response = client.get("/health/ready")
+    data = response.json()
+
+    assert response.status_code == 503
+    assert data["minio"] == "unavailable"
+    assert data["object_storage"] == "unavailable"
+    assert "minio" in data["unavailable"]
 
 
 def test_health_status_reflects_dependencies():
-    """Readiness may be degraded in development; liveness is a separate route."""
+    """Readiness fails closed in every runtime environment."""
     response = client.get("/health")
     data = response.json()
-    assert data["status"] in ("ok", "degraded")
-    assert data["status"] == ("ok" if not data["unavailable"] else "degraded")
+    assert data["status"] in ("ok", "error")
+    assert data["status"] == ("ok" if not data["unavailable"] else "error")
+    assert response.status_code == (200 if not data["unavailable"] else 503)
 
 
-def test_production_readiness_fails_closed(monkeypatch):
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "environment", "production")
+def test_api_readiness_fails_closed():
     response = client.get("/api/health")
     data = response.json()
     if data["unavailable"]:
@@ -135,7 +179,7 @@ def test_http_probe_closes_every_response(monkeypatch):
     monkeypatch.setattr("app.main.urllib.request.urlopen", fake_urlopen)
 
     for _ in range(1100):
-        _probe_http_service("http://chroma:8000/api/v1/heartbeat")
+        _probe_http_service("http://browser:9222/json/version")
 
     assert len(responses) == 1100
     assert all(response.closed for response in responses)

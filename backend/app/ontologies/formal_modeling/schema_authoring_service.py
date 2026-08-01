@@ -5,9 +5,11 @@ imports and monkeypatch targets remain valid while all implementation lives in
 the canonical formal-modeling package.
 """
 import logging
+import inspect
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import wraps
 from typing import Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -63,6 +65,43 @@ def _reject_direct_runtime_data_write() -> None:
             403,
             "生产本体数据只允许由已审批的数据资产湖 Mapping 写入；直接实例写入已禁用。",
         )
+
+
+def _finish_graph_projection(db: Session, ontology_id: str) -> None:
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        rebuild_after_commit,
+    )
+
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_failed",
+            "message": (
+                "正规本体已提交，但 Neo4j 图投影失败；"
+                "图读取已阻断，请执行图修复"
+            ),
+            "ontology_id": ontology_id,
+        }) from exc
+
+
+def _projection_locked_writer(func):
+    """Fence a canonical schema writer before it takes the project row."""
+    signature = inspect.signature(func)
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        from app.ontologies.runtime_fence import _ontology_build_lock
+
+        with _ontology_build_lock(
+            bound.arguments["db"],
+            bound.arguments["ontology_id"],
+        ):
+            return func(*args, **kwargs)
+
+    return wrapped
 
 
 def _runtime_state(db: Session, ontology_id: str):
@@ -386,6 +425,7 @@ def get_full_ontology(
     return ok_fn(out.model_dump(by_alias=True))
 
 
+@_projection_locked_writer
 def save_full_ontology(
     ontology_id: str,
     body: S.SaveFullOntologyRequest,
@@ -593,6 +633,8 @@ def save_full_ontology(
 
     # 显式推进修订戳：即使元信息字段无变化，fo_* 数据的保存也必须产生新 revision
     project.updated_at = datetime.now(timezone.utc)
+    from app.ontologies.projection_state import mark_projecting
+    mark_projecting(db, ontology_id)
 
     # 1) 先提交核心保存 —— 保证用户的建模改动一定落库
     db.commit()
@@ -610,6 +652,10 @@ def save_full_ontology(
     except Exception:
         db.rollback()
         logger.warning("引用完整性清理失败,已跳过(不影响保存)", exc_info=True)
+
+    # SQL/Formal truth and cleanup are now durable. Validate the complete
+    # Neo4j query projection before any post-save Sentinel action can run.
+    _finish_graph_projection(db, ontology_id)
 
     # 3) 保存即"变化到达"：触发哨兵评估（尽力而为，失败不影响保存）。
     #    编辑器内的实例变更只有保存时才落库，不在这里评估的话哨兵对编辑器是"聋"的。
@@ -639,6 +685,7 @@ def save_full_ontology(
     return response
 
 
+@_projection_locked_writer
 def patch_full_ontology(
     ontology_id: str,
     body: S.PatchOntologyRequest,
@@ -914,6 +961,8 @@ def patch_full_ontology(
             )
 
     project.updated_at = datetime.now(timezone.utc)
+    from app.ontologies.projection_state import mark_projecting
+    mark_projecting(db, ontology_id)
     db.commit()
 
     # 引用完整性清理（尽力而为，同 PUT）
@@ -929,6 +978,8 @@ def patch_full_ontology(
     except Exception:
         db.rollback()
         logger.warning("引用完整性清理失败,已跳过(不影响保存)", exc_info=True)
+
+    _finish_graph_projection(db, ontology_id)
 
     # 哨兵评估（尽力而为，同 PUT）
     sentinel_summary = None
@@ -1139,6 +1190,26 @@ def _crud(
         ActionType: 2,
         OntologyFunction: 3,
     }
+    graph_model = model in (ObjectType, LinkType)
+
+    def projection_locked(func):
+        """Acquire the canonical advisory lock before the project-row lock."""
+        if not graph_model:
+            return func
+
+        signature = inspect.signature(func)
+
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            bound = signature.bind_partial(*args, **kwargs)
+            db = bound.arguments["db"]
+            ontology_id = bound.arguments["ontology_id"]
+            from app.ontologies.runtime_fence import _ontology_build_lock
+
+            with _ontology_build_lock(db, ontology_id):
+                return func(*args, **kwargs)
+
+        return wrapped
 
     def helper(helper_name: str, fallback):
         if compatibility_helpers is None:
@@ -1165,6 +1236,7 @@ def _crud(
         )
 
     @sub.post(f"/{{ontology_id}}/{name}", status_code=201)
+    @projection_locked
     def create_item(
         ontology_id: str,
         body: create_schema,
@@ -1196,8 +1268,13 @@ def _crud(
         )
         project.updated_at = datetime.now(timezone.utc)
         db.add(obj)
+        if graph_model:
+            from app.ontologies.projection_state import mark_projecting
+            mark_projecting(db, ontology_id)
         db.commit()
         db.refresh(obj)
+        if graph_model:
+            _finish_graph_projection(db, ontology_id)
         return helper("_ok", _ok)(
             out_schema.model_validate(obj).model_dump(by_alias=True)
         )
@@ -1224,6 +1301,7 @@ def _crud(
         )
 
     @sub.put(f"/{{ontology_id}}/{name}/{{item_id}}")
+    @projection_locked
     def update_item(
         ontology_id: str,
         item_id: str,
@@ -1263,8 +1341,13 @@ def _crud(
         for key, value in updates.items():
             setattr(obj, key, value)
         project.updated_at = datetime.now(timezone.utc)
+        if graph_model:
+            from app.ontologies.projection_state import mark_projecting
+            mark_projecting(db, ontology_id)
         db.commit()
         db.refresh(obj)
+        if graph_model:
+            _finish_graph_projection(db, ontology_id)
         return helper("_ok", _ok)(
             out_schema.model_validate(obj).model_dump(by_alias=True)
         )
@@ -1273,6 +1356,7 @@ def _crud(
         f"/{{ontology_id}}/{name}/{{item_id}}",
         status_code=204,
     )
+    @projection_locked
     def delete_item(
         ontology_id: str,
         item_id: str,
@@ -1309,6 +1393,11 @@ def _crud(
         )
         project.updated_at = datetime.now(timezone.utc)
         db.delete(obj)
+        if graph_model:
+            from app.ontologies.projection_state import mark_projecting
+            mark_projecting(db, ontology_id)
         db.commit()
+        if graph_model:
+            _finish_graph_projection(db, ontology_id)
 
     return sub

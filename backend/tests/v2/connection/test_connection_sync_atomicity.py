@@ -1,10 +1,14 @@
 import pytest
 from fastapi import HTTPException
+from unittest.mock import MagicMock
 
 from app.data_channel.connections.router import SyncBody, trigger_sync
 from app.models.v2.connection import Connection
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.tasks.v2.connection_sync import sync_connection
+
+
+CONNECTION_SYNC_TASK_NAME = "app.tasks.v2.connection_sync.sync_connection"
 
 
 class _Connector:
@@ -52,6 +56,28 @@ class _Storage:
 
     def delete_object(self, uri):
         self.objects.pop(uri, None)
+
+
+def test_connection_sync_task_has_stable_name_and_delay(monkeypatch):
+    dispatched = object()
+    apply_async = MagicMock(return_value=dispatched)
+    monkeypatch.setattr(sync_connection, "apply_async", apply_async)
+
+    result = sync_connection.delay("conn-1", "delta", "orders")
+
+    assert sync_connection.name == CONNECTION_SYNC_TASK_NAME
+    assert result is dispatched
+    apply_async.assert_called_once_with(("conn-1", "delta", "orders"), {})
+
+
+def test_connection_sync_worker_include_registers_task():
+    from app.tasks.celery_app import celery_app
+
+    assert "app.tasks.v2.connection_sync" in celery_app.conf.include
+    celery_app.loader.import_default_modules()
+    registered = celery_app.tasks[CONNECTION_SYNC_TASK_NAME]
+    assert registered.name == CONNECTION_SYNC_TASK_NAME
+    assert callable(registered.delay)
 
 
 def test_connection_sync_uses_database_when_managed_minio_is_unavailable(
@@ -220,11 +246,9 @@ def test_async_dispatch_does_not_mark_connection_active_before_completion(
     assert dispatched == [(connection.id, "full", "/orders")]
 
 
-def test_async_dispatch_fails_closed_when_production_requires_celery(
+def test_async_dispatch_fails_closed_in_compatibility_mode(
     db, monkeypatch,
 ):
-    from app.config import settings
-
     connection = Connection(
         id="conn-async-strict",
         name="生产异步连接",
@@ -234,12 +258,11 @@ def test_async_dispatch_fails_closed_when_production_requires_celery(
     )
     db.add(connection)
     db.commit()
-    monkeypatch.setattr(settings, "require_external_dependencies", True)
+    dispatched_task = MagicMock()
+    dispatched_task.delay.side_effect = ConnectionError("broker secret")
     monkeypatch.setattr(
-        sync_connection,
-        "delay",
-        lambda *_args: (_ for _ in ()).throw(ConnectionError("broker secret")),
-        raising=False,
+        "app.tasks.v2.connection_sync.sync_connection",
+        dispatched_task,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -250,5 +273,6 @@ def test_async_dispatch_fails_closed_when_production_requires_celery(
         )
 
     assert exc_info.value.status_code == 503
-    assert "禁止降级" in str(exc_info.value.detail)
+    assert "异步同步任务未投递" in str(exc_info.value.detail)
     assert "broker secret" not in str(exc_info.value.detail)
+    dispatched_task.assert_not_called()

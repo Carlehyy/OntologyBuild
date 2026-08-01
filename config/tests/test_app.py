@@ -25,7 +25,6 @@ def _complete_payload(payload: dict) -> dict:
     payload["minio"]["access_key"] = "minio-test-access"
     payload["minio"]["secret_key"] = "minio-test-password"
     payload["n8n"]["api_key"] = "n8n-test-key"
-    payload["llm"]["api_key"] = "llm-test-key"
     return payload
 
 
@@ -127,7 +126,6 @@ def test_only_required_successful_probes_gate_atomic_generation(
     client, env_path = _client(tmp_path)
     bootstrap = client.get("/api/bootstrap").json()
     profile = _complete_payload(bootstrap["profile"])
-    profile["llm"]["api_key"] = ""
     csrf = bootstrap["csrf_token"]
     assert bootstrap["required_services"] == list(REQUIRED_SERVICES)
     assert bootstrap["optional_services"] == list(OPTIONAL_SERVICES)
@@ -171,7 +169,54 @@ def test_only_required_successful_probes_gate_atomic_generation(
     assert env_path.is_file()
 
 
-def test_optional_probes_remain_available_without_gating_generation(
+def test_browser_probe_is_advisory_but_cdp_url_remains_in_generated_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, env_path = _client(tmp_path)
+    bootstrap = client.get("/api/bootstrap").json()
+    profile = _complete_payload(bootstrap["profile"])
+    csrf = bootstrap["csrf_token"]
+    assert "browser" in OPTIONAL_SERVICES
+    assert "browser" not in REQUIRED_SERVICES
+    monkeypatch.setattr(
+        main_module,
+        "run_probe",
+        lambda service, _profile: ProbeResult(
+            service != "browser",
+            "ok" if service != "browser" else "CDP unavailable",
+            "mocked",
+            1,
+        ),
+    )
+
+    for service in REQUIRED_SERVICES:
+        response = client.post(
+            f"/api/test/{service}",
+            json=profile,
+            headers={"x-csrf-token": csrf},
+        )
+        assert response.json()["ok"] is True
+    browser = client.post(
+        "/api/test/browser",
+        json=profile,
+        headers={"x-csrf-token": csrf},
+    )
+    assert browser.json()["ok"] is False
+
+    generated = client.post(
+        "/api/generate",
+        json=profile,
+        headers={"x-csrf-token": csrf},
+    )
+
+    assert generated.status_code == 200
+    assert 'STEWARD_BROWSER_CDP_URL="http://127.0.0.1:9222"' in (
+        env_path.read_text(encoding="utf-8")
+    )
+
+
+def test_unknown_probe_is_rejected(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -179,21 +224,6 @@ def test_optional_probes_remain_available_without_gating_generation(
     bootstrap = client.get("/api/bootstrap").json()
     profile = _complete_payload(bootstrap["profile"])
     csrf = bootstrap["csrf_token"]
-    monkeypatch.setattr(
-        main_module,
-        "run_probe",
-        lambda service, _profile: ProbeResult(True, service, "mocked", 1),
-    )
-
-    for service in OPTIONAL_SERVICES:
-        response = client.post(
-            f"/api/test/{service}",
-            json=profile,
-            headers={"x-csrf-token": csrf},
-        )
-        assert response.status_code == 200
-        assert response.json()["ok"] is True
-
     assert (
         client.post(
             "/api/test/not-a-service",
@@ -249,9 +279,7 @@ def test_existing_secret_is_not_returned_to_browser(tmp_path: Path) -> None:
 
     assert second["has_config"] is True
     assert second["profile"]["postgres"]["password"] == ""
-    assert second["profile"]["llm"]["api_key"] == ""
     assert second["secrets_present"]["postgres.password"] is True
-    assert second["secrets_present"]["llm.api_key"] is True
 
 
 def test_validation_error_never_echoes_submitted_secrets(
@@ -325,13 +353,13 @@ def test_invalid_existing_env_can_be_repaired(
     )
 
 
-def test_runtime_check_accepts_optional_chroma_outage(monkeypatch) -> None:
+def test_runtime_check_rejects_degraded_backend(monkeypatch) -> None:
     class FakeResponse:
         def raise_for_status(self) -> None:
             return None
 
         def json(self) -> dict:
-            return {"status": "degraded", "unavailable": ["chroma"]}
+            return {"status": "degraded", "unavailable": ["minio"]}
 
     class FakeClient:
         def __init__(self, **_kwargs):
@@ -352,5 +380,5 @@ def test_runtime_check_accepts_optional_chroma_outage(monkeypatch) -> None:
         "http://127.0.0.1:8000/health/ready"
     )
 
-    assert result["ok"] is True
-    assert "chroma" in result["detail"]
+    assert result["ok"] is False
+    assert "minio" in result["detail"]

@@ -30,17 +30,12 @@ def start_audit(ontology_id: str, body: AuditRequest, db: Session = Depends(get_
     try:
         from app.tasks.audit import run_audit
         run_audit.delay(task.id)
-    except Exception:
-        import threading
-
-        def run_sync():
-            from app.tasks.audit import run_audit
-            try:
-                run_audit(task.id)
-            except Exception:
-                pass
-
-        threading.Thread(target=run_sync, daemon=True).start()
+    except Exception as exc:
+        task.status = "failed"
+        task.error = "Redis/Celery 后台任务服务不可用，审计任务未投递"
+        task.progress = {"stage": "dispatch_failed", "pct": 0}
+        db.commit()
+        raise HTTPException(503, task.error) from exc
 
     return {"data": {"task_id": task.id}, "message": "Audit queued"}
 

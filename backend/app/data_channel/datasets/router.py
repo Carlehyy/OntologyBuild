@@ -55,7 +55,7 @@ def _dispatch_dataset_import_task(
     *,
     operation: str,
 ) -> dict:
-    """Dispatch one import task without making optional Celery a hard dependency."""
+    """Dispatch one import task through the required Celery worker."""
     from app.config import settings
 
     return mutation_service.dispatch_dataset_import_task(

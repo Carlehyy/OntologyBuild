@@ -222,7 +222,30 @@ def _rollback_version_locked(
     formal_restored = None
     projection_check = None
 
+    from app.ontologies.projection_state import snapshot as projection_snapshot
+    current_projection = projection_snapshot(db, ontology_id)
+    if current_projection.status != "ready":
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_not_ready",
+            "message": "当前本体查询投影未就绪，禁止回滚；请先执行图修复",
+            "projectionStatus": current_projection.status,
+        })
+
+    # Block readers before a rollback candidate is written to Neo4j. The
+    # outer advisory ontology lock remains held across this fence commit.
+    from app.ontologies.projection_state import mark_projecting
+    mark_projecting(db, ontology_id)
+    db.commit()
     try:
+        # The fence is already durable. Re-querying the project can still fail,
+        # so it must be covered by the same rollback/compensation path as the
+        # candidate restore below; otherwise ``projecting`` can be stranded.
+        project = db.query(OntologyProject).filter(
+            OntologyProject.id == ontology_id,
+        ).with_for_update().first()
+        if project is None:
+            raise HTTPException(404, "Ontology not found")
+
         # 旧扁平投影也随版本恢复；先删关系，再删实体，避免 FK 顺序错误。
         db.query(Relation).filter(Relation.ontology_id == ontology_id).delete(
             synchronize_session=False)
@@ -407,7 +430,7 @@ def _rollback_version_locked(
             },
         ))
         db.flush()
-        if settings.environment == "production":
+        if settings.environment != "test":
             try:
                 projection_check = _rebuild_required_query_projections(
                     db, ontology_id)
@@ -415,7 +438,7 @@ def _rollback_version_locked(
                 raise HTTPException(503, detail={
                     "code": "rollback_projection_not_ready",
                     "message": (
-                        "Neo4j/Chroma 构建回滚候选投影时失败；"
+                        "Neo4j 构建回滚候选投影时失败；"
                         "发布激活事务已回滚"),
                     "projection": {
                         "ready": False,
@@ -426,10 +449,12 @@ def _rollback_version_locked(
                 raise HTTPException(503, detail={
                     "code": "rollback_projection_not_ready",
                     "message": (
-                        "Neo4j/Chroma 未能构建回滚候选投影；"
+                        "Neo4j 未能构建回滚候选投影；"
                         "发布激活事务已回滚"),
                     "projection": projection_check,
                 })
+        from app.ontologies.projection_state import mark_ready
+        mark_ready(db, ontology_id)
         db.commit()
     except HTTPException as exc:
         db.rollback()
@@ -446,29 +471,69 @@ def _rollback_version_locked(
                     "ready": False,
                     "error": str(compensation_exc),
                 }
+            from app.ontologies.projection_state import mark_failed, mark_ready
+            if compensation.get("ready"):
+                mark_ready(db, ontology_id)
+            else:
+                mark_failed(
+                    db,
+                    ontology_id,
+                    compensation.get("error")
+                    or "Neo4j rollback compensation rebuild failed",
+                )
+            db.commit()
             raise HTTPException(503, detail={
                 **detail,
                 "compensation": compensation,
             }) from exc
+        from app.ontologies.projection_state import mark_ready
+        mark_ready(db, ontology_id)
+        db.commit()
         raise
     except Exception as exc:
         db.rollback()
+        compensation = None
+        if settings.environment != "test":
+            try:
+                # The candidate SQL transaction has rolled back. Rebuild from
+                # the now-authoritative previous release before advertising
+                # readiness; the candidate may already have reached Neo4j.
+                compensation = _rebuild_required_query_projections(
+                    db, ontology_id)
+            except Exception as compensation_exc:  # noqa: BLE001
+                compensation = {
+                    "ready": False,
+                    "error": str(compensation_exc),
+                }
+        from app.ontologies.projection_state import mark_failed, mark_ready
+        if settings.environment == "test" or (
+            compensation is not None and compensation.get("ready")
+        ):
+            mark_ready(db, ontology_id)
+        else:
+            mark_failed(
+                db,
+                ontology_id,
+                (compensation or {}).get("error")
+                or "Neo4j rollback compensation rebuild failed",
+            )
+        db.commit()
         raise HTTPException(409, detail={
             "code": "rollback_restore_failed",
             "message": f"回滚恢复失败，当前本体保持不变: {exc}",
             "errors": [_gate_error(
                 "rollback_restore_failed", "ontologyVersion", str(exc),
                 item_id=version_id, name=v.version_number)],
+            "compensation": compensation,
         }) from exc
 
-    if settings.environment != "production":
+    if settings.environment == "test":
         try:
             projection_check = _rebuild_required_query_projections(
                 db, ontology_id)
         except Exception as projection_exc:  # noqa: BLE001
-            # SQL activation is already committed in non-production. Surface
-            # optional query-store health without turning a successful,
-            # durable rollback into an ambiguous HTTP 500.
+            # Unit tests do not require a live query store. Surface its mocked
+            # state without weakening any real runtime environment.
             projection_check = {
                 "ready": False,
                 "error": str(projection_exc),

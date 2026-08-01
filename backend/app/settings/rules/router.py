@@ -148,7 +148,14 @@ def get_workflow_config(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    return workflow_config_service.get_workflow_config(db)
+    return workflow_config_service.get_workflow_config(
+        db,
+        environment=settings.environment,
+        managed_api_url=settings.n8n_api_url,
+        managed_api_key=settings.n8n_api_key,
+        managed_timeout_seconds=settings.n8n_timeout_seconds,
+        enforce_url_policy_fn=enforce_n8n_url_policy,
+    )
 
 
 @router.put("/workflow-config")
@@ -173,6 +180,9 @@ def test_workflow_connection(
         body,
         db,
         environment=settings.environment,
+        managed_api_url=settings.n8n_api_url,
+        managed_api_key=settings.n8n_api_key,
+        managed_timeout_seconds=settings.n8n_timeout_seconds,
         get_workflow_config_fn=_get_workflow_config,
         enforce_url_policy_fn=enforce_n8n_url_policy,
         test_connection_fn=test_n8n_connection,

@@ -1,8 +1,11 @@
 """Collector type ownership and edge-direction guardrails."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
+from app.models.ontology import OntologyProject
 from app.models.ontology_formal import (
     LinkInstance,
     LinkType,
@@ -281,3 +284,66 @@ def test_collector_valid_source_types_create_objects_edge_and_facts(
         for fact in db.query(PropertyFact).filter_by(ontology_id=oid).all()
     }
     assert {"object", "property", "link"} <= fact_kinds
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert project.projection_status == "ready"
+
+
+def test_collector_commits_truth_and_persists_failed_projection_fence(
+    client, auth_headers, ontology, db, monkeypatch,
+):
+    from app.data_channel.connections import collectors_router
+    from app.ontologies import projection_state
+
+    oid = ontology["id"]
+    lock_held = {"value": False}
+
+    @contextmanager
+    def observed_lock(_db, target_ontology_id):
+        assert target_ontology_id == oid
+        lock_held["value"] = True
+        try:
+            yield
+        finally:
+            lock_held["value"] = False
+
+    db.add(_object_type("collector-main", oid, "CollectorMain"))
+    db.commit()
+    monkeypatch.setattr(
+        collectors_router.aihot,
+        "fetch_items",
+        lambda **_kwargs: {"items": [_item()]},
+    )
+
+    def fail_rebuild(session, ontology_id):
+        assert lock_held["value"] is True
+        return projection_state.rebuild_after_commit(
+            session,
+            ontology_id,
+            rebuild=lambda _ontology_id: False,
+            run_in_test=True,
+        )
+
+    monkeypatch.setattr(
+        collectors_router,
+        "rebuild_after_commit",
+        fail_rebuild,
+    )
+    monkeypatch.setattr(
+        collectors_router,
+        "_ontology_build_lock",
+        observed_lock,
+    )
+    response = client.post(
+        f"/api/v2/collectors/aihot/collect/{oid}",
+        headers=auth_headers,
+        json={"object_type_id": "collector-main"},
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "ontology_projection_failed"
+    db.expire_all()
+    assert db.query(ObjectInstance).filter_by(ontology_id=oid).count() == 1
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert project.projection_status == "failed"
+    assert "incomplete" in (project.projection_error or "")
+    assert lock_held["value"] is False

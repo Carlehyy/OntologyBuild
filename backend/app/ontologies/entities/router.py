@@ -7,6 +7,25 @@ import uuid
 
 router = APIRouter()
 
+
+def _finish_projection(db: Session, ontology_id: str) -> None:
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        rebuild_after_commit,
+    )
+
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "ontology_projection_failed",
+                "message": "实体已保存到关系型真相，但 Neo4j 图投影失败；请执行图修复",
+                "ontology_id": ontology_id,
+            },
+        ) from exc
+
 @router.get("")
 def list_entities(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     # 单一可信数据源：正规本体存在对象类型时，直接投影其 ObjectType，
@@ -25,9 +44,17 @@ def list_entities(ontology_id: str, db: Session = Depends(get_db), _=Depends(get
 
 @router.post("", status_code=201)
 def create_entity(ontology_id: str, body: EntityCreate, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    data = {k: v for k, v in body.model_dump().items() if v is not None}
-    e = Entity(id=str(uuid.uuid4()), ontology_id=ontology_id, **data)
-    db.add(e); db.commit(); db.refresh(e)
+    from app.ontologies.projection_state import mark_projecting
+    from app.ontologies.runtime_fence import _ontology_build_lock
+
+    with _ontology_build_lock(db, ontology_id):
+        data = {k: v for k, v in body.model_dump().items() if v is not None}
+        e = Entity(id=str(uuid.uuid4()), ontology_id=ontology_id, **data)
+        db.add(e)
+        mark_projecting(db, ontology_id)
+        db.commit()
+        db.refresh(e)
+        _finish_projection(db, ontology_id)
     return {"data": EntityOut.model_validate(e).model_dump()}
 
 @router.get("/{entity_id}")
@@ -52,20 +79,34 @@ def get_entity(ontology_id: str, entity_id: str, db: Session = Depends(get_db), 
 
 @router.put("/{entity_id}")
 def update_entity(ontology_id: str, entity_id: str, body: EntityUpdate, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    e = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first()
-    if not e:
-        raise HTTPException(404, "Not found")
-    for k, v in body.model_dump(exclude_none=True).items():
-        setattr(e, k, v)
-    db.commit(); db.refresh(e)
+    from app.ontologies.projection_state import mark_projecting
+    from app.ontologies.runtime_fence import _ontology_build_lock
+
+    with _ontology_build_lock(db, ontology_id):
+        e = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first()
+        if not e:
+            raise HTTPException(404, "Not found")
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(e, k, v)
+        mark_projecting(db, ontology_id)
+        db.commit()
+        db.refresh(e)
+        _finish_projection(db, ontology_id)
     return {"data": EntityOut.model_validate(e).model_dump()}
 
 @router.delete("/{entity_id}", status_code=204)
 def delete_entity(ontology_id: str, entity_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    e = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first()
-    if not e:
-        raise HTTPException(404, "Not found")
-    db.delete(e); db.commit()
+    from app.ontologies.projection_state import mark_projecting
+    from app.ontologies.runtime_fence import _ontology_build_lock
+
+    with _ontology_build_lock(db, ontology_id):
+        e = db.query(Entity).filter(Entity.id == entity_id, Entity.ontology_id == ontology_id).first()
+        if not e:
+            raise HTTPException(404, "Not found")
+        db.delete(e)
+        mark_projecting(db, ontology_id)
+        db.commit()
+        _finish_projection(db, ontology_id)
 
 @router.get("/{entity_id}/related")
 def get_related_for_entity(

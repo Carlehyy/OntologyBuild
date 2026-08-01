@@ -85,6 +85,51 @@ def test_steward_intent_router_does_not_default_every_turn_to_overview():
     assert classify_steward_intent("你好，先聊聊需求")["code"] == "consult"
 
 
+def test_environment_managed_n8n_client_ignores_database(
+    monkeypatch,
+):
+    managed = SimpleNamespace(
+        environment="production",
+        n8n_api_url="https://n8n.example.test",
+        n8n_api_key="managed-key",
+        n8n_timeout_seconds=37,
+    )
+    monkeypatch.setattr(service, "settings", managed)
+    db = SimpleNamespace(
+        query=lambda *_args: pytest.fail(
+            "normal runtime n8n clients must not read DB overrides"
+        ),
+    )
+
+    status = service.n8n_config_status(db)
+    client = service.get_n8n_client(db)
+
+    assert status == {
+        "configured": True,
+        "enabled": True,
+        "api_url": "https://n8n.example.test",
+    }
+    assert client.api_base == "https://n8n.example.test/api/v1"
+    assert client.api_key == "managed-key"
+    assert client.timeout_seconds == 37
+
+
+def test_orchestration_fails_closed_when_remote_active_state_is_unknown():
+    record = SimpleNamespace(
+        name="订单流水线",
+        n8n_workflow_id="workflow-1",
+        pipeline_id=None,
+    )
+    client = SimpleNamespace(
+        get_workflow=lambda _workflow_id: (_ for _ in ()).throw(
+            RuntimeError("n8n unavailable")
+        ),
+    )
+
+    with pytest.raises(StewardError, match="安全中止编排"):
+        service.require_orchestrable(SimpleNamespace(), record, client)
+
+
 def test_chat_request_forwards_explicit_target(
         client, auth_headers, monkeypatch):
     captured = {}
@@ -306,10 +351,60 @@ def fake_n8n(monkeypatch):
     return fake
 
 
+class PreviewStorage:
+    """Explicit test object store; unit tests never rely on runtime fallback."""
+
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+
+    @staticmethod
+    def _uri(bucket: str, key: str) -> str:
+        return f"s3://{bucket}/{key}"
+
+    def put_bytes(
+        self,
+        bucket: str,
+        key: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        del content_type
+        uri = self._uri(bucket, key)
+        self.objects[uri] = bytes(data)
+        return uri
+
+    def get_object(self, uri: str) -> bytes:
+        try:
+            return self.objects[uri]
+        except KeyError as exc:
+            raise FileNotFoundError(uri) from exc
+
+    def delete_object(self, uri: str) -> None:
+        self.objects.pop(uri, None)
+
+    def list_prefix(self, bucket: str, prefix: str) -> list[str]:
+        marker = self._uri(bucket, prefix)
+        return sorted(uri for uri in self.objects if uri.startswith(marker))
+
+
 @pytest.fixture
-def pipelines_client(client, db):
+def preview_storage(monkeypatch):
+    from app.shared import storage as shared_storage
+
+    storage = PreviewStorage()
+    monkeypatch.setattr(
+        shared_storage,
+        "get_storage_service",
+        lambda: storage,
+    )
+    return storage
+
+
+@pytest.fixture
+def pipelines_client(client, db, preview_storage):
     """v2 pipelines 路由用的是模块内自建的 get_db（非 app.deps.get_db），
     需要单独覆盖才能命中测试库。client fixture 结束时统一 clear。"""
+    del preview_storage
     from app.main import app
     from app.data_channel.pipelines.router import get_db as pipelines_get_db
 

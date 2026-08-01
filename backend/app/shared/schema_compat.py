@@ -1,6 +1,6 @@
-"""Small, explicit compatibility repairs for databases created by ``create_all``.
+"""Small, explicit compatibility repairs for test databases from ``create_all``.
 
-Development SQLite databases historically have no Alembic revision.  SQLAlchemy's
+Test SQLite databases have no Alembic revision. SQLAlchemy's
 ``create_all`` creates new tables, but it cannot add columns to tables that already
 exist.  Keep the repair list deliberately narrow: every entry must also have a real
 Alembic migration for production deployments.

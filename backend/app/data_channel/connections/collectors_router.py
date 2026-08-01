@@ -19,6 +19,11 @@ from app.ontologies.formal_modeling.facts import (
 )
 from app.ontologies.formal_modeling.derived import recompute_instance_derived
 from app.ontologies.mappings.mapping_service import _ontology_build_lock
+from app.ontologies.projection_state import (
+    ProjectionRebuildError,
+    mark_projecting,
+    rebuild_after_commit,
+)
 from app.ontologies.access import ontology_access_guard
 from app.services.collectors import aihot
 
@@ -27,6 +32,20 @@ router = APIRouter()
 
 def _ok(data):
     return {"data": data}
+
+
+def _finish_projection(db: Session, ontology_id: str) -> None:
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_failed",
+            "message": (
+                "采集数据已保存到关系型真相，但 Neo4j 图投影失败；"
+                "图读取已阻断，请执行图修复"
+            ),
+            "ontology_id": ontology_id,
+        }) from exc
 
 
 @router.get("")
@@ -274,7 +293,15 @@ def _collect_aihot_locked(
                         link_type_id=source_lt.id, exists=True,
                         source="collector://aihot")
 
+    changed = bool(created or updated)
+    if changed:
+        # Keep the durable fence in the same SQL transaction as every
+        # collector-owned ObjectInstance/LinkInstance mutation.  The
+        # canonical ontology lock remains held through the full rebuild.
+        mark_projecting(db, ontology_id)
     db.commit()
+    if changed:
+        _finish_projection(db, ontology_id)
     return _ok({
         "collected": len(items),
         "created": created,

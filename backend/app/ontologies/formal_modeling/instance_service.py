@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from functools import wraps
+import inspect
 from typing import Callable, Optional
 
 from fastapi import HTTPException
@@ -51,6 +53,54 @@ from app.ontologies.release_context import (
     runtime_release_identity,
 )
 from app.schemas import ontology_formal as S
+
+
+def _projection_locked_writer(func):
+    """Fence a canonical instance writer before it takes the project row."""
+    signature = inspect.signature(func)
+
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        from app.ontologies.runtime_fence import _ontology_build_lock
+
+        with _ontology_build_lock(
+            bound.arguments["db"],
+            bound.arguments["ontology_id"],
+        ):
+            return func(*args, **kwargs)
+
+    return wrapped
+
+
+def _commit_graph_mutation(
+    db: Session,
+    ontology_id: str,
+    *,
+    refresh=None,
+) -> None:
+    """Commit Formal truth with a durable fence, then validate Neo4j."""
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        mark_projecting,
+        rebuild_after_commit,
+    )
+
+    mark_projecting(db, ontology_id)
+    db.commit()
+    if refresh is not None:
+        db.refresh(refresh)
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(503, detail={
+            "code": "ontology_projection_failed",
+            "message": (
+                "正规本体数据已提交，但 Neo4j 图投影失败；"
+                "图读取已阻断，请执行图修复"
+            ),
+            "ontology_id": ontology_id,
+        }) from exc
 
 def list_instances(
         ontology_id: str,
@@ -402,6 +452,7 @@ def instance_browser_links(
     })
 
 
+@_projection_locked_writer
 def create_instance(
         ontology_id: str,
         body: S.ObjectInstanceCreate,
@@ -441,10 +492,11 @@ def create_instance(
     )
     recompute_instance_derived(db, ontology_id=ontology_id, instance=obj, trigger_facts=created)
     project.updated_at = datetime.now(timezone.utc)
-    db.commit(); db.refresh(obj)
+    _commit_graph_mutation(db, ontology_id, refresh=obj)
     return _ok(S.ObjectInstanceOut.model_validate(obj).model_dump(by_alias=True))
 
 
+@_projection_locked_writer
 def update_instance(
         ontology_id: str,
         instance_id: str,
@@ -479,7 +531,7 @@ def update_instance(
     if created:
         recompute_instance_derived(db, ontology_id=ontology_id, instance=obj, trigger_facts=created)
     project.updated_at = datetime.now(timezone.utc)
-    db.commit(); db.refresh(obj)
+    _commit_graph_mutation(db, ontology_id, refresh=obj)
     return _ok(S.ObjectInstanceOut.model_validate(obj).model_dump(by_alias=True))
 
 
@@ -577,6 +629,7 @@ def instance_as_of(
     })
 
 
+@_projection_locked_writer
 def delete_instance(
         ontology_id: str,
         instance_id: str,
@@ -609,7 +662,8 @@ def delete_instance(
         object_type_id=obj.object_type_id, source="manual",
         actor_id=getattr(current_user, "id", None))
     project.updated_at = datetime.now(timezone.utc)
-    db.delete(obj); db.commit()
+    db.delete(obj)
+    _commit_graph_mutation(db, ontology_id)
 
 
 # ============================================================
@@ -628,6 +682,7 @@ def list_link_instances(
     return _ok([S.LinkInstanceOut.model_validate(x).model_dump(by_alias=True) for x in items])
 
 
+@_projection_locked_writer
 def create_link_instance(
         ontology_id: str,
         body: S.LinkInstanceCreate,
@@ -656,10 +711,11 @@ def create_link_instance(
                      link_type_id=obj.link_type_id, exists=True,
                      source="manual", actor_id=getattr(current_user, "id", None))
     project.updated_at = datetime.now(timezone.utc)
-    db.commit(); db.refresh(obj)
+    _commit_graph_mutation(db, ontology_id, refresh=obj)
     return _ok(S.LinkInstanceOut.model_validate(obj).model_dump(by_alias=True))
 
 
+@_projection_locked_writer
 def delete_link_instance(
         ontology_id: str,
         link_id: str,
@@ -677,4 +733,5 @@ def delete_link_instance(
                      link_type_id=obj.link_type_id, exists=False,
                      source="manual", actor_id=getattr(current_user, "id", None))
     project.updated_at = datetime.now(timezone.utc)
-    db.delete(obj); db.commit()
+    db.delete(obj)
+    _commit_graph_mutation(db, ontology_id)

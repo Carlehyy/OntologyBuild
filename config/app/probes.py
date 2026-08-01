@@ -4,7 +4,6 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
 import psycopg2
@@ -137,25 +136,6 @@ def probe_minio(profile: ConfigProfile) -> tuple[str, str]:
     return "MinIO 连接正常", f"凭据可读取存储桶列表，当前可见 {len(buckets)} 个桶"
 
 
-def probe_chroma(profile: ConfigProfile) -> tuple[str, str]:
-    config = profile.chroma
-    origin = f"http://{_http_host(config.host)}:{config.port}"
-    attempted: list[str] = []
-    with httpx.Client(
-        timeout=6,
-        follow_redirects=False,
-        mounts=loopback_httpx_mounts(origin),
-    ) as client:
-        for path in ("/api/v2/heartbeat", "/api/v1/heartbeat", "/api/v1/version"):
-            attempted.append(path)
-            response = client.get(f"{origin}{path}")
-            if response.status_code == 200:
-                return "Chroma 连接正常", f"健康接口 {path} 返回成功"
-            if response.status_code not in {404, 405}:
-                response.raise_for_status()
-    raise RuntimeError(f"未找到兼容的 Chroma 健康接口: {', '.join(attempted)}")
-
-
 def probe_browser(profile: ConfigProfile) -> tuple[str, str]:
     url = f"{profile.browser.cdp_url.rstrip('/')}/json/version"
     with httpx.Client(
@@ -193,67 +173,13 @@ def probe_n8n(profile: ConfigProfile) -> tuple[str, str]:
     return "n8n 连接正常", "API Key 可读取工作流列表"
 
 
-def probe_llm(profile: ConfigProfile) -> tuple[str, str]:
-    config = profile.llm
-    base = config.api_base.rstrip("/")
-    with httpx.Client(
-        timeout=30,
-        follow_redirects=False,
-        mounts=loopback_httpx_mounts(base),
-    ) as client:
-        if config.provider == "anthropic":
-            response = client.post(
-                f"{base}/messages",
-                headers={
-                    "x-api-key": config.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": config.model,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "Reply PONG"}],
-                },
-            )
-        else:
-            response = client.post(
-                f"{base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {config.api_key}",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": config.model,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "Reply PONG"}],
-                },
-            )
-        response.raise_for_status()
-        payload: Any = response.json()
-    if not isinstance(payload, dict):
-        raise RuntimeError("模型服务返回格式无法识别")
-    if payload.get("error"):
-        raise RuntimeError("模型服务返回了错误信息")
-    if config.provider == "anthropic":
-        content = payload.get("content")
-        if not isinstance(content, list) or not content:
-            raise RuntimeError("模型服务未返回 Anthropic 消息内容")
-    else:
-        choices = payload.get("choices")
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("模型服务未返回兼容的 choices 内容")
-    return "默认模型连接正常", "已完成一次最小输出测试，可能产生极少量费用"
-
-
 PROBES: dict[str, Callable[[ConfigProfile], tuple[str, str]]] = {
     "postgres": probe_postgres,
     "redis": probe_redis,
     "neo4j": probe_neo4j,
     "minio": probe_minio,
-    "chroma": probe_chroma,
     "browser": probe_browser,
     "n8n": probe_n8n,
-    "llm": probe_llm,
 }
 
 
@@ -280,13 +206,8 @@ def _secret_values(profile: ConfigProfile) -> list[str]:
         profile.minio.access_key,
         profile.minio.secret_key,
         profile.n8n.api_key,
-        profile.llm.api_key,
         profile.advanced.w3_password,
         profile.advanced.api_hub_mcp_token,
         profile.advanced.api_hub_system_mcp_token,
         profile.advanced.api_hub_internal_proxy_token,
     ]
-
-
-def _http_host(host: str) -> str:
-    return f"[{host}]" if ":" in host and not host.startswith("[") else host

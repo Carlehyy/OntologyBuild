@@ -297,7 +297,6 @@ class IncrementalOrchestrator:
 
     def _trigger_pipeline(self, pipeline_id: str, mode: str = "incremental") -> str | None:
         """触发 Pipeline 运行，返回 run_id"""
-        from app.config import settings
         from app.models.v2.pipeline import PipelineRun
 
         run = PipelineRun(pipeline_id=pipeline_id, status="pending")
@@ -309,37 +308,21 @@ class IncrementalOrchestrator:
             from app.tasks.v2.pipeline_run import pipeline_run_task
             pipeline_run_task.delay(pipeline_id, run.id)
         except Exception as dispatch_error:
-            if settings.require_external_dependencies:
-                run.status = "failed"
-                run.error_log = (
-                    "Redis/Celery 后台任务服务不可用，生产环境禁止降级执行"
-                )
-                try:
-                    self._db.commit()
-                except Exception:  # noqa: BLE001
-                    self._db.rollback()
-                logger.error(
-                    "Pipeline %s 任务 %s 投递失败；生产强依赖模式禁止同步降级",
-                    pipeline_id,
-                    run.id,
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    "Redis/Celery 后台任务服务不可用，Pipeline 未执行"
-                ) from dispatch_error
-            # Celery 不可用时回退同步执行——静默 pass 会让 PipelineRun 永久 pending
+            run.status = "failed"
+            run.error_log = "Redis/Celery 后台任务服务不可用，Pipeline 未执行"
             try:
-                from app.tasks.v2.pipeline_run import pipeline_run_task as _t
-                fn = getattr(_t, "run", _t)
-                fn(pipeline_id, run.id)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Pipeline 同步执行失败: {e}")
-                try:
-                    run.status = "failed"
-                    run.error_log = f"派发与同步执行均失败: {e}"[:2000]
-                    self._db.commit()
-                except Exception:  # noqa: BLE001
-                    self._db.rollback()
+                self._db.commit()
+            except Exception:  # noqa: BLE001
+                self._db.rollback()
+            logger.error(
+                "Pipeline %s 任务 %s 投递失败；任务未执行（%s）",
+                pipeline_id,
+                run.id,
+                type(dispatch_error).__name__,
+            )
+            raise RuntimeError(
+                "Redis/Celery 后台任务服务不可用，Pipeline 未执行"
+            ) from dispatch_error
 
         return run.id
 
@@ -351,8 +334,6 @@ class IncrementalOrchestrator:
         synchronous: bool = False,
     ) -> str | None:
         """触发 Mapping Apply 任务"""
-        from app.config import settings
-
         if synchronous:
             from app.tasks.v2.mapping_apply import mapping_apply_task
             task = getattr(mapping_apply_task, "run", mapping_apply_task)
@@ -385,20 +366,12 @@ class IncrementalOrchestrator:
             result = mapping_apply_task.delay(mapping_id, ontology_id)
             return str(result.id) if hasattr(result, 'id') else mapping_id
         except Exception as dispatch_error:
-            if settings.require_external_dependencies:
-                logger.error(
-                    "Mapping %s（本体 %s）投递失败；生产强依赖模式禁止同步降级",
-                    mapping_id,
-                    ontology_id,
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    "Redis/Celery 后台任务服务不可用，Mapping 未执行"
-                ) from dispatch_error
-            # Celery 不可用时同步执行
-            try:
-                from app.tasks.v2.mapping_apply import mapping_apply_task
-                mapping_apply_task(mapping_id, ontology_id)
-            except Exception as e:
-                logger.warning(f"Mapping apply 同步执行失败: {e}")
-            return mapping_id
+            logger.error(
+                "Mapping %s（本体 %s）投递失败；任务未执行（%s）",
+                mapping_id,
+                ontology_id,
+                type(dispatch_error).__name__,
+            )
+            raise RuntimeError(
+                "Redis/Celery 后台任务服务不可用，Mapping 未执行"
+            ) from dispatch_error

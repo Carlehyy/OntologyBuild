@@ -402,20 +402,24 @@ def test_fetch_agents_error_mapping_is_unchanged(
 
 
 def test_workflow_read_and_rejected_write_do_not_create_config(db):
-    response = workflow_config_service.get_workflow_config(db)
+    response = workflow_config_service.get_workflow_config(
+        db,
+        environment="test",
+    )
     assert response.model_dump() == {
         "enabled": False,
         "api_url": "",
         "has_api_key": False,
-        "timeout_seconds": 10,
+        "timeout_seconds": 30,
     }
     assert db.query(WorkflowConfig).count() == 0
 
     with pytest.raises(HTTPException) as raised:
         workflow_config_service.reject_direct_update()
-    assert raised.value.status_code == 400
+    assert raised.value.status_code == 409
     assert raised.value.detail == (
-        "请使用测试连接接口；n8n 配置仅在连接测试成功后保存"
+        "n8n 配置由启动环境/配置中心托管，运行时不允许覆盖；"
+        "请修改 N8N_* 配置并重启服务"
     )
     assert db.query(WorkflowConfig).count() == 0
 
@@ -449,7 +453,7 @@ def test_workflow_success_keeps_two_phase_create_then_save_order(
             timeout_seconds=25,
         ),
         db,
-        environment="development",
+        environment="test",
         test_connection_fn=test_connection,
         encrypt_fn=encrypt_key,
     )
@@ -522,7 +526,7 @@ def test_workflow_connection_error_mapping_never_persists(
             api_key="key",
         ),
         db,
-        environment="development",
+        environment="test",
         enforce_url_policy_fn=lambda *_args, **_kwargs: (
             "http://n8n/api/v1"
         ),
@@ -534,3 +538,72 @@ def test_workflow_connection_error_mapping_never_persists(
     assert response.ok is False
     assert response.message == message
     assert response.api_base == "http://n8n/api/v1"
+
+
+def test_environment_managed_workflow_read_never_uses_database():
+    db = SimpleNamespace(
+        query=lambda *_args: pytest.fail(
+            "managed workflow reads must not consult the database"
+        ),
+    )
+
+    response = workflow_config_service.get_workflow_config(
+        db,
+        environment="production",
+        managed_api_url="https://n8n.example.test",
+        managed_api_key="environment-secret",
+        managed_timeout_seconds=35,
+        enforce_url_policy_fn=lambda raw, **_kwargs: f"{raw}/api/v1",
+    )
+
+    assert response.model_dump() == {
+        "enabled": True,
+        "api_url": "https://n8n.example.test/api/v1",
+        "has_api_key": True,
+        "timeout_seconds": 35,
+    }
+
+
+def test_environment_managed_connection_ignores_body_and_never_persists():
+    calls = []
+    db = SimpleNamespace(
+        query=lambda *_args: pytest.fail(
+            "managed connection tests must not consult the database"
+        ),
+        commit=lambda: pytest.fail(
+            "managed connection tests must not persist overrides"
+        ),
+    )
+
+    def test_connection(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            ok=True,
+            api_base="https://managed-n8n.example.test/api/v1",
+        )
+
+    response = workflow_config_service.test_workflow_connection(
+        WorkflowConnectionTestRequest(
+            enabled=False,
+            api_url="https://attacker.example.test",
+            api_key="attacker-key",
+            timeout_seconds=1,
+        ),
+        db,
+        environment="production",
+        managed_api_url="https://managed-n8n.example.test",
+        managed_api_key="managed-key",
+        managed_timeout_seconds=31,
+        test_connection_fn=test_connection,
+    )
+
+    assert calls == [{
+        "api_url": "https://managed-n8n.example.test/api/v1",
+        "api_key": "managed-key",
+        "timeout_seconds": 31,
+    }]
+    assert response.model_dump() == {
+        "ok": True,
+        "message": "n8n 环境托管配置连接成功",
+        "api_base": "https://managed-n8n.example.test/api/v1",
+    }

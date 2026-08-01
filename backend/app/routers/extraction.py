@@ -15,6 +15,7 @@ def start_extraction(ontology_id: str, body: ExtractionRequest, db: Session = De
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not project:
         raise HTTPException(404, "Ontology not found")
+    previous_project_status = project.status
 
     files_query = db.query(UploadedFile).filter(UploadedFile.ontology_id == ontology_id)
     if body.file_ids:
@@ -45,16 +46,13 @@ def start_extraction(ontology_id: str, body: ExtractionRequest, db: Session = De
     try:
         from app.tasks.extraction import run_extraction
         run_extraction.delay(task.id)
-    except Exception:
-        # If celery not available, run synchronously in background thread
-        import threading
-        def run_sync():
-            from app.tasks.extraction import run_extraction
-            try:
-                run_extraction(task.id)
-            except Exception:
-                pass
-        threading.Thread(target=run_sync, daemon=True).start()
+    except Exception as exc:
+        task.status = "failed"
+        task.error = "Redis/Celery 后台任务服务不可用，提取任务未投递"
+        task.progress = {"stage": "dispatch_failed", "pct": 0}
+        project.status = previous_project_status
+        db.commit()
+        raise HTTPException(503, task.error) from exc
 
     return {"data": {"task_id": task.id}, "message": "Extraction queued"}
 

@@ -20,6 +20,11 @@ def test_requires_ontology_id_filter():
     assert err is not None and "ontology_id" in err
 
 
+def test_rejects_ontology_id_text_that_is_not_a_bound_property_filter():
+    bypass = "MATCH (n) WHERE 'ontology_id' = 'ontology_id' RETURN n"
+    assert validate_readonly_cypher(bypass) is not None
+
+
 def test_valid_scoped_query_passes():
     q = "MATCH (n) WHERE n.ontology_id = $ontology_id RETURN n LIMIT 25"
     assert validate_readonly_cypher(q) is None

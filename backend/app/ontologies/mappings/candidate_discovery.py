@@ -200,7 +200,7 @@ class CandidateDiscoveryMixin:
             ))
 
         automation_name = "Automation Rule: Approved curated dataset triggers mapping sync"
-        automation_desc = "When a curated dataset is approved, incremental ontology mapping can upsert objects, links, vectors, logic and actions."
+        automation_desc = "When a curated dataset is approved, incremental ontology mapping can upsert objects, links, logic and actions."
         created_v2 += int(self._upsert_v2_logic(
             ontology_id, automation_name, "automation", automation_desc, None,
             {"trigger": "curated_review.approved", "effect": "mapping_resync"},

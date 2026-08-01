@@ -19,7 +19,6 @@ from app.models.relation import Relation
 from app.models.logic import LogicRule
 from app.models.action import Action
 from app.models.user import User
-from app.services.v2.graph.networkx_service import NetworkXGraphService
 
 router = APIRouter(dependencies=[Depends(ontology_access_guard)])
 
@@ -197,8 +196,6 @@ def _execute_inference(db: Session, run: InferenceRun, ontology_id: str):
         Action.enabled == True,
     ).all()
 
-    # 构建图用于路径分析
-    svc = NetworkXGraphService()
     total = len(entities)
     matched = 0
     fired = 0

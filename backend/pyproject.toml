@@ -35,7 +35,6 @@ dependencies = [
   "python-dotenv==1.0.1",
   "json-repair==0.61.1",
   "neo4j==5.26.0",
-  "chromadb==0.5.20",
   "duckdb==1.2.0",
   "minio==7.2.12",
   "pymongo==4.10.1",
@@ -43,7 +42,6 @@ dependencies = [
   "pyarrow==18.1.0",
   "pandas==3.0.3",
   "python-crontab==3.2.0",
-  "networkx==3.6.1",
   "apscheduler==3.11.3",
   "mcp>=1.28.1,<2",
 ]

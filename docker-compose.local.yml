@@ -15,9 +15,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-ontopromptredis123}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$${REDIS_PASSWORD}\""]
     ports: ["6379:6379"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -52,16 +55,6 @@ services:
       timeout: 5s
       retries: 5
 
-  chromadb:
-    image: chromadb/chroma:0.5.20
-    ports: ["8001:8000"]
-    volumes: [chroma_data:/chroma/chroma]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   browser:
     image: ontologybuild-browser:local
     build:
@@ -71,7 +64,25 @@ services:
     command: ["--no-sandbox", "--disable-dev-shm-usage"]
     ports: ["9222:9222"]
     shm_size: 2gb
+    healthcheck:
+      # The browser image intentionally has no curl/wget. Bash's TCP socket
+      # support verifies the real CDP endpoint without adding another package.
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9222 && printf 'GET /json/version HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q 'webSocketDebuggerUrl' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+
+  migrate:
+    build: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes: [./backend:/app]
+    command: alembic upgrade head
+    restart: "no"
 
   backend:
     build: ./backend
@@ -94,8 +105,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      chromadb:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      # CDP availability participates in deep readiness and deployment
+      # preflight, but does not prevent the API process from starting so an
+      # operator can still inspect diagnostics when Chromium is unhealthy.
       browser:
         condition: service_started
     volumes: [./backend:/app, ./uploads:/uploads]
@@ -113,8 +127,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      chromadb:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes: [./backend:/app, ./uploads:/uploads]
     command: celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 
@@ -131,4 +145,3 @@ volumes:
   pg_data:
   neo4j_data:
   minio_data:
-  chroma_data:

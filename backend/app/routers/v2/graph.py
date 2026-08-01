@@ -1,8 +1,7 @@
 """Compatibility alias for the relocated graph API module.
 
-The router exposes a few intentionally patchable factories and a private
-SQLite fallback used by operational tests.  A star import loses the private
-helper and causes patches to target a different module object.
+The router exposes intentionally patchable service factories. A star import
+would cause patches to target a different module object.
 """
 import sys
 

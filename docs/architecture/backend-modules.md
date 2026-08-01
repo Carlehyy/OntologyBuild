@@ -56,7 +56,6 @@ app/services/connection/sql_connector.py
 app/services/v2/graph/graph_analytics.py
 app/services/v2/graph/neo4j_service.py
 app/services/v2/pipeline/steps/md_to_structured.py
-app/services/v2/vector/chroma_service.py
 ```
 
 例如 `app/services/storage_service.py` 通过 `sys.modules` 维持 canonical 模块

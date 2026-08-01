@@ -70,7 +70,7 @@ flowchart LR
   Impact --> Promote["admin promote\nrelease + runtime conflict fences"]
   Promote --> Runtime["激活精确 Object / Link / Fact"]
   Runtime --> NewRelease["新 immutable release\n切换 current_release_id"]
-  NewRelease --> Query["生产：重建 Neo4j / Chroma 查询投影"]
+  NewRelease --> Query["生产：重建 Neo4j 图查询投影"]
 ```
 
 发布不是把 live 表“标记为 published”。系统会验证同一个通过试跑的
@@ -95,7 +95,7 @@ Action 契约和运行态冲突，再在事务中激活冻结结果。生产查�
 promotion 与 rollback。[`versions/router.py`](../../backend/app/ontologies/versions/router.py)
 保留 HTTP 端点，以及为既有 promotion/rollback 注入和 monkeypatch 契约服务的
 薄兼容 helper；发布错误组装与 production mapping gate 的实现位于
-`release_gate_service.py`，Neo4j/Chroma 重建、activation number 和动态
+`release_gate_service.py`，Neo4j 重建、activation number 和动态
 Sentinel 失效位于 `release_activation_service.py`。
 
 ## 3. 发布后的数据刷新
@@ -109,7 +109,7 @@ flowchart LR
   Subscription -->|是| Reconcile["Mappings application command\nMappingService.build_all\nrequire_approved=true"]
   Reconcile --> Formal["PostgreSQL Formal\nObject / Link / Fact"]
   Formal --> Projecting["runtime fence = projecting"]
-  Projecting --> Projection["重建 Neo4j / Chroma\n查询投影"]
+  Projecting --> Projection["重建 Neo4j\n图查询投影"]
   Projection --> Applied["runtime fence = applied"]
   Applied --> Cdc["注册 Mapping / Formal CDC"]
   Cdc --> Sentinel["Sentinel exact-release evaluation"]
@@ -124,7 +124,7 @@ flowchart LR
 Sentinel 定义。手工数据版本使用独立 `__auto_apply_on_version__` 开关，且必须
 满足用户维护、稳定主键、不可变 checksum 版本等资格；不能用该开关绕过成品
 审核。Mapping 先提交 PostgreSQL Formal 主事实并把运行围栏置为
-`projecting`，随后重建 Neo4j/Chroma 查询投影；只有投影成功才进入 `applied`
+`projecting`，随后重建 Neo4j 图查询投影；只有投影成功才进入 `applied`
 并触发 CDC/Sentinel。production 中任一投影失败都会把围栏置为 `failed`，
 阻断后续发布和 Action，不能把查询投影误解成链路外的可选缓存。
 
@@ -177,15 +177,18 @@ Event Registry 提供人工/JWT 管理、第三方 X-API-Key ingest、幂等来�
 | Formal 定义、Object/Link、Fact、Action/Sentinel 记录 | PostgreSQL `fo_*` 等表 | 否 | 运行与审计主事实 |
 | DatasetVersion/Sentinel outbox 与 claim 状态 | PostgreSQL | 否 | 重启、重试和幂等依据 |
 | 图查询视图 | Neo4j | 是 | 从当前 PostgreSQL release/runtime 重建 |
-| 向量查询视图 | ChromaDB | 是 | 从当前发布内容重建 |
 | 队列与短期协调 | Redis/Celery | 是 | 传输/执行边界，不是业务真相 |
-| 浏览器运行时、n8n、模型提供商 | 外部系统 | 视系统而定 | 必须保存调用身份、状态和失败证据 |
+| 浏览器运行时、n8n | 外部系统 | 视系统而定 | 启动必需；必须保存调用身份、状态和失败证据 |
+| 模型提供商 | 外部系统 | 视系统而定 | 启动后按需配置；调用失败必须显式可见 |
 
 结构化数据库存储边界由
 [`DatasetVersion`](../../backend/app/data_channel/datasets/models.py) 和
 [`test_storage_hardening.py`](../../backend/tests/v2/datasets/test_storage_hardening.py)
-共同验证。Neo4j/ChromaDB 在 production promote/rollback 中是发布门的一部分，
-但它们仍是可重建的查询投影，不取代 PostgreSQL 发布指针、快照和 Fact lineage。
+共同验证。Neo4j 在 production promote/rollback 中是发布门的一部分，但仍是
+可重建的查询投影，不取代 PostgreSQL 发布指针、快照和 Fact lineage。
+
+ChromaDB 与向量查询投影已移除。关键词搜索读取 PostgreSQL；语义搜索和统一
+搜索的 semantic 模式显式返回 501，而不是退回关键词或其他近似结果。
 
 ## 6. 跨边界变更检查
 

@@ -35,18 +35,14 @@ DEFAULT_ENV_PATH = PROJECT_ROOT / "config" / "generated" / "local" / ".env"
 DEFAULT_CONFIG_PORT = 8888
 RECEIPT_TTL_SECONDS = 15 * 60
 AVAILABLE_SERVICES = tuple(PROBES)
-REQUIRED_SERVICES = (
-    "postgres",
-    "redis",
-    "neo4j",
-    "minio",
-    "browser",
-    "n8n",
+REQUIRED_SERVICES = tuple(
+    service for service in AVAILABLE_SERVICES if service != "browser"
 )
-OPTIONAL_SERVICES = tuple(
-    service for service in AVAILABLE_SERVICES if service not in REQUIRED_SERVICES
-)
-OPTIONAL_RUNTIME_DEPENDENCIES = frozenset({"chroma"})
+# Chromium configuration is mandatory in the profile, but reachability is an
+# advisory pre-start check: an operator must still be able to start the API and
+# inspect diagnostics while the CDP sidecar is unhealthy. Deep readiness stays
+# red until the browser becomes reachable.
+OPTIONAL_SERVICES: tuple[str, ...] = ("browser",)
 
 
 class ConfigCenterState:
@@ -429,18 +425,6 @@ def service_guides() -> dict[str, dict[str, Any]]:
                 "mc admin user list local",
             ],
         },
-        "chroma": {
-            "title": "确认 Chroma 地址",
-            "summary": "仓库中的本地容器通常把宿主机 8001 映射到容器 8000。",
-            "steps": [
-                "如果 Chroma 直接安装在本机，请以实际监听端口为准。",
-                "如果使用 Docker，请查看端口映射左侧的宿主机端口。",
-            ],
-            "commands": [
-                "docker ps --filter name=chroma",
-                "curl http://127.0.0.1:8001/api/v1/heartbeat",
-            ],
-        },
         "browser": {
             "title": "启动 Chromium 远程调试",
             "summary": "数据管家需要单独的浏览器调试会话，建议使用独立用户目录。",
@@ -467,17 +451,6 @@ def service_guides() -> dict[str, dict[str, Any]]:
                 "docker ps --filter name=n8n",
                 "curl http://127.0.0.1:5678/healthz",
             ],
-        },
-        "llm": {
-            "title": "准备默认模型凭据",
-            "summary": "模型测试会发送一次最小请求，可能产生极少量费用。",
-            "steps": [
-                "OpenAI 或兼容服务通常使用以 /v1 结尾的 API Base。",
-                "Anthropic 通常使用 https://api.anthropic.com/v1。",
-                "模型名称必须是该 Key 有权限调用的真实模型标识。",
-                "若公司使用统一代理，请向管理员索取兼容地址、Key 和模型名。",
-            ],
-            "commands": [],
         },
     }
 
@@ -513,35 +486,24 @@ def _check_backend_runtime(url: str) -> dict[str, Any]:
             response.raise_for_status()
             payload = response.json()
         unavailable = [str(item) for item in payload.get("unavailable") or []]
-        required_unavailable = [
-            item for item in unavailable if item not in OPTIONAL_RUNTIME_DEPENDENCIES
-        ]
-        if (
-            payload.get("status") not in {"ok", "degraded"}
-            or required_unavailable
-        ):
+        if payload.get("status") != "ok" or unavailable:
             return {
                 "id": "backend",
                 "label": "后端核心就绪",
                 "ok": False,
                 "detail": (
                     "后端仍有必选项目未就绪: "
-                    + ", ".join(required_unavailable or unavailable)
+                    + ", ".join(
+                        unavailable
+                        or [str(payload.get("status") or "unknown")]
+                    )
                 ),
             }
-        optional_unavailable = [
-            item for item in unavailable if item in OPTIONAL_RUNTIME_DEPENDENCIES
-        ]
         return {
             "id": "backend",
             "label": "后端核心就绪",
             "ok": True,
-            "detail": (
-                "数据库和核心第三方依赖均已就绪；"
-                f"可选增强暂不可用: {', '.join(optional_unavailable)}"
-                if optional_unavailable
-                else "数据库和核心第三方依赖均已就绪"
-            ),
+            "detail": "数据库和全部启动依赖均已就绪",
         }
     except Exception as exc:  # noqa: BLE001
         return {

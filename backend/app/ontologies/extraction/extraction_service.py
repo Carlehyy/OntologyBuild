@@ -3,7 +3,8 @@ LLM 多轮抽取增强管道
 
 流程: 长文档 → 切块 → 多轮抽取(实体→关系→规则) → 跨块去重 → 置信度校准 → 候选池
 
-使用 DeepSeek API，无Key时自动降级为确定性规则提取。
+使用平台启动后由管理员启用的文本 LLM。未配置 LLM 时使用明确标识的
+确定性规则模式；已配置 LLM 调用失败时显式失败，不悄悄切换算法。
 """
 from __future__ import annotations
 import logging
@@ -13,22 +14,22 @@ import uuid
 from typing import Any
 from datetime import datetime, timezone
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
-# DeepSeek 配置
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_API_KEY = "YOUR_DEEPSEEK_API_KEY_HERE"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
+
+class LLMExtractionError(RuntimeError):
+    """A configured LLM failed; callers must surface the failure."""
 
 
 class LLMExtractionService:
-    """LLM多轮抽取服务 — DeepSeek驱动，无Key时确定性降级"""
+    """LLM multi-round extraction or an explicit non-LLM rules mode."""
 
-    def __init__(self):
-        self.available = bool(DEEPSEEK_API_KEY)
-        self.client = httpx.Client(timeout=60.0)
+    def __init__(self, call_kwargs: dict | None = None):
+        self._call_kwargs = dict(call_kwargs or {})
+        self.available = bool(self._call_kwargs)
+        self.model_name = (
+            str(self._call_kwargs.get("model") or "") or None
+        )
 
     def extract_pipeline(self, text: str, ontology_id: str, domain: str = "金融风控") -> dict:
         """
@@ -41,7 +42,7 @@ class LLMExtractionService:
         6. 置信度校准
         """
         if not self.available or not text.strip():
-            return self._deterministic_fallback(text, ontology_id)
+            return self._deterministic_rules(text, ontology_id)
 
         try:
             chunks = self._chunk_text(text)
@@ -81,9 +82,12 @@ class LLMExtractionService:
                 "total_deduped": len(calibrated_entities) + len(calibrated_relations),
             }
 
-        except Exception as e:
-            logger.warning(f"LLM extraction failed: {e}, falling back to deterministic")
-            return self._deterministic_fallback(text, ontology_id)
+        except LLMExtractionError:
+            raise
+        except Exception as exc:
+            raise LLMExtractionError(
+                "已配置的 LLM 抽取失败，未切换到规则模式"
+            ) from exc
 
     def _chunk_text(self, text: str, max_chars: int = 2000) -> list[str]:
         """简单文本切块 — 按句子边界分割"""
@@ -106,25 +110,22 @@ class LLMExtractionService:
         return chunks if chunks else [text[:max_chars]]
 
     def _call_llm(self, system_prompt: str, user_content: str, temperature: float = 0.3) -> str:
-        """调用 DeepSeek API"""
-        resp = self.client.post(
-            DEEPSEEK_API_URL,
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": DEEPSEEK_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": temperature,
-                "max_tokens": 2000,
-            },
+        """Call the selected platform model through the shared gateway."""
+        del temperature  # the shared gateway owns the platform call policy
+        from app.model_configs.llm_gateway import chat
+
+        result = chat(
+            self._call_kwargs,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            [],
         )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        content = result.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise LLMExtractionError("LLM 未返回可解析文本")
+        return content
 
     def _extract_entities(self, text: str, domain: str) -> list[dict]:
         """Round 1: 实体抽取"""
@@ -150,9 +151,9 @@ class LLMExtractionService:
                     e["_confidence"] = 0.85
                     e["id"] = f"cand_{uuid.uuid4().hex[:8]}"
                 return entities
-        except Exception as e:
-            logger.warning(f"Entity extraction failed: {e}")
-        return []
+        except Exception as exc:
+            raise LLMExtractionError("LLM 实体抽取失败") from exc
+        raise LLMExtractionError("LLM 实体抽取未返回 JSON 数组")
 
     def _extract_relations(self, text: str, context_entities: list[dict]) -> list[dict]:
         """Round 2: 关系抽取"""
@@ -179,9 +180,9 @@ class LLMExtractionService:
                     r["_confidence"] = 0.80
                     r["id"] = f"cand_rel_{uuid.uuid4().hex[:8]}"
                 return relations
-        except Exception as e:
-            logger.warning(f"Relation extraction failed: {e}")
-        return []
+        except Exception as exc:
+            raise LLMExtractionError("LLM 关系抽取失败") from exc
+        raise LLMExtractionError("LLM 关系抽取未返回 JSON 数组")
 
     def _extract_rules(self, text: str, domain: str) -> list[dict]:
         """Round 3: 规则抽取"""
@@ -203,9 +204,9 @@ class LLMExtractionService:
                     r["_round"] = 3
                     r["_confidence"] = 0.75
                 return rules
-        except Exception as e:
-            logger.warning(f"Rule extraction failed: {e}")
-        return []
+        except Exception as exc:
+            raise LLMExtractionError("LLM 规则抽取失败") from exc
+        raise LLMExtractionError("LLM 规则抽取未返回 JSON 数组")
 
     @staticmethod
     def _deduplicate_entities(entities: list[dict]) -> list[dict]:
@@ -244,9 +245,9 @@ class LLMExtractionService:
         return items
 
     @staticmethod
-    def _deterministic_fallback(text: str, ontology_id: str) -> dict:
+    def _deterministic_rules(text: str, ontology_id: str) -> dict:
         """
-        确定性降级：基于规则的文本分析，绝不返回假数据
+        明确的非 LLM 模式：基于规则的文本分析，绝不返回假数据。
         """
         # 企业名称模式匹配
         company_patterns = [
@@ -320,14 +321,14 @@ class LLMExtractionService:
 
         return {
             "status": "completed",
-            "method": "deterministic_fallback",
+            "method": "deterministic_rules",
             "chunks_processed": 1,
             "entities": entities,
             "relations": relations[:20],
             "rules": [],
             "total_raw": len(entities) + len(relations),
             "total_deduped": len(entities) + len(relations),
-            "note": "LLM unavailable, using deterministic extraction",
+            "note": "No enabled text LLM is configured; deterministic rules mode was selected explicitly",
         }
 
     def nl_to_cypher(self, question: str, ontology_id: str) -> dict:
@@ -347,22 +348,38 @@ class LLMExtractionService:
             match = re.search(r'\{.*\}', content, re.DOTALL)
             if match:
                 result = json.loads(match.group())
+                cypher = result.get("cypher")
+                if not isinstance(cypher, str) or not cypher.strip():
+                    raise LLMExtractionError(
+                        "已配置的 LLM 查询翻译未返回 Cypher"
+                    )
                 return {
-                    "cypher": result.get("cypher", ""),
+                    "cypher": cypher,
                     "explanation": result.get("explanation", ""),
                     "confidence": 0.85,
                 }
-        except Exception as e:
-            logger.warning(f"NL to Cypher failed: {e}")
+        except LLMExtractionError:
+            raise
+        except Exception as exc:
+            raise LLMExtractionError(
+                "已配置的 LLM 查询翻译失败"
+            ) from exc
 
-        return {"cypher": "", "confidence": 0, "explanation": f"Error: {str(e)[:100]}"}
+        raise LLMExtractionError(
+            "已配置的 LLM 查询翻译未返回 JSON 对象"
+        )
 
 
-# Singleton
-_llm_service: LLMExtractionService | None = None
+def get_llm_extraction_service(db=None) -> LLMExtractionService:
+    """Resolve the currently enabled platform text model for this request."""
+    from app.model_configs.selector import (
+        llm_call_kwargs,
+        select_llm_model_config,
+    )
 
-def get_llm_extraction_service() -> LLMExtractionService:
-    global _llm_service
-    if _llm_service is None:
-        _llm_service = LLMExtractionService()
-    return _llm_service
+    model_config = select_llm_model_config(
+        db,
+        purpose_tags=("本体抽取", "extraction"),
+        allow_vlm=False,
+    )
+    return LLMExtractionService(llm_call_kwargs(model_config))

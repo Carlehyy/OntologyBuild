@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 |---|---|
 | 状态 | Accepted（现状证据基线，不代表新增产品意图） |
-| 日期 | 2026-07-30 |
+| 日期 | 2026-08-02 |
 | 负责人 | 未在仓库可核验来源中声明 |
 | 评审人 | 未在仓库可核验来源中声明 |
 | 目标版本 | 当前实现；无可核验版本号 |
@@ -33,8 +33,22 @@
 | 草稿 | 从完整发布快照复制、可递增 revision/hash 的 `OntologyVersion` draft |
 | 隔离试跑 | 使用精确数据版本 materialize 到 `OntologyTrialObject/Link`，不写运行投影 |
 | Formal 投影 | PostgreSQL `fo_*` 对象、关系、Fact、Action/Sentinel 运行记录 |
-| 查询投影 | 可由 PostgreSQL 当前事实重建的 Neo4j/ChromaDB 视图 |
+| 查询投影 | 可由 PostgreSQL 当前事实重建的 Neo4j 图视图 |
 | 运行时 CDC | Formal/Mapping 变更的 durable outbox，不等同于事件登记 |
+
+### 2.1 运行依赖与搜索契约
+
+- 正常启动必须真实配置并验证 PostgreSQL、Redis、Celery worker、Neo4j、
+  MinIO 和 n8n；任一未就绪都阻止 API 启动或平台 ready；Chromium CDP 地址
+  必须配置，但服务不可达只允许 API 保持 liveness/诊断，深度 readiness 返回
+  503；
+- PostgreSQL、Celery、Neo4j 和 MinIO 失败时，不得分别切换到平台 SQLite、
+  API 线程任务、NetworkX/SQL 图或本地对象存储；
+- ChromaDB 与向量投影已移除。PostgreSQL 关键词搜索保留；语义搜索端点和统一
+  搜索 `mode=semantic` 返回 `501 semantic_search_unsupported`；
+- LLM 不属于启动依赖。管理员在平台启动后从“模型配置”页面按需添加提供商；
+- API Hub 自有 SQLite、测试环境 SQLite、历史 `local://` 只读迁移兼容是隔离
+  用途，不构成上述运行时降级。
 
 权威发布上下文由
 [`release_context.py`](../../../backend/app/ontologies/release_context.py)
@@ -144,8 +158,7 @@ stateDiagram-v2
 
 晋级在同一数据库事务中恢复定义、激活精确试跑 Object/Link、写 Fact lineage、
 创建 immutable release 并切换 `current_release_id`。生产环境还必须成功构建
-Neo4j/ChromaDB 候选查询投影；任一步失败都会回滚 SQL 事务并尝试恢复当前查询
-投影。
+Neo4j 候选图查询投影；任一步失败都会回滚 SQL 事务并尝试恢复当前查询投影。
 
 实现：
 [`promotion_service.py`](../../../backend/app/ontologies/versions/promotion_service.py)、
@@ -247,6 +260,9 @@ Approved Curated Version
 | rollback | 历史 snapshot + 新 activation id | 验证/投影失败保持当前 release |
 | Sentinel CDC | release id、event kind、claim token、chain/checkpoint | retry/dead 可观测；旧 release 事件 stale |
 | Action | request idempotency key、release/action/target/parameters | success/pending 可回放；冲突 fail closed |
+| Celery 异步调度 | Redis broker、已注册 task、worker readiness | 入队/worker 不可用即失败，不自动切到 API 线程；显式同步接口保持原语义 |
+| 图/对象存储 | Neo4j、MinIO readiness | 返回明确失败，不切换内存/SQL 图或本地目录 |
+| 搜索 | 显式 keyword/semantic mode | keyword 使用 PostgreSQL；semantic 返回 501 |
 
 ## 9. 证据矩阵
 
@@ -277,8 +293,8 @@ Approved Curated Version
 3. durable event/CDC 的 claim、retry、dead/stale 与幂等行为不变；
 4. PostgreSQL 新库和现存副本迁移可运行，只有一个 Alembic head；
 5. 后端完整回归、前端分类/lint/build/mocked E2E 通过；
-6. 涉及 PostgreSQL、Redis/Celery、Neo4j、MinIO、ChromaDB、发布或回滚时，在
-   隔离真实栈补充供应链与失败恢复证据。
+6. 涉及 PostgreSQL、Redis/Celery worker、Neo4j、MinIO、n8n、Chromium CDP、
+   发布或回滚时，在隔离真实栈补充供应链与失败恢复证据。
 
 关联：
 [导航与 RBAC 契约](./0001-current-platform-contract.md)、

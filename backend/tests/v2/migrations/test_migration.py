@@ -6,14 +6,16 @@
   - 实体/关系数量统计正确
   - v1 数据库不存在时抛出 FileNotFoundError
   - PostgreSQL 不可用时记录 error 而非崩溃
-  - to_dict 包含 neo4j_nodes 和 chroma_docs 字段
+  - to_dict 包含 Neo4j 投影统计字段
 """
 import json
+import os
 import sqlite3
 import tempfile
-import os
-import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 # ── 测试数据库初始化 ─────────────────────────────────────────────────
@@ -110,7 +112,8 @@ def create_v1_db(db_path: str):
             '{}', 'v0.1', datetime('now'), datetime('now')
         );
         INSERT INTO relations VALUES (
-            'r-1', 'o-1', 'e-1', 'e-2', 'COMPETES', 0.8, '{}', datetime('now')
+            'r-1', 'o-1', 'e-1', 'e-2', 'COMPETES', 0.8,
+            '{"weight": 7}', datetime('now')
         );
         INSERT INTO prompts VALUES (
             'p-1', '供应链提示词', '供应链', '提取供应链实体', 'v1.0', 'u-1',
@@ -119,6 +122,52 @@ def create_v1_db(db_path: str):
     """)
     conn.commit()
     conn.close()
+
+
+class _RecordingQuery:
+    """Small ORM-query double keyed by a model's ``id`` comparison."""
+
+    def __init__(self, session, model):
+        self._session = session
+        self._model = model
+        self._record_id = None
+
+    def filter(self, *criteria):
+        for criterion in criteria:
+            if getattr(getattr(criterion, "left", None), "key", None) == "id":
+                self._record_id = str(criterion.right.value)
+        return self
+
+    def first(self):
+        return self._session.records.get(self._model, {}).get(self._record_id)
+
+
+class _RecordingSession:
+    """Record merged ORM rows without requiring a second test database."""
+
+    def __init__(self):
+        self.records = {}
+        self.commits = 0
+        self.rollbacks = 0
+
+    def query(self, model):
+        return _RecordingQuery(self, model)
+
+    def merge(self, instance):
+        self.records.setdefault(type(instance), {})[str(instance.id)] = instance
+        return instance
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def get_bind(self):
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+    def close(self):
+        pass
 
 
 @pytest.fixture
@@ -213,6 +262,112 @@ def test_migration_counts_entities(v1_db):
     assert migrator.stats.ontologies == 1
 
 
+def test_non_dry_run_persists_entities_relations_and_projecting_fence(v1_db):
+    """The committed SQL truth includes relationships before projection."""
+    from app.models.entity import Entity
+    from app.models.ontology import OntologyProject
+    from app.models.relation import Relation
+    from scripts.migrations.migrate_v1_to_v2 import V1ToV2Migrator
+
+    session = _RecordingSession()
+    migrator = V1ToV2Migrator(v1_db, "postgresql://x")
+    migrator._v2_session = session
+    projection_calls = []
+
+    def assert_committed_projection(ontology_id, **counts):
+        project = session.records[OntologyProject][ontology_id]
+        assert session.commits == 1
+        assert project.projection_status == "projecting"
+        projection_calls.append((ontology_id, counts))
+
+    migrator._rebuild_projection = assert_committed_projection
+    try:
+        migrator._connect_v1()
+        migrator._migrate_ontologies_and_entities()
+    finally:
+        migrator._cleanup()
+
+    assert set(session.records[Entity]) == {"e-1", "e-2"}
+    assert set(session.records[Relation]) == {"r-1"}
+    relation = session.records[Relation]["r-1"]
+    assert relation.source_entity == "e-1"
+    assert relation.target_entity == "e-2"
+    assert relation.properties == {"weight": 7}
+    assert projection_calls == [
+        ("o-1", {"entity_count": 2, "relation_count": 1})
+    ]
+    assert migrator.stats.ontologies == 1
+    assert migrator.stats.entities == 2
+    assert migrator.stats.relations == 1
+
+
+def test_relation_with_unresolved_endpoint_fails_before_commit(v1_db):
+    """A corrupt legacy edge cannot silently point outside its ontology."""
+    from scripts.migrations.migrate_v1_to_v2 import V1ToV2Migrator
+
+    conn = sqlite3.connect(v1_db)
+    conn.execute("UPDATE relations SET target = 'missing-entity' WHERE id = 'r-1'")
+    conn.commit()
+    conn.close()
+
+    session = _RecordingSession()
+    migrator = V1ToV2Migrator(v1_db, "postgresql://x")
+    migrator._v2_session = session
+    try:
+        migrator._connect_v1()
+        with pytest.raises(RuntimeError, match="无法解析的端点"):
+            migrator._migrate_ontologies_and_entities()
+    finally:
+        migrator._cleanup()
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    assert migrator.stats.ontologies == 0
+
+
+def test_projection_rebuild_uses_canonical_fail_closed_path():
+    """Migration always invokes the real canonical rebuild, even in tests."""
+    from scripts.migrations.migrate_v1_to_v2 import V1ToV2Migrator
+
+    migrator = V1ToV2Migrator("unused.db", "postgresql://x")
+    migrator._v2_session = MagicMock()
+
+    with patch(
+        "app.ontologies.projection_state.rebuild_after_commit"
+    ) as rebuild:
+        migrator._rebuild_projection(
+            "o-1", entity_count=2, relation_count=1
+        )
+
+    rebuild.assert_called_once_with(
+        migrator._v2_session,
+        "o-1",
+        run_in_test=True,
+    )
+    assert migrator.stats.neo4j_nodes == 2
+    assert migrator.stats.neo4j_edges == 1
+
+
+def test_projection_failure_is_reported_as_recoverable_not_success():
+    """Committed SQL is reported while a failed projection stays explicit."""
+    from scripts.migrations.migrate_v1_to_v2 import V1ToV2Migrator
+
+    migrator = V1ToV2Migrator("unused.db", "postgresql://x")
+    migrator._v2_session = MagicMock()
+
+    with patch(
+        "app.ontologies.projection_state.rebuild_after_commit",
+        side_effect=RuntimeError("neo4j unavailable"),
+    ):
+        with pytest.raises(RuntimeError, match="项目保持非 ready"):
+            migrator._rebuild_projection(
+                "o-1", entity_count=2, relation_count=1
+            )
+
+    assert migrator.stats.neo4j_nodes == 0
+    assert migrator.stats.neo4j_edges == 0
+
+
 def test_migration_v1_db_not_found():
     """v1 数据库文件不存在时抛出 FileNotFoundError"""
     from scripts.migrations.migrate_v1_to_v2 import V1ToV2Migrator
@@ -244,13 +399,13 @@ def test_migration_reports_errors_on_bad_pg(v1_db):
 
 
 def test_migration_stats_to_dict_complete():
-    """to_dict 的 migrated 子字典包含 neo4j_nodes 和 chroma_docs 字段"""
+    """to_dict exposes current relational and Neo4j migration counters."""
     from scripts.migrations.migrate_v1_to_v2 import MigrationStats
 
-    stats = MigrationStats(neo4j_nodes=10, chroma_docs=10)
+    stats = MigrationStats(neo4j_nodes=10, neo4j_edges=4)
     d = stats.to_dict()
 
     assert "neo4j_nodes" in d["migrated"]
-    assert "chroma_docs" in d["migrated"]
+    assert "neo4j_edges" in d["migrated"]
     assert d["migrated"]["neo4j_nodes"] == 10
-    assert d["migrated"]["chroma_docs"] == 10
+    assert d["migrated"]["neo4j_edges"] == 4

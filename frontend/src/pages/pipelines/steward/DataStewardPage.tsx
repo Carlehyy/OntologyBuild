@@ -394,13 +394,13 @@ export default function DataStewardPage() {
         <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-800 shrink-0">
           <AlertTriangle size={15} className="shrink-0" />
           <span className="flex-1">
-            {!status.n8n.configured ? 'n8n 尚未配置：请先到系统设置填写 n8n 地址与 API Key 并通过连接测试。'
-              : !status.n8n.enabled ? 'n8n 集成处于停用状态：请到系统设置启用。'
+            {!status.n8n.configured ? '启动配置缺少 n8n 地址或 API Key：请通过配置中心补齐 N8N_* 并重启平台。'
+              : !status.n8n.enabled ? '当前测试环境注入的 n8n 集成处于停用状态。'
               : `n8n 无法连接：${status.n8n.error || '请检查服务是否在线'}`}
           </span>
           <Link to="/settings/workflows"
             className="flex items-center gap-1 text-xs px-2.5 py-1 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 shrink-0">
-            <Settings size={11} /> 工作流配置
+            <Settings size={11} /> 查看工作流状态
           </Link>
         </div>
       )}

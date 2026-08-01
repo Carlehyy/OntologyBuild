@@ -4,8 +4,34 @@ from app.deps import get_db, get_current_user
 from app.models.entity import Entity
 from app.models.relation import Relation
 from app.models.ontology import OntologyProject
+from app.ontologies.access import (
+    legacy_ontology_write_guard,
+    ontology_access_guard,
+)
 
-router = APIRouter()
+router = APIRouter(dependencies=[
+    Depends(ontology_access_guard),
+    Depends(legacy_ontology_write_guard),
+])
+
+
+def _finish_projection(db: Session, ontology_id: str) -> None:
+    from app.ontologies.projection_state import (
+        ProjectionRebuildError,
+        rebuild_after_commit,
+    )
+
+    try:
+        rebuild_after_commit(db, ontology_id)
+    except ProjectionRebuildError as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "ontology_projection_failed",
+                "message": "关系已保存到关系型真相，但 Neo4j 图投影失败；请执行图修复",
+                "ontology_id": ontology_id,
+            },
+        ) from exc
 
 @router.get("")
 def get_graph(ontology_id: str, limit: int = 300, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -13,103 +39,62 @@ def get_graph(ontology_id: str, limit: int = 300, db: Session = Depends(get_db),
     if not project:
         raise HTTPException(404, "Ontology not found")
 
-    # 优先从 Neo4j 读取；无数据或不可用时回退 SQLite
+    _require_projection_ready(db, ontology_id)
     neo4j_nodes, neo4j_edges = _try_neo4j(ontology_id, limit)
-    if neo4j_nodes:
-        return {
-            "data": {
-                "nodes": neo4j_nodes,
-                "edges": neo4j_edges,
-                "meta": {
-                    "ontology_id": ontology_id,
-                    "name": project.name,
-                    "entity_count": len(neo4j_nodes),
-                    "relation_count": len(neo4j_edges),
-                    "source": "neo4j",
-                }
-            }
-        }
-
-    # 单一可信数据源：正规本体存在实例时，从 ObjectInstance/LinkInstance 投影，
-    # 保证图谱视图与图谱编辑器一致（消除数据双轨）。
-    from app.services.formal.legacy_bridge import has_formal_instances, graph_from_formal
-    if has_formal_instances(db, ontology_id):
-        fg = graph_from_formal(db, ontology_id, limit=limit)
-        nodes = [{"data": {
-            "id": n["id"], "label": n["label"], "name_en": n["properties"].get("name_en"),
-            "type": n["type"], "confidence": 1.0,
-        }} for n in fg["nodes"]]
-        edges = [{"data": {
-            "id": e["id"], "source": e["source"], "target": e["target"],
-            "label": e["label"] or e["type"], "confidence": 1.0,
-        }} for e in fg["edges"]]
-        return {"data": {"nodes": nodes, "edges": edges, "meta": {
-            "ontology_id": ontology_id, "name": project.name,
-            "entity_count": len(nodes), "relation_count": len(edges),
-            "source": "formal_ontology",
-        }}}
-
-    # SQLite fallback
-    entities = db.query(Entity).filter(Entity.ontology_id == ontology_id).limit(limit).all()
-    relations = db.query(Relation).filter(Relation.ontology_id == ontology_id).all()
-    entity_ids = {e.id for e in entities}
-
-    nodes = [
-        {
-            "data": {
-                "id": e.id,
-                "label": e.name_cn or e.name_en or e.id,
-                "name_en": e.name_en,
-                "name_abbr": e.name_abbr,
-                "type": e.type,
-                "confidence": e.confidence,
-            }
-        }
-        for e in entities
-    ]
-
-    edges = [
-        {
-            "data": {
-                "id": r.id,
-                "source": r.source_entity,
-                "target": r.target_entity,
-                "label": r.type,
-                "confidence": r.confidence,
-            }
-        }
-        for r in relations
-        if r.source_entity in entity_ids and r.target_entity in entity_ids
-    ]
-
     return {
         "data": {
-            "nodes": nodes,
-            "edges": edges,
+            "nodes": neo4j_nodes,
+            "edges": neo4j_edges,
             "meta": {
                 "ontology_id": ontology_id,
                 "name": project.name,
-                "entity_count": len(nodes),
-                "relation_count": len(edges),
-                "source": "sqlite",
+                "entity_count": len(neo4j_nodes),
+                "relation_count": len(neo4j_edges),
+                "source": "neo4j",
             }
         }
     }
 
 
+def _require_projection_ready(db: Session, ontology_id: str) -> None:
+    from app.ontologies.projection_state import not_ready_detail, snapshot
+
+    state = snapshot(db, ontology_id, lock_for_read=True)
+    if not state.ready:
+        raise HTTPException(
+            status_code=503,
+            detail=not_ready_detail(state),
+        )
+
+
 def _try_neo4j(ontology_id: str, limit: int) -> tuple[list, list]:
-    """尝试从 Neo4j 读取并转换为 v1 格式；失败或无数据返回空列表。"""
+    """从 Neo4j 读取并转换为 v1 格式；空图保持为空图。"""
     try:
         from app.services.v2.graph.neo4j_service import Neo4jService
         svc = Neo4jService()
-        if not svc.available:
-            return [], []
-        data = svc.get_graph_data(ontology_id, limit=limit)
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "neo4j_unavailable",
+                "message": "Neo4j 图数据库不可用，请检查服务与连接配置",
+            },
+        )
+
+    if not svc.available:
         svc.close()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "neo4j_unavailable",
+                "message": "Neo4j 图数据库不可用，请检查服务与连接配置",
+            },
+        )
+
+    try:
+        data = svc.get_graph_data(ontology_id, limit=limit)
         raw_nodes = data.get("nodes", [])
         raw_edges = data.get("edges", [])
-        if not raw_nodes:
-            return [], []
         # 转换为 v1 GraphTab 期望的格式
         node_ids = {n["id"] for n in raw_nodes}
         nodes = [
@@ -120,7 +105,8 @@ def _try_neo4j(ontology_id: str, limit: int) -> tuple[list, list]:
                              or (n.get("properties") or {}).get("name")
                              or (n.get("labels") or [n["id"]])[0],
                     "name_en": (n.get("properties") or {}).get("name_en", ""),
-                    "type": (n.get("labels") or [""])[0],
+                    "type": (n.get("properties") or {}).get("type")
+                    or (n.get("labels") or [""])[0],
                     "confidence": (n.get("properties") or {}).get("confidence", 1.0),
                 }
             }
@@ -141,7 +127,15 @@ def _try_neo4j(ontology_id: str, limit: int) -> tuple[list, list]:
         ]
         return nodes, edges
     except Exception:
-        return [], []
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "neo4j_operation_failed",
+                "message": "Neo4j 图查询失败，请检查服务状态",
+            },
+        )
+    finally:
+        svc.close()
 
 @router.post("/relations")
 def create_relation(
@@ -151,22 +145,58 @@ def create_relation(
     _=Depends(get_current_user)
 ):
     from app.models.relation import Relation
+    from app.ontologies.projection_state import mark_projecting
+    from app.ontologies.runtime_fence import _ontology_build_lock
     import uuid
-    relation = Relation(
-        id=str(uuid.uuid4()),
-        ontology_id=ontology_id,
-        source_entity=body["source_entity"],
-        target_entity=body["target_entity"],
-        type=body.get("type", "关联"),
-        properties=body.get("properties", {}),
-        confidence=body.get("confidence", 1.0),
-    )
-    db.add(relation); db.commit(); db.refresh(relation)
+    with _ontology_build_lock(db, ontology_id):
+        source_id = str(body.get("source_entity") or "").strip()
+        target_id = str(body.get("target_entity") or "").strip()
+        requested_endpoints = {source_id, target_id} - {""}
+        existing_endpoints = {
+            str(row[0])
+            for row in db.query(Entity.id).filter(
+                Entity.ontology_id == ontology_id,
+                Entity.id.in_(requested_endpoints),
+            ).all()
+        }
+        missing_endpoints = sorted(
+            ({source_id, target_id} - {""}) - existing_endpoints
+        )
+        if not source_id or not target_id or missing_endpoints:
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "relation_endpoint_not_in_ontology",
+                    "message": "关系两端必须是当前本体中的实体",
+                    "missing_entity_ids": missing_endpoints,
+                },
+            )
+        relation = Relation(
+            id=str(uuid.uuid4()),
+            ontology_id=ontology_id,
+            source_entity=source_id,
+            target_entity=target_id,
+            type=body.get("type", "关联"),
+            properties=body.get("properties", {}),
+            confidence=body.get("confidence", 1.0),
+        )
+        db.add(relation)
+        mark_projecting(db, ontology_id)
+        db.commit()
+        db.refresh(relation)
+        _finish_projection(db, ontology_id)
     return {"data": {"id": relation.id, "source": relation.source_entity, "target": relation.target_entity, "type": relation.type}}
 
 @router.delete("/relations/{relation_id}", status_code=204)
 def delete_relation(ontology_id: str, relation_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    r = db.query(Relation).filter(Relation.id == relation_id, Relation.ontology_id == ontology_id).first()
-    if not r:
-        raise HTTPException(404, "Not found")
-    db.delete(r); db.commit()
+    from app.ontologies.projection_state import mark_projecting
+    from app.ontologies.runtime_fence import _ontology_build_lock
+
+    with _ontology_build_lock(db, ontology_id):
+        r = db.query(Relation).filter(Relation.id == relation_id, Relation.ontology_id == ontology_id).first()
+        if not r:
+            raise HTTPException(404, "Not found")
+        db.delete(r)
+        mark_projecting(db, ontology_id)
+        db.commit()
+        _finish_projection(db, ontology_id)

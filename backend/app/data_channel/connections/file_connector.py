@@ -1,4 +1,4 @@
-"""文件上传 Connector — MinIO 优先、持久化本地存储降级。"""
+"""文件上传 Connector — 所有新文件均写入必需的 MinIO。"""
 from __future__ import annotations
 
 import mimetypes

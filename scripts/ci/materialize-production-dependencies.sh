@@ -57,16 +57,30 @@ append_boolean() {
   esac
 }
 
+append_bounded_integer_default() {
+  local key="$1"
+  local source_name="$2"
+  local default_value="$3"
+  local minimum="$4"
+  local maximum="$5"
+  local value="${!source_name:-$default_value}"
+  case "$value" in
+    *[!0-9]*)
+      echo "$source_name must be an integer between $minimum and $maximum" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$value" -lt "$minimum" ] || [ "$value" -gt "$maximum" ]; then
+    echo "$source_name must be an integer between $minimum and $maximum" >&2
+    exit 1
+  fi
+  printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+}
+
 cat >> "$tmp_file" <<'EOF'
 ENVIRONMENT=production
-STRICT_PRODUCTION_CONFIG=true
-REQUIRE_EXTERNAL_DEPENDENCIES=true
-DATASET_IMPORT_USE_CELERY=true
-STORAGE_LOCAL_FALLBACK=false
 EOF
 append_port PUBLIC_PORT PROD_PUBLIC_PORT
-append_required POSTGRES_HOST PROD_POSTGRES_HOST
-append_port POSTGRES_PORT PROD_POSTGRES_PORT
 append_required POSTGRES_DB PROD_POSTGRES_DB
 append_required POSTGRES_USER PROD_POSTGRES_USER
 append_required POSTGRES_PASSWORD PROD_POSTGRES_PASSWORD
@@ -76,15 +90,14 @@ append_required NEO4J_URI PROD_NEO4J_URI
 append_required NEO4J_USER PROD_NEO4J_USER
 append_required NEO4J_PASSWORD PROD_NEO4J_PASSWORD
 append_required NEO4J_AUTH PROD_NEO4J_AUTH
-append_required MINIO_CONSOLE_URL PROD_MINIO_CONSOLE_URL
 append_required MINIO_ENDPOINT PROD_MINIO_ENDPOINT
 append_required MINIO_ACCESS_KEY PROD_MINIO_ACCESS_KEY
 append_required MINIO_SECRET_KEY PROD_MINIO_SECRET_KEY
 append_boolean MINIO_USE_SSL PROD_MINIO_USE_SSL
 append_required N8N_API_URL PROD_N8N_API_URL
-append_required N8N_EMAIL PROD_N8N_EMAIL
-append_required N8N_PASSWORD PROD_N8N_PASSWORD
 append_required N8N_API_KEY PROD_N8N_API_KEY
+append_bounded_integer_default \
+  N8N_TIMEOUT_SECONDS PROD_N8N_TIMEOUT_SECONDS 30 3 120
 
 chmod 600 "$tmp_file"
 mv "$tmp_file" "$target"

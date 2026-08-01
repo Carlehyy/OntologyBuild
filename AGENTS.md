@@ -122,7 +122,7 @@ npm run test:e2e:mocked
 
 涉及以下任一项时，mock 测试不充分：
 
-- PostgreSQL、Redis/Celery、Neo4j、MinIO、ChromaDB；
+- PostgreSQL、Redis/Celery worker、Neo4j、MinIO、n8n、Chromium CDP；
 - Alembic、对象存储、文件上传下载或公开分享；
 - SSE、WebSocket、浏览器接管、n8n、API Hub proxy；
 - 本体映射/发布、Sentinel 执行动作、生产部署与回滚。

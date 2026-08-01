@@ -85,10 +85,11 @@ def test_alt_key_relation_via_document_mentions(db, admin_user):
     svc = MappingService(db)
     with patch("app.services.v2.dataset_service.DatasetService.load_all_rows",
                side_effect=lambda dataset_id, *a, **k: rows_by_ds[dataset_id]), \
-         patch.object(MappingService, "_write_neo4j",
-                      side_effect=lambda _s, _c, ents: len(ents), autospec=True), \
-         patch.object(MappingService, "_write_neo4j_relations", return_value=None), \
-         patch("app.services.v2.vector.chroma_service.ChromaService.upsert_entities", return_value=None):
+         patch.object(
+             MappingService,
+             "_rebuild_neo4j_projection",
+             return_value=True,
+         ):
         svc.build_all(onto.id)
         svc.build_all(onto.id)  # 幂等性: 重跑不应崩溃
 
@@ -135,10 +136,11 @@ def test_exploded_rows_use_composite_lake_identity_for_relation_pairs(db, admin_
     svc = MappingService(db)
     with patch("app.services.v2.dataset_service.DatasetService.load_all_rows",
                side_effect=lambda dataset_id, *a, **k: rows_by_ds[dataset_id]), \
-         patch.object(MappingService, "_write_neo4j",
-                      side_effect=lambda _s, _c, ents: len(ents), autospec=True), \
-         patch.object(MappingService, "_write_neo4j_relations", return_value=None), \
-         patch("app.services.v2.vector.chroma_service.ChromaService.upsert_entities", return_value=None):
+         patch.object(
+             MappingService,
+             "_rebuild_neo4j_projection",
+             return_value=True,
+         ):
         svc.build_all(onto.id)  # 此前会因 UNIQUE constraint 崩溃
 
     rels = db.query(Relation).filter(Relation.ontology_id == onto.id).all()

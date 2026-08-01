@@ -31,11 +31,176 @@ def test_get_ontology(client, auth_headers):
     assert r2.status_code == 200
     assert r2.json()["data"]["name"] == "GetTest"
 
-def test_delete_ontology(client, auth_headers):
+def test_delete_ontology(client, auth_headers, monkeypatch):
+    class FakeNeo4j:
+        available = True
+
+        def delete_by_ontology(self, ontology_id):
+            self.deleted = ontology_id
+            return 0
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.v2.graph.neo4j_service.Neo4jService",
+        FakeNeo4j,
+    )
     r = client.post("/api/v1/ontologies", json={"name": "Del", "domain": "财务"}, headers=auth_headers)
     oid = r.json()["data"]["id"]
     r2 = client.delete(f"/api/v1/ontologies/{oid}", headers=auth_headers)
     assert r2.status_code == 204
+
+
+def test_delete_ontology_keeps_sql_truth_when_neo4j_is_unavailable(
+    client,
+    auth_headers,
+    db,
+    monkeypatch,
+):
+    from app.models.ontology import OntologyProject
+
+    class UnavailableNeo4j:
+        available = False
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.v2.graph.neo4j_service.Neo4jService",
+        UnavailableNeo4j,
+    )
+    created = client.post(
+        "/api/v1/ontologies",
+        json={"name": "Delete fenced", "domain": "财务"},
+        headers=auth_headers,
+    ).json()["data"]
+
+    response = client.delete(
+        f"/api/v1/ontologies/{created['id']}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 503
+    db.expire_all()
+    persisted = db.get(OntologyProject, created["id"])
+    assert persisted is not None
+    assert persisted.projection_status == "failed"
+    assert "Neo4j ontology deletion failed" in (
+        persisted.projection_error or ""
+    )
+
+
+def test_delete_ontology_fences_sql_commit_failure_after_graph_delete(
+    client,
+    auth_headers,
+    db,
+    monkeypatch,
+):
+    from app.models.ontology import OntologyProject
+
+    deleted: list[str] = []
+
+    class FakeNeo4j:
+        available = True
+
+        def delete_by_ontology(self, ontology_id):
+            deleted.append(ontology_id)
+            return 0
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.v2.graph.neo4j_service.Neo4jService",
+        FakeNeo4j,
+    )
+    created = client.post(
+        "/api/v1/ontologies",
+        json={"name": "Delete SQL failure", "domain": "财务"},
+        headers=auth_headers,
+    ).json()["data"]
+
+    original_commit = db.commit
+    commit_calls = 0
+
+    def fail_delete_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            raise RuntimeError("injected SQL delete commit failure")
+        return original_commit()
+
+    monkeypatch.setattr(db, "commit", fail_delete_commit)
+
+    response = client.delete(
+        f"/api/v1/ontologies/{created['id']}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 503
+    assert deleted == [created["id"]]
+    db.expire_all()
+    persisted = db.get(OntologyProject, created["id"])
+    assert persisted is not None
+    assert persisted.projection_status == "failed"
+    assert "SQL ontology deletion failed" in (
+        persisted.projection_error or ""
+    )
+
+
+def test_delete_ontology_accepts_ambiguous_commit_when_sql_row_is_absent(
+    client,
+    auth_headers,
+    db,
+    monkeypatch,
+):
+    from app.models.ontology import OntologyProject
+
+    deleted: list[str] = []
+
+    class FakeNeo4j:
+        available = True
+
+        def delete_by_ontology(self, ontology_id):
+            deleted.append(ontology_id)
+            return 0
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.v2.graph.neo4j_service.Neo4jService",
+        FakeNeo4j,
+    )
+    created = client.post(
+        "/api/v1/ontologies",
+        json={"name": "Delete committed ambiguity", "domain": "财务"},
+        headers=auth_headers,
+    ).json()["data"]
+
+    original_commit = db.commit
+    commit_calls = 0
+
+    def commit_then_report_failure():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            original_commit()
+            raise RuntimeError("injected post-commit acknowledgement failure")
+        return original_commit()
+
+    monkeypatch.setattr(db, "commit", commit_then_report_failure)
+
+    response = client.delete(
+        f"/api/v1/ontologies/{created['id']}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 204
+    assert deleted == [created["id"]]
+    db.expire_all()
+    assert db.get(OntologyProject, created["id"]) is None
 
 def test_update_ontology(client, auth_headers):
     r = client.post("/api/v1/ontologies", json={"name": "Update", "domain": "医疗"}, headers=auth_headers)

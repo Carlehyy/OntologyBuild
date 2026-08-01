@@ -15,6 +15,7 @@
 """
 import json
 import uuid
+from contextlib import contextmanager
 
 import pytest
 
@@ -507,6 +508,7 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
     from app.models.ontology import OntologyProject
     from app.models.ontology_version import OntologyVersion
     project = db.query(OntologyProject).filter_by(id=oid).one()
+    assert project.projection_status == "ready"
     release = db.query(OntologyVersion).filter_by(
         id=project.current_release_id).one()
     assert release.version_number == "v0"
@@ -527,6 +529,68 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
             and x.source.get("sessionId") == session["id"]
             and x.source.get("draftKey") and x.source.get("sourceRefs")
             for x in rows), f"{model.__name__} 血缘缺失"
+
+
+def test_draft_apply_keeps_truth_and_failed_fence_when_rebuild_fails(
+    client, auth_headers, session, db, monkeypatch,
+):
+    from app.exploration import application_service
+    from app.exploration.models import ExplorationDraft
+    from app.models.ontology import OntologyProject
+    from app.models.ontology_formal import ObjectType
+    from app.ontologies import projection_state
+
+    draft = _make_draft(client, auth_headers, session["id"], db)
+    lock_held = {"value": False}
+
+    @contextmanager
+    def observed_lock(_db, _ontology_id):
+        lock_held["value"] = True
+        try:
+            yield
+        finally:
+            lock_held["value"] = False
+
+    def fail_rebuild(session_db, ontology_id):
+        assert lock_held["value"] is True
+        return projection_state.rebuild_after_commit(
+            session_db,
+            ontology_id,
+            rebuild=lambda _target_ontology_id: False,
+            run_in_test=True,
+        )
+
+    monkeypatch.setattr(
+        application_service,
+        "_ontology_build_lock",
+        observed_lock,
+    )
+    monkeypatch.setattr(
+        application_service,
+        "rebuild_after_commit",
+        fail_rebuild,
+    )
+    response = client.post(
+        f"{BASE}/drafts/{draft['id']}/apply",
+        headers=auth_headers,
+        json={"newOntology": {"name": "投影失败仍保留真相"}},
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "ontology_projection_failed"
+    db.expire_all()
+    project = db.query(OntologyProject).filter_by(
+        name="投影失败仍保留真相",
+    ).one()
+    assert db.query(ObjectType).filter_by(
+        ontology_id=project.id,
+    ).count() == 3
+    stored_draft = db.query(ExplorationDraft).filter_by(id=draft["id"]).one()
+    assert stored_draft.status == "applied"
+    assert stored_draft.applied_ontology_id == project.id
+    assert project.projection_status == "failed"
+    assert "incomplete" in (project.projection_error or "")
+    assert lock_held["value"] is False
 
 
 def test_draft_reapply_partial_then_rest(client, auth_headers, session, db):
