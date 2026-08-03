@@ -286,6 +286,7 @@ def test_deploy_merges_required_runtime_manifest(tmp_path):
     env.update({
         "APP_DIR": str(tmp_path),
         "SKIP_GIT": "1",
+        "BOOTSTRAP_PRODUCTION_ENV": "1",
         "DEPLOY_VALIDATE_ONLY": "1",
         "HEALTH_URL": "https://platform.example.com/",
     })

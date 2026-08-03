@@ -29,6 +29,7 @@ YYYY/YYYY-MM-DD-short-topic.md
 ## 当前记录
 
 - [2026 年索引](./2026/README.md)
+  - [2026-08-03：生产运行密钥无损解耦与部署配置保全](./2026/2026-08-03-preserve-runtime-secret-migration.md)
   - [2026-08-02：退役遗留文档到本体抽取链路](./2026/2026-08-02-retire-legacy-document-ontology-extraction.md)
   - [2026-08-02：稳定版必需运行依赖与降级移除](./2026/2026-08-02-required-runtime-dependencies.md)
   - [2026-07-31：Windows 回环代理绕行、配置中心门禁与默认值优化](./2026/2026-07-31-loopback-proxy-bypass.md)

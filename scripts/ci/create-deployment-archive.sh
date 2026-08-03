@@ -58,5 +58,6 @@ tar \
   --exclude='*.py[co]' \
   --exclude='frontend/src/test' \
   "${required_paths[@]}"
+chmod 600 "$ARCHIVE_PATH"
 
 printf 'deployment archive created: %s\n' "$ARCHIVE_PATH"

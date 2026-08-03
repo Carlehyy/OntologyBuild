@@ -34,6 +34,44 @@ Redis 客户端连接以 `REDIS_URL` 为唯一清单权威。使用随 Compose �
 URL 保持原样；Compose 仍启动的内置 Redis 使用独立本地密码，但 backend 和
 worker 不会连接它。
 
+## 应用密钥边界
+
+`SECRET_KEY` 与 `ENCRYPTION_KEY` 不能作为同一个可随意替换的“应用密码”处理：
+
+- `SECRET_KEY` 用于登录 JWT 和短期 Pipeline 文件上传 JWT；
+- `ENCRYPTION_KEY` 用于 PostgreSQL 中保存的模型、Connection、n8n、Agent、
+  MinIO、浏览器源、分享令牌和 MCP 凭据，以及 API Hub SQLite 中的 W3 密码；
+- 用户密码哈希、API Hub proxy key 和设备/分享 token hash 不依赖上述可逆密钥。
+
+只有在维护者已经证明 PostgreSQL、API Hub、Neo4j、MinIO、uploads 等全部持久
+存储均为空，并通过手工 `workflow_dispatch` 勾选 fresh-install 确认时，服务器
+才由 `scripts/deploy-prod.sh` 分别生成随机 `SECRET_KEY` 和独立 Fernet
+`ENCRYPTION_KEY`。普通 push 或未确认的手工部署遇到 `.env` 缺失会 fail closed，
+避免“配置文件丢了但数据还在”时生成新的、无法解密旧数据的 authority。
+生产部署当前只支持应用目录内权限为 `0600` 的普通 `.env` 文件；有效或失效的
+软链接都会在写入前被拒绝，以免一次原子更新悄悄替换 secret mount。若使用外部
+秘密管理器，应先由受控发布步骤把完整配置原子落成该普通文件，再启动部署。
+
+历史版本允许 `ENCRYPTION_KEY` 为空，此时实际加密密钥是从
+当时生效的 `SECRET_KEY` 派生出来的。部署脚本会区分“没有 `SECRET_KEY` 行”与
+“存在 `SECRET_KEY=` 空行”：前者旧程序使用 Settings 默认值，后者会以空字符串
+覆盖默认值，两者派生 key 不同。对这些状态或仍为仓库已知示例值的旧安装，部署
+脚本会先把这个**原有效加密密钥**固化为显式
+`ENCRYPTION_KEY`，再更换 JWT `SECRET_KEY`。该状态转换不更新 PostgreSQL、
+API Hub SQLite 或任何业务行，存量密文字节保持不变。
+
+新 backend/worker 使用转换后的配置启动时，旧登录会话和尚未消费的短期上传
+令牌会失效，用户需要重新登录；永久
+Dataset/File 分享链接仍保留。`FIRST_ADMIN_PASSWORD` 的示例值也会被替换为随机
+的未来 seed，但已有管理员的数据库密码哈希不会改变。未知的自定义短
+`SECRET_KEY` 不会被猜测或自动迁移，部署会保留原值并明确失败。
+
+不得手工同时生成新的 `SECRET_KEY` 和 `ENCRYPTION_KEY`，不得先更换
+`SECRET_KEY` 后再补 `ENCRYPTION_KEY`，也不得为通过校验而清空密文。由公开示例
+值派生的历史加密密钥虽然经显式固化后能完整保留数据，但保密强度没有因此
+提高；真正轮换 `ENCRYPTION_KEY` 必须作为独立维护变更，在 PostgreSQL 与 API
+Hub SQLite 完整备份、停写、全量解密校验和可恢复迁移机制就绪后执行。
+
 ## 必需运行依赖
 
 | 依赖 | 运行责任 | 未就绪行为 |
@@ -118,18 +156,23 @@ Environment Secrets/Variables 时，使用
 `http://${DEPLOY_HOST}:${PUBLIC_PORT}/`。这里的 `${...}` 表示工作流运行时
 取值，不是要求把字面量保存为 Secret。当前已跟踪清单继续使用 `8088`，因此
 本轮整理不会改变现有公网端口。
+显式 `DEPLOY_HEALTH_URL` 必须是无空白、无原始单引号的 HTTP(S) URL；不合法值
+会在发起 SSH 前失败。
 
 `DEPLOY_APP_DIR` 为空时使用 `/opt/ontologybuild`。自定义值必须是规范化的
 绝对路径，并位于某个顶层目录之下；根目录、顶层目录本身、`.`/`..` 段、重复
 或末尾斜杠，以及空格、引号、控制字符和 shell 标点都会在任何 SSH 删除/解包
-命令前被拒绝。
+命令前被拒绝。远端最终路径还必须是真实目录而非软链接，避免源码替换跟随链接
+写入另一个目录。
 
 ## 首个管理员配置
 
 `.env.example` 中的 `FIRST_ADMIN_USER=admin` 和示例密码只用于本地模板。首次
-部署且服务器尚无 `.env` 时，`scripts/deploy-prod.sh` 会保留默认用户名
-`admin`，为 `FIRST_ADMIN_PASSWORD` 生成随机值，将 `.env` 设为 `0600`，且
-不会把值打印到 Actions 日志。后续部署会保留服务器已有 `.env`。
+安装在确认全部持久存储为空后，必须从 Actions 手工运行 workflow 并勾选
+`bootstrap_production_env`；脚本随后保留默认用户名 `admin`，为
+`FIRST_ADMIN_PASSWORD` 生成随机值，将 `.env` 设为 `0600`，且不会把值打印到
+Actions 日志。普通 push 不具有创建新加密 authority 的权限，后续部署会保留
+服务器已有 `.env`。
 
 `FIRST_ADMIN_PASSWORD` 只在数据库没有任何 admin 时用于 seed。管理员一旦创建，
 数据库中的密码哈希就是登录事实源；只编辑 `.env` 不会轮换现存账号密码。

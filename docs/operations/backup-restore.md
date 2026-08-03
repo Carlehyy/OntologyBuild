@@ -14,6 +14,17 @@
 Redis 队列是否需要持久恢复取决于任务幂等与业务 RPO，必须在具体运行手册中
 说明。
 
+服务器 `.env` 与 PostgreSQL/API Hub 数据必须作为同一恢复点管理。
+`ENCRYPTION_KEY`（历史环境中可能由当时的 `SECRET_KEY` 派生）是模型、Connection、
+n8n、MinIO、浏览器源、分享令牌、MCP 和 W3 密文的解密权威；只恢复数据而丢失
+对应密钥，等价于不可恢复。备份副本必须在受控位置以最小权限保存，不得放入
+Git、CI artifact、聊天或应用目录内的普通源码备份。
+
+API Hub 使用 SQLite WAL。运行中只复制 `app.db` 不能证明得到一致备份；应先停止
+API Hub 写入，再备份整个 `api_hub_data` volume（包括 WAL/SHM 和会话文件），或
+使用 SQLite 官方一致性备份机制。API Hub 的接口导出功能不包含 W3 密码、settings
+或完整登录会话，不能替代 volume 灾备。
+
 ## 恢复演练
 
 备份成功日志不等于可恢复。至少定期在隔离环境验证：

@@ -27,6 +27,31 @@ ready，再由管理员在模型配置页添加提供商。
 - 静态资源失败：检查 Nginx、Vite base、懒加载 chunk 和内容类型；
 - 迁移失败：保留日志与数据库副本，禁止直接 stamp/改 Alembic 历史。
 
+出现 `SECRET_KEY is missing or still uses an example credential` 时，不要删除
+`.env`、数据库或 Compose volume，也不要只随机覆盖 `SECRET_KEY`。当前版本会对
+缺失键、显式空值和仓库已知示例值自动执行一次无损密钥解耦，并按旧 dotenv
+语义区分缺失与空值；若仍看到这条错误，先确认
+远端实际执行的 `scripts/deploy-prod.sh` 已是本版本，并确认源码上传阶段没有
+失败。若错误变为 `SECRET_KEY must contain at least 32 characters`，说明服务器
+使用的是未知自定义短密钥：保持原 `.env` 和所有数据不动，由维护者在受控终端
+确认旧运行实例的实际加密边界，不允许猜测或清空存量凭据。
+
+成功日志中的 `pinned the existing SECRET_KEY-derived encryption key` 表示只把
+旧有效 Fernet key 显式写入 `.env`，并没有更新任何业务密文。随后用户需要重新
+登录，尚未消费的短期 Pipeline 上传令牌需要重新生成；持久分享链接与已有管理
+员密码应保持不变。日志或工单中不得粘贴 `.env` 的值。
+
+出现 `production .env is missing; refusing to generate new encryption authority`
+时，首先按“存量环境配置丢失”处理并恢复原 `.env`。只有已证明 PostgreSQL、
+API Hub、Neo4j、MinIO、uploads 等全部持久存储为空的首次安装，才手工 Dispatch
+并勾选 `bootstrap_production_env`；不得对有数据的环境使用这个确认项。
+
+出现 `production .env must be a regular server-side file` 时，部署检测到了有效或
+失效软链接并在任何密钥迁移前停止。不要删除链接后勾选 bootstrap；先确认链接
+原本指向的秘密管理器/挂载是否可恢复，再按部署手册物化完整的普通 `0600`
+`.env`。出现 `non-empty and has no .git directory` 时同样属于保护性失败：脚本
+不会删除目录内的 `.env` 或其他状态，应改用 Actions 归档部署路径或先审计目录。
+
 ## 目录移动后失败
 
 优先检查：

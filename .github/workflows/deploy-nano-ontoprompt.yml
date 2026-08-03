@@ -3,6 +3,12 @@ on:
   push:
     branches: [nano-ontoprompt]
   workflow_dispatch:
+    inputs:
+      bootstrap_production_env:
+        description: 'Confirm this is a fresh install with no persistent platform data'
+        required: true
+        default: false
+        type: boolean
 concurrency:
   group: deploy-nano-ontoprompt
   # A deployment may include a contract/drop migration. Queue a later push so
@@ -82,6 +88,27 @@ jobs:
           uv run alembic upgrade head
         working-directory: backend
 
+      - name: Persisted ciphertext secret-split E2E
+        env:
+          ONTOLOGYBUILD_RUNTIME_SECRET_E2E: "1"
+          ENVIRONMENT: test
+          DATABASE_URL: postgresql://ontologybuild_ci:ontologybuild_ci@127.0.0.1:5432/ontologybuild_ci
+        run: |
+          mkdir -p ../.artifacts/runtime-secret-migration
+          uv run python scripts/runtime_secret_split_postgres_e2e.py --self-test
+          uv run python scripts/runtime_secret_split_postgres_e2e.py \
+            --report ../.artifacts/runtime-secret-migration/report.json
+        working-directory: backend
+
+      - name: Upload runtime-secret migration evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-secret-migration-${{ github.run_id }}
+          path: .artifacts/runtime-secret-migration/report.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Install configuration-center dependencies
         run: uv sync --frozen --group dev
         working-directory: config
@@ -96,6 +123,7 @@ jobs:
           trap 'rm -f .env' EXIT
           APP_DIR="${GITHUB_WORKSPACE}" \
             SKIP_GIT=1 \
+            BOOTSTRAP_PRODUCTION_ENV=1 \
             DEPLOY_VALIDATE_ONLY=1 \
             HEALTH_URL=http://127.0.0.1/ \
             bash scripts/deploy-prod.sh
@@ -203,9 +231,37 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
           bash scripts/ci/create-deployment-archive.sh /tmp/ontologybuild.tar.gz
-          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "if [ -f '${APP_DIR}/.env' ]; then cp '${APP_DIR}/.env' /tmp/ontologybuild.env; fi; rm -rf '${APP_DIR}' && mkdir -p '${APP_DIR}'"
-          sshpass -p "${DEPLOY_PASSWORD}" scp -o StrictHostKeyChecking=yes -o ConnectTimeout=20 /tmp/ontologybuild.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/ontologybuild.tar.gz"
-          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "tar -xzf /tmp/ontologybuild.tar.gz -C '${APP_DIR}' && if [ -f /tmp/ontologybuild.env ]; then mv /tmp/ontologybuild.env '${APP_DIR}/.env' && chmod 600 '${APP_DIR}/.env'; fi; rm -f /tmp/ontologybuild.tar.gz"
+          REMOTE_ARCHIVE="/tmp/ontologybuild.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tar.gz"
+          sshpass -p "${DEPLOY_PASSWORD}" scp -o StrictHostKeyChecking=yes -o ConnectTimeout=20 /tmp/ontologybuild.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_ARCHIVE}"
+          # Keep the persistent .env in place throughout source replacement.
+          # An interrupted upload can remove code, but can never strand or
+          # restore a stale copy of the encryption authority from /tmp.
+          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -s -- '${APP_DIR}' '${REMOTE_ARCHIVE}'" <<'REMOTE_SOURCE_SWAP'
+          set -Eeuo pipefail
+          APP_DIR="$1"
+          REMOTE_ARCHIVE="$2"
+          umask 077
+          trap 'rm -f "$REMOTE_ARCHIVE"' EXIT
+          chmod 600 "$REMOTE_ARCHIVE"
+          tar -tzf "$REMOTE_ARCHIVE" >/dev/null
+          if [ -L "$APP_DIR" ]; then
+            echo "DEPLOY_APP_DIR must be a real directory, not a symlink"
+            exit 1
+          fi
+          if [ -L "$APP_DIR/.env" ]; then
+            echo "production .env must be a regular file, not a symlink"
+            exit 1
+          fi
+          mkdir -p "$APP_DIR"
+          find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf -- {} +
+          tar --extract --gzip --file "$REMOTE_ARCHIVE" \
+            --directory "$APP_DIR" --no-same-permissions --no-same-owner
+          test -f "$APP_DIR/production.dependencies.env"
+          chmod 600 "$APP_DIR/production.dependencies.env"
+          if [ -f "$APP_DIR/.env" ] && [ ! -L "$APP_DIR/.env" ]; then
+            chmod 600 "$APP_DIR/.env"
+          fi
+          REMOTE_SOURCE_SWAP
 
       - name: Deploy over SSH
         timeout-minutes: 25
@@ -215,6 +271,7 @@ jobs:
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
           DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+          BOOTSTRAP_PRODUCTION_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_production_env && '1' || '0' }}
         run: |
           : "${DEPLOY_HOST:?DEPLOY_HOST secret is required}"
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
@@ -249,7 +306,18 @@ jobs:
               HEALTH_URL="http://${DEPLOY_HOST}:${PUBLIC_PORT}/"
             fi
           fi
-          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "cd '${APP_DIR}' && APP_DIR='${APP_DIR}' SKIP_GIT=1 HEALTH_URL='${HEALTH_URL}' bash scripts/deploy-prod.sh"
+          case "${HEALTH_URL}" in
+            http://*|https://*) ;;
+            *)
+              echo "DEPLOY_HEALTH_URL must use an HTTP(S) URL"
+              exit 1
+              ;;
+          esac
+          if [[ "${HEALTH_URL}" == *"'"* || "${HEALTH_URL}" =~ [[:space:]] ]]; then
+            echo "DEPLOY_HEALTH_URL must not contain quotes or whitespace"
+            exit 1
+          fi
+          sshpass -p "${DEPLOY_PASSWORD}" ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "${DEPLOY_USER}@${DEPLOY_HOST}" "cd '${APP_DIR}' && APP_DIR='${APP_DIR}' SKIP_GIT=1 BOOTSTRAP_PRODUCTION_ENV='${BOOTSTRAP_PRODUCTION_ENV}' HEALTH_URL='${HEALTH_URL}' bash scripts/deploy-prod.sh"
 
       - name: Remove runner deployment archive
         if: ${{ always() }}

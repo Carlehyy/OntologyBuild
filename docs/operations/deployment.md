@@ -5,7 +5,8 @@
 当前生产部署由 `.github/workflows/deploy-nano-ontoprompt.yml` 管理：
 
 - push 到 `nano-ontoprompt`；
-- 手工 `workflow_dispatch`。
+- 手工 `workflow_dispatch`。只有已证明所有持久存储为空的首次安装，才勾选
+  `bootstrap_production_env`；普通发布保持未勾选。
 
 目录治理和功能开发必须通过功能分支与 PR，不得直接向该分支试错。
 
@@ -21,12 +22,14 @@
 6. 构建生产镜像，将本次作业扫描到的 SSH host key 写入 `known_hosts` 并强制
    校验，同时在任何远端命令前校验部署目录；
 7. 将当前版本中的 `production.dependencies.env` 作为受控部署输入；
-8. 通过受测试的运行时白名单生成部署包并上传；服务器部署入口再次校验目录，
-   完成依赖探测后先停止旧 backend 与 Celery worker，再执行迁移和 Compose
-   启动；
-9. 检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、MinIO、
+8. 通过受测试的运行时白名单生成部署包并先上传；远端替换源码时始终原地保留
+   服务器 `.env`，不把秘密复制到固定 `/tmp` 文件；
+9. 服务器部署入口再次校验目录；旧安装如仍使用示例运行密钥，先执行不改密文
+   的密钥解耦，再完成依赖探测、停止旧 backend/Celery worker、数据库迁移和
+   Compose 启动；
+10. 检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、MinIO、
    n8n、Chromium CDP 和前端静态资源；
-10. 无论成功失败，清理 runner 上的上传压缩包。
+11. 无论成功失败，清理 runner 上的上传压缩包。
 
 PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执行
 文档/仓库卫生、后端、配置中心和前端门禁，但不会执行部署。
@@ -50,17 +53,65 @@ worker 停止；这是保护数据一致性的预期行为。此时先保留日�
 staging Alembic 升级也必须遵循同一顺序：先停止所有 API/worker 写入者，确认
 没有遗留任务执行，再校验 head 和升级，最后才启动与该 schema 兼容的版本。
 
+## 历史运行密钥的无损解耦
+
+旧版本曾允许服务器 `.env` 缺少 `SECRET_KEY`/`ENCRYPTION_KEY`，或继续使用
+`.env.example` 的示例 `SECRET_KEY`。在 `ENCRYPTION_KEY` 为空时，存量业务密文
+实际上使用旧 `SECRET_KEY` 的派生 Fernet key。只随机替换 `SECRET_KEY` 会让
+PostgreSQL 与 API Hub SQLite 中的配置仍存在却无法解密。
+
+当前部署只对缺失键、显式空值和两个仓库已知示例值执行一次幂等转换。缺失键
+沿用旧 Settings 默认值，显式空值则按旧 dotenv 覆盖语义从空字符串派生，不能
+把二者当成同一状态：
+
+1. 计算旧程序已经在使用的 Fernet key；
+2. 在 `.env` 中把它显式固化为 `ENCRYPTION_KEY`；
+3. 同一次原子文件替换生成新的随机 `SECRET_KEY`；
+4. 将示例 `FIRST_ADMIN_PASSWORD` 改成随机未来 seed，不修改已有用户行；
+5. 后续部署原样保留这些值。
+
+该过程不连接或更新 PostgreSQL、Neo4j、MinIO、n8n、Redis、API Hub SQLite，
+也不会重写任何密文。旧容器仍使用其启动时环境；新 backend/worker 切换后，旧
+登录 JWT 和短期 Pipeline 上传 JWT 才会失效。因此发布窗口应避开在途文件上传，
+并通知用户重新登录；持久分享链接和已有管理员密码不变。若服务器使用未知的
+自定义短密钥，部署会失败且不猜测派生方式，必须先由维护者审计实际生效配置。
+
+这一步只保证数据完整和部署可恢复，不等于完成历史密文强度升级。由公开示例
+派生的 `ENCRYPTION_KEY` 后续仍应通过独立的停写、备份、双密钥或离线迁移进行
+轮换；PostgreSQL 与 API Hub SQLite 不能被假设为一个事务，本次部署禁止顺带
+执行全量重加密。
+
 ## 首次登录与管理员密码恢复
 
 首次部署且服务器尚无 `.env` 时，部署脚本从 `.env.example` 创建持久配置：
-初始用户名默认为 `admin`，`FIRST_ADMIN_PASSWORD` 会在服务器上随机生成，
-`.env` 权限设为 `0600`，值不会出现在 Actions 日志。上传新版本时，工作流会
-先保存并恢复已有 `.env`，因此正常重部署不会重新生成该密码。
+初始用户名默认为 `admin`，`SECRET_KEY`、独立 `ENCRYPTION_KEY` 和
+`FIRST_ADMIN_PASSWORD` 会在服务器上随机生成，`.env` 权限设为 `0600`，值不会
+出现在 Actions 日志。上传新版本时，工作流在替换源码期间始终跳过现有
+`.env`，因此正常重部署不会重新生成或从临时目录恢复这些值。
+
+这个 bootstrap 不是“看到文件不存在就自动执行”。先停止并盘点目标环境，证明
+PostgreSQL、API Hub `api_hub_data`、Neo4j、MinIO、uploads 和其他平台持久数据
+均为空，再在 GitHub Actions 中手工运行 `Deploy nano-ontoprompt`，勾选
+`bootstrap_production_env`。push 触发和未勾选的手工运行固定传入 0；如果
+`.env` 缺失，部署会在生成任何新 key 前失败。已有数据但 `.env` 丢失时必须恢复
+原 `.env`，绝不能通过勾选该选项“修复”部署。
+
+`.env` 必须是应用目录内的普通服务器文件。部署会拒绝任何有效或失效软链接，
+并且会在远端删除任何旧源码前完成该检查，不会删除位于应用目录内的链接目标，
+也不会把 secret mount 替换成普通文件；外部秘密管理器需要先以受控、原子方式
+物化完整的 `0600` 文件。直接运行 `scripts/deploy-prod.sh` 的 Git 模式也只会接管
+不存在或空目录，并在任何 fetch/checkout/reset 前拒绝 `.env` 软链接；遇到没有
+`.git` 的非空目录会保留全部内容并失败，不再递归删除。
+部署目录自身也不能是软链接，远端源码替换和脚本都会在清理任何文件前拒绝。
 
 部署包由 `scripts/ci/create-deployment-archive.sh` 构建，只包含生产 Compose、
 前后端构建/运行输入、Alembic、容器初始化资源、部署入口和受控维护脚本。
 `docs/`、测试、fixture、前端 E2E 源码及过程产物不会上传；白名单由
-`scripts/ci/test-deploy-guards.sh` 在 PR 和部署验证阶段共同锁定。
+`scripts/ci/test-deploy-guards.sh` 在 PR 和部署验证阶段共同锁定。部署包含有受控
+依赖清单，因此 runner/远端临时归档及远端解包后的清单均限制为 `0600`；一旦
+远端替换脚本启动，Bash trap 会在校验、清理或解包失败时删除该次唯一命名的
+临时包。若任务恰好在上传完成后、远端脚本启动前被外部强制终止，受限为 `0600`
+的唯一命名包可能暂留 `/tmp`，应按 run id 核对后清理。
 
 首次登录只能在受控的服务器交互终端读取该值。先确认文件权限，再读取所需的
 两项；若自定义了 `DEPLOY_APP_DIR`，请替换下列路径。不要把输出复制到聊天、
@@ -139,6 +190,9 @@ backend、Celery worker 和 frontend，且不得在旧 API/worker 仍可访问�
 ## 部署前检查
 
 - 当前版本中的 `production.dependencies.env` 存在且通过只读配置校验；
+- 服务器 `.env` 是可恢复的普通 `0600` 文件，而不是软链接；
+- 非首次安装确认服务器原 `.env` 可恢复；只有已证明全部持久存储为空的首次安装
+  才手工勾选 `bootstrap_production_env`；
 - `DATABASE_URL` 的持久运行值为 `postgresql://`；旧清单里的 `postgres://` 或
   `postgresql+psycopg2://` 只由部署入口在写入 `.env` 时一次性规范化；
 - 若 `REDIS_URL` 指向 Compose 服务 `redis:6379`，确认它使用未转义的 16 位以上

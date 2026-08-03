@@ -1,5 +1,7 @@
 """Fail-closed production configuration and deployment gates."""
 
+import base64
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -9,12 +11,19 @@ import tomllib
 
 import pytest
 import yaml
+from cryptography.fernet import Fernet
+from jose import JWTError
 
 from app.shared.config import Settings, production_config_errors
 from app.settings.workflows.n8n_client import enforce_n8n_url_policy
 
 
 ROOT = Path(__file__).resolve().parents[4]
+
+
+def _derived_fernet_key(secret_key: str) -> str:
+    digest = hashlib.sha256(secret_key.encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode()
 
 
 def _production_settings(**updates):
@@ -198,6 +207,129 @@ def test_deploy_probes_dependencies_after_start_and_before_migrations():
     assert "db redis neo4j minio browser" not in wait_block
 
 
+def test_workflow_keeps_persistent_env_in_place_during_source_replacement(
+    tmp_path,
+):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/deploy-nano-ontoprompt.yml").read_text()
+    )
+    upload_step = next(
+        step for step in workflow["jobs"]["deploy"]["steps"]
+        if step.get("name") == "Upload source to server"
+    )
+    script = upload_step["run"]
+    syntax = subprocess.run(
+        ["bash", "-n"], input=script, capture_output=True, text=True,
+    )
+
+    assert syntax.returncode == 0, syntax.stderr
+    assert "/tmp/ontologybuild.env" not in script
+    assert "! -name .env" in script
+    assert "rm -rf '${APP_DIR}'" not in script
+    assert "REMOTE_ARCHIVE=" in script
+    assert "bash -s --" in script
+    assert "umask 077" in script
+    assert "--no-same-permissions" in script
+    assert "--no-same-owner" in script
+    assert '[ -L "$APP_DIR" ]' in script
+    assert '[ -L "$APP_DIR/.env" ]' in script
+    assert 'chmod 600 "$APP_DIR/production.dependencies.env"' in script
+    assert '[ ! -L "$APP_DIR/.env" ]' in script
+    assert script.index(" scp ") < script.index('find "$APP_DIR"')
+    assert script.index("tar -tzf") < script.index('find "$APP_DIR"')
+    assert script.index('[ -L "$APP_DIR/.env" ]') < script.index(
+        'find "$APP_DIR"'
+    )
+
+    lines = script.splitlines()
+    remote_start = next(
+        index for index, line in enumerate(lines)
+        if line.endswith("<<'REMOTE_SOURCE_SWAP'")
+    ) + 1
+    remote_end = lines.index("REMOTE_SOURCE_SWAP", remote_start)
+    remote_script = "\n".join(lines[remote_start:remote_end]) + "\n"
+    app_dir = tmp_path / "app"
+    authority_dir = app_dir / "runtime-secrets"
+    authority_dir.mkdir(parents=True)
+    authority = authority_dir / "prod.env"
+    authority.write_text("SECRET_KEY=must-survive\n", encoding="utf-8")
+    original = authority.read_bytes()
+    (app_dir / ".env").symlink_to(Path("runtime-secrets/prod.env"))
+    archive_source = tmp_path / "archive-source"
+    archive_source.mkdir()
+    (archive_source / "production.dependencies.env").write_text(
+        "ENVIRONMENT=production\n",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "source.tar.gz"
+    subprocess.run(
+        ["tar", "-czf", str(archive), "-C", str(archive_source), "."],
+        check=True,
+    )
+
+    result = subprocess.run(
+        ["bash", "-s", "--", str(app_dir), str(archive)],
+        input=remote_script,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "production .env must be a regular file" in (
+        result.stdout + result.stderr
+    )
+    assert (app_dir / ".env").is_symlink()
+    assert authority.read_bytes() == original
+    assert not archive.exists()
+
+
+def test_workflow_requires_manual_fresh_install_confirmation():
+    workflow_path = ROOT / ".github/workflows/deploy-nano-ontoprompt.yml"
+    contents = workflow_path.read_text()
+    workflow = yaml.safe_load(contents)
+    deploy_step = next(
+        step for step in workflow["jobs"]["deploy"]["steps"]
+        if step.get("name") == "Deploy over SSH"
+    )
+
+    assert "bootstrap_production_env:" in contents
+    assert "default: false" in contents
+    assert "BOOTSTRAP_PRODUCTION_ENV" in deploy_step["env"]
+    bootstrap_expression = deploy_step["env"]["BOOTSTRAP_PRODUCTION_ENV"]
+    assert "workflow_dispatch" in bootstrap_expression
+    assert "inputs.bootstrap_production_env" in bootstrap_expression
+    assert "BOOTSTRAP_PRODUCTION_ENV=" in deploy_step["run"]
+
+
+def test_workflow_publishes_real_ciphertext_migration_evidence():
+    workflow_path = ROOT / ".github/workflows/deploy-nano-ontoprompt.yml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    steps = workflow["jobs"]["verify"]["steps"]
+    names = [step.get("name") for step in steps]
+    migration_index = names.index("Fresh database migration")
+    e2e_index = names.index("Persisted ciphertext secret-split E2E")
+    upload_index = names.index("Upload runtime-secret migration evidence")
+    e2e_step = steps[e2e_index]
+    upload_step = steps[upload_index]
+    script = (
+        ROOT / "backend/scripts/runtime_secret_split_postgres_e2e.py"
+    ).read_text()
+
+    assert migration_index < e2e_index < upload_index
+    assert e2e_step["env"]["ONTOLOGYBUILD_RUNTIME_SECRET_E2E"] == "1"
+    assert e2e_step["env"]["ENVIRONMENT"] == "test"
+    assert "127.0.0.1" in e2e_step["env"]["DATABASE_URL"]
+    assert e2e_step["env"]["DATABASE_URL"].endswith("_ci")
+    assert "--self-test" in e2e_step["run"]
+    assert "--report" in e2e_step["run"]
+    assert upload_step["if"] == "${{ always() }}"
+    assert upload_step["with"]["if-no-files-found"] == "error"
+    assert "production.dependencies.env" not in script
+    assert "session_replication_role = replica" in script
+    assert "transaction.rollback()" in script
+
+
 def test_operator_configured_public_http_n8n_is_allowed_in_production():
     assert enforce_n8n_url_policy(
         "http://n8n.example.com:5678/api/v1", environment="production"
@@ -236,15 +368,87 @@ def test_n8n_global_config_test_requires_admin(client, editor_user):
 def test_secret_key_derived_encryption_remains_decryptable(monkeypatch):
     from app.shared import encryption
 
+    legacy_secret = "0123456789abcdef0123456789abcdef"
     monkeypatch.setattr(encryption.settings, "encryption_key", "")
+    monkeypatch.setattr(encryption.settings, "secret_key", legacy_secret)
+    ciphertext = encryption.encrypt("existing-connection-password")
+    monkeypatch.setattr(
+        encryption.settings, "encryption_key",
+        _derived_fernet_key(legacy_secret),
+    )
     monkeypatch.setattr(
         encryption.settings, "secret_key",
-        "0123456789abcdef0123456789abcdef")
-    ciphertext = encryption.encrypt("existing-connection-password")
+        "fedcba9876543210fedcba9876543210",
+    )
+
     assert encryption.decrypt(ciphertext) == "existing-connection-password"
 
 
-def _run_deploy_validation(app_dir: Path, *, health_url: str | None = None):
+def test_secret_key_rotation_invalidates_only_old_jwt(monkeypatch):
+    from app.auth import service
+    from app.data_channel.file_assets import service as file_service
+
+    monkeypatch.setattr(
+        service.settings, "secret_key",
+        "0123456789abcdef0123456789abcdef",
+    )
+    old_token = service.create_access_token({"sub": "existing-user"})
+    old_upload_token = file_service.create_upload_token(
+        pipeline_id="pipeline-1",
+        workflow_id="workflow-1",
+        invocation_id="invocation-1",
+        purpose="run",
+        owner_id="existing-user",
+    )
+    monkeypatch.setattr(
+        service.settings, "secret_key",
+        "fedcba9876543210fedcba9876543210",
+    )
+
+    with pytest.raises(JWTError):
+        service.decode_token(old_token)
+    with pytest.raises(file_service.FileAssetError):
+        file_service.decode_upload_token(old_upload_token)
+    new_token = service.create_access_token({"sub": "existing-user"})
+    assert service.decode_token(new_token)["sub"] == "existing-user"
+    new_upload_token = file_service.create_upload_token(
+        pipeline_id="pipeline-1",
+        workflow_id="workflow-1",
+        invocation_id="invocation-2",
+        purpose="run",
+        owner_id="existing-user",
+    )
+    assert file_service.decode_upload_token(new_upload_token)[
+        "invocation_id"
+    ] == "invocation-2"
+
+
+def test_future_admin_seed_does_not_change_existing_admin_hash(
+    db,
+    admin_user,
+    monkeypatch,
+):
+    from app.auth import service
+
+    original_hash = admin_user.password_hash
+    monkeypatch.setattr(
+        service.settings, "first_admin_password",
+        "new-future-admin-seed",
+    )
+
+    service.seed_admin(db)
+
+    db.refresh(admin_user)
+    assert admin_user.password_hash == original_hash
+
+
+def _run_deploy_validation(
+    app_dir: Path,
+    *,
+    health_url: str | None = None,
+    bootstrap: bool = True,
+    extra_env: dict[str, str] | None = None,
+):
     manifest = app_dir / "production.dependencies.env"
     if not manifest.exists():
         _write_valid_dependency_manifest(manifest)
@@ -253,9 +457,12 @@ def _run_deploy_validation(app_dir: Path, *, health_url: str | None = None):
         "APP_DIR": str(app_dir),
         "SKIP_GIT": "1",
         "DEPLOY_VALIDATE_ONLY": "1",
+        "BOOTSTRAP_PRODUCTION_ENV": "1" if bootstrap else "0",
     })
     if health_url is not None:
         env["HEALTH_URL"] = health_url
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=20,
@@ -321,6 +528,10 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
     generated = _read_env(generated_path)
     assert generated["ENVIRONMENT"] == "production"
     assert len(generated["SECRET_KEY"]) == 64
+    Fernet(generated["ENCRYPTION_KEY"].encode())
+    assert generated["ENCRYPTION_KEY"] != _derived_fernet_key(
+        generated["SECRET_KEY"]
+    )
     assert len(generated["FIRST_ADMIN_PASSWORD"]) == 48
     assert generated["POSTGRES_PASSWORD"] in generated["DATABASE_URL"]
     assert generated["NEO4J_AUTH"] == f"neo4j/{generated['NEO4J_PASSWORD']}"
@@ -335,11 +546,213 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
         "http://127.0.0.1:80")
     assert generated["PIPELINE_FILE_PUBLIC_API_BASE_URL"] == (
         "http://127.0.0.1:80")
-    assert generated["SECRET_KEY"] not in result.stdout
+    output = result.stdout + result.stderr
+    for sensitive_value in (
+        generated["SECRET_KEY"],
+        generated["ENCRYPTION_KEY"],
+        generated["FIRST_ADMIN_PASSWORD"],
+        generated["POSTGRES_PASSWORD"],
+        generated["REDIS_PASSWORD"],
+        generated["NEO4J_PASSWORD"],
+        generated["MINIO_ACCESS_KEY"],
+        generated["MINIO_SECRET_KEY"],
+        generated["API_HUB_SYSTEM_MCP_TOKEN"],
+    ):
+        assert sensitive_value
+        assert sensitive_value not in output
     assert stat.S_IMODE(generated_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(
         (tmp_path / "production.dependencies.env").stat().st_mode
     ) == 0o600
+
+
+def test_deploy_refuses_missing_env_without_fresh_install_confirmation(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+
+    result = _run_deploy_validation(tmp_path, bootstrap=False)
+
+    assert result.returncode != 0
+    assert not (tmp_path / ".env").exists()
+    assert "refusing to generate new encryption authority" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_deploy_cleans_incomplete_bootstrap_without_publishing_env(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_ln = fake_bin / "ln"
+    fake_ln.write_text("#!/usr/bin/env bash\nexit 73\n", encoding="utf-8")
+    fake_ln.chmod(0o755)
+
+    result = _run_deploy_validation(
+        tmp_path,
+        extra_env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert not (tmp_path / ".env").exists()
+    assert list(tmp_path.glob(".env.bootstrap.*")) == []
+    assert "refusing to overwrite it" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("dangling", [False, True])
+def test_deploy_refuses_env_symlink_without_replacing_authority(
+    tmp_path,
+    dangling,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    target = tmp_path / "mounted-production.env"
+    if not dangling:
+        shutil.copy(ROOT / ".env.example", target)
+        original = target.read_bytes()
+    (tmp_path / ".env").symlink_to(target)
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    assert (tmp_path / ".env").is_symlink()
+    if not dangling:
+        assert target.read_bytes() == original
+    else:
+        assert not target.exists()
+    assert "refusing to replace a secret-authority symlink" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_git_mode_refuses_to_delete_non_worktree_deployment_state(tmp_path):
+    sentinel = tmp_path / ".env"
+    sentinel.write_text("SECRET_KEY=must-survive\n", encoding="utf-8")
+    original = sentinel.read_bytes()
+    env = os.environ.copy()
+    env.update({"APP_DIR": str(tmp_path), "SKIP_GIT": "0"})
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert sentinel.read_bytes() == original
+    assert "refusing to delete persistent deployment state" in (
+        result.stdout + result.stderr
+    )
+
+    git_worktree = tmp_path / "git-worktree"
+    git_worktree.mkdir()
+    (git_worktree / ".git").mkdir()
+    authority = git_worktree / "tracked-authority.env"
+    authority.write_text("SECRET_KEY=must-also-survive\n", encoding="utf-8")
+    authority_original = authority.read_bytes()
+    (git_worktree / ".env").symlink_to(authority.name)
+    fake_bin = tmp_path / "fake-git-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/usr/bin/env bash\n"
+        ": > \"$ONTOLOGYBUILD_FAKE_GIT_MARKER\"\n"
+        "rm -f -- \"$ONTOLOGYBUILD_FAKE_GIT_TARGET\"\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    marker = tmp_path / "git-was-invoked"
+    symlink_env = os.environ.copy()
+    symlink_env.update(
+        {
+            "APP_DIR": str(git_worktree),
+            "SKIP_GIT": "0",
+            "PATH": f"{fake_bin}:{symlink_env['PATH']}",
+            "ONTOLOGYBUILD_FAKE_GIT_MARKER": str(marker),
+            "ONTOLOGYBUILD_FAKE_GIT_TARGET": str(authority),
+        }
+    )
+
+    symlink_result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        cwd=ROOT,
+        env=symlink_env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert symlink_result.returncode != 0
+    assert not marker.exists()
+    assert (git_worktree / ".env").is_symlink()
+    assert authority.read_bytes() == authority_original
+    assert "refusing to replace a secret-authority symlink" in (
+        symlink_result.stdout + symlink_result.stderr
+    )
+
+
+def test_deploy_refuses_app_dir_symlink_without_touching_target(tmp_path):
+    target = tmp_path / "real-target"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_text("must survive\n", encoding="utf-8")
+    app_link = tmp_path / "linked-app"
+    app_link.symlink_to(target, target_is_directory=True)
+    env = os.environ.copy()
+    env.update({"APP_DIR": str(app_link), "SKIP_GIT": "1"})
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert app_link.is_symlink()
+    assert sentinel.read_text(encoding="utf-8") == "must survive\n"
+    assert "refusing to follow a symlink" in result.stdout + result.stderr
+
+
+def test_git_mode_restricts_manifest_before_missing_env_failure(tmp_path):
+    (tmp_path / ".git").mkdir()
+    manifest = tmp_path / "production.dependencies.env"
+    manifest.write_text(
+        "N8N_API_KEY=must-not-remain-world-readable\n",
+        encoding="utf-8",
+    )
+    manifest.chmod(0o644)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_git.chmod(0o755)
+    env = os.environ.copy()
+    env.update({
+        "APP_DIR": str(tmp_path),
+        "SKIP_GIT": "0",
+        "BOOTSTRAP_PRODUCTION_ENV": "0",
+        "PATH": f"{fake_bin}:{env['PATH']}",
+    })
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode != 0
+    assert stat.S_IMODE(manifest.stat().st_mode) == 0o600
+    assert "refusing to generate new encryption authority" in (
+        result.stdout + result.stderr
+    )
 
 
 def test_deploy_upgrades_exact_legacy_bundled_redis_url(tmp_path):
@@ -498,14 +911,322 @@ def test_deploy_rejects_encoded_password_for_bundled_redis(tmp_path):
     assert "encoded%40password" not in output
 
 
-def test_existing_insecure_example_env_is_rejected(tmp_path):
+def test_deploy_splits_legacy_example_secret_without_rewriting_ciphertext(
+    tmp_path,
+):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     shutil.copy(ROOT / ".env.example", tmp_path / ".env")
+    legacy_secret = "change-me-to-a-random-32-char-string"
+    legacy_key = _derived_fernet_key(legacy_secret)
+    ciphertext = Fernet(legacy_key.encode()).encrypt(
+        b"persisted-production-credential"
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(tmp_path / ".env")
+    assert generated["SECRET_KEY"] != legacy_secret
+    assert len(generated["SECRET_KEY"]) == 64
+    assert generated["ENCRYPTION_KEY"] == legacy_key
+    assert generated["FIRST_ADMIN_PASSWORD"] != "admin123"
+    assert Fernet(generated["ENCRYPTION_KEY"].encode()).decrypt(
+        ciphertext
+    ) == b"persisted-production-credential"
+    output = result.stdout + result.stderr
+    assert "persisted ciphertext was not rewritten" in output
+    for secret in (
+        generated["SECRET_KEY"],
+        generated["ENCRYPTION_KEY"],
+        generated["FIRST_ADMIN_PASSWORD"],
+    ):
+        assert secret not in output
+
+    # The split is a one-time, idempotent state transition. Ordinary future
+    # deployments must preserve all three persisted values.
+    second = _run_deploy_validation(tmp_path)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert _read_env(tmp_path / ".env") == generated
+
+
+def test_deploy_splits_explicit_dev_secret_without_rewriting_ciphertext(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    contents = (ROOT / ".env.example").read_text().replace(
+        "SECRET_KEY=change-me-to-a-random-32-char-string",
+        "SECRET_KEY=dev-secret-key",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+    legacy_key = _derived_fernet_key("dev-secret-key")
+    ciphertext = Fernet(legacy_key.encode()).encrypt(b"legacy-dev-secret")
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(env_path)
+    assert generated["ENCRYPTION_KEY"] == legacy_key
+    assert len(generated["SECRET_KEY"]) == 64
+    assert Fernet(generated["ENCRYPTION_KEY"].encode()).decrypt(
+        ciphertext
+    ) == b"legacy-dev-secret"
+
+
+def test_deploy_uses_historical_runtime_default_when_secret_key_is_absent(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            line for line in (ROOT / ".env.example").read_text().splitlines()
+            if not line.startswith("SECRET_KEY=")
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(env_path)
+    assert generated["ENCRYPTION_KEY"] == _derived_fernet_key(
+        "dev-secret-key"
+    )
+    assert len(generated["SECRET_KEY"]) == 64
+
+
+def test_deploy_preserves_ciphertext_from_explicitly_empty_legacy_secret(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    contents = (ROOT / ".env.example").read_text().replace(
+        "SECRET_KEY=change-me-to-a-random-32-char-string",
+        "SECRET_KEY=",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+    legacy_key = _derived_fernet_key("")
+    ciphertext = Fernet(legacy_key.encode()).encrypt(
+        b"credential-encrypted-with-empty-secret"
+    )
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(env_path)
+    assert generated["ENCRYPTION_KEY"] == legacy_key
+    assert len(generated["SECRET_KEY"]) == 64
+    assert Fernet(generated["ENCRYPTION_KEY"].encode()).decrypt(
+        ciphertext
+    ) == b"credential-encrypted-with-empty-secret"
+
+
+def test_admin_seed_upgrade_does_not_rewrite_custom_secret_escapes(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    custom_secret = r"custom-secret-with-literal-\n-and-\t-escapes-123456789"
+    contents = (ROOT / ".env.example").read_text().replace(
+        "SECRET_KEY=change-me-to-a-random-32-char-string",
+        f"SECRET_KEY={custom_secret}",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(env_path)
+    assert generated["SECRET_KEY"] == custom_secret
+    assert generated["ENCRYPTION_KEY"] == ""
+    assert generated["FIRST_ADMIN_PASSWORD"] != "admin123"
+
+
+def test_deploy_preserves_existing_explicit_encryption_key(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    explicit_key = Fernet.generate_key().decode()
+    contents = (ROOT / ".env.example").read_text().replace(
+        "ENCRYPTION_KEY=", f"ENCRYPTION_KEY={explicit_key}",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+    ciphertext = Fernet(explicit_key.encode()).encrypt(b"existing-secret")
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(env_path)
+    assert generated["ENCRYPTION_KEY"] == explicit_key
+    assert generated["SECRET_KEY"] != (
+        "change-me-to-a-random-32-char-string"
+    )
+    assert Fernet(generated["ENCRYPTION_KEY"].encode()).decrypt(
+        ciphertext
+    ) == b"existing-secret"
+    assert explicit_key not in result.stdout + result.stderr
+
+
+def test_bootstrap_confirmation_never_changes_existing_strong_authority(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    secret = "strong-existing-secret-key-0123456789abcdef"
+    encryption_key = Fernet.generate_key().decode()
+    admin_seed = "strong-existing-admin-seed"
+    contents = (ROOT / ".env.example").read_text()
+    contents = contents.replace(
+        "SECRET_KEY=change-me-to-a-random-32-char-string",
+        f"SECRET_KEY={secret}",
+    ).replace(
+        "ENCRYPTION_KEY=", f"ENCRYPTION_KEY={encryption_key}",
+    ).replace(
+        "FIRST_ADMIN_PASSWORD=admin123",
+        f"FIRST_ADMIN_PASSWORD={admin_seed}",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+
+    result = _run_deploy_validation(tmp_path, bootstrap=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = _read_env(env_path)
+    assert generated["SECRET_KEY"] == secret
+    assert generated["ENCRYPTION_KEY"] == encryption_key
+    assert generated["FIRST_ADMIN_PASSWORD"] == admin_seed
+
+
+def test_deploy_rejects_malformed_explicit_encryption_key_before_rotation(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    contents = (ROOT / ".env.example").read_text().replace(
+        "ENCRYPTION_KEY=", "ENCRYPTION_KEY=malformed-key",
+    )
+    env_path.write_text(contents, encoding="utf-8")
 
     result = _run_deploy_validation(tmp_path)
 
     assert result.returncode != 0
-    assert "SECRET_KEY is missing or still uses an example credential" in (
+    generated = _read_env(env_path)
+    assert generated["SECRET_KEY"] == (
+        "change-me-to-a-random-32-char-string"
+    )
+    assert generated["ENCRYPTION_KEY"] == "malformed-key"
+    assert generated["FIRST_ADMIN_PASSWORD"] == "admin123"
+    assert "ENCRYPTION_KEY must be a URL-safe base64 Fernet key" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_deploy_rejects_unknown_short_secret_without_guessing_old_key(
+    tmp_path,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    contents = (ROOT / ".env.example").read_text()
+    contents = contents.replace(
+        "SECRET_KEY=change-me-to-a-random-32-char-string",
+        "SECRET_KEY=unknown-short-secret",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    generated = _read_env(env_path)
+    assert generated["SECRET_KEY"] == "unknown-short-secret"
+    assert generated["ENCRYPTION_KEY"] == ""
+    assert generated["FIRST_ADMIN_PASSWORD"] == "admin123"
+    assert "SECRET_KEY must contain at least 32 characters" in (
+        result.stdout + result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "export SECRET_KEY=change-me-to-a-random-32-char-string",
+        "SECRET_KEY =change-me-to-a-random-32-char-string",
+    ],
+)
+def test_deploy_rejects_ambiguous_dotenv_secret_syntax_before_rotation(
+    tmp_path,
+    assignment,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    contents = (ROOT / ".env.example").read_text().replace(
+        "SECRET_KEY=change-me-to-a-random-32-char-string",
+        assignment,
+    )
+    env_path.write_text(contents, encoding="utf-8")
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    assert assignment in env_path.read_text()
+    assert "SECRET_KEY must use one canonical uppercase KEY=value" in (
+        result.stdout + result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    ("canonical_key", "variant_key"),
+    [
+        ("SECRET_KEY", "secret_key"),
+        ("SECRET_KEY", "Secret_Key"),
+        ("ENCRYPTION_KEY", "encryption_key"),
+        ("ENCRYPTION_KEY", "Encryption_Key"),
+        ("FIRST_ADMIN_PASSWORD", "first_admin_password"),
+        ("FIRST_ADMIN_PASSWORD", "First_Admin_Password"),
+    ],
+)
+def test_deploy_rejects_case_variant_authority_without_touching_env(
+    tmp_path,
+    canonical_key,
+    variant_key,
+):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    values = {
+        "SECRET_KEY": "change-me-to-a-random-32-char-string",
+        "ENCRYPTION_KEY": Fernet.generate_key().decode(),
+        "FIRST_ADMIN_PASSWORD": "admin123",
+    }
+    original_assignments = {
+        "SECRET_KEY": "SECRET_KEY=change-me-to-a-random-32-char-string",
+        "ENCRYPTION_KEY": "ENCRYPTION_KEY=",
+        "FIRST_ADMIN_PASSWORD": "FIRST_ADMIN_PASSWORD=admin123",
+    }
+    contents = (ROOT / ".env.example").read_text().replace(
+        original_assignments[canonical_key],
+        f"{variant_key}={values[canonical_key]}",
+    )
+    env_path.write_text(contents, encoding="utf-8")
+    original = env_path.read_bytes()
+
+    result = _run_deploy_validation(tmp_path)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert env_path.read_bytes() == original
+    assert f"{canonical_key} must use one canonical uppercase KEY=value" in output
+    assert values[canonical_key] not in output
+
+
+def test_deploy_rejects_duplicate_case_variant_authority(tmp_path):
+    shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
+    env_path = tmp_path / ".env"
+    contents = (ROOT / ".env.example").read_text()
+    contents += "secret_key=another-strong-secret-0123456789abcdef\n"
+    env_path.write_text(contents, encoding="utf-8")
+    original = env_path.read_bytes()
+
+    result = _run_deploy_validation(tmp_path)
+
+    assert result.returncode != 0
+    assert env_path.read_bytes() == original
+    assert "SECRET_KEY must use one canonical uppercase KEY=value" in (
         result.stdout + result.stderr
     )
 
@@ -516,6 +1237,7 @@ def test_deploy_requires_dependency_manifest(tmp_path):
     env.update({
         "APP_DIR": str(tmp_path),
         "SKIP_GIT": "1",
+        "BOOTSTRAP_PRODUCTION_ENV": "1",
         "DEPLOY_VALIDATE_ONLY": "1",
         "DEPENDENCY_CONFIG_FILE": "missing-production-dependencies.env",
     })
@@ -670,6 +1392,7 @@ def _run_deploy_workflow_step(
         "DEPLOY_PASSWORD": "test-password",
         "DEPLOY_APP_DIR": "/srv/ontologybuild",
         "DEPLOY_HEALTH_URL": health_url,
+        "BOOTSTRAP_PRODUCTION_ENV": "0",
     })
     return subprocess.run(
         ["bash", "-e", "-c", _deploy_workflow_script()],
@@ -712,6 +1435,29 @@ def test_deploy_workflow_preserves_explicit_health_url(tmp_path):
         "HEALTH_URL='https://platform.example.com/health-root/'"
         in result.stdout
     )
+
+
+@pytest.mark.parametrize(
+    "health_url",
+    [
+        "ftp://platform.example.com/",
+        "https://platform.example.com/' ; touch /tmp/injected ; echo '",
+        "https://platform.example.com/unsafe path/",
+    ],
+)
+def test_deploy_workflow_rejects_unsafe_health_url_before_ssh(
+    tmp_path,
+    health_url,
+):
+    result = _run_deploy_workflow_step(
+        tmp_path,
+        dependency_config="PUBLIC_PORT=not-used\n",
+        health_url=health_url,
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY_HEALTH_URL must" in result.stdout
+    assert "ssh -o StrictHostKeyChecking" not in result.stdout
 
 
 @pytest.mark.parametrize("public_port", ["not-a-port", "0", "65536"])
