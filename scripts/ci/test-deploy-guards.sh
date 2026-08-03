@@ -179,10 +179,14 @@ done
 DEPLOY_SOURCE_ROOT="$archive_source" \
   bash "$ARCHIVE_SCRIPT" "$archive_output" >/dev/null
 archive_listing="$(tar -tzf "$archive_output")"
-archive_mode="$(
-  stat -f '%Lp' "$archive_output" 2>/dev/null \
-    || stat -c '%a' "$archive_output"
-)"
+if archive_mode="$(stat -c '%a' "$archive_output" 2>/dev/null)"; then
+  : # GNU coreutils
+elif archive_mode="$(stat -f '%Lp' "$archive_output" 2>/dev/null)"; then
+  : # BSD/macOS
+else
+  printf 'could not inspect deployment archive mode\n' >&2
+  exit 1
+fi
 if [ "$archive_mode" != "600" ]; then
   printf 'deployment archive must be mode 600, got %s\n' "$archive_mode" >&2
   exit 1

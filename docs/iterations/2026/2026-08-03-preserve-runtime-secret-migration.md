@@ -134,6 +134,8 @@ Connection/n8n/MinIO/浏览器/MCP 配置读取、两类持久分享链接和 AP
 ## 已知风险与后续动作
 
 - 由公开示例派生的历史 `ENCRYPTION_KEY` 只被显式固化，尚未增强保密性；
+- 首次远端 verify 暴露部署归档权限守卫的 BSD/GNU `stat` 探测顺序差异；已改为
+  GNU 语法优先、BSD/macOS 回退，并在两类环境验证后重新走完整 workflow；
 - 后续独立实现 PostgreSQL + API Hub SQLite 的可恢复全量重加密与逐项校验；
 - 生产 canary、真实数据只读校验和恢复演练不应在普通开发工作树中执行，证据由
   运维环境保存为 CI artifact。
