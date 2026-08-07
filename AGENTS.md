@@ -24,21 +24,56 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 | 系统设置 | `backend/app/settings/` |
 | 鉴权与收件箱 | `backend/app/auth/`、`backend/app/inbox/` |
 
-`backend/app/routers/`、`models/`、`schemas/`、`services/` 以迁移期兼容层为主，
-但仍有少量当前实现，例外台账见
-`docs/architecture/backend-modules.md`：
+`backend/app/routers/`、`models/`、`schemas/`、`services/` 以迁移期兼容层为主：
 
 - 不得假设整个目录都可删除；
-- 除例外的修复外，禁止在兼容层新增业务实现；
+- 除例外台账内的修复外，禁止在兼容层新增业务实现；
 - 新代码直接导入 canonical package；
 - 删除兼容入口前必须证明内部零引用、测试零 patch、Celery 旧任务兼容、
   Alembic 历史可运行。
 
+### 兼容层例外台账
+
+下列文件仍包含真实实现、模型注册或组合逻辑，不能按纯 facade 处理：
+
+```text
+app/routers/settings.py
+app/models/__init__.py
+app/services/local_config_sync.py
+app/services/storage_service.py
+```
+
+下列入口维持私有符号、惰性循环依赖或 monkeypatch 所依赖的模块对象身份，
+不能改成普通 `import *` facade（例如 `storage_service.py` 通过 `sys.modules`
+维持 canonical 模块身份）：
+
+```text
+app/routers/v2/graph.py
+app/services/audit_service.py
+app/services/llm_service.py
+app/services/sentinel/__init__.py
+app/services/connection/sql_connector.py
+app/services/v2/graph/graph_analytics.py
+app/services/v2/graph/neo4j_service.py
+app/services/v2/pipeline/steps/md_to_structured.py
+```
+
+`app/services/model_config_selector.py` 是纯转发 facade，但部分调用方在函数
+执行时从该路径导入以保留 monkeypatch/扩展点，兼容测试迁移前不得批量替换。
+`app.services.llm_service._call_llm` 仍被模型配置、Agent、业务探索和数据管家
+等存量调用方作为 patch seam 使用，不能移除。
+
+退役兼容入口的顺序必须是：调用方改用 canonical import → 加边界检查 → 保留
+显式 facade 跑完整回归 → 确认运行时、迁移和外部脚本零依赖 → 最后删除 facade。
+`backend/tests/architecture/` 下的边界守卫测试编码了已完成迁移并经兼容测试
+证明的事实；尚未完成迁移的 facade 不会被笼统判定为可删除。函数内依赖纳入
+统计时，当前唯一依赖环例外是 `sentinels.cdc`、`sentinels.engine`、
+`sentinels.dynamic_service` 三节点四边，架构测试拒绝新增节点或边。
+
 前端目标由 `frontend/src/app/`、`frontend/src/features/`、
 `frontend/src/shared/` 三层组成，但当前仍以 `pages/api/components` 等路径
-为权威。只有某业务域的迁移 ADR 获批并建立目标骨架后，该业务域的新功能才
-进入 `frontend/src/features/<capability>/`；此前继续维护现有路径，不得制造
-第三套并行实现。
+为权威。某业务域迁入 `frontend/src/features/<capability>/` 必须经维护者批准
+并先建立目标骨架；此前继续维护现有路径，不得制造第三套并行实现。
 
 ## 2. 不可破坏的兼容契约
 
@@ -59,12 +94,11 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 
 每项变更必须依次执行：
 
-1. 从 `docs/README.md` 和 `docs/product/navigation-business-map.md` 确认业务域。
-2. 检查受影响入口、调用方、测试、配置、迁移、部署脚本和文档。
-3. 在 `docs/iterations/` 新建或更新迭代记录。
-4. 将“原样移动”“导入路径调整”“逻辑重构”“格式化”分开提交。
-5. 先运行受影响测试，再运行本表要求的完整门禁。
-6. 在 PR 中记录执行命令、结果、未执行项及原因。
+1. 按本文件第 1 节的业务域表确认改动所属能力域。
+2. 检查受影响入口、调用方、测试、配置、迁移和部署脚本。
+3. 将“原样移动”“导入路径调整”“逻辑重构”“格式化”分开提交。
+4. 先运行受影响测试，再运行本文件第 4 节要求的完整门禁。
+5. 在 PR 中记录执行命令、结果、未执行项及原因。
 
 禁止以“只是移动文件”为理由跳过测试。Python import、monkeypatch 路径、
 相对 fixture 路径、Vite alias、Docker context 和 Compose 相对路径都会因
@@ -144,12 +178,12 @@ npm run test:e2e:mocked
 
 ## 6. 文档责任
 
-- `README.md`：三分钟项目入口和标准启动方式。
-- `docs/product/requirements/`：要实现什么。
-- `docs/architecture/` 与 ADR：为什么这样设计。
-- `docs/development/`：如何开发和验证。
-- `docs/operations/`：如何配置、部署、监控和回滚。
-- `docs/iterations/`：每次实际改了什么及其测试/上线证据。
+仓库只维护少数长期有效的文档，功能与行为说明以代码和测试为准：
+
+- `README.md`：三分钟项目入口和标准启动方式；
+- `docs/operations/`：如何配置、部署、监控、备份和回滚；
+- `docs/development/`：如何搭建本地环境并验证改动；
 - `CHANGELOG.md`：面向发布的结果摘要。
 
-功能、配置、部署或目录发生变化时，代码与对应文档必须在同一个 PR 更新。
+不为单个功能新增需求、架构、ADR 或迭代类文档；启动方式、部署流程或配置
+分区发生变化时，代码与上述文档必须在同一个 PR 更新。

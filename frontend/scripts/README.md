@@ -12,5 +12,5 @@
   生产源码零未登记孤儿、零循环依赖。
 
 这里不再存放一次性调试、截图、数据修补或手工验收脚本。正式浏览器场景统一
-写入 [`src/test/e2e/`](../src/test/e2e/)，历史脚本的场景意图和替代入口见
-[归档记录](../../docs/archive/legacy-frontend-manual-scenarios.md)。
+写入 [`src/test/e2e/`](../src/test/e2e/)；历史一次性脚本已删除，需要追溯时
+使用 Git 历史。

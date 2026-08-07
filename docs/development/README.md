@@ -4,10 +4,7 @@
 development/
 ├── README.md
 ├── setup.md                    本地环境与启动
-├── testing.md                  测试分层和强制门禁
-├── coding-standards.md         编码与迁移规范
-├── module-ownership.md         能力责任与评审
-└── frontend-design-system.md   当前视觉约束
+└── testing.md                  测试分层和强制门禁
 ```
 
 命令必须与 `pyproject.toml`、`uv.lock`、`package.json` 和 GitHub Actions

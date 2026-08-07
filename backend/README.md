@@ -3,9 +3,8 @@
 后端使用 FastAPI、SQLAlchemy、Alembic 和 Celery，要求 Python 3.12。应用入口
 是 `app/main.py`，生产数据库历史以 `alembic/versions/` 为准。
 
-依赖事实源是 `pyproject.toml` 与 `uv.lock`。`requirements.txt` 仅保留给当前
-`.coze` 运行器兼容使用；增删直接依赖时必须同步更新，日常开发和 CI 仍统一
-使用 `uv sync --frozen`。
+依赖事实源是 `pyproject.toml` 与 `uv.lock`。`requirements.txt` 为历史兼容产物，
+日常开发和 CI 统一使用 `uv sync --frozen`。
 
 ## 当前模块边界
 
@@ -32,7 +31,7 @@ app/
 
 `app/routers`、`models`、`schemas`、`services` 以兼容转发为主，但仍有少量
 真实实现；不要批量删除或假设它们都是 facade。例外和迁移协议见
-[后端模块边界](../docs/architecture/backend-modules.md)。
+[AGENTS.md 兼容层例外台账](../AGENTS.md)。
 
 ## 人工脚本
 

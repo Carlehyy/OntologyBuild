@@ -48,5 +48,5 @@ data_channel/
   DatasetVersion、Pipeline、Curated review 或 Mapping；当前没有可达 UI
   调用。不得把它推广成绕过标准审核链路的通用采集模式。
 
-完整状态流见[核心数据流](../../../docs/architecture/data-flow.md)，API、前端和
-测试对应关系见[统一模块地图](../../../docs/architecture/module-map.md)。
+完整状态流、API、前端和测试对应关系以本目录实现及 `backend/tests/` 中
+data-channel 相关测试为准。

@@ -53,8 +53,8 @@ npm run test:e2e:mocked
 Playwright；这不是跳过纯逻辑单元测试的理由。
 
 早期 `frontend/scripts/` 手工场景已在零消费者审计后删除。不要恢复截图驱动
-或直接修改持久数据的一次性脚本；场景意图、正式替代和新增方式见
-[归档记录](../archive/legacy-frontend-manual-scenarios.md)。
+或直接修改持久数据的一次性脚本；正式浏览器场景统一新增到
+`frontend/src/test/e2e/`。
 
 ## 文档与仓库结构
 

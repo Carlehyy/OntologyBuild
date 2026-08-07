@@ -69,8 +69,7 @@ migrations/models/perf/pipeline/search/services` 等明确二级目录。若某�
 collect-only 均为 1475 cases。第二波只整理上述 7 个 v2 根级模块：5 个文件
 SHA-256 不变，2 个路径敏感文件归一化父目录层级后 SHA-256 不变，移动前后均
 收集 37 cases，移动后 37 passed。四个不会被 pytest 执行的根级历史脚本已
-清理，依据和正式替代入口见
-[归档记录](../../docs/archive/legacy-test-scripts.md)。
+清理。
 
 定向测试：
 

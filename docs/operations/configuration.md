@@ -5,8 +5,6 @@
 - `.env.example`：本地开发与 Compose 的无秘密模板；
 - `config/generated/local/.env`：本地配置中心生成，不进入 Git；
 - `backend/.env`：旧本地兼容入口，不应作为新配置源；
-- `.coze`：Coze 运行器兼容配置，前端同样消费 npm 的
-  `frontend/package-lock.json`；
 - `production.dependencies.env`：当前自动部署读取的生产第三方依赖清单；
 - `production.dependencies.example.env`：不含秘密的人工校验与后续迁移模板。
 

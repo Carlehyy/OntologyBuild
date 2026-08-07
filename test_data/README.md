@@ -20,5 +20,4 @@
 - 删除或迁移 fixture 时，必须同步更新消费者并运行相关后端与 stack E2E。
 
 历史上混放于此的手工流程、数据生成脚本和无消费者样例已删除；需要追溯时使用
-Git 历史，正式替代入口见
-[`docs/archive/legacy-test-scripts.md`](../docs/archive/legacy-test-scripts.md)。
+Git 历史。

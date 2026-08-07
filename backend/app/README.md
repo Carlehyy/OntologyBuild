@@ -31,7 +31,7 @@ app/
 ```
 
 不要根据目录名猜测 canonical。兼容例外、特殊模块身份和迁移顺序见
-[后端模块边界](../../docs/architecture/backend-modules.md)。HTTP、menu key、
+[AGENTS.md 兼容层例外台账](../../AGENTS.md)。HTTP、menu key、
 Alembic revision、Celery task name 和 patch 路径都可能是兼容契约。
 
 两条最复杂的核心链路另有目录入口：

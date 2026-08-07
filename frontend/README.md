@@ -22,11 +22,9 @@ src/
     └── e2e/            Playwright 浏览器测试
 ```
 
-平台概览已按
-[ADR-0002](../docs/architecture/adr/0002-frontend-overview-feature-boundary.md)
-迁入 `src/features/overview/`。`src/app/`、其余 `features/` 和 `src/shared/`
-仍是逐业务域迁移的目标结构；业务域尚未建立迁移 ADR 和目标骨架时，继续维护
-当前权威路径，不要创建第三套并行实现。
+平台概览已迁入 `src/features/overview/`。`src/app/`、其余 `features/` 和
+`src/shared/` 仍是逐业务域迁移的目标结构；业务域迁移方案未经维护者批准并
+建立目标骨架时，继续维护当前权威路径，不要创建第三套并行实现。
 
 复杂页面当前在原业务目录内按“页面编排 + 同域组件”拆分：
 
@@ -41,9 +39,6 @@ src/
 - 系统设置：`pages/settings/SettingsPage.tsx` 只解析 URL/tab、调用五个能力
   hook 并选择视图；`hooks/` 承载状态/API/副作用，`tabs/` 只接收显式
   view-model props。
-
-精确文件与责任边界见
-[统一模块地图](../docs/architecture/module-map.md#前端复杂页面的当前内部分工)。
 
 ## 开发与静态门禁
 
@@ -74,6 +69,5 @@ HTML 报告写入仓库根目录 `.artifacts/playwright/`，不得提交。
 没有循环依赖，并且除 ADR-0002 登记的 Overview 兼容入口外，全部生产
 TypeScript/TSX 都能从 `src/main.tsx` 到达。
 
-业务模块定位和真实验收条件见
-[统一模块地图](../docs/architecture/module-map.md) 与
+真实验收条件见
 [测试指南](../docs/development/testing.md)。

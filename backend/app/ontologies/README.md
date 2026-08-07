@@ -1,7 +1,7 @@
 # 本体业务域
 
 本目录承载本体定义、版本、映射、Formal Runtime、Sentinel 和 Action。第一次
-修改前应先阅读[核心运行契约](../../../docs/product/requirements/0002-core-data-ontology-runtime-contract.md)；
+修改前应先阅读本目录及 `backend/tests/ontologies/` 中的状态门与发布契约测试；
 这里同时存在 canonical Formal 实现和受控的 v1 兼容读模型，不能仅凭文件名
 批量移动或删除。
 
@@ -59,7 +59,4 @@ activation outbox，事务所有权跨越三者。静态 top-level import 图的
 无多节点环；包含函数内 import 的架构守卫则精确拒绝除上述四条边外的任何新增
 环。Mapping、Action、Release 和 legacy facade 均不在该运行期环中。改变这
 四条边必须先设计 Outbox handler 注册和事务迁移，不能用隐藏动态 import
-假装断环。
-
-领域细节见[Ontology 参考](../../../docs/reference/ontology.md)与
-[Sentinel Engine 参考](../../../docs/reference/sentinel-engine.md)。
+假装断环。领域行为以本目录实现和对应测试为准。

@@ -25,5 +25,4 @@ pages/
 
 复杂页面采用“页面编排 + 同域组件/Hook/展示层”：跨页面共享能力进入
 `src/components`、`src/api`、`src/lib` 等基础目录；页面不得直接 import 兄弟
-page domain。执行 `npm run check:feature-boundaries` 验证该方向。完整的前端、
-后端、API 与测试映射见[统一模块地图](../../../docs/architecture/module-map.md)。
+page domain。执行 `npm run check:feature-boundaries` 验证该方向。

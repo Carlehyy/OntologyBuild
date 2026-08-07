@@ -28,48 +28,13 @@ const ignoredDirectoryNames = new Set([
 ]);
 const requiredDocumentationFiles = [
   'docs/README.md',
-  'docs/index.md',
-  'docs/product/README.md',
-  'docs/product/requirements/README.md',
-  'docs/product/requirements/template.md',
-  'docs/architecture/README.md',
-  'docs/architecture/adr/README.md',
-  'docs/architecture/adr/template.md',
   'docs/development/README.md',
   'docs/operations/README.md',
-  'docs/iterations/README.md',
-  'docs/iterations/template.md',
-  'docs/reference/README.md',
-  'docs/archive/README.md',
 ];
-const documentationIndexRules = [
-  {
-    directory: 'docs/product/requirements',
-    index: 'docs/product/requirements/README.md',
-    template: 'docs/product/requirements/template.md',
-    recursive: false,
-  },
-  {
-    directory: 'docs/architecture/adr',
-    index: 'docs/architecture/adr/README.md',
-    template: 'docs/architecture/adr/template.md',
-    recursive: false,
-  },
-  {
-    directory: 'docs/iterations',
-    index: 'docs/iterations/README.md',
-    template: 'docs/iterations/template.md',
-    recursive: true,
-  },
-];
+const documentationIndexRules = [];
 const rootDocumentationIndexes = [
-  'docs/product/README.md',
-  'docs/architecture/README.md',
   'docs/development/README.md',
   'docs/operations/README.md',
-  'docs/iterations/README.md',
-  'docs/reference/README.md',
-  'docs/archive/README.md',
 ];
 
 if (process.argv.includes('--help')) {
@@ -786,7 +751,6 @@ for (const repositoryPath of documentData.keys()) {
   if (
     repositoryPath.startsWith('docs/')
     && !isArchivePath(repositoryPath)
-    && repositoryPath !== 'docs/index.md'
     && !reachableDocumentation.has(repositoryPath)
   ) {
     addDiagnostic({
@@ -806,15 +770,6 @@ for (const requiredIndex of rootDocumentationIndexes) {
       message: `root documentation index must link directly to ${requiredIndex}`,
     });
   }
-}
-
-const compatibilityIndexTargets = documentationEdges.get('docs/index.md') ?? new Set();
-if (!compatibilityIndexTargets.has('docs/README.md')) {
-  addDiagnostic({
-    source: 'docs/index.md',
-    code: 'compatibility-index',
-    message: 'compatibility index must link to docs/README.md',
-  });
 }
 
 for (const rule of documentationIndexRules) {

@@ -25,10 +25,9 @@ src/
 ```
 
 路由事实源是 `App.tsx`，导航与 menu key 事实源是
-`config/navigation.ts`。平台概览遵循
-[ADR-0002](../../docs/architecture/adr/0002-frontend-overview-feature-boundary.md)，
-应用从 `@/features/overview` 导入，`pages/overview/OverviewPage.tsx` 只保留
-兼容 re-export。其他业务域只有在迁移 ADR 获批并建立目标骨架后才能进入
+`config/navigation.ts`。平台概览遵循已批准的迁移边界，应用从
+`@/features/overview` 导入，`pages/overview/OverviewPage.tsx` 只保留
+兼容 re-export。其他业务域只有在迁移方案获批并建立目标骨架后才能进入
 `features/`；此前继续维护当前权威路径，不创建并行实现。
 
 `features/overview` 不得依赖 `pages/` 或其他 feature。运行
@@ -60,16 +59,12 @@ palantir-graph/components/
 ```
 
 Agent 的卡片、drawer、图表和惰性视图仍有同域文件位于 `pages/agent/` 根；
-这不是跨域耦合，也不能据此声称该目录已经全部组件化。精确文件职责见
-[统一模块地图](../../docs/architecture/module-map.md#前端复杂页面的当前内部分工)。
-Settings 的依赖方向固定为 `SettingsPage → hooks/tabs`；tabs 只 type-import
+这不是跨域耦合，也不能据此声称该目录已经全部组件化。Settings 的依赖方向
+固定为 `SettingsPage → hooks/tabs`；tabs 只 type-import
 对应 hook，hooks 不依赖 tabs，也不使用 barrel 隐藏边界。图谱入口保持
 `Panel → editors` 单向依赖。Sentinel 面板的 controller/view/compiler 分工及
 本地演示初始状态的保留依据见
 [`palantir-graph/README.md`](./palantir-graph/README.md)。
-
-从用户功能定位代码请查
-[统一模块地图](../../docs/architecture/module-map.md)。
 
 ## 源码卫生
 
@@ -86,7 +81,6 @@ npm run build
 ```
 
 当前唯一刻意不从应用入口导入的页面源码是
-`pages/overview/OverviewPage.tsx` 两行兼容 re-export，其删除条件由 ADR-0002
-管理；其他生产 TypeScript/TSX 必须可从 `main.tsx` 到达，且全图不得形成循环
-依赖。2026-07-30 的零引用清理证据见
-[迭代记录](../../docs/iterations/2026/2026-07-30-repository-governance.md)。
+`pages/overview/OverviewPage.tsx` 两行兼容 re-export，其删除条件按登记的
+兼容入口管理；其他生产 TypeScript/TSX 必须可从 `main.tsx` 到达，且全图不得
+形成循环依赖。
