@@ -95,10 +95,12 @@ app/services/v2/pipeline/steps/md_to_structured.py
 每项变更必须依次执行：
 
 1. 按本文件第 1 节的业务域表确认改动所属能力域。
-2. 检查受影响入口、调用方、测试、配置、迁移和部署脚本。
-3. 将“原样移动”“导入路径调整”“逻辑重构”“格式化”分开提交。
-4. 先运行受影响测试，再运行本文件第 4 节要求的完整门禁。
-5. 在 PR 中记录执行命令、结果、未执行项及原因。
+2. 从非自动部署分支创建功能分支；一个 PR 聚焦一个业务域或一种治理动作，
+   禁止直接向 `nano-ontoprompt` 推送结构调整。
+3. 检查受影响入口、调用方、测试、配置、迁移和部署脚本。
+4. 将“原样移动”“导入路径调整”“逻辑重构”“格式化”分开提交。
+5. 先运行受影响测试，再运行本文件第 4 节要求的完整门禁。
+6. 在 PR 中记录执行命令、结果、未执行项及原因。
 
 禁止以“只是移动文件”为理由跳过测试。Python import、monkeypatch 路径、
 相对 fixture 路径、Vite alias、Docker context 和 Compose 相对路径都会因
@@ -109,6 +111,7 @@ app/services/v2/pipeline/steps/md_to_structured.py
 ### 所有源码变更
 
 ```bash
+git diff --check
 node scripts/ci/check-markdown-links.mjs
 bash scripts/ci/check-repository-hygiene.sh
 
@@ -182,8 +185,9 @@ npm run test:e2e:mocked
 
 - `README.md`：三分钟项目入口和标准启动方式；
 - `docs/operations/`：如何配置、部署、监控、备份和回滚；
-- `docs/development/`：如何搭建本地环境并验证改动；
-- `CHANGELOG.md`：面向发布的结果摘要。
+- `docs/development/`：如何搭建本地环境并验证改动。
+
+变更史以 Git 提交历史为准，不单独维护 Changelog。
 
 不为单个功能新增需求、架构、ADR 或迭代类文档；启动方式、部署流程或配置
 分区发生变化时，代码与上述文档必须在同一个 PR 更新。

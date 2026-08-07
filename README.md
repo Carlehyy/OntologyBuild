@@ -92,9 +92,8 @@ RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的�
 
 ## 开发指南
 
-开始开发前请先阅读 [AGENTS.md](./AGENTS.md)（仓库级强制准则）；参与方式见
-[CONTRIBUTING.md](./CONTRIBUTING.md)。所有文档入口和事实源见
-[docs/README.md](./docs/README.md)。
+开始开发前请先阅读 [AGENTS.md](./AGENTS.md)（仓库级强制准则，含分支与 PR
+规则）。所有文档入口和事实源见 [docs/README.md](./docs/README.md)。
 
 ### 三分钟定位
 
@@ -105,7 +104,7 @@ RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的�
 | 配置和秘密放在哪里 | [配置说明](./docs/operations/configuration.md) |
 | GitHub Actions 如何部署、如何回滚 | [部署](./docs/operations/deployment.md) 与 [回滚](./docs/operations/rollback.md) |
 | 功能的前端、后端和测试在哪里 | 代码即文档：从 `frontend/src/config/navigation.ts` 的导航项出发，对照 [AGENTS.md](./AGENTS.md) 第 1 节的业务域表定位后端包 |
-| 最近迭代了什么 | [CHANGELOG](./CHANGELOG.md) |
+| 最近迭代了什么 | Git 提交历史（`git log` 或 GitHub 提交页） |
 
 ### 仓库结构
 
@@ -127,9 +126,7 @@ OntologyBuild/
 ├── production.dependencies.example.env
 │                            后续迁移与人工校验使用的无秘密模板
 ├── AGENTS.md                强制开发和交付准则
-├── CONTRIBUTING.md          贡献流程与验证入口
 ├── SECURITY.md              安全边界与报告方式
-├── CHANGELOG.md             面向版本的变更摘要
 ├── docker-compose.local.yml  推荐的本地核心完整栈
 └── docker-compose.prod.yml   生产编排
 ```
