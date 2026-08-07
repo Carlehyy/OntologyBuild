@@ -463,7 +463,7 @@ def _run(report_path: Path) -> None:
                 }
             )
             result = subprocess.run(
-                ["bash", str(REPO_ROOT / "scripts" / "deploy-prod.sh")],
+                ["bash", str(REPO_ROOT / "deploy" / "deploy-prod.sh")],
                 cwd=REPO_ROOT,
                 env=deploy_env,
                 capture_output=True,
