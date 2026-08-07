@@ -120,7 +120,6 @@ OntologyBuild/
 ├── scripts/                 CI、部署和受控数据脚本
 ├── docker/                  容器初始化与运行资源
 ├── test_data/               受版本控制、已分类的测试 fixture
-├── .claude/                 无秘密、可复制的本地 Agent 启动示例
 ├── .github/workflows/       PR 验证与自动部署
 ├── .env.example             本地/容器环境变量模板
 ├── production.dependencies.env

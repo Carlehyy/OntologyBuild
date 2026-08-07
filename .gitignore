@@ -52,7 +52,6 @@ CLAUDE.md
 MEMORY.md
 memory/
 prompt-harness-rules-for-coding-agent.md
-/.claude/launch.json
 
 # Test screenshots
 frontend/screenshots_*/

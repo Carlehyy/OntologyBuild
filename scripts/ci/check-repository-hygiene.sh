@@ -13,7 +13,6 @@ report_error() {
 
 required_readmes=(
   "README.md"
-  ".claude/README.md"
   "backend/README.md"
   "backend/app/README.md"
   "backend/app/data_channel/README.md"
@@ -45,12 +44,6 @@ required_readmes=(
 for readme_file in "${required_readmes[@]}"; do
   if [[ ! -f "$readme_file" ]]; then
     report_error "required directory guide is missing: $readme_file"
-  fi
-done
-
-for forbidden_file in ".claude/launch.json"; do
-  if [[ -e "$forbidden_file" || -L "$forbidden_file" ]]; then
-    report_error "forbidden local/production file exists in the repository: $forbidden_file"
   fi
 done
 
