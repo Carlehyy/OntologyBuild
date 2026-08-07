@@ -126,7 +126,6 @@ OntologyBuild/
 ├── production.dependencies.example.env
 │                            后续迁移与人工校验使用的无秘密模板
 ├── AGENTS.md                强制开发和交付准则
-├── SECURITY.md              安全边界与报告方式
 ├── docker-compose.local.yml  推荐的本地核心完整栈
 └── docker-compose.prod.yml   生产编排
 ```
@@ -171,5 +170,4 @@ npm --prefix frontend run test:e2e:mocked
 当前部署事实源是仓库中已跟踪的 `production.dependencies.env`（含真实生产
 凭据，属受控临时例外）：日常开发不得修改、复制或回显其中的值。后续迁移到
 GitHub Environment Secrets/Variables 必须作为独立运维变更执行；仅删除当前
-文件不等于清理 Git 历史。安全边界与问题报告方式见
-[SECURITY.md](./SECURITY.md)。
+文件不等于清理 Git 历史。凭据与卫生红线见 [AGENTS.md](./AGENTS.md) 第 5 节。
