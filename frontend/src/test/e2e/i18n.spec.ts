@@ -21,7 +21,8 @@ test.describe('Internationalization (i18n)', () => {
   test('current platform renders its default Chinese interface', async ({ page }) => {
     await page.goto('/#/overview')
     await expect(page.getByRole('heading', { name: '本体治理中枢', exact: true })).toBeVisible()
-    await expect(page.getByRole('link', { name: '平台概览', exact: true })).toBeVisible()
+    await expect(page.getByRole('link', { name: '平台概览', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: '超级助手', exact: true })).toHaveCount(0)
   })
 
   test('login page has Chinese labels', async ({ page }) => {

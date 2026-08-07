@@ -3,6 +3,9 @@
 导航配置以 `frontend/src/config/navigation.ts` 为当前界面事实源。目录迁移不得
 改变已经持久化的 menu key。
 
+`overview` 和 `super_assistant` 当前仅在功能导航中临时隐藏；对应 Hash
+路由、menu key、RBAC、页面实现和直达访问保持不变，以便后续集中优化后恢复入口。
+
 | 导航 | 前端当前入口 | 后端 canonical package |
 |---|---|---|
 | 平台概览 | `features/overview/`（`pages/overview/OverviewPage.tsx` 仅兼容 facade） | `app/platform/` |

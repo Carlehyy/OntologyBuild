@@ -90,6 +90,10 @@
 - custom 只得到 `overview`；
 - admin 的后端菜单判断覆盖全部 18 个业务 key。
 
+`overview` 与 `super_assistant` 虽仍在这 18 个可配置 key 中，当前的
+前端功能导航不渲染这两个入口。此临时隐藏不改变 Hash 路由、直达
+访问、默认落地页、权限配置或后端守卫。
+
 证据：E1、E3；custom 默认值另由 E8 的
 `test_custom_role_has_one_assignment_and_configurable_menu_scope` 实际验证。
 当前测试没有单独登录 viewer 验证其默认集合，因此 viewer 默认值属于实现证据，
@@ -145,8 +149,9 @@ E1 另定义 6 个 admin-only key，它们不属于上述可配置集合：
    `/login?returnTo=...`，同时写入 navigation state。下载深链的登录、返回原地址
    和 Bearer 下载已由 E9 实际验证。
 3. 已登录但无对应 menu key 时，页面渲染 `AccessDeniedPage`；返回目标优先使用
-   最近一次仍有权访问的路径，否则使用当前首个可见导航入口。没有任何可见入口
-   时首个可访问路径为 `/no-access`。证据：E1、E2。
+   最近一次仍有权访问的路径，否则使用当前首个有权访问的业务入口（可以是
+   临时从功能导航隐藏的入口）。没有任何有权入口时，首个可访问路径为
+   `/no-access`。证据：E1、E2。
 4. `/` 和未知路径对已登录用户重定向到首个可访问入口，对未登录用户重定向到
    `/login`。证据：E2。
 5. 当前兼容重定向为：

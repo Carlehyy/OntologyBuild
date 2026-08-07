@@ -96,7 +96,7 @@ test.describe('平台概览迁移契约', () => {
     await expect(page.getByTestId('overview-flow-stage-graph')).toContainText('42')
 
     const navigation = page.getByRole('navigation')
-    await expect(navigation.getByRole('link', { name: '平台概览' })).toBeVisible()
+    await expect(navigation.getByRole('link', { name: '平台概览' })).toHaveCount(0)
     await expect(navigation.getByText('本体管理', { exact: true })).toHaveCount(0)
     await expect(navigation.getByText('系统设置', { exact: true })).toHaveCount(0)
 
@@ -116,6 +116,9 @@ test.describe('平台概览迁移契约', () => {
 
     await page.goto('/#/overview')
     await expect(page.getByRole('heading', { name: '本体治理中枢' })).toBeVisible()
+    const navigation = page.getByRole('navigation')
+    await expect(navigation.getByRole('link', { name: '平台概览' })).toHaveCount(0)
+    await expect(navigation.getByRole('link', { name: '超级助手' })).toHaveCount(0)
 
     await page.getByTestId('overview-flow-stage-model').click()
     await expect(page).toHaveURL(/\/#\/ontologies$/)

@@ -76,6 +76,7 @@ docs/
 ### 迭代与参考
 
 - [迭代规则与模板](./iterations/README.md)
+- [当前平台概览与超级助手导航临时隐藏迭代](./iterations/2026/2026-08-07-temporarily-hide-overview-and-super-assistant-navigation.md)
 - [当前运行密钥无损解耦迭代](./iterations/2026/2026-08-03-preserve-runtime-secret-migration.md)
 - [当前遗留文档本体抽取退役迭代](./iterations/2026/2026-08-02-retire-legacy-document-ontology-extraction.md)
 - [当前稳定版依赖迭代](./iterations/2026/2026-08-02-required-runtime-dependencies.md)

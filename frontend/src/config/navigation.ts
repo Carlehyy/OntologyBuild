@@ -32,6 +32,7 @@ export interface PlatformNavItem {
   label: string
   description?: string
   adminOnly?: boolean
+  hiddenFromNavigation?: boolean
   subItems?: PlatformNavItem[]
 }
 
@@ -55,8 +56,8 @@ export const DEFAULT_NON_ADMIN_MENU_KEYS = [
 export const DEFAULT_CUSTOM_MENU_KEYS = ['overview']
 
 export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
-  { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览' },
-  { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口' },
+  { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览', hiddenFromNavigation: true },
+  { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口', hiddenFromNavigation: true },
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
   { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
   { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
@@ -120,8 +121,9 @@ export function hasMenuAccess(user: User | null, key: string): boolean {
 export function visibleNavigation(user: User | null): PlatformNavItem[] {
   if (!user) return []
   return PLATFORM_NAV_ITEMS.flatMap(item => {
+    if (item.hiddenFromNavigation) return []
     if (item.adminOnly && user.role !== 'admin') return []
-    const subItems = item.subItems?.filter(child => hasMenuAccess(user, child.key))
+    const subItems = item.subItems?.filter(child => !child.hiddenFromNavigation && hasMenuAccess(user, child.key))
     if (item.subItems && !subItems?.length && !hasMenuAccess(user, item.key)) return []
     if (!item.subItems && !hasMenuAccess(user, item.key)) return []
     return [{ ...item, subItems }]
@@ -157,10 +159,15 @@ export function canAccessPath(user: User | null, pathname: string): boolean {
 }
 
 export function firstAccessiblePath(user: User | null): string {
-  const items = visibleNavigation(user)
-  const first = items[0]
+  if (!user) return '/no-access'
+  const first = PLATFORM_NAV_ITEMS.find(item => {
+    if (item.adminOnly && user.role !== 'admin') return false
+    return hasMenuAccess(user, item.key)
+      || (item.subItems?.some(child => hasMenuAccess(user, child.key)) ?? false)
+  })
   if (!first) return '/no-access'
-  return first.subItems?.[0]?.to ?? first.to
+  const firstSubItem = first.subItems?.find(child => hasMenuAccess(user, child.key))
+  return firstSubItem?.to ?? first.to
 }
 
 export const CONFIGURABLE_NAV_ITEMS = PLATFORM_NAV_ITEMS.filter(item => !item.adminOnly)
