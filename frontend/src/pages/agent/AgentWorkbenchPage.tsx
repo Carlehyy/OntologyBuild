@@ -8,7 +8,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeftRight, BadgeCheck, BellRing, Bot, FileSearch,
   FileText, History, List, Loader2, Network, PenLine, Scale, Send, Shield,
@@ -57,6 +57,7 @@ const selectArrow = "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http:/
 export default function AgentWorkbenchPage() {
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { toast } = useToast()
   const { containerRef, sizes, startResize } = useAssistantLayout()
 
@@ -71,16 +72,20 @@ export default function AgentWorkbenchPage() {
   // the release pointer is the authoritative assistant scope (including v0).
   const releasedOntologyList = useMemo(
     () => ontologyList.filter((item: any) => !!item.current_release_id), [ontologyList])
-  const [oid, setOid] = useState('')
+  const requestedOntologyId = searchParams.get('ontology_id')?.trim() || ''
+  const oid = releasedOntologyList.some((item: any) => item.id === requestedOntologyId)
+    ? requestedOntologyId
+    : ''
   const [workspaceView, setWorkspaceView] = useState<'ontology' | 'data' | 'decision' | 'trace'>('ontology')
 
-  useEffect(() => {
-    if (releasedOntologyList.length === 0) {
-      if (oid) setOid('')
-      return
-    }
-    if (oid && !releasedOntologyList.some((item: any) => item.id === oid)) setOid('')
-  }, [releasedOntologyList, oid])
+  const selectOntology = useCallback((nextOntologyId: string) => {
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      if (nextOntologyId) next.set('ontology_id', nextOntologyId)
+      else next.delete('ontology_id')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
 
   const selectedOntology = releasedOntologyList.find((item: any) => item.id === oid)
   const releaseId = selectedOntology?.current_release_id || ''
@@ -345,7 +350,7 @@ export default function AgentWorkbenchPage() {
               <div className="flex shrink-0 items-center gap-2">
                 <select
                   value={oid}
-                  onChange={e => setOid(e.target.value)}
+                  onChange={e => selectOntology(e.target.value)}
                   aria-label="选择本体"
                   className="h-8 min-w-[180px] cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-3 pr-8 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 10px center' }}

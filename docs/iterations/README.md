@@ -29,6 +29,7 @@ YYYY/YYYY-MM-DD-short-topic.md
 ## 当前记录
 
 - [2026 年索引](./2026/README.md)
+  - [2026-08-07：从本体卡片直达本体助手](./2026/2026-08-07-ontology-agent-deep-link.md)
   - [2026-08-07：本体结构画布首次进入直接居中](./2026/2026-08-07-center-ontology-structure-initial-view.md)
   - [2026-08-07：临时隐藏平台概览与超级助手导航入口](./2026/2026-08-07-temporarily-hide-overview-and-super-assistant-navigation.md)
   - [2026-08-03：生产运行密钥无损解耦与部署配置保全](./2026/2026-08-03-preserve-runtime-secret-migration.md)

@@ -45,11 +45,23 @@ async function mockAgentHeader(page: Page, options: { withConversation?: boolean
         current_release_version: 'v1',
         created_at: now,
         updated_at: now,
+      }, {
+        id: 'ontology-without-release',
+        name: '未发布本体',
+        domain: '供应链',
+        description: '没有当前发布版本',
+        status: 'draft',
+        version: 'v1',
+        current_release_id: null,
+        current_release_version: null,
+        created_at: now,
+        updated_at: now,
       }],
-      total: 1,
+      total: 2,
       page: 1,
       page_size: 20,
     })
+    if (path === '/api/v1/domains') return json(route, [])
     if (path === '/api/v1/models') return json(route, [])
     return route.fallback()
   })
@@ -243,6 +255,36 @@ async function mockAgentHeader(page: Page, options: { withConversation?: boolean
     return route.fallback()
   })
 }
+
+test('本体卡片可直接进入助手并自动选择当前本体', async ({ page }) => {
+  await mockAgentHeader(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/ontologies')
+
+  const ontologyCard = page.getByRole('article').filter({
+    has: page.getByRole('button', { name: '供应链本体', exact: true }),
+  })
+  const unpublishedCard = page.getByRole('article').filter({
+    has: page.getByRole('button', { name: '未发布本体', exact: true }),
+  })
+  await expect(unpublishedCard.getByRole('button', { name: '未发布本体尚未发布，暂不可对话' })).toBeDisabled()
+  const cardFooter = ontologyCard.locator('footer')
+  await expect(cardFooter).toBeVisible()
+  expect(await cardFooter.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(
+    await cardFooter.evaluate(element => element.clientWidth),
+  )
+  await ontologyCard.getByRole('button', { name: '使用供应链本体进入本体助手对话' }).click()
+
+  await expect(page).toHaveURL(/\/#\/agent\?ontology_id=ontology-1$/)
+  const ontologySelect = page.getByLabel('选择本体')
+  await expect(ontologySelect).toHaveValue('ontology-1')
+  await expect(page.getByTestId('agent-ontology-panel')).toContainText('供应链本体')
+
+  await ontologySelect.selectOption('')
+  await expect(page).toHaveURL(/\/#\/agent$/)
+  await ontologySelect.selectOption('ontology-1')
+  await expect(page).toHaveURL(/\/#\/agent\?ontology_id=ontology-1$/)
+})
 
 test('智能助手顶栏只保留有色历史会话入口', async ({ page }) => {
   await mockAgentHeader(page)

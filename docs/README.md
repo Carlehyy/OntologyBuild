@@ -43,6 +43,7 @@ docs/
 - [需求目录与模板](./product/requirements/README.md)
 - [当前导航、路由与 RBAC 契约](./product/requirements/0001-current-platform-contract.md)
 - [核心数据、本体发布与运行时契约](./product/requirements/0002-core-data-ontology-runtime-contract.md)
+- [从本体卡片直达本体助手](./product/requirements/0003-ontology-agent-deep-link.md)
 
 ### 架构
 
@@ -76,6 +77,7 @@ docs/
 ### 迭代与参考
 
 - [迭代规则与模板](./iterations/README.md)
+- [当前本体卡片直达助手迭代](./iterations/2026/2026-08-07-ontology-agent-deep-link.md)
 - [当前平台概览与超级助手导航临时隐藏迭代](./iterations/2026/2026-08-07-temporarily-hide-overview-and-super-assistant-navigation.md)
 - [当前运行密钥无损解耦迭代](./iterations/2026/2026-08-03-preserve-runtime-secret-migration.md)
 - [当前遗留文档本体抽取退役迭代](./iterations/2026/2026-08-02-retire-legacy-document-ontology-extraction.md)

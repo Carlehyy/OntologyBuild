@@ -19,6 +19,7 @@ import {
   GraduationCap,
   HeartPulse,
   Landmark,
+  MessageCircle,
   Network,
   Pencil,
   Plus,
@@ -328,14 +329,18 @@ function OntologyCard({
   onEdit,
   onDetail,
   onView,
+  onChat,
   onDelete,
 }: {
   item: OntologyListItem
   onEdit: () => void
   onDetail: () => void
   onView: () => void
+  onChat: () => void
   onDelete: () => void
 }) {
+  const chatAvailable = Boolean(item.current_release_id)
+
   return (
     <article className="group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
       <div className="flex flex-col p-4 pb-2.5">
@@ -402,19 +407,31 @@ function OntologyCard({
           >
             <Search size={12} /> 查看
           </button>
+          <button
+            type="button"
+            onClick={onChat}
+            disabled={!chatAvailable}
+            title={chatAvailable ? `使用“${item.name}”进入本体助手` : '本体发布后可进入助手对话'}
+            aria-label={chatAvailable ? `使用${item.name}进入本体助手对话` : `${item.name}尚未发布，暂不可对话`}
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-slate-100"
+          >
+            <MessageCircle size={12} /> 对话
+          </button>
         </div>
-        <span className="ml-auto shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400" title={`创建时间：${new Date(item.created_at).toLocaleString('zh-CN')}`}>
-          {formatChangedAt(item.created_at)}
-        </span>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
-          title="删除本体"
-          aria-label={`删除本体 ${item.name}`}
-        >
-          <Trash2 size={14} />
-        </button>
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <span className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline" title={`创建时间：${new Date(item.created_at).toLocaleString('zh-CN')}`}>
+            {formatChangedAt(item.created_at)}
+          </span>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+            title="删除本体"
+            aria-label={`删除本体 ${item.name}`}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
       </footer>
     </article>
   )
@@ -634,6 +651,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
               onEdit={() => setEditTarget(item)}
               onDetail={() => navigate(`/ontologies/${item.id}`)}
               onView={() => navigate(`/ontologies/${item.id}`)}
+              onChat={() => navigate(`/agent?ontology_id=${encodeURIComponent(item.id)}`)}
               onDelete={() => setDeleteTarget(item)}
             />
           ))
