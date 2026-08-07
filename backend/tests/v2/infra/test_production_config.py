@@ -234,6 +234,7 @@ def test_workflow_keeps_persistent_env_in_place_during_source_replacement(
     assert '[ -L "$APP_DIR" ]' in script
     assert '[ -L "$APP_DIR/.env" ]' in script
     assert 'chmod 600 "$APP_DIR/deploy/production.dependencies.env"' in script
+    assert 'chmod -R a+rX "$APP_DIR/frontend/dist"' in script
     assert '[ ! -L "$APP_DIR/.env" ]' in script
     assert script.index(" scp ") < script.index('find "$APP_DIR"')
     assert script.index("tar -tzf") < script.index('find "$APP_DIR"')
@@ -282,6 +283,54 @@ def test_workflow_keeps_persistent_env_in_place_during_source_replacement(
     assert (app_dir / ".env").is_symlink()
     assert authority.read_bytes() == original
     assert not archive.exists()
+
+
+def test_source_swap_keeps_prebuilt_frontend_assets_readable(tmp_path):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/deploy-nano-ontoprompt.yml").read_text()
+    )
+    upload_step = next(
+        step for step in workflow["jobs"]["deploy"]["steps"]
+        if step.get("name") == "Upload source to server"
+    )
+    lines = upload_step["run"].splitlines()
+    remote_start = next(
+        index for index, line in enumerate(lines)
+        if line.endswith("<<'REMOTE_SOURCE_SWAP'")
+    ) + 1
+    remote_end = lines.index("REMOTE_SOURCE_SWAP", remote_start)
+    remote_script = "\n".join(lines[remote_start:remote_end]) + "\n"
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    archive_source = tmp_path / "archive-source"
+    (archive_source / "deploy").mkdir(parents=True)
+    (archive_source / "deploy" / "production.dependencies.env").write_text(
+        "ENVIRONMENT=production\n",
+        encoding="utf-8",
+    )
+    dist = archive_source / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>\n", encoding="utf-8")
+    archive = tmp_path / "source.tar.gz"
+    subprocess.run(
+        ["tar", "-czf", str(archive), "-C", str(archive_source), "."],
+        check=True,
+    )
+
+    result = subprocess.run(
+        ["bash", "-s", "--", str(app_dir), str(archive)],
+        input=remote_script,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    extracted = app_dir / "frontend" / "dist" / "index.html"
+    assert stat.S_IMODE(extracted.stat().st_mode) & 0o044
+    manifest = app_dir / "deploy" / "production.dependencies.env"
+    assert stat.S_IMODE(manifest.stat().st_mode) == 0o600
 
 
 def test_workflow_requires_manual_fresh_install_confirmation():
