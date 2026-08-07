@@ -1146,7 +1146,7 @@ if ! run_with_retry compose up -d --remove-orphans; then
   exit 1
 fi
 log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
   if curl -fsS --connect-timeout 5 --max-time 10 "$READINESS_URL" >/dev/null \
       && check_action_worker \
       && check_frontend_assets; then
@@ -1154,8 +1154,8 @@ for i in $(seq 1 30); do
     compose ps
     exit 0
   fi
-  log "health check not ready (${i}/30)"
-  sleep 10
+  log "health check not ready (${i}/60)"
+  sleep 5
 done
 log "deployment health check failed"
 compose ps || true

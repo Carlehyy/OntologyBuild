@@ -153,6 +153,7 @@ archive_fixture_paths=(
   "backend/scripts/maintenance/reset_admin_password.py"
   "frontend/.dockerignore"
   "frontend/Dockerfile.prod"
+  "frontend/dist/index.html"
   "frontend/index.html"
   "frontend/nginx/default.conf"
   "frontend/package.json"
@@ -195,6 +196,7 @@ for required_member in \
   ".env.example" \
   "backend/app/main.py" \
   "backend/scripts/maintenance/reset_admin_password.py" \
+  "frontend/dist/index.html" \
   "frontend/src/main.tsx" \
   "docker/browser/Dockerfile" \
   "production.dependencies.env"; do

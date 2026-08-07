@@ -22,6 +22,7 @@ required_paths=(
   "backend/scripts/maintenance"
   "frontend/.dockerignore"
   "frontend/Dockerfile.prod"
+  "frontend/dist"
   "frontend/index.html"
   "frontend/nginx"
   "frontend/package.json"

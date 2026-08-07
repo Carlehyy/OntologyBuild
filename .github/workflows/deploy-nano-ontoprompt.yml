@@ -18,11 +18,11 @@ permissions:
   contents: read
   statuses: write
 jobs:
-  verify:
+  verify-backend:
     runs-on: ubuntu-latest
-    # 首次安装 Python/Node 依赖 + 完整后端回归 + 迁移检查 + 前端生产构建
-    # 在冷缓存 runner 上可能超过 25 分钟；保留明确上限，避免误取消正常验证。
-    timeout-minutes: 45
+    # xdist 并行 + 测试环境低 bcrypt 轮次后，全量回归在 4 vCPU runner 上约 8-10
+    # 分钟；保留明确上限，避免误取消正常验证。
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine
@@ -38,20 +38,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - name: Mark deployment pending
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: 'pending',
-              context: 'ontologybuild/deploy',
-              description: 'Verification and deployment are running',
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            })
-
       - uses: actions/checkout@v4
 
       - name: Set up uv and Python
@@ -60,18 +46,17 @@ jobs:
           version: "0.11.16"
           python-version: '3.12'
           enable-cache: true
-          cache-dependency-glob: |
-            backend/uv.lock
-            config/uv.lock
+          cache-dependency-glob: backend/uv.lock
 
       - name: Install backend dependencies
         run: uv sync --frozen --group dev
         working-directory: backend
 
       - name: Backend regression suite
-        run: uv run pytest -q --disable-warnings --ignore tests/v2/perf
+        run: uv run pytest -q --disable-warnings -n auto --dist loadfile --ignore tests/v2/perf
         working-directory: backend
 
+      # 性能套件测量耗时，保持串行运行以避免并行负载干扰读数。
       - name: Backend performance suite (informational)
         continue-on-error: true
         run: uv run pytest -q --disable-warnings tests/v2/perf
@@ -109,37 +94,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Install configuration-center dependencies
-        run: uv sync --frozen --group dev
-        working-directory: config
-
-      - name: Configuration-center regression suite
-        run: uv run pytest -q
-        working-directory: config
-
-      - name: Production dependency configuration gate
-        run: |
-          test -s production.dependencies.env
-          trap 'rm -f .env' EXIT
-          APP_DIR="${GITHUB_WORKSPACE}" \
-            SKIP_GIT=1 \
-            BOOTSTRAP_PRODUCTION_ENV=1 \
-            DEPLOY_VALIDATE_ONLY=1 \
-            HEALTH_URL=http://127.0.0.1/ \
-            bash scripts/deploy-prod.sh
+  verify-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Validate documentation and repository hygiene
-        run: |
-          node scripts/ci/check-markdown-links.mjs --self-test
-          node scripts/ci/check-markdown-links.mjs
-          bash scripts/ci/test-deploy-guards.sh
-          bash scripts/ci/check-repository-hygiene.sh
 
       - name: Install frontend dependencies
         run: npm ci
@@ -165,6 +130,16 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      # 部署镜像直接使用本 job 构建的 dist，保证上线产物与通过门禁的产物一致，
+      # 服务器端不再重复执行 vite build。
+      - name: Upload frontend dist for deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.run_id }}
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         working-directory: frontend
@@ -182,15 +157,94 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  verify-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mark deployment pending
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'pending',
+              context: 'ontologybuild/deploy',
+              description: 'Verification and deployment are running',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            })
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate documentation and repository hygiene
+        run: |
+          node scripts/ci/check-markdown-links.mjs --self-test
+          node scripts/ci/check-markdown-links.mjs
+          bash scripts/ci/test-deploy-guards.sh
+          bash scripts/ci/check-repository-hygiene.sh
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.16"
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: config/uv.lock
+
+      - name: Install configuration-center dependencies
+        run: uv sync --frozen --group dev
+        working-directory: config
+
+      - name: Configuration-center regression suite
+        run: uv run pytest -q
+        working-directory: config
+
+      - name: Production dependency configuration gate
+        run: |
+          test -s production.dependencies.env
+          trap 'rm -f .env' EXIT
+          APP_DIR="${GITHUB_WORKSPACE}" \
+            SKIP_GIT=1 \
+            BOOTSTRAP_PRODUCTION_ENV=1 \
+            DEPLOY_VALIDATE_ONLY=1 \
+            HEALTH_URL=http://127.0.0.1/ \
+            bash scripts/deploy-prod.sh
+
+  verify-docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 前端镜像改为预构建形态（COPY dist），需要 verify-frontend 产出的 dist；
+    # 该依赖仍早于关键路径上的 verify-backend，不延长整体墙钟。
+    needs: verify-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-${{ github.run_id }}
+          path: frontend/dist
+
+      - name: Build Docker images
+        run: docker compose -f docker-compose.prod.yml build
+
   deploy:
-    needs: verify
+    needs: [verify-backend, verify-frontend, verify-gates, verify-docker-build]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker images
-        run: docker compose -f docker-compose.prod.yml build
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-${{ github.run_id }}
+          path: frontend/dist
 
       - name: Check deployment secrets
         env:
@@ -325,16 +379,27 @@ jobs:
 
   report:
     if: ${{ always() }}
-    needs: [verify, deploy]
+    needs: [verify-backend, verify-frontend, verify-gates, verify-docker-build, deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Publish deployment result
         uses: actions/github-script@v7
         with:
           script: |
-            const verify = '${{ needs.verify.result }}'
+            const verifyBackend = '${{ needs.verify-backend.result }}'
+            const verifyFrontend = '${{ needs.verify-frontend.result }}'
+            const verifyGates = '${{ needs.verify-gates.result }}'
+            const verifyDockerBuild = '${{ needs.verify-docker-build.result }}'
             const deploy = '${{ needs.deploy.result }}'
-            const succeeded = verify === 'success' && deploy === 'success'
+            const results = {
+              'verify-backend': verifyBackend,
+              'verify-frontend': verifyFrontend,
+              'verify-gates': verifyGates,
+              'verify-docker-build': verifyDockerBuild,
+              deploy,
+            }
+            const succeeded = Object.values(results).every((r) => r === 'success')
+            const summary = Object.entries(results).map(([k, v]) => `${k}=${v}`).join(', ')
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -343,9 +408,9 @@ jobs:
               context: 'ontologybuild/deploy',
               description: succeeded
                 ? 'Verification and deployment succeeded'
-                : `verify=${verify}, deploy=${deploy}`.slice(0, 140),
+                : summary.slice(0, 140),
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             })
             if (!succeeded) {
-              core.setFailed(`verify=${verify}, deploy=${deploy}`)
+              core.setFailed(summary)
             }

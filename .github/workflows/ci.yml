@@ -54,7 +54,7 @@ jobs:
         working-directory: backend
 
       - name: Run regression suite
-        run: uv run pytest -q --disable-warnings --ignore tests/v2/perf
+        run: uv run pytest -q --disable-warnings -n auto --dist loadfile --ignore tests/v2/perf
         working-directory: backend
 
       - name: Validate a fresh database migration

@@ -19,6 +19,19 @@ from app.services.auth_service import hash_password
 from app.models.user import User
 import uuid
 
+# 测试环境使用最低 bcrypt 轮次：生产默认 12 轮时每次 hash+verify ≈ 0.37s，
+# 认证 fixture 与 TestClient 启动 seeding 在近两千个用例中重复支付该成本。
+# 轮次存储在哈希串中，低轮次上下文仍可验证既有哈希，不影响生产策略。
+from passlib.context import CryptContext
+import app.auth.service as _auth_service
+
+_auth_service.pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],
+    deprecated="auto",
+    bcrypt_sha256__rounds=4,
+    bcrypt__rounds=4,
+)
+
 # 每次 pytest 运行使用独立的临时 SQLite, 避免并发运行互相锁库
 _db_fd, _db_path = tempfile.mkstemp(prefix="ontoprompt_test_", suffix=".db")
 os.close(_db_fd)

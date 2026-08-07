@@ -305,7 +305,7 @@ def test_workflow_requires_manual_fresh_install_confirmation():
 def test_workflow_publishes_real_ciphertext_migration_evidence():
     workflow_path = ROOT / ".github/workflows/deploy-nano-ontoprompt.yml"
     workflow = yaml.safe_load(workflow_path.read_text())
-    steps = workflow["jobs"]["verify"]["steps"]
+    steps = workflow["jobs"]["verify-backend"]["steps"]
     names = [step.get("name") for step in steps]
     migration_index = names.index("Fresh database migration")
     e2e_index = names.index("Persisted ciphertext secret-split E2E")

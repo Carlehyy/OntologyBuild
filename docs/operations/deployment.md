@@ -12,24 +12,30 @@
 
 ## 当前流程
 
-1. 使用 Python 3.12 和各自 `uv.lock` 执行后端、配置中心回归；
+1. 使用 Python 3.12 和各自 `uv.lock` 并行执行后端（pytest-xdist 多进程，
+   测试环境使用最低 bcrypt 轮次）与配置中心回归；
 2. 运行 Alembic 新库升级与单 head 检查；
 3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis/Celery worker、
    Neo4j、MinIO、n8n 和 Chromium CDP 配置；
 4. 执行文档链接、目录索引与仓库卫生守卫；
 5. 执行前端单元测试、feature boundary、E2E 分类、lint、生产构建和离线
-   Playwright 回归；
-6. 构建生产镜像，将本次作业扫描到的 SSH host key 写入 `known_hosts` 并强制
+   Playwright 回归；通过门禁的 `frontend/dist` 作为本次部署的静态产物
+   上传；
+6. 并行验证生产镜像可构建；前端镜像为预构建形态（`Dockerfile.prod` 直接
+   打包上一步的 `dist`），服务器端不再执行 npm/vite 构建——本地手动构建
+   前端镜像前需先在 `frontend/` 下执行 `npm ci && npm run build`；
+7. 将本次作业扫描到的 SSH host key 写入 `known_hosts` 并强制
    校验，同时在任何远端命令前校验部署目录；
-7. 将当前版本中的 `production.dependencies.env` 作为受控部署输入；
-8. 通过受测试的运行时白名单生成部署包并先上传；远端替换源码时始终原地保留
+8. 将当前版本中的 `production.dependencies.env` 作为受控部署输入；
+9. 通过受测试的运行时白名单生成部署包（含 CI 构建的 `frontend/dist`）并
+   先上传；远端替换源码时始终原地保留
    服务器 `.env`，不把秘密复制到固定 `/tmp` 文件；
-9. 服务器部署入口再次校验目录；旧安装如仍使用示例运行密钥，先执行不改密文
+10. 服务器部署入口再次校验目录；旧安装如仍使用示例运行密钥，先执行不改密文
    的密钥解耦，再完成依赖探测、停止旧 backend/Celery worker、数据库迁移和
    Compose 启动；
-10. 检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、MinIO、
+11. 检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、MinIO、
    n8n、Chromium CDP 和前端静态资源；
-11. 无论成功失败，清理 runner 上的上传压缩包。
+12. 无论成功失败，清理 runner 上的上传压缩包。
 
 PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执行
 文档/仓库卫生、后端、配置中心和前端门禁，但不会执行部署。
@@ -105,7 +111,8 @@ PostgreSQL、API Hub `api_hub_data`、Neo4j、MinIO、uploads 和其他平台持
 部署目录自身也不能是软链接，远端源码替换和脚本都会在清理任何文件前拒绝。
 
 部署包由 `scripts/ci/create-deployment-archive.sh` 构建，只包含生产 Compose、
-前后端构建/运行输入、Alembic、容器初始化资源、部署入口和受控维护脚本。
+前后端构建/运行输入、CI 构建的 `frontend/dist` 静态产物、Alembic、容器
+初始化资源、部署入口和受控维护脚本。
 `docs/`、测试、fixture、前端 E2E 源码及过程产物不会上传；白名单由
 `scripts/ci/test-deploy-guards.sh` 在 PR 和部署验证阶段共同锁定。部署包含有受控
 依赖清单，因此 runner/远端临时归档及远端解包后的清单均限制为 `0600`；一旦
@@ -155,7 +162,8 @@ admin 时的 seed 输入，编辑它不会修改已经存在的管理员密码�
 ## 当前已知缺口
 
 - 发布前 verify 与 deploy 仍在同一个 workflow，避免绕过发布门禁；
-- Actions 构建的镜像没有作为不可变产物推送，服务器会再次构建；
+- Actions 构建的镜像没有作为不可变产物推送，backend/browser 镜像仍由
+  服务器再次构建（前端静态产物已由 CI 构建并随部署包直传）；
 - 服务器部署会替换应用目录；
 - 健康检查失败尚无自动镜像回滚；
 - SSH 仍使用密码方式；
