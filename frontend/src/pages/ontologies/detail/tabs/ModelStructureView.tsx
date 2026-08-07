@@ -453,9 +453,15 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const pendingPositions = useRef<Record<string, { x: number; y: number }>>({})
   const saveTimer = useRef<number | null>(null)
   const saveInFlight = useRef(false)
+  const lastAnimatedGraph = useRef(builtGraph)
 
   useEffect(() => {
     setAllNodes(builtGraph.nodes)
+    // React Flow owns the initial fit so that it can center the viewport as soon
+    // as node dimensions are measured, before those nodes become visible. Only
+    // later graph changes (for example L1 -> L2) should animate into place.
+    if (lastAnimatedGraph.current === builtGraph) return
+    lastAnimatedGraph.current = builtGraph
     const timer = window.setTimeout(() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.9, duration: 260 }), 80)
     return () => window.clearTimeout(timer)
   }, [builtGraph, fitView, level])
@@ -812,7 +818,8 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           onEdgeClick={(_event, edge) => { if (edge.data?.kind === 'relation' && edge.data.entityId) setDetail({ kind: 'relation', id: edge.data.entityId }) }}
           onPaneClick={() => { setDetail(null); setSearchOpen(false) }}
           nodesDraggable nodesConnectable={false} elementsSelectable minZoom={0.2} maxZoom={2.4}
-          defaultViewport={{ x: 0, y: 0, zoom: 0.78 }} proOptions={{ hideAttribution: true }}
+          fitView fitViewOptions={{ padding: 0.2, minZoom: 0.24, maxZoom: 0.9 }}
+          proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd5e1" />
           <MiniMap pannable zoomable position="bottom-left" style={{ width: 150, height: 96 }} className="!m-3 !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#0f766e' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
