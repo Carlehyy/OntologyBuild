@@ -191,7 +191,7 @@ def test_local_compose_requires_real_stack_without_chroma():
 
 
 def test_deploy_probes_dependencies_after_start_and_before_migrations():
-    script = (ROOT / "scripts" / "deploy-prod.sh").read_text(
+    script = (ROOT / "deploy" / "deploy-prod.sh").read_text(
         encoding="utf-8"
     )
 
@@ -233,7 +233,7 @@ def test_workflow_keeps_persistent_env_in_place_during_source_replacement(
     assert "--no-same-owner" in script
     assert '[ -L "$APP_DIR" ]' in script
     assert '[ -L "$APP_DIR/.env" ]' in script
-    assert 'chmod 600 "$APP_DIR/production.dependencies.env"' in script
+    assert 'chmod 600 "$APP_DIR/deploy/production.dependencies.env"' in script
     assert '[ ! -L "$APP_DIR/.env" ]' in script
     assert script.index(" scp ") < script.index('find "$APP_DIR"')
     assert script.index("tar -tzf") < script.index('find "$APP_DIR"')
@@ -256,8 +256,8 @@ def test_workflow_keeps_persistent_env_in_place_during_source_replacement(
     original = authority.read_bytes()
     (app_dir / ".env").symlink_to(Path("runtime-secrets/prod.env"))
     archive_source = tmp_path / "archive-source"
-    archive_source.mkdir()
-    (archive_source / "production.dependencies.env").write_text(
+    (archive_source / "deploy").mkdir(parents=True)
+    (archive_source / "deploy" / "production.dependencies.env").write_text(
         "ENVIRONMENT=production\n",
         encoding="utf-8",
     )
@@ -449,8 +449,9 @@ def _run_deploy_validation(
     bootstrap: bool = True,
     extra_env: dict[str, str] | None = None,
 ):
-    manifest = app_dir / "production.dependencies.env"
+    manifest = app_dir / "deploy" / "production.dependencies.env"
     if not manifest.exists():
+        manifest.parent.mkdir(parents=True, exist_ok=True)
         _write_valid_dependency_manifest(manifest)
     env = os.environ.copy()
     env.update({
@@ -464,7 +465,7 @@ def _run_deploy_validation(
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=20,
     )
 
@@ -486,6 +487,7 @@ def _write_valid_dependency_manifest(
     postgres_password: str = "synthetic-postgres-password",
     postgres_db: str = "ontology",
 ) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "ENVIRONMENT=production\n"
         f"PUBLIC_PORT={public_port}\n"
@@ -562,7 +564,7 @@ def test_deploy_bootstraps_server_env_without_more_github_secrets(tmp_path):
         assert sensitive_value not in output
     assert stat.S_IMODE(generated_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(
-        (tmp_path / "production.dependencies.env").stat().st_mode
+        (tmp_path / "deploy" / "production.dependencies.env").stat().st_mode
     ) == 0o600
 
 
@@ -632,7 +634,7 @@ def test_git_mode_refuses_to_delete_non_worktree_deployment_state(tmp_path):
     env.update({"APP_DIR": str(tmp_path), "SKIP_GIT": "0"})
 
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -676,7 +678,7 @@ def test_git_mode_refuses_to_delete_non_worktree_deployment_state(tmp_path):
     )
 
     symlink_result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT,
         env=symlink_env,
         capture_output=True,
@@ -704,7 +706,7 @@ def test_deploy_refuses_app_dir_symlink_without_touching_target(tmp_path):
     env.update({"APP_DIR": str(app_link), "SKIP_GIT": "1"})
 
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -720,7 +722,8 @@ def test_deploy_refuses_app_dir_symlink_without_touching_target(tmp_path):
 
 def test_git_mode_restricts_manifest_before_missing_env_failure(tmp_path):
     (tmp_path / ".git").mkdir()
-    manifest = tmp_path / "production.dependencies.env"
+    manifest = tmp_path / "deploy" / "production.dependencies.env"
+    manifest.parent.mkdir(parents=True)
     manifest.write_text(
         "N8N_API_KEY=must-not-remain-world-readable\n",
         encoding="utf-8",
@@ -740,7 +743,7 @@ def test_git_mode_restricts_manifest_before_missing_env_failure(tmp_path):
     })
 
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -758,7 +761,7 @@ def test_git_mode_restricts_manifest_before_missing_env_failure(tmp_path):
 def test_deploy_upgrades_exact_legacy_bundled_redis_url(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env",
+        tmp_path / "deploy" / "production.dependencies.env",
         redis_url="redis://redis:6379/0",
     )
 
@@ -778,7 +781,7 @@ def test_deploy_derives_bundled_redis_requirepass_from_client_url(tmp_path):
     password = "synthetic-bundled-redis-password"
     redis_url = f"redis://:{password}@redis:6379/0"
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env",
+        tmp_path / "deploy" / "production.dependencies.env",
         redis_url=redis_url,
     )
 
@@ -800,7 +803,7 @@ def test_deploy_preserves_external_redis_url_without_binding_local_password(
         "rediss://:synthetic-provider-password@cache.example.com:6380/0"
     )
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env",
+        tmp_path / "deploy" / "production.dependencies.env",
         redis_url=redis_url,
     )
 
@@ -816,7 +819,7 @@ def test_deploy_preserves_external_redis_url_without_binding_local_password(
 
 def test_deploy_validates_bundled_postgres_and_neo4j_authorities(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
-    manifest = tmp_path / "production.dependencies.env"
+    manifest = tmp_path / "deploy" / "production.dependencies.env"
     _write_valid_dependency_manifest(
         manifest,
         database_url=(
@@ -836,7 +839,7 @@ def test_deploy_validates_bundled_postgres_and_neo4j_authorities(tmp_path):
 def test_deploy_compares_decoded_bundled_postgres_authority(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env",
+        tmp_path / "deploy" / "production.dependencies.env",
         database_url=(
             "postgres://onto%40logy:synthetic%3Apostgres-password"
             "@db:5432/onto%2Flogy"
@@ -884,7 +887,7 @@ def test_deploy_rejects_mismatched_or_disabled_bundled_auth(
 ):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env",
+        tmp_path / "deploy" / "production.dependencies.env",
         database_url=database_url,
         neo4j_uri=neo4j_uri,
         neo4j_auth=neo4j_auth,
@@ -899,7 +902,7 @@ def test_deploy_rejects_mismatched_or_disabled_bundled_auth(
 def test_deploy_rejects_encoded_password_for_bundled_redis(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env",
+        tmp_path / "deploy" / "production.dependencies.env",
         redis_url="redis://:encoded%40password@redis:6379/0",
     )
 
@@ -1243,7 +1246,7 @@ def test_deploy_requires_dependency_manifest(tmp_path):
     })
 
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -1259,7 +1262,7 @@ def test_deploy_ignores_legacy_manifest_switches_without_reenabling_them(
     tmp_path,
 ):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
-    manifest = tmp_path / "production.dependencies.env"
+    manifest = tmp_path / "deploy" / "production.dependencies.env"
     _write_valid_dependency_manifest(manifest)
     with manifest.open("a", encoding="utf-8") as stream:
         stream.write(
@@ -1302,7 +1305,7 @@ def test_deploy_backfills_n8n_timeout_for_existing_env_and_old_manifest(
     first = _run_deploy_validation(tmp_path)
     assert first.returncode == 0, first.stdout + first.stderr
 
-    for filename in (".env", "production.dependencies.env"):
+    for filename in (".env", "deploy/production.dependencies.env"):
         path = tmp_path / filename
         path.write_text(
             "\n".join(
@@ -1337,7 +1340,7 @@ def test_deploy_derives_pipeline_file_gateway_from_external_health_url(tmp_path)
 def test_deploy_uses_manifest_public_port_for_default_health_origin(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env", public_port="8123"
+        tmp_path / "deploy" / "production.dependencies.env", public_port="8123"
     )
 
     result = _run_deploy_validation(tmp_path)
@@ -1371,7 +1374,8 @@ def _run_deploy_workflow_step(
     dependency_config: str,
     health_url: str = "",
 ):
-    (tmp_path / "production.dependencies.env").write_text(
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "production.dependencies.env").write_text(
         dependency_config,
         encoding="utf-8",
     )
@@ -1479,7 +1483,7 @@ def test_deploy_ignores_empty_exported_public_port_and_uses_validated_env(
 ):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
     _write_valid_dependency_manifest(
-        tmp_path / "production.dependencies.env", public_port="8123"
+        tmp_path / "deploy" / "production.dependencies.env", public_port="8123"
     )
     monkeypatch.setenv("PUBLIC_PORT", "")
 

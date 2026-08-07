@@ -169,10 +169,10 @@ npm run test:e2e:mocked
 
 ## 5. 安全与仓库卫生
 
-- 除仓库所有者已明确批准的现有 `production.dependencies.env` 临时兼容例外
+- 除仓库所有者已明确批准的现有 `deploy/production.dependencies.env` 临时兼容例外
   外，禁止提交真实密码、token、API key、Cookie、证书或生产连接串。
 - 禁止提交个人绝对路径、个人 launch 配置和历史 worktree 路径。
-- 日常功能或重构不得修改、复制、回显 `production.dependencies.env`；后续
+- 日常功能或重构不得修改、复制、回显 `deploy/production.dependencies.env`；后续
   迁移和历史处理必须作为独立运维变更执行，不能混入普通功能提交。
 - fixture 必须确定、最小且脱敏；真实业务数据不得进入测试目录。
 - 截图、trace、HTML report、coverage 和结果 JSON 写入 `.artifacts/`。

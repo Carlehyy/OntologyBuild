@@ -5,13 +5,13 @@
 - `.env.example`：本地开发与 Compose 的无秘密模板；
 - `config/generated/local/.env`：本地配置中心生成，不进入 Git；
 - `backend/.env`：旧本地兼容入口，不应作为新配置源；
-- `production.dependencies.env`：当前自动部署读取的生产第三方依赖清单；
-- `production.dependencies.example.env`：不含秘密的人工校验与后续迁移模板。
+- `deploy/production.dependencies.env`：当前自动部署读取的生产第三方依赖清单；
+- `deploy/production.dependencies.example.env`：不含秘密的人工校验与后续迁移模板。
 
 直接启动应用进程时，系统环境变量仍按框架规则具有最高优先级。本地完整模式由
 配置中心生成统一环境文件；生产部署则先保留服务器已有 `.env`，再把当前版本
-中的 `production.dependencies.env` 合并进去，并以合并后的 `.env` 作为唯一
-Compose 权威。`scripts/deploy-prod.sh` 的所有 Compose 调用都会清除宿主 shell
+中的 `deploy/production.dependencies.env` 合并进去，并以合并后的 `.env` 作为唯一
+Compose 权威。`deploy/deploy-prod.sh` 的所有 Compose 调用都会清除宿主 shell
 中同名的环境、端口、依赖、镜像及严格镜像校验变量，避免已验证配置被临时
 `export` 静默覆盖。
 
@@ -43,7 +43,7 @@ worker 不会连接它。
 
 只有在维护者已经证明 PostgreSQL、API Hub、Neo4j、MinIO、uploads 等全部持久
 存储均为空，并通过手工 `workflow_dispatch` 勾选 fresh-install 确认时，服务器
-才由 `scripts/deploy-prod.sh` 分别生成随机 `SECRET_KEY` 和独立 Fernet
+才由 `deploy/deploy-prod.sh` 分别生成随机 `SECRET_KEY` 和独立 Fernet
 `ENCRYPTION_KEY`。普通 push 或未确认的手工部署遇到 `.env` 缺失会 fail closed，
 避免“配置文件丢了但数据还在”时生成新的、无法解密旧数据的 authority。
 生产部署当前只支持应用目录内权限为 `0600` 的普通 `.env` 文件；有效或失效的
@@ -126,14 +126,14 @@ MinIO 连接/鉴权/服务故障不会触发它。适配器不暴露上传能力
 目录治理不迁移它的配置来源，也不要求新建 GitHub `production`
 Environment。工作流继续使用：
 
-- 仓库中已跟踪的 `production.dependencies.env` 作为依赖事实源；
+- 仓库中已跟踪的 `deploy/production.dependencies.env` 作为依赖事实源；
 - GitHub Repository Secrets 中已有的 SSH 参数负责传输和远端执行；
-- `scripts/deploy-prod.sh` 在日志中只报告应用字段数，不打印字段值；
+- `deploy/deploy-prod.sh` 在日志中只报告应用字段数，不打印字段值；
 - 部署包仍以 `0600` 权限应用清单，并保留服务器已有 `.env`。
 
 日常功能、重构和文档 PR 不得修改、复制或回显该文件。后续迁移到逐项 GitHub
 Environment Secrets/Variables 时，使用
-`production.dependencies.example.env` 和
+`deploy/production.dependencies.example.env` 和
 `scripts/ci/materialize-production-dependencies.sh` 作为迁移工具，并在独立
 运维变更中验证审批、端口、严格模式和回滚，不能与目录整理混在一起。
 

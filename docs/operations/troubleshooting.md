@@ -31,7 +31,7 @@ ready，再由管理员在模型配置页添加提供商。
 `.env`、数据库或 Compose volume，也不要只随机覆盖 `SECRET_KEY`。当前版本会对
 缺失键、显式空值和仓库已知示例值自动执行一次无损密钥解耦，并按旧 dotenv
 语义区分缺失与空值；若仍看到这条错误，先确认
-远端实际执行的 `scripts/deploy-prod.sh` 已是本版本，并确认源码上传阶段没有
+远端实际执行的 `deploy/deploy-prod.sh` 已是本版本，并确认源码上传阶段没有
 失败。若错误变为 `SECRET_KEY must contain at least 32 characters`，说明服务器
 使用的是未知自定义短密钥：保持原 `.env` 和所有数据不动，由维护者在受控终端
 确认旧运行实例的实际加密边界，不允许猜测或清空存量凭据。

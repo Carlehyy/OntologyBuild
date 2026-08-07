@@ -11,7 +11,7 @@ ARCHIVE_PATH="${1:?usage: create-deployment-archive.sh ARCHIVE_PATH}"
 required_paths=(
   ".env.example"
   "docker-compose.prod.yml"
-  "production.dependencies.env"
+  "deploy/production.dependencies.env"
   "backend/.dockerignore"
   "backend/Dockerfile"
   "backend/alembic.ini"
@@ -36,7 +36,7 @@ required_paths=(
   "frontend/tsconfig.node.json"
   "frontend/vite.config.ts"
   "docker/browser"
-  "scripts/deploy-prod.sh"
+  "deploy/deploy-prod.sh"
   "scripts/ci/validate-deploy-app-dir.sh"
 )
 

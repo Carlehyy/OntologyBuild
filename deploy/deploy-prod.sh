@@ -2,11 +2,11 @@
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-/opt/ontologybuild}"
-bash "$SCRIPT_DIR/ci/validate-deploy-app-dir.sh" "$APP_DIR"
+bash "$SCRIPT_DIR/../scripts/ci/validate-deploy-app-dir.sh" "$APP_DIR"
 BRANCH="${BRANCH:-nano-ontoprompt}"
 REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
-DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-production.dependencies.env}"
+DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-deploy/production.dependencies.env}"
 # Preserve explicit operator overrides, but defer defaults until the persistent
 # .env and the production dependency manifest have been merged. The dependency
 # manifest is mandatory and must configure every external runtime service.

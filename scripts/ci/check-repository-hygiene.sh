@@ -20,6 +20,7 @@ required_readmes=(
   "backend/scripts/README.md"
   "backend/tests/README.md"
   "config/README.md"
+  "deploy/README.md"
   "docker/README.md"
   "docs/README.md"
   "docs/development/README.md"

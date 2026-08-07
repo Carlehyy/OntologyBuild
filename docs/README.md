@@ -41,7 +41,7 @@ docs/
 | 推荐本地核心完整栈 | `docker-compose.local.yml` |
 | 生产编排 | `docker-compose.prod.yml` |
 | 自动部署 | `.github/workflows/deploy-nano-ontoprompt.yml` |
-| 服务器部署行为 | `scripts/deploy-prod.sh` |
+| 服务器部署行为 | `deploy/deploy-prod.sh` |
 | 本地配置中心 | `config/README.md` |
 
 文档描述必须来自源码、可执行配置或测试。若这些事实互相矛盾，先修正事实，

@@ -4,7 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 APP_DIR_VALIDATOR="$SCRIPT_DIR/validate-deploy-app-dir.sh"
-DEPLOY_SCRIPT="$REPO_ROOT/scripts/deploy-prod.sh"
+DEPLOY_SCRIPT="$REPO_ROOT/deploy/deploy-prod.sh"
 DEPLOY_WORKFLOW="$REPO_ROOT/.github/workflows/deploy-nano-ontoprompt.yml"
 ARCHIVE_SCRIPT="$SCRIPT_DIR/create-deployment-archive.sh"
 NGINX_CONFIG="$REPO_ROOT/frontend/nginx/default.conf"
@@ -85,8 +85,8 @@ if ! grep -Fq \
   exit 1
 fi
 if ! git -C "$REPO_ROOT" ls-files --error-unmatch \
-    production.dependencies.env >/dev/null 2>&1 \
-    || [ ! -s "$REPO_ROOT/production.dependencies.env" ]; then
+    deploy/production.dependencies.env >/dev/null 2>&1 \
+    || [ ! -s "$REPO_ROOT/deploy/production.dependencies.env" ]; then
   printf 'the current deployment contract requires the tracked production dependency manifest\n' >&2
   exit 1
 fi
@@ -142,7 +142,7 @@ trap 'rm -rf -- "$test_dir" "$archive_source"; rm -f -- "$archive_output"' EXIT
 archive_fixture_paths=(
   ".env.example"
   "docker-compose.prod.yml"
-  "production.dependencies.env"
+  "deploy/production.dependencies.env"
   "backend/.dockerignore"
   "backend/Dockerfile"
   "backend/alembic.ini"
@@ -168,7 +168,7 @@ archive_fixture_paths=(
   "frontend/tsconfig.node.json"
   "frontend/vite.config.ts"
   "docker/browser/Dockerfile"
-  "scripts/deploy-prod.sh"
+  "deploy/deploy-prod.sh"
   "scripts/ci/validate-deploy-app-dir.sh"
   "docs/should-not-deploy.md"
   ".artifacts/should-not-deploy.json"
@@ -199,7 +199,7 @@ for required_member in \
   "frontend/dist/index.html" \
   "frontend/src/main.tsx" \
   "docker/browser/Dockerfile" \
-  "production.dependencies.env"; do
+  "deploy/production.dependencies.env"; do
   if ! grep -Fxq "$required_member" <<<"$archive_listing"; then
     printf 'deployment archive is missing required member: %s\n' \
       "$required_member" >&2

@@ -11,7 +11,7 @@ operations/
 ```
 
 运维事实以 `.github/workflows/`、`docker-compose*.yml`、
-`scripts/deploy-prod.sh`、配置模型和健康检查为准。任何部署脚本变化必须在
+`deploy/deploy-prod.sh`、配置模型和健康检查为准。任何部署脚本变化必须在
 同一 PR 更新本目录并运行部署专项测试。
 
 正常启动必须同时具备 PostgreSQL、Redis、Celery worker、Neo4j、MinIO、n8n

@@ -178,7 +178,7 @@ def test_runtime_gate_rejects_empty_database_and_redis_passwords():
 
 
 def test_committed_manifest_template_declares_contract_without_secrets():
-    template = ROOT / "production.dependencies.example.env"
+    template = ROOT / "deploy" / "production.dependencies.example.env"
     manifest = _read_env(template)
 
     assert set(manifest) == MATERIALIZED_KEYS
@@ -279,7 +279,7 @@ def test_materializer_validates_typed_values(
 
 def test_deploy_merges_required_runtime_manifest(tmp_path):
     shutil.copy(ROOT / ".env.example", tmp_path / ".env.example")
-    manifest_path = tmp_path / "production.dependencies.env"
+    manifest_path = tmp_path / "deploy" / "production.dependencies.env"
     materialized = _run_materializer(manifest_path)
     assert materialized.returncode == 0, materialized.stdout + materialized.stderr
     env = os.environ.copy()
@@ -292,7 +292,7 @@ def test_deploy_merges_required_runtime_manifest(tmp_path):
     })
 
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "deploy-prod.sh")],
+        ["bash", str(ROOT / "deploy" / "deploy-prod.sh")],
         cwd=ROOT,
         env=env,
         capture_output=True,

@@ -26,7 +26,7 @@
    前端镜像前需先在 `frontend/` 下执行 `npm ci && npm run build`；
 7. 将本次作业扫描到的 SSH host key 写入 `known_hosts` 并强制
    校验，同时在任何远端命令前校验部署目录；
-8. 将当前版本中的 `production.dependencies.env` 作为受控部署输入；
+8. 将当前版本中的 `deploy/production.dependencies.env` 作为受控部署输入；
 9. 通过受测试的运行时白名单生成部署包（含 CI 构建的 `frontend/dist`）并
    先上传；远端替换源码时始终原地保留
    服务器 `.env`，不把秘密复制到固定 `/tmp` 文件；
@@ -48,7 +48,7 @@ PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执
 
 ## 数据库迁移停机边界
 
-生产迁移是一次有意的短暂停机。依赖连接预检通过后，`scripts/deploy-prod.sh`
+生产迁移是一次有意的短暂停机。依赖连接预检通过后，`deploy/deploy-prod.sh`
 会先对 `backend` 和 `celery_worker` 执行带 30 秒宽限期的停止，再检查 Alembic
 单 head 并升级。这样旧版本进程不会在新投影状态迁移期间继续读写数据库。
 前端可能仍能提供静态文件，但 API 在迁移和新版本就绪前不可用。
@@ -105,7 +105,7 @@ PostgreSQL、API Hub `api_hub_data`、Neo4j、MinIO、uploads 和其他平台持
 `.env` 必须是应用目录内的普通服务器文件。部署会拒绝任何有效或失效软链接，
 并且会在远端删除任何旧源码前完成该检查，不会删除位于应用目录内的链接目标，
 也不会把 secret mount 替换成普通文件；外部秘密管理器需要先以受控、原子方式
-物化完整的 `0600` 文件。直接运行 `scripts/deploy-prod.sh` 的 Git 模式也只会接管
+物化完整的 `0600` 文件。直接运行 `deploy/deploy-prod.sh` 的 Git 模式也只会接管
 不存在或空目录，并在任何 fetch/checkout/reset 前拒绝 `.env` 软链接；遇到没有
 `.git` 的非空目录会保留全部内容并失败，不再递归删除。
 部署目录自身也不能是软链接，远端源码替换和脚本都会在清理任何文件前拒绝。
@@ -197,7 +197,7 @@ backend、Celery worker 和 frontend，且不得在旧 API/worker 仍可访问�
 
 ## 部署前检查
 
-- 当前版本中的 `production.dependencies.env` 存在且通过只读配置校验；
+- 当前版本中的 `deploy/production.dependencies.env` 存在且通过只读配置校验；
 - 服务器 `.env` 是可恢复的普通 `0600` 文件，而不是软链接；
 - 非首次安装确认服务器原 `.env` 可恢复；只有已证明全部持久存储为空的首次安装
   才手工勾选 `bootstrap_production_env`；

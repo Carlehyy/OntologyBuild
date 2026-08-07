@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-target="${1:-production.dependencies.env}"
+target="${1:-deploy/production.dependencies.env}"
 target_dir="$(dirname "$target")"
 mkdir -p "$target_dir"
 umask 077

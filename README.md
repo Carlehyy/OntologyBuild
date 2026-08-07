@@ -116,15 +116,12 @@ OntologyBuild/
 ├── docs/
 │   ├── development/         本地环境搭建与测试门禁
 │   └── operations/          配置、部署、回滚、备份和排障
-├── scripts/                 CI、部署和受控数据脚本
+├── scripts/                 CI 与受控数据脚本
+├── deploy/                  生产部署脚本与依赖清单（含受控临时例外的真实凭据）
 ├── docker/                  容器初始化与运行资源
 ├── test_data/               受版本控制、已分类的测试 fixture
 ├── .github/workflows/       PR 验证与自动部署
 ├── .env.example             本地/容器环境变量模板
-├── production.dependencies.env
-│                            当前自动部署使用的生产依赖清单（受控临时例外）
-├── production.dependencies.example.env
-│                            后续迁移与人工校验使用的无秘密模板
 ├── AGENTS.md                强制开发和交付准则
 ├── docker-compose.local.yml  推荐的本地核心完整栈
 └── docker-compose.prod.yml   生产编排
@@ -167,7 +164,7 @@ npm --prefix frontend run test:e2e:mocked
 [部署说明](./docs/operations/deployment.md) 和
 [回滚](./docs/operations/rollback.md)。
 
-当前部署事实源是仓库中已跟踪的 `production.dependencies.env`（含真实生产
+当前部署事实源是仓库中已跟踪的 `deploy/production.dependencies.env`（含真实生产
 凭据，属受控临时例外）：日常开发不得修改、复制或回显其中的值。后续迁移到
 GitHub Environment Secrets/Variables 必须作为独立运维变更执行；仅删除当前
 文件不等于清理 Git 历史。凭据与卫生红线见 [AGENTS.md](./AGENTS.md) 第 5 节。
