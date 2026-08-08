@@ -6,10 +6,17 @@ export const PYTHON_SCRIPT_TEMPLATE = `# Python 脚本流水线：在此编写�
 # 平台将按此输出写入数据资产湖；pandas DataFrame 也可直接赋值。
 #
 # 执行环境自带 requests / httpx / pandas / pymysql / openpyxl 等依赖库。
-import requests
 
-resp = requests.get("https://api.example.com/data", timeout=30)
-resp.raise_for_status()
+# 默认演示数据：不做任何修改直接点击「执行」，即可看到平台要求的输出格式
+result = [
+    {"id": 1, "name": "示例数据 A", "amount": 100.5},
+    {"id": 2, "name": "示例数据 B", "amount": 200.0},
+]
 
-result = resp.json()  # 例：[{"id": 1, "name": "示例"}]
+# 示例：HTTP 取数——把 URL 换成你的真实数据源后，删除上方演示数据并取消注释
+# import requests
+#
+# resp = requests.get("https://your-data-source.example.com/api/data", timeout=30)
+# resp.raise_for_status()
+# result = resp.json()  # 要求响应是 [{"列名": 值}, ...] 的数组对象
 `
