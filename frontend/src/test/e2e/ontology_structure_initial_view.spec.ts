@@ -166,3 +166,55 @@ test('点击本体结构后画布内容首次可见时已经居中且不再横�
   expect(Math.abs(nodeBox!.x + nodeBox!.width / 2 - (canvasBox!.x + canvasBox!.width / 2))).toBeLessThanOrEqual(1)
   expect(Math.abs(nodeBox!.y + nodeBox!.height / 2 - (canvasBox!.y + canvasBox!.height / 2))).toBeLessThanOrEqual(1)
 })
+
+test('切换 L1/L2 视角时视口直接到位而不从角落滑入', async ({ page }) => {
+  await mockOntologyStructure(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/ontologies/${ontologyId}`, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '本体结构', exact: true }).click()
+  await expect(page.getByTestId('structure-node-object')).toBeVisible()
+  // Wait for the initial fit to fully settle so every later transform change
+  // is caused by the level switch itself.
+  await page.waitForTimeout(750)
+
+  await page.evaluate(() => {
+    const state = window as typeof window & { __levelSwitchTransforms?: string[] }
+    state.__levelSwitchTransforms = []
+    const startedAt = performance.now()
+    const capture = () => {
+      const viewport = document.querySelector<HTMLElement>('.react-flow__viewport')
+      if (viewport) state.__levelSwitchTransforms?.push(viewport.style.transform)
+      if (performance.now() - startedAt < 900) requestAnimationFrame(capture)
+    }
+    requestAnimationFrame(capture)
+  })
+
+  await page.getByRole('button', { name: 'L2', exact: true }).click()
+  await expect(page.getByTestId('structure-node-property')).toBeVisible()
+  await page.waitForTimeout(950)
+
+  const transforms = await page.evaluate(() => {
+    const state = window as typeof window & { __levelSwitchTransforms?: string[] }
+    return state.__levelSwitchTransforms || []
+  })
+  expect(transforms.length).toBeGreaterThan(5)
+  // An animated fit interpolates the viewport across ~16 frames; a direct fit
+  // changes the transform at most once (before vs after the switch).
+  expect(new Set(transforms).size).toBeLessThanOrEqual(2)
+
+  const canvasBox = await page.locator('.react-flow').boundingBox()
+  const graphBox = await page.evaluate(() => {
+    const rects = Array.from(document.querySelectorAll<HTMLElement>('.react-flow__node'))
+      .map(element => element.getBoundingClientRect())
+    if (!rects.length) return null
+    const left = Math.min(...rects.map(rect => rect.x))
+    const top = Math.min(...rects.map(rect => rect.y))
+    const right = Math.max(...rects.map(rect => rect.x + rect.width))
+    const bottom = Math.max(...rects.map(rect => rect.y + rect.height))
+    return { centerX: (left + right) / 2, centerY: (top + bottom) / 2 }
+  })
+  expect(canvasBox).not.toBeNull()
+  expect(graphBox).not.toBeNull()
+  expect(Math.abs(graphBox!.centerX - (canvasBox!.x + canvasBox!.width / 2))).toBeLessThanOrEqual(2)
+  expect(Math.abs(graphBox!.centerY - (canvasBox!.y + canvasBox!.height / 2))).toBeLessThanOrEqual(2)
+})

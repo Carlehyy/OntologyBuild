@@ -453,16 +453,19 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const pendingPositions = useRef<Record<string, { x: number; y: number }>>({})
   const saveTimer = useRef<number | null>(null)
   const saveInFlight = useRef(false)
-  const lastAnimatedGraph = useRef(builtGraph)
+  const lastFittedGraph = useRef(builtGraph)
 
   useEffect(() => {
     setAllNodes(builtGraph.nodes)
     // React Flow owns the initial fit so that it can center the viewport as soon
-    // as node dimensions are measured, before those nodes become visible. Only
-    // later graph changes (for example L1 -> L2) should animate into place.
-    if (lastAnimatedGraph.current === builtGraph) return
-    lastAnimatedGraph.current = builtGraph
-    const timer = window.setTimeout(() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.9, duration: 260 }), 80)
+    // as node dimensions are measured, before those nodes become visible. Later
+    // graph changes (L1 <-> L2) must snap to the fitted view without animation:
+    // the two levels pack their layouts independently from the same origin with
+    // different extents, so an animated fit makes the graph slide in from a
+    // corner instead of appearing centered.
+    if (lastFittedGraph.current === builtGraph) return
+    lastFittedGraph.current = builtGraph
+    const timer = window.setTimeout(() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.9 }), 80)
     return () => window.clearTimeout(timer)
   }, [builtGraph, fitView, level])
 
