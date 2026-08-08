@@ -134,7 +134,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
     from app.services.v2 import sync_scheduler
     from app.services.v2.graph import index_setup
     from app.shared import dependency_probe
-    from app.settings.object_storage import mcp_server as minio_mcp
     from app.ontologies import projection_state
 
     events: list[str] = []
@@ -163,7 +162,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
             events.append("data_scheduler.shutdown")
 
     scheduler = Scheduler()
-    minio_manager = Manager("minio_mcp")
     api_hub_public = Manager("api_hub_public_mcp")
     api_hub_system = Manager("api_hub_system_mcp")
 
@@ -232,11 +230,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         lambda: events.append("api_hub_mcp.reset")
         or (api_hub_public, api_hub_system),
     )
-    monkeypatch.setattr(
-        minio_mcp,
-        "reset_session_manager",
-        lambda: events.append("minio_mcp.reset") or minio_manager,
-    )
 
     async def cleanup_loop():
         await asyncio.Future()
@@ -277,14 +270,11 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "data_scheduler.start",
         "api_hub_mcp.reset",
         "file_cleanup.create",
-        "minio_mcp.reset",
-        "minio_mcp.enter",
         "api_hub_public_mcp.enter",
         "api_hub_system_mcp.enter",
         "application.ready",
         "api_hub_system_mcp.exit",
         "api_hub_public_mcp.exit",
-        "minio_mcp.exit",
         "browser.close_all",
         "data_scheduler.shutdown",
         "sentinel_scan.stop",

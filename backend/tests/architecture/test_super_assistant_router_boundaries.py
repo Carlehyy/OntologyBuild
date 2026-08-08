@@ -243,8 +243,8 @@ def test_super_assistant_router_preserves_contract_and_helper_aliases():
     )
     assert assistant_router.stream_chat is runtime.stream_chat
     assert (
-        assistant_router.ConfiguredMinioService
-        is object_storage_service.ConfiguredMinioService
+        assistant_router.get_workspace_minio_service
+        is object_storage_service.get_workspace_minio_service
     )
     for name in (
         "SkillStoreError",
@@ -379,7 +379,7 @@ def test_router_patch_seams_are_resolved_at_request_time(
         },
     }
 
-    service_class = object()
+    service_factory = object()
     manifest = object()
     expected_mcp = object()
     mcp_call = {}
@@ -391,8 +391,8 @@ def test_router_patch_seams_are_resolved_at_request_time(
 
     monkeypatch.setattr(
         assistant_router,
-        "ConfiguredMinioService",
-        service_class,
+        "get_workspace_minio_service",
+        service_factory,
     )
     monkeypatch.setattr(
         assistant_router,
@@ -412,7 +412,7 @@ def test_router_patch_seams_are_resolved_at_request_time(
     assert mcp_call == {
         "args": (database, "owner-1"),
         "kwargs": {
-            "configured_minio_service_cls": service_class,
+            "workspace_minio_service_factory": service_factory,
             "minio_tool_manifest_fn": manifest,
         },
     }

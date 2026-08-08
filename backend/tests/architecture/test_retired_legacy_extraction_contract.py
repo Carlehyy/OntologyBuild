@@ -34,11 +34,15 @@ RETIRED_OPENAPI_OPERATIONS = {
 
 PRESERVED_MCP_OPERATIONS = {
     ("get", "/api/api-hub/mcp/info"),
-    ("get", "/api/v1/settings/minio-config"),
     ("get", "/api/v2/community/mcp-servers"),
     ("get", "/api/v2/super-assistant/mcp-servers"),
     ("post", "/api/v2/super-assistant/mcp-servers/platform-minio"),
 }
+
+RETIRED_MINIO_OPERATION_PREFIXES = (
+    "/api/v1/settings/minio-config",
+    "/api/v1/settings/minio/",
+)
 
 
 def _openapi_operations() -> set[tuple[str, str]]:
@@ -62,13 +66,22 @@ def test_unrelated_mcp_capabilities_remain_published():
     assert PRESERVED_MCP_OPERATIONS <= _openapi_operations()
 
 
-def test_raw_legacy_mcp_is_gone_but_api_hub_and_minio_mcp_remain(client):
-    assert client.post("/mcp").status_code == 404
+def test_manual_minio_settings_operations_are_retired():
+    operations = _openapi_operations()
+    assert not [
+        operation
+        for operation in operations
+        if operation[1].startswith(RETIRED_MINIO_OPERATION_PREFIXES)
+    ]
 
-    # These are middleware endpoints and therefore intentionally absent from
+
+def test_raw_legacy_mcp_and_external_minio_mcp_are_gone_but_api_hub_remains(client):
+    assert client.post("/mcp").status_code == 404
+    assert client.post("/mcp/minio").status_code == 404
+
+    # This is a middleware endpoint and therefore intentionally absent from
     # OpenAPI. Missing/disabled credentials still prove the route was claimed.
     assert client.post("/api-hub/mcp").status_code in {401, 503}
-    assert client.post("/mcp/minio").status_code == 401
 
 
 def test_retired_runtime_modules_do_not_return_as_compatibility_facades():

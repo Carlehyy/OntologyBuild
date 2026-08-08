@@ -187,10 +187,6 @@ def test_merge_base_propagates_read_failure(db, svc, storage, monkeypatch):
     storage.objects.clear()
     # load_latest_rows 内部自建 DatasetService，注入同一个 FakeStorage
     monkeypatch.setattr("app.data_channel.datasets.service.get_storage_service", lambda: storage)
-    monkeypatch.setattr(
-        "app.data_channel.datasets.service.get_environment_storage_service",
-        lambda: storage,
-    )
     with pytest.raises(DatasetReadError):
         load_latest_rows(db, ds.id)
 
@@ -257,57 +253,24 @@ def test_first_database_version_is_atomic_on_commit_failure(
     assert svc.get_dataset(dataset_id) is None
 
 
-def test_legacy_versions_use_managed_migration_reader_after_checksum_mismatch(db):
-    internal = FakeStorage()
-    managed = FakeStorage()
-    svc = DatasetService(
-        db, storage=managed, legacy_storages=[internal, managed])
-    ds = svc.create_dataset("切换期间历史版本", "curated")
-    raw = _csv_bytes([{"id": "1", "value": "external"}])
-    version = _seed_legacy_version(db, ds, managed, raw)
-    # A stale object under the same URI in the original endpoint must not mask
-    # the valid regression-era copy in managed MinIO.
-    internal.objects[version.storage_uri] = b"stale"
+def test_environment_object_miss_is_a_hard_read_failure(db):
+    """历史对象只存于权威环境 MinIO；对象缺失即硬失败，没有第二套端点。"""
+    storage = FakeStorage()
+    svc = DatasetService(db, storage=storage)
+    ds = svc.create_dataset("对象缺失", "curated")
+    _seed_legacy_version(db, ds, storage, _csv_bytes([{"id": "1"}]))
+    storage.objects.clear()
 
-    assert svc.load_all_rows(ds.id) == [{"id": "1", "value": "external"}]
+    with pytest.raises(DatasetReadError, match="历史存储对象读取失败"):
+        svc.load_all_rows(ds.id)
 
 
-def test_legacy_managed_reader_is_used_only_after_environment_object_miss(
-    db, monkeypatch,
-):
-    from app.data_channel.datasets import service
-
-    environment = FakeStorage()
-    managed = FakeStorage()
-    seed_service = DatasetService(db, storage=managed)
-    ds = seed_service.create_dataset("回归期端点迁移", "curated")
-    _seed_legacy_version(
-        db, ds, managed, _csv_bytes([{"id": "1", "value": "managed"}]))
-    legacy_access_calls = 0
-
-    def legacy_access():
-        nonlocal legacy_access_calls
-        legacy_access_calls += 1
-        return managed
-
-    monkeypatch.setattr(
-        service, "get_environment_storage_service", lambda: environment)
-    monkeypatch.setattr(
-        service, "get_legacy_managed_storage_access", legacy_access)
-
-    assert DatasetService(db).load_all_rows(ds.id) == [
-        {"id": "1", "value": "managed"}]
-    assert legacy_access_calls == 1
-
-
-def test_environment_minio_outage_never_uses_legacy_managed_reader(
-    db, monkeypatch,
-):
+def test_environment_minio_outage_is_a_hard_read_failure(db, monkeypatch):
     from app.data_channel.datasets import service
 
     managed = FakeStorage()
     seed_service = DatasetService(db, storage=managed)
-    ds = seed_service.create_dataset("环境故障不降级", "curated")
+    ds = seed_service.create_dataset("环境故障硬失败", "curated")
     _seed_legacy_version(
         db, ds, managed, _csv_bytes([{"id": "1", "value": "legacy"}]))
 
@@ -315,25 +278,14 @@ def test_environment_minio_outage_never_uses_legacy_managed_reader(
         def get_object(self, _uri: str) -> bytes:
             raise RuntimeError("environment MinIO unavailable")
 
-    legacy_access_calls = 0
-
-    def legacy_access():
-        nonlocal legacy_access_calls
-        legacy_access_calls += 1
-        return managed
-
     monkeypatch.setattr(
         service,
-        "get_environment_storage_service",
+        "get_storage_service",
         lambda: UnavailableEnvironment(),
     )
-    monkeypatch.setattr(
-        service, "get_legacy_managed_storage_access", legacy_access)
 
     with pytest.raises(DatasetReadError, match="environment MinIO unavailable"):
         DatasetService(db).load_all_rows(ds.id)
-
-    assert legacy_access_calls == 0
 
 
 def test_unstructured_versions_remain_in_minio(svc, storage):

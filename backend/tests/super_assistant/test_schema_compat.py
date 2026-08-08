@@ -9,7 +9,7 @@ from app.data_channel.datasets.models import DatasetVersion
 from app.models.ontology_formal import ActionExecutionLog
 from app.models.sentinel import Notification, Sentinel, SentinelCdcOutbox
 from app.ontologies.versions.models import OntologyTrialObject
-from app.settings.object_storage.models import MinioConfig, MinioOperationAudit
+from app.settings.object_storage.models import MinioOperationAudit
 from app.shared.database import Base
 from app.shared.schema_compat import (
     assert_critical_schema,
@@ -23,7 +23,6 @@ def test_legacy_development_database_repairs_mcp_columns(tmp_path):
     Base.metadata.create_all(bind=engine, tables=[
         User.__table__,
         SuperAssistantMcpServer.__table__,
-        MinioConfig.__table__,
         MinioOperationAudit.__table__,
         DatasetVersion.__table__,
         ActionExecutionLog.__table__,
@@ -90,7 +89,6 @@ def test_legacy_development_database_repairs_dataset_payload_columns(tmp_path):
     Base.metadata.create_all(bind=engine, tables=[
         User.__table__,
         SuperAssistantMcpServer.__table__,
-        MinioConfig.__table__,
         MinioOperationAudit.__table__,
         DatasetVersion.__table__,
         ActionExecutionLog.__table__,
@@ -127,7 +125,6 @@ def test_legacy_development_database_repairs_sentinel_runtime_columns(
     Base.metadata.create_all(bind=engine, tables=[
         User.__table__,
         SuperAssistantMcpServer.__table__,
-        MinioConfig.__table__,
         MinioOperationAudit.__table__,
         DatasetVersion.__table__,
         ActionExecutionLog.__table__,

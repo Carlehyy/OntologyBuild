@@ -397,8 +397,5 @@ def test_environment_minio_is_always_authoritative(monkeypatch):
         "get_environment_storage_service",
         lambda: sentinel,
     )
-    monkeypatch.setattr(storage, "_storage_service", None)
 
-    platform = storage.get_storage_service()
-    assert isinstance(platform, storage.PlatformStorageAccess)
-    assert platform._authoritative is sentinel
+    assert storage.get_storage_service() is sentinel

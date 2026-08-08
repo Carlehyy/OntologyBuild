@@ -80,8 +80,9 @@ def test_retirement_drops_only_legacy_tables_and_downgrade_is_schema_only(
     engine = create_engine(f"sqlite:///{db_path}")
     tables = set(inspect(engine).get_table_names())
     assert RETIRED_TABLES.isdisjoint(tables)
+    assert "minio_config" not in tables
     assert {
-        "minio_config",
+        "minio_operation_audits",
         "super_assistant_mcp_servers",
         "v2_datasets",
         "v2_ontology_mappings",
