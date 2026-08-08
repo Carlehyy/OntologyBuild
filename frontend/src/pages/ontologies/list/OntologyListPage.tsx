@@ -459,17 +459,8 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
 
   const allItems = useMemo(() => data?.items ?? [], [data?.items])
   const domains = useMemo(() => {
-    const byName = new Map<string, DomainItem>()
-    configuredDomains.forEach(item => byName.set(item.name, item))
-    // Historical ontology domains remain filterable even if a setting was
-    // later renamed or removed.
-    allItems.forEach(item => {
-      if (item.domain && !byName.has(item.domain)) {
-        byName.set(item.domain, { id: `legacy-${item.domain}`, name: item.domain, description: '' })
-      }
-    })
-    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
-  }, [allItems, configuredDomains])
+    return [...configuredDomains].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  }, [configuredDomains])
 
   const filteredItems = useMemo(() => {
     const keyword = nameFilter.trim().toLocaleLowerCase('zh-CN')
@@ -481,6 +472,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['ontologies'] })
+    queryClient.invalidateQueries({ queryKey: ['domains'] })
     queryClient.invalidateQueries({ queryKey: ['stats'] })
   }
 

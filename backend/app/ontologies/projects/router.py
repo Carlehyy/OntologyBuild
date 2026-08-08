@@ -4,7 +4,6 @@ from typing import Optional
 from app.deps import get_db, get_current_user
 from app.models.ontology import OntologyProject
 from app.models.user import User
-from app.models.domain import Domain
 from app.models.ontology_version import OntologyVersion
 from app.ontologies.release_context import create_initial_release
 from app.ontologies.versions.snapshot_contract import (
@@ -17,6 +16,11 @@ from app.ontologies.export.service import import_structure_package
 from app.ontologies.projection_state import mark_failed, mark_projecting
 from app.ontologies.runtime_fence import _ontology_build_lock
 from app.schemas.ontology import OntologyCreate, OntologyOut, OntologyListItem, OntologyUpdate
+from app.settings.domains.service import (
+    LEGACY_ONTOLOGY_DESCRIPTION,
+    ensure_domain,
+    find_domain,
+)
 import uuid
 
 router = APIRouter()
@@ -30,13 +34,22 @@ LEGACY_DOMAINS = {
 }
 
 
-def _validate_domain(db: Session, domain: str) -> None:
-    exists = db.query(Domain.id).filter(Domain.name == domain).first()
-    if exists is None and domain not in LEGACY_DOMAINS:
-        raise HTTPException(422, detail={
-            "error": "INVALID_DOMAIN",
-            "message": f"领域「{domain}」不存在，请先在系统设置中添加",
-        })
+def _validate_domain(db: Session, domain: str, *, current_user: User) -> None:
+    exists = find_domain(db, domain, for_update=True)
+    if exists is not None:
+        return
+    if domain in LEGACY_DOMAINS:
+        ensure_domain(
+            db,
+            name=domain,
+            description=LEGACY_ONTOLOGY_DESCRIPTION,
+            created_by=current_user.id,
+        )
+        return
+    raise HTTPException(422, detail={
+        "error": "INVALID_DOMAIN",
+        "message": f"领域「{domain}」不存在，请先在系统设置中添加",
+    })
 
 
 def _release_map(db: Session, projects: list[OntologyProject]) -> dict[str, OntologyVersion]:
@@ -130,7 +143,7 @@ def list_ontologies(
 def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if getattr(current_user, "role", "") not in ("admin", "editor"):
         raise HTTPException(403, "Viewer role is read-only")
-    _validate_domain(db, body.domain)
+    _validate_domain(db, body.domain, current_user=current_user)
     existing = db.query(OntologyProject).filter(OntologyProject.name.ilike(body.name)).first()
     if existing:
         raise HTTPException(status_code=409, detail={"error": "DUPLICATE_NAME", "message": f"Ontology 名称「{body.name}」已存在", "existing_id": existing.id})
@@ -164,7 +177,6 @@ def import_ontology_structure(
     """Create a published v0 ontology from a local structure JSON package."""
     if getattr(current_user, "role", "") not in ("admin", "editor"):
         raise HTTPException(403, "Viewer role is read-only")
-    _validate_domain(db, body.ontology.domain)
     return {"data": import_structure_package(db, body, current_user=current_user)}
 
 @router.get("/{ontology_id}")
@@ -180,7 +192,7 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
     p = require_ontology_access(db, ontology_id, current_user, write=True)
     update = body.model_dump(exclude_none=True)
     if "domain" in update and update["domain"] != p.domain:
-        _validate_domain(db, update["domain"])
+        _validate_domain(db, update["domain"], current_user=current_user)
     if "name" in update:
         existing = db.query(OntologyProject).filter(
             OntologyProject.name.ilike(update["name"]),

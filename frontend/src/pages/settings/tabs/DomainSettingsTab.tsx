@@ -118,6 +118,7 @@ export default function DomainSettingsTab({ settings }: DomainSettingsTabProps) 
                     <input
                       value={domainName}
                       onChange={e => setDomainName(e.target.value)}
+                      maxLength={100}
                       placeholder="输入领域名称"
                       className="w-full border rounded-lg px-3 py-2 text-sm"
                       autoFocus
@@ -159,7 +160,7 @@ export default function DomainSettingsTab({ settings }: DomainSettingsTabProps) 
               <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
                 <h3 className="text-lg font-semibold mb-2">确认删除</h3>
                 <p className="text-sm text-gray-500 mb-6">
-                  确定要删除领域「{deleteDomainTarget.name}」吗？此操作不可撤销。
+                  确定要删除领域「{deleteDomainTarget.name}」吗？若仍有本体使用该领域，系统会阻止删除；删除后不可撤销。
                 </p>
                 <div className="flex justify-end gap-2">
                   <button

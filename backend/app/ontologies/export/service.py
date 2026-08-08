@@ -38,6 +38,10 @@ from app.ontologies.formal_modeling.validation import validate_model
 from app.ontologies.versions.snapshot_contract import (
     snapshot_hash,
 )
+from app.settings.domains.service import (
+    LOCAL_IMPORT_DESCRIPTION,
+    ensure_domain,
+)
 
 
 def _new_id() -> str:
@@ -399,6 +403,12 @@ def import_structure_package(
     """Import a validated package and atomically create its published v0 baseline."""
 
     _validate_import_package(package)
+    ensure_domain(
+        db,
+        name=package.ontology.domain,
+        description=LOCAL_IMPORT_DESCRIPTION,
+        created_by=current_user.id,
+    )
     structure = package.structure
     ontology_id = _new_id()
     project_name = _unique_project_name(db, package.ontology.name)
