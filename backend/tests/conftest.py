@@ -8,6 +8,15 @@ from pathlib import Path
 # into the only supported SQLite profile before importing application modules.
 os.environ["ENVIRONMENT"] = "test"
 
+# 应用的 SessionLocal/engine 在 import 时按 DATABASE_URL 绑定。默认的固定路径
+# /tmp/ontoprompt.db 会被 xdist 多 worker 共享，并发 lifespan seeding 的
+# create_all 会互相踩表（table users already exists）；这里给每个进程一个独立
+# 文件。它刻意与下方 fixture 引擎的库分离——seed 的管理员账号不能与测试
+# fixture 自建账号同库，否则用户名唯一约束冲突。
+_app_db_fd, _app_db_path = tempfile.mkstemp(prefix="ontoprompt_app_", suffix=".db")
+os.close(_app_db_fd)
+os.environ["DATABASE_URL"] = f"sqlite:///{_app_db_path}"
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -44,10 +53,11 @@ TestSession = sessionmaker(bind=engine)
 @atexit.register
 def _cleanup_test_db():
     engine.dispose()
-    try:
-        os.unlink(_db_path)
-    except OSError:
-        pass
+    for path in (_db_path, _app_db_path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 @pytest.fixture(autouse=True)
 def setup_db():
