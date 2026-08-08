@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from passlib.context import CryptContext
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.auth.models import User
 from app.config import settings
@@ -40,4 +41,9 @@ def seed_admin(db: Session):
             role="admin",
         )
         db.add(admin)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # 多进程并发启动（CI xdist worker、并行容器）可能同时通过上方的
+            # 存在性检查；另一进程已完成写入时，本次种子视为幂等成功。
+            db.rollback()
