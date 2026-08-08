@@ -372,7 +372,7 @@ def test_workflow_publishes_real_ciphertext_migration_evidence():
     assert e2e_step["env"]["DATABASE_URL"].endswith("_ci")
     assert "--self-test" in e2e_step["run"]
     assert "--report" in e2e_step["run"]
-    assert upload_step["if"] == "${{ always() && matrix.shard == 0 }}"
+    assert upload_step["if"] == "${{ always() && matrix.shard == 1 }}"
     assert upload_step["with"]["if-no-files-found"] == "error"
     assert "production.dependencies.env" not in script
     assert "session_replication_role = replica" in script

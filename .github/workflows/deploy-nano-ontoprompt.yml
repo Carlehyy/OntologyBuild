@@ -54,10 +54,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
-    # xdist 并行 + 测试环境低 bcrypt 轮次 + 四分片后，全量回归在 4 vCPU runner
-    # 上约 4-5 分钟；保留明确上限，避免误取消正常验证。
-    timeout-minutes: 15
+        shard: [1, 2, 3, 4]
+    # xdist 并行 + 测试环境低 bcrypt 轮次 + pytest-split 按时长四分片后，全量
+    # 回归在 4 vCPU runner 上约 4-5 分钟；保留明确上限，避免误取消正常验证。
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16-alpine
@@ -90,18 +90,19 @@ jobs:
       - name: Backend regression suite
         run: >-
           uv run pytest -q --disable-warnings -n auto --dist loadfile
-          --ignore tests/v2/perf --num-shards=4 --shard-id=${{ matrix.shard }}
+          --ignore tests/v2/perf --splits=4 --group=${{ matrix.shard }}
+          --splitting-algorithm=least_duration
         working-directory: backend
 
       # 性能套件测量耗时，保持串行运行以避免并行负载干扰读数。
       - name: Backend performance suite (informational)
-        if: matrix.shard == 0
+        if: matrix.shard == 1
         continue-on-error: true
         run: uv run pytest -q --disable-warnings tests/v2/perf
         working-directory: backend
 
       - name: Fresh database migration
-        if: matrix.shard == 0
+        if: matrix.shard == 1
         env:
           ENVIRONMENT: test
           DATABASE_URL: postgresql://ontologybuild_ci:ontologybuild_ci@127.0.0.1:5432/ontologybuild_ci
@@ -113,7 +114,7 @@ jobs:
         working-directory: backend
 
       - name: Persisted ciphertext secret-split E2E
-        if: matrix.shard == 0
+        if: matrix.shard == 1
         env:
           ONTOLOGYBUILD_RUNTIME_SECRET_E2E: "1"
           ENVIRONMENT: test
@@ -126,7 +127,7 @@ jobs:
         working-directory: backend
 
       - name: Upload runtime-secret migration evidence
-        if: ${{ always() && matrix.shard == 0 }}
+        if: ${{ always() && matrix.shard == 1 }}
         uses: actions/upload-artifact@v4
         with:
           name: runtime-secret-migration-${{ github.run_id }}

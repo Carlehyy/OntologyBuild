@@ -119,8 +119,11 @@ is_generic_documented_path() {
 
 should_scan_drive_paths() {
   local file_name="$1"
+  # .test_durations 以参数化测试 ID 为键，内嵌的对抗性 fixture（如 C:/ 盘符
+  # 用例）与被排除的测试目录同理，不是个人路径。
   [[
     "$file_name" != backend/tests/*
+    && "$file_name" != backend/.test_durations
     && "$file_name" != config/tests/*
     && "$file_name" != test_data/*
   ]]

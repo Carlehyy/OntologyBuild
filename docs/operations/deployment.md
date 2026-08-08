@@ -17,7 +17,8 @@
 完整流程，手动触发（workflow_dispatch）始终全量：
 
 1. 使用 Python 3.12 和各自 `uv.lock` 并行执行后端（pytest-xdist 多进程 +
-   pytest-shard 四分片，测试环境使用最低 bcrypt 轮次）与配置中心回归；
+   pytest-split 按已记录时长分四个时长均衡的分片，时长数据见
+   `backend/.test_durations`；测试环境使用最低 bcrypt 轮次）与配置中心回归；
 2. 运行 Alembic 新库升级与单 head 检查；
 3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis/Celery worker、
    Neo4j、MinIO、n8n 和 Chromium CDP 配置；
