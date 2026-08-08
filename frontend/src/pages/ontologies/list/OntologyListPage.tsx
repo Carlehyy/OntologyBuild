@@ -191,7 +191,7 @@ function OntologyFormModal({
             onClick={submit}
             loading={saving}
             disabled={!name.trim() || !selectedDomain}
-            className="bg-teal-600 text-white hover:bg-teal-700 active:bg-teal-800"
+            className="bg-teal-600 text-white hover:bg-teal-700 active:bg-teal-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
           >
             {submitText}
           </Button>
@@ -328,18 +328,17 @@ function OntologyCard({
   item,
   onEdit,
   onDetail,
-  onView,
   onChat,
   onDelete,
 }: {
   item: OntologyListItem
   onEdit: () => void
   onDetail: () => void
-  onView: () => void
   onChat: () => void
   onDelete: () => void
 }) {
   const chatAvailable = Boolean(item.current_release_id)
+  const releaseVersion = chatAvailable ? item.current_release_version || item.version : null
 
   return (
     <article className="group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
@@ -361,9 +360,15 @@ function OntologyCard({
               <span className="inline-flex min-w-0 max-w-full truncate rounded-md border border-teal-100 bg-teal-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-teal-700">
                 {item.domain || '未设置领域'}
               </span>
-              <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
-                {item.current_release_version || item.version || 'v0'}
-              </span>
+              {releaseVersion ? (
+                <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
+                  {releaseVersion}
+                </span>
+              ) : (
+                <span className="inline-flex shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-slate-500">
+                  未发布
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -384,7 +389,7 @@ function OntologyCard({
             { label: '哨兵引擎', value: item.sentinel_count ?? 0 },
           ].map(metric => (
             <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2.5 text-center">
-              <p className="whitespace-nowrap text-[10px] font-medium text-slate-400">{metric.label}</p>
+              <p className="whitespace-nowrap text-[11px] font-medium text-slate-400">{metric.label}</p>
               <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-800">{metric.value}</p>
             </div>
           ))}
@@ -400,27 +405,21 @@ function OntologyCard({
           >
             <Pencil size={12} /> 编辑
           </button>
-          <button
-            type="button"
-            onClick={onView}
-            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
-          >
-            <Search size={12} /> 查看
-          </button>
-          <button
-            type="button"
-            onClick={onChat}
-            disabled={!chatAvailable}
-            title={chatAvailable ? `使用“${item.name}”进入本体助手` : '本体发布后可进入助手对话'}
-            aria-label={chatAvailable ? `使用${item.name}进入本体助手对话` : `${item.name}尚未发布，暂不可对话`}
-            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-slate-100"
-          >
-            <MessageCircle size={12} /> 对话
-          </button>
+          <span title={chatAvailable ? undefined : '本体发布后可进入助手对话'} className="inline-flex shrink-0">
+            <button
+              type="button"
+              onClick={onChat}
+              disabled={!chatAvailable}
+              aria-label={chatAvailable ? `使用${item.name}进入本体助手对话` : `${item.name}尚未发布，暂不可对话`}
+              className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-slate-100"
+            >
+              <MessageCircle size={12} /> 对话
+            </button>
+          </span>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <span className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline" title={`创建时间：${new Date(item.created_at).toLocaleString('zh-CN')}`}>
-            {formatChangedAt(item.created_at)}
+          <span className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline" title={`最近更新：${new Date(item.updated_at || item.created_at).toLocaleString('zh-CN')}`}>
+            {formatChangedAt(item.updated_at || item.created_at)}
           </span>
           <button
             type="button"
@@ -448,7 +447,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const navigate = useNavigate()
   const { toast } = useToast()
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['ontologies'],
     queryFn: () => ontologyApi.list({ page_size: 1000 }),
   })
@@ -465,9 +464,10 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const filteredItems = useMemo(() => {
     const keyword = nameFilter.trim().toLocaleLowerCase('zh-CN')
     return [...allItems]
-      .filter(item => !keyword || item.name.toLocaleLowerCase('zh-CN').includes(keyword))
+      .filter(item => !keyword
+        || `${item.name} ${item.description ?? ''}`.toLocaleLowerCase('zh-CN').includes(keyword))
       .filter(item => !domainFilter || item.domain === domainFilter)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime())
   }, [allItems, domainFilter, nameFilter])
 
   const refresh = () => {
@@ -561,8 +561,8 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
           <input
             value={nameFilter}
             onChange={event => setNameFilter(event.target.value)}
-            placeholder="搜索本体名称"
-            aria-label="按本体名称筛选"
+            placeholder="搜索本体名称或描述"
+            aria-label="按本体名称或描述筛选"
             className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
           />
           {nameFilter && (
@@ -594,10 +594,15 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
             <X size={13} /> 清除筛选
           </button>
         )}
+        <span className="ml-auto hidden text-xs tabular-nums text-slate-400 sm:inline" aria-live="polite">
+          {nameFilter || domainFilter
+            ? `共 ${filteredItems.length} / ${allItems.length} 个本体`
+            : `共 ${allItems.length} 个本体`}
+        </span>
         <button
           type="button"
           onClick={openCreate}
-          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
         >
           <Plus size={15} /> 立即创建
         </button>
@@ -626,8 +631,15 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
             <LoadingState message="加载本体列表..." />
           </div>
         ) : isError ? (
-          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-red-100 bg-red-50 px-6 text-center text-sm text-red-600 sm:col-span-1 lg:col-span-2 xl:col-span-3">
-            本体列表加载失败，请刷新页面后重试。
+          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3" role="alert">
+            <p className="text-sm text-red-600">本体列表加载失败，请检查网络连接后重试。</p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+            >
+              重新加载
+            </button>
           </div>
         ) : filteredItems.length === 0 ? (
           <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
@@ -642,21 +654,11 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
               item={item}
               onEdit={() => setEditTarget(item)}
               onDetail={() => navigate(`/ontologies/${item.id}`)}
-              onView={() => navigate(`/ontologies/${item.id}`)}
               onChat={() => navigate(`/agent?ontology_id=${encodeURIComponent(item.id)}`)}
               onDelete={() => setDeleteTarget(item)}
             />
           ))
         )}
-      </div>
-
-      <div className="mt-5 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-600" aria-hidden="true">
-          <Network size={14} strokeWidth={1.8} />
-        </span>
-        <p className="text-xs font-medium tracking-wide text-slate-500">
-          让业务知识形成统一语言、让数据治理不再成为孤岛
-        </p>
       </div>
 
       {createOpen && (
