@@ -47,6 +47,7 @@ dependencies = [
   "jupyter-kernel-gateway==3.0.1",
   "ipykernel==6.29.5",
   "websocket-client==1.8.0",
+  "nats-py>=2.15.0",
 ]
 
 [dependency-groups]

@@ -38,8 +38,8 @@
 10. 服务器部署入口再次校验目录；旧安装如仍使用示例运行密钥，先执行不改密文
    的密钥解耦，再完成依赖探测、停止旧 backend/Celery worker、数据库迁移和
    Compose 启动；
-11. 检查 API 深度 readiness、Celery worker、PostgreSQL、Redis、Neo4j、MinIO、
-   n8n、Chromium CDP 和前端静态资源；
+11. 检查 API 深度 readiness、Celery worker、pipeline executor、PostgreSQL、
+   Redis、Neo4j、MinIO、n8n、Chromium CDP 和前端静态资源；
 12. 无论成功失败，清理 runner 上的上传压缩包。
 
 PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执行

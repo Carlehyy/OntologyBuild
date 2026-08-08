@@ -56,6 +56,12 @@ def test_config_center_default_port_avoids_platform_service_ports() -> None:
     assert DEFAULT_CONFIG_PORT == 8888
 
 
+def test_nats_is_a_required_blocking_service() -> None:
+    assert "nats" in REQUIRED_SERVICES
+    assert "nats" in AVAILABLE_SERVICES
+    assert "nats" not in OPTIONAL_SERVICES
+
+
 def test_run_starts_config_center_on_default_port(
     monkeypatch,
 ) -> None:

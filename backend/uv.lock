@@ -1214,6 +1214,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nats-py"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/f0/fc5e93f2b0dd14a202590ad9d30eda1955ea872039b5204357348d0f4b1e/nats_py-2.15.0.tar.gz", hash = "sha256:6622c547d9a7d2313d9c147d46c386188f4ec2c7b5c9f9a0438a4d1b55f54a93", size = 75995, upload-time = "2026-06-05T07:34:03.904Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/a8/b55606c7c621fb813c8ec78baf201d2c78bf6051091ec0c7ada572999e95/nats_py-2.15.0-py3-none-any.whl", hash = "sha256:9f8d36aa52a9926a88b8f1d70cf1fdce0ad387941479b500ee9ab3e51073cefd", size = 90334, upload-time = "2026-06-05T07:34:02.81Z" },
+]
+
+[[package]]
 name = "nbclient"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1329,6 +1338,7 @@ dependencies = [
     { name = "markitdown" },
     { name = "mcp" },
     { name = "minio" },
+    { name = "nats-py" },
     { name = "neo4j" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -1384,6 +1394,7 @@ requires-dist = [
     { name = "markitdown", specifier = "==0.0.1a3" },
     { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "minio", specifier = "==7.2.12" },
+    { name = "nats-py", specifier = ">=2.15.0" },
     { name = "neo4j", specifier = "==5.26.0" },
     { name = "openai", specifier = "==1.51.0" },
     { name = "openpyxl", specifier = "==3.1.5" },

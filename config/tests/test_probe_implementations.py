@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import app.probes as probes
 from app.models import ConfigProfile, default_profile
 
@@ -91,6 +93,117 @@ def test_redis_probe_authenticates_pings_and_closes(monkeypatch) -> None:
     assert message == "Redis 连接正常"
     assert seen["password"] == "redis-password"
     assert seen["closed"] is True
+
+
+class FakeNatsConnection:
+    """按 NATS 协议脚本化应答的假 socket，recv 逐段返回预设字节。"""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.sent = bytearray()
+        self.timeout = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def sendall(self, data):
+        self.sent.extend(data)
+
+    def recv(self, _size):
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+def _install_fake_nats(monkeypatch, chunks) -> dict:
+    seen = {}
+
+    def fake_create_connection(address, timeout=None):
+        seen["address"] = address
+        seen["timeout"] = timeout
+        seen["connection"] = FakeNatsConnection(chunks)
+        return seen["connection"]
+
+    monkeypatch.setattr(probes.socket, "create_connection", fake_create_connection)
+    return seen
+
+
+def test_nats_probe_pings_jetstream_without_authentication(monkeypatch) -> None:
+    seen = _install_fake_nats(
+        monkeypatch,
+        [b'INFO {"server_id":"NDTEST","jetstream":true}\r\n', b"PONG\r\n"],
+    )
+
+    message, detail = probes.probe_nats(_profile())
+
+    assert message == "NATS 连接正常"
+    assert "JetStream 已启用" in detail
+    assert seen["address"] == ("localhost", 4222)
+    assert seen["timeout"] == 3
+    assert seen["connection"].timeout == 3
+    assert bytes(seen["connection"].sent) == b'CONNECT {"verbose":false}\r\nPING\r\n'
+
+
+def test_nats_probe_sends_configured_auth_token(monkeypatch) -> None:
+    payload = default_profile().model_dump()
+    payload["nats"]["token"] = "nats-secret-token"
+    profile = ConfigProfile.model_validate(payload)
+    seen = _install_fake_nats(
+        monkeypatch,
+        [b'INFO {"jetstream":true}\r\n', b"PONG\r\n"],
+    )
+
+    message, _ = probes.probe_nats(profile)
+
+    assert message == "NATS 连接正常"
+    assert bytes(seen["connection"].sent) == (
+        b'CONNECT {"verbose":false,"auth_token":"nats-secret-token"}\r\nPING\r\n'
+    )
+
+
+def test_nats_probe_answers_auth_required_even_with_blank_token(monkeypatch) -> None:
+    seen = _install_fake_nats(
+        monkeypatch,
+        [b'INFO {"jetstream":true,"auth_required":true}\r\n', b"PONG\r\n"],
+    )
+
+    message, _ = probes.probe_nats(_profile())
+
+    assert message == "NATS 连接正常"
+    assert b'"auth_token":""' in bytes(seen["connection"].sent)
+
+
+def test_nats_probe_requires_jetstream(monkeypatch) -> None:
+    _install_fake_nats(
+        monkeypatch,
+        [b'INFO {"server_id":"NDTEST","jetstream":false}\r\n'],
+    )
+
+    with pytest.raises(RuntimeError, match="-js/--jetstream"):
+        probes.probe_nats(_profile())
+
+
+def test_nats_probe_rejects_non_nats_greeting(monkeypatch) -> None:
+    _install_fake_nats(monkeypatch, [b"HELLO\r\n"])
+
+    with pytest.raises(RuntimeError, match="INFO"):
+        probes.probe_nats(_profile())
+
+
+def test_nats_probe_rejects_non_pong_reply(monkeypatch) -> None:
+    _install_fake_nats(
+        monkeypatch,
+        [b'INFO {"jetstream":true}\r\n', b"-ERR 'Authorization Violation'\r\n"],
+    )
+
+    with pytest.raises(RuntimeError, match="PONG"):
+        probes.probe_nats(_profile())
 
 
 def test_neo4j_probe_verifies_connectivity_and_query(monkeypatch) -> None:

@@ -16,6 +16,7 @@ from .models import (
     ConfigProfile,
     MinioConfig,
     N8nConfig,
+    NatsConfig,
     Neo4jConfig,
     PlatformConfig,
     PostgresConfig,
@@ -30,6 +31,7 @@ SECRET_FIELDS: dict[str, tuple[str, str]] = {
     "platform.encryption_key": ("platform", "encryption_key"),
     "postgres.password": ("postgres", "password"),
     "redis.password": ("redis", "password"),
+    "nats.token": ("nats", "token"),
     "neo4j.password": ("neo4j", "password"),
     "minio.access_key": ("minio", "access_key"),
     "minio.secret_key": ("minio", "secret_key"),
@@ -103,6 +105,7 @@ class LocalEnvStore:
         loading_defaults = not self.exists and self.defaults_exists
         database = _parse_database_url(values.get("DATABASE_URL", ""))
         redis = _parse_redis_url(values.get("REDIS_URL", ""))
+        nats = _parse_nats_url(values.get("NATS_URL", ""))
         default_secret = (
             (lambda value: value) if loading_defaults else (lambda _value: "")
         )
@@ -185,6 +188,11 @@ class LocalEnvStore:
                     redis.get("password", ""),
                 ),
                 use_tls=redis.get("use_tls", defaults.redis.use_tls),
+            ),
+            nats=NatsConfig(
+                host=nats.get("host", defaults.nats.host),
+                port=int(nats.get("port", defaults.nats.port)),
+                token=nats.get("token", ""),
             ),
             neo4j=Neo4jConfig(
                 uri=values.get("NEO4J_URI", defaults.neo4j.uri),
@@ -329,7 +337,8 @@ class LocalEnvStore:
             old_value = existing.get(section, {}).get(key, "")
             if old_value:
                 payload[section][key] = old_value
-            else:
+            elif field != "nats.token":
+                # NATS 默认无认证，token 留空是合法配置而不是缺失凭据
                 missing.append(field)
 
         if missing:
@@ -398,6 +407,9 @@ def render_env(profile: ConfigProfile) -> str:
         f"{redis_scheme}://{redis_userinfo}@{_url_host(redis.host)}:"
         f"{redis.port}/{redis.database}"
     )
+    nats = profile.nats
+    nats_userinfo = f"{quote(nats.token, safe='')}@" if nats.token else ""
+    nats_url = f"nats://{nats_userinfo}{_url_host(nats.host)}:{nats.port}"
 
     sections: list[tuple[str, list[tuple[str, object]]]] = [
         (
@@ -442,6 +454,10 @@ def render_env(profile: ConfigProfile) -> str:
                 ("REDIS_PASSWORD", redis.password),
                 ("REDIS_URL", redis_url),
             ],
+        ),
+        (
+            "NATS 消息队列。流水线任务派发通道，需以 -js 启用 JetStream",
+            [("NATS_URL", nats_url)],
         ),
         (
             "Neo4j 图数据库",
@@ -590,6 +606,20 @@ def _parse_redis_url(value: str) -> dict[str, object]:
         "username": unquote(parsed.username or ""),
         "password": unquote(parsed.password or ""),
         "use_tls": parsed.scheme == "rediss",
+    }
+
+
+def _parse_nats_url(value: str) -> dict[str, object]:
+    if not value:
+        return {}
+    parsed = urlsplit(value)
+    if parsed.scheme != "nats":
+        return {}
+    # NATS 连接串的 userinfo 是单段 token，即 nats://<token>@host:port
+    return {
+        "host": parsed.hostname or "",
+        "port": parsed.port or 4222,
+        "token": unquote(parsed.username or ""),
     }
 
 

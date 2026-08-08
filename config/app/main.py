@@ -398,6 +398,19 @@ def service_guides() -> dict[str, dict[str, Any]]:
                 "docker inspect <redis-container>",
             ],
         },
+        "nats": {
+            "title": "启动带 JetStream 的 NATS",
+            "summary": "NATS 是流水线任务派发通道，必须以 -js 启用 JetStream；本机默认无认证。",
+            "steps": [
+                "最简单的本机启动方式是使用官方 Docker 镜像，命令见下方。",
+                "未启用 JetStream 时连接测试会明确报错，请在启动参数中加入 -js 后重启。",
+                "若服务端启用了令牌认证，请把同一个令牌填写到本页的连接令牌框。",
+            ],
+            "commands": [
+                "docker run -d --name nats -p 4222:4222 -v nats_data:/data nats:alpine -js --store_dir /data -m 8222",
+                "docker logs <nats-container>",
+            ],
+        },
         "neo4j": {
             "title": "确认 Neo4j 登录信息",
             "summary": "Neo4j 首次登录通常会要求修改初始密码，配置中心需要修改后的密码。",

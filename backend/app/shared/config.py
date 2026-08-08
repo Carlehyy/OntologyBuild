@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     # application startup validates PostgreSQL before importing the app.
     database_url: str = "sqlite:////tmp/ontoprompt.db"
     redis_url: str = "redis://localhost:6379/0"
+    # NATS JetStream 消息队列：流水线任务派发通道（PR-3 接入执行器）
+    nats_url: str = ""
+    # 流水线 executor 进程内同时执行的任务数上限；每条任务在独立线程执行，
+    # 超过上限的消息积压在 JetStream 等下一轮拉取。
+    pipeline_executor_concurrency: int = 2
+    # 流水线执行对账器的运行周期（秒）：只收口租约已过期的中断执行，
+    # 租约仍有效的长任务不受影响。
+    pipeline_run_reconcile_interval_seconds: int = 300
     secret_key: str = "dev-secret-key"
     encryption_key: str = ""
     cors_allowed_origins: str = "*"
@@ -108,8 +116,10 @@ class Settings(BaseSettings):
     # 可选 OfficeCLI 适配器。核心会话空间不依赖它；配置后才向探索 Agent 暴露
     # docx/xlsx/pptx 的结构化增删改工具，避免生产镜像隐式下载第三方二进制。
     exploration_officecli_path: str = ""
-    # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理
-    dataset_version_keep: int = 20
+    # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理。
+    # 活跃消费方只需「最新 + 前一版（审核 diff）」，被审核/媒体钉住的版本由
+    # _prune_versions 永久豁免，因此 5 已覆盖全部真实需求并给存储留足余量。
+    dataset_version_keep: int = 5
     # Immutable DatasetVersion outbox poll interval.  The worker uses database
     # claims, so multiple API replicas may poll safely.
     dataset_event_poll_seconds: int = 2
@@ -123,6 +133,9 @@ class Settings(BaseSettings):
     # inputs explicitly instead of risking process OOM; raise as deployments
     # gain memory or replace with a streaming executor.
     pipeline_max_in_memory_rows: int = 500_000
+    # 源行数达到上限该比例时提前预警（仅生产；超过上限即拒绝执行）。
+    # 留给运维拆资产或调参的窗口，避免某天突然硬失败。
+    pipeline_source_warn_ratio: float = 0.8
 
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"

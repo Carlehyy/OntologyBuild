@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -85,6 +87,43 @@ def probe_redis(profile: ConfigProfile) -> tuple[str, str]:
     finally:
         client.close()
     return "Redis 连接正常", "Celery 使用的消息通道已通过 PING 测试"
+
+
+def probe_nats(profile: ConfigProfile) -> tuple[str, str]:
+    """用裸 socket 完成 NATS 握手，避免为配置中心引入 nats.py 依赖。"""
+    config = profile.nats
+    with socket.create_connection((config.host, config.port), timeout=3) as connection:
+        connection.settimeout(3)
+        info_line = _read_nats_line(connection)
+        if not info_line.startswith("INFO "):
+            raise RuntimeError("对端不是 NATS 服务，未收到 INFO 握手")
+        try:
+            info = json.loads(info_line[len("INFO "):])
+        except ValueError as exc:
+            raise RuntimeError("NATS INFO 握手无法解析") from exc
+        if info.get("jetstream") is not True:
+            raise RuntimeError("NATS 需要以 -js/--jetstream 启动才能承载流水线任务")
+        connect_options: dict[str, object] = {"verbose": False}
+        if config.token or info.get("auth_required"):
+            connect_options["auth_token"] = config.token
+        payload = json.dumps(connect_options, separators=(",", ":"))
+        connection.sendall(f"CONNECT {payload}\r\nPING\r\n".encode("utf-8"))
+        reply = _read_nats_line(connection)
+    if reply != "PONG":
+        raise RuntimeError("NATS 没有返回 PONG，请检查连接令牌是否正确")
+    return "NATS 连接正常", "流水线任务派发通道已通过 PING 测试，JetStream 已启用"
+
+
+def _read_nats_line(connection: socket.socket) -> str:
+    buffer = bytearray()
+    while not buffer.endswith(b"\n"):
+        chunk = connection.recv(4096)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > 65536:
+            raise RuntimeError("NATS 握手响应超出预期长度")
+    return buffer.decode("utf-8", "replace").strip()
 
 
 def probe_neo4j(profile: ConfigProfile) -> tuple[str, str]:
@@ -176,6 +215,7 @@ def probe_n8n(profile: ConfigProfile) -> tuple[str, str]:
 PROBES: dict[str, Callable[[ConfigProfile], tuple[str, str]]] = {
     "postgres": probe_postgres,
     "redis": probe_redis,
+    "nats": probe_nats,
     "neo4j": probe_neo4j,
     "minio": probe_minio,
     "browser": probe_browser,
@@ -202,6 +242,7 @@ def _secret_values(profile: ConfigProfile) -> list[str]:
         profile.platform.encryption_key,
         profile.postgres.password,
         profile.redis.password,
+        profile.nats.token,
         profile.neo4j.password,
         profile.minio.access_key,
         profile.minio.secret_key,

@@ -15,8 +15,8 @@
 
 ## 配置边界
 
-生成配置前必须确认平台与端口、安全与目录，并通过 PostgreSQL、Redis、Neo4j、
-MinIO 和 n8n 的真实连通性测试。Chromium CDP 地址同样是必填启动配置，但其
+生成配置前必须确认平台与端口、安全与目录，并通过 PostgreSQL、Redis、NATS、
+Neo4j、MinIO 和 n8n 的真实连通性测试。Chromium CDP 地址同样是必填启动配置，但其
 生成前连通测试只用于提示：暂时不可达仍可生成配置并启动 API 诊断，深度
 readiness 会保持失败。生成后启动 API、Celery worker 和前端，再由“启动后
 复检”确认后端深度 readiness 及至少一个 worker 返回 PONG。任一必需依赖或
@@ -46,8 +46,15 @@ config/generated/local/.env
 
 配置中心已经内置常用的非敏感默认值：PostgreSQL 主机
 `127.0.0.1:5432`、账号 `postgres`、数据库 `openontology`，Redis
-`localhost:6379`，Neo4j `neo4j://localhost:7687`，MinIO
+`localhost:6379`，NATS `127.0.0.1:4222`（本机默认无认证，需以 `-js` 启用
+JetStream），Neo4j `neo4j://localhost:7687`，MinIO
 `localhost:9000`、账号 `admin`，以及默认的 CDP、n8n、平台端口和项目相对目录。
+
+本机启动 NATS 可执行：
+
+```bash
+docker run -d --name nats -p 4222:4222 -v nats_data:/data nats:alpine -js --store_dir /data -m 8222
+```
 
 密码和 API Key 不会提交到 Git。需要在首次打开页面时自动加载固定凭据，可复制
 `config/defaults.env.example` 为 `config/generated/local/defaults.env`，只在本机填写。
@@ -70,6 +77,12 @@ config/generated/local/.env
 
 后端启动命令会读取配置的监听地址和端口。Vite 使用严格端口，如果端口被其他程序占用会明确失败，不会悄悄切换。
 Celery worker 是运行契约的一部分；入队失败不会回退到 API 进程内线程执行。
+流水线调度任务（定时触发与手动异步触发）由独立 executor 进程经 NATS 执行；本地源码运行时另开一个终端启动：
+
+```bash
+cd backend && uv run python -m app.data_channel.pipeline_tasks.nats_executor
+```
+
 平台可用后，再进入“模型配置”页面配置需要使用的 LLM。
 
 ## 安全说明

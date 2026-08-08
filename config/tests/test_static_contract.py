@@ -56,3 +56,16 @@ def test_every_form_control_has_an_accessible_label() -> None:
 
     assert controls
     assert set(controls).issubset(labelled)
+
+
+def test_nats_section_is_wired_like_other_required_services() -> None:
+    html = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+
+    assert 'data-section="nats"' in html
+    assert 'data-nav-section="nats"' in html
+    assert 'data-test-service="nats"' in html
+    assert 'data-test-message="nats"' in html
+    assert 'data-secret="nats.token"' in html
+    assert '"nats"' in javascript
+    assert 'nats: "NATS"' in javascript

@@ -42,15 +42,15 @@
       <aside class="sidebar" aria-label="配置项目">
         <div class="sidebar-intro">
           <p class="sidebar-title">完整功能检查</p>
-          <p>五项阻塞依赖通过后即可生成；CDP 地址必填，连通性可稍后修复。</p>
+          <p>六项阻塞依赖通过后即可生成；CDP 地址必填，连通性可稍后修复。</p>
         </div>
 
         <div class="progress-summary" aria-labelledby="progress-label">
           <div class="progress-copy">
             <span id="progress-label">连通性进度</span>
-            <strong id="progress-count">0 / 5</strong>
+            <strong id="progress-count">0 / 6</strong>
           </div>
-          <progress id="test-progress" value="0" max="5">0 / 5</progress>
+          <progress id="test-progress" value="0" max="6">0 / 6</progress>
         </div>
 
         <nav class="section-nav">
@@ -64,6 +64,10 @@
           </a>
           <a href="#redis-section" data-nav-section="redis">
             <span>Redis 与 Celery</span>
+            <span class="nav-status status-idle">待测试</span>
+          </a>
+          <a href="#nats-section" data-nav-section="nats">
+            <span>NATS</span>
             <span class="nav-status status-idle">待测试</span>
           </a>
           <a href="#neo4j-section" data-nav-section="neo4j">
@@ -276,6 +280,48 @@
               <button class="primary-button test-button" type="button" data-test-service="redis">测试 Redis</button>
             </div>
             <div class="test-message" data-test-message="redis" aria-live="polite"></div>
+          </section>
+
+          <section id="nats-section" class="config-section" data-section="nats" aria-labelledby="nats-title">
+            <div class="section-heading">
+              <div>
+                <p class="section-purpose">派发流水线任务消息</p>
+                <h2 id="nats-title">NATS 消息队列</h2>
+                <p>NATS JetStream 是数据通道流水线的任务派发通道。服务必须以 -js 启用 JetStream，连通性测试会读取 INFO 握手并发送 PING。</p>
+              </div>
+              <span class="section-state status-idle" data-section-status="nats">
+                <span class="status-indicator" aria-hidden="true"></span>
+                <span>待测试</span>
+              </span>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="nats-host">服务器地址</label>
+                <input id="nats-host" data-path="nats.host" name="nats.host" type="text" value="127.0.0.1" required autocomplete="hostname">
+                <p class="field-help">本机安装时通常填 127.0.0.1。</p>
+                <p class="field-error" data-error-for="nats.host"></p>
+              </div>
+              <div class="field">
+                <label for="nats-port">端口</label>
+                <input id="nats-port" data-path="nats.port" name="nats.port" type="number" min="1" max="65535" value="4222" required inputmode="numeric">
+                <p class="field-help">NATS 默认客户端端口是 4222。</p>
+                <p class="field-error" data-error-for="nats.port"></p>
+              </div>
+              <div class="field">
+                <label for="nats-token">连接令牌，可留空</label>
+                <div class="secret-control">
+                  <input id="nats-token" data-path="nats.token" data-secret="nats.token" name="nats.token" type="password" autocomplete="new-password">
+                  <button class="text-button secret-toggle" type="button" data-toggle-secret="nats-token" aria-label="显示 NATS 令牌">显示</button>
+                </div>
+                <p class="field-help secret-help">本机 Docker 启动的 NATS 默认无认证，可留空。</p>
+                <p class="field-error" data-error-for="nats.token"></p>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button class="secondary-button help-button" type="button" data-guide="nats">我不知道如何启动 NATS</button>
+              <button class="primary-button test-button" type="button" data-test-service="nats">测试 NATS</button>
+            </div>
+            <div class="test-message" data-test-message="nats" aria-live="polite"></div>
           </section>
 
           <section id="neo4j-section" class="config-section" data-section="neo4j" aria-labelledby="neo4j-title">
@@ -578,7 +624,7 @@
               <div>
                 <p class="section-purpose">最后检查并写入本地文件</p>
                 <h2 id="finish-title">生成与启动</h2>
-                <p>生成前必须完成五项阻塞依赖测试，并填写 CDP 地址；CDP 连通性可稍后修复。大模型请在平台启动后通过“模型配置”页面按需添加。</p>
+                <p>生成前必须完成六项阻塞依赖测试，并填写 CDP 地址；CDP 连通性可稍后修复。大模型请在平台启动后通过“模型配置”页面按需添加。</p>
               </div>
               <span class="section-state status-idle" data-section-status="finish">
                 <span class="status-indicator" aria-hidden="true"></span>
@@ -594,7 +640,7 @@
               <button id="test-all" class="secondary-button large-button" type="button">测试全部必选依赖</button>
               <button id="generate-config" class="primary-button large-button" type="button" disabled>生成本地配置文件</button>
             </div>
-            <p id="generate-help" class="action-help">请先填写并通过五项阻塞依赖测试。</p>
+            <p id="generate-help" class="action-help">请先填写并通过六项阻塞依赖测试。</p>
 
             <div id="generated-result" class="generated-result" hidden>
               <div class="result-heading">
@@ -623,7 +669,7 @@
     <div id="sticky-actions" class="sticky-actions" hidden>
       <div>
         <strong id="sticky-title">还未完成连通性测试</strong>
-        <span id="sticky-copy">0 / 5 项必选测试已通过</span>
+        <span id="sticky-copy">0 / 6 项必选测试已通过</span>
       </div>
       <button id="sticky-test-all" class="secondary-button" type="button">测试必选项</button>
       <button id="sticky-generate" class="primary-button" type="button" disabled>生成配置</button>

@@ -112,6 +112,13 @@ class RedisConfig(StrictModel):
     use_tls: bool = False
 
 
+class NatsConfig(StrictModel):
+    host: str = Field(default="127.0.0.1", min_length=1, max_length=253)
+    port: int = Field(default=4222, ge=1, le=65535)
+    # 本机 Docker 启动的 NATS 默认无认证，token 可留空
+    token: str = Field(default="", min_length=0, max_length=512)
+
+
 class Neo4jConfig(StrictModel):
     uri: str = Field(default="bolt://127.0.0.1:7687", min_length=1, max_length=500)
     username: str = Field(default="neo4j", min_length=1, max_length=128)
@@ -196,6 +203,7 @@ class ConfigProfile(StrictModel):
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     postgres: PostgresConfig = Field(default_factory=PostgresConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
+    nats: NatsConfig = Field(default_factory=NatsConfig)
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
     minio: MinioConfig = Field(default_factory=MinioConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
@@ -242,6 +250,7 @@ def default_profile() -> ConfigProfile:
             password="",
         ),
         redis=RedisConfig(host="localhost", port=6379, password=""),
+        nats=NatsConfig(host="localhost", port=4222),
         neo4j=Neo4jConfig(
             uri="neo4j://localhost:7687",
             username="neo4j",

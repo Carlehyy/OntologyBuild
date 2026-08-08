@@ -4,6 +4,7 @@
   const SERVICES = [
     "postgres",
     "redis",
+    "nats",
     "neo4j",
     "minio",
     "browser",
@@ -13,6 +14,7 @@
   const SERVICE_LABELS = {
     postgres: "PostgreSQL",
     redis: "Redis",
+    nats: "NATS",
     neo4j: "Neo4j",
     minio: "MinIO",
     browser: "Chromium CDP",
@@ -30,6 +32,7 @@
     requiredServices: [
       "postgres",
       "redis",
+      "nats",
       "neo4j",
       "minio",
       "n8n",
@@ -117,6 +120,41 @@
           },
           {
             text: "使用 Homebrew 安装时，可以在 redis.conf 中查找 requirepass。",
+          },
+        ],
+      },
+    },
+    nats: {
+      title: "启动带 JetStream 的 NATS",
+      intro:
+        "NATS 是流水线任务派发通道，必须以 -js 启用 JetStream。本机 Docker 启动的 NATS 默认无认证，连接令牌可留空。",
+      warning: "未启用 JetStream 时连接测试会明确报错；启用令牌认证时，本页填写的令牌必须与服务端一致。",
+      platforms: {
+        Windows: [
+          {
+            command:
+              "docker run -d --name nats -p 4222:4222 -v nats_data:/data nats:alpine -js --store_dir /data -m 8222",
+          },
+          {
+            text: "已有容器但未加 -js 时，请先删除旧容器再用上面的命令重建。",
+          },
+        ],
+        Ubuntu: [
+          {
+            command:
+              "docker run -d --name nats -p 4222:4222 -v nats_data:/data nats:alpine -js --store_dir /data -m 8222",
+          },
+          {
+            command: "docker logs nats",
+          },
+        ],
+        macOS: [
+          {
+            command:
+              "docker run -d --name nats -p 4222:4222 -v nats_data:/data nats:alpine -js --store_dir /data -m 8222",
+          },
+          {
+            text: "使用 Homebrew 安装时，请在启动参数中加入 -js 或 --jetstream。",
           },
         ],
       },
@@ -783,6 +821,7 @@
       ["platform.frontend_port", "前端端口", "platform.frontend_host"],
       ["postgres.port", "PostgreSQL 端口", "postgres.host"],
       ["redis.port", "Redis 端口", "redis.host"],
+      ["nats.port", "NATS 端口", "nats.host"],
     ];
     const used = new Map();
     let valid = true;

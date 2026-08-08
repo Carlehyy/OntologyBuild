@@ -76,6 +76,7 @@ Hub SQLite 完整备份、停写、全量解密校验和可恢复迁移机制就
 |---|---|---|
 | PostgreSQL | 平台主数据库、Alembic、发布与审计事实 | 启动/readiness 失败；不切平台 SQLite |
 | Redis + Celery worker | durable 入队、异步调度和后台执行 | readiness/入队失败；异步路径不自动改在 API 线程执行，显式同步 API 保持原契约 |
+| NATS + pipeline_executor | 流水线调度任务（定时触发与手动异步触发）的派发与执行 | 未配置 `NATS_URL` 时派发方报错、手动异步触发返回 503；executor 不健康时部署失败 |
 | Neo4j | 图查询、分析和可重建发布投影 | 图接口返回明确 503，发布/投影 fail closed；不切 NetworkX/SQL 图 |
 | MinIO | 新文件与对象的权威对象存储 | 写入失败；不切本地对象目录 |
 | n8n | 数据管家工作流执行 | 启动/readiness 失败，不按可选增强跳过 |
@@ -105,6 +106,16 @@ n8n 在非测试环境中只有一个配置权威：启动环境中的 `N8N_API_
 Hub、Sentinel、数据调度器和 MCP 会话。任一阻塞型依赖或投影修复失败都不会
 留下后台 worker。Chromium CDP 同样会在此时探测，但只记录提示并允许 API
 进程提供诊断；`/health/ready` 在 CDP 恢复前仍返回 503。
+
+数据调度器只在 API 进程内做「派发」：流水线定时触发与手动异步触发经
+NATS JetStream 送达到独立 `pipeline_executor` 进程执行，不再占用 API 进程
+的 GIL、内存与数据库连接；手动 `sync=true` 保持 API 进程内同步执行。NATS
+只负责送达，并发正确性由执行引擎的数据库原子租约兜底。executor 被打断
+（部署、宕机）时，在途任务表现为执行中断：其数据库租约最长 6 小时过期，
+API 进程内的对账器（默认每 5 分钟，
+`PIPELINE_RUN_RECONCILE_INTERVAL_SECONDS`）随后把过期中断的任务与运行
+记录收口为 failed。executor 并发度由 `PIPELINE_EXECUTOR_CONCURRENCY`
+（默认 2）控制。
 CDP 配置只填写服务根地址（例如 `http://browser:9222`）；平台会自行请求
 `/json/version`。带该 discovery 路径、查询参数、fragment 或 URL 用户信息的
 地址会在配置阶段被拒绝，避免配置校验通过后实际探测到重复路径。

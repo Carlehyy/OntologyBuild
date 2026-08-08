@@ -209,6 +209,15 @@ check_action_worker() {
     celery -A app.tasks.celery_app:celery_app inspect ping --timeout=5 \
     >/dev/null
 }
+check_pipeline_executor() {
+  # executor 没有进程内 ping 接口，以容器健康检查（心跳文件 mtime）为准
+  local container_id health
+  container_id="$(compose ps -q pipeline_executor 2>/dev/null || true)"
+  [ -n "$container_id" ] || return 1
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+    "$container_id" 2>/dev/null || true)"
+  [ "$health" = "healthy" ]
+}
 start_required_dependency_services() {
   # CDP must be configured and is checked by deep readiness, but an unhealthy
   # browser must not prevent the API process from starting for diagnostics.
@@ -220,11 +229,11 @@ start_required_dependency_services() {
   if compose up --help 2>&1 | grep -q -- '--wait'; then
     compose up -d --wait \
       --wait-timeout "${DEPENDENCY_WAIT_TIMEOUT:-180}" \
-      db redis neo4j minio
+      db redis neo4j minio nats
   else
     # Legacy Compose has no --wait. The mandatory connectivity probe below is
     # retried and remains the authoritative availability gate.
-    compose up -d db redis neo4j minio
+    compose up -d db redis neo4j minio nats
   fi
 }
 if [ "${SKIP_GIT:-0}" != "1" ]; then
@@ -1149,10 +1158,11 @@ if ! run_with_retry compose up -d --remove-orphans; then
   log "restore the pre-deploy database/files backup before rolling back the application"
   exit 1
 fi
-log "waiting for backend, action worker and frontend readiness: ${READINESS_URL}"
+log "waiting for backend, action worker, pipeline executor and frontend readiness: ${READINESS_URL}"
 for i in $(seq 1 60); do
   if curl -fsS --connect-timeout 5 --max-time 10 "$READINESS_URL" >/dev/null \
       && check_action_worker \
+      && check_pipeline_executor \
       && check_frontend_assets; then
     log "deployment succeeded"
     compose ps
@@ -1163,7 +1173,7 @@ for i in $(seq 1 60); do
 done
 log "deployment health check failed"
 compose ps || true
-redact_compose_logs backend browser frontend || true
+redact_compose_logs backend browser frontend pipeline_executor || true
 stop_new_runtime_after_failed_deploy
 log "migration reached head; restore the pre-deploy backup before rolling back the application"
 exit 1

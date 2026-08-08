@@ -16,6 +16,7 @@ def complete_profile() -> ConfigProfile:
     payload["postgres"]["password"] = "Pg@pass:word/#%"
     payload["redis"]["username"] = "ontology"
     payload["redis"]["password"] = "Redis@pass:word/#%"
+    payload["nats"]["token"] = "Nats@token:word/#%"
     payload["neo4j"]["password"] = "Neo4j@pass:word/#%"
     payload["minio"]["access_key"] = "ontology-access"
     payload["minio"]["secret_key"] = "Minio@pass:word/#%"
@@ -41,6 +42,9 @@ def test_env_round_trip_keeps_complete_mode_and_special_credentials(
     assert parsed["N8N_API_KEY"] == "n8n-local-key"
     assert parsed["REDIS_PASSWORD"] == "Redis@pass:word/#%"
     assert parsed["REDIS_PASSWORD"] not in parsed["REDIS_URL"]
+    assert parsed["NATS_URL"].startswith("nats://")
+    assert "Nats@token:word" not in parsed["NATS_URL"]
+    assert "Nats%40token%3Aword%2F%23%25" in parsed["NATS_URL"]
     assert parsed["LOCAL_CONFIG_MANAGED"] == "true"
     assert parsed["UPLOADS_DIR"] == "./runtime/uploads"
     assert "sqlite" not in parsed["DATABASE_URL"].lower()
@@ -122,6 +126,47 @@ def test_missing_required_external_secret_fails_closed(tmp_path: Path) -> None:
     assert "postgres.password" in message
     assert "redis.password" in message
     assert "n8n.api_key" in message
+    # NATS token 非必需，空 token 不应被视为缺失凭据
+    assert "nats.token" not in message
+
+
+def test_nats_url_rendered_without_token_and_with_ipv6_host(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / "generated" / ".env"
+    store = LocalEnvStore(env_path)
+    payload = complete_profile().model_dump()
+    payload["nats"]["token"] = ""
+    payload["nats"]["host"] = "::1"
+    store.write(ConfigProfile.model_validate(payload))
+
+    parsed = dotenv_values(env_path, interpolate=False)
+    assert parsed["NATS_URL"] == "nats://[::1]:4222"
+    assert "@" not in parsed["NATS_URL"]
+    loaded = store.load_profile()
+    assert loaded.nats.host == "::1"
+    assert loaded.nats.port == 4222
+    assert loaded.nats.token == ""
+
+
+def test_nats_probe_allows_blank_token_and_preserves_saved_one(
+    tmp_path: Path,
+) -> None:
+    store = LocalEnvStore(tmp_path / ".env")
+    profile = ConfigProfile.model_validate(default_profile().model_dump())
+
+    resolved = store.resolve_service_secrets(profile, "nats")
+    assert resolved.nats.token == ""
+
+    original = complete_profile()
+    store.write(original)
+    public, present, warning = store.public_profile()
+    assert warning is None
+    assert public.nats.token == ""
+    assert present["nats.token"] is True
+
+    resolved = store.resolve_service_secrets(public, "nats")
+    assert resolved.nats.token == original.nats.token
 
 
 def test_individual_probe_only_requires_its_own_credentials(
@@ -161,6 +206,7 @@ def test_ignored_local_defaults_are_loaded_and_secrets_stay_masked(
         "LOCAL_POSTGRES_PASSWORD=postgres-local-secret\n"
         "LOCAL_REDIS_HOST=localhost\n"
         "LOCAL_REDIS_PASSWORD=redis-local-secret\n"
+        "NATS_URL=nats://localhost:4222\n"
         "NEO4J_URI=neo4j://localhost:7687\n"
         "NEO4J_USER=neo4j\n"
         "NEO4J_PASSWORD=neo4j-local-secret\n"
@@ -184,6 +230,10 @@ def test_ignored_local_defaults_are_loaded_and_secrets_stay_masked(
     assert public.postgres.username == "postgres"
     assert public.postgres.password == ""
     assert public.redis.host == "localhost"
+    assert public.nats.host == "localhost"
+    assert public.nats.port == 4222
+    assert public.nats.token == ""
+    assert present["nats.token"] is False
     assert public.neo4j.uri == "neo4j://localhost:7687"
     assert public.minio.endpoint == "localhost:9000"
     assert public.minio.access_key == ""

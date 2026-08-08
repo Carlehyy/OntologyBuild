@@ -8,6 +8,7 @@ from app.models import (
     BrowserConfig,
     ConfigProfile,
     MinioConfig,
+    NatsConfig,
     PlatformConfig,
     default_profile,
 )
@@ -28,9 +29,28 @@ def test_default_profile_generates_stable_security_material() -> None:
     assert profile.postgres.database == "openontology"
     assert profile.postgres.username == "postgres"
     assert profile.redis.host == "localhost"
+    assert profile.nats.host == "localhost"
+    assert profile.nats.port == 4222
+    assert profile.nats.token == ""
     assert profile.neo4j.uri == "neo4j://localhost:7687"
     assert profile.minio.endpoint == "localhost:9000"
     assert profile.minio.access_key == "admin"
+
+
+def test_nats_config_validates_port_and_token_bounds() -> None:
+    assert NatsConfig().host == "127.0.0.1"
+    assert NatsConfig().port == 4222
+    assert NatsConfig().token == ""
+    assert NatsConfig(port=65535).port == 65535
+
+    with pytest.raises(ValidationError):
+        NatsConfig(port=0)
+    with pytest.raises(ValidationError):
+        NatsConfig(port=65536)
+    with pytest.raises(ValidationError):
+        NatsConfig(host="")
+    with pytest.raises(ValidationError):
+        NatsConfig(token="x" * 513)
 
 
 @pytest.mark.parametrize(

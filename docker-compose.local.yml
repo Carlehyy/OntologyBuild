@@ -25,6 +25,17 @@ services:
       timeout: 5s
       retries: 5
 
+  nats:
+    image: nats:alpine
+    command: ["-js", "--store_dir", "/data", "-m", "8222"]
+    ports: ["4222:4222"]
+    volumes: [nats_data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   neo4j:
     image: neo4j:5.20-community
     ports:
@@ -106,10 +117,15 @@ services:
       STEWARD_INTERNAL_PROXY_BASE_URL: http://backend:8000/api-hub/internal/interfaces
       PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
       PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
+      # 流水线任务派发通道，仅 compose 内网可达；宿主机源码运行时使用
+      # config/generated/local/.env 中的 NATS_URL（经 4222 宿主端口映射）。
+      NATS_URL: nats://nats:4222
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      nats:
         condition: service_healthy
       neo4j:
         condition: service_healthy
@@ -145,6 +161,35 @@ services:
     volumes: [./backend:/app, ./uploads:/uploads]
     command: celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 
+  # 流水线调度/手动异步触发的执行者：经 NATS JetStream 消费，与 Web 进程隔离。
+  pipeline_executor:
+    build: ./backend
+    env_file: .env
+    environment:
+      STEWARD_BROWSER_CDP_URL: http://browser:9222
+      STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
+      STEWARD_INTERNAL_PROXY_BASE_URL: http://backend:8000/api-hub/internal/interfaces
+      # executor 会执行整条流水线（含 python 脚本引擎），需要内核网关地址
+      PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
+      PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
+      NATS_URL: nats://nats:4222
+    depends_on:
+      db:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes: [./backend:/app, ./uploads:/uploads]
+    command: python -m app.data_channel.pipeline_tasks.nats_executor
+    healthcheck:
+      # executor 没有进程内 ping 接口；主循环每 5 秒刷新心跳文件 mtime。
+      test: ["CMD", "python", "-c", "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/nats_executor.heartbeat')<30 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
   frontend:
     build: ./frontend
     ports: ["5173:5173"]
@@ -158,3 +203,4 @@ volumes:
   pg_data:
   neo4j_data:
   minio_data:
+  nats_data:
