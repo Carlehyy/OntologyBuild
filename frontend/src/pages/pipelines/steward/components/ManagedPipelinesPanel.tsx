@@ -192,7 +192,7 @@ function RecordCard({ record: r, expanded, onToggle, n8nApiUrl, onOpenWizard }: 
     return () => window.clearTimeout(timer)
   }, [r.pipelineStatus, r.updatedAt])
 
-  const n8nWebUrl = n8nApiUrl ? n8nApiUrl.replace(/\/api\/.*$/, '') : ''
+  const n8nWebUrl = n8nApiUrl ? n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '') : ''
   const canJump = !!(n8nWebUrl && r.n8nWorkflowId)
 
   return (

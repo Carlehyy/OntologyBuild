@@ -487,7 +487,7 @@ export default function PipelineListPage() {
                               const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
                               const workflowId = wfId?.n8n_workflow_id as string | undefined
                               if (workflowId && n8nApiUrl) {
-                                const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '')
+                                const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
                                 window.open(`${webUrl}/workflow/${workflowId}`, '_blank')
                               }
                             } else {
