@@ -95,6 +95,17 @@ RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的�
 开始开发前请先阅读 [AGENTS.md](./AGENTS.md)（仓库级强制准则，含分支与 PR
 规则）。所有文档入口和事实源见 [docs/README.md](./docs/README.md)。
 
+### 日常开发流程
+
+1. 本地基于 `nano-ontoprompt` 分支创建新的 worktree 分支，并行开发若干功能，
+   每个功能在独立 worktree 中进行；
+2. 功能开发完成后，先合入本地 `nano-ontoprompt` 分支，有冲突就解决冲突；
+3. 推送至 GitHub 远程 `nano-ontoprompt` 分支，触发 GitHub Actions 验证并
+   自动部署到目标云服务器；
+4. Actions 自动部署成功后，通过云服务器访问环境，查看最新功能效果；
+5. 每次推送后，还需在另一台电脑手动拉取最新代码：先在 `config/` 配置中心
+   填写配置信息并通过连通性检查，再按上文「源码开发」分别启动后端与前端。
+
 ### 三分钟定位
 
 | 想了解 | 从这里开始 |
