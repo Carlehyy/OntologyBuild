@@ -31,6 +31,10 @@ _RUNNERS: dict[str, Callable] = {}
 # 内置引擎：惰性 import，避免 steward ↔ pipeline_run 的环形依赖
 _BUILTIN: dict[str, tuple[str, str]] = {
     "n8n": ("app.data_channel.steward.runner", "run_n8n_pipeline"),
+    "python": (
+        "app.data_channel.pipelines.python_engine.runner",
+        "run_python_pipeline",
+    ),
 }
 
 # 画布引擎的别名：definition.engine 为这些值时走 pipeline_run_task 内置路径

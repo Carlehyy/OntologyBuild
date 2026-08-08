@@ -25,6 +25,11 @@ def is_n8n_pipeline(pipeline: Pipeline) -> bool:
     return (pipeline.definition or {}).get("engine") == "n8n"
 
 
+def is_python_pipeline(pipeline: Pipeline) -> bool:
+    """Return whether a pipeline is a user-authored Python script pipeline."""
+    return (pipeline.definition or {}).get("engine") == "python"
+
+
 def column_definitions_hash(definitions: list | None) -> str:
     """Canonical contract fingerprint used by publish attestations."""
     from app.data_channel.datasets.lake_gate import normalize_definitions
@@ -215,6 +220,24 @@ def validate_pipeline_definition(
                     "severity": "error",
                     "message": str(exc),
                 })
+        return ValidateResult(
+            valid=len(errors) == 0,
+            errors=errors,
+            warnings=warnings,
+        )
+
+    # Python 脚本流水线：不落入画布 DAG 校验，只要求已保存脚本。
+    if is_python_pipeline(pipeline):
+        script = ((definition or {}).get("python") or {}).get("script") or ""
+        if not script.strip():
+            errors.append({
+                "node_id": "",
+                "severity": "error",
+                "message": (
+                    "Python 脚本流水线尚未保存脚本，"
+                    "请到脚本编辑页编写并保存脚本。"
+                ),
+            })
         return ValidateResult(
             valid=len(errors) == 0,
             errors=errors,
@@ -804,7 +827,7 @@ def validate_column_definitions(
         else:
             pipeline.validation_attestation = {
                 "version": 1,
-                "engine": "canvas",
+                "engine": (pipeline.definition or {}).get("engine") or "canvas",
                 "column_definitions_hash": column_definitions_hash(
                     body.column_definitions
                 ),

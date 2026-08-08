@@ -84,15 +84,17 @@ def list_pipelines(
         )
     if domain:
         query = query.filter(Pipeline.domain == domain)
-    if engine in {"n8n", "canvas"}:
+    if engine in {"n8n", "canvas", "python"}:
         engine_value = Pipeline.definition["engine"].as_string()
         if engine == "n8n":
             query = query.filter(engine_value == "n8n")
+        elif engine == "python":
+            query = query.filter(engine_value == "python")
         else:
             query = query.filter(or_(
                 Pipeline.definition.is_(None),
                 engine_value.is_(None),
-                engine_value != "n8n",
+                engine_value.notin_(["n8n", "python"]),
             ))
     if enabled is not None:
         query = query.filter(Pipeline.enabled.is_(enabled))
@@ -226,6 +228,18 @@ def update_pipeline(
                 f"不可修改字段：{', '.join(blocked)}。",
             )
 
+    # Python 脚本流水线的脚本只经脚本保存端点写入（该端点会重新执行并校验
+    # 输出格式）；通用 update 不接受 definition 变更，绕开格式门禁。
+    if (
+        (pipeline.definition or {}).get("engine") == "python"
+        and "definition" in update_data
+    ):
+        raise HTTPException(
+            400,
+            "该流水线是 Python 脚本流水线：脚本请在脚本编辑页修改并保存"
+            "（保存会重新执行并校验输出格式）。",
+        )
+
     if "column_definitions" in update_data:
         from app.data_channel.datasets.lake_gate import (
             normalize_definitions,
@@ -340,6 +354,25 @@ def delete_pipeline(
             steward_service.archive(db, record, client)
         except steward_service.StewardError as exc:
             raise HTTPException(400, str(exc)) from exc
+        return {"status": "archived", "id": pipeline_id}
+
+    # Python 脚本流水线与 n8n 同为「归档」语义：保留发布版本与运行记录的
+    # 审计链，只是没有外部资源需要停用；被任务池/同步链引用时拒绝。
+    if (pipeline.definition or {}).get("engine") == "python":
+        references = pipeline_task_refs_fn(db, pipeline_id)
+        if references:
+            names = "、".join(task.name for task in references[:3])
+            suffix = "…" if len(references) > 3 else ""
+            raise HTTPException(
+                400,
+                f"流水线已被 {len(references)} 个调度任务引用"
+                f"（{names}{suffix}），请先在数据任务池删除或改绑这些任务。",
+            )
+        reject_sync_chain_refs_fn(db, pipeline_id, action="归档")
+        pipeline.status = "archived"
+        pipeline.enabled = False
+        pipeline.updated_at = datetime.now(timezone.utc)
+        db.commit()
         return {"status": "archived", "id": pipeline_id}
 
     references = pipeline_task_refs_fn(db, pipeline_id)

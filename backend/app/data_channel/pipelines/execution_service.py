@@ -368,6 +368,45 @@ def dry_run_pipeline(
                 "meta": {},
                 "multi_source": False,
             }]
+        elif (pipeline.definition or {}).get("engine") == "python":
+            from app.data_channel.pipelines.python_engine.client import (
+                PythonEngineError,
+                execute_script,
+            )
+
+            script = (
+                ((pipeline.definition or {}).get("python") or {}).get("script")
+                or ""
+            )
+            if not script.strip():
+                raise PythonEngineError(
+                    "该 Python 脚本流水线尚未保存脚本，无法试运行。")
+            execution = execute_script(
+                script,
+                timeout=settings.python_script_timeout_seconds,
+            )
+            if execution.error:
+                raise PythonEngineError(execution.error)
+            rows = execution.rows
+            engine_meta = {
+                "kernel_id": execution.kernel_id,
+                "duration_ms": execution.duration_ms,
+            }
+            outputs = [{
+                "source": {
+                    "dataset_id": None,
+                    "filename": pipeline.name,
+                    "route": "A",
+                    "kind": "python",
+                },
+                "table_name": None,
+                "rows": rows,
+                "rows_in": len(rows),
+                "rows_out": len(rows),
+                "route": "A",
+                "meta": {},
+                "multi_source": False,
+            }]
         else:
             from app.tasks.v2.pipeline_run import collect_pipeline_output
 

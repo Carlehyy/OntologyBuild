@@ -18,10 +18,14 @@ from app.data_channel.pipelines.contracts import (
     PipelineUpdate,
     PreviewStepBody,
     PublishBody,
+    ScriptBody,
     ValidateDefinitionsBody,
     ValidateDefinitionsError,
     ValidateDefinitionsResult,
     ValidateResult,
+)
+from app.data_channel.pipelines.python_engine import (
+    service as python_engine_service,
 )
 from app.data_channel.pipelines.dependency_service import (
     reject_if_sync_chain_refs as _reject_if_sync_chain_refs,
@@ -425,6 +429,41 @@ def commit_dry_run(pipeline_id: str, dry_run_id: str):
     试执行只生成预览，不具备资产写入权限；数据任务池是流水线入湖的唯一入口。
     """
     return execution_service.reject_dry_run_commit()
+
+
+# ── Python 脚本引擎 ───────────────────────────────────────────────
+
+@router.post("/{pipeline_id}/script/execute")
+def execute_pipeline_script(
+    pipeline_id: str,
+    body: ScriptBody,
+    db: Session = Depends(get_db),
+):
+    """执行 Python 脚本（不落库）：真实在内核执行编辑器中的当前内容。
+
+    返回执行结果与平台行格式（list[dict]）校验结论，供脚本编辑页展示；
+    脚本级失败以 ok=false + traceback 承载，网关类故障返回 502。
+    """
+    return python_engine_service.execute_pipeline_script(pipeline_id, body, db)
+
+
+@router.put("/{pipeline_id}/script")
+def save_pipeline_script(
+    pipeline_id: str,
+    body: ScriptBody,
+    db: Session = Depends(get_db),
+):
+    """保存 Python 脚本：服务端重新执行并复验输出格式，通过才落库。
+
+    已发布流水线脚本封版（409）。保存成功会使既有发布校验凭证失效，
+    发布前必须重新执行预览并校验字段定义。
+    """
+    return python_engine_service.save_pipeline_script(
+        pipeline_id,
+        body,
+        db,
+        format_pipeline_fn=_format_pipeline,
+    )
 
 
 @router.post("/preview-step")

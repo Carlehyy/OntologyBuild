@@ -40,6 +40,19 @@ npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
+Python 脚本流水线（可选能力）还需要一个 Jupyter Kernel Gateway 执行网关，
+Windows 原生可跑、无需 Docker：
+
+```bash
+uv run --directory backend jupyter kernelgateway --KernelGatewayApp.port=8088
+```
+
+并在启动环境中设置 `PYTHON_KERNEL_GATEWAY_URL=http://localhost:8088`（令牌可
+留空）。不启动网关不影响其余开发：仅脚本执行/保存会返回明确的未配置错误。
+内核直接使用 backend 依赖环境，脚本可用 requests/pandas 等已装库。Compose
+本地起栈（docker-compose.local.yml）时该网关由 `python_kernel_gateway` 服务
+自动提供，无需手工启动。
+
 随后执行配置中心的“启动后复检”，确认后端深度 readiness、前端以及至少一个
 Celery worker PONG。复检未通过时平台不算启动完成。
 

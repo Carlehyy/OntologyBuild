@@ -225,6 +225,21 @@ export default function PipelineBuilderPage() {
       </div>
     )
   }
+  // Python 脚本流水线：没有画布 DSL，脚本在专属编辑页维护
+  if ((pipeline.definition as { engine?: string } | null)?.engine === 'python') {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-16 text-center">
+        <p className="text-sm font-medium text-gray-700">「{pipeline.name}」是 Python 脚本流水线</p>
+        <p className="text-xs text-gray-400">它没有画布节点，取数逻辑在脚本编辑页用 Python 编写；发布在编辑向导完成，启用由流水线列表开关控制</p>
+        <button
+          onClick={() => navigate(`/data/pipelines/script/${pipeline.id}`)}
+          className="mt-1 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
+        >
+          前往脚本编辑页
+        </button>
+      </div>
+    )
+  }
 
   return (
     <ReactFlowProvider>

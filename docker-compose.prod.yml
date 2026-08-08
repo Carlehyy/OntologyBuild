@@ -75,6 +75,17 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # Python 脚本流水线的执行网关（Jupyter Kernel Gateway）。用户脚本在其内核
+  # 中执行，因此刻意不挂 env_file、不注入任何平台凭据环境变量，也不暴露
+  # 宿主机端口——仅 backend / celery_worker 经 compose 内网访问。
+  python_kernel_gateway:
+    build:
+      context: ./backend
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
+    command: jupyter kernelgateway --KernelGatewayApp.ip=0.0.0.0 --KernelGatewayApp.port=8088 --KernelGatewayApp.auth_token=${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -115,6 +126,8 @@ services:
       PIPELINE_FILE_GATEWAY_BASE_URL: ${PIPELINE_FILE_GATEWAY_BASE_URL:-http://backend:8000/api/v2/file-transfer}
       PIPELINE_FILE_PUBLIC_APP_BASE_URL: ${PIPELINE_FILE_PUBLIC_APP_BASE_URL:-http://localhost:5173}
       PIPELINE_FILE_PUBLIC_API_BASE_URL: ${PIPELINE_FILE_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
+      PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
     depends_on:
       db:
         condition: service_healthy
@@ -171,6 +184,8 @@ services:
       UPLOADS_DIR: ${UPLOADS_DIR:-/uploads}
       PIPELINE_FILE_PUBLIC_APP_BASE_URL: ${PIPELINE_FILE_PUBLIC_APP_BASE_URL:-http://localhost:5173}
       PIPELINE_FILE_PUBLIC_API_BASE_URL: ${PIPELINE_FILE_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
+      PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
     depends_on:
       backend:
         condition: service_healthy

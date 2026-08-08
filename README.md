@@ -87,7 +87,7 @@ RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的�
 - 后端：FastAPI、Python 3.12、SQLAlchemy、Alembic、Celery；
 - 前端：React、TypeScript、Vite、Tailwind CSS；
 - 数据与中间件：PostgreSQL、Redis、Neo4j、MinIO；
-- 工作流与浏览器：n8n、Chromium CDP；
+- 工作流与浏览器：n8n、Chromium CDP；Python 脚本流水线执行：Jupyter Kernel Gateway（可选）；
 - 交付：Docker Compose、GitHub Actions。
 
 ## 开发指南

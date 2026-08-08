@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   X, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronLeft, ChevronRight,
   KeyRound, Eye, Save, Rocket, Info, Lock, Sparkles, Table2, GitBranch, ShieldCheck,
+  FileCode2,
 } from 'lucide-react'
 import pipelinesApi, { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult, DryRunRowsPage, ColumnDefinition, ValidateDefinitionsResult } from '@/api/v2/pipelines'
@@ -49,6 +50,7 @@ interface Props {
 export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props) {
   const isPublished = pipeline.status === 'published'
   const isN8n = (pipeline.definition as { engine?: string } | null)?.engine === 'n8n'
+  const isPython = (pipeline.definition as { engine?: string } | null)?.engine === 'python'
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
 
   // ── 阶段 1: 流水线信息 ──
@@ -325,6 +327,10 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               {isN8n ? (
                 <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700">
                   <Sparkles size={10} /> n8n流水线
+                </span>
+              ) : isPython ? (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">
+                  <FileCode2 size={10} /> Python 脚本
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] font-normal text-blue-600">

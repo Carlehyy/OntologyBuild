@@ -76,6 +76,11 @@ class PublishBody(BaseModel):
     enable: bool = False
 
 
+class ScriptBody(BaseModel):
+    """Python 脚本流水线的执行/保存请求体。"""
+    script: str
+
+
 class EnabledBody(BaseModel):
     enabled: bool
 

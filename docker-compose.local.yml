@@ -74,6 +74,14 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # Python 脚本流水线的执行网关（Jupyter Kernel Gateway）。用户脚本在其内核
+  # 中执行，因此刻意不挂 env_file、不注入任何平台凭据环境变量，也不暴露
+  # 宿主机端口——仅 backend / celery_worker 经 compose 内网访问。
+  python_kernel_gateway:
+    build: ./backend
+    command: jupyter kernelgateway --KernelGatewayApp.ip=0.0.0.0 --KernelGatewayApp.port=8088 --KernelGatewayApp.auth_token=${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
+    restart: unless-stopped
+
   migrate:
     build: ./backend
     env_file: .env
@@ -96,6 +104,8 @@ services:
       STEWARD_BROWSER_REAPER_INTERVAL_SECONDS: ${STEWARD_BROWSER_REAPER_INTERVAL_SECONDS:-30}
       STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
       STEWARD_INTERNAL_PROXY_BASE_URL: http://backend:8000/api-hub/internal/interfaces
+      PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
+      PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
     depends_on:
       db:
         condition: service_healthy
@@ -118,6 +128,9 @@ services:
   celery_worker:
     build: ./backend
     env_file: .env
+    environment:
+      PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
+      PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
     depends_on:
       db:
         condition: service_healthy

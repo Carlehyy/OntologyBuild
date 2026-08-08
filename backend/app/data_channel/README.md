@@ -9,7 +9,10 @@ data_channel/
 ├── access.py          数据集/成品跨目录访问守卫
 ├── connections/       SQL、REST、Mongo、文件与 AI-HOT 连接/采集适配
 ├── datasets/          数据集目录、版本、导入、编辑、共享与版本事件
-├── pipelines/         定义、DAG、依赖、校验/发布、执行与管理
+├── pipelines/         定义、DAG、依赖、校验/发布、执行与管理；采集引擎注册表
+│                      （engine_registry.py：canvas/n8n/python）与外部引擎共用
+│                      入湖骨架（external_runner.py），python_engine/ 为 Jupyter
+│                      Kernel Gateway 脚本引擎（client/service/runner）
 ├── pipeline_tasks/    调度任务契约、候选/统计/历史、CRUD、触发与入湖执行
 ├── curated/           成品目录、版本读取、审核、导出与安全删除
 ├── sync_tasks/        定时/增量同步、调度和版本事件消费

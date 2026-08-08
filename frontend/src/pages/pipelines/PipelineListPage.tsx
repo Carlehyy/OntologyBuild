@@ -3,10 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, ListChecks, Sparkles, ExternalLink,
-  AlertCircle,
+  AlertCircle, FileCode2,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
+import { getPipelineEngine } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
 import type { StewardStatus } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -35,7 +36,11 @@ const RUN_STATUS_META: Record<string, { icon: React.ReactNode; label: string; co
 }
 
 function isN8nPipeline(pl: Pipeline): boolean {
-  return (pl.definition as { engine?: string } | null)?.engine === 'n8n'
+  return getPipelineEngine(pl) === 'n8n'
+}
+
+function isPythonPipeline(pl: Pipeline): boolean {
+  return getPipelineEngine(pl) === 'python'
 }
 
 function mergePipeline(current: Pipeline, updated: Pipeline): Pipeline {
@@ -165,7 +170,7 @@ export default function PipelineListPage() {
     if (keyword && !pl.name.toLowerCase().includes(keyword) && !pl.id.toLowerCase().includes(keyword)) {
       return false
     }
-    if (filterSource && (filterSource === 'n8n') !== isN8nPipeline(pl)) return false
+    if (filterSource && getPipelineEngine(pl) !== filterSource) return false
     if (filterStatus && normStatus(pl.status) !== filterStatus) return false
     if (filterEnabled) {
       const enabled = pl.enabled ?? true
@@ -248,7 +253,7 @@ export default function PipelineListPage() {
       setTotal(value => Math.max(0, value - 1))
       toast({
         tone: 'success',
-        title: isN8nPipeline(target) ? '流水线已归档' : '流水线已删除',
+        title: isN8nPipeline(target) || isPythonPipeline(target) ? '流水线已归档' : '流水线已删除',
         description: `「${target.name}」已从当前列表移除。`,
       })
     } catch (e: unknown) {
@@ -257,7 +262,7 @@ export default function PipelineListPage() {
       setDeleteTarget(null)
       toast({
         tone: 'error',
-        title: isN8nPipeline(target) ? '流水线归档失败' : '流水线删除失败',
+        title: isN8nPipeline(target) || isPythonPipeline(target) ? '流水线归档失败' : '流水线删除失败',
         description: err?.detail || err?.message || '请稍后重试。',
       })
     } finally {
@@ -297,8 +302,9 @@ export default function PipelineListPage() {
           className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
         >
           <option value="">全部来源</option>
-          <option value="canvas">系统自定义</option>
           <option value="n8n">n8n 流水线</option>
+          <option value="python">Python 脚本</option>
+          <option value="canvas">系统自定义</option>
         </select>
         <select
           value={filterStatus}
@@ -376,6 +382,7 @@ export default function PipelineListPage() {
                 const curatedCount = pl.target_curated_ids?.length ?? 0
                 const taskCount = pl.task_count ?? 0
                 const n8n = isN8nPipeline(pl)
+                const python = isPythonPipeline(pl)
                 const enabled = pl.enabled ?? true
                 const enableLockReason = taskCount > 0
                   ? `流水线「${pl.name}」已被 ${taskCount} 个数据任务关联。为避免影响任务调度，请先在数据任务池删除或改绑关联任务，解除关联后再更改启用状态。`
@@ -398,6 +405,11 @@ export default function PipelineListPage() {
                         <span className="inline-flex whitespace-nowrap items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700"
                           title="由数据管家托管的 n8n 流水线：编排在数据管家，发布在编辑向导，启用由本列表开关控制">
                           <Sparkles size={10} /> n8n 流水线
+                        </span>
+                      ) : python ? (
+                        <span className="inline-flex whitespace-nowrap items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700"
+                          title="Python 脚本流水线：在脚本编辑页编写取数脚本，输出 list[dict] 行数据入湖">
+                          <FileCode2 size={10} /> Python 脚本
                         </span>
                       ) : (
                         <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
@@ -490,12 +502,14 @@ export default function PipelineListPage() {
                                 const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
                                 window.open(`${webUrl}/workflow/${workflowId}`, '_blank')
                               }
+                            } else if (python) {
+                              navigate(`/data/pipelines/script/${pl.id}`)
                             } else {
                               navigate(`/data/pipelines/${pl.id}`)
                             }
                           }}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                          title={n8n ? '跳转 n8n 工作流' : '跳转画布编排'}
+                          title={n8n ? '跳转 n8n 工作流' : python ? '编辑 Python 脚本' : '跳转画布编排'}
                         >
                           <ExternalLink size={14} />
                         </button>
@@ -516,7 +530,7 @@ export default function PipelineListPage() {
                         <button
                           onClick={() => setDeleteTarget(pl)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                          title={n8n ? '归档流水线' : '删除'}
+                          title={n8n || python ? '归档流水线' : '删除'}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -600,11 +614,13 @@ export default function PipelineListPage() {
       {/* 删除确认 */}
       <ConfirmDialog
         open={!!deleteTarget}
-        title={deleteTarget && isN8nPipeline(deleteTarget) ? '归档流水线' : '删除流水线'}
+        title={deleteTarget && (isN8nPipeline(deleteTarget) || isPythonPipeline(deleteTarget)) ? '归档流水线' : '删除流水线'}
         message={deleteTarget && isN8nPipeline(deleteTarget)
           ? `确认归档流水线「${deleteTarget.name}」？系统会停用 n8n 工作流，并保留发布版本、运行记录和资产湖产物用于审计。`
-          : `确认删除流水线「${deleteTarget?.name}」？运行记录与版本历史将一并删除；已产出的成品数据集会保留在资产湖中。`}
-        confirmLabel={deleting ? '处理中...' : deleteTarget && isN8nPipeline(deleteTarget) ? '确认归档' : '确认删除'}
+          : deleteTarget && isPythonPipeline(deleteTarget)
+            ? `确认归档流水线「${deleteTarget.name}」？系统会停用该流水线，并保留发布版本、运行记录和资产湖产物用于审计。`
+            : `确认删除流水线「${deleteTarget?.name}」？运行记录与版本历史将一并删除；已产出的成品数据集会保留在资产湖中。`}
+        confirmLabel={deleting ? '处理中...' : deleteTarget && (isN8nPipeline(deleteTarget) || isPythonPipeline(deleteTarget)) ? '确认归档' : '确认删除'}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
@@ -628,12 +644,12 @@ function PipelineCreateModal({
     n8nStatus?.configured && n8nStatus.enabled && n8nStatus.reachable !== false,
   )
   const defaultMode = isEdit
-    ? (isN8nPipeline(pipeline) ? 'n8n' : 'canvas')
+    ? (isN8nPipeline(pipeline) ? 'n8n' : isPythonPipeline(pipeline) ? 'python' : 'canvas')
     : (n8nReady ? 'n8n' : 'canvas')
 
   const [name, setName] = useState(pipeline?.name || '')
   const [description, setDescription] = useState(pipeline?.description || '')
-  const [mode, setMode] = useState<'canvas' | 'n8n'>(defaultMode)
+  const [mode, setMode] = useState<'canvas' | 'n8n' | 'python'>(defaultMode)
   const [saving, setSaving] = useState(false)
 
   const handleSubmit = async () => {
@@ -670,6 +686,15 @@ function PipelineCreateModal({
             },
           } as unknown as Pipeline['definition'],
         })
+      } else if (mode === 'python') {
+        const pl = await pipelinesApi.create({
+          name: name.trim(),
+          description,
+          // 脚本留空：首个脚本必须经脚本编辑页「保存」（服务端重跑复验）写入，
+          // 保证落库脚本一定通过执行与输出格式校验；编辑页会预填模板。
+          definition: { engine: 'python', nodes: [], edges: [], python: {} },
+        })
+        onCreated?.(pl)
       } else {
         const pl = await pipelinesApi.create({
           name: name.trim(),
@@ -703,18 +728,7 @@ function PipelineCreateModal({
           {!isEdit && (
             <div>
               <label className="block text-xs text-gray-500 mb-1.5">创建方式 *</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMode('canvas')}
-                  className={`text-left p-3 rounded-lg border-2 transition-all ${
-                    mode === 'canvas' ? 'border-[var(--color-nav-bg)] bg-blue-50/40' : 'border-gray-200 hover:border-gray-300'}`}
-                >
-                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'canvas' ? 'text-[var(--color-nav-bg)]' : 'text-gray-900'}`}>
-                    <GitBranch size={13} /> 旧版系统流水线
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5">创建后进入画布，自行编排采集与加工节点</div>
-                </button>
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setMode('n8n')}
@@ -730,6 +744,28 @@ function PipelineCreateModal({
                     <Sparkles size={13} /> n8n 流水线
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">后台自动在 n8n 创建骨架工作流并加入列表；点击流水线可到数据管家用 AI 完善编排</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('python')}
+                  className={`text-left p-3 rounded-lg border-2 transition-all ${
+                    mode === 'python' ? 'border-indigo-400 bg-indigo-50/50' : 'border-gray-200 hover:border-gray-300'}`}
+                >
+                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'python' ? 'text-indigo-700' : 'text-gray-900'}`}>
+                    <FileCode2 size={13} /> Python 脚本
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">自行编写 Python 脚本取数（HTTP 请求等），输出行数据写入资产湖</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('canvas')}
+                  className={`text-left p-3 rounded-lg border-2 transition-all ${
+                    mode === 'canvas' ? 'border-[var(--color-nav-bg)] bg-blue-50/40' : 'border-gray-200 hover:border-gray-300'}`}
+                >
+                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'canvas' ? 'text-[var(--color-nav-bg)]' : 'text-gray-900'}`}>
+                    <GitBranch size={13} /> 旧版系统流水线
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">创建后进入画布，自行编排采集与加工节点</div>
                 </button>
               </div>
               {!n8nReady && (
@@ -766,7 +802,7 @@ function PipelineCreateModal({
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">描述</label>
+            <label className="block text-xs text-gray-500 mb-1">流水线描述</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}

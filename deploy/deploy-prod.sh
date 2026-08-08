@@ -212,7 +212,11 @@ check_action_worker() {
 start_required_dependency_services() {
   # CDP must be configured and is checked by deep readiness, but an unhealthy
   # browser must not prevent the API process from starting for diagnostics.
-  compose up -d browser
+  # python_kernel_gateway executes user scripts for Python pipelines; it is
+  # optional at the platform level (script execution reports a clear error
+  # when unreachable), so it starts with the dependency tier without joining
+  # the mandatory connectivity probe.
+  compose up -d browser python_kernel_gateway
   if compose up --help 2>&1 | grep -q -- '--wait'; then
     compose up -d --wait \
       --wait-timeout "${DEPENDENCY_WAIT_TIMEOUT:-180}" \

@@ -44,6 +44,9 @@ dependencies = [
   "python-crontab==3.2.0",
   "apscheduler==3.11.3",
   "mcp>=1.28.1,<2",
+  "jupyter-kernel-gateway==3.0.1",
+  "ipykernel==6.29.5",
+  "websocket-client==1.8.0",
 ]
 
 [dependency-groups]

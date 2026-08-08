@@ -1,5 +1,27 @@
 import { apiClientV2 } from '@/api/client'
 
+/** definition.python — Python 脚本流水线保存在定义里的脚本与元数据 */
+export interface PythonScriptDefinition {
+  script?: string
+  saved_at?: string
+  output_columns?: string[]
+}
+
+/** definition 除画布 nodes/edges 外，还承载引擎标记与引擎自有配置 */
+export interface PipelineDefinition {
+  nodes: unknown[]
+  edges: unknown[]
+  engine?: string
+  n8n?: Record<string, unknown>
+  python?: PythonScriptDefinition
+}
+
+/** 流水线引擎：canvas=旧版系统流水线 / n8n=数据管家托管 / python=Python 脚本 */
+export function getPipelineEngine(pl: Pick<Pipeline, 'definition'>): 'n8n' | 'python' | 'canvas' {
+  const engine = (pl.definition as PipelineDefinition | null)?.engine
+  return engine === 'n8n' ? 'n8n' : engine === 'python' ? 'python' : 'canvas'
+}
+
 export interface Pipeline {
   id: string
   name: string
@@ -8,10 +30,10 @@ export interface Pipeline {
   source_dataset_id?: string | null
   route?: string | null
   spec?: Record<string, unknown>
-  definition?: { nodes: unknown[]; edges: unknown[] } | null
+  definition?: PipelineDefinition | null
   column_definitions?: ColumnDefinition[] | null  // [{field_key, field_name, field_type, is_primary_key, nullable}]
   status: string
-  engine?: string          // canvas=系统自定义 / n8n=数据管家托管
+  engine?: string          // canvas=系统自定义 / n8n=数据管家托管 / python=Python 脚本
   enabled?: boolean        // 启用开关：停用后任务池/链式触发不执行
   branch?: string
   version?: number
@@ -81,8 +103,28 @@ export interface PipelineCreateBody {
   source_dataset_id?: string | null
   route?: string | null
   spec?: Record<string, unknown>
-  definition?: { nodes: unknown[]; edges: unknown[] } | null
+  definition?: PipelineDefinition | null
   column_definitions?: ColumnDefinition[] | null
+}
+
+/** Python 脚本执行结果（脚本级失败以 ok=false 承载，不是 HTTP 错误） */
+export interface ScriptExecutionResult {
+  ok: boolean
+  format_valid: boolean
+  format_error: string | null
+  row_count: number
+  columns: string[]
+  sample: Array<Record<string, unknown>>
+  stdout: string
+  error: string | null
+  traceback: string
+  duration_ms: number
+}
+
+/** 保存脚本 = 服务端重跑复验通过后才落库；返回更新后的流水线与执行摘要 */
+export interface ScriptSaveResult {
+  pipeline: Pipeline
+  execution: ScriptExecutionResult
 }
 
 export interface PipelineRunItem {
@@ -166,6 +208,13 @@ const pipelinesApi = {
   /** 分页读取试运行暂存的完整输出（「展开查看全部数据」） */
   dryRunRows: (id: string, dryRunId: string, params?: { output_index?: number; page?: number; page_size?: number }) =>
     apiClientV2.get<DryRunRowsPage>(`/pipelines/${id}/dry-run/${dryRunId}/rows`, { params }).then(r => r),
+
+  /** Python 脚本：执行编辑器当前内容（不落库），返回结果与行格式校验结论 */
+  executeScript: (id: string, script: string) =>
+    apiClientV2.post<ScriptExecutionResult>(`/pipelines/${id}/script/execute`, { script }).then(r => r),
+  /** Python 脚本：保存（服务端重跑复验，输出格式合法才落库） */
+  saveScript: (id: string, script: string) =>
+    apiClientV2.put<ScriptSaveResult>(`/pipelines/${id}/script`, { script }).then(r => r),
 
   /** Runs */
   run: (id: string) =>
