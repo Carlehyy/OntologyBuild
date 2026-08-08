@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, FilePlus2, Loader2, Paperclip, RefreshCcw, Trash2, Undo2, Upload } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
+import { useToast } from '@/components/ui/Toast'
 import { ontologyApi } from '@/api/ontologies'
 import { eventsApi, formatBytes, type Attachment, type EventCreateBody, type EventItem } from '@/api/events'
 
@@ -48,6 +49,7 @@ export default function EventFormModal({
   editing?: EventItem | null
 }) {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const isEdit = Boolean(editing)
   const [title, setTitle] = useState('')
   const [eventType, setEventType] = useState('')
@@ -164,8 +166,13 @@ export default function EventFormModal({
       }
       return event
     },
-    onSuccess: () => {
+    onSuccess: (event) => {
       queryClient.invalidateQueries({ queryKey: ['events'] })
+      toast({
+        tone: 'success',
+        title: isEdit ? '事件已保存' : '事件登记成功',
+        description: isEdit ? undefined : `事件编号 ${event.eventNo}，可在详情中复制`,
+      })
       onClose()
     },
     onError: (cause: any) => setError(cause?.message || cause?.detail || '保存失败'),
@@ -195,6 +202,7 @@ export default function EventFormModal({
       description={isEdit ? undefined : '记录一条业务事件，供后续本体优化挖掘'}
       size="2xl"
       headerIcon={<FilePlus2 size={19} className="text-emerald-600" />}
+      disableClose={mutation.isPending}
       footer={(
         <div className="flex w-full justify-center gap-3">
           <button

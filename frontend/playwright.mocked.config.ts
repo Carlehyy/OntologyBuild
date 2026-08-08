@@ -15,6 +15,7 @@ export default defineConfig({
     '**/asset_lake_tabs.spec.ts',
     '**/community.spec.ts',
     '**/data_mapping_preview.spec.ts',
+    '**/event_registry_detail.spec.ts',
     '**/event_registry_edit.spec.ts',
     '**/explore_async_isolation.spec.ts',
     '**/explore_diagram_interaction.spec.ts',
