@@ -936,6 +936,7 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-shard" },
     { name = "pytest-xdist" },
 ]
 
@@ -987,6 +988,7 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = "==8.3.3" },
     { name = "pytest-asyncio", specifier = "==0.24.0" },
+    { name = "pytest-shard", specifier = ">=0.1.2" },
     { name = "pytest-xdist", specifier = "==3.6.1" },
 ]
 
@@ -1386,6 +1388,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/52/6d/c6cf50ce320cf8611df7a1254d86233b3df7cc07f9b5f5cbcb82e08aa534/pytest_asyncio-0.24.0.tar.gz", hash = "sha256:d081d828e576d85f875399194281e92bf8a68d60d72d1a2faf2feddb6c46b276", size = 49855, upload-time = "2024-08-22T08:03:18.145Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/31/6607dab48616902f76885dfcf62c08d929796fc3b2d2318faf9fd54dbed9/pytest_asyncio-0.24.0-py3-none-any.whl", hash = "sha256:a811296ed596b69bf0b6f3dc40f83bcaf341b155a269052d82efa2b25ac7037b", size = 18024, upload-time = "2024-08-22T08:03:15.536Z" },
+]
+
+[[package]]
+name = "pytest-shard"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c6/ca/3efa6f3b84dab83220db45997e785be726684c2c2c4267bffb7d80101c7f/pytest-shard-0.1.2.tar.gz", hash = "sha256:b86a967fbfd1c8e50295095ccda031b7e890862ee06531d5142844f4c1d1cd67", size = 3579, upload-time = "2020-12-11T19:52:55.083Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/7a/dbeb4c54e9fc3b59622f410091365f354a69cda1af10c3b83ac0ca6e6f4f/pytest_shard-0.1.2-py3-none-any.whl", hash = "sha256:407a1df385cebe1feb9b4d2e7eeee8b044f8a24f0919421233159a17c59be2b9", size = 4608, upload-time = "2020-12-11T19:52:54.226Z" },
 ]
 
 [[package]]

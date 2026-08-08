@@ -12,8 +12,12 @@
 
 ## 当前流程
 
-1. 使用 Python 3.12 和各自 `uv.lock` 并行执行后端（pytest-xdist 多进程，
-   测试环境使用最低 bcrypt 轮次）与配置中心回归；
+改动先经 `changes` 作业分类：仅含 `docs/` 与根目录 Markdown 的推送不进入
+部署归档，因此跳过代码验证与部署（文档/卫生门禁照常运行）；其余推送执行
+完整流程，手动触发（workflow_dispatch）始终全量：
+
+1. 使用 Python 3.12 和各自 `uv.lock` 并行执行后端（pytest-xdist 多进程 +
+   pytest-shard 四分片，测试环境使用最低 bcrypt 轮次）与配置中心回归；
 2. 运行 Alembic 新库升级与单 head 检查；
 3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis/Celery worker、
    Neo4j、MinIO、n8n 和 Chromium CDP 配置；
