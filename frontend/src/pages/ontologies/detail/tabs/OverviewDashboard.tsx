@@ -120,7 +120,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const factsQuery = useQuery<FactRow[]>({
     queryKey: ['recent-facts', ontologyId],
     queryFn: () => apiClientV2.get(
-      `/formal/ontologies/${ontologyId}/facts/recent?limit=8&current_release_only=true`) as Promise<FactRow[]>,
+      `/formal/ontologies/${ontologyId}/facts/recent?limit=6&current_release_only=true`) as Promise<FactRow[]>,
     refetchInterval: 30000,
   })
   const runtimeDayCount = overviewQuery.data?.runtime.daily7d?.length || 7
@@ -128,11 +128,23 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
   }, [ontologyId, runtimeDayCount])
 
-  if (overviewQuery.isLoading || !overviewQuery.data) {
+  if (!overviewQuery.data) {
+    if (overviewQuery.isError) {
+      return (
+        <div className="overview-error" role="alert">
+          <CircleAlert size={20} />
+          <span>当前发布投影读取失败，请稍后重试。</span>
+          <button
+            type="button"
+            onClick={() => void overviewQuery.refetch()}
+            className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+          >
+            重新加载
+          </button>
+        </div>
+      )
+    }
     return <div className="overview-loading"><Loader2 className="spin" size={20} /> 正在读取当前发布投影…</div>
-  }
-  if (overviewQuery.isError) {
-    return <div className="overview-error"><CircleAlert size={20} /> 当前发布投影读取失败，请刷新后重试。</div>
   }
 
   const ov = overviewQuery.data
@@ -141,23 +153,11 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     .filter(([, value]) => value > 0)
     .sort(([a], [b]) => (FACT_META[a] ? 0 : 1) - (FACT_META[b] ? 0 : 1))
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
-  const runtimeDays = ov.runtime.daily7d?.length ? ov.runtime.daily7d : Array.from({ length: 7 }, (_, index) => {
-    const date = new Date()
-    date.setDate(date.getDate() - (6 - index))
-    return {
-      date: date.toISOString().slice(0, 10),
-      firings: {
-        fired: index === 6 ? ov.runtime.firings7d.fired : 0,
-        error: index === 6 ? ov.runtime.firings7d.error : 0,
-      },
-      actionRuns: {
-        success: index === 6 ? ov.runtime.actionRuns7d.success : 0,
-        failed: index === 6 ? ov.runtime.actionRuns7d.failed : 0,
-      },
-    }
-  })
-  const runtimeRangeEnd = Math.min(runtimeRange[1], runtimeDays.length - 1)
-  const runtimeRangeStart = Math.min(runtimeRange[0], runtimeRangeEnd)
+  // daily7d 只信后端按日返回的数据；没有就如实呈现空态，绝不把 7 日汇总堆到"今天"。
+  const runtimeDays = ov.runtime.daily7d ?? []
+  const hasRuntimeDays = runtimeDays.length > 0
+  const runtimeRangeEnd = hasRuntimeDays ? Math.min(runtimeRange[1], runtimeDays.length - 1) : 0
+  const runtimeRangeStart = hasRuntimeDays ? Math.min(runtimeRange[0], runtimeRangeEnd) : 0
   const selectedRuntimeDays = runtimeDays.slice(runtimeRangeStart, runtimeRangeEnd + 1)
   const selectedRuntime = selectedRuntimeDays.reduce((summary, day) => ({
     fired: summary.fired + day.firings.fired,
@@ -171,11 +171,13 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   ]), 1)
   const selectedRuntimeTotal = selectedRuntime.fired + selectedRuntime.error
     + selectedRuntime.success + selectedRuntime.failed
-  const runtimeStartLabel = formatRuntimeDay(runtimeDays[runtimeRangeStart].date)
-  const runtimeEndLabel = formatRuntimeDay(runtimeDays[runtimeRangeEnd].date)
-  const runtimeRangeLabel = runtimeRangeStart === runtimeRangeEnd
-    ? runtimeStartLabel
-    : `${runtimeStartLabel} – ${runtimeEndLabel}`
+  const runtimeStartLabel = hasRuntimeDays ? formatRuntimeDay(runtimeDays[runtimeRangeStart].date) : ''
+  const runtimeEndLabel = hasRuntimeDays ? formatRuntimeDay(runtimeDays[runtimeRangeEnd].date) : ''
+  const runtimeRangeLabel = !hasRuntimeDays
+    ? '近 7 日'
+    : runtimeRangeStart === runtimeRangeEnd
+      ? runtimeStartLabel
+      : `${runtimeStartLabel} – ${runtimeEndLabel}`
   const runtimeRangeSpan = Math.max(runtimeDays.length - 1, 1)
 
   return (
@@ -235,12 +237,14 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <span className="kpi-label">当前版本事实流</span>
             <strong>{ov.facts.total}<small>条</small></strong>
             <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_META[kind]?.label || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
-            <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>
+            {ov.runtime.pendingApprovals > 0
+              ? <em className="kpi-status is-warning"><CircleAlert size={15} />{ov.runtime.pendingApprovals} 条动作待人工审批</em>
+              : <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>}
           </button>
         </section>
 
         <section className="overview-panel runtime-summary">
-          <PanelTitle title="近 7 日运行汇总" sub={`${runtimeRangeLabel} · ${selectedRuntimeDays.length} 日聚合`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>} />
+          <PanelTitle title="近 7 日运行汇总" sub={hasRuntimeDays ? `${runtimeRangeLabel} · ${selectedRuntimeDays.length} 日聚合` : '暂无按日运行数据'} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>} />
           <div className="runtime-highlights">
             <article className="runtime-highlight runtime-highlight--sentinel">
               <span className="runtime-highlight-icon"><Activity size={17} /></span>
@@ -313,6 +317,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
               )}
             </div>
           </div>
+          {hasRuntimeDays && (
           <div className="runtime-range" aria-label="运行汇总时间范围">
             <div className="runtime-range-heading">
               <span>时间范围</span>
@@ -358,6 +363,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
               <time dateTime={runtimeDays.at(-1)?.date}>{formatRuntimeDay(runtimeDays.at(-1)?.date || '')}</time>
             </div>
           </div>
+          )}
         </section>
       </div>
 
@@ -381,7 +387,18 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
 
         <section className="overview-panel recent-facts">
           <PanelTitle title="最近发生了什么" sub={`${ov.release.version} 事实流 · 追加不修改`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看全部 <ChevronRight size={15} /></button>} />
-          {factsQuery.isLoading ? <div className="recent-empty"><Loader2 className="spin" size={18} />正在读取事实流…</div> : facts.length === 0 ? (
+          {factsQuery.isLoading ? <div className="recent-empty"><Loader2 className="spin" size={18} />正在读取事实流…</div> : factsQuery.isError ? (
+            <div className="recent-empty" role="alert">
+              <CircleAlert size={18} />事实流读取失败
+              <button
+                type="button"
+                onClick={() => void factsQuery.refetch()}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              >
+                重试
+              </button>
+            </div>
+          ) : facts.length === 0 ? (
             <div className="recent-empty"><Sparkles size={20} />还没有事实记录；数据灌入或动作执行后会在这里留痕。</div>
           ) : (
             <div className="recent-list">

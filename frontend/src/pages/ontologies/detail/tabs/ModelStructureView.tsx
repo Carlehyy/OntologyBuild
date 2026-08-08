@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { agentApi, type DynamicSentinel } from '@/api/agent'
 import { apiClientV2 } from '@/api/client'
+import { ConfirmModal } from '@/components/ui/Modal'
 import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
 import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
 import {
@@ -445,6 +446,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const [openDependency, setOpenDependency] = useState<'function' | 'sentinel' | null>(null)
   const [saveState, setSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState('')
+  const [organizeConfirmOpen, setOrganizeConfirmOpen] = useState(false)
   const groupDrag = useRef<{
     objectId: string
     parentStart: { x: number; y: number }
@@ -790,7 +792,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           <span data-testid="published-structure-readonly" title="当前页面只允许调整并保存画布布局，不允许修改本体模型结构" className="mr-1 inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-medium text-slate-600">
             <ShieldCheck size={13} className="text-teal-700" />发布快照 · 结构只读
           </span>
-          <button type="button" onClick={organizeGraph} aria-label="智能整理图谱" title="按实体关系力导向展开，并将属性与动作分层排列" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
+          <button type="button" onClick={() => setOrganizeConfirmOpen(true)} aria-label="智能整理图谱" title="按实体关系力导向展开，并将属性与动作分层排列" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
           <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
           <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
           <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
@@ -831,7 +833,18 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
         <div className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] text-slate-500 shadow-sm backdrop-blur">
           <Layers3 size={13} className="text-teal-600" /><span>L{level} · {workspace.objectTypes.length} 对象 · {workspace.linkTypes.length} 关系{level === 2 ? ` · ${workspace.objectTypes.reduce((sum, item) => sum + item.properties.length, 0)} 属性 · ${workspace.actions.length} 动作` : ''}</span>
           <span className="h-3 w-px bg-slate-200" />
-          <span className={`inline-flex items-center gap-1 ${saveState === 'error' ? 'text-red-600' : saveState === 'saved' ? 'text-emerald-600' : ''}`} title={saveError}><Clock3 size={11} />{saveLabel}</span>
+          {saveState === 'error' ? (
+            <button
+              type="button"
+              onClick={() => void flushLayout()}
+              title={saveError || '布局保存失败'}
+              className="pointer-events-auto inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium text-red-600 underline decoration-red-300 underline-offset-2 transition-colors hover:bg-red-50 hover:text-red-700"
+            >
+              <AlertCircle size={11} />保存失败 · 点击重试
+            </button>
+          ) : (
+            <span className={`inline-flex items-center gap-1 ${saveState === 'saved' ? 'text-emerald-600' : ''}`}><Clock3 size={11} />{saveLabel}</span>
+          )}
           <span className="h-3 w-px bg-slate-200" />
           <span>发布版 <span className="font-mono font-semibold text-teal-700" data-testid="published-structure-version">{workspace.version}</span></span>
         </div>
@@ -848,6 +861,19 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
 
         <DetailPanel workspace={workspace} selection={detail} onClose={() => setDetail(null)} />
       </div>
+
+      <ConfirmModal
+        open={organizeConfirmOpen}
+        onClose={() => setOrganizeConfirmOpen(false)}
+        onConfirm={() => {
+          setOrganizeConfirmOpen(false)
+          organizeGraph()
+        }}
+        title="重新整理画布布局？"
+        description="将忽略当前画布上所有手动拖动的位置，按实体关系力导向重新排列全部节点，并立即保存覆盖现有布局。此操作无法撤销。"
+        confirmText="整理并覆盖布局"
+        variant="danger"
+      />
     </div>
   )
 }
@@ -864,7 +890,12 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
     enabled: Boolean(releaseId && releaseQuery.data?.isCurrentRelease),
   })
   if (releaseQuery.isLoading || (releaseId && dynamicSentinelsQuery.isLoading)) return <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
-  if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease || releaseQuery.data.workspaceMode !== 'release' || releaseQuery.data.editable !== false) return <div className="flex h-full items-center justify-center gap-2 bg-red-50 text-sm text-red-700"><AlertCircle size={18} />当前发布快照读取失败，已停止展示可变模型数据。</div>
+  if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease || releaseQuery.data.workspaceMode !== 'release' || releaseQuery.data.editable !== false) return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-red-50 text-sm text-red-700" role="alert">
+      <p className="inline-flex items-center gap-2"><AlertCircle size={18} />当前发布快照读取失败，已停止展示可变模型数据。</p>
+      <button type="button" onClick={() => void releaseQuery.refetch()} className="rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400">重新加载</button>
+    </div>
+  )
   if (dynamicSentinelsQuery.isError) return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-amber-50 px-6 text-center text-sm text-amber-800" role="alert">
       <AlertCircle size={20} />

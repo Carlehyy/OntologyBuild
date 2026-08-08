@@ -913,7 +913,7 @@ function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[]
           key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}
           sticky={index === 0}
         >
-          <FullValue value={column.computed
+          <FullValue type={column.type} value={column.computed
             ? row.computed?.[column.name] ?? row.properties?.[column.name]
             : row.properties?.[column.name]} />
         </DataCell>
@@ -940,7 +940,7 @@ function LinkDataRow({
         <EndpointCell endpoint={row.targetObject} />
       </DataCell>
       {columns.map((column, index) => (
-        <DataCell key={`${column.name}:${index}`}><FullValue value={row.properties?.[column.name]} /></DataCell>
+        <DataCell key={`${column.name}:${index}`}><FullValue type={column.type} value={row.properties?.[column.name]} /></DataCell>
       ))}
     </tr>
   )
@@ -964,7 +964,12 @@ function EndpointCell({ endpoint }: { endpoint?: EndpointSummary | null }) {
   )
 }
 
-function FullValue({ value }: { value: unknown }) {
+// 值展示统一转译为用户语言：数字加千分位；date/datetime 列与严格 ISO 字符串转本地可读时间。
+// 仅命中带时刻与可选时区的完整 ISO 形式，避免误伤 '2026-08'、编号等普通文本。
+const DATE_TYPE_RE = /^(date|datetime|timestamp|timestamptz|time)$/i
+const ISO_MOMENT_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/
+
+function FullValue({ value, type }: { value: unknown; type?: string }) {
   if (value === null || value === undefined || value === '') {
     return <span className="text-slate-300">—</span>
   }
@@ -982,7 +987,23 @@ function FullValue({ value }: { value: unknown }) {
       </pre>
     )
   }
-  return <span className="block max-w-[30rem] whitespace-pre-wrap break-words text-slate-700">{String(value)}</span>
+  if (typeof value === 'number') {
+    return (
+      <span className="block max-w-[30rem] whitespace-pre-wrap break-words tabular-nums text-slate-700">
+        {value.toLocaleString('zh-CN')}
+      </span>
+    )
+  }
+  const text = String(value)
+  const isDateColumn = type ? DATE_TYPE_RE.test(type.trim().replace(/\(.*\)/, '')) : false
+  if ((isDateColumn || ISO_MOMENT_RE.test(text)) && !Number.isNaN(new Date(text).getTime())) {
+    return (
+      <span className="block max-w-[30rem] whitespace-nowrap tabular-nums text-slate-700" title={text}>
+        {formatDate(text)}
+      </span>
+    )
+  }
+  return <span className="block max-w-[30rem] whitespace-pre-wrap break-words text-slate-700">{text}</span>
 }
 
 function EmptyData({

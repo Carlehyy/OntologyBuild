@@ -327,7 +327,7 @@
 .runtime-day-stack--action b { background: #e7a24c; }
 .runtime-day time { color: #788699; font-size: 8px; white-space: nowrap; }
 .runtime-day-total { min-width: 18px; border-radius: 4px; color: #8c97a6; font-size: 8px; font-weight: 650; text-align: center; }
-.runtime-empty-note { position: absolute; top: 38px; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .9); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translateX(-50%); }
+.runtime-empty-note { position: absolute; top: 38px; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .9); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translateX(-50%); pointer-events: none; }
 .runtime-empty-note svg { flex: 0 0 auto; color: #6b8dca; }
 .runtime-empty-note > span { color: #59687c; font-size: 10px; font-weight: 650; }
 .runtime-empty-note small { display: block; margin-top: 2px; color: #96a1af; font-size: 8px; font-weight: 500; }

@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
+import { apiClientV2 } from '@/api/client'
 import { LoadingState } from '@/components/ui/LoadingState'
 import type { OntologyDetail } from '@/types/ontology'
 import OverviewDashboard from './tabs/OverviewDashboard'
@@ -67,6 +68,16 @@ export default function OntologyDetailPage() {
     queryFn: () => ontologyApi.get(id!),
     enabled: !!id,
   })
+
+  // 与治理 Tab 共用同一 queryKey，仅做一次请求并共享缓存；待审批数直接露在 Tab 角标上。
+  const { data: pendingActions } = useQuery<Array<{ id: string }>>({
+    queryKey: ['gov-pending', id, ontology?.current_release_id],
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${id}/pending-actions?release_id=${encodeURIComponent(ontology!.current_release_id!)}`) as Promise<Array<{ id: string }>>,
+    enabled: Boolean(id && ontology?.current_release_id),
+    staleTime: 30000,
+  })
+  const pendingApprovalCount = pendingActions?.length ?? 0
 
   const handleExport = async () => {
     if (!id || !ontology || isExporting) return
@@ -144,6 +155,17 @@ export default function OntologyDetailPage() {
                   }`}
                 >
                   {group.label}
+                  {group.key === 'governance' && pendingApprovalCount > 0 && (
+                    <span
+                      className={`ml-1.5 inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ${
+                        isActive ? 'bg-white/25 text-white' : 'bg-red-100 text-red-600'
+                      }`}
+                      title={`${pendingApprovalCount} 条动作待人工审批`}
+                      aria-label={`${pendingApprovalCount} 条动作待人工审批`}
+                    >
+                      {pendingApprovalCount}
+                    </span>
+                  )}
                 </button>
               )
             })}
