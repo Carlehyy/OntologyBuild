@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { apiClientV2 } from '@/api/client'
 import { sentinelApi, type Sentinel, type SentinelFiring } from '@/api/sentinelApi'
 import { Button } from '@/components/ui/Button'
-import { Modal } from '@/components/ui/Modal'
+import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import {
   HandMetal, Rocket, ShieldAlert, ScrollText, Loader2, CheckCircle2, XCircle,
   Eye, Bolt, ArrowUpCircle, ArrowDownCircle, ExternalLink, AlertTriangle,
@@ -69,11 +69,11 @@ const LEVEL_META: Record<string, { label: string; icon: any; cls: string; desc: 
 const BACKGROUND_REFRESH_INTERVAL_MS = 12_000
 const BACKGROUND_REFRESH_MAX_CYCLES = 10
 
-function readableTargetSummary(log: PendingLog): string {
+function readableTargetSummary(log: PendingLog, fallback = '未提供可读目标名称'): string {
   const labels = [log.objectTypeName, log.objectInstanceLabel]
     .map(label => label?.trim())
     .filter((label): label is string => Boolean(label))
-  return [...new Set(labels)].join(' · ') || '未提供可读目标名称'
+  return [...new Set(labels)].join(' · ') || fallback
 }
 
 function SectionHead({ icon: Icon, iconCls, title, sub, extra }: {
@@ -110,6 +110,7 @@ export default function GovernanceTab({
   const [rejectTarget, setRejectTarget] = useState<PendingLog | null>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [rejectError, setRejectError] = useState<string | null>(null)
+  const [approveTarget, setApproveTarget] = useState<PendingLog | null>(null)
   const [kindFilter, setKindFilter] = useState('')
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === 'undefined' || document.visibilityState === 'visible')
@@ -230,7 +231,10 @@ export default function GovernanceTab({
     try {
       await apiClientV2.post(`/formal/ontologies/${ontologyId}/action-logs/${log.id}/decide`,
         { decision, reason, releaseId: currentReleaseId })
-      setMsg({ ok: true, text: decision === 'approved' ? '已批准并执行，决策已写入事实流。' : '已拒绝，决策已写入事实流。' })
+      setMsg({ ok: true, text: decision === 'approved' ? '已批准并提交执行，决策已写入事实流。' : '已拒绝，决策已写入事实流。' })
+      if (decision === 'approved') {
+        setApproveTarget(null)
+      }
       if (decision === 'rejected') {
         setRejectTarget(null)
         setRejectReason('')
@@ -370,13 +374,13 @@ export default function GovernanceTab({
               <div key={l.id} className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm text-gray-800 font-medium">{l.actionName || l.actionId}</p>
-                  <p className="text-xs text-gray-500 truncate">
-                    {l.objectInstanceId && <>目标 <code className="text-gray-600">{l.objectInstanceId.slice(0, 10)}…</code> · </>}
+                  <p className="text-xs text-gray-500 truncate" title={l.objectInstanceId ? `实例 ID：${l.objectInstanceId}` : undefined}>
+                    {l.objectInstanceId && <>目标 <span className="text-gray-600 font-medium">{readableTargetSummary(l, `${l.objectInstanceId.slice(0, 10)}…`)}</span> · </>}
                     {Object.entries(l.parameters || {}).slice(0, 3).map(([k, v]) => `${k}=${fmtVal(v)}`).join('，') || '无参数'}
                     <span className="text-gray-400"> · {l.actorId ? '人工发起' : '哨兵触发'} · {fmtTime(l.executedAt)}</span>
                   </p>
                 </div>
-                <button onClick={() => void decide(l, 'approved')} disabled={busy === l.id}
+                <button onClick={() => setApproveTarget(l)} disabled={busy === l.id}
                   className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 shrink-0">
                   {busy === l.id ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
                   批准并执行
@@ -420,17 +424,21 @@ export default function GovernanceTab({
                     ))}
                     <div className="ml-auto flex gap-1.5">
                       {s.level === 'L1' && (
-                        <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-                          disabled={s.recommendation !== 'promote'}
+                        <span
+                          className="inline-flex"
                           title={s.recommendation === 'promote' ? '批准率达标，请在版本草稿中变更后重新发布'
                             : `晋升条件：近 ${s.thresholds.promoteMinDecisions} 次批准率 ≥ ${Math.round(s.thresholds.promoteRate * 100)}%（当前 ${s.decisions.recentCount} 次 / ${pct(r)}）`}
-                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] border ${
-                            s.recommendation === 'promote'
-                              ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
-                              : 'border-gray-200 text-gray-300 cursor-not-allowed'
-                          }`}>
-                          <ArrowUpCircle size={12} /> 去草稿晋升
-                        </button>
+                        >
+                          <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+                            disabled={s.recommendation !== 'promote'}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] border disabled:pointer-events-none ${
+                              s.recommendation === 'promote'
+                                ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                                : 'border-gray-200 text-gray-300 cursor-not-allowed'
+                            }`}>
+                            <ArrowUpCircle size={12} /> 去草稿晋升
+                          </button>
+                        </span>
                       )}
                       {s.level === 'L2' && (
                         <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
@@ -648,6 +656,18 @@ export default function GovernanceTab({
           </div>
         )}
       </Modal>
+
+      <ConfirmModal
+        open={Boolean(approveTarget)}
+        onClose={() => { if (!approveTarget || busy !== approveTarget.id) setApproveTarget(null) }}
+        onConfirm={() => { if (approveTarget && busy !== approveTarget.id) void decide(approveTarget, 'approved') }}
+        title={approveTarget ? `批准动作：${approveTarget.actionName || approveTarget.actionId}` : '批准动作'}
+        description={approveTarget
+          ? `将对「${readableTargetSummary(approveTarget)}」立即执行该动作，并写入人工批准的决策事实。执行由可靠队列异步完成，结果会同步到哨兵与事实流。`
+          : undefined}
+        confirmText="批准并执行"
+        loading={Boolean(approveTarget && busy === approveTarget.id)}
+      />
     </div>
   )
 }
