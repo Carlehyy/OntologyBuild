@@ -8,6 +8,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
+import { ConfirmModal } from '@/components/ui/Modal'
 import { eventsApi, type IngestKey, type IngestKeyListResp } from '@/api/events'
 import { writeTextToClipboard } from '@/utils/clipboard'
 
@@ -45,6 +46,7 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
   const [scope, setScope] = useState('')
   const [newKey, setNewKey] = useState<IngestKey | null>(null)
   const [error, setError] = useState('')
+  const [revokeTarget, setRevokeTarget] = useState<IngestKey | null>(null)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<'all' | 'active' | 'revoked'>('all')
   const [sourceSystem, setSourceSystem] = useState('')
@@ -93,6 +95,7 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
     mutationFn: (id: string) => eventsApi.revokeKey(id),
     onSuccess: () => {
       setError('')
+      setRevokeTarget(null)
       queryClient.invalidateQueries({ queryKey: ['ingest-keys'] })
     },
     onError: (cause: any) => setError(cause?.detail || cause?.message || '密钥吊销失败'),
@@ -274,7 +277,7 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
                         {!revoked && (
                           <button
                             type="button"
-                            onClick={() => revokeMutation.mutate(key.id)}
+                            onClick={() => setRevokeTarget(key)}
                             disabled={revokeMutation.isPending}
                             className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
                           >
@@ -342,6 +345,16 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
           </section>
         </div>
       </aside>
+      <ConfirmModal
+        open={Boolean(revokeTarget)}
+        onClose={() => setRevokeTarget(null)}
+        onConfirm={() => { if (revokeTarget) revokeMutation.mutate(revokeTarget.id) }}
+        title="吊销密钥"
+        description={revokeTarget ? `确认吊销密钥“${revokeTarget.name}”？吊销后使用该密钥的第三方系统将立即无法上报事件，此操作不可恢复。` : undefined}
+        confirmText="确认吊销"
+        variant="danger"
+        loading={revokeMutation.isPending}
+      />
     </div>,
     document.body,
   )

@@ -6,30 +6,22 @@ import type { EventItem, EventStats } from '../../api/events'
 import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, Archive, ArchiveRestore, Paperclip, Pencil, Trash2 } from 'lucide-react'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
+import { useAuthStore } from '@/stores/authStore'
+import { useDebouncedValue } from '@/utils/useDebouncedValue'
 import EventFormModal from './EventFormModal'
 import EventAttachmentsModal from './EventAttachmentsModal'
+import EventDetailDrawer from './EventDetailDrawer'
 import IngestKeysDrawer from './IngestKeysDrawer'
+import { PALETTE, fmt, SeverityBadge } from './shared'
 
 // 与「数据资产湖」一致的基础面板：白底、细边框、轻阴影。
 const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50'
-const PALETTE = {
-  blue: '#3B82F6', teal: '#5EEAD4', gold: '#FCD34D', orange: '#FDBA74',
-  red: '#FB7185',
-}
 const PAGE_SIZE = 8
 const STATUS_TABS = [
   { value: 'active', label: '活跃', icon: Activity },
   { value: 'archived', label: '归档', icon: Archive },
   { value: 'all', label: '全部', icon: Filter },
 ] as const
-
-function fmt(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '—'
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 // ─── 数据 hooks ──────────────────────────────────────────
 function useStats() { return useQuery({ queryKey: ['events', 'stats'], queryFn: () => eventsApi.stats() }) }
@@ -40,7 +32,9 @@ function useList(params: { page: number; pageSize: number; q?: string; sourceTyp
 export default function EventRegistryPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(search, 300)
   const [sourceType, setSourceType] = useState<string>('')
   const [severity, setSeverity] = useState<string>('')
   const [status, setStatus] = useState<string>('active')
@@ -48,6 +42,7 @@ export default function EventRegistryPage() {
   const [formOpen, setFormOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
   const [editing, setEditing] = useState<EventItem | null>(null)
+  const [detailEventId, setDetailEventId] = useState<string | null>(null)
   const [attachmentEventId, setAttachmentEventId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<EventItem | null>(null)
   const statusTabsRef = useRef<HTMLDivElement>(null)
@@ -57,13 +52,13 @@ export default function EventRegistryPage() {
   const stats: EventStats | undefined = statsQ.data
   const listQ = useList({
     page, pageSize: PAGE_SIZE,
-    q: search || undefined,
+    q: debouncedSearch.trim() || undefined,
     sourceType: sourceType || undefined,
     severity: severity || undefined,
     status: status || 'active',
   })
 
-  useEffect(() => { setPage(1) }, [search, sourceType, severity, status])
+  useEffect(() => { setPage(1) }, [debouncedSearch, sourceType, severity, status])
   useEffect(() => {
     const container = statusTabsRef.current
     if (!container) return
@@ -370,7 +365,15 @@ export default function EventRegistryPage() {
                   </td></tr>
                 ) : (listQ.data?.items ?? []).map((r, i) => (
                   <tr key={r.id}
-                    className={`group border-t border-slate-100 transition-colors hover:bg-slate-50 ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
+                    tabIndex={0}
+                    onClick={() => setDetailEventId(r.id)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setDetailEventId(r.id)
+                      }
+                    }}
+                    className={`group cursor-pointer border-t border-slate-100 transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
                     style={{ animation: `rowIn 0.35s ease-out ${i * 30}ms both` }}>
                     <td className="px-4 py-3 text-left align-middle">
                       <div className="flex items-stretch justify-start gap-2">
@@ -381,6 +384,9 @@ export default function EventRegistryPage() {
                           <div className="flex items-center justify-start gap-1 truncate font-medium text-slate-800">
                             {r.title}
                             {r.severity === 'critical' && <AlertOctagon className="h-3.5 w-3.5 shrink-0 text-red-400" />}
+                            {r.status === 'archived' && (
+                              <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">已归档</span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -396,7 +402,7 @@ export default function EventRegistryPage() {
                       {r.attachmentCount && r.attachmentCount > 0 ? (
                         <button
                           type="button"
-                          onClick={() => setAttachmentEventId(r.id)}
+                          onClick={event => { event.stopPropagation(); setAttachmentEventId(r.id) }}
                           className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 hover:text-emerald-800"
                           title="点击查看附件清单"
                         >
@@ -405,7 +411,7 @@ export default function EventRegistryPage() {
                       ) : <span className="text-sm text-slate-300">—</span>}
                     </td>
                     <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-slate-500">{fmt(r.occurredAt)}</td>
-                    <td className="px-2 py-3 text-center align-middle">
+                    <td className="px-2 py-3 text-center align-middle" onClick={event => event.stopPropagation()}>
                       <div className="inline-flex items-center justify-center gap-1">
                         <ActionButton
                           label="编辑事件"
@@ -424,14 +430,16 @@ export default function EventRegistryPage() {
                         >
                           {r.status === 'archived' ? <ArchiveRestore size={15} /> : <Archive size={15} />}
                         </ActionButton>
-                        <ActionButton
-                          label="删除事件（仅管理员）"
-                          ariaLabel={`删除事件 ${r.title}`}
-                          onClick={() => setDeleteTarget(r)}
-                          tone="red"
-                        >
-                          <Trash2 size={15} />
-                        </ActionButton>
+                        {isAdmin && (
+                          <ActionButton
+                            label="删除事件（仅管理员）"
+                            ariaLabel={`删除事件 ${r.title}`}
+                            onClick={() => setDeleteTarget(r)}
+                            tone="red"
+                          >
+                            <Trash2 size={15} />
+                          </ActionButton>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -475,6 +483,16 @@ export default function EventRegistryPage() {
       </button>
 
       <EventFormModal open={formOpen} onClose={() => { setFormOpen(false); setEditing(null) }} editing={editing} />
+      <EventDetailDrawer
+        open={Boolean(detailEventId)}
+        eventId={detailEventId}
+        onClose={() => setDetailEventId(null)}
+        onEdit={event => {
+          setDetailEventId(null)
+          setEditing(event)
+          setFormOpen(true)
+        }}
+      />
       <EventAttachmentsModal
         open={Boolean(attachmentEventId)}
         eventId={attachmentEventId}
@@ -571,23 +589,6 @@ function ActionButton({
         <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
       </span>
     </button>
-  )
-}
-
-// ─── 级别标签 ────────────────────────────────────────────
-function SeverityBadge({ sev }: { sev: string }) {
-  const map: Record<string, { bg: string; text: string; dot: string; label: string; glow: string }> = {
-    critical: { bg: 'bg-red-50', text: 'text-red-600', dot: PALETTE.red, label: '严重', glow: 'rgba(251,113,133,0.4)' },
-    high: { bg: 'bg-orange-50', text: 'text-orange-600', dot: PALETTE.orange, label: '高级', glow: 'rgba(253,186,116,0.4)' },
-    medium: { bg: 'bg-amber-50', text: 'text-amber-600', dot: PALETTE.gold, label: '中级', glow: 'rgba(252,211,77,0.4)' },
-    low: { bg: 'bg-teal-50', text: 'text-teal-600', dot: PALETTE.teal, label: '低级', glow: 'rgba(94,234,212,0.4)' },
-    info: { bg: 'bg-blue-50', text: 'text-blue-600', dot: PALETTE.blue, label: '信息', glow: 'rgba(59,130,246,0.4)' },
-  }
-  const c = map[sev] ?? map.info
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 ${c.bg} ${c.text} text-xs font-medium whitespace-nowrap`}>
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.dot, boxShadow: `0 0 4px ${c.glow}` }} />{c.label}
-    </span>
   )
 }
 

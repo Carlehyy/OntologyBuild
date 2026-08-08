@@ -12,6 +12,8 @@ interface ModalProps {
   footer?: React.ReactNode
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
   headerIcon?: React.ReactNode
+  /** 为 true 时屏蔽 Esc、遮罩点击与关闭按钮（用于提交/上传进行中，防止产生半截数据） */
+  disableClose?: boolean
   panelClassName?: string
   backdropClassName?: string
   headerClassName?: string
@@ -37,6 +39,7 @@ export function Modal({
   footer,
   size = 'md',
   headerIcon,
+  disableClose = false,
   panelClassName,
   backdropClassName,
   headerClassName,
@@ -49,11 +52,11 @@ export function Modal({
   React.useEffect(() => {
     if (!open) return undefined
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && !disableClose) onClose()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, open])
+  }, [disableClose, onClose, open])
 
   if (!open) return null
 
@@ -64,7 +67,7 @@ export function Modal({
           'absolute inset-0 bg-slate-950/30 backdrop-blur-[2px] animate-fade-in',
           backdropClassName,
         )}
-        onClick={onClose}
+        onClick={disableClose ? undefined : onClose}
         aria-hidden="true"
       />
       <section
@@ -81,8 +84,9 @@ export function Modal({
         <button
           type="button"
           onClick={onClose}
+          disabled={disableClose}
           aria-label="关闭弹窗"
-          className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
         >
           <X size={16} />
         </button>
