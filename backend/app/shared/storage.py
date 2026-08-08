@@ -511,138 +511,9 @@ class StorageService:
         return scheme, bucket, key
 
 
-class LegacyManagedStorageAccess:
-    """Read/delete-only access to objects written by an old endpoint regression.
-
-    A previous development-mode implementation could redirect platform objects
-    to the administrator-managed MinIO row. Stable runtime writes must never use
-    that row, but regression-era dataset versions, file assets, media objects,
-    and file-connector objects still need an explicit migration path.
-    Deliberately do not expose any upload method from this adapter.
-    """
-
-    def __init__(self, storage: StorageService):
-        self._storage = storage
-
-    def get_object(self, uri: str) -> bytes:
-        return self._storage.get_object(uri)
-
-    def get_stream(self, uri: str) -> BinaryIO:
-        return self._storage.get_stream(uri)
-
-    def presigned_get(self, uri: str, expires_seconds: int = 3600) -> str:
-        return self._storage.presigned_get(uri, expires_seconds)
-
-    def list_prefix(self, bucket: str, prefix: str) -> list[str]:
-        return self._storage.list_prefix(bucket, prefix)
-
-    def object_exists(self, uri: str) -> bool:
-        return self._storage.object_exists(uri)
-
-    def delete_object(self, uri: str) -> None:
-        self._storage.delete_object(uri)
-
-
-class PlatformStorageAccess:
-    """Authoritative writes plus explicit read/delete migration compatibility.
-
-    Every mutating write is delegated only to the environment MinIO. Historical
-    objects written to the former administrator-managed endpoint remain
-    readable only after the healthy authoritative endpoint has positively
-    reported a miss. Operational failures never activate the legacy endpoint.
-    """
-
-    def __init__(self, authoritative: StorageService):
-        self._authoritative = authoritative
-
-    def __getattr__(self, name: str):
-        return getattr(self._authoritative, name)
-
-    def _legacy(self) -> LegacyManagedStorageAccess | None:
-        return get_legacy_managed_storage_access()
-
-    def get_object(self, uri: str) -> bytes:
-        try:
-            return self._authoritative.get_object(uri)
-        except Exception as exc:
-            if (
-                not uri.startswith("s3://")
-                or not StorageService._is_not_found_error(exc)
-            ):
-                raise
-            legacy = self._legacy()
-            if legacy is None:
-                raise
-            return legacy.get_object(uri)
-
-    def get_stream(self, uri: str) -> BinaryIO:
-        try:
-            return self._authoritative.get_stream(uri)
-        except Exception as exc:
-            if (
-                not uri.startswith("s3://")
-                or not StorageService._is_not_found_error(exc)
-            ):
-                raise
-            legacy = self._legacy()
-            if legacy is None:
-                raise
-            return legacy.get_stream(uri)
-
-    def presigned_get(self, uri: str, expires_seconds: int = 3600) -> str:
-        if uri.startswith("local://"):
-            return self._authoritative.presigned_get(uri, expires_seconds)
-        if self._authoritative.object_exists(uri):
-            return self._authoritative.presigned_get(uri, expires_seconds)
-        legacy = self._legacy()
-        if legacy is None:
-            raise FileNotFoundError(uri)
-        return legacy.presigned_get(uri, expires_seconds)
-
-    def list_prefix(self, bucket: str, prefix: str) -> list[str]:
-        # The authoritative listing must succeed first. A MinIO outage is not
-        # permission to return a legacy-only partial result.
-        result = self._authoritative.list_prefix(bucket, prefix)
-        legacy = self._legacy()
-        if legacy is not None:
-            result.extend(legacy.list_prefix(bucket, prefix))
-        return sorted(set(result))
-
-    def object_exists(self, uri: str) -> bool:
-        if uri.startswith("local://"):
-            return self._authoritative.object_exists(uri)
-        if self._authoritative.object_exists(uri):
-            return True
-        legacy = self._legacy()
-        return legacy.object_exists(uri) if legacy is not None else False
-
-    def delete_object(self, uri: str) -> None:
-        if uri.startswith("local://"):
-            self._authoritative.delete_object(uri)
-            return
-
-        # ``remove_object`` itself does not report whether the key existed, so
-        # first use the authoritative service's strict stat contract. A
-        # connection/auth/service failure raises here and must retain the
-        # caller's durable deletion task instead of touching the old endpoint.
-        if self._authoritative.object_exists(uri):
-            self._authoritative.delete_object(uri)
-            return
-
-        # A false result means the healthy environment MinIO positively
-        # reported a miss (and no historical local object matched). Only now
-        # may deletion be routed to the read/delete-only regression adapter.
-        legacy = self._legacy()
-        if legacy is not None:
-            legacy.delete_object(uri)
-
-
-# 平台对象持久化只认部署环境中的 MinIO。系统设置里的 MinIO 管理/MCP 客户端
-# 是独立能力，不能在运行中暗中替换这里的权威端点并把对象分散到第二个后端。
-_storage_service: PlatformStorageAccess | None = None
+# 平台对象持久化只认部署环境中的 MinIO。对象读写不存在第二套配置，
+# 也不会在运行中切换到任何其他端点。
 _environment_storage_service: StorageService | None = None
-_legacy_managed_storage_access: LegacyManagedStorageAccess | None = None
-_legacy_managed_storage_resolved = False
 
 
 def get_environment_storage_service() -> StorageService:
@@ -653,16 +524,9 @@ def get_environment_storage_service() -> StorageService:
     return _environment_storage_service
 
 
-def get_storage_service() -> PlatformStorageAccess:
-    """Return authoritative storage with read/delete-only migration access."""
-    global _storage_service
-    if _storage_service is None:
-        # One authoritative endpoint prevents objects from being split between
-        # an env-configured store and a later administrator override.
-        _storage_service = PlatformStorageAccess(
-            get_environment_storage_service()
-        )
-    return _storage_service
+def get_storage_service() -> StorageService:
+    """Stable entry point for the authoritative environment MinIO."""
+    return get_environment_storage_service()
 
 
 def clear_environment_storage_backoff() -> None:
@@ -670,72 +534,3 @@ def clear_environment_storage_backoff() -> None:
     StorageService._shared_unavailable_until = 0.0
     if _environment_storage_service is not None:
         _environment_storage_service._next_reconnect_at = 0.0
-
-
-def get_legacy_managed_storage_access() -> LegacyManagedStorageAccess | None:
-    """Return explicit read/delete-only access for regression-era objects.
-
-    This accessor is never consulted for new writes and must only be tried after
-    the authoritative environment MinIO has positively reported an object miss
-    (or returned bytes whose stored checksum proves they are not the right
-    immutable version). An environment connectivity failure is not permission
-    to fall back to this endpoint.
-    """
-    global _legacy_managed_storage_access, _legacy_managed_storage_resolved
-    if _legacy_managed_storage_resolved:
-        return _legacy_managed_storage_access
-
-    try:
-        from app.database import SessionLocal
-        from app.services.encryption_service import decrypt
-        from app.settings.object_storage.models import MinioConfig
-
-        db = SessionLocal()
-        try:
-            config = db.query(MinioConfig).filter(
-                MinioConfig.id == "default",
-                MinioConfig.enabled.is_(True),
-                MinioConfig.connected.is_(True),
-            ).first()
-            if config is None:
-                _legacy_managed_storage_resolved = True
-                return None
-            storage = StorageService(
-                endpoint=config.endpoint,
-                access_key=decrypt(config.access_key_encrypted),
-                secret_key=decrypt(config.secret_key_encrypted),
-                secure=config.secure,
-                region=config.region,
-            )
-        finally:
-            db.close()
-    except Exception as exc:
-        logger.warning(
-            "Legacy managed MinIO configuration resolution failed (%s)",
-            type(exc).__name__,
-        )
-        # Do not cache a transient database/decryption failure as "no legacy
-        # endpoint". In particular, deletion outbox processing must retain the
-        # task rather than silently orphaning a regression-era object.
-        raise RuntimeError(
-            "Legacy managed MinIO configuration is unavailable"
-        ) from exc
-
-    _legacy_managed_storage_access = LegacyManagedStorageAccess(storage)
-    _legacy_managed_storage_resolved = True
-    return _legacy_managed_storage_access
-
-
-def reset_storage_service() -> None:
-    """Reset compatibility accessors without changing the environment client."""
-    global _storage_service
-    global _legacy_managed_storage_access, _legacy_managed_storage_resolved
-    _storage_service = None
-    legacy = _legacy_managed_storage_access
-    legacy_client = getattr(getattr(legacy, "_storage", None), "_client", None)
-    legacy_http = getattr(legacy_client, "_http", None)
-    legacy_clear = getattr(legacy_http, "clear", None)
-    if callable(legacy_clear):
-        legacy_clear()
-    _legacy_managed_storage_access = None
-    _legacy_managed_storage_resolved = False

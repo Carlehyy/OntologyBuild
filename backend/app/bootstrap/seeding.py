@@ -53,7 +53,7 @@ def seed_database() -> None:
         )
         from app.models.workflow_config import WorkflowConfig  # noqa: F401
         from app.settings.object_storage.models import (  # noqa: F401
-            MinioConfig, MinioOperationAudit,
+            MinioOperationAudit,
         )
         # 数据管家 (对话式 n8n 数据流水线：治理记录 + 会话)
         from app.data_channel.steward.models import (  # noqa: F401

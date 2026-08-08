@@ -37,7 +37,7 @@ REPO_ROOT = BACKEND_DIR.parent
 # Direct ``python scripts/...`` execution makes ``backend/scripts`` sys.path[0].
 # Add the backend package root explicitly before the late application imports.
 sys.path.insert(0, str(BACKEND_DIR))
-POSTGRES_LOCATION_COUNT = 12
+POSTGRES_LOCATION_COUNT = 10
 SQLITE_LOCATION_COUNT = 1
 TOTAL_LOCATION_COUNT = POSTGRES_LOCATION_COUNT + SQLITE_LOCATION_COUNT
 SYNTHETIC_MANIFEST_CREDENTIALS = {
@@ -263,8 +263,6 @@ def _legacy_fixture_values() -> tuple[dict[str, str], dict[str, str], str]:
         ),
         "workflow_config.api_key_encrypted": "synthetic-n8n-api-key",
         "agent_config.password_encrypted": "synthetic-agent-password",
-        "minio_config.access_key_encrypted": "synthetic-minio-access",
-        "minio_config.secret_key_encrypted": "synthetic-minio-secret",
         "super_assistant_mcp_servers.headers_encrypted": json.dumps(
             {"Authorization": "Bearer synthetic-mcp-token"}, separators=(",", ":")
         ),
@@ -313,10 +311,6 @@ def _insert_postgres_fixtures(conn, ciphertexts: dict[str, str]) -> None:
           (id,base_url,auth_enabled,username,password_encrypted,token,target_agent_id,target_agent_name,created_at,updated_at)
           VALUES ('cipher-agent','https://synthetic-agent.invalid',true,'synthetic',:cipher,'','','',:now,:now)""",
          {"cipher": ciphertexts["agent_config.password_encrypted"], "now": now}),
-        ("""INSERT INTO minio_config
-          (id,enabled,endpoint,secure,region,default_bucket,access_key_encrypted,secret_key_encrypted,read_enabled,write_enabled,delete_enabled,mcp_enabled,mcp_token_hash,mcp_token_hint,connected,created_at,updated_at)
-          VALUES ('cipher-minio',true,'synthetic-minio.invalid:9000',true,'us-east-1','synthetic',:access,:secret,true,true,false,true,'','',false,:now,:now)""",
-         {"access": ciphertexts["minio_config.access_key_encrypted"], "secret": ciphertexts["minio_config.secret_key_encrypted"], "now": now}),
         ("""INSERT INTO super_assistant_mcp_servers
           (id,owner_id,name,transport,url,headers_encrypted,header_names,args,env_encrypted,env_names,enabled,require_confirmation,tool_manifest,created_at,updated_at)
           VALUES ('cipher-mcp','synthetic-user','Cipher E2E','streamable_http','https://synthetic-mcp.invalid',:headers,CAST('[\"Authorization\"]' AS json),CAST('[]' AS json),:env,CAST('[\"MCP_SECRET\"]' AS json),true,true,CAST('[]' AS json),:now,:now)""",
@@ -344,8 +338,6 @@ def _postgres_queries() -> dict[str, str]:
         "v2_connections.config._encrypted": "SELECT config->>'_encrypted' FROM v2_connections WHERE id='cipher-connection'",
         "workflow_config.api_key_encrypted": "SELECT api_key_encrypted FROM workflow_config WHERE id='cipher-workflow'",
         "agent_config.password_encrypted": "SELECT password_encrypted FROM agent_config WHERE id='cipher-agent'",
-        "minio_config.access_key_encrypted": "SELECT access_key_encrypted FROM minio_config WHERE id='cipher-minio'",
-        "minio_config.secret_key_encrypted": "SELECT secret_key_encrypted FROM minio_config WHERE id='cipher-minio'",
         "super_assistant_mcp_servers.headers_encrypted": "SELECT headers_encrypted FROM super_assistant_mcp_servers WHERE id='cipher-mcp'",
         "super_assistant_mcp_servers.env_encrypted": "SELECT env_encrypted FROM super_assistant_mcp_servers WHERE id='cipher-mcp'",
         "v2_steward_browser_sources.endpoint_url_encrypted": "SELECT endpoint_url_encrypted FROM v2_steward_browser_sources WHERE id='cipher-browser'",

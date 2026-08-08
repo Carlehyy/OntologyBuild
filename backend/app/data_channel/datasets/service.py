@@ -5,7 +5,6 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
@@ -15,10 +14,7 @@ from app.models.v2.dataset import (
     Dataset, DatasetVersion, DatasetVersionEvent, StorageDeletionOutbox,
 )
 from app.services.storage_service import (
-    LegacyManagedStorageAccess,
     StorageService,
-    get_environment_storage_service,
-    get_legacy_managed_storage_access,
     get_storage_service,
 )
 
@@ -33,17 +29,12 @@ class DatasetReadError(RuntimeError):
     """
 
 
-def _is_legacy_object_miss(exc: Exception) -> bool:
-    """Whether a healthy object store positively reported an absent object."""
-    return isinstance(exc, FileNotFoundError) or StorageService._is_not_found_error(exc)
-
-
 def dataset_kind_uses_database(kind: str | None) -> bool:
     """Whether a dataset version belongs in the platform database.
 
     Only genuinely unstructured source files stay in object storage.  Tabular,
-    semi-structured and curated lake snapshots are transactional database data;
-    administrator MinIO configuration must never redirect them.
+    semi-structured and curated lake snapshots are transactional database data
+    and are never redirected to object storage.
     """
     return str(kind or "").strip().lower() != "unstructured"
 
@@ -510,27 +501,13 @@ def _storage_uri_is_referenced(db: Session, storage_uri: str) -> bool:
 
 def _deletion_storage_candidates(
     storage: StorageService | None,
-) -> list[StorageService | LegacyManagedStorageAccess]:
-    """Resolve the store(s) that may own an outbox object.
+) -> list[StorageService]:
+    """Resolve the store that owns an outbox object.
 
-    Current objects live only in the authoritative environment MinIO. All
-    regression-era platform objects use the shared compatibility boundary,
-    which consults the old configurable endpoint only after an authoritative
-    miss. An explicit override keeps tests/callers deterministic.
+    Objects live only in the authoritative environment MinIO. An explicit
+    override keeps tests/callers deterministic.
     """
-    if storage is not None:
-        candidates = [storage]
-    else:
-        candidates = [get_storage_service()]
-
-    unique: list[StorageService | LegacyManagedStorageAccess] = []
-    seen: set[int] = set()
-    for candidate in candidates:
-        if id(candidate) in seen:
-            continue
-        seen.add(id(candidate))
-        unique.append(candidate)
-    return unique
+    return [storage] if storage is not None else [get_storage_service()]
 
 
 def drain_storage_deletion_outbox(
@@ -603,48 +580,16 @@ class DatasetService:
         self,
         db: Session,
         storage: StorageService | None = None,
-        *,
-        legacy_storages: list[StorageService] | None = None,
     ):
         self._db = db
         # ``storage`` remains the injection point used by file-backed datasets
         # and tests.  It is intentionally lazy in production so database-backed
         # dataset reads/writes do not depend on MinIO availability.
         self._storage_override = storage
-        self._legacy_storages_override = legacy_storages
 
     def _object_storage(self) -> StorageService:
         """Authoritative environment MinIO for genuine file payloads."""
         return self._storage_override or get_storage_service()
-
-    def _legacy_storage_candidates(
-        self,
-    ) -> Iterator[StorageService | LegacyManagedStorageAccess]:
-        """Stores that may contain a pre-database DatasetVersion.
-
-        The environment endpoint is always authoritative and is yielded first.
-        The former managed-endpoint regression adapter is resolved lazily only
-        after that endpoint positively misses or returns a checksum mismatch;
-        an environment connectivity failure must never trigger this path.
-        """
-        if self._legacy_storages_override is not None:
-            candidates = self._legacy_storages_override
-        elif self._storage_override is not None:
-            candidates = [self._storage_override]
-        else:
-            environment = get_environment_storage_service()
-            yield environment
-            legacy = get_legacy_managed_storage_access()
-            if legacy is not None and legacy is not environment:
-                yield legacy
-            return
-
-        seen: set[int] = set()
-        for candidate in candidates:
-            if id(candidate) in seen:
-                continue
-            seen.add(id(candidate))
-            yield candidate
 
     def create_dataset(self, name: str, kind: str, connection_id: str | None = None,
                        schema_json: dict | None = None, *,
@@ -901,7 +846,7 @@ class DatasetService:
     def load_version_bytes(
         self, dataset_id: str, version_no: int | None = None,
     ) -> bytes | None:
-        """Strictly load one immutable version from DB or legacy object storage."""
+        """Strictly load one immutable version from DB or object storage."""
         ver = self._resolve_version(dataset_id, version_no)
         if ver is None:
             return None
@@ -914,30 +859,17 @@ class DatasetService:
                     "（平台数据库）：版本内容可能已损坏")
             return raw
         elif ver.storage_uri:
-            failures: list[str] = []
-            for index, storage in enumerate(
-                self._legacy_storage_candidates(), start=1,
-            ):
-                try:
-                    raw = storage.get_object(ver.storage_uri)
-                except Exception as exc:
-                    failures.append(f"{type(exc).__name__}: {exc}")
-                    if index == 1 and not _is_legacy_object_miss(exc):
-                        # The first candidate is authoritative. Trying an old
-                        # managed endpoint during an outage would reintroduce
-                        # precisely the split-brain degradation being removed.
-                        break
-                    continue
-                if self._checksum_matches(raw, ver.checksum):
-                    return raw
-                # The same legacy URI can exist in both endpoints.  A stale or
-                # overwritten copy must not mask a valid copy in the next one.
-                failures.append(f"候选存储 {index} 的对象校验和不匹配")
-
-            details = "; ".join(failures) or "没有可用的历史对象存储"
-            raise DatasetReadError(
-                f"数据集 {dataset_id} v{ver.version_no} 历史存储对象读取失败"
-                f"（{ver.storage_uri}）：{details}")
+            try:
+                raw = self._object_storage().get_object(ver.storage_uri)
+            except Exception as exc:
+                raise DatasetReadError(
+                    f"数据集 {dataset_id} v{ver.version_no} 历史存储对象读取失败"
+                    f"（{ver.storage_uri}）：{type(exc).__name__}: {exc}") from exc
+            if not self._checksum_matches(raw, ver.checksum):
+                raise DatasetReadError(
+                    f"数据集 {dataset_id} v{ver.version_no} 校验和不匹配"
+                    f"（{ver.storage_uri}）：版本内容可能已损坏")
+            return raw
         else:
             return None
 

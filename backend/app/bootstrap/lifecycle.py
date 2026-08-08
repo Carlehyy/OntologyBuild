@@ -138,7 +138,6 @@ async def application_lifespan(
             _main_logger.warning("SyncScheduler 启动失败: %s", exc)
 
         from app.api_hub import mcp_server as api_hub_mcp
-        from app.settings.object_storage import mcp_server as minio_mcp
 
         # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建
         api_hub_public, api_hub_system = api_hub_mcp.reset_session_managers()
@@ -149,7 +148,6 @@ async def application_lifespan(
         file_cleanup_task = asyncio.create_task(file_asset_cleanup_loop())
         runtime_resources_started = True
         async with (
-            minio_mcp.reset_session_manager().run(),
             api_hub_public.run(),
             api_hub_system.run(),
         ):

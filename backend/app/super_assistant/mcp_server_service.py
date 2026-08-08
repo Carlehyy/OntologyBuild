@@ -5,10 +5,8 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.settings.object_storage.models import MinioConfig
 from app.settings.object_storage.service import (
-    ConfiguredMinioService,
-    MinioServiceError,
+    get_workspace_minio_service,
     minio_tool_manifest,
 )
 from app.super_assistant.mcp_client import (
@@ -215,10 +213,7 @@ async def test_mcp_server(
     item.last_tested_at = datetime.now(timezone.utc)
     try:
         if item.builtin_key == "minio":
-            service = ConfiguredMinioService.from_db(db)
-            if not service.config.mcp_enabled:
-                raise MinioServiceError("MinIO MCP 已被管理员停用")
-            service.status()
+            get_workspace_minio_service().status()
             tools = minio_tool_manifest()
         else:
             tools = await discover_tools(
@@ -246,23 +241,11 @@ def install_platform_minio_mcp(
     db: Session,
     owner_id: str,
     *,
-    configured_minio_service_cls=ConfiguredMinioService,
+    workspace_minio_service_factory=get_workspace_minio_service,
     minio_tool_manifest_fn=minio_tool_manifest,
 ) -> SuperAssistantMcpServer:
-    config = db.query(MinioConfig).filter(
-        MinioConfig.id == "default",
-    ).first()
-    if (
-        not config
-        or not config.enabled
-        or not config.connected
-        or not config.mcp_enabled
-    ):
-        raise McpServerConflictError(
-            "平台 MinIO MCP 尚未由管理员连接并启用",
-        )
     try:
-        configured_minio_service_cls.from_db(db).status()
+        workspace_minio_service_factory().status()
     except Exception as exc:
         raise McpServerUnavailableError(
             f"平台 MinIO 当前不可用：{exc}",

@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     n8n_api_key: str = ""
     n8n_timeout_seconds: int = Field(default=30, ge=3, le=120)
 
+    # Python 脚本流水线的执行网关（Jupyter Kernel Gateway）。可选引擎：
+    # 留空不阻断启动，仅在执行/保存脚本时返回明确错误。网关以内核方式运行
+    # 用户脚本，必须部署为无平台凭据环境变量的独立服务（见 compose）。
+    python_kernel_gateway_url: str = ""
+    python_kernel_gateway_auth_token: str = ""
+    python_script_timeout_seconds: int = Field(default=120, ge=5, le=1800)
+
     # SQLite is retained only for the explicit test environment. Every normal
     # application startup validates PostgreSQL before importing the app.
     database_url: str = "sqlite:////tmp/ontoprompt.db"
@@ -125,6 +132,10 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_use_ssl: bool = False
+    # 超级助手内置 MinIO MCP 的工作区桶：工具只能读写这一个桶，与平台数据桶隔离。
+    minio_mcp_bucket: str = "assistant-workspace"
+    # 默认不允许助手经 MCP 删除/移动对象；确有需求再在部署环境放开。
+    minio_mcp_allow_delete: bool = False
     # Retained only so legacy local:// objects can be migrated/read. New writes
     # always require MinIO and never select this directory as a fallback.
     storage_local_dir: str = "storage"

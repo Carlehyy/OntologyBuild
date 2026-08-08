@@ -14,7 +14,6 @@ from sqlalchemy import Connection, MetaData, inspect, text
 
 CRITICAL_SCHEMA_TABLES = (
     "super_assistant_mcp_servers",
-    "minio_config",
     "minio_operation_audits",
     "v2_dataset_versions",
     "fo_action_logs",

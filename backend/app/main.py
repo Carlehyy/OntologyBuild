@@ -107,7 +107,6 @@ class McpMiddleware:
         path = scope.get("path", "")
         from app.api_hub import config as api_hub_config
         from app.api_hub import mcp_server as api_hub_mcp
-        from app.settings.object_storage import mcp_server as minio_mcp
         if path == api_hub_config.SYSTEM_MCP_PATH or path.startswith(api_hub_config.SYSTEM_MCP_PATH + "/"):
             if not api_hub_config.SYSTEM_MCP_TOKEN:
                 await _send_json(send, 503, {"error": "system MCP is disabled"})
@@ -137,23 +136,6 @@ class McpMiddleware:
             hub_scope["path"] = "/"
             hub_scope["raw_path"] = b"/"
             await api_hub_mcp.handle_mcp(hub_scope, receive, send)
-            return
-        if path == "/mcp/minio" or path.startswith("/mcp/minio/"):
-            headers = dict(scope.get("headers") or [])
-            auth = headers.get(b"authorization", b"").decode("latin-1")
-            if not auth.startswith("Bearer "):
-                await _send_json(send, 401, {"detail": "Missing MinIO MCP Bearer token"})
-                return
-            token = auth.removeprefix("Bearer ").strip()
-            try:
-                minio_mcp.validate_bearer_token(token)
-            except HTTPException as exc:
-                await _send_json(send, exc.status_code, {"detail": exc.detail})
-                return
-            minio_scope = dict(scope)
-            minio_scope["path"] = "/"
-            minio_scope["raw_path"] = b"/"
-            await minio_mcp.handle_mcp(minio_scope, receive, send)
             return
         await self.app(scope, receive, send)
 

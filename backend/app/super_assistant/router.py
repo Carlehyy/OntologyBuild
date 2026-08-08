@@ -66,9 +66,8 @@ from app.super_assistant.skill_store import (
     skill_directory,
     write_text_file,
 )
-from app.settings.object_storage.models import MinioConfig
 from app.settings.object_storage.service import (
-    ConfiguredMinioService,
+    get_workspace_minio_service,
     minio_tool_manifest,
 )
 
@@ -481,7 +480,7 @@ def install_platform_minio_mcp(
         return mcp_server_service.install_platform_minio_mcp(
             db,
             current_user.id,
-            configured_minio_service_cls=ConfiguredMinioService,
+            workspace_minio_service_factory=get_workspace_minio_service,
             minio_tool_manifest_fn=minio_tool_manifest,
         )
     except mcp_server_service.McpServerServiceError as exc:
