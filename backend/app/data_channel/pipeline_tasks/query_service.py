@@ -6,7 +6,7 @@ from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipeline_tasks.models import PipelineTask
@@ -132,8 +132,6 @@ def _last_impact_map(
     """Return each task's latest asset-lake impact summary."""
     if not task_ids:
         return {}
-    from sqlalchemy import func
-
     output: dict[str, dict] = {}
     try:
         latest_created = (
@@ -145,8 +143,9 @@ def _last_impact_map(
             .group_by(PipelineRun.task_id)
             .subquery()
         )
+        # 只取 task_id 与 stats 两列：stats 之外的大字段（error_log 等）不参与计算
         latest = (
-            db.query(PipelineRun)
+            db.query(PipelineRun.task_id, PipelineRun.stats)
             .join(
                 latest_created,
                 (PipelineRun.task_id == latest_created.c.task_id)
@@ -154,10 +153,10 @@ def _last_impact_map(
             )
             .all()
         )
-        for run in latest:
-            impact = (run.stats or {}).get("lake_impact")
-            if run.task_id not in output and impact:
-                output[run.task_id] = impact
+        for task_id, stats in latest:
+            impact = (stats or {}).get("lake_impact")
+            if task_id not in output and impact:
+                output[task_id] = impact
     except Exception:
         pass
     return output
@@ -167,10 +166,21 @@ def _with_pipeline_info(
     db: Session,
     tasks: list[PipelineTask],
 ) -> list[dict]:
-    pipelines = {
-        pipeline.id: pipeline
-        for pipeline in db.query(Pipeline).all()
-    }
+    # 只取当前页任务实际引用的流水线、只取展示需要的标量列——
+    # Pipeline 行含 definition/spec 等大 JSON 列，全表拉取会随流水线数量劣化。
+    pipeline_ids = {task.pipeline_id for task in tasks if task.pipeline_id}
+    pipelines = {}
+    if pipeline_ids:
+        pipelines = {
+            row.id: row
+            for row in db.query(
+                Pipeline.id,
+                Pipeline.name,
+                Pipeline.status,
+                Pipeline.enabled,
+                Pipeline.version,
+            ).filter(Pipeline.id.in_(pipeline_ids)).all()
+        }
     task_ids = [task.id for task in tasks]
     live_next_runs = _live_next_run_map(task_ids)
     impacts = _last_impact_map(db, task_ids)
@@ -261,6 +271,47 @@ def selectable_pipelines(
         )
         .all()
     )
+
+    # 批量预取候选引用的数据集与各自最新版本，替代逐流水线逐产物的 N+1 查询。
+    # 最新版本 = 同 dataset_id 下 version_no 最大行（唯一约束保证无并列，
+    # 与 order_by(version_no.desc()).first() 语义一致）；DatasetVersion.data_blob
+    # 是 deferred 列，批量查询不会物化字节内容。
+    all_dataset_ids: list[str] = []
+    seen_dataset_ids: set[str] = set()
+    for pipeline in pipelines:
+        for dataset_id in (pipeline.target_curated_ids or []):
+            if dataset_id and dataset_id not in seen_dataset_ids:
+                seen_dataset_ids.add(dataset_id)
+                all_dataset_ids.append(dataset_id)
+    datasets_by_id: dict[str, Any] = {}
+    latest_version_by_dataset: dict[str, Any] = {}
+    if all_dataset_ids:
+        datasets_by_id = {
+            dataset.id: dataset
+            for dataset in db.query(Dataset)
+            .filter(Dataset.id.in_(all_dataset_ids))
+            .all()
+        }
+        latest_version_sub = (
+            db.query(
+                DatasetVersion.dataset_id,
+                func.max(DatasetVersion.version_no).label("mx"),
+            )
+            .filter(DatasetVersion.dataset_id.in_(all_dataset_ids))
+            .group_by(DatasetVersion.dataset_id)
+            .subquery()
+        )
+        latest_version_by_dataset = {
+            ver.dataset_id: ver
+            for ver in db.query(DatasetVersion)
+            .join(
+                latest_version_sub,
+                (DatasetVersion.dataset_id == latest_version_sub.c.dataset_id)
+                & (DatasetVersion.version_no == latest_version_sub.c.mx),
+            )
+            .all()
+        }
+
     items: list[dict] = []
     for pipeline in pipelines:
         curated: list[dict] = []
@@ -270,19 +321,10 @@ def selectable_pipelines(
             for item in (pipeline.target_curated_ids or [])
             if item
         ]:
-            dataset = (
-                db.query(Dataset)
-                .filter(Dataset.id == dataset_id)
-                .first()
-            )
+            dataset = datasets_by_id.get(dataset_id)
             if not dataset:
                 continue
-            latest = (
-                db.query(DatasetVersion)
-                .filter(DatasetVersion.dataset_id == dataset_id)
-                .order_by(DatasetVersion.version_no.desc())
-                .first()
-            )
+            latest = latest_version_by_dataset.get(dataset_id)
             has_data = bool(
                 latest
                 and (

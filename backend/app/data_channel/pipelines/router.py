@@ -336,8 +336,8 @@ def run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{pipeline_id}/runs")
-def list_runs(pipeline_id: str, db: Session = Depends(get_db)):
-    return execution_service.list_pipeline_runs(pipeline_id, db)
+def list_runs(pipeline_id: str, db: Session = Depends(get_db), limit: int = 50):
+    return execution_service.list_pipeline_runs(pipeline_id, db, limit=limit)
 
 
 @router.get("/runs/{run_id}")

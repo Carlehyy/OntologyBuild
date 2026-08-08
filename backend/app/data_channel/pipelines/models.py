@@ -76,6 +76,14 @@ class PipelineRun(Base):
     dataset_version_id: Mapped[str | None] = mapped_column(String, ForeignKey("v2_dataset_versions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # 运行历史是高频查询入口（任务池列表、执行动态、按流水线回看）；
+    # stats 为重 JSON 列，没有索引时历史积累会把列表查询拖成全表扫描。
+    __table_args__ = (
+        Index("ix_v2_pipeline_runs_pipeline_created", "pipeline_id", "created_at"),
+        Index("ix_v2_pipeline_runs_task_created", "task_id", "created_at"),
+        Index("ix_v2_pipeline_runs_created_at", "created_at"),
+    )
+
 
 class PipelineScriptVersion(Base):
     """Python 脚本流水线的保存历史。

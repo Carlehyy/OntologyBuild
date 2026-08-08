@@ -344,8 +344,8 @@ def test_remaining_execution_entries_delegate_to_canonical_service(
     monkeypatch.setattr(
         execution_service,
         "list_pipeline_runs",
-        lambda pipeline_id, db: calls.append(
-            ("list", pipeline_id, db)
+        lambda pipeline_id, db, limit=50: calls.append(
+            ("list", pipeline_id, db, limit)
         )
         or expected,
     )
@@ -376,7 +376,7 @@ def test_remaining_execution_entries_delegate_to_canonical_service(
     )
     assert pipeline_router.preview_step(body) is expected
     assert calls == [
-        ("list", "pipeline-1", database),
+        ("list", "pipeline-1", database, 50),
         ("get", "run-1", database),
         ("commit",),
         ("preview", body),

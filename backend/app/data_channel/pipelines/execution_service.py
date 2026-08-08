@@ -104,10 +104,14 @@ def enqueue_pipeline_run(
     return {"run_id": run.id, "status": "pending"}
 
 
-def list_pipeline_runs(pipeline_id: str, db: Session) -> list[dict]:
+def list_pipeline_runs(pipeline_id: str, db: Session, limit: int = 50) -> list[dict]:
+    # 运行历史只返回最新 N 条：stats 是重 JSON 列，全量返回会随历史积累
+    # 线性膨胀。前端各调用点均只消费最新一条（runs[0]）后转详情接口；
+    # 需要更早记录走数据任务池的执行历史（已分页）。
+    limit = max(1, min(int(limit or 50), 200))
     runs = db.query(PipelineRun).filter(
         PipelineRun.pipeline_id == pipeline_id
-    ).order_by(PipelineRun.created_at.desc()).all()
+    ).order_by(PipelineRun.created_at.desc()).limit(limit).all()
     return [
         {
             "id": run.id,
