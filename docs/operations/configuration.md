@@ -113,12 +113,29 @@ CDP 配置只填写服务根地址（例如 `http://browser:9222`）；平台会
 明确例外只有：API Hub 自有 SQLite；`ENVIRONMENT=test` 的隔离 SQLite 与 n8n
 配置注入；历史 `local://` 对象的只读读取/迁移。新平台数据不写入这些兼容路径。
 
-早期开发模式曾有一段时间会把 DatasetVersion、FileAsset、Media、FileConnector
-等平台对象写到数据库中“系统设置”保存的 MinIO 端点。该端点现在只通过显式的
-legacy read/list/delete 适配器参与回归时代对象迁移：仅当权威环境 MinIO 已正常
-响应“对象不存在”（DatasetVersion 还允许 checksum 不匹配）时才会尝试，环境
-MinIO 连接/鉴权/服务故障不会触发它。适配器不暴露上传能力；迁移完旧对象并核验
-内容后，所有新对象继续只写环境 `MINIO_*` 所指向的端点。
+平台只有一套 MinIO 配置，即部署环境 `MINIO_*`。早期开发模式曾把平台对象
+写到“系统设置”里手动保存的 MinIO 端点，该手动配置（页面、`/api/v1/settings/
+minio*` 接口、`minio_config` 表、外部 `/mcp/minio` 端点）已整体移除，回归期
+对象的 legacy 读取适配器也一并退役。超级助手内置的 MinIO MCP 继续使用同一个
+环境 MinIO，但所有工具被服务端锁定到 `MINIO_MCP_BUCKET`（默认
+`assistant-workspace`）专用桶，无法接触平台数据桶；删除/移动类操作默认关闭，
+需要时由部署方设置 `MINIO_MCP_ALLOW_DELETE=true` 放开。
+
+## Python 脚本流水线执行网关（可选）
+
+Python 脚本流水线（`definition.engine=python`）由 Jupyter Kernel Gateway
+执行用户脚本。三个环境变量：`PYTHON_KERNEL_GATEWAY_URL`（服务地址）、
+`PYTHON_KERNEL_GATEWAY_AUTH_TOKEN`（内网调用令牌）、
+`PYTHON_SCRIPT_TIMEOUT_SECONDS`（单次执行上限，默认 120 秒）。该依赖是
+**可选**的：不参与启动探测与 readiness；未配置或不可达时，脚本执行/保存/
+试运行返回明确错误，其余平台能力不受影响。
+
+Compose 部署固定使用随栈启动的 `python_kernel_gateway` 服务。该服务以独立
+内核执行用户脚本，因此**不得**给它挂 `env_file` 或注入任何平台凭据环境变量
+（`DATABASE_URL`、`SECRET_KEY`、MinIO/n8n 凭据等对用户脚本可读），也不暴露
+宿主机端口，仅 backend 与 celery_worker 经 Compose 内网访问。内核环境继承
+backend 镜像依赖（requests/httpx/pandas/pymysql 等），脚本可直接发起 HTTP
+请求取数；新增第三方库须加入 backend 依赖并重建镜像。
 
 ## 当前自动部署兼容策略
 

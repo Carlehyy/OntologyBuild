@@ -17,6 +17,7 @@ import SettingsPage from '@/pages/settings/SettingsPage'
 import PipelinesLayout from '@/pages/pipelines/PipelinesLayout'
 import PipelineListPage from '@/pages/pipelines/PipelineListPage'
 import PipelineBuilderPage from '@/pages/pipelines/builder/PipelineBuilderPage'
+import PythonScriptPage from '@/pages/pipelines/script/PythonScriptPage'
 import DataStewardPage from '@/pages/pipelines/steward/DataStewardPage'
 import FileAssetDownloadPage from '@/pages/pipelines/FileAssetDownloadPage'
 import ConnectionsTab from '@/pages/pipelines/connections/ConnectionsTab'
@@ -134,6 +135,8 @@ export default function App() {
           </Route>
           {/* 数据管家（对话式 n8n 流水线）— 静态段优先于 :pipelineId 匹配 */}
           <Route path="/data/pipelines/steward" element={<ProtectedRoute><DataStewardPage /></ProtectedRoute>} />
+          {/* Python 脚本流水线编辑页 — 静态段优先于 :pipelineId 匹配 */}
+          <Route path="/data/pipelines/script/:pipelineId" element={<ProtectedRoute><PythonScriptPage /></ProtectedRoute>} />
           <Route path="/data/pipelines/:pipelineId" element={<ProtectedRoute><PipelineBuilderPage /></ProtectedRoute>} />
 
           {/* Legacy redirect — keep old /pipelines URLs working */}
@@ -169,6 +172,7 @@ export default function App() {
           <Route path="/settings/rules" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/prompts" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/open-interfaces" element={<Navigate to="/settings/users" replace />} />
+          <Route path="/settings/minio" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/:tab" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<UnknownRouteRedirect />} />
           </Routes>

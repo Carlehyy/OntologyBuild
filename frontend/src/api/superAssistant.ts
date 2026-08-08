@@ -194,7 +194,4 @@ export const superAssistantApi = {
   testMcpServer: (id: string) => apiClientV2.post<{ ok: boolean; message: string; tools: McpTool[] }>(
     `/super-assistant/mcp-servers/${id}/test`,
   ),
-  installPlatformMinio: () => apiClientV2.post<SuperMcpServer>(
-    '/super-assistant/mcp-servers/platform-minio',
-  ),
 }

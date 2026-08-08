@@ -61,14 +61,6 @@ if ! grep -Fq 'location = /mcp {' "$NGINX_CONFIG" \
   printf 'retired generic MCP paths must return an explicit production 404\n' >&2
   exit 1
 fi
-minio_mcp_proxy_block="$(
-  sed -n '/location \^~ \/mcp\/minio {/,/^[[:space:]]*}/p' "$NGINX_CONFIG"
-)"
-if ! grep -Fq 'proxy_pass http://backend:8000;' <<<"$minio_mcp_proxy_block" \
-    || ! grep -Fq 'proxy_buffering off;' <<<"$minio_mcp_proxy_block"; then
-  printf 'production Nginx must stream the preserved MinIO MCP to backend\n' >&2
-  exit 1
-fi
 sshpass_command_count="$(grep -c 'sshpass -p' "$DEPLOY_WORKFLOW")"
 strict_sshpass_command_count="$(
   grep -c 'sshpass -p.*StrictHostKeyChecking=yes' "$DEPLOY_WORKFLOW"

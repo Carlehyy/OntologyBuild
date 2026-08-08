@@ -46,10 +46,9 @@ PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执
 文档/仓库卫生、后端、配置中心和前端门禁，但不会执行部署。
 
 生产 Nginx 对 `/api/`、`/api-hub/` 和 `/proxy/` 使用各自的后端代理契约。
-独立的 MinIO Streamable HTTP 服务继续通过 `/mcp/minio` 代理到 backend；
-已经退役的通用 `/mcp`（以及除 MinIO 外的 `/mcp/` 子路径）必须直接返回
-404，不能落入 SPA 的 `index.html`。`scripts/ci/test-deploy-guards.sh` 固定这条
-生产路由边界。
+已退役的通用 `/mcp` 与全部 `/mcp/` 子路径（含已移除的外部 MinIO MCP
+端点）必须直接返回 404，不能落入 SPA 的 `index.html`。
+`scripts/ci/test-deploy-guards.sh` 固定这条生产路由边界。
 
 ## 数据库迁移停机边界
 
