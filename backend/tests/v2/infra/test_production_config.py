@@ -394,26 +394,6 @@ def test_private_http_and_public_https_n8n_are_allowed_in_production():
     ) == "https://n8n.example.com/api/v1"
 
 
-def test_n8n_global_config_test_requires_admin(client, editor_user):
-    login = client.post(
-        "/api/v1/auth/login",
-        json={"username": "editor", "password": "editor123"},
-    )
-    token = login.json()["data"]["access_token"]
-    response = client.post(
-        "/api/v1/settings/workflow-config/test",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "enabled": True,
-            "api_url": "http://127.0.0.1:5678/api/v1",
-            "api_key": "not-sent-because-authz-runs-first",
-            "timeout_seconds": 1,
-        },
-    )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Admin required"
-
-
 def test_secret_key_derived_encryption_remains_decryptable(monkeypatch):
     from app.shared import encryption
 

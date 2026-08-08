@@ -29,7 +29,6 @@ test.describe('Settings Page', () => {
     const navigation = page.getByRole('navigation')
     await expect(navigation.getByText('用户管理', { exact: true })).toBeVisible()
     await expect(navigation.getByText('智能体配置', { exact: true })).toBeVisible()
-    await expect(navigation.getByText('工作流配置', { exact: true })).toBeVisible()
     await expect(navigation.getByText('领域设置', { exact: true })).toBeVisible()
   })
 
@@ -38,10 +37,11 @@ test.describe('Settings Page', () => {
     await expect(page.getByText('提示词模板', { exact: true })).toHaveCount(0)
     await expect(page.getByText('开放接口', { exact: true })).toHaveCount(0)
     await expect(page.getByText('MinIO 存储', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('工作流配置', { exact: true })).toHaveCount(0)
   })
 
   test('legacy settings deep links resolve to user management', async ({ page }) => {
-    for (const retired of ['extraction', 'rules', 'prompts', 'open-interfaces', 'minio']) {
+    for (const retired of ['extraction', 'rules', 'prompts', 'open-interfaces', 'minio', 'workflows']) {
       await page.goto(`/#/settings/${retired}`)
       await expect(page).toHaveURL(/\/#\/settings\/users$/)
     }

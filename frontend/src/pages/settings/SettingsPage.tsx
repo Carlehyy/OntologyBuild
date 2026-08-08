@@ -2,27 +2,23 @@ import { useTranslation } from 'react-i18next'
 import { useLocation, useParams } from 'react-router-dom'
 import UserManagementPanel from './UserManagementPanel'
 import { useAgentSettings } from './hooks/useAgentSettings'
-import { useWorkflowSettings } from './hooks/useWorkflowSettings'
 import { useDomainSettings } from './hooks/useDomainSettings'
 import AgentSettingsTab from './tabs/AgentSettingsTab'
-import WorkflowSettingsTab from './tabs/WorkflowSettingsTab'
 import DomainSettingsTab from './tabs/DomainSettingsTab'
 
-type ActiveTab = 'users' | 'agents' | 'workflows' | 'domains'
+type ActiveTab = 'users' | 'agents' | 'domains'
 
 const TAB_FROM_PATH: Record<string, ActiveTab> = {
   '/settings': 'users',
   '/settings/': 'users',
   '/settings/users': 'users',
   '/settings/agents': 'agents',
-  '/settings/workflows': 'workflows',
   '/settings/domains': 'domains',
 }
 
 const TAB_PARAM_MAP: Record<string, ActiveTab> = {
   'users': 'users',
   'agents': 'agents',
-  'workflows': 'workflows',
   'domains': 'domains',
 }
 
@@ -35,13 +31,11 @@ export default function SettingsPage() {
 
   // Keep every capability hook mounted in this order so state survives tab changes.
   const agentSettings = useAgentSettings(activeTab, t)
-  const workflowSettings = useWorkflowSettings(activeTab, t)
   const domainSettings = useDomainSettings(activeTab)
 
   return (
     <div>
       {activeTab === 'agents' && <AgentSettingsTab settings={agentSettings} t={t} />}
-      {activeTab === 'workflows' && <WorkflowSettingsTab settings={workflowSettings} t={t} />}
       {activeTab === 'users' && <UserManagementPanel />}
       {activeTab === 'domains' && <DomainSettingsTab settings={domainSettings} />}
     </div>

@@ -19,7 +19,6 @@ import {
   Settings,
   Table2,
   Waypoints,
-  Workflow,
 } from 'lucide-react'
 import type { User } from '@/types/auth'
 
@@ -86,7 +85,6 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
     key: 'system_settings', to: '/settings', icon: Settings, label: '系统设置', adminOnly: true, subItems: [
       { key: 'settings.users', to: '/settings/users', icon: Network, label: '用户管理', adminOnly: true },
       { key: 'settings.agents', to: '/settings/agents', icon: Bot, label: '智能体配置', adminOnly: true },
-      { key: 'settings.workflows', to: '/settings/workflows', icon: Workflow, label: '工作流配置', adminOnly: true },
       { key: 'settings.domains', to: '/settings/domains', icon: Globe, label: '领域设置', adminOnly: true },
     ],
   },

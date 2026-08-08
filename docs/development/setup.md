@@ -56,9 +56,9 @@ uv run --directory backend jupyter kernelgateway --KernelGatewayApp.port=8088
 随后执行配置中心的“启动后复检”，确认后端深度 readiness、前端以及至少一个
 Celery worker PONG。复检未通过时平台不算启动完成。
 
-n8n 地址、API Key 和超时由配置中心生成的启动环境统一托管。“系统设置 →
-工作流配置”只显示脱敏状态并测试当前启动配置，不保存覆盖值；修改 n8n 后需
-重启 API 与 worker。测试代码只有在 `ENVIRONMENT=test` 下才可注入隔离配置。
+n8n 地址、API Key 和超时由配置中心生成的启动环境统一托管，连通性由
+`/health/ready` 实时探测；修改 n8n 后需重启 API 与 worker。测试代码只有在
+`ENVIRONMENT=test` 下才可注入隔离配置。
 
 API、worker 和前端都启动后，再由管理员登录“模型配置”页面，按需配置 LLM
 提供商、模型和凭据。LLM 未配置不阻断基础平台启动；相关接口会明确报告未配置，

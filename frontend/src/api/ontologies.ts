@@ -124,19 +124,6 @@ export const settingsApi = {
   }) => apiClient.post<{ agents: { id: string; name: string; description: string }[] }>(
     '/settings/agent-config/agents', body,
   ),
-
-  // Workflow/n8n config
-  getWorkflowConfig: () => apiClient.get<{
-    enabled: boolean; api_url: string; has_api_key: boolean; timeout_seconds: number;
-  }>('/settings/workflow-config'),
-  updateWorkflowConfig: (body: {
-    enabled: boolean; api_url: string; api_key: string; timeout_seconds: number;
-  }) => apiClient.put('/settings/workflow-config', body),
-  testWorkflowConnection: (body: {
-    enabled: boolean; api_url: string; api_key: string; timeout_seconds: number;
-  }) => apiClient.post<{ ok: boolean; message: string; api_base: string }>(
-    '/settings/workflow-config/test', body,
-  ),
 }
 
 export const domainApi = {

@@ -40,7 +40,6 @@ export default defineConfig({
     '**/steward_conversation_export.spec.ts',
     '**/sync_tasks_ui.spec.ts',
     '**/trial_action_plan_review.spec.ts',
-    '**/workflow_settings_managed.spec.ts',
   ],
   outputDir: '../.artifacts/playwright/mocked-results',
 })
