@@ -56,8 +56,9 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     # xdist 并行 + 测试环境低 bcrypt 轮次 + pytest-split 按时长四分片后，全量
-    # 回归在 4 vCPU runner 上约 4-5 分钟；保留明确上限，避免误取消正常验证。
-    timeout-minutes: 10
+    # 回归在 4 vCPU runner 上目前约 7-10 分钟（套件随功能持续增长）；上限留到
+    # 15 分钟，既覆盖增长余量，又能及时掐断真正卡死的任务。
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
