@@ -2,6 +2,17 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { domainApi } from '@/api/ontologies'
 
+
+function domainErrorMessage(error: any, fallback: string) {
+  const detail = error?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && typeof detail[0]?.msg === 'string') return detail[0].msg
+  if (detail && typeof detail.message === 'string') return detail.message
+  if (typeof error?.message === 'string') return error.message
+  return fallback
+}
+
+
 export function useDomainSettings(activeTab: string) {
   const [domainSearch, setDomainSearch] = useState('')
   const [showDomainModal, setShowDomainModal] = useState(false)
@@ -26,7 +37,7 @@ export function useDomainSettings(activeTab: string) {
       setShowDomainModal(false)
       setDomainMsg('创建成功')
     },
-    onError: (e: any) => setDomainMsg(e?.detail || '创建失败'),
+    onError: (e: any) => setDomainMsg(domainErrorMessage(e, '创建失败')),
   })
 
   const updateDomainMut = useMutation({
@@ -34,11 +45,12 @@ export function useDomainSettings(activeTab: string) {
       domainApi.update(id, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['domains'] })
+      qc.invalidateQueries({ queryKey: ['ontologies'] })
       setShowDomainModal(false)
       setEditingDomain(null)
       setDomainMsg('更新成功')
     },
-    onError: (e: any) => setDomainMsg(e?.detail || '更新失败'),
+    onError: (e: any) => setDomainMsg(domainErrorMessage(e, '更新失败')),
   })
 
   const deleteDomainMut = useMutation({
@@ -48,7 +60,7 @@ export function useDomainSettings(activeTab: string) {
       setDeleteDomainTarget(null)
       setDomainMsg('删除成功')
     },
-    onError: (e: any) => setDomainMsg(e?.detail || '删除失败'),
+    onError: (e: any) => setDomainMsg(domainErrorMessage(e, '删除失败')),
   })
 
   function openCreateDomain() {

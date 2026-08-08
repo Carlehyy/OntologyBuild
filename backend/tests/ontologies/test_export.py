@@ -303,6 +303,27 @@ def test_export_import_round_trip_remaps_references_and_publishes_v0(
     assert "linkInstances" not in detail["snapshot"]["formal"]
 
 
+def test_import_auto_creates_missing_domain(client, auth_headers, ontology):
+    _seed_portable_structure(client, auth_headers, ontology["id"])
+    package, _ = _export(client, auth_headers, ontology["id"])
+    package["ontology"]["domain"] = "跨境风险"
+
+    response = client.post(
+        "/api/v1/ontologies/import",
+        json=package,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["ontology"]["domain"] == "跨境风险"
+    domains = client.get(
+        "/api/v1/domains",
+        headers=auth_headers,
+    ).json()["data"]
+    imported_domain = next(item for item in domains if item["name"] == "跨境风险")
+    assert imported_domain["description"] == "由本体本地导入自动创建"
+
+
 def test_import_rejects_dangling_structure_without_partial_project(
     client, auth_headers, ontology,
 ):
@@ -310,6 +331,7 @@ def test_import_rejects_dangling_structure_without_partial_project(
     _seed_portable_structure(client, auth_headers, source_id)
     package, _ = _export(client, auth_headers, source_id)
     broken = copy.deepcopy(package)
+    broken["ontology"]["domain"] = "校验失败不应创建"
     broken["structure"]["actions"][0]["rules"][0]["config"]["linkTypeId"] = "missing-link"
 
     before = client.get(
@@ -329,6 +351,11 @@ def test_import_rejects_dangling_structure_without_partial_project(
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "ontology_import_validation_failed"
     assert after == before
+    domains = client.get(
+        "/api/v1/domains",
+        headers=auth_headers,
+    ).json()["data"]
+    assert "校验失败不应创建" not in {item["name"] for item in domains}
 
 
 def test_import_rejects_runtime_data_outside_structure_contract(
