@@ -637,7 +637,6 @@ function PipelineCreateModal({
   onCreated?: (pl: Pipeline) => void
   onSaved?: () => void
 }) {
-  const navigate = useNavigate()
   const { toast } = useToast()
   const isEdit = !!pipeline
   const n8nReady = Boolean(
@@ -661,7 +660,7 @@ function PipelineCreateModal({
       toast({
         tone: 'warning',
         title: 'n8n 当前不可用',
-        description: '请先到系统设置完成配置、启用并通过连接测试。',
+        description: '请联系管理员检查部署环境的 N8N_* 启动配置并重启平台。',
       })
       return
     }
@@ -775,18 +774,11 @@ function PipelineCreateModal({
                     {!n8nStatus
                       ? '正在检查 n8n 配置状态…'
                       : !n8nStatus.configured
-                        ? '尚未配置 n8n 地址和 API Key。'
+                        ? '启动配置缺少 n8n 地址或 API Key，请联系管理员在部署环境补齐 N8N_* 并重启平台。'
                         : !n8nStatus.enabled
                           ? 'n8n 集成当前处于停用状态。'
                           : `n8n 当前不可达${n8nStatus.error ? `：${n8nStatus.error}` : '。'}`}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => { onClose(); navigate('/settings/workflows') }}
-                    className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 font-medium hover:bg-amber-100"
-                  >
-                    去配置
-                  </button>
                 </div>
               )}
             </div>

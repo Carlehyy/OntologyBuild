@@ -15,7 +15,6 @@ import {
   FolderOpen,
   History,
   Monitor,
-  Settings,
   Sparkles,
 } from 'lucide-react'
 import {
@@ -398,10 +397,6 @@ export default function DataStewardPage() {
               : !status.n8n.enabled ? '当前测试环境注入的 n8n 集成处于停用状态。'
               : `n8n 无法连接：${status.n8n.error || '请检查服务是否在线'}`}
           </span>
-          <Link to="/settings/workflows"
-            className="flex items-center gap-1 text-xs px-2.5 py-1 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 shrink-0">
-            <Settings size={11} /> 查看工作流状态
-          </Link>
         </div>
       )}
       {status && n8nReady && !status.llmReady && (

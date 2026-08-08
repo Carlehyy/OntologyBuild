@@ -165,7 +165,7 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
   await page.goto('/#/data/pipelines')
   await page.getByRole('button', { name: '新建流水线' }).click()
   await expect(page.getByRole('button', { name: /n8n 流水线/ })).toBeDisabled()
-  await expect(page.getByText(/尚未配置 n8n|n8n 集成当前处于停用状态/)).toBeVisible()
+  await expect(page.getByText(/启动配置缺少 n8n|n8n 集成当前处于停用状态/)).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath('02-n8n-preflight.png'),
     fullPage: true,
