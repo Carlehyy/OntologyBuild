@@ -6,6 +6,10 @@
 - append        直接追加：已有数据 + 本次输出
 - append_dedup  去重追加：追加后按整行内容去重（无主键场景防重复导入）
 - upsert        主键合并：按主键去重保留最新，可选软删除列打 __deleted__ 标记
+
+参考实现：语义权威，供等价性属性测试对照；流水线入湖的运行时路径已切换
+merge_engine（DuckDB 下推）。本模块函数不得删除——merge_rows /
+compute_lake_impact / _row_signature 同时被行级审核（curated review）使用。
 """
 from __future__ import annotations
 
@@ -117,7 +121,10 @@ def _apply_soft_delete(rows: list[dict], deleted_col: str) -> list[dict]:
 
 
 def merge_rows(old: list[dict], new: list[dict], opts: dict[str, Any]) -> tuple[list[dict], dict]:
-    """按入库方式合并，返回 (合并后的全量行, 合并统计)"""
+    """按入库方式合并，返回 (合并后的全量行, 合并统计)
+
+    参考实现：语义权威，供等价性属性测试对照；运行时路径已切换 merge_engine。
+    """
     opts = opts or {}
     mode = normalize_write_mode(opts.get("mode"))
 
@@ -161,6 +168,7 @@ def compute_lake_impact(before: list[dict], after: list[dict],
                         pk_cols: list[str], sample_limit: int = 50) -> dict:
     """本次入库对资产湖的行级影响 = diff(入库前全量, 入库后全量)。
 
+    参考实现：语义权威，供等价性属性测试对照；运行时路径已切换 merge_engine。
     有主键 → 按主键组合识别同一行，能区分「更新」（键在、内容变）。
     无主键 → 退化为整行内容比对，只有「新增/删除」，没有「更新」。
     返回计数 + 各类别的行样本（截断），供执行记录逐条追溯审计。

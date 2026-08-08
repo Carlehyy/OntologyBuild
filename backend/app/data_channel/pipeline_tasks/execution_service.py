@@ -1,6 +1,7 @@
 """Manual execution entry point for Pipeline Tasks."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -8,6 +9,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipeline_tasks.models import PipelineTask
+
+logger = logging.getLogger(__name__)
 
 
 def trigger_task(
@@ -31,18 +34,21 @@ def trigger_task(
             or task.lease_expires_at > datetime.utcnow()
         ):
             raise HTTPException(409, "任务正在执行中，请稍后再试")
-    from app.data_channel.pipeline_tasks.engine import (
-        execute_pipeline_task,
-    )
-
     if sync:
+        # sync=true 是产品契约：前端阻塞等待本次执行结果，保持原地内联执行
+        from app.data_channel.pipeline_tasks.engine import (
+            execute_pipeline_task,
+        )
         return execute_pipeline_task(
             task_id,
             trigger_type="manual",
         )
-    background.add_task(
-        execute_pipeline_task,
-        task_id,
-        "manual",
-    )
+
+    # sync=false 经 NATS 派发给独立 executor 进程执行，不再占用 Web 进程
+    from app.data_channel.pipeline_tasks.dispatch import dispatch_pipeline_task
+    try:
+        dispatch_pipeline_task(task_id, "manual")
+    except Exception as exc:  # noqa: BLE001 - 任何通道故障对用户都是 503
+        logger.error("PipelineTask %s 派发失败: %s", task_id, exc)
+        raise HTTPException(503, "任务派发失败：消息通道不可用，请稍后重试")
     return {"status": "triggered", "task_id": task_id}

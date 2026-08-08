@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _JOB_PREFIX = "sync_task:"
 _PIPE_JOB_PREFIX = "pipe_task:"
 _DATASET_EVENT_JOB_ID = "dataset_version_events:drain"
+_PIPELINE_RECONCILE_JOB_ID = "pipeline_executions:reconcile"
 # 正在执行的任务锁
 _running_locks: dict[str, threading.Lock] = {}
 _global_lock = threading.Lock()
@@ -38,20 +39,21 @@ def _job_runner(task_id: str) -> None:
 
 
 def _pipeline_job_runner(task_id: str) -> None:
-    """调度器回调：安全执行流水线调度任务（任务池新语义）"""
+    """调度器回调：把流水线调度任务派发到 NATS，由独立 executor 进程执行。
+
+    派发失败只记日志：下一个调度周期会自然重试；重复派发由执行引擎的
+    数据库原子租约兜底，不会产生并发执行。
+    """
     lock = _get_task_lock(f"pipe:{task_id}")
     if not lock.acquire(blocking=False):
-        logger.info(f"PipelineTask {task_id} 正在执行，跳过本次调度")
+        logger.info(f"PipelineTask {task_id} 正在派发，跳过本次调度")
         return
     try:
-        from app.data_channel.pipeline_tasks.engine import execute_pipeline_task
-        result = execute_pipeline_task(task_id, trigger_type="scheduled")
-        if result.get("status") == "ok":
-            logger.info(f"PipelineTask {task_id} 调度执行成功 lake_rows={result.get('lake_rows')}")
-        else:
-            logger.error(f"PipelineTask {task_id} 调度执行失败: {result.get('error')}")
+        from app.data_channel.pipeline_tasks.dispatch import dispatch_pipeline_task
+        dispatch_pipeline_task(task_id, "scheduled")
+        logger.info(f"PipelineTask {task_id} 已派发调度执行")
     except Exception as e:
-        logger.exception(f"PipelineTask {task_id} 调度执行异常: {e}")
+        logger.error(f"PipelineTask {task_id} 派发失败（下一调度周期自动重试）: {e}")
     finally:
         lock.release()
 
@@ -67,6 +69,24 @@ def _dataset_event_job_runner() -> None:
             logger.info("DatasetVersion event outbox: %s", result)
     except Exception:
         logger.exception("DatasetVersion event outbox worker failed")
+
+
+def _pipeline_reconcile_job_runner() -> None:
+    """周期收口进程退出留下的中断流水线执行（只处理租约已过期的）。"""
+    try:
+        from app.database import SessionLocal
+        from app.data_channel.pipeline_tasks.reconciler import (
+            reconcile_pipeline_executions,
+        )
+        db = SessionLocal()
+        try:
+            result = reconcile_pipeline_executions(db)
+        finally:
+            db.close()
+        if result.get("tasks_failed") or result.get("runs_failed"):
+            logger.info("PipelineTask 对账器收口中断执行: %s", result)
+    except Exception:
+        logger.exception("PipelineTask 对账器执行失败")
 
 
 class SyncScheduler:
@@ -123,6 +143,19 @@ class SyncScheduler:
                 coalesce=True,
                 max_instances=1,
                 misfire_grace_time=30,
+            )
+            self._scheduler.add_job(
+                _pipeline_reconcile_job_runner,
+                trigger=IntervalTrigger(
+                    seconds=max(
+                        1,
+                        int(settings.pipeline_run_reconcile_interval_seconds or 300),
+                    )),
+                id=_PIPELINE_RECONCILE_JOB_ID,
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
             )
             # Fail closed on a missing production migration and recover any
             # events left behind by the previous process before reporting ready.

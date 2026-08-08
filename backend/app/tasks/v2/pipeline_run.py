@@ -356,6 +356,41 @@ def _strip_content(rows: list[dict]) -> list[dict]:
     return [{k: v for k, v in r.items() if k != "content"} for r in rows]
 
 
+def _slim_ctx_meta(meta: dict | None) -> dict:
+    """ctx.meta 落入 run.stats 前的白名单裁剪。
+
+    ctx.meta 可能携带全量行数据（宽表拆分的 split_tables = 表名→完整行
+    列表），原样写进 v2_pipeline_runs.stats 会让单行 JSON 膨胀到百 MB 级、
+    甚至超过 Postgres json 字段上限导致运行失败。dry-run 与真实运行统一只
+    保留质量分记账用的两个标量键；split_tables 的产物明细已由
+    _save_curated_outputs 展开成多个 output 表达，不依赖 meta 透传。
+    """
+    return {k: v for k, v in (meta or {}).items() if k in ("rows_before", "rows_after")}
+
+
+def _source_capacity_warning(source: dict) -> str | None:
+    """源行数接近内存执行上限时提前预警。
+
+    硬性拒绝只在生产环境生效（见 _load_source_rows），预警同样只在生产
+    发出，避免开发环境看到与己无关的容量措辞。
+    """
+    from app.config import settings
+
+    max_rows = int(settings.pipeline_max_in_memory_rows or 0)
+    if settings.environment != "production" or max_rows <= 0:
+        return None
+    ratio = float(settings.pipeline_source_warn_ratio or 0.8)
+    rowcount = int(source.get("source_rowcount") or 0)
+    if not (0 < ratio < 1) or rowcount <= max_rows * ratio:
+        return None
+    return (
+        f"源数据集「{source.get('filename') or source.get('dataset_id')}」"
+        f"当前 {rowcount:,} 行，已达内存执行上限 {max_rows:,} 行的 {ratio:.0%}；"
+        "超过上限后生产运行将拒绝执行。请提前拆分源资产，"
+        "或调大 PIPELINE_MAX_IN_MEMORY_ROWS（需先评估执行器内存）"
+    )
+
+
 def collect_pipeline_output(db, pl) -> list[dict]:
     """试运行取数：执行采集与加工但【不写资产湖】。
 
@@ -380,8 +415,7 @@ def collect_pipeline_output(db, pl) -> list[dict]:
         path = (plan.get("paths") or {}).get(source.get("connector_node_id"))
         transform_route, runtime_spec = _pipeline_runtime_config(pl, path)
         data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
-        base_meta = {k: v for k, v in ctx.meta.items()
-                     if k in ("rows_before", "rows_after")}  # 质量分只用这两个键
+        base_meta = _slim_ctx_meta(ctx.meta)  # 质量分只用这两个键
         split_tables = ctx.meta.get("split_tables")
         if isinstance(split_tables, dict) and split_tables:
             for table_name, rows in split_tables.items():
@@ -609,8 +643,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     # ── 资产湖准入闸门：行格式规范化 + 主键契约（声明仲裁/三校验）+ 列漂移检测。
     # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
     from app.data_channel.datasets.lake_gate import (
-        gate_rows, persist_contract, split_pk, validate_merged_lake,
-        validate_upsert_base, infer_columns_typed)
+        gate_rows, persist_contract, split_pk, infer_columns_typed)
     # 流水线字段契约（改名/非空/主键）仅适用于单产物运行：多源/宽表拆分的
     # 契约粒度是「每个数据集一个」，流水线级契约对不上，跳过并在警告里说明
     contract_applicable = table_name is None and not multi_source
@@ -629,6 +662,9 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     merge_meta: dict = {}
     lake_rows = data
     lake_impact: dict | None = None
+    lake_parquet: bytes | None = None
+    lake_rowcount = len(data)
+    lake_columns_typed: list[dict] | None = None
     if write_opts:
         if not data and write_opts.get("skip_empty", True):
             # 空输出保护：本次流水线输出 0 行，跳过入库，避免误清空资产
@@ -643,27 +679,38 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
                 "rows_out": 0,
                 "lake_rows": None,
                 "skipped": "empty_output",
-                "meta": ctx.meta,
+                "meta": _slim_ctx_meta(ctx.meta),
             }
-        from app.data_channel.pipeline_tasks.merge import (
-            load_latest_rows, merge_rows, compute_lake_impact)
-        # 入库前的湖中全量——既作非 overwrite 的合并基，也作审计差异基线
-        prev_rows = load_latest_rows(db, curated_ds.id)
-        old_rows = [] if write_opts.get("mode") in (None, "overwrite") else prev_rows
-        if write_opts.get("mode") == "upsert":
-            # 湖中存量行缺主键列时按键去重会把它们折叠成一行——合并前硬校验
-            validate_upsert_base(old_rows, split_pk(effective_pk),
-                                 dataset_name=curated_ds.name)
-        # 合并统一用仲裁后的生效主键（湖中已声明的契约优先于任务本次填写）
-        lake_rows, merge_meta = merge_rows(
-            old_rows, data, {**write_opts, "primary_key": effective_pk})
-        # gate_rows 只看本批输出；合并后再验完整快照，才能发现跨批次重复主键。
-        # 对所有模式统一执行可防未来新增合并策略遗漏，当前 append 两种模式受益最大。
-        validate_merged_lake(
-            lake_rows, split_pk(effective_pk), dataset_name=curated_ds.name,
-            write_mode=merge_meta.get("mode") or "")
-        # 审计：本次入库对资产湖的行级影响（入库前后 diff：新增/更新/删除）
-        lake_impact = compute_lake_impact(prev_rows, lake_rows, split_pk(effective_pk))
+        from app.data_channel.pipeline_tasks.merge_engine import merge_lake_increment
+        from app.data_channel.datasets.service import version_has_content
+        from app.models.v2.dataset import DatasetVersion as _DSV
+        # 基座原始字节：与 load_latest_rows 同一读取语义——读取/解析失败抛
+        # DatasetReadError 让本次运行失败；只有尚无版本/版本无内容才是空基座
+        base_ver = (db.query(_DSV).filter(_DSV.dataset_id == curated_ds.id)
+                    .order_by(_DSV.version_no.desc()).first())
+        base_bytes = (svc.load_version_bytes(curated_ds.id, base_ver.version_no)
+                      if version_has_content(base_ver) else None)
+        # 合并/去重/主键校验/审计 diff/parquet 序列化整体下推 DuckDB
+        # （merge_engine），运行成本与内存只随增量批次而非湖中总量增长；
+        # 生效主键照旧用仲裁结果（湖中已声明的契约优先于任务本次填写）。
+        # upsert 软删除会对 data 就地打标（与参考实现 merge_rows 一致）。
+        outcome = merge_lake_increment(
+            base_bytes=base_bytes,
+            base_version_no=base_ver.version_no if base_ver is not None else None,
+            new_rows=data,
+            write_opts={**write_opts, "primary_key": effective_pk},
+            pk_cols=split_pk(effective_pk),
+            dataset_name=curated_ds.name,
+            dataset_id=curated_ds.id,
+            # 空增量（skip_empty=False）时质量分以湖中全量为样本，需物化合并行
+            need_merged_rows=not data,
+        )
+        merge_meta = outcome.merge_meta
+        lake_impact = outcome.lake_impact
+        lake_parquet = outcome.parquet_bytes
+        lake_rowcount = outcome.rowcount
+        lake_columns_typed = outcome.columns_typed
+        lake_rows = outcome.merged_rows or []
 
     schema_to_publish: dict | None = None
     if data or lake_rows:
@@ -671,7 +718,8 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         schema_to_publish = persist_contract(
             curated_ds, pk=effective_pk,
             pk_source=gate["pk_source"],
-            lake_rows=lake_rows, output_rows=data,
+            lake_rows=lake_rows, lake_columns_typed=lake_columns_typed,
+            output_rows=data,
             column_definitions=column_defs,
             allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
         sample = data or lake_rows
@@ -688,7 +736,10 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
 
     from app.data_channel.datasets.service import rows_to_parquet_bytes
     ver = svc.create_version(
-        curated_ds.id, rows_to_parquet_bytes(lake_rows), rowcount=len(lake_rows),
+        curated_ds.id,
+        # write_opts 路径快照由 merge_engine 直出（与 rows_to_parquet_bytes 读回等价）
+        lake_parquet if lake_parquet is not None else rows_to_parquet_bytes(lake_rows),
+        rowcount=lake_rowcount,
         schema_json=schema_to_publish, _lock_held=True)
 
     # 审计：本次流水线输出样本（入库前的产物），供执行记录追溯「流水线的输出是什么」
@@ -707,7 +758,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         "version_no": ver.version_no,
         "rows_in": ctx.rows_in,
         "rows_out": len(data),
-        "lake_rows": len(lake_rows),
+        "lake_rows": lake_rowcount,
         "output_columns": output_columns,
         "output_sample": output_sample,
         "lake_impact": lake_impact,
@@ -716,7 +767,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         "pk_source": gate["pk_source"] or None,
         "schema_drift": gate["drift"],
         "gate_warnings": gate["warnings"] or None,
-        "meta": ctx.meta,
+        "meta": _slim_ctx_meta(ctx.meta),
     }
 
 
@@ -774,14 +825,9 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             if ((published_version.definition or {}) != (pl.definition or {})
                     or (published_version.column_definitions or []) != (pl.column_definitions or [])):
                 raise ValueError("Pipeline live 配置与发布快照不一致，拒绝执行漂移版本")
-        run.stats = {
-            **(run.stats or {}),
-            "pipeline_version": pl.version,
-            "pipeline_version_snapshot_id": published_version.id if published_version else None,
-            "definition_snapshot": pl.definition,
-            "spec_snapshot": pl.spec,
-            "column_definitions_snapshot": pl.column_definitions,
-        }
+        # stats 只写轻量标量：definition/spec/契约快照与发布版本表重复、
+        # 无任何消费方，逐 run 复制只会让 v2_pipeline_runs 单行体积失控。
+        run.stats = {**(run.stats or {}), "pipeline_version": pl.version}
         db.commit()
 
         # ── 非画布引擎（n8n / 未来第三方工作流）：注册表分发，共用入湖通道 ──
@@ -824,11 +870,17 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
 
         outputs = []
         source_stats = []
+        source_warnings: list[str] = []
         multi_source = len(sources) > 1
         for source in sources:
             path = (plan.get("paths") or {}).get(source.get("connector_node_id"))
             transform_route, runtime_spec = _pipeline_runtime_config(pl, path)
             data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
+
+            capacity_warning = _source_capacity_warning(source)
+            if capacity_warning:
+                logger.warning(capacity_warning)
+                source_warnings.append(capacity_warning)
 
             conn_node_id = source.get("connector_node_id")
 
@@ -913,6 +965,7 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             "lake_impact": lake_impact_summary,
             "write_mode": (write_opts or {}).get("mode"),
             "gate_warnings": gate_warnings or None,
+            "source_warnings": source_warnings or None,
             "skipped_outputs": [o for o in outputs if o.get("skipped")] or None,
             "node_status": dict(node_status),
             "source_stats": source_stats,

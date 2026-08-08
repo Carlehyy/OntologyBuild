@@ -561,7 +561,9 @@ def validate_merged_lake(rows: list[dict], pk_cols: list[str], *,
 
 
 def persist_contract(curated_ds, *, pk: str, pk_source: str,
-                     lake_rows: list[dict], output_rows: list[dict] | None = None,
+                     lake_rows: list[dict] | None = None,
+                     lake_columns_typed: list[dict] | None = None,
+                     output_rows: list[dict] | None = None,
                      column_definitions: list | None = None,
                      allow_redeclare: bool = False) -> dict:
     """把契约固化/更新到 schema_json（返回新 schema dict，调用方负责赋值提交）。
@@ -569,13 +571,16 @@ def persist_contract(curated_ds, *, pk: str, pk_source: str,
     - primary_key：首次声明时写入（来源 task/pipeline）；已有声明仅在
       allow_redeclare（全量覆盖重建）且生效主键确实不同的时候重写，
       并把旧声明留在 contract.previous_pk 供审计
-    - columns / columns_typed：每次成功入湖都刷新为湖中本版实际列（合并后）
+    - columns / columns_typed：每次成功入湖都刷新为湖中本版实际列（合并后）。
+      调用方既可传 lake_rows 由本函数推断，也可直接传 lake_columns_typed
+      （merge_engine 下推路径避免把湖中全量行物化回 Python，二者输出等价）
     - last_output_columns：本次流水线输出的列（合并前），下次漂移检测的基线
     - field_names / contract_definitions：流水线契约的显示名与完整定义快照，
       供资产湖展示与审计（每次入湖随契约刷新）
     """
     schema = dict(getattr(curated_ds, "schema_json", None) or {})
-    typed = infer_columns_typed(lake_rows)
+    typed = (lake_columns_typed if lake_columns_typed is not None
+             else infer_columns_typed(lake_rows or []))
     defs = normalize_definitions(column_definitions)
     if defs:
         declared_types = {d["field_key"]: d["field_type"] for d in defs}
