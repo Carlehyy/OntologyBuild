@@ -514,6 +514,83 @@ def test_list_filter_separates_python_from_canvas_and_n8n(db):
     assert _ids("n8n") == {"n8nA"}
 
 
+# ── 脚本保存历史 ─────────────────────────────────────────────────
+
+
+def test_save_records_history_and_lists_newest_first(db, monkeypatch):
+    pipeline = _python_pipeline(db)
+    monkeypatch.setattr(
+        python_service,
+        "execute_script",
+        lambda script, *, timeout: _execution(),
+    )
+    pipeline_router.save_pipeline_script(
+        pipeline.id, ScriptBody(script="result = [{'id': 'A-1'}]"), db)
+    pipeline_router.save_pipeline_script(
+        pipeline.id, ScriptBody(script="result = [{'id': 'A-2'}]"), db)
+
+    result = pipeline_router.list_script_versions(pipeline.id, db)
+
+    assert [item["version_no"] for item in result["items"]] == [2, 1]
+    latest = result["items"][0]
+    assert latest["script"] == "result = [{'id': 'A-2'}]"
+    assert latest["output_columns"] == ["id", "name"]
+    assert latest["row_count"] == 1
+    assert latest["created_at"]
+
+
+def test_failed_or_rejected_save_records_no_history(db, monkeypatch):
+    pipeline = _python_pipeline(db)
+    monkeypatch.setattr(
+        python_service,
+        "execute_script",
+        lambda script, *, timeout: _execution(rows=[], error="脚本执行失败（ValueError）：x"),
+    )
+    with pytest.raises(HTTPException):
+        pipeline_router.save_pipeline_script(
+            pipeline.id, ScriptBody(script=SCRIPT), db)
+
+    published = _python_pipeline(db, status="published", name="已发布")
+    monkeypatch.setattr(
+        python_service,
+        "execute_script",
+        lambda script, *, timeout: _execution(),
+    )
+    with pytest.raises(HTTPException):
+        pipeline_router.save_pipeline_script(
+            published.id, ScriptBody(script=SCRIPT), db)
+
+    assert pipeline_router.list_script_versions(pipeline.id, db)["items"] == []
+    assert pipeline_router.list_script_versions(published.id, db)["items"] == []
+
+
+def test_script_history_pruned_beyond_keep_limit(db, monkeypatch):
+    pipeline = _python_pipeline(db)
+    monkeypatch.setattr(python_service, "_SCRIPT_VERSION_KEEP", 2)
+    monkeypatch.setattr(
+        python_service,
+        "execute_script",
+        lambda script, *, timeout: _execution(),
+    )
+    for index in range(3):
+        pipeline_router.save_pipeline_script(
+            pipeline.id, ScriptBody(script=f"result = [{{'n': {index}}}]"), db)
+
+    result = pipeline_router.list_script_versions(pipeline.id, db)
+
+    assert [item["version_no"] for item in result["items"]] == [3, 2]
+
+
+def test_list_script_versions_rejects_non_python(db):
+    canvas = Pipeline(name="画布流水线", definition={"nodes": [], "edges": []})
+    db.add(canvas)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        pipeline_router.list_script_versions(canvas.id, db)
+    assert exc_info.value.status_code == 400
+
+
 # ── run-sync 全链路（证明下游零改动可用） ───────────────────────────
 
 

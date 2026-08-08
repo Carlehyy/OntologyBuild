@@ -452,18 +452,30 @@ def save_pipeline_script(
     pipeline_id: str,
     body: ScriptBody,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """保存 Python 脚本：服务端重新执行并复验输出格式，通过才落库。
 
-    已发布流水线脚本封版（409）。保存成功会使既有发布校验凭证失效，
-    发布前必须重新执行预览并校验字段定义。
+    落库同时把该版脚本冻结进保存历史。已发布流水线脚本封版（409）。
+    保存成功会使既有发布校验凭证失效，发布前必须重新执行预览并校验
+    字段定义。
     """
     return python_engine_service.save_pipeline_script(
         pipeline_id,
         body,
         db,
         format_pipeline_fn=_format_pipeline,
+        current_user=current_user,
     )
+
+
+@router.get("/{pipeline_id}/script/versions")
+def list_script_versions(
+    pipeline_id: str,
+    db: Session = Depends(get_db),
+):
+    """Python 脚本的保存历史（最近在前，含脚本全文，供查看/恢复）。"""
+    return python_engine_service.list_script_versions(pipeline_id, db)
 
 
 @router.post("/preview-step")

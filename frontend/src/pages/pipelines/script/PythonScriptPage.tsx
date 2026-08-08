@@ -4,10 +4,10 @@ import CodeMirror from '@uiw/react-codemirror'
 import { python } from '@codemirror/lang-python'
 import {
   ArrowLeft, Play, Save, Loader2, CheckCircle2, XCircle, AlertTriangle,
-  FileCode2, Terminal, RotateCcw, Keyboard,
+  FileCode2, Terminal, RotateCcw, Keyboard, History, X,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
-import type { Pipeline, ScriptExecutionResult } from '@/api/v2/pipelines'
+import type { Pipeline, ScriptExecutionResult, ScriptVersion } from '@/api/v2/pipelines'
 import { useToast } from '@/components/ui/Toast'
 import { PYTHON_SCRIPT_TEMPLATE } from './template'
 
@@ -46,6 +46,17 @@ function formatClock(iso?: string): string {
   }
 }
 
+function formatDateTime(iso?: string | null): string {
+  if (!iso) return '-'
+  try {
+    return new Date(iso).toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    })
+  } catch {
+    return iso
+  }
+}
+
 const EMPTY_RESULT: Omit<ScriptExecutionResult, 'ok' | 'error'> = {
   format_valid: false,
   format_error: null,
@@ -76,6 +87,9 @@ export default function PythonScriptPage() {
   const [validatedScript, setValidatedScript] = useState<string | null>(null)
   const [draftRestoredAt, setDraftRestoredAt] = useState<string | null>(null)
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [showVersions, setShowVersions] = useState(false)
+  const [versions, setVersions] = useState<ScriptVersion[] | null>(null)
+  const [versionsLoading, setVersionsLoading] = useState(false)
 
   const isPublished = pipeline?.status === 'published'
   const wrongEngine = pipeline && (pipeline.definition as { engine?: string } | null)?.engine !== 'python'
@@ -186,6 +200,37 @@ export default function PythonScriptPage() {
     setScript(savedScript || PYTHON_SCRIPT_TEMPLATE)
     clearDraft()
     setValidatedScript(null)
+  }
+
+  const openVersions = async () => {
+    if (!pipeline) return
+    setShowVersions(true)
+    setVersionsLoading(true)
+    try {
+      const res = await pipelinesApi.scriptVersions(pipeline.id)
+      setVersions(res.items)
+    } catch (e: unknown) {
+      const err = e as { detail?: string; message?: string }
+      toast({
+        tone: 'error',
+        title: '历史版本加载失败',
+        description: err?.detail || err?.message || '请稍后重试。',
+      })
+      setShowVersions(false)
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  const handleRestoreVersion = (version: ScriptVersion) => {
+    setScript(version.script)
+    setValidatedScript(null)
+    setShowVersions(false)
+    toast({
+      tone: 'info',
+      title: `已恢复 v${version.version_no} 到编辑器`,
+      description: '恢复后需重新执行并通过格式校验，才能保存为最新版本。',
+    })
   }
 
   const handleDiscardDraft = () => {
@@ -380,13 +425,21 @@ export default function PythonScriptPage() {
                 onClick={handleRevert}
                 disabled={executing || saving}
                 className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
-                title="放弃当前修改，恢复为已保存的脚本"
+                title="放弃当前修改，回退到最近一次保存的脚本"
               >
                 <RotateCcw size={13} /> 放弃修改
               </button>
             )}
           </>
         )}
+        <button
+          onClick={openVersions}
+          disabled={executing || saving}
+          className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+          title="查看脚本的保存历史，可查看或恢复任一版本"
+        >
+          <History size={13} /> 历史版本
+        </button>
         <p className="text-xs text-gray-400">
           {isPublished
             ? '已发布流水线脚本只读'
@@ -404,6 +457,104 @@ export default function PythonScriptPage() {
         saving={saving}
         sampleColumns={sampleColumns}
       />
+
+      {/* 历史版本抽屉 */}
+      {showVersions && (
+        <VersionsDrawer
+          versions={versions}
+          loading={versionsLoading}
+          readOnly={!!isPublished}
+          onClose={() => setShowVersions(false)}
+          onRestore={handleRestoreVersion}
+        />
+      )}
+    </div>
+  )
+}
+
+function VersionsDrawer({
+  versions,
+  loading,
+  readOnly,
+  onClose,
+  onRestore,
+}: {
+  versions: ScriptVersion[] | null
+  loading: boolean
+  readOnly: boolean
+  onClose: () => void
+  onRestore: (version: ScriptVersion) => void
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-[2px]" onClick={onClose}>
+      <div
+        className="absolute inset-y-0 right-0 flex w-[540px] max-w-full flex-col bg-white shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3.5">
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">脚本历史版本</h3>
+            <p className="mt-0.5 text-xs text-slate-400">
+              每次保存冻结一版，最多保留最近 20 版；恢复后需重新执行校验才能保存
+            </p>
+          </div>
+          <button onClick={onClose} aria-label="关闭" className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-900">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
+              <Loader2 size={15} className="animate-spin" /> 加载中...
+            </div>
+          ) : !versions || versions.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-16 text-center">
+              <History size={26} className="text-slate-300" />
+              <p className="text-sm text-gray-500">还没有保存历史</p>
+              <p className="text-xs text-gray-400">第一次保存脚本后会在这里生成版本记录</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {versions.map((version, index) => (
+                <div key={version.id} className="rounded-xl border border-slate-200 bg-white">
+                  <div className="flex items-center gap-2 px-3.5 py-2.5">
+                    <span className={`inline-flex h-6 min-w-10 items-center justify-center rounded-lg px-2 font-mono text-xs font-semibold ${
+                      index === 0 ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-600'}`}
+                    >
+                      v{version.version_no}
+                    </span>
+                    {index === 0 && (
+                      <span className="rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium text-teal-700">当前</span>
+                    )}
+                    <span className="text-xs text-gray-500">{formatDateTime(version.created_at)}</span>
+                    <span className="ml-auto text-[11px] text-gray-400">
+                      {version.row_count.toLocaleString()} 行 · {version.output_columns.length} 列 · {(version.duration_ms / 1000).toFixed(1)}s
+                    </span>
+                    <button
+                      onClick={() => setExpandedId(expandedId === version.id ? null : version.id)}
+                      className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-gray-600 transition hover:bg-gray-50"
+                    >
+                      {expandedId === version.id ? '收起' : '查看'}
+                    </button>
+                    {!readOnly && (
+                      <button
+                        onClick={() => onRestore(version)}
+                        className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-2 py-1 text-[11px] font-medium text-indigo-700 transition hover:bg-indigo-100"
+                      >
+                        恢复到编辑器
+                      </button>
+                    )}
+                  </div>
+                  {expandedId === version.id && (
+                    <pre className="max-h-72 overflow-auto border-t border-slate-100 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{version.script}</pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

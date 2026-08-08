@@ -75,3 +75,28 @@ class PipelineRun(Base):
     error_log: Mapped[str | None] = mapped_column(Text, nullable=True)
     dataset_version_id: Mapped[str | None] = mapped_column(String, ForeignKey("v2_dataset_versions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class PipelineScriptVersion(Base):
+    """Python 脚本流水线的保存历史。
+
+    每次「保存」都把通过执行与格式校验的脚本冻结为一版（最多保留最近
+    若干版，见 python_engine.service）。与发布封版快照（PipelineVersion）
+    不同：这里是草稿期的编辑历史，供脚本编辑页查看/恢复。
+    """
+    __tablename__ = "v2_pipeline_script_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    pipeline_id: Mapped[str] = mapped_column(String, ForeignKey("v2_pipelines.id", ondelete="CASCADE"), nullable=False)
+    version_no: Mapped[int] = mapped_column(nullable=False)
+    script: Mapped[str] = mapped_column(Text, nullable=False)
+    # 保存那次执行的输出摘要（列结构/行数/耗时），供历史列表快速判断
+    output_columns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    row_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(default=0, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("uq_pipeline_script_versions_pipeline_version", "pipeline_id", "version_no", unique=True),
+    )

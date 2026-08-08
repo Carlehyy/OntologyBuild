@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -18,10 +19,12 @@ from app.data_channel.pipelines.python_engine.client import (
     ScriptExecution,
     execute_script,
 )
-from app.models.v2.pipeline import Pipeline
+from app.models.v2.pipeline import Pipeline, PipelineScriptVersion
 
 # 执行结果回传的样本行数（完整数据以 dry-run 暂存通道为准）
 _SAMPLE_ROWS = 50
+# 每条流水线保留的脚本历史版数上限（超出后最旧的版本被修剪）
+_SCRIPT_VERSION_KEEP = 20
 
 
 def execute_pipeline_script(pipeline_id: str, body, db: Session) -> dict:
@@ -40,8 +43,13 @@ def save_pipeline_script(
     db: Session,
     *,
     format_pipeline_fn,
+    current_user=None,
 ) -> dict:
-    """保存脚本：服务端重跑复验，执行成功且输出格式合法才落库。"""
+    """保存脚本：服务端重跑复验，执行成功且输出格式合法才落库。
+
+    落库同时把该版脚本冻结进保存历史（v2_pipeline_script_versions），
+    供脚本编辑页查看/恢复；历史超出保留上限时修剪最旧版本。
+    """
     pipeline = _load_python_pipeline(db, pipeline_id)
     if (pipeline.status or "") == "published":
         raise HTTPException(
@@ -65,21 +73,77 @@ def save_pipeline_script(
             f"保存前格式校验未通过，脚本未保存：{format_error}",
         )
 
+    output_columns = _columns_of(execution.rows)
     definition = dict(pipeline.definition or {})
     definition["python"] = {
         "script": script,
         "saved_at": datetime.now(timezone.utc).isoformat(),
-        "output_columns": _columns_of(execution.rows),
+        "output_columns": output_columns,
     }
     pipeline.definition = definition
     # 脚本变更使既有发布校验凭证失效：发布前必须重新执行预览并校验字段定义
     pipeline.validation_attestation = None
     pipeline.updated_at = datetime.now(timezone.utc)
+
+    next_version = (
+        db.query(func.max(PipelineScriptVersion.version_no))
+        .filter(PipelineScriptVersion.pipeline_id == pipeline.id)
+        .scalar()
+        or 0
+    ) + 1
+    db.add(PipelineScriptVersion(
+        pipeline_id=pipeline.id,
+        version_no=next_version,
+        script=script,
+        output_columns=output_columns,
+        row_count=len(execution.rows),
+        duration_ms=execution.duration_ms,
+        created_by=getattr(current_user, "id", None),
+    ))
+    stale_ids = (
+        db.query(PipelineScriptVersion.id)
+        .filter(PipelineScriptVersion.pipeline_id == pipeline.id)
+        .order_by(PipelineScriptVersion.version_no.desc())
+        .offset(_SCRIPT_VERSION_KEEP)
+        .all()
+    )
+    if stale_ids:
+        db.query(PipelineScriptVersion).filter(
+            PipelineScriptVersion.id.in_([row[0] for row in stale_ids])
+        ).delete(synchronize_session=False)
+
     db.commit()
     db.refresh(pipeline)
     return {
         "pipeline": format_pipeline_fn(pipeline),
         "execution": _execution_payload(pipeline, execution),
+    }
+
+
+def list_script_versions(pipeline_id: str, db: Session) -> dict:
+    """脚本的保存历史（最近在前）。"""
+    pipeline = _load_python_pipeline(db, pipeline_id)
+    rows = (
+        db.query(PipelineScriptVersion)
+        .filter(PipelineScriptVersion.pipeline_id == pipeline.id)
+        .order_by(PipelineScriptVersion.version_no.desc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "version_no": row.version_no,
+                "script": row.script,
+                "output_columns": row.output_columns or [],
+                "row_count": row.row_count or 0,
+                "duration_ms": row.duration_ms or 0,
+                "created_at": (
+                    row.created_at.isoformat() if row.created_at else None
+                ),
+            }
+            for row in rows
+        ]
     }
 
 

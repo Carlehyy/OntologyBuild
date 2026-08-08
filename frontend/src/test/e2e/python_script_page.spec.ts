@@ -60,6 +60,24 @@ async function mockScriptPage(page: Page, executeBody: unknown = executeOk) {
     if (url.pathname === `/api/v2/pipelines/${PIPELINE_ID}/script/execute`) {
       return ok(executeBody)
     }
+    if (url.pathname === `/api/v2/pipelines/${PIPELINE_ID}/script/versions`) {
+      return ok({
+        items: [
+          {
+            id: 'sv-2', version_no: 2,
+            script: 'result = [{"id": 1, "name": "已保存"}]',
+            output_columns: ['id', 'name'], row_count: 1, duration_ms: 700,
+            created_at: '2026-08-09T02:00:00Z',
+          },
+          {
+            id: 'sv-1', version_no: 1,
+            script: 'result = [{"id": 0, "name": "第一版"}]',
+            output_columns: ['id', 'name'], row_count: 1, duration_ms: 500,
+            created_at: '2026-08-08T10:00:00Z',
+          },
+        ],
+      })
+    }
     if (url.pathname === `/api/v2/pipelines/${PIPELINE_ID}/script`) {
       return ok({ pipeline: pythonPipeline, execution: executeOk })
     }
@@ -114,6 +132,29 @@ test.describe('Python 脚本编辑页', () => {
     await expect(page.getByText('执行失败', { exact: true })).toBeVisible()
     await expect(page.getByText('脚本执行失败（ValueError）：boom')).toBeVisible()
     await expect(page.getByText(/Traceback/)).toBeVisible()
+    await expect(page.getByRole('button', { name: /保存/ })).toBeDisabled()
+  })
+
+  test('历史版本抽屉：查看、展开脚本、恢复到编辑器后需重新执行', async ({ page }) => {
+    await mockScriptPage(page)
+    await page.goto(`/#/data/pipelines/script/${PIPELINE_ID}`)
+    await expect(page.locator('.cm-content')).toContainText('已保存')
+
+    await page.getByRole('button', { name: /历史版本/ }).click()
+    await expect(page.getByText('脚本历史版本')).toBeVisible()
+    await expect(page.getByText('v2')).toBeVisible()
+    await expect(page.getByText('v1')).toBeVisible()
+    await expect(page.getByText('当前')).toBeVisible()
+
+    // 展开 v1 脚本内容
+    await page.getByRole('button', { name: '查看' }).last().click()
+    await expect(page.getByText('第一版')).toBeVisible()
+
+    // 恢复 v1 到编辑器：内容替换为 v1、保存重新置灰、未保存状态出现
+    await page.getByRole('button', { name: '恢复到编辑器' }).last().click()
+    await expect(page.locator('.cm-content')).toContainText('第一版')
+    await expect(page.locator('.cm-content')).not.toContainText('已保存')
+    await expect(page.getByText('有未保存修改 · 草稿已自动缓存')).toBeVisible()
     await expect(page.getByRole('button', { name: /保存/ })).toBeDisabled()
   })
 

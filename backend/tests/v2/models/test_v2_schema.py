@@ -82,6 +82,7 @@ def test_all_v2_tables_registered():
             "v2_pipeline_runs",
             "v2_pipeline_file_assets",
             "v2_pipeline_tasks",
+            "v2_pipeline_script_versions",
         "v2_data_sync_tasks",
         "v2_data_sync_histories",
         "v2_n8n_pipelines",

@@ -127,6 +127,17 @@ export interface ScriptSaveResult {
   execution: ScriptExecutionResult
 }
 
+/** Python 脚本的保存历史版本 */
+export interface ScriptVersion {
+  id: string
+  version_no: number
+  script: string
+  output_columns: string[]
+  row_count: number
+  duration_ms: number
+  created_at: string | null
+}
+
 export interface PipelineRunItem {
   id: string
   status: string
@@ -215,6 +226,9 @@ const pipelinesApi = {
   /** Python 脚本：保存（服务端重跑复验，输出格式合法才落库） */
   saveScript: (id: string, script: string) =>
     apiClientV2.put<ScriptSaveResult>(`/pipelines/${id}/script`, { script }).then(r => r),
+  /** Python 脚本：保存历史（最近在前，含脚本全文，供查看/恢复） */
+  scriptVersions: (id: string) =>
+    apiClientV2.get<{ items: ScriptVersion[] }>(`/pipelines/${id}/script/versions`).then(r => r),
 
   /** Runs */
   run: (id: string) =>
