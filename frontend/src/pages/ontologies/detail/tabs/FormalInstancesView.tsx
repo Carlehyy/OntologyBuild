@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link as RouterLink } from 'react-router-dom'
+import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
   ArrowUpRight,
@@ -106,6 +106,7 @@ export default function FormalInstancesView({
 }) {
   const base = `/formal/ontologies/${ontologyId}/instance-browser`
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const { toast } = useToast()
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -168,12 +169,24 @@ export default function FormalInstancesView({
         ? catalog.linkTypes.some(item => item.id === selection.id)
         : false
     if (selectionExists) return
+    // 从数据映射页「查看实例」跳入：type=object:<id> / link:<id> 优先选中对应类型
+    const requested = searchParams.get('type')?.match(/^(object|link):(.+)$/)
+    if (requested) {
+      const [, kind, id] = requested
+      const exists = kind === 'object'
+        ? catalog.objectTypes.some(item => item.id === id)
+        : catalog.linkTypes.some(item => item.id === id)
+      if (exists) {
+        setSelection({ kind: kind as Selection['kind'], id })
+        return
+      }
+    }
     const firstObject = catalog.objectTypes.find(item => item.instanceCount > 0) || catalog.objectTypes[0]
     const firstLink = catalog.linkTypes.find(item => item.instanceCount > 0) || catalog.linkTypes[0]
     setSelection(firstObject
       ? { kind: 'object', id: firstObject.id }
       : firstLink ? { kind: 'link', id: firstLink.id } : null)
-  }, [catalog, selection])
+  }, [catalog, searchParams, selection])
 
   const dataQuery = useQuery<InstancePage<ObjectRow | LinkRow>>({
     queryKey: ['instance-browser-page', ontologyId, selection?.kind, selection?.id, page, pageSize, keyword],

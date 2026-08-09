@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
-  ChevronRight, Database, Eye, GitBranch, Link2, Loader2, RefreshCw, Search,
-  Table2, Workflow, X,
+  ChevronRight, Database, Eye, ExternalLink, GitBranch, Link2, Loader2,
+  RefreshCw, Search, Table2, Workflow, X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import curatedApi from '@/api/v2/curated'
@@ -18,7 +18,37 @@ import {
   mappingTargetId, matchAppliedVersion, typesCompatible, userFieldMapping,
   useMappingData, type DatasetReviewState, type MappingDataset,
 } from './mapping-data'
+import type { FlowChartRow } from './MappingFlowChart'
 import './mapping-overview.css'
+
+const MappingFlowChart = lazy(() => import('./MappingFlowChart'))
+
+/** KPI 数字滚动：挂载/变化时 600ms ease-out 过渡到目标值；reduced-motion 直出终值。 */
+function useCountUp(target: number, duration = 600): number {
+  const [display, setDisplay] = useState(0)
+  const previous = useRef(0)
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      previous.current = target
+      setDisplay(target)
+      return undefined
+    }
+    const from = previous.current
+    if (from === target) { setDisplay(target); return undefined }
+    const start = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setDisplay(Math.round(from + (target - from) * eased))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+      else previous.current = target
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [target, duration])
+  return display
+}
 
 type TargetSelection = { kind: 'object'; id: string } | { kind: 'relation'; id: string }
 const PREVIEW_PAGE_SIZES = [10, 20, 50]
@@ -248,6 +278,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const [previewDataset, setPreviewDataset] = useState<MappingDataset | null>(null)
   const [reconcileTarget, setReconcileTarget] = useState<MappingRow | null>(null)
   const [reconcilingMappingId, setReconcilingMappingId] = useState<string | null>(null)
+  // 行 ↔ 桑基图双向联动：rowHoverKey 由行 hover 置起驱动图高亮；chartHoverKey 反向高亮行
+  const [rowHoverKey, setRowHoverKey] = useState<string | null>(null)
+  const [chartHoverKey, setChartHoverKey] = useState<string | null>(null)
+  const rowRefs = useRef(new Map<string, HTMLElement>())
   const [reconcileFeedback, setReconcileFeedback] = useState<{
     mappingId: string
     tone: 'success' | 'error'
@@ -445,6 +479,46 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
 
   const allHealthy = issueRows.length === 0 && reviewIssueCount === 0
   const reviewOnlyIssue = issueRows.length === 0 && reviewIssueCount > 0
+
+  /** 跳转「实例数据」Tab 并选中对应类型（relation → 实例侧的 link）。 */
+  const openInstances = (row: MappingRow) => {
+    navigate(`/ontologies/${ontologyId}?tab=data&type=${row.kind === 'object' ? 'object' : 'link'}:${row.selection.id}`)
+  }
+  const selectFromChart = (key: string) => {
+    const row = mappingRows.find(candidate => candidate.key === key)
+    if (!row) return
+    setSelected(row.selection)
+    rowRefs.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+  const flowRows = useMemo<FlowChartRow[]>(() => mappingRows.map(row => ({
+    key: row.key,
+    kind: row.kind,
+    name: row.name,
+    mappingExists: row.mappingExists,
+    instanceCount: row.instanceCount,
+    statusLabel: STATUS_COPY[row.status].label,
+    mappedFields: row.mappedFields,
+    totalFields: row.totalFields,
+    datasets: row.datasets.map(dataset => {
+      const review = datasetReviewState(dataset)
+      return {
+        id: dataset.id,
+        name: dataset.name,
+        sourceLabel: dataset.sourceLabel,
+        rows: dataset.rows,
+        quality: dataset.quality,
+        reviewLabel: isReviewIssue(review) ? REVIEW_BADGE_COPY[review].label : null,
+      }
+    }),
+  })), [mappingRows])
+  const mappedFlowCount = useMemo(
+    () => flowRows.filter(row => row.mappingExists && row.datasets.length > 0).length,
+    [flowRows],
+  )
+  const kpiReady = useCountUp(readyCount)
+  const kpiCoverage = useCountUp(fieldCoverage)
+  const kpiInstances = useCountUp(totalInstances)
+  const kpiAssets = useCountUp(usedDatasetIds.size)
   const readinessTitle = allHealthy
     ? '当前数据链路可用'
     : reviewOnlyIssue
@@ -477,19 +551,53 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           </div>
         </div>
         <div className="dmo-kpis" aria-label="映射关键指标">
-          <div><span>可用链路</span><b>{readyCount}<i> / {mappingRows.length}</i></b></div>
+          <div><span>可用链路</span><b>{kpiReady}<i> / {mappingRows.length}</i></b></div>
           {totalTargetFields > 0 ? (
-            <div><span>字段已连接</span><b>{fieldCoverage}<i>%</i></b><small>{mappedFields} / {totalTargetFields} 个字段</small></div>
+            <div><span>字段已连接</span><b>{kpiCoverage}<i>%</i></b><small>{mappedFields} / {totalTargetFields} 个字段</small></div>
           ) : (
             <div><span>字段已连接</span><b>—</b><small>暂无可连接字段</small></div>
           )}
-          <div><span>实例已产出</span><b>{totalInstances.toLocaleString()}</b><small>对象与关系实例</small></div>
-          <div><span>来源数据资产</span><b>{usedDatasetIds.size}</b><small>{usedDatasetIds.size > 0 ? `成品 ${usedCuratedCount} · 人工 ${usedManualCount}` : '尚未连接数据资产'}</small></div>
+          <div><span>实例已产出</span><b>{kpiInstances.toLocaleString()}</b><small>对象与关系实例</small></div>
+          <div><span>来源数据资产</span><b>{kpiAssets}</b><small>{usedDatasetIds.size > 0 ? `成品 ${usedCuratedCount} · 人工 ${usedManualCount}` : '尚未连接数据资产'}</small></div>
         </div>
         <button type="button" className="dmo-primary-button" onClick={() => openMappingWorkspace()}>
           <Workflow size={15} />查看字段级映射
         </button>
       </header>
+
+      {/* ═══ 数据供给全景：桑基图直观呈现「数据资产 → 本体元素」的真实流向 ═══ */}
+      <section className="dmo-flow" aria-label="数据供给全景">
+        <div className="dmo-flow-head">
+          <div className="dmo-flow-title">
+            <b>数据供给全景</b>
+            <small>数据资产如何流入本体元素；流宽代表实例产出量，点击节点可定位详情</small>
+          </div>
+          {mappingRows.length - mappedFlowCount > 0 && (
+            <span className="dmo-flow-caption">另有 {mappingRows.length - mappedFlowCount} 个本体元素未接入数据流 · 见下方清单</span>
+          )}
+        </div>
+        {mappedFlowCount === 0 ? (
+          <div className="dmo-flow-empty">
+            <Link2 size={22} />
+            <b>暂无数据流</b>
+            <span>当前发布版本尚未建立可见的映射链路；完成映射配置并发布后，这里会呈现数据资产流入本体的全景。</span>
+          </div>
+        ) : (
+          <Suspense fallback={<div className="dmo-flow-skeleton" aria-label="正在加载供给全景图" />}>
+            <MappingFlowChart
+              rows={flowRows}
+              hoverKey={rowHoverKey}
+              selectedKey={selectedRow?.key ?? null}
+              onSelectElement={selectFromChart}
+              onPreviewDataset={(datasetId) => {
+                const dataset = data.datasets.find(item => item.id === datasetId)
+                if (dataset) setPreviewDataset(dataset)
+              }}
+              onHoverNode={setChartHoverKey}
+            />
+          </Suspense>
+        )}
+      </section>
 
       <div className="dmo-workspace">
         <main className="dmo-register">
@@ -523,12 +631,26 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
               const active = selectedRow?.key === row.key
               const rowReview = worstReviewState(row.datasets)
               return (
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="dmo-map-row"
                   data-selected={active}
+                  data-chart-hover={chartHoverKey === row.key || undefined}
                   key={row.key}
+                  ref={element => {
+                    if (element) rowRefs.current.set(row.key, element)
+                    else rowRefs.current.delete(row.key)
+                  }}
                   onClick={() => setSelected(row.selection)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSelected(row.selection)
+                    }
+                  }}
+                  onMouseEnter={() => setRowHoverKey(row.key)}
+                  onMouseLeave={() => setRowHoverKey(null)}
                   aria-pressed={active}
                 >
                   <span className="dmo-target-cell">
@@ -545,13 +667,26 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                     <i><em style={{ width: `${row.totalFields ? Math.min(100, row.mappedFields / row.totalFields * 100) : 100}%` }} /></i>
                   </span>
                   <span className="dmo-instance-cell">
-                    {row.mappingExists
-                      ? <><b>{row.instanceCount.toLocaleString()}</b><small>条</small></>
-                      : <b className="is-empty" title="尚未建立映射，暂无实例">—</b>}
+                    {row.mappingExists && row.instanceCount > 0 ? (
+                      <a
+                        className="dmo-instance-link"
+                        href={`#/ontologies/${ontologyId}?tab=data&type=${row.kind === 'object' ? 'object' : 'link'}:${row.selection.id}`}
+                        title={`查看「${row.name}」的实例数据`}
+                        onClick={event => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          openInstances(row)
+                        }}
+                      ><b>{row.instanceCount.toLocaleString()}</b><small>条</small></a>
+                    ) : row.mappingExists ? (
+                      <><b>{row.instanceCount.toLocaleString()}</b><small>条</small></>
+                    ) : (
+                      <b className="is-empty" title="尚未建立映射，暂无实例">—</b>
+                    )}
                   </span>
                   <span className="dmo-status" data-status={row.status}>{row.status === 'ready' && <CheckCircle2 size={12} />}{STATUS_COPY[row.status].label}</span>
                   <ArrowRight size={14} className="dmo-row-arrow" />
-                </button>
+                </div>
               )
             })}
             {filteredRows.length === 0 && mappingRows.length === 0 && (
@@ -581,7 +716,23 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
 
               <section className="dmo-status-note" data-status={selectedRow.status}>
                 {selectedRow.status === 'ready' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
-                <div><b>{STATUS_COPY[selectedRow.status].detail}</b><small>{selectedRow.instanceCount.toLocaleString()} 条实例可供实例查询、业务探索与治理规则使用</small></div>
+                <div>
+                  <b>{STATUS_COPY[selectedRow.status].detail}</b>
+                  <small>
+                    {selectedRow.instanceCount > 0 ? (
+                      <a
+                        className="dmo-inline-link"
+                        href={`#/ontologies/${ontologyId}?tab=data&type=${selectedRow.kind === 'object' ? 'object' : 'link'}:${selectedRow.selection.id}`}
+                        title={`查看「${selectedRow.name}」的实例数据`}
+                        onClick={event => {
+                          event.preventDefault()
+                          openInstances(selectedRow)
+                        }}
+                      >{selectedRow.instanceCount.toLocaleString()} 条实例</a>
+                    ) : `${selectedRow.instanceCount.toLocaleString()} 条实例`}
+                    可供实例查询、业务探索与治理规则使用
+                  </small>
+                </div>
               </section>
 
               <section className="dmo-lineage">
@@ -626,6 +777,12 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                             disabled={previewBlocked}
                             title={isReviewIssue(review) ? REVIEW_BADGE_COPY[review].reason : `预览数据源 ${dataset.name}`}
                           ><Eye size={14} />预览</button>
+                          <a
+                            className="dmo-source-open"
+                            href={`#/data/structured?dataset=${dataset.id}`}
+                            title={`在数据管理中查看 ${dataset.name}`}
+                            aria-label={`在数据管理中查看 ${dataset.name}`}
+                          ><ExternalLink size={13} /></a>
                         </div>
                         {review === 'rejected' && (
                           <p className="dmo-source-warning" role="note">当前版本已被拒绝，仅保留审计追溯；不可预览与重新灌入。</p>

@@ -4,11 +4,13 @@ import { describe, it } from 'node:test'
 import {
   appliedDatasetVersionId,
   appliedLinkVersionId,
+  buildFlowModel,
   datasetReviewState,
   formatFullDateTime,
   formatShortDateTime,
   isReviewIssue,
   matchAppliedVersion,
+  resolveFlowNodeClick,
 } from '../../../pages/ontologies/detail/mapping/mapping-review.ts'
 
 describe('datasetReviewState', () => {
@@ -116,5 +118,77 @@ describe('datetime formatting', () => {
     assert.equal(formatShortDateTime(null), '')
     assert.equal(formatShortDateTime('not-a-date'), '')
     assert.equal(formatFullDateTime(undefined), '')
+  })
+})
+
+describe('buildFlowModel', () => {
+  const dataset = { id: 'ds-1', name: '订单宽表' }
+  const mappedObject = {
+    key: 'object:o1', kind: 'object' as const, name: '订单',
+    mappingExists: true, instanceCount: 12, datasets: [dataset],
+  }
+  const mappedRelation = {
+    key: 'relation:r1', kind: 'relation' as const, name: '履约',
+    mappingExists: true, instanceCount: 0, datasets: [dataset],
+  }
+  const unmapped = {
+    key: 'object:o2', kind: 'object' as const, name: '日志',
+    mappingExists: false, instanceCount: 0, datasets: [],
+  }
+
+  it('builds dataset→element links with real instance volume', () => {
+    const model = buildFlowModel([mappedObject, mappedRelation])
+    assert.equal(model.mappedCount, 2)
+    assert.equal(model.nodes.length, 3)
+    const datasetNode = model.nodes.find(node => node.kind === 'dataset')
+    assert.deepEqual(datasetNode, { id: 'dataset:ds-1', displayName: '订单宽表', kind: 'dataset', depth: 0 })
+    assert.equal(model.links.length, 2)
+    assert.deepEqual(model.links[0], {
+      source: 'dataset:ds-1', target: 'object:o1', value: 12, realValue: 12,
+    })
+  })
+
+  it('keeps zero-instance links visible as thin flows', () => {
+    const model = buildFlowModel([mappedRelation])
+    assert.equal(model.links[0].value, 0.4)
+    assert.equal(model.links[0].realValue, 0)
+  })
+
+  it('excludes unmapped elements and dedupes shared datasets', () => {
+    const model = buildFlowModel([mappedObject, mappedRelation, unmapped])
+    assert.equal(model.mappedCount, 2)
+    assert.equal(model.nodes.filter(node => node.kind === 'dataset').length, 1)
+    assert.ok(!model.nodes.some(node => node.id === 'object:o2'))
+  })
+
+  it('returns an empty model when nothing is mapped', () => {
+    const model = buildFlowModel([unmapped])
+    assert.equal(model.mappedCount, 0)
+    assert.equal(model.nodes.length, 0)
+    assert.equal(model.links.length, 0)
+  })
+})
+
+describe('resolveFlowNodeClick', () => {
+  it('routes dataset nodes to preview and element nodes to selection', () => {
+    assert.deepEqual(
+      resolveFlowNodeClick({ id: 'dataset:ds-1', kind: 'dataset' }),
+      { type: 'preview-dataset', datasetId: 'ds-1' },
+    )
+    assert.deepEqual(
+      resolveFlowNodeClick({ id: 'object:o1', kind: 'object' }),
+      { type: 'select-element', key: 'object:o1' },
+    )
+    assert.deepEqual(
+      resolveFlowNodeClick({ id: 'relation:r1', kind: 'relation' }),
+      { type: 'select-element', key: 'relation:r1' },
+    )
+  })
+
+  it('ignores malformed clicks', () => {
+    assert.equal(resolveFlowNodeClick(undefined), null)
+    assert.equal(resolveFlowNodeClick({}), null)
+    assert.equal(resolveFlowNodeClick({ id: 'x' }), null)
+    assert.equal(resolveFlowNodeClick({ id: 'x', kind: 'edge' }), null)
   })
 })
