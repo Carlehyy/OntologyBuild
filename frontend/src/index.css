@@ -84,6 +84,11 @@
     background-color: #f8fbff;
   }
 
+  /* 深色模式下画布随主题翻转（浅色值保持 #f8fbff 不变） */
+  .dark .workspace-topology-surface {
+    background-color: var(--card);
+  }
+
   .scrollbar-none {
     scrollbar-width: none;
     -ms-overflow-style: none;
