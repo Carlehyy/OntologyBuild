@@ -333,8 +333,8 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   <FileCode2 size={10} /> Python 脚本
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] font-normal text-blue-600">
-                  <GitBranch size={10} /> 系统流水线
+                <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[11px] font-normal text-gray-500">
+                  <GitBranch size={10} /> 未知引擎
                 </span>
               )}
             </h3>

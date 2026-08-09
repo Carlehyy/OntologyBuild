@@ -494,9 +494,8 @@ def test_delete_python_pipeline_rejected_when_task_references(db):
     assert db.get(Pipeline, pipeline.id).status == "draft"
 
 
-def test_list_filter_separates_python_from_canvas_and_n8n(db):
+def test_list_filter_separates_python_from_n8n(db):
     _python_pipeline(db, name="脚本A")
-    db.add(Pipeline(name="画布A", definition={"nodes": [], "edges": []}))
     db.add(Pipeline(
         name="n8nA",
         definition={"engine": "n8n", "nodes": [], "edges": []},
@@ -510,8 +509,9 @@ def test_list_filter_separates_python_from_canvas_and_n8n(db):
         return {item["name"] for item in page["items"]}
 
     assert _ids("python") == {"脚本A"}
-    assert _ids("canvas") == {"画布A"}
     assert _ids("n8n") == {"n8nA"}
+    # canvas 已下线：engine=canvas 不再是受支持的过滤值，按不过滤处理
+    assert _ids("canvas") == {"脚本A", "n8nA"}
 
 
 # ── 脚本保存历史 ─────────────────────────────────────────────────

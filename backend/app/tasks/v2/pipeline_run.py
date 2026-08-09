@@ -1,4 +1,4 @@
-"""Pipeline 执行 Celery 任务 — 支持 DAG 编译 + 节点状态追踪"""
+"""Pipeline 执行 Celery 任务 — 引擎注册表分发 + 共用资产湖入湖"""
 from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
@@ -19,27 +19,9 @@ def get_celery_app():
 celery_app = get_celery_app()
 
 
-def _init_node_status(definition: dict | None) -> dict[str, str]:
-    """从 definition 中提取所有节点 ID，初始化为 'idle'"""
-    if not definition:
-        return {}
-    nodes = definition.get("nodes", [])
-    return {n["id"]: "idle" for n in nodes}
-
-
-def _compute_quality_score(rows: list[dict], route: str, meta: dict) -> float:
+def _compute_quality_score(rows: list[dict], meta: dict) -> float:
     if not rows:
         return 0.0
-    if route == "C":
-        meta_fields = {"markdown_text", "filename", "source_file", "source_dataset_id",
-                       "extraction_strategy", "extraction_method", "structured_extraction_ok",
-                       "structured_extraction_error"}
-        meaningful_fields = [k for k in rows[0].keys() if k not in meta_fields]
-        total_fields = len(meaningful_fields) or 1
-        filled = sum(1 for row in rows for k in meaningful_fields if row.get(k))
-        completeness = filled / (len(rows) * total_fields) if total_fields > 0 else 0
-        rule_bonus = min(0.2, int(rows[0].get("rule_count", 0)) * 0.02)
-        return min(1.0, completeness + rule_bonus)
     rows_before = meta.get("rows_before", len(rows)) or len(rows)
     rows_after = meta.get("rows_after", len(rows)) or len(rows)
     retention = rows_after / rows_before if rows_before > 0 else 1.0
@@ -49,389 +31,19 @@ def _compute_quality_score(rows: list[dict], route: str, meta: dict) -> float:
     return round(retention * 0.4 + fill_rate * 0.6, 3)
 
 
-def _route_for_kind(kind: str | None, default_route: str | None = None) -> str:
-    if default_route in ("A", "B", "C"):
-        return default_route
-    if kind == "semi":
-        return "B"
-    if kind == "unstructured":
-        return "C"
-    return "A"
-
-
-def _transform_nodes(definition: dict | None, node_ids: set[str] | None = None) -> list[dict]:
-    if not definition:
-        return []
-    return [
-        n for n in definition.get("nodes") or []
-        if n.get("type") == "transform"
-        and (node_ids is None or n.get("id") in node_ids)
-    ]
-
-
-def _route_from_transform_config(config: dict | None) -> str | None:
-    path = (config or {}).get("path")
-    if path == "structured":
-        return "A"
-    if path == "semi_structured":
-        return "B"
-    if path == "unstructured":
-        return "C"
-    if path == "wide_table":
-        return "A"
-    return None
-
-
-def _merge_dict(base: dict, overlay: dict) -> dict:
-    result = dict(base or {})
-    for key, value in (overlay or {}).items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _merge_dict(result[key], value)
-        else:
-            result[key] = value
-    return result
-
-
-def _spec_from_transform_config(config: dict | None) -> dict:
-    config = config or {}
-    spec: dict = {}
-    steps = config.get("steps") or []
-
-    if config.get("engine"):
-        spec["engine"] = config.get("engine")
-    if config.get("path"):
-        spec["path"] = config.get("path")
-
-    for step in steps:
-        op = step.get("op") if isinstance(step, dict) else None
-        params = step.get("params") if isinstance(step, dict) else {}
-        params = params or {}
-
-        if op in ("parse_json", "flatten_json", "explode_array"):
-            spec["format"] = "json"
-            flatten = dict(spec.get("json_flatten") or {})
-            if op == "explode_array":
-                flatten["array_explode"] = True
-            flatten.update(params)
-            spec["json_flatten"] = flatten
-        elif op == "parse_xml":
-            spec["format"] = "xml"
-        elif op in ("detect_wide_table", "suggest_split", "apply_split"):
-            wide = dict(spec.get("wide_table_split") or {})
-            wide["enabled"] = True
-            if op in ("detect_wide_table", "suggest_split"):
-                wide["suggest_only"] = True
-            if op == "apply_split":
-                wide["suggest_only"] = False
-            wide.update(params)
-            spec["wide_table_split"] = wide
-        elif op in ("drop_duplicates", "drop_nulls", "fill_nulls", "normalize_dates"):
-            cleansing = dict(spec.get("cleansing") or {})
-            if op == "drop_duplicates":
-                cleansing["deduplicate"] = True
-            elif op == "drop_nulls":
-                cleansing["null_strategy"] = "drop"
-            elif op == "fill_nulls":
-                cleansing["null_strategy"] = params.get("strategy", "fill_empty")
-            elif op == "normalize_dates":
-                cleansing["normalize_dates"] = True
-            cleansing.update({k: v for k, v in params.items() if k != "strategy"})
-            spec["cleansing"] = cleansing
-        elif op == "document_to_markdown":
-            doc = dict(spec.get("document_to_md") or {})
-            doc["strategy"] = params.get("strategy", doc.get("strategy", "markitdown"))
-            doc.update(params)
-            spec["document_to_md"] = doc
-        elif op == "ocr_extract":
-            doc = dict(spec.get("document_to_md") or {})
-            doc["strategy"] = "ocr"
-            doc.update(params)
-            spec["document_to_md"] = doc
-        elif op == "vlm_extract":
-            doc = dict(spec.get("document_to_md") or {})
-            doc["strategy"] = "vlm"
-            doc.update(params)
-            spec["document_to_md"] = doc
-        elif op == "llm_structurize":
-            extract = dict(spec.get("md_to_structured") or {})
-            extract["auto_extract"] = True
-            extract.update(params)
-            spec["md_to_structured"] = extract
-        elif op == "llm_enrich":
-            # 方案三：规则提取后 LLM 语义增强，不影响结构确定性
-            extract = dict(spec.get("md_to_structured") or {})
-            extract["llm_enrich"] = True
-            if params.get("fields"):
-                extract["enrich_fields"] = params["fields"]
-            spec["md_to_structured"] = extract
-
-    if config.get("path") == "wide_table":
-        wide = dict(spec.get("wide_table_split") or {})
-        wide.setdefault("enabled", True)
-        wide.setdefault("suggest_only", False)
-        spec["wide_table_split"] = wide
-    return spec
-
-
-def _pipeline_runtime_config(pl, node_ids: list[str] | set[str] | None = None) -> tuple[str | None, dict]:
-    """Build runtime config from transforms on the selected DAG path only."""
-    selected = set(node_ids) if node_ids is not None else None
-    transforms = _transform_nodes(pl.definition, selected)
-    route = None
-    spec = dict(pl.spec or {})
-    for node in transforms:
-        cfg = node.get("config") or {}
-        route = route or _route_from_transform_config(cfg)
-        spec = _merge_dict(spec, _spec_from_transform_config(cfg))
-    return route, spec
-
-
-def _source_runtime_route(source: dict, transform_route: str | None, default_route: str | None) -> str:
-    return transform_route or source.get("route") or _route_for_kind(source.get("kind"), default_route)
-
-
-def _find_dataset_for_file(db, filename: str):
-    from app.models.v2.dataset import Dataset, DatasetVersion
-    from app.data_channel.datasets.service import version_has_content
-
-    stem = Path(filename).stem
-    candidates = db.query(Dataset).filter(
-        Dataset.name == stem
-    ).order_by(Dataset.created_at.desc()).limit(20).all()
-    for candidate in candidates:
-        ver = db.query(DatasetVersion).filter(
-            DatasetVersion.dataset_id == candidate.id
-        ).order_by(DatasetVersion.version_no.desc()).first()
-        if ver and ((ver.rowcount or 0) > 0 or version_has_content(ver)):
-            return candidate
-    return candidates[0] if candidates else None
-
-
-def _collect_sources(db, pl, connector_ids: set[str] | None = None) -> list[dict]:
-    from app.models.v2.dataset import Dataset
-
-    sources: list[dict] = []
-    definition = pl.definition or {}
-    for node in definition.get("nodes") or []:
-        if node.get("type") != "connector":
-            continue
-        connector_id = node.get("id")
-        if connector_ids is not None and connector_id not in connector_ids:
-            continue
-        for file_info in (node.get("config") or {}).get("files", []) or []:
-            filename = file_info.get("name") or file_info.get("filename") or ""
-            dataset_id = file_info.get("dataset_id")
-            ds = db.query(Dataset).filter(Dataset.id == dataset_id).first() if dataset_id else None
-            if not ds and filename:
-                ds = _find_dataset_for_file(db, filename)
-            if ds:
-                sources.append({
-                    "dataset_id": ds.id,
-                    "filename": filename or ds.name,
-                    "route": _route_for_kind(ds.kind, None),
-                    "kind": ds.kind,
-                    "connector_node_id": connector_id,
-                })
-
-    if not sources and pl.source_dataset_id:
-        ds = db.query(Dataset).filter(Dataset.id == pl.source_dataset_id).first()
-        if ds:
-            sources.append({
-                "dataset_id": ds.id,
-                "filename": ds.name,
-                "route": _route_for_kind(ds.kind, pl.route),
-                "kind": ds.kind,
-                "connector_node_id": (
-                    next(iter(connector_ids)) if connector_ids and len(connector_ids) == 1 else None
-                ),
-            })
-
-    # Preserve order while removing duplicate datasets.
-    seen: set[tuple[str, str | None]] = set()
-    unique_sources = []
-    for source in sources:
-        identity = (source["dataset_id"], source.get("connector_node_id"))
-        if identity in seen:
-            continue
-        seen.add(identity)
-        unique_sources.append(source)
-    return unique_sources
-
-
-def _load_source_rows(db, svc, source: dict) -> list[dict]:
-    from app.models.v2.dataset import DatasetVersion
-    from app.data_channel.datasets.service import version_has_content
-    from app.config import settings
-
-    ver = db.query(DatasetVersion).filter(
-        DatasetVersion.dataset_id == source["dataset_id"]
-    ).order_by(DatasetVersion.version_no.desc()).first()
-    if not version_has_content(ver):
-        return []
-    source["dataset_version_id"] = ver.id
-    source["version_no"] = ver.version_no
-    source["source_rowcount"] = ver.rowcount
-    if (settings.environment == "production"
-            and settings.pipeline_max_in_memory_rows > 0
-            and (ver.rowcount or 0) > settings.pipeline_max_in_memory_rows):
-        raise ValueError(
-            f"源数据集 {source['dataset_id']} v{ver.version_no} 有 {ver.rowcount:,} 行，"
-            f"超过当前内存执行器安全上限 {settings.pipeline_max_in_memory_rows:,}；"
-            "已拒绝执行，避免进程 OOM。请拆分资产或启用流式执行器。"
-        )
-    if source["route"] == "C":
-        raw = svc.load_version_bytes(source["dataset_id"], ver.version_no)
-        if raw is None:
-            return []
-        return [{
-            "filename": source["filename"],
-            "content": raw,
-            "storage_uri": ver.storage_uri or f"db://dataset-versions/{ver.id}",
-            "source_dataset_id": source["dataset_id"],
-        }]
-    # Production execution must be complete and fail closed.  preview() is a
-    # UI helper that truncates and converts storage errors into an empty list.
-    return svc.load_all_rows(source["dataset_id"], ver.version_no)
-
-
-def _execute_route(route: str, ctx, data: list[dict]) -> tuple[list[dict], object]:
-    from app.data_channel.pipelines.route_executor import (
-        execute_route_a,
-        execute_route_b,
-        execute_route_c,
-    )
-
-    if route == "B":
-        return execute_route_b(ctx, data)
-    if route == "C":
-        return execute_route_c(ctx, data)
-    return execute_route_a(ctx, data)
-
-
-def _execute_source(db, svc, pl, source: dict, transform_route: str | None, runtime_spec: dict):
-    """单个源的完整执行：定路由 → 读最新版本行 → 跑 A/B/C steps。
-
-    真实运行（pipeline_run_task）与试运行（collect_pipeline_output）共用，
-    保证 dry-run 预览所见 = 入湖所得。返回 (data, ctx)。
-    """
-    from app.services.v2.pipeline.base import PipelineContext
-
-    source["route"] = _source_runtime_route(source, transform_route, pl.route)
-    data = _load_source_rows(db, svc, source)
-
-    ctx = PipelineContext(
-        dataset_id=source["dataset_id"],
-        version_no=int(source.get("version_no") or 1),
-        route=source["route"],
-        spec=runtime_spec,
-    )
-    if source["route"] == "C":
-        ctx.spec = dict(ctx.spec or {})
-        # 默认使用规则提取保证可重复性。只有当 pipeline spec 中已明确写入
-        # md_to_structured.auto_extract=true 时才调用 LLM（非确定性）。
-        existing_md_spec = ctx.spec.get("md_to_structured") or {}
-        if existing_md_spec.get("auto_extract"):
-            # Pipeline spec 显式请求 LLM 提取：检查模型是否可用
-            from app.services.model_config_selector import select_llm_model_config
-            try:
-                _has_llm = bool(select_llm_model_config(
-                    purpose_tags=("结构化提取", "结构化抽取"), allow_vlm=False))
-            except Exception:
-                _has_llm = False
-            if not _has_llm:
-                existing_md_spec = {k: v for k, v in existing_md_spec.items() if k != "auto_extract"}
-                existing_md_spec["rule_based"] = True
-            ctx.spec["md_to_structured"] = existing_md_spec
-        else:
-            # 默认规则提取（确定性）
-            ctx.spec["md_to_structured"] = {"rule_based": True, **existing_md_spec}
-    ctx.rows_in = len(data)
-    data, ctx = _execute_route(source["route"], ctx, data)
-    ctx.rows_out = len(data)
-    return data, ctx
-
-
 def _strip_content(rows: list[dict]) -> list[dict]:
-    """去掉 route C 的原始文件 bytes 列——它从不入 CSV，也无法进 JSON 暂存。"""
+    """去掉行数据里的原始文件 bytes 列——它从不入 CSV，也无法进 JSON 暂存。"""
     return [{k: v for k, v in r.items() if k != "content"} for r in rows]
 
 
 def _slim_ctx_meta(meta: dict | None) -> dict:
     """ctx.meta 落入 run.stats 前的白名单裁剪。
 
-    ctx.meta 可能携带全量行数据（宽表拆分的 split_tables = 表名→完整行
-    列表），原样写进 v2_pipeline_runs.stats 会让单行 JSON 膨胀到百 MB 级、
-    甚至超过 Postgres json 字段上限导致运行失败。dry-run 与真实运行统一只
-    保留质量分记账用的两个标量键；split_tables 的产物明细已由
-    _save_curated_outputs 展开成多个 output 表达，不依赖 meta 透传。
+    ctx.meta 可能携带大体积执行明细，原样写进 v2_pipeline_runs.stats 会让
+    单行 JSON 膨胀失控。dry-run 与真实运行统一只保留质量分记账用的两个
+    标量键。
     """
     return {k: v for k, v in (meta or {}).items() if k in ("rows_before", "rows_after")}
-
-
-def _source_capacity_warning(source: dict) -> str | None:
-    """源行数接近内存执行上限时提前预警。
-
-    硬性拒绝只在生产环境生效（见 _load_source_rows），预警同样只在生产
-    发出，避免开发环境看到与己无关的容量措辞。
-    """
-    from app.config import settings
-
-    max_rows = int(settings.pipeline_max_in_memory_rows or 0)
-    if settings.environment != "production" or max_rows <= 0:
-        return None
-    ratio = float(settings.pipeline_source_warn_ratio or 0.8)
-    rowcount = int(source.get("source_rowcount") or 0)
-    if not (0 < ratio < 1) or rowcount <= max_rows * ratio:
-        return None
-    return (
-        f"源数据集「{source.get('filename') or source.get('dataset_id')}」"
-        f"当前 {rowcount:,} 行，已达内存执行上限 {max_rows:,} 行的 {ratio:.0%}；"
-        "超过上限后生产运行将拒绝执行。请提前拆分源资产，"
-        "或调大 PIPELINE_MAX_IN_MEMORY_ROWS（需先评估执行器内存）"
-    )
-
-
-def collect_pipeline_output(db, pl) -> list[dict]:
-    """试运行取数：执行采集与加工但【不写资产湖】。
-
-    供列表页「执行」弹窗的 dry-run 预览使用；宽表拆分在此展开成多个输出，
-    与 _save_curated_outputs 的落库粒度一一对应，commit 时按同样粒度回放。
-    返回 [{source, table_name, rows, rows_in, rows_out, route, meta, multi_source}]。
-    """
-    from app.services.v2.dataset_service import DatasetService
-
-    from app.data_channel.pipelines.dag_compiler import compile_definition
-
-    svc = DatasetService(db)
-    plan = compile_definition(pl.definition)
-    connector_ids = set(plan.get("paths") or {}) or None
-    sources = _collect_sources(db, pl, connector_ids)
-    if not sources:
-        raise ValueError("Pipeline 未绑定源数据集，请先在画布中配置连接器节点")
-
-    outputs: list[dict] = []
-    multi_source = len(sources) > 1
-    for source in sources:
-        path = (plan.get("paths") or {}).get(source.get("connector_node_id"))
-        transform_route, runtime_spec = _pipeline_runtime_config(pl, path)
-        data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
-        base_meta = _slim_ctx_meta(ctx.meta)  # 质量分只用这两个键
-        split_tables = ctx.meta.get("split_tables")
-        if isinstance(split_tables, dict) and split_tables:
-            for table_name, rows in split_tables.items():
-                rows = _strip_content(rows or [])
-                outputs.append({
-                    "source": dict(source), "table_name": str(table_name),
-                    "rows": rows, "rows_in": ctx.rows_in, "rows_out": len(rows),
-                    "route": source["route"], "meta": base_meta, "multi_source": True,
-                })
-        else:
-            outputs.append({
-                "source": dict(source), "table_name": None,
-                "rows": _strip_content(data), "rows_in": ctx.rows_in, "rows_out": ctx.rows_out,
-                "route": source["route"], "meta": base_meta, "multi_source": multi_source,
-            })
-    return outputs
 
 
 def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None = None) -> str:
@@ -644,7 +256,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
     from app.data_channel.datasets.lake_gate import (
         gate_rows, persist_contract, split_pk, infer_columns_typed)
-    # 流水线字段契约（改名/非空/主键）仅适用于单产物运行：多源/宽表拆分的
+    # 流水线字段契约（改名/非空/主键）仅适用于单产物运行：多源/拆分的
     # 契约粒度是「每个数据集一个」，流水线级契约对不上，跳过并在警告里说明
     contract_applicable = table_name is None and not multi_source
     column_defs = pl.column_definitions if contract_applicable else None
@@ -658,7 +270,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     effective_pk = gate["pk"]
 
     # 入库方式：任务触发时按 write_mode 与资产湖已有数据合并；
-    # 手动画布运行不带 write_opts，保持原行为（本次输出即新版本 = 全量覆盖）
+    # 手动运行不带 write_opts，保持原行为（本次输出即新版本 = 全量覆盖）
     merge_meta: dict = {}
     lake_rows = data
     lake_impact: dict | None = None
@@ -724,7 +336,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
             allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
         sample = data or lake_rows
         schema_to_publish["quality_score"] = _compute_quality_score(
-            sample, source["route"], ctx.meta)
+            sample, ctx.meta)
         schema_to_publish["route"] = source["route"]
         schema_to_publish["source_dataset_id"] = source["dataset_id"]
         schema_to_publish["pipeline_id"] = pl.id
@@ -784,12 +396,10 @@ def _save_curated_outputs(db, svc, pl, source: dict, data: list[dict], ctx, mult
 
 
 def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = None):
-    """Pipeline 执行任务 — 支持 DAG 编译 + 节点状态追踪"""
+    """Pipeline 执行任务 — 经 engine_registry 分发到采集引擎（n8n / python / 运行时注册）"""
     from app.database import SessionLocal
     from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
     from app.config import settings
-    from app.services.v2.pipeline.dag_compiler import compile_definition
-    from app.services.v2.dataset_service import DatasetService
 
     db = SessionLocal()
     run = None  # except 块引用；首个查询即抛异常时不能 NameError 掩盖原始错误
@@ -830,150 +440,20 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
         run.stats = {**(run.stats or {}), "pipeline_version": pl.version}
         db.commit()
 
-        # ── 非画布引擎（n8n / 未来第三方工作流）：注册表分发，共用入湖通道 ──
+        # ── 采集引擎分发：definition.engine 决定行数据来源，入湖通道共用 ──
         from app.data_channel.pipelines.engine_registry import (
-            CANVAS_ENGINES, get_engine_runner, known_engines)
+            get_engine_runner, known_engines)
         engine = (pl.definition or {}).get("engine")
-        if engine not in CANVAS_ENGINES:
-            runner = get_engine_runner(engine)
-            if runner is None:
-                run.status = "failed"
-                run.error_log = (f"未知采集引擎「{engine}」，已注册引擎：{known_engines()}。"
-                                 f"接入新引擎请在 engine_registry 登记 runner。")
-                run.finished_at = datetime.now(timezone.utc)
-                db.commit()
-                return
-            runner(db, pl, run, write_opts)
-            return
-
-        # ── DAG 编译 ──────────────────────────────────────────────
-        definition = pl.definition
-        plan = compile_definition(definition)
-        node_status = _init_node_status(definition)
-
-        def set_node_status(nid: str, status: str):
-            if nid in node_status:
-                node_status[nid] = status
-                # 每步更新持久化到 run; 必须赋新 dict, 原地修改 JSON 列不会被 SQLAlchemy 跟踪
-                run.stats = {**(run.stats or {}), "node_status": dict(node_status)}
-                db.commit()
-
-        svc = DatasetService(db)
-        connector_ids = set(plan.get("paths") or {}) or None
-        sources = _collect_sources(db, pl, connector_ids)
-        if not sources:
-            raise ValueError("Pipeline has no source datasets")
-
-        if sources and not pl.source_dataset_id:
-            pl.source_dataset_id = sources[0]["dataset_id"]
+        runner = get_engine_runner(engine)
+        if runner is None:
+            run.status = "failed"
+            run.error_log = (f"未知采集引擎「{engine}」，已注册引擎：{known_engines()}。"
+                             "系统自定义（canvas）与 route A/B/C 流水线已下线；"
+                             "接入新引擎请在 engine_registry 登记 runner。")
+            run.finished_at = datetime.now(timezone.utc)
             db.commit()
-
-        outputs = []
-        source_stats = []
-        source_warnings: list[str] = []
-        multi_source = len(sources) > 1
-        for source in sources:
-            path = (plan.get("paths") or {}).get(source.get("connector_node_id"))
-            transform_route, runtime_spec = _pipeline_runtime_config(pl, path)
-            data, ctx = _execute_source(db, svc, pl, source, transform_route, runtime_spec)
-
-            capacity_warning = _source_capacity_warning(source)
-            if capacity_warning:
-                logger.warning(capacity_warning)
-                source_warnings.append(capacity_warning)
-
-            conn_node_id = source.get("connector_node_id")
-
-            outputs.extend(_save_curated_outputs(db, svc, pl, source, data, ctx, multi_source, write_opts))
-
-            # 记录逐源统计
-            source_stat = {
-                "source_name": source.get("filename", source["dataset_id"][:8]),
-                "dataset_id": source["dataset_id"],
-                "dataset_version_id": source.get("dataset_version_id"),
-                "dataset_version_no": source.get("version_no"),
-                "source_rowcount": source.get("source_rowcount"),
-                "route": source["route"],
-                "rows_in": ctx.rows_in,
-                "rows_out": ctx.rows_out,
-                "connector_node_id": conn_node_id,
-            }
-            source_stats.append(source_stat)
-
-        total_in = sum(s["rows_in"] for s in source_stats)
-        total_out = sum(s["rows_out"] for s in source_stats)
-
-        # Every accepted canvas node belongs to exactly one validated path.
-        # Statuses therefore describe executed nodes, not decorative nodes.
-        connector_totals: dict[str, dict[str, int]] = {}
-        for source_stat in source_stats:
-            connector_id = source_stat.get("connector_node_id")
-            if connector_id:
-                total = connector_totals.setdefault(connector_id, {"rows_in": 0, "rows_out": 0})
-                total["rows_in"] += int(source_stat["rows_in"] or 0)
-                total["rows_out"] += int(source_stat["rows_out"] or 0)
-        for connector_id, connector_stat in connector_totals.items():
-            set_node_status(
-                connector_id,
-                f"in:{connector_stat['rows_in']} out:{connector_stat['rows_out']}",
-            )
-            path = (plan.get("paths") or {}).get(connector_id, [])
-            for node_id in path:
-                node = next((n for n in (definition or {}).get("nodes", [])
-                             if n.get("id") == node_id), {})
-                if node.get("type") == "transform":
-                    set_node_status(
-                        node_id,
-                        f"in:{connector_stat['rows_in']} out:{connector_stat['rows_out']}",
-                    )
-                elif node.get("type") == "output":
-                    set_node_status(node_id, f"out:{connector_stat['rows_out']}")
-
-        for nid in node_status:
-            if ":" not in str(node_status.get(nid, "")):
-                set_node_status(nid, "success")
-
-        curated_ids = [o["curated_dataset_id"] for o in outputs]
-        pl.target_curated_ids = curated_ids
-        if len({s["route"] for s in sources}) == 1:
-            pl.route = sources[0]["route"]
-        else:
-            pl.route = pl.route or sources[0]["route"] or "A"
-
-        # 生命周期与运行态分离：status 只承载 draft/published（发布须走 publish
-        # 端点），本次运行的成败由 PipelineRun.status 承载，不回写流水线
-        db.commit()
-
-        run.status = "success"
-        run.finished_at = datetime.now(timezone.utc)
-        # run ↔ 产物版本血缘：主产物的 DatasetVersion id
-        run.dataset_version_id = next((o.get("dataset_version_id") for o in outputs if o.get("dataset_version_id")), None)
-        lake_rows_total = sum(o.get("lake_rows") or 0 for o in outputs)
-        gate_warnings = [w for o in outputs for w in (o.get("gate_warnings") or [])]
-        # 审计：跨产物聚合的资产湖影响计数（列表页快速展示，明细在 meta.outputs）
-        _impacts = [o.get("lake_impact") for o in outputs if o.get("lake_impact")]
-        lake_impact_summary = {
-            "added": sum(i.get("added_count", 0) for i in _impacts),
-            "updated": sum(i.get("updated_count", 0) for i in _impacts),
-            "deleted": sum(i.get("deleted_count", 0) for i in _impacts),
-        } if _impacts else None
-        run.stats = {
-            **(run.stats or {}),
-            "rows_in": total_in,
-            "rows_out": total_out,
-            "lake_rows": lake_rows_total,
-            "lake_impact": lake_impact_summary,
-            "write_mode": (write_opts or {}).get("mode"),
-            "gate_warnings": gate_warnings or None,
-            "source_warnings": source_warnings or None,
-            "skipped_outputs": [o for o in outputs if o.get("skipped")] or None,
-            "node_status": dict(node_status),
-            "source_stats": source_stats,
-            "meta": {"outputs": outputs},
-            "curated_dataset_id": curated_ids[0] if curated_ids else None,
-            "curated_dataset_ids": curated_ids,
-        }
-        db.commit()
+            return
+        runner(db, pl, run, write_opts)
 
     except Exception as e:
         logger.error(f"Pipeline run failed: {e}")
@@ -981,23 +461,10 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             run.status = "failed"
             run.error_log = str(e)
             run.finished_at = datetime.now(timezone.utc)
-            stats = dict(run.stats or {})
-            stats.setdefault("node_status", {})
-            run.stats = stats
             # 运行失败不夺走发布态：failed 属于这次 run，不属于流水线生命周期
             db.commit()
     finally:
         db.close()
-
-
-def _get_node_type(definition: dict | None, node_id: str) -> str:
-    """从 definition 中获取节点类型"""
-    if not definition:
-        return ""
-    for n in definition.get("nodes", []):
-        if n.get("id") == node_id:
-            return n.get("type", "")
-    return ""
 
 
 if celery_app:

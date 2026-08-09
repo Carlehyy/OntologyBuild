@@ -1,5 +1,5 @@
 """
-外部采集引擎通用运行器 — definition.engine ≠ canvas 的流水线共用执行骨架。
+外部采集引擎通用运行器 — n8n / python 等注册表引擎流水线共用执行骨架。
 
 引擎差异被压缩到一个 collector 回调（「行数据从哪来」）；其余全部通用：
 run 状态机、PipelineContext 记账、资产湖准入闸门 + 版本化入湖

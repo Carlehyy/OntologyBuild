@@ -2,9 +2,13 @@
 采集引擎注册表 — 接入新流水线来源（第三方工作流平台等）的唯一挂点。
 
 一条流水线的 definition.engine 决定行数据从哪来：
-  - 缺省/"canvas"  画布引擎：数据集 → route A/B/C steps（pipeline_run_task 内置）
   - "n8n"          数据管家治理的 n8n 工作流（steward 模块）
+  - "python"       Python 脚本流水线（python_engine 模块）
   - 未来引擎        在 _BUILTIN 登记，或运行时 register_engine()
+
+系统自定义（canvas 画布）与 route A/B/C 流水线已下线：definition.engine
+缺省或为 "canvas" 的存量流水线由迁移 0061 统一归档，运行时按未知引擎
+明确失败。
 
 所有引擎的产物殊途同归：list[dict] 行数据 → 资产湖准入闸门（lake_gate）→
 curated 版本化入湖。新引擎只需要实现「怎么取到行数据」（一个 collector），
@@ -36,9 +40,6 @@ _BUILTIN: dict[str, tuple[str, str]] = {
         "run_python_pipeline",
     ),
 }
-
-# 画布引擎的别名：definition.engine 为这些值时走 pipeline_run_task 内置路径
-CANVAS_ENGINES = (None, "", "canvas")
 
 
 def register_engine(name: str, runner: Callable) -> None:

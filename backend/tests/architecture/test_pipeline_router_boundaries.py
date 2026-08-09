@@ -43,7 +43,6 @@ CONTRACT_NAMES = (
     "ValidateDefinitionsResult",
     "PublishBody",
     "EnabledBody",
-    "PreviewStepBody",
 )
 
 VALIDATION_HELPERS = {
@@ -51,9 +50,9 @@ VALIDATION_HELPERS = {
     "_column_definitions_hash": "column_definitions_hash",
     "_pipeline_execution_hash": "pipeline_execution_hash",
     "_current_execution_hash": "current_execution_hash",
-    "_invalidate_canvas_attestation": "invalidate_canvas_attestation",
-    "_require_canvas_publish_attestation": (
-        "require_canvas_publish_attestation"
+    "_invalidate_publish_attestation": "invalidate_publish_attestation",
+    "_require_publish_attestation": (
+        "require_publish_attestation"
     ),
     "_require_production_executable": "require_production_executable",
 }
@@ -360,13 +359,7 @@ def test_remaining_execution_entries_delegate_to_canonical_service(
         "reject_dry_run_commit",
         lambda: calls.append(("commit",)) or expected,
     )
-    monkeypatch.setattr(
-        execution_service,
-        "preview_pipeline_step",
-        lambda body: calls.append(("preview", body)) or expected,
-    )
     database = object()
-    body = contracts.PreviewStepBody(op="schema_inference")
 
     assert pipeline_router.list_runs("pipeline-1", database) is expected
     assert pipeline_router.get_run("run-1", database) is expected
@@ -374,12 +367,10 @@ def test_remaining_execution_entries_delegate_to_canonical_service(
         pipeline_router.commit_dry_run("pipeline-1", "dry-run-1")
         is expected
     )
-    assert pipeline_router.preview_step(body) is expected
     assert calls == [
         ("list", "pipeline-1", database, 50),
         ("get", "run-1", database),
         ("commit",),
-        ("preview", body),
     ]
 
 
@@ -414,7 +405,6 @@ def test_pipeline_router_keeps_business_workflows_as_thin_adapters():
         "dry_run_pipeline",
         "dry_run_rows",
         "commit_dry_run",
-        "preview_step",
     ):
         body = _non_docstring_body(functions[name])
         assert len(body) == 1

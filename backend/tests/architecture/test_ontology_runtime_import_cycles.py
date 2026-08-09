@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from app.data_channel.pipelines import engine as pipeline_engine_facade
-from app.data_channel.pipelines import route_executor, trigger_service
+from app.data_channel.pipelines import trigger_service
 from app.ontologies import runtime_fence
 from app.ontologies.mappings import mapping_service
 from app.ontologies.sentinels import engine as sentinel_engine
@@ -183,9 +183,6 @@ def test_pipeline_runtime_uses_canonical_engine_and_keeps_legacy_contract():
         assert "app.services.v2.pipeline.engine" not in imported_modules
 
     for name, canonical_module in (
-        ("execute_route_a", route_executor),
-        ("execute_route_b", route_executor),
-        ("execute_route_c", route_executor),
         ("execute_pipeline", trigger_service),
     ):
         assert getattr(pipeline_engine_facade, name) is getattr(

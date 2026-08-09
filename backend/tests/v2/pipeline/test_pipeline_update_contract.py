@@ -10,7 +10,7 @@ def test_published_pipeline_allows_name_and_description_updates(db):
         name="发布前名称",
         description="发布前描述",
         status="published",
-        definition={"engine": "canvas", "nodes": [], "edges": []},
+        definition={"engine": "python", "python": {"script": "result = []"}},
         column_definitions=[],
     )
     db.add(pipeline)
@@ -31,7 +31,7 @@ def test_published_pipeline_still_rejects_contract_changes(db):
     pipeline = Pipeline(
         name="已发布流水线",
         status="published",
-        definition={"engine": "canvas", "nodes": [], "edges": []},
+        definition={"engine": "python", "python": {"script": "result = []"}},
         column_definitions=[],
     )
     db.add(pipeline)

@@ -19,15 +19,37 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const SUPPLY_CHAIN_DIR = path.resolve(__dirname, '../../../../test_data/供应链')
 
+// python 引擎流水线的取数逻辑即脚本本身，只能处理文本可解析夹具；
+// 二进制格式（docx/xlsx/pptx/pdf/md）随画布编排一并退出该 golden flow。
 const ENTITY_BY_FILE: Record<string, string> = {
   'inventory_transactions.csv': 'InventoryTransactions',
   'logistics_performance.csv': 'LogisticsPerformance',
-  'procurement_policy.docx': 'ProcurementPolicy',
-  'supplier_database.xlsx': 'SupplierDatabase',
   'supplier_orders.json': 'SupplierOrders',
-  'supply_chain_review.pptx': 'SupplyChainReview',
-  'supply_chain_strategy.md': 'SupplyChainStrategy',
-  'warehouse_management.pdf': 'WarehouseManagement',
+}
+
+/** 生成 python 引擎脚本：原文内嵌，执行内核用标准库解析为 list[dict] 行数据 */
+function buildScript(name: string, content: string): string {
+  const dataLiteral = JSON.stringify(content)
+  if (name.endsWith('.json')) {
+    return [
+      'import json',
+      '',
+      `DATA = ${dataLiteral}`,
+      '_parsed = json.loads(DATA)',
+      '_rows = _parsed if isinstance(_parsed, list) else [_parsed]',
+      'result = [',
+      '  {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v) for k, v in row.items()}',
+      '  for row in _rows',
+      ']',
+    ].join('\n')
+  }
+  return [
+    'import csv',
+    'import io',
+    '',
+    `DATA = ${dataLiteral}`,
+    'result = list(csv.DictReader(io.StringIO(DATA.lstrip("\\ufeff"))))',
+  ].join('\n')
 }
 
 interface DryRunOutput {
@@ -108,33 +130,18 @@ async function createPublishedPipeline(
   token: string,
   ts: number,
   uploaded: { name: string; dataset_id: string },
+  content: string,
 ) {
-  const definition = {
-    schema_version: '2.0',
-    nodes: [
-      {
-        id: 'connector',
-        type: 'connector',
-        label: `供应链数据源 · ${uploaded.name}`,
-        position: { x: 80, y: 180 },
-        config: { source_type: 'file', files: [uploaded] },
-      },
-      { id: 'storage', type: 'storage', label: '分类存储', position: { x: 330, y: 180 }, config: { storage_mode: 'auto' } },
-      { id: 'transform', type: 'transform', label: '分路径转换', position: { x: 580, y: 180 }, config: { path: 'auto', steps: [{ op: 'vlm_extract', params: { strategy: 'vlm' } }] } },
-      { id: 'output', type: 'output', label: '结构化输出', position: { x: 830, y: 180 }, config: { dataset_type: 'curated_dataset', primary_key: [] } },
-    ],
-    edges: [
-      { id: 'e1', source: 'connector', target: 'storage' },
-      { id: 'e2', source: 'storage', target: 'transform' },
-      { id: 'e3', source: 'transform', target: 'output' },
-    ],
-  }
   const pipeline = await apiJson(request, 'POST', '/api/v2/pipelines', token, {
     name: `SC_GOLDEN_E2E_${ts}_${uploaded.name}`,
     domain: '供应链',
     description: 'Playwright golden flow: preview -> contract validation -> publish -> curated output',
-    route: 'A',
-    definition,
+    definition: { engine: 'python', nodes: [], edges: [], python: {} },
+  })
+  // 脚本经「保存」端点落库（服务端重跑复验输出格式），之后 dry-run / 发布 /
+  // 运行都执行这份已保存脚本。
+  await apiJson(request, 'PUT', `/api/v2/pipelines/${pipeline.id}/script`, token, {
+    script: buildScript(uploaded.name, content),
   })
 
   const dryRun = await apiJson(
@@ -168,6 +175,7 @@ async function createPublishedPipeline(
     pipeline,
     run,
     definitions,
+    fileName: uploaded.name,
     curatedDatasetId: run.stats.curated_dataset_ids[0] as string,
   }
 }
@@ -213,27 +221,28 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
     expect(token).toBeTruthy()
 
     const filenames = fs.readdirSync(SUPPLY_CHAIN_DIR).filter((name: string) => ENTITY_BY_FILE[name]).sort()
-    expect(filenames).toHaveLength(8)
+    expect(filenames).toHaveLength(3)
 
-    const uploaded: Array<{ name: string; dataset_id: string }> = []
+    const uploaded: Array<{ name: string; dataset_id: string; content: string }> = []
     for (const name of filenames) {
       const filePath = path.join(SUPPLY_CHAIN_DIR, name)
+      const buffer = fixtureBuffer(name, filePath)
       const response = await request.post(`${API}/api/v2/datasets/upload`, {
         headers: { Authorization: `Bearer ${token}` },
         multipart: {
           file: {
             name,
             mimeType: 'application/octet-stream',
-            buffer: fixtureBuffer(name, filePath),
+            buffer,
           },
         },
       })
       expect(response.ok(), `upload ${name}: ${await response.text()}`).toBeTruthy()
       const body = await response.json()
-      uploaded.push({ name, dataset_id: body.data.id })
+      uploaded.push({ name, dataset_id: body.data.id, content: buffer.toString('utf-8') })
     }
 
-    // 当前发布门禁的字段契约粒度是「单产物」。八个异构文件因此各自
+    // 当前发布门禁的字段契约粒度是「单产物」。三个文本夹具因此各自
     // 经过执行预览、全量字段校验与发布，再共同映射到一个本体。
     const pipelineOutputs: Array<{
       pipeline: { id: string }
@@ -244,23 +253,23 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
         }
       }
       definitions: ColumnDefinition[]
+      fileName: string
       curatedDatasetId: string
     }> = []
     for (const item of uploaded) {
-      pipelineOutputs.push(await createPublishedPipeline(request, token, ts, item))
+      pipelineOutputs.push(await createPublishedPipeline(request, token, ts, item, item.content))
     }
-    expect(pipelineOutputs).toHaveLength(8)
+    expect(pipelineOutputs).toHaveLength(3)
 
     const firstPipeline = pipelineOutputs[0].pipeline
     await login(page)
-    await page.goto(`/#/data/pipelines/${firstPipeline.id}`)
-    await expect(page.getByText(`供应链数据源 · ${uploaded[0].name}`, { exact: true })).toBeVisible()
+    await page.goto(`/#/data/pipelines/script/${firstPipeline.id}`)
+    await expect(page.getByRole('heading', { name: `SC_GOLDEN_E2E_${ts}_${uploaded[0].name}` })).toBeVisible()
     await shot(page, outDir, '01-pipeline-seeded')
 
     const curatedIds = pipelineOutputs.map(item => item.curatedDatasetId)
-    expect(curatedIds).toHaveLength(8)
-    await expect(page.getByText('Curated Dataset', { exact: true })).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByText('已发布', { exact: true })).toBeVisible()
+    expect(curatedIds).toHaveLength(3)
+    await expect(page.getByText('已发布', { exact: true }).first()).toBeVisible()
     await shot(page, outDir, '02-pipeline-after-run')
     await shot(page, outDir, '03-pipeline-published')
 
@@ -290,16 +299,15 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
       `/api/v2/ontologies/${ontologyId}/versions/${root.id}/drafts`,
       token,
       {
-        versionLabel: '供应链八资产映射',
-        description: '八个单产物发布流水线在隔离空间完成映射试跑',
+        versionLabel: '供应链三资产映射',
+        description: '三个单产物发布流水线在隔离空间完成映射试跑',
       },
     )
     const draft = draftResponse.data
     const objectTypes = pipelineOutputs.map((item, index) => {
-      const output = item.run.stats.meta.outputs[0]
-      const entityClass = ENTITY_BY_FILE[output.source_file]
+      const entityClass = ENTITY_BY_FILE[item.fileName]
       const primary = item.definitions.find(definition => definition.is_primary_key)
-      expect(primary, `${output.source_file} must have a single primary key`).toBeTruthy()
+      expect(primary, `${item.fileName} must have a single primary key`).toBeTruthy()
       return {
         id: `ot-${ts}-${index}`,
         name: entityClass,
@@ -334,8 +342,7 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
       },
     )
     const mappings = pipelineOutputs.map((item, index) => {
-      const output = item.run.stats.meta.outputs[0]
-      const entityClass = ENTITY_BY_FILE[output.source_file]
+      const entityClass = ENTITY_BY_FILE[item.fileName]
       const primary = item.definitions.find(definition => definition.is_primary_key)!
       return {
         id: `mapping-${ts}-${index}`,
@@ -374,7 +381,7 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
     )
     const trial = trialResponse.data
     expect(trial.status, JSON.stringify(trial.result?.errors || [])).toBe('passed')
-    expect(trial.result.counts.datasets).toBe(8)
+    expect(trial.result.counts.datasets).toBe(3)
     expect(trial.result.counts.objects).toBeGreaterThanOrEqual(100)
     const impactResponse = await apiJson(
       request,
@@ -399,7 +406,7 @@ test.describe('Supply chain pipeline to ontology mapping', () => {
       token,
     )
     const released = releasedResponse.data
-    expect(released.objectTypes).toHaveLength(8)
+    expect(released.objectTypes).toHaveLength(3)
     expect(released.instances).toHaveLength(trial.result.counts.objects)
 
     await login(page)

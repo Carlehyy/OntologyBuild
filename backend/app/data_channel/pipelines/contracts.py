@@ -83,9 +83,3 @@ class ScriptBody(BaseModel):
 
 class EnabledBody(BaseModel):
     enabled: bool
-
-
-class PreviewStepBody(BaseModel):
-    op: str
-    params: dict = {}
-    sample_data: list[dict] = []

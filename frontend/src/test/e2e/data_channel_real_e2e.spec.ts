@@ -99,7 +99,7 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
   const token = await login(page)
   const suffix = Date.now()
   const connectionName = `E2E REST ${suffix}`
-  const pipelineName = `E2E Canvas ${suffix}`
+  const pipelineName = `E2E Python ${suffix}`
   const taskName = `E2E Task ${suffix}`
 
   // 真实页面创建 REST 连接；先验证非法 Header JSON 会被页面阻断。
@@ -161,58 +161,23 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
   )
   expect(preview).toEqual(fixtureRows)
 
-  // 未配置 n8n 时，真实新建弹窗必须禁用 n8n 入口并给出配置说明。
+  // 未配置 n8n 时，真实新建弹窗必须禁用 n8n 入口并给出配置说明；
+  // 默认选中 Python 脚本，且不再提供旧版画布（系统自定义）入口。
   await page.goto('/#/data/pipelines')
   await page.getByRole('button', { name: '新建流水线' }).click()
   await expect(page.getByRole('button', { name: /n8n 流水线/ })).toBeDisabled()
   await expect(page.getByText(/启动配置缺少 n8n|n8n 集成当前处于停用状态/)).toBeVisible()
+  const pythonCard = page.getByRole('button', { name: /Python 脚本/ })
+  await expect(pythonCard).toBeEnabled()
+  await expect(pythonCard).toHaveClass(/border-indigo-400/)
+  await expect(page.getByRole('button', { name: /旧版系统流水线/ })).toHaveCount(0)
   await page.screenshot({
     path: testInfo.outputPath('02-n8n-preflight.png'),
     fullPage: true,
   })
   await page.getByRole('button', { name: '取消', exact: true }).click()
 
-  const definition = {
-    engine: 'canvas',
-    nodes: [
-      {
-        id: 'connector',
-        type: 'connector',
-        label: 'E2E Connector',
-        position: { x: 80, y: 160 },
-        config: {
-          source_type: 'file',
-          files: [{ dataset_id: dataset?.id, name: 'orders.json' }],
-        },
-      },
-      {
-        id: 'storage',
-        type: 'storage',
-        label: 'E2E Storage',
-        position: { x: 330, y: 160 },
-        config: { storage_mode: 'auto' },
-      },
-      {
-        id: 'transform',
-        type: 'transform',
-        label: 'E2E Transform',
-        position: { x: 580, y: 160 },
-        config: { path: 'structured', steps: [] },
-      },
-      {
-        id: 'output',
-        type: 'output',
-        label: 'E2E Output',
-        position: { x: 830, y: 160 },
-        config: { dataset_type: 'curated_dataset' },
-      },
-    ],
-    edges: [
-      { id: 'e1', source: 'connector', target: 'storage' },
-      { id: 'e2', source: 'storage', target: 'transform' },
-      { id: 'e3', source: 'transform', target: 'output' },
-    ],
-  }
+  // Python 引擎流水线：definition 只声明引擎，取数逻辑全部在脚本里。
   const pipeline = await apiJson<{ id: string }>(
     request,
     token,
@@ -221,10 +186,23 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
     {
       name: pipelineName,
       description: '真实端到端发布门禁验证',
-      source_dataset_id: dataset?.id,
-      route: 'A',
-      definition,
+      definition: { engine: 'python', nodes: [], edges: [], python: {} },
     },
+  )
+  // 脚本经「保存」端点落库（服务端重跑复验输出格式）；之后的 dry-run、
+  // 发布与任务运行都执行这份已保存脚本。脚本直连夹具服务取数，
+  // 因此夹具行数变化会真实反映到下一次运行。
+  const script = [
+    'import requests',
+    '',
+    `result = requests.get(${JSON.stringify(fixtureUrl)}, headers={"X-E2E-Token": "allowed"}, timeout=30).json()`,
+  ].join('\n')
+  await apiJson(
+    request,
+    token,
+    'PUT',
+    `/api/v2/pipelines/${pipeline.id}/script`,
+    { script },
   )
 
   // 直接调用发布端点也不能绕过执行预览和字段全量校验。
@@ -373,10 +351,13 @@ test('real data-channel flow: REST sync, lake visibility, publish gate and lates
   expect(histories.items[0].started_at).toMatch(/Z$/)
   expect(histories.items[0].finished_at).toMatch(/Z$/)
 
-  // 发布后画布检查器读取最新一条运行（3 行），不能回退到第一条旧运行（2 行）。
-  await page.goto(`/#/data/pipelines/${pipeline.id}`)
-  await page.getByText('E2E Transform', { exact: true }).click()
-  await expect(page.getByText('输入行数: 3', { exact: true })).toBeVisible()
+  // 发布后脚本编辑页只读；实时执行已封版脚本必须读到上游最新数据（3 行），
+  // 不能回退到第一条旧运行（2 行）。
+  await page.goto(`/#/data/pipelines/script/${pipeline.id}`)
+  await expect(page.getByText('已发布').first()).toBeVisible()
+  await page.getByRole('button', { name: /^执行$/ }).click()
+  await expect(page.getByText('执行成功 · 输出格式校验通过')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('Gamma')).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath('03-latest-run-inspector.png'),
     fullPage: true,

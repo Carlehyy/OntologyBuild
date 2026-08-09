@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.data_channel.pipelines.contracts import EnabledBody, PreviewStepBody
+from app.data_channel.pipelines.contracts import EnabledBody
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
 
@@ -46,7 +46,8 @@ def format_pipeline(pipeline: Pipeline) -> dict:
         "spec": pipeline.spec or {},
         "definition": pipeline.definition,
         "status": pipeline.status or "draft",
-        "engine": ((pipeline.definition or {}).get("engine") or "canvas"),
+        # 引擎仅存 n8n / python；canvas 已下线，存量行由迁移 0061 归档
+        "engine": (pipeline.definition or {}).get("engine"),
         "enabled": True if pipeline.enabled is None else bool(pipeline.enabled),
         "column_definitions": pipeline.column_definitions,
         "branch": pipeline.branch or "main",
@@ -318,6 +319,14 @@ def dry_run_pipeline(
     if not pipeline:
         raise HTTPException(404, "Pipeline not found")
 
+    engine = (pipeline.definition or {}).get("engine")
+    if not is_n8n_pipeline_fn(pipeline) and engine != "python":
+        raise HTTPException(
+            410,
+            "系统自定义（canvas）与 route A/B/C 流水线已下线，无法试运行；"
+            "请改用 n8n 流水线或 Python 脚本。",
+        )
+
     engine_meta: dict = {}
     try:
         if is_n8n_pipeline_fn(pipeline):
@@ -372,7 +381,7 @@ def dry_run_pipeline(
                 "meta": {},
                 "multi_source": False,
             }]
-        elif (pipeline.definition or {}).get("engine") == "python":
+        elif engine == "python":
             from app.data_channel.pipelines.python_engine.client import (
                 PythonEngineError,
                 execute_script,
@@ -411,10 +420,8 @@ def dry_run_pipeline(
                 "meta": {},
                 "multi_source": False,
             }]
-        else:
-            from app.tasks.v2.pipeline_run import collect_pipeline_output
-
-            outputs = collect_pipeline_output(db, pipeline)
+        else:  # 前置校验已拦截至 n8n/python，此处仅为防御
+            raise ValueError(f"不支持的采集引擎「{engine}」")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"试运行失败：{exc}")
 
@@ -555,10 +562,7 @@ def dry_run_pipeline(
     total_out = sum(output["rows_out"] for output in outputs)
     return {
         "dry_run_id": dry_run_id,
-        "engine": (
-            (pipeline.definition or {}).get("engine")
-            or "canvas"
-        ),
+        "engine": engine,
         "rows_in": sum(output["rows_in"] for output in outputs),
         "rows_out": total_out,
         "outputs": preview,
@@ -642,47 +646,3 @@ def reject_dry_run_commit() -> None:
         409,
         "试执行结果不能直接写入资产湖。请在数据任务池创建并执行任务，由任务统一完成入湖。",
     )
-
-
-def preview_pipeline_step(body: PreviewStepBody) -> dict:
-    """Preview one legacy transform step."""
-    try:
-        from app.services.v2.pipeline.base import PipelineContext
-        from app.services.v2.pipeline.steps.cleansing import CleansingStep
-        from app.services.v2.pipeline.steps.schema_inference import (
-            SchemaInferenceStep,
-        )
-
-        context = PipelineContext(
-            dataset_id="",
-            version_no=1,
-            route="A",
-            spec={},
-        )
-        data = body.sample_data or [{"col": "sample"}]
-
-        if body.op in (
-            "drop_duplicates",
-            "fill_nulls",
-            "normalize_dates",
-        ):
-            step = CleansingStep()
-            data = step.run(context, data)
-        elif body.op == "schema_inference":
-            step = SchemaInferenceStep()
-            data = step.run(context, data)
-
-        return {
-            "op": body.op,
-            "rows_in": len(body.sample_data),
-            "rows_out": len(data),
-            "preview": data[:20],
-        }
-    except Exception as exc:
-        return {
-            "op": body.op,
-            "error": str(exc),
-            "rows_in": 0,
-            "rows_out": 0,
-            "preview": [],
-        }

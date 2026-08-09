@@ -1,4 +1,4 @@
-"""v2 Pipeline API — 支持新 DSL (nodes/edges) + 旧 steps 格式兼容"""
+"""v2 Pipeline API — n8n / python 两种采集引擎的 CRUD、校验、发布与运行"""
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -16,7 +16,6 @@ from app.data_channel.pipelines.contracts import (
     PipelineCreate,
     PipelineResponse,
     PipelineUpdate,
-    PreviewStepBody,
     PublishBody,
     ScriptBody,
     ValidateDefinitionsBody,
@@ -45,9 +44,9 @@ _is_n8n_pipeline = validation_service.is_n8n_pipeline
 _column_definitions_hash = validation_service.column_definitions_hash
 _pipeline_execution_hash = validation_service.pipeline_execution_hash
 _current_execution_hash = validation_service.current_execution_hash
-_invalidate_canvas_attestation = validation_service.invalidate_canvas_attestation
-_require_canvas_publish_attestation = (
-    validation_service.require_canvas_publish_attestation
+_invalidate_publish_attestation = validation_service.invalidate_publish_attestation
+_require_publish_attestation = (
+    validation_service.require_publish_attestation
 )
 _require_production_executable = (
     validation_service.require_production_executable
@@ -172,7 +171,7 @@ def create_pipeline(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """创建新 Pipeline。支持旧 steps 格式和新 nodes/edges DSL。"""
+    """创建新 Pipeline（definition.engine 仅接受 n8n / python）。"""
     return management_service.create_pipeline(
         body,
         db,
@@ -231,7 +230,7 @@ def update_pipeline(pipeline_id: str, body: PipelineUpdate, db: Session = Depend
         is_n8n_pipeline_fn=_is_n8n_pipeline,
         column_definitions_hash_fn=_column_definitions_hash,
         pipeline_execution_hash_fn=_pipeline_execution_hash,
-        invalidate_canvas_attestation_fn=_invalidate_canvas_attestation,
+        invalidate_publish_attestation_fn=_invalidate_publish_attestation,
         format_pipeline_fn=_format_pipeline,
     )
 
@@ -291,7 +290,7 @@ def publish_pipeline(pipeline_id: str, body: PublishBody | None = None,
                      current_user=Depends(get_current_user)):
     """发布 Pipeline：永久封版身份、编排与字段契约，之后不可修改或撤回。
 
-    发布是所有引擎共同的生命周期唯一入口（画布与 n8n 一致）。n8n 引擎
+    发布是所有引擎共同的生命周期唯一入口（python 与 n8n 一致）。n8n 引擎
     发布时附加：校验触发器 → 激活 n8n workflow → 固化 webhook/期望列。
     发布前校验：definition 结构 + 契约结构（字段标识命名/唯一）。契约与
     数据的一致性校验（全量非空/唯一/类型）在向导第 3 步完成——发布不重
@@ -364,7 +363,7 @@ def run_pipeline_sync(pipeline_id: str, db: Session = Depends(get_db)):
 def set_pipeline_enabled(pipeline_id: str, body: EnabledBody, db: Session = Depends(get_db)):
     """启用/停用流水线：停用后任务池调度与同步链式触发都不执行。
 
-    只有已发布的流水线才能启用（画布与 n8n 同一规则）。只要已被任务池
+    只有已发布的流水线才能启用（python 与 n8n 同一规则）。只要已被任务池
     关联，就锁定启用状态；任务自身是否启用不影响该保护。
     """
     return execution_service.set_pipeline_enabled(
@@ -476,9 +475,3 @@ def list_script_versions(
 ):
     """Python 脚本的保存历史（最近在前，含脚本全文，供查看/恢复）。"""
     return python_engine_service.list_script_versions(pipeline_id, db)
-
-
-@router.post("/preview-step")
-def preview_step(body: PreviewStepBody):
-    """预览某个 Transform 步骤的输出"""
-    return execution_service.preview_pipeline_step(body)

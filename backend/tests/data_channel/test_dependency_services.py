@@ -31,24 +31,15 @@ class _Db:
         return _Query(self._rows)
 
 
-def test_dataset_consumer_map_deduplicates_source_and_connector_references():
+def test_dataset_consumer_map_uses_source_dataset_reference_only():
+    """canvas 下线后只经 source_dataset_id 绑定源数据集；画布节点引用不再扫描。"""
     first = SimpleNamespace(
         id="pipeline-1",
         name="订单入湖",
         status="published",
         domain="供应链",
         source_dataset_id="dataset-a",
-        definition={
-            "nodes": [{
-                "type": "connector",
-                "config": {
-                    "files": [
-                        {"dataset_id": "dataset-a"},
-                        {"dataset_id": "dataset-b"},
-                    ],
-                },
-            }],
-        },
+        definition={"engine": "python", "python": {"script": "result = []"}},
     )
     second = SimpleNamespace(
         id="pipeline-2",
@@ -73,20 +64,8 @@ def test_dataset_consumer_map_deduplicates_source_and_connector_references():
         "status": "published",
         "domain": "供应链",
     }]
-    assert dataset_consumers(db, "dataset-b") == [
-        {
-            "id": "pipeline-1",
-            "name": "订单入湖",
-            "status": "published",
-            "domain": "供应链",
-        },
-        {
-            "id": "pipeline-2",
-            "name": "补充数据",
-            "status": "draft",
-            "domain": "通用",
-        },
-    ]
+    # 存量画布 connector.files 引用不再计入消费方
+    assert dataset_consumers(db, "dataset-b") == []
     assert dataset_consumers(db, "unreferenced") == []
 
 

@@ -1,19 +1,15 @@
 """采集引擎注册表测试 — 新引擎接入点的行为契约"""
 from app.data_channel.pipelines.engine_registry import (
-    CANVAS_ENGINES,
     get_engine_runner,
     known_engines,
     register_engine,
 )
 
 
-def test_canvas_engine_aliases():
-    for alias in (None, "", "canvas"):
-        assert alias in CANVAS_ENGINES
-
-
 def test_unknown_engine_returns_none():
     assert get_engine_runner("no-such-engine") is None
+    # canvas 已下线：别名不再注册，与未知引擎同等处理
+    assert get_engine_runner("canvas") is None
 
 
 def test_runtime_registration():

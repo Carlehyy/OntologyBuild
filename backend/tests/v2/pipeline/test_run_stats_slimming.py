@@ -6,7 +6,7 @@ v2_pipeline_runs.stats 曾原样嵌入流水线定义/契约快照与 ctx.meta�
 """
 from types import SimpleNamespace
 
-from app.data_channel.datasets.service import DatasetService, rows_to_parquet_bytes
+from app.data_channel.datasets.service import DatasetService
 from app.models.v2.pipeline import Pipeline, PipelineRun
 from app.tasks.v2.pipeline_run import _save_curated_dataset, pipeline_run_task
 
@@ -69,19 +69,18 @@ def test_save_curated_dataset_slims_ctx_meta_in_output(db, monkeypatch):
 
 
 def test_pipeline_run_task_stats_exclude_dead_fields(db, monkeypatch):
-    """真实执行路径落终态 stats：无快照死字段，outputs meta 已裁剪。"""
+    """真实执行路径（python 引擎）落终态 stats：无快照死字段，outputs meta 已裁剪。"""
     from sqlalchemy.orm import sessionmaker
 
-    storage = _Storage()
-    svc = DatasetService(db, storage=storage)
-    source_ds = svc.create_dataset(name="订单源表", kind="raw", schema_json={})
-    svc.create_version(
-        source_ds.id,
-        rows_to_parquet_bytes([{"order_id": "A-1", "amount": "10"}]),
-        rowcount=1, schema_json={})
+    from app.data_channel.pipelines.python_engine.client import ScriptExecution
+
     db.add(Pipeline(
-        id="pipe-slim-run", name="订单流水线", spec={}, definition=None,
-        source_dataset_id=source_ds.id, status="published", enabled=True,
+        id="pipe-slim-run", name="订单流水线", spec={},
+        definition={
+            "engine": "python",
+            "python": {"script": "result = [{'order_id': 'A-1', 'amount': '10'}]"},
+        },
+        status="published", enabled=True,
         column_definitions=None))
     db.add(PipelineRun(id="run-slim-1", pipeline_id="pipe-slim-run",
                        status="pending"))
@@ -89,6 +88,16 @@ def test_pipeline_run_task_stats_exclude_dead_fields(db, monkeypatch):
 
     runtime_session = sessionmaker(bind=db.get_bind())
     monkeypatch.setattr("app.database.SessionLocal", runtime_session)
+    monkeypatch.setattr(
+        "app.data_channel.pipelines.python_engine.runner.execute_script",
+        lambda script, *, timeout: ScriptExecution(
+            rows=[{"order_id": "A-1", "amount": "10"}],
+            stdout="",
+            error=None,
+            traceback="",
+            duration_ms=12,
+            kernel_id="kernel-1",
+        ))
 
     pipeline_run_task.run("pipe-slim-run", "run-slim-1")
 
@@ -102,6 +111,7 @@ def test_pipeline_run_task_stats_exclude_dead_fields(db, monkeypatch):
             assert key not in stats
         assert stats["pipeline_version"] == 1
         # 消费方可见的执行摘要保持完整
+        assert stats["engine"] == "python"
         assert stats["rows_in"] == 1
         assert stats["rows_out"] == 1
         assert stats["lake_rows"] == 1

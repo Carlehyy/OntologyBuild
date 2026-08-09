@@ -1,7 +1,7 @@
 """Synchronous pipeline trigger orchestration.
 
-Route transformation lives in :mod:`route_executor`; this service owns only
-the run-record lifecycle and invocation of the shared worker task.
+Engine dispatch lives in the shared worker task; this service owns only
+the run-record lifecycle and invocation of that task.
 """
 from __future__ import annotations
 

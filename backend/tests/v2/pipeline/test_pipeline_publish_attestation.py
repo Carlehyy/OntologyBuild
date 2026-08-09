@@ -13,12 +13,12 @@ from app.data_channel.pipelines.router import (
     _dry_run_uri,
     publish_pipeline,
     update_pipeline,
-    validate_pipeline,
     validate_column_definitions,
 )
-from app.data_channel.datasets.service import DatasetService
 from app.data_channel.steward.service import canonical_json_hash
 
+
+SCRIPT = "result = [{'id': 'A-1'}]"
 
 COLUMNS = [{
     "source_key": "id",
@@ -50,13 +50,14 @@ class _Storage:
 
 def _pipeline(db) -> Pipeline:
     pipeline = Pipeline(
-        id="canvas-attestation",
+        id="python-attestation",
         name="发布凭证测试",
         status="draft",
         definition={
-            "engine": "canvas",
+            "engine": "python",
             "nodes": [],
             "edges": [],
+            "python": {"script": SCRIPT},
         },
         spec={},
         column_definitions=[],
@@ -83,7 +84,7 @@ def _stage(storage: _Storage, pipeline_id: str, rows: list[dict]) -> str:
     return dry_run_id
 
 
-def test_canvas_validation_persists_publish_attestation_and_matching_save_keeps_it(
+def test_python_validation_persists_publish_attestation_and_matching_save_keeps_it(
     db, monkeypatch,
 ):
     pipeline = _pipeline(db)
@@ -111,7 +112,7 @@ def test_canvas_validation_persists_publish_attestation_and_matching_save_keeps_
     assert pipeline.validation_attestation is not None
 
 
-def test_canvas_execution_or_contract_change_invalidates_attestation(
+def test_python_execution_or_contract_change_invalidates_attestation(
     db, monkeypatch,
 ):
     pipeline = _pipeline(db)
@@ -137,7 +138,7 @@ def test_canvas_execution_or_contract_change_invalidates_attestation(
     assert pipeline.validation_attestation is None
 
 
-def test_canvas_publish_endpoint_rejects_missing_validation_attestation(
+def test_python_publish_endpoint_rejects_missing_validation_attestation(
     db, monkeypatch,
 ):
     pipeline = _pipeline(db)
@@ -157,7 +158,7 @@ def test_canvas_publish_endpoint_rejects_missing_validation_attestation(
         )
 
 
-def test_canvas_publish_accepts_current_verified_attestation(
+def test_python_publish_accepts_current_verified_attestation(
     db, monkeypatch,
 ):
     pipeline = _pipeline(db)
@@ -192,128 +193,3 @@ def test_canvas_publish_accepts_current_verified_attestation(
 
     assert result["status"] == "published"
     assert result["enabled"] is False
-
-
-def test_pipeline_validation_reads_historical_json_when_rowcount_is_missing(
-    db, monkeypatch,
-):
-    storage = _Storage()
-    monkeypatch.setattr(
-        "app.data_channel.datasets.service.get_storage_service",
-        lambda: storage,
-    )
-    dataset_service = DatasetService(db, storage=storage)
-    dataset = dataset_service.create_dataset("历史 JSON", "semi")
-    dataset_service.create_version(
-        dataset.id,
-        b'[{"id": "A-1"}]',
-        rowcount=None,
-    )
-    pipeline = Pipeline(
-        id="historical-json-pipeline",
-        name="历史 JSON 流水线",
-        status="draft",
-        definition={
-            "nodes": [
-                {
-                    "id": "connector",
-                    "type": "connector",
-                    "config": {"files": [{"dataset_id": dataset.id}]},
-                },
-                {"id": "storage", "type": "storage", "config": {}},
-                {"id": "transform", "type": "transform", "config": {}},
-                {"id": "output", "type": "output", "config": {}},
-            ],
-            "edges": [
-                {"source": "connector", "target": "storage"},
-                {"source": "storage", "target": "transform"},
-                {"source": "transform", "target": "output"},
-            ],
-        },
-        spec={},
-    )
-    db.add(pipeline)
-    db.commit()
-
-    result = validate_pipeline(pipeline.id, db)
-
-    assert result.valid is True
-    assert not any("所有 Connector" in item["message"] for item in result.errors)
-
-    pipeline.definition = {
-        "nodes": [
-            {"id": "storage", "type": "storage", "config": {}},
-            {"id": "transform", "type": "transform", "config": {}},
-            {"id": "output", "type": "output", "config": {}},
-        ],
-        "edges": [
-            {"source": "storage", "target": "transform"},
-            {"source": "transform", "target": "output"},
-        ],
-    }
-    pipeline.source_dataset_id = dataset.id
-    db.commit()
-
-    fallback_result = validate_pipeline(pipeline.id, db)
-
-    assert not any("暂无数据版本" in item["message"]
-                   for item in fallback_result.warnings)
-
-
-@pytest.mark.parametrize(
-    ("payload", "expected_valid"),
-    [
-        (b"PK\x03\x04non-empty-docx-payload", True),
-        (b"", False),
-    ],
-    ids=["non-empty", "empty"],
-)
-def test_pipeline_validation_handles_unstructured_version_payload_without_rows(
-    db, payload, expected_valid,
-):
-    storage = _Storage()
-    dataset_service = DatasetService(db, storage=storage)
-    dataset = dataset_service.create_dataset("采购制度", "unstructured")
-    version = dataset_service.create_version(
-        dataset.id,
-        payload,
-        rowcount=None,
-    )
-    assert version.rowcount is None
-    assert version.storage_uri
-
-    pipeline = Pipeline(
-        id="unstructured-file-pipeline",
-        name="非结构化文件流水线",
-        status="draft",
-        definition={
-            "nodes": [
-                {
-                    "id": "connector",
-                    "type": "connector",
-                    "config": {"files": [{"dataset_id": dataset.id}]},
-                },
-                {"id": "storage", "type": "storage", "config": {}},
-                {"id": "transform", "type": "transform", "config": {}},
-                {"id": "output", "type": "output", "config": {}},
-            ],
-            "edges": [
-                {"source": "connector", "target": "storage"},
-                {"source": "storage", "target": "transform"},
-                {"source": "transform", "target": "output"},
-            ],
-        },
-        spec={},
-    )
-    db.add(pipeline)
-    db.commit()
-
-    result = validate_pipeline(pipeline.id, db)
-
-    assert result.valid is expected_valid
-    connector_empty = any(
-        "所有 Connector" in item["message"] for item in result.errors
-    )
-    assert connector_empty is (not expected_valid)
-    if expected_valid:
-        assert not any("暂无数据" in item["message"] for item in result.warnings)

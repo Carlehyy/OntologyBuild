@@ -34,13 +34,9 @@ def dataset_consumer_map(db: Session) -> dict[str, list[dict]]:
             bucket.append(entry)
 
     for pipeline in db.query(Pipeline).all():
+        # canvas 画布节点（connector.files）引用扫描已随该引擎下线移除；
+        # n8n/python 流水线只经 source_dataset_id 绑定源数据集。
         add(pipeline.source_dataset_id, pipeline)
-        definition = pipeline.definition or {}
-        for node in definition.get("nodes", []) or []:
-            if node.get("type") != "connector":
-                continue
-            for file_item in (node.get("config") or {}).get("files", []) or []:
-                add(file_item.get("dataset_id"), pipeline)
     return mapping
 
 

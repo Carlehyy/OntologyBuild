@@ -722,41 +722,6 @@ def test_n8n_publish_rejects_missing_preview_validation_attestation(
     assert not any(call.startswith("activate:") for call in fake_n8n.calls)
 
 
-def test_canvas_publish_requires_its_own_validation_attestation(db, monkeypatch):
-    from fastapi import HTTPException
-    from app.data_channel.pipelines import router as pipelines_router
-
-    pipeline = Pipeline(
-        name="画布兼容发布",
-        route="A",
-        spec={},
-        definition={"engine": "canvas", "nodes": [], "edges": []},
-        column_definitions=[],
-        status="draft",
-        enabled=False,
-        version=1,
-    )
-    db.add(pipeline)
-    db.commit()
-    monkeypatch.setattr(
-        pipelines_router,
-        "validate_pipeline",
-        lambda *_args, **_kwargs: pipelines_router.ValidateResult(
-            valid=True, errors=[], warnings=[]),
-    )
-
-    with pytest.raises(HTTPException, match="执行预览与字段定义"):
-        pipelines_router.publish_pipeline(
-            pipeline.id,
-            pipelines_router.PublishBody(enable=False),
-            db,
-            current_user=SimpleNamespace(id=None),
-        )
-
-    assert db.query(PipelineVersion).filter(
-        PipelineVersion.pipeline_id == pipeline.id).count() == 0
-
-
 def test_validate_definitions_persists_complete_n8n_publish_attestation(
         pipelines_client, client, auth_headers, db, fake_n8n, draft_record):
     preview = client.post(

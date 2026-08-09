@@ -433,7 +433,7 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
             )}
           </div>
         ) : (
-          <div className="border-t border-slate-100 pt-2 text-[10.5px] text-slate-400">本次为手动画布运行，无原始入湖影响记录</div>
+          <div className="border-t border-slate-100 pt-2 text-[10.5px] text-slate-400">本次为手动运行，无原始入湖影响记录</div>
         )}
       </div>
     </div>

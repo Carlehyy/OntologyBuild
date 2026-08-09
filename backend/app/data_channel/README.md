@@ -9,10 +9,10 @@ data_channel/
 ├── access.py          数据集/成品跨目录访问守卫
 ├── connections/       SQL、REST、Mongo、文件与 AI-HOT 连接/采集适配
 ├── datasets/          数据集目录、版本、导入、编辑、共享与版本事件
-├── pipelines/         定义、DAG、依赖、校验/发布、执行与管理；采集引擎注册表
-│                      （engine_registry.py：canvas/n8n/python）与外部引擎共用
-│                      入湖骨架（external_runner.py），python_engine/ 为 Jupyter
-│                      Kernel Gateway 脚本引擎（client/service/runner）
+├── pipelines/         定义、依赖、校验/发布、执行与管理；采集引擎注册表
+│                      （engine_registry.py：n8n/python，canvas 已下线）与外部
+│                      引擎共用入湖骨架（external_runner.py），python_engine/
+│                      为 Jupyter Kernel Gateway 脚本引擎（client/service/runner）
 ├── pipeline_tasks/    调度任务契约、候选/统计/历史、CRUD、触发与入湖执行
 ├── curated/           成品目录、版本读取、审核、导出与安全删除
 ├── sync_tasks/        定时/增量同步、调度和版本事件消费
@@ -29,9 +29,9 @@ data_channel/
   查询、n8n 生命周期锁、task reference 查询和兼容 wiring，不能描述为纯
   adapter。管理、执行/dry-run、依赖检查、发布校验分别位于
   `management_service.py`、`execution_service.py`、`dependency_service.py`
-  和 `validation_service.py`；A/B/C 纯转换位于 `route_executor.py`，同步链式
-  run-record 编排位于 `trigger_service.py`，`engine.py` 仅保留新旧 import 的
-  兼容 facade。实际异步执行入口在
+  和 `validation_service.py`；同步链式 run-record 编排位于
+  `trigger_service.py`，`engine.py` 仅保留新旧 import 的兼容 facade。
+  实际异步执行入口在
   [`app/tasks/v2/pipeline_run.py`](../tasks/v2/pipeline_run.py)。
 - `pipeline_tasks/router.py` 只装配任务池 HTTP；请求契约、流水线契约校验、
   查询/统计、历史/审计、生命周期和手动触发分别进入同目录 service，

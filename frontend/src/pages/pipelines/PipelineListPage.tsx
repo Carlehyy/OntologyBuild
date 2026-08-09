@@ -253,7 +253,7 @@ export default function PipelineListPage() {
       setTotal(value => Math.max(0, value - 1))
       toast({
         tone: 'success',
-        title: isN8nPipeline(target) || isPythonPipeline(target) ? '流水线已归档' : '流水线已删除',
+        title: '流水线已归档',
         description: `「${target.name}」已从当前列表移除。`,
       })
     } catch (e: unknown) {
@@ -262,7 +262,7 @@ export default function PipelineListPage() {
       setDeleteTarget(null)
       toast({
         tone: 'error',
-        title: isN8nPipeline(target) || isPythonPipeline(target) ? '流水线归档失败' : '流水线删除失败',
+        title: '流水线归档失败',
         description: err?.detail || err?.message || '请稍后重试。',
       })
     } finally {
@@ -304,7 +304,6 @@ export default function PipelineListPage() {
           <option value="">全部来源</option>
           <option value="n8n">n8n 流水线</option>
           <option value="python">Python 脚本</option>
-          <option value="canvas">系统自定义</option>
         </select>
         <select
           value={filterStatus}
@@ -413,8 +412,8 @@ export default function PipelineListPage() {
                         </span>
                       ) : (
                         <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
-                          title="在流水线画布中自行编排的流水线">
-                          <GitBranch size={10} /> 系统自定义
+                          title="存量数据缺少可识别的引擎标记（engine 非 n8n/python），无编排入口">
+                          <GitBranch size={10} /> 未知引擎
                         </span>
                       )}
                     </td>
@@ -493,26 +492,26 @@ export default function PipelineListPage() {
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1 justify-center">
-                        <button
-                          onClick={() => {
-                            if (n8n) {
-                              const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
-                              const workflowId = wfId?.n8n_workflow_id as string | undefined
-                              if (workflowId && n8nApiUrl) {
-                                const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
-                                window.open(`${webUrl}/workflow/${workflowId}`, '_blank')
+                        {(n8n || python) && (
+                          <button
+                            onClick={() => {
+                              if (n8n) {
+                                const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
+                                const workflowId = wfId?.n8n_workflow_id as string | undefined
+                                if (workflowId && n8nApiUrl) {
+                                  const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
+                                  window.open(`${webUrl}/workflow/${workflowId}`, '_blank')
+                                }
+                              } else {
+                                navigate(`/data/pipelines/script/${pl.id}`)
                               }
-                            } else if (python) {
-                              navigate(`/data/pipelines/script/${pl.id}`)
-                            } else {
-                              navigate(`/data/pipelines/${pl.id}`)
-                            }
-                          }}
-                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
-                          title={n8n ? '跳转 n8n 工作流' : python ? '编辑 Python 脚本' : '跳转画布编排'}
-                        >
-                          <ExternalLink size={14} />
-                        </button>
+                            }}
+                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                            title={n8n ? '跳转 n8n 工作流' : '编辑 Python 脚本'}
+                          >
+                            <ExternalLink size={14} />
+                          </button>
+                        )}
                         <button
                           onClick={() => setEditTarget(pl)}
                           className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
@@ -530,7 +529,7 @@ export default function PipelineListPage() {
                         <button
                           onClick={() => setDeleteTarget(pl)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                          title={n8n || python ? '归档流水线' : '删除'}
+                          title="归档流水线"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -611,16 +610,12 @@ export default function PipelineListPage() {
         />
       )}
 
-      {/* 删除确认 */}
+      {/* 删除确认：后端对所有引擎统一归档语义（保留版本、运行记录与资产湖产物） */}
       <ConfirmDialog
         open={!!deleteTarget}
-        title={deleteTarget && (isN8nPipeline(deleteTarget) || isPythonPipeline(deleteTarget)) ? '归档流水线' : '删除流水线'}
-        message={deleteTarget && isN8nPipeline(deleteTarget)
-          ? `确认归档流水线「${deleteTarget.name}」？系统会停用 n8n 工作流，并保留发布版本、运行记录和资产湖产物用于审计。`
-          : deleteTarget && isPythonPipeline(deleteTarget)
-            ? `确认归档流水线「${deleteTarget.name}」？系统会停用该流水线，并保留发布版本、运行记录和资产湖产物用于审计。`
-            : `确认删除流水线「${deleteTarget?.name}」？运行记录与版本历史将一并删除；已产出的成品数据集会保留在资产湖中。`}
-        confirmLabel={deleting ? '处理中...' : deleteTarget && (isN8nPipeline(deleteTarget) || isPythonPipeline(deleteTarget)) ? '确认归档' : '确认删除'}
+        title="归档流水线"
+        message={`确认归档流水线「${deleteTarget?.name}」？系统会停用该流水线，并保留发布版本、运行记录和资产湖产物用于审计。`}
+        confirmLabel={deleting ? '处理中...' : '确认归档'}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
@@ -643,12 +638,12 @@ function PipelineCreateModal({
     n8nStatus?.configured && n8nStatus.enabled && n8nStatus.reachable !== false,
   )
   const defaultMode = isEdit
-    ? (isN8nPipeline(pipeline) ? 'n8n' : isPythonPipeline(pipeline) ? 'python' : 'canvas')
-    : (n8nReady ? 'n8n' : 'canvas')
+    ? (isN8nPipeline(pipeline) ? 'n8n' : 'python')
+    : (n8nReady ? 'n8n' : 'python')
 
   const [name, setName] = useState(pipeline?.name || '')
   const [description, setDescription] = useState(pipeline?.description || '')
-  const [mode, setMode] = useState<'canvas' | 'n8n' | 'python'>(defaultMode)
+  const [mode, setMode] = useState<'n8n' | 'python'>(defaultMode)
   const [saving, setSaving] = useState(false)
 
   const handleSubmit = async () => {
@@ -694,13 +689,6 @@ function PipelineCreateModal({
           definition: { engine: 'python', nodes: [], edges: [], python: {} },
         })
         onCreated?.(pl)
-      } else {
-        const pl = await pipelinesApi.create({
-          name: name.trim(),
-          description,
-          definition: { nodes: [], edges: [] },
-        })
-        onCreated?.(pl)
       }
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
@@ -727,7 +715,7 @@ function PipelineCreateModal({
           {!isEdit && (
             <div>
               <label className="block text-xs text-gray-500 mb-1.5">创建方式 *</label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setMode('n8n')}
@@ -754,17 +742,6 @@ function PipelineCreateModal({
                     <FileCode2 size={13} /> Python 脚本
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">自行编写 Python 脚本取数（HTTP 请求等），输出行数据写入资产湖</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode('canvas')}
-                  className={`text-left p-3 rounded-lg border-2 transition-all ${
-                    mode === 'canvas' ? 'border-[var(--color-nav-bg)] bg-blue-50/40' : 'border-gray-200 hover:border-gray-300'}`}
-                >
-                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'canvas' ? 'text-[var(--color-nav-bg)]' : 'text-gray-900'}`}>
-                    <GitBranch size={13} /> 旧版系统流水线
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5">创建后进入画布，自行编排采集与加工节点</div>
                 </button>
               </div>
               {!n8nReady && (
@@ -809,8 +786,8 @@ function PipelineCreateModal({
             {isEdit
               ? '名称和描述始终可修改；发布后仅编排与字段契约封版。'
               : n8nReady
-                ? '推荐使用 n8n 流水线。系统流水线为旧版能力，仅保留兼容入口。'
-                : 'n8n 当前不可用；请检查启动配置与服务连通性后再创建 n8n 流水线。'}
+                ? '推荐使用 n8n 流水线；需要自行编写取数逻辑时选择 Python 脚本。'
+                : 'n8n 当前不可用；可创建 Python 脚本流水线，或检查启动配置与服务连通性后再创建 n8n 流水线。'}
           </p>
           <div className="flex gap-3 shrink-0">
             <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">

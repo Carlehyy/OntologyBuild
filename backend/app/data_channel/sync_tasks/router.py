@@ -75,7 +75,7 @@ def _validate_task(db: Session, body, is_create: bool) -> None:
         if (pipe.status or "draft") != "published":
             raise HTTPException(
                 400,
-                f"流水线「{pipe.name}」尚未发布，任务只能触发已发布的流水线。请先在流水线画布中完成发布。",
+                f"流水线「{pipe.name}」尚未发布，任务只能触发已发布的流水线。请先在编辑向导中完成发布。",
             )
 
     sync_mode = g("sync_mode")

@@ -164,56 +164,38 @@ async function runPipelineMapping(
   expect(files).toContain(sourceFile)
   console.log(`\n  [${domain}][Pipeline] 单产物发布夹具: ${sourceFile}`)
 
-  // 1. 上传一个代表性结构化文件。当前字段契约与发布凭证以单产物为粒度；
+  // 1. 读取代表性结构化文件内容。当前字段契约与发布凭证以单产物为粒度；
   // 多文件全量覆盖由独立的供应链 golden flow 逐文件验证。
-  const uploadResponse = await request.post(`${API}/api/v2/datasets/upload`, {
-    headers: { Authorization: `Bearer ${token}` },
-    multipart: {
-      file: {
-        name: sourceFile,
-        mimeType: 'application/octet-stream',
-        buffer: fs.readFileSync(path.join(domainDir, sourceFile)),
-      },
-    },
-  })
-  const uploadBody = await uploadResponse.json()
-  expect(uploadResponse.ok(), `upload ${sourceFile}: ${JSON.stringify(uploadBody)}`).toBeTruthy()
-  const uploaded = { name: sourceFile, dataset_id: uploadBody.data.id as string }
-  console.log('    上传完成: 1 个文件')
+  // Python 引擎流水线的取数逻辑即脚本本身：把 CSV 原文内嵌进脚本，
+  // 由执行内核用标准库解析出行数据（输出列即 CSV 表头）。
+  const csvText = fs
+    .readFileSync(path.join(domainDir, sourceFile), 'utf-8')
+    .replace(/^\uFEFF/, '')
+  console.log('    读取夹具: 1 个文件')
 
-  // 2. 创建 Pipeline
+  // 2. 创建 Python 脚本流水线，并经「保存」端点落库脚本（服务端重跑复验）
   const plBody = await apiCall(request, 'POST', '/api/v2/pipelines', token, {
     name: `E2E_${domain}_Pipeline_${ts}`,
     domain,
     description: `三领域对比 E2E — ${domain} Pipeline`,
-    route: 'A',
-    definition: {
-      schema_version: '2.0',
-      nodes: [
-        { id: 'connector', type: 'connector', label: `${domain}数据源`, position: { x: 80, y: 180 },
-          config: { source_type: 'file', files: [uploaded] } },
-        { id: 'storage',   type: 'storage',   label: '分类存储',       position: { x: 330, y: 180 },
-          config: { storage_mode: 'auto' } },
-        { id: 'transform', type: 'transform', label: '数据转换',       position: { x: 580, y: 180 },
-          config: { path: 'auto', steps: [] } },
-        { id: 'output',    type: 'output',    label: '结构化输出',     position: { x: 830, y: 180 },
-          config: { dataset_type: 'curated_dataset', primary_key: [] } },
-      ],
-      edges: [
-        { id: 'e1', source: 'connector', target: 'storage' },
-        { id: 'e2', source: 'storage',   target: 'transform' },
-        { id: 'e3', source: 'transform', target: 'output' },
-      ],
-    },
+    definition: { engine: 'python', nodes: [], edges: [], python: {} },
   })
   const pipelineId: string = plBody.id ?? plBody.data?.id
   expect(pipelineId).toBeTruthy()
+  const script = [
+    'import csv',
+    'import io',
+    '',
+    `DATA = ${JSON.stringify(csvText)}`,
+    'result = list(csv.DictReader(io.StringIO(DATA)))',
+  ].join('\n')
+  await apiCall(request, 'PUT', `/api/v2/pipelines/${pipelineId}/script`, token, { script })
   console.log(`    Pipeline: ${pipelineId.slice(0, 8)}`)
 
-  // 3. 前端截图 Pipeline Builder
-  await page.goto(`/#/data/pipelines/${pipelineId}`)
+  // 3. 前端截图 Python 脚本编辑页
+  await page.goto(`/#/data/pipelines/script/${pipelineId}`)
   await page.waitForTimeout(1500)
-  await shot(page, outDir, `${domain}_pm_01_pipeline_builder`)
+  await shot(page, outDir, `${domain}_pm_01_pipeline_script`)
 
   // 4. 当前发布契约：先执行预览，再对完整暂存输出做字段与主键校验，
   // 保存完全一致的字段定义后才允许发布。

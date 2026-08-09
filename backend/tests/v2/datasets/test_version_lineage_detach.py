@@ -2,12 +2,10 @@
 
 v2_pipeline_runs.dataset_version_id 只写不读，但 FK（NO ACTION）曾让：
 - keep 版本清理在 best-effort 兜底下静默失效；
-- 成品数据集删除 500；
-- 生产者流水线删除 500（现改为 409 并点名资产）。
-"""
-import pytest
-from fastapi import HTTPException
+- 成品数据集删除 500。
 
+流水线删除已改为统一归档语义（不物理删除），生产者 FK 不再构成删除死结。
+"""
 from app.data_channel.curated import lifecycle_service
 from app.data_channel.datasets.service import DatasetService, rows_to_parquet_bytes
 from app.data_channel.pipelines.management_service import delete_pipeline
@@ -86,7 +84,8 @@ def test_delete_curated_detaches_run_lineage(db):
     assert run is not None and run.dataset_version_id is None
 
 
-def test_delete_pipeline_blocked_by_produced_curated_with_409(db):
+def test_delete_pipeline_archives_even_with_produced_curated(db):
+    """归档语义下产物不再阻断删除：不物理删除，producer FK 不会触发死结。"""
     db.add(Pipeline(id="pipe-producer", name="生产者流水线", spec={},
                     status="published", enabled=True))
     db.add(Dataset(id="curated-produced", name="订单 curated", kind="curated",
@@ -94,20 +93,20 @@ def test_delete_pipeline_blocked_by_produced_curated_with_409(db):
                    output_key="default"))
     db.commit()
 
-    with pytest.raises(HTTPException) as exc_info:
-        delete_pipeline(
-            "pipe-producer", db,
-            is_n8n_pipeline_fn=lambda _p: False,
-            pipeline_task_refs_fn=lambda _db, _pid: [],
-            reject_sync_chain_refs_fn=lambda *_a, **_kw: None,
-        )
-    assert exc_info.value.status_code == 409
-    assert "订单 curated" in str(exc_info.value.detail)
-    # 流水线未被误删
-    assert db.query(Pipeline).get("pipe-producer") is not None
+    result = delete_pipeline(
+        "pipe-producer", db,
+        is_n8n_pipeline_fn=lambda _p: False,
+        pipeline_task_refs_fn=lambda _db, _pid: [],
+        reject_sync_chain_refs_fn=lambda *_a, **_kw: None,
+    )
+
+    assert result["status"] == "archived"
+    archived = db.query(Pipeline).get("pipe-producer")
+    assert archived.status == "archived"
+    assert archived.enabled is False
 
 
-def test_delete_pipeline_succeeds_without_produced_assets(db):
+def test_delete_pipeline_archives_pipeline_without_produced_assets(db):
     db.add(Pipeline(id="pipe-free", name="自由流水线", spec={},
                     status="draft", enabled=False))
     db.commit()
@@ -118,5 +117,6 @@ def test_delete_pipeline_succeeds_without_produced_assets(db):
         pipeline_task_refs_fn=lambda _db, _pid: [],
         reject_sync_chain_refs_fn=lambda *_a, **_kw: None,
     )
-    assert result["status"] == "deleted"
-    assert db.query(Pipeline).get("pipe-free") is None
+    assert result["status"] == "archived"
+    archived = db.query(Pipeline).get("pipe-free")
+    assert archived is not None and archived.status == "archived"

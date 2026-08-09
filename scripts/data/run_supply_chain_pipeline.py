@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
 供应链数据端到端 Pipeline 脚本
-1. 上传所有供应链文件 → Dataset (连接器节点)
-2. 创建 Pipeline (connector→storage→transform→output)
+1. 上传所有供应链文件 → Dataset（原始数据集，供页面查看）
+2. 创建 python 引擎 Pipeline（每结构化源一条，脚本内嵌演示数据）
 3. 同步运行 Pipeline → Curated Dataset
 4. 创建供应链本体 (Ontology)
 5. 创建实体、逻辑规则、Action
 6. 创建 Ontology Mapping
+
+注：系统自定义（canvas）DAG 与 route A/B/C 转换步骤已下线，Pipeline 不再
+经 connector 节点读取上传的 Dataset；python 脚本在内核内自洽取数，最终结果
+赋值给 result（list[dict]）。本脚本的演示数据内嵌在各 Pipeline 脚本中。
 """
 import json
 import sys
@@ -68,86 +72,104 @@ def upload_datasets(client, token):
     return datasets
 
 
-def create_pipeline(client, token, datasets):
-    headers = {"Authorization": f"Bearer {token}"}
+# ── python 引擎 Pipeline 脚本（契约：最终结果赋值给 result，list[dict]）──
+# 原 canvas DAG 的清洗/展开转换步骤已随引擎下线；结构化源为直通演示数据，
+# supplier_orders 在脚本内等价实现原 JSON flatten 步骤的嵌套展开语义。
+PIPELINE_SCRIPTS = {
+    "inventory_transactions": """\
+# 库存交易演示数据（直通；原 drop_duplicates/fill_nulls 步骤已下线）
+result = [
+    {"日期": "2026-03-08", "物料编码": "MAT001", "操作类型": "出库",
+     "数量": 62, "库存状态": "正常", "所在仓库": "WH-A"},
+    {"日期": "2026-03-09", "物料编码": "MAT002", "操作类型": "入库",
+     "数量": 120, "库存状态": "正常", "所在仓库": "WH-B"},
+    {"日期": "2026-03-10", "物料编码": "MAT001", "操作类型": "盘点",
+     "数量": 185, "库存状态": "短缺", "所在仓库": "WH-A"},
+]
+""",
+    "logistics_performance": """\
+# 物流运单演示数据（直通）
+result = [
+    {"运单号": "WB-2026-0001", "承运商": "顺丰", "供应商": "天钢原材料有限公司",
+     "目的区域": "西部", "实际时效": "2天", "是否准时": "准时",
+     "货损率": 0.35, "运费(元)": 7697},
+    {"运单号": "WB-2026-0002", "承运商": "德邦", "供应商": "恒力精密部件厂",
+     "目的区域": "华东", "实际时效": "3天", "是否准时": "延迟",
+     "货损率": 0.0, "运费(元)": 4230},
+]
+""",
+    "supplier_database": """\
+# 供应商主数据演示数据（直通）
+result = [
+    {"供应商ID": "SUP001", "供应商名称": "天钢原材料有限公司", "等级": "S",
+     "主供物料": "钢材", "年采购额(万)": 8500, "准时率%": 98.5,
+     "合格率%": 99.7, "联系人": "张明", "状态": "有效"},
+    {"供应商ID": "SUP002", "供应商名称": "恒力精密部件厂", "等级": "A",
+     "主供物料": "轴承", "年采购额(万)": 3200, "准时率%": 95.1,
+     "合格率%": 98.9, "联系人": "李芳", "状态": "有效"},
+]
+""",
+    "supplier_orders": """\
+# 采购订单演示数据：原 canvas 的 flatten_json 步骤已下线，
+# 嵌套 JSON 的展开在脚本内等价实现（supplier.* 平铺为点分列）。
+import json
 
-    # Build connector node files list
-    connector_files = []
-    for fname, ds in datasets.items():
-        connector_files.append({"name": fname, "dataset_id": ds["id"]})
-
-    # Pipeline definition: connector → storage → transform → output
-    definition = {
-        "nodes": [
-            {
-                "id": "node-connector-1",
-                "type": "connector",
-                "label": "供应链数据源",
-                "config": {
-                    "source_type": "file",
-                    "files": connector_files,
-                },
-            },
-            {
-                "id": "node-storage-1",
-                "type": "storage",
-                "label": "原始存储",
-                "config": {
-                    "storage_type": "raw",
-                    "partition_by": "source_file",
-                },
-            },
-            {
-                "id": "node-transform-1",
-                "type": "transform",
-                "label": "数据转换&清洗",
-                "config": {
-                    "path": "structured",
-                    "steps": [
-                        {"op": "drop_duplicates", "params": {}},
-                        {"op": "fill_nulls", "params": {"strategy": "fill_empty"}},
-                        {"op": "normalize_dates", "params": {}},
-                    ],
-                },
-            },
-            {
-                "id": "node-output-1",
-                "type": "output",
-                "label": "结构化输出",
-                "config": {
-                    "format": "curated",
-                    "target": "ontology_mapping",
-                },
-            },
-        ],
-        "edges": [
-            {"id": "e1", "source": "node-connector-1", "target": "node-storage-1"},
-            {"id": "e2", "source": "node-storage-1", "target": "node-transform-1"},
-            {"id": "e3", "source": "node-transform-1", "target": "node-output-1"},
-        ],
+raw = json.loads('''[
+    {"order_id": "PO-2026-0501", "order_date": "2026-05-02",
+     "status": "已审批", "supplier": {"name": "天钢原材料有限公司", "level": "S"}},
+    {"order_id": "PO-2026-0502", "order_date": "2026-05-03",
+     "status": "待审批", "supplier": {"name": "恒力精密部件厂", "level": "A"}}
+]''')
+result = [
+    {
+        "order_id": item["order_id"],
+        "order_date": item["order_date"],
+        "status": item["status"],
+        "supplier.name": (item.get("supplier") or {}).get("name"),
+        "supplier.level": (item.get("supplier") or {}).get("level"),
     }
+    for item in raw
+]
+""",
+}
 
-    r = client.post(
-        "/api/v2/pipelines",
-        headers=headers,
-        json={
-            "name": "供应链数据Pipeline",
-            "domain": "供应链",
-            "description": "供应链全链路数据接入、清洗与结构化输出",
-            "definition": definition,
-        },
-    )
-    if r.status_code == 400 and "已存在" in r.text:
-        # Find existing
-        r2 = client.get("/api/v2/pipelines", headers=headers)
-        for pl in r2.json():
-            if pl["name"] == "供应链数据Pipeline":
-                print(f"  [REUSE] 已存在 pipeline_id={pl['id']}")
-                return pl["id"]
-    r.raise_for_status()
-    pl_id = r.json()["id"]
-    print(f"  [OK] Pipeline created: id={pl_id}")
-    return pl_id
+
+def create_pipelines(client, token):
+    """每个结构化源创建一条 python 引擎 Pipeline（幂等：重名则复用）。"""
+    headers = {"Authorization": f"Bearer {token}"}
+    pipeline_ids = []
+    for stem, script in PIPELINE_SCRIPTS.items():
+        name = f"供应链 {stem}"
+        definition = {
+            "engine": "python",
+            "python": {"script": script},
+        }
+        r = client.post(
+            "/api/v2/pipelines",
+            headers=headers,
+            json={
+                "name": name,
+                "domain": "供应链",
+                "description": f"供应链 {stem} 数据接入（python 引擎演示）",
+                "definition": definition,
+            },
+        )
+        if r.status_code == 400 and "已存在" in r.text:
+            # Find existing
+            r2 = client.get("/api/v2/pipelines", headers=headers)
+            for pl in r2.json():
+                if pl["name"] == name:
+                    print(f"  [REUSE] 已存在 pipeline_id={pl['id']} ({name})")
+                    pipeline_ids.append(pl["id"])
+                    break
+            else:
+                r.raise_for_status()
+            continue
+        r.raise_for_status()
+        pl_id = r.json()["id"]
+        pipeline_ids.append(pl_id)
+        print(f"  [OK] Pipeline created: id={pl_id} ({name})")
+    return pipeline_ids
 
 
 def run_pipeline(client, token, pipeline_id):
@@ -663,17 +685,19 @@ def main():
         print("  [OK] 登录成功")
 
         # Step 2: Upload datasets
-        print("\n[Step 2] 上传供应链文件 → Datasets (连接器节点)...")
+        print("\n[Step 2] 上传供应链文件 → Datasets（原始数据集）...")
         datasets = upload_datasets(client, token)
         print(f"  [OK] 共上传 {len(datasets)} 个文件")
 
-        # Step 3: Create pipeline
-        print("\n[Step 3] 创建 Pipeline (connector→storage→transform→output)...")
-        pipeline_id = create_pipeline(client, token, datasets)
+        # Step 3: Create pipelines (python 引擎)
+        print("\n[Step 3] 创建 python 引擎 Pipeline...")
+        pipeline_ids = create_pipelines(client, token)
 
-        # Step 4: Run pipeline
+        # Step 4: Run pipelines
         print("\n[Step 4] 同步运行 Pipeline...")
-        curated_ids = run_pipeline(client, token, pipeline_id)
+        curated_ids = []
+        for pipeline_id in pipeline_ids:
+            curated_ids.extend(run_pipeline(client, token, pipeline_id))
         print(f"  [OK] 生成 {len(curated_ids)} 个 Curated Dataset")
 
         if curated_ids:
@@ -709,7 +733,7 @@ def main():
         result = verify_ontology(client, token, ontology_id)
 
         print("\n" + "=" * 60)
-        print(f"Pipeline ID:   {pipeline_id}")
+        print(f"Pipeline IDs:  {', '.join(pipeline_ids)}")
         print(f"Ontology ID:   {ontology_id}")
         print(f"Curated 数量:  {len(curated_ids)}")
         print(f"实体:          {result['entities']}")

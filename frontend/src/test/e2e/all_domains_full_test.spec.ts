@@ -111,78 +111,98 @@ async function runPipelineMapping(
     console.log(`    ✓ 上传 ${filename} → ${body.data.id.slice(0, 8)}`)
   }
 
-  // 2. 创建 Pipeline（含单个连接器，引用所有已上传文件）
+  // 2. 创建 Python 脚本流水线（python 引擎为单产物：每域取排序后第一个 CSV
+  // 作为代表夹具，原文内嵌进脚本，由执行内核用标准库解析出行数据）
   const pipelineName = `E2E_${domainCn}_Pipeline_${ts}`
+  const csvFiles = files.filter(f => f.endsWith('.csv')).sort()
+  expect(csvFiles.length, `${domainCn} 至少需要一个 CSV 夹具`).toBeGreaterThan(0)
+  const sourceFile = csvFiles[0]
+  const csvText = fs.readFileSync(path.join(domainDir, sourceFile), 'utf-8').replace(/^\uFEFF/, '')
   const plBody = await api(request, 'POST', '/api/v2/pipelines', token, {
     name: pipelineName,
     domain: ONTOLOGY_DOMAIN[domainCn],
     description: `E2E 自动化测试 - ${domainCn} Pipeline Mapping`,
-    route: 'A',
-    definition: {
-      schema_version: '2.0',
-      nodes: [
-        {
-          id: 'connector_all', type: 'connector', label: `${domainCn}数据源`,
-          position: { x: 80, y: 180 },
-          config: { source_type: 'file', files: uploaded },
-        },
-        {
-          id: 'storage_all', type: 'storage', label: '分类存储',
-          position: { x: 330, y: 180 },
-          config: { storage_mode: 'auto' },
-        },
-        {
-          id: 'transform_all', type: 'transform', label: '数据转换',
-          position: { x: 580, y: 180 },
-          config: { path: 'auto', steps: [] },
-        },
-        {
-          id: 'output_all', type: 'output', label: '结构化输出',
-          position: { x: 830, y: 180 },
-          config: { dataset_type: 'curated_dataset', primary_key: [] },
-        },
-      ],
-      edges: [
-        { id: 'e1', source: 'connector_all', target: 'storage_all' },
-        { id: 'e2', source: 'storage_all', target: 'transform_all' },
-        { id: 'e3', source: 'transform_all', target: 'output_all' },
-      ],
-    },
+    definition: { engine: 'python', nodes: [], edges: [], python: {} },
   })
   const pipelineId: string = plBody.id ?? plBody.data?.id
   expect(pipelineId).toBeTruthy()
-  console.log(`  Pipeline 创建: ${pipelineId.slice(0, 8)}`)
+  const script = [
+    'import csv',
+    'import io',
+    '',
+    `DATA = ${JSON.stringify(csvText)}`,
+    'result = list(csv.DictReader(io.StringIO(DATA)))',
+  ].join('\n')
+  await api(request, 'PUT', `/api/v2/pipelines/${pipelineId}/script`, token, { script })
+  console.log(`  Pipeline 创建: ${pipelineId.slice(0, 8)}（夹具 ${sourceFile}）`)
 
-  // 3. 前端查看 Pipeline Builder
-  await page.goto(appUrl(`/data/pipelines/${pipelineId}`))
+  // 3. 前端查看 Python 脚本编辑页
+  await page.goto(appUrl(`/data/pipelines/script/${pipelineId}`))
   await page.waitForTimeout(1500)
-  await shot(page, outDir, `${domainCn}_01_pipeline_builder`)
+  await shot(page, outDir, `${domainCn}_01_pipeline_script`)
 
-  // 4. 同步运行 Pipeline
+  // 4. 发布门禁：执行预览 → 字段全量校验 → 保存字段契约（不声明主键，
+  // 本体映射使用 __row_hash__ 作为对象身份）
+  const dryRun = await api(request, 'POST', `/api/v2/pipelines/${pipelineId}/dry-run?max_rows=500`, token)
+  expect(dryRun.outputs).toHaveLength(1)
+  const usedKeys = new Set<string>()
+  const definitions = (dryRun.outputs[0].columns as string[]).map((sourceKey, index) => {
+    const normalized = sourceKey.replace(/[^A-Za-z0-9_]/g, '_')
+    const initial = (
+      /^[A-Za-z_]/.test(normalized)
+      && /[A-Za-z0-9]/.test(normalized)
+      && !normalized.startsWith('__')
+    ) ? normalized : `field_${index + 1}`
+    let fieldKey = initial
+    let suffix = 2
+    while (usedKeys.has(fieldKey)) fieldKey = `${initial}_${suffix++}`
+    usedKeys.add(fieldKey)
+    return {
+      source_key: sourceKey,
+      field_key: fieldKey,
+      field_name: sourceKey,
+      field_type: 'string',
+      is_primary_key: false,
+      nullable: true,
+    }
+  })
+  const validation = await api(
+    request,
+    'POST',
+    `/api/v2/pipelines/${pipelineId}/validate-definitions?dry_run_id=${dryRun.dry_run_id}`,
+    token,
+    { column_definitions: definitions },
+  )
+  expect(validation.valid, JSON.stringify(validation.errors || [])).toBe(true)
+  await api(request, 'PUT', `/api/v2/pipelines/${pipelineId}`, token, {
+    column_definitions: definitions,
+  })
+
+  // 5. 同步运行 Pipeline
   console.log(`  运行 Pipeline...`)
   const runBody = await api(request, 'POST', `/api/v2/pipelines/${pipelineId}/run-sync`, token)
   expect(runBody.status, `Pipeline run failed: ${JSON.stringify(runBody)}`).toBe('success')
   const curatedIds: string[] = runBody.stats?.curated_dataset_ids ?? []
   console.log(`  ✓ 运行完成，产出 ${curatedIds.length} 个 curated dataset`)
 
-  // 5. Publish pipeline
+  // 6. Publish pipeline（发布凭证来自第 4 步的执行预览与全量校验）
   await api(request, 'POST', `/api/v2/pipelines/${pipelineId}/publish`, token)
-  await page.goto(appUrl(`/data/pipelines/${pipelineId}`))
+  await page.goto(appUrl(`/data/pipelines/script/${pipelineId}`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_02_pipeline_published`)
 
-  // 6. 批准所有 curated datasets
+  // 7. 批准所有 curated datasets
   for (const id of curatedIds) {
     await api(request, 'POST', `/api/v2/curated/${id}/review?action=approve`, token)
   }
   console.log(`  ✓ 批准 ${curatedIds.length} 个 curated dataset`)
 
-  // 7. 前端查看结构数据页
+  // 8. 前端查看结构数据页
   await page.goto(appUrl('/data/structured'))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_03_structured_data`)
 
-  // 8. 创建 Pipeline Mapping 本体
+  // 9. 创建 Pipeline Mapping 本体
   const ontoName = `E2E_${domainCn}_PipelineMapping_${ts}`
   const ontoBody = await api(request, 'POST', '/api/v1/ontologies', token, {
     name: ontoName,
@@ -194,13 +214,14 @@ async function runPipelineMapping(
   expect(ontologyId).toBeTruthy()
   console.log(`  本体创建: ${ontologyId.slice(0, 8)}`)
 
-  // 9. 为每个 curated dataset 创建 mapping
+  // 10. 为每个 curated dataset 创建 mapping
   const outputs: Array<{ curated_dataset_id: string; source_file?: string }> =
     runBody.stats?.meta?.outputs ?? curatedIds.map(id => ({ curated_dataset_id: id }))
 
   for (const output of outputs) {
-    const sourceFile = output.source_file
-    const entityClass = sourceFile ? toEntityClass(sourceFile) : `Entity_${output.curated_dataset_id.slice(0, 6)}`
+    // python 引擎的 source_file 是流水线名（可能含中文），实体类名只保留字母数字
+    const rawClass = output.source_file ? toEntityClass(output.source_file) : ''
+    const entityClass = rawClass.replace(/[^A-Za-z0-9]/g, '') || `Entity_${output.curated_dataset_id.slice(0, 6)}`
     await api(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings`, token, {
       curated_dataset_id: output.curated_dataset_id,
       entity_class: entityClass,
@@ -210,12 +231,12 @@ async function runPipelineMapping(
   }
   console.log(`  ✓ 创建 ${outputs.length} 个 mapping`)
 
-  // 10. Build all
+  // 11. Build all
   console.log(`  构建本体中...`)
   const buildBody = await api(request, 'POST', `/api/v2/ontologies/${ontologyId}/mappings/build-all`, token)
   console.log(`  ✓ 构建完成: entities=${buildBody.total_entities} relations=${buildBody.total_relations} logic=${buildBody.total_logic} actions=${buildBody.total_actions}`)
 
-  // 11. 前端查看本体详情
+  // 12. 前端查看本体详情
   await page.goto(appUrl(`/ontologies/${ontologyId}`))
   await page.waitForTimeout(1500)
   await shot(page, outDir, `${domainCn}_04_ontology_info`)

@@ -35,14 +35,14 @@ def test_paginated_list_orders_by_created_at_and_keeps_legacy_shape(
             created_by=admin_user.id,
             created_at=base,
             updated_at=base + timedelta(days=10),
-            engine="canvas",
+            engine="python",
         ),
         _pipeline(
             name="中间创建",
             created_by=admin_user.id,
             created_at=base + timedelta(days=1),
             updated_at=base + timedelta(days=1),
-            engine="canvas",
+            engine="python",
         ),
         _pipeline(
             name="最新创建",
@@ -96,11 +96,11 @@ def test_paginated_list_applies_source_and_enabled_filters(
             enabled=True,
         ),
         _pipeline(
-            name="画布未启用",
+            name="脚本未启用",
             created_by=admin_user.id,
             created_at=base + timedelta(days=1),
             updated_at=base + timedelta(days=1),
-            engine="canvas",
+            engine="python",
         ),
     ])
     db.commit()
@@ -121,10 +121,10 @@ def test_paginated_list_applies_source_and_enabled_filters(
     assert payload["total"] == 1
     assert [item["name"] for item in payload["items"]] == ["n8n 已启用"]
 
-    canvas_response = client.get(
+    python_response = client.get(
         "/api/v2/pipelines",
-        params={"paginated": True, "engine": "canvas"},
+        params={"paginated": True, "engine": "python"},
         headers=auth_headers,
     )
-    assert canvas_response.status_code == 200
-    assert [item["name"] for item in canvas_response.json()["items"]] == ["画布未启用"]
+    assert python_response.status_code == 200
+    assert [item["name"] for item in python_response.json()["items"]] == ["脚本未启用"]

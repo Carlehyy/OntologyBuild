@@ -16,13 +16,11 @@ import ModelsPage from '@/pages/models/ModelsPage'
 import SettingsPage from '@/pages/settings/SettingsPage'
 import PipelinesLayout from '@/pages/pipelines/PipelinesLayout'
 import PipelineListPage from '@/pages/pipelines/PipelineListPage'
-import PipelineBuilderPage from '@/pages/pipelines/builder/PipelineBuilderPage'
 import PythonScriptPage from '@/pages/pipelines/script/PythonScriptPage'
 import DataStewardPage from '@/pages/pipelines/steward/DataStewardPage'
 import FileAssetDownloadPage from '@/pages/pipelines/FileAssetDownloadPage'
 import ConnectionsTab from '@/pages/pipelines/connections/ConnectionsTab'
 import DatasetsTab from '@/pages/pipelines/datasets/DatasetsTab'
-import TransformsTab from '@/pages/pipelines/transforms/TransformsTab'
 import CuratedTab from '@/pages/pipelines/curated/CuratedTab'
 import SyncTasksTab from '@/pages/pipelines/sync-tasks/SyncTasksTab'
 import StructuredDataPage from '@/pages/data-management/structured/StructuredDataPage'
@@ -130,14 +128,14 @@ export default function App() {
             <Route path="connections" element={<ConnectionsTab />} />
             <Route path="sync-tasks" element={<SyncTasksTab />} />
             <Route path="datasets" element={<DatasetsTab />} />
-            <Route path="transforms" element={<TransformsTab />} />
             <Route path="curated" element={<CuratedTab />} />
           </Route>
           {/* 数据管家（对话式 n8n 流水线）— 静态段优先于 :pipelineId 匹配 */}
           <Route path="/data/pipelines/steward" element={<ProtectedRoute><DataStewardPage /></ProtectedRoute>} />
           {/* Python 脚本流水线编辑页 — 静态段优先于 :pipelineId 匹配 */}
           <Route path="/data/pipelines/script/:pipelineId" element={<ProtectedRoute><PythonScriptPage /></ProtectedRoute>} />
-          <Route path="/data/pipelines/:pipelineId" element={<ProtectedRoute><PipelineBuilderPage /></ProtectedRoute>} />
+          {/* 画布编排已下线：旧 builder 深链重定向回流水线列表（静态段天然优先于 :pipelineId） */}
+          <Route path="/data/pipelines/:pipelineId" element={<Navigate to="/data/pipelines" replace />} />
 
           {/* Legacy redirect — keep old /pipelines URLs working */}
           <Route path="/pipelines" element={<Navigate to="/data/pipelines" replace />} />

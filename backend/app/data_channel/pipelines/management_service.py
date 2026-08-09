@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipelines.contracts import PipelineCreate, PipelineUpdate
@@ -34,20 +34,20 @@ def create_pipeline(
     if existing:
         raise HTTPException(400, "已存在同名 Pipeline，请更换名称。")
 
-    inferred_route = body.route
-    if not inferred_route and body.definition:
-        nodes = body.definition.get("nodes", [])
-        types = {node.get("type") for node in nodes if node.get("type")}
-        if "transform" in types:
-            # The current route contract deliberately keeps the default path.
-            pass
-        inferred_route = inferred_route or "A"
+    # 系统自定义（canvas）与 route A/B/C 已下线：新建必须声明受支持引擎
+    engine = (body.definition or {}).get("engine")
+    if engine not in {"n8n", "python"}:
+        raise HTTPException(
+            400,
+            "仅支持创建 n8n 流水线或 Python 脚本流水线；"
+            "系统自定义（canvas）流水线已下线。",
+        )
     pipeline = Pipeline(
         name=body.name,
         domain=body.domain or "通用",
         description=body.description or "",
         source_dataset_id=body.source_dataset_id,
-        route=inferred_route or "A",
+        route=body.route or "A",
         spec=body.spec or {},
         definition=body.definition,
         status="draft",
@@ -84,18 +84,9 @@ def list_pipelines(
         )
     if domain:
         query = query.filter(Pipeline.domain == domain)
-    if engine in {"n8n", "canvas", "python"}:
+    if engine in {"n8n", "python"}:
         engine_value = Pipeline.definition["engine"].as_string()
-        if engine == "n8n":
-            query = query.filter(engine_value == "n8n")
-        elif engine == "python":
-            query = query.filter(engine_value == "python")
-        else:
-            query = query.filter(or_(
-                Pipeline.definition.is_(None),
-                engine_value.is_(None),
-                engine_value.notin_(["n8n", "python"]),
-            ))
+        query = query.filter(engine_value == engine)
     if enabled is not None:
         query = query.filter(Pipeline.enabled.is_(enabled))
     if status:
@@ -181,7 +172,7 @@ def update_pipeline(
     is_n8n_pipeline_fn: Callable[[Pipeline], bool],
     column_definitions_hash_fn: Callable[[Any], str],
     pipeline_execution_hash_fn: Callable[..., str],
-    invalidate_canvas_attestation_fn: Callable[[Pipeline], None],
+    invalidate_publish_attestation_fn: Callable[[Pipeline], None],
     format_pipeline_fn: Callable[[Pipeline], dict],
 ):
     """Apply the mutable draft/display contract in one database transaction."""
@@ -284,7 +275,7 @@ def update_pipeline(
                 "column_definitions_hash"
             )
         ):
-            invalidate_canvas_attestation_fn(pipeline)
+            invalidate_publish_attestation_fn(pipeline)
 
     if "name" in update_data:
         new_name = (update_data.get("name") or "").strip()
@@ -334,7 +325,7 @@ def delete_pipeline(
     pipeline_task_refs_fn: Callable[[Session, str], list],
     reject_sync_chain_refs_fn: Callable[..., None],
 ):
-    """Archive governed n8n pipelines or delete unreferenced canvas drafts."""
+    """Archive governed n8n pipelines or unreferenced local-engine pipelines."""
     pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pipeline:
         raise HTTPException(404, "Pipeline not found")
@@ -356,25 +347,9 @@ def delete_pipeline(
             raise HTTPException(400, str(exc)) from exc
         return {"status": "archived", "id": pipeline_id}
 
-    # Python 脚本流水线与 n8n 同为「归档」语义：保留发布版本与运行记录的
-    # 审计链，只是没有外部资源需要停用；被任务池/同步链引用时拒绝。
-    if (pipeline.definition or {}).get("engine") == "python":
-        references = pipeline_task_refs_fn(db, pipeline_id)
-        if references:
-            names = "、".join(task.name for task in references[:3])
-            suffix = "…" if len(references) > 3 else ""
-            raise HTTPException(
-                400,
-                f"流水线已被 {len(references)} 个调度任务引用"
-                f"（{names}{suffix}），请先在数据任务池删除或改绑这些任务。",
-            )
-        reject_sync_chain_refs_fn(db, pipeline_id, action="归档")
-        pipeline.status = "archived"
-        pipeline.enabled = False
-        pipeline.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        return {"status": "archived", "id": pipeline_id}
-
+    # 非 n8n 引擎（python 及已下线的 canvas 存量）统一「归档」语义：保留
+    # 发布版本与运行记录的审计链，只是没有外部资源需要停用；被任务池/
+    # 同步链引用时拒绝。
     references = pipeline_task_refs_fn(db, pipeline_id)
     if references:
         names = "、".join(task.name for task in references[:3])
@@ -384,29 +359,12 @@ def delete_pipeline(
             f"流水线已被 {len(references)} 个调度任务引用"
             f"（{names}{suffix}），请先在数据任务池删除或改绑这些任务。",
         )
-    # 该流水线生产过的成品数据集通过 producer_pipeline_id RESTRICT 引用它；
-    # 直接删除会在 FK 层 500。显式 409 并点名资产，引导先删成品数据集。
-    from app.models.v2.dataset import Dataset as _ProducedDataset
-    produced = db.query(_ProducedDataset).filter(
-        _ProducedDataset.producer_pipeline_id == pipeline_id).all()
-    if produced:
-        names = "、".join(d.name for d in produced[:3])
-        suffix = "…" if len(produced) > 3 else ""
-        raise HTTPException(
-            409,
-            f"该流水线是 {len(produced)} 个成品数据集（{names}{suffix}）的生产者，"
-            "请先在资产湖删除对应成品数据集，再删除流水线。",
-        )
-    reject_sync_chain_refs_fn(db, pipeline_id, action="删除")
-    db.query(PipelineRun).filter(
-        PipelineRun.pipeline_id == pipeline_id
-    ).delete()
-    db.query(PipelineVersion).filter(
-        PipelineVersion.pipeline_id == pipeline_id
-    ).delete()
-    db.delete(pipeline)
+    reject_sync_chain_refs_fn(db, pipeline_id, action="归档")
+    pipeline.status = "archived"
+    pipeline.enabled = False
+    pipeline.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return {"status": "deleted", "id": pipeline_id}
+    return {"status": "archived", "id": pipeline_id}
 
 
 def reject_unpublish(pipeline_id: str, db: Session):

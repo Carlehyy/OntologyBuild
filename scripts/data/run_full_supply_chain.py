@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 供应链数据接入与映射全流程脚本 v2
-- Pipeline: connector(8文件) → storage → transform(deepseek LLM + mimo-omni VLM) → output
+- Pipeline: python 引擎（脚本内嵌演示数据；canvas DAG 与 LLM/VLM 转换步骤已下线）
 - Ontology: 创建手工建模项目，再由 pipeline mapping 写入实例数据
 - Neo4j: mapping apply 时自动写入图数据库
 
 本脚本不会调用已退役的 Prompt、旧本体文件上传或文档→本体抽取接口。
 """
-import sys, os
+import os
 import httpx
 
 BASE_URL = "http://localhost:8000"
@@ -15,17 +15,17 @@ DATA_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "test_data", "供应链")
 )
 
-# 文件列表及处理策略
+# 文件列表（原始数据集上传，供页面查看；route A/B/C 引擎已下线，
+# Pipeline 不再按文件类型路由转换）
 FILES = [
-    # (文件名, 转换策略)
-    ("inventory_transactions.csv",  "structured"),       # Route A
-    ("logistics_performance.csv",   "structured"),       # Route A
-    ("supplier_database.xlsx",      "structured"),       # Route A
-    ("supplier_orders.json",        "semi_structured"),  # Route B
-    ("procurement_policy.docx",     "unstructured_vlm"), # Route C + VLM
-    ("supply_chain_review.pptx",    "unstructured_vlm"), # Route C + VLM
-    ("supply_chain_strategy.md",    "unstructured"),     # Route C markitdown
-    ("warehouse_management.pdf",    "unstructured_vlm"), # Route C + VLM
+    "inventory_transactions.csv",
+    "logistics_performance.csv",
+    "supplier_database.xlsx",
+    "supplier_orders.json",
+    "procurement_policy.docx",
+    "supply_chain_review.pptx",
+    "supply_chain_strategy.md",
+    "warehouse_management.pdf",
 ]
 
 MIME = {
@@ -69,7 +69,7 @@ def cleanup_old_data(c, token):
 # ─── Step 1: 上传文件 ─────────────────────────────────────────
 def upload_files(c, token):
     datasets = {}
-    for fname, strategy in FILES:
+    for fname in FILES:
         fpath = os.path.join(DATA_DIR, fname)
         if not os.path.exists(fpath):
             print(f"  [SKIP] {fname}")
@@ -81,90 +81,37 @@ def upload_files(c, token):
                    files={"file": (fname, content, MIME.get(ext, "application/octet-stream"))})
         r.raise_for_status()
         ds = r.json()["data"]
-        datasets[fname] = {"id": ds["id"], "kind": ds["kind"], "strategy": strategy}
-        print(f"  [OK] {fname} → {ds['id'][:8]}... kind={ds['kind']} strategy={strategy}")
+        datasets[fname] = {"id": ds["id"], "kind": ds["kind"]}
+        print(f"  [OK] {fname} → {ds['id'][:8]}... kind={ds['kind']}")
     return datasets
 
 
 # ─── Step 2: 创建 Pipeline ────────────────────────────────────
-def create_pipeline(c, token, datasets, vlm_model_id, llm_model_id):
-    connector_files = [
-        {"name": fname, "dataset_id": info["id"]}
-        for fname, info in datasets.items()
-    ]
+# python 引擎契约：脚本在内核内自洽取数，最终结果赋值给 result（list[dict]）。
+# 原 canvas DAG 的 LLM/VLM 文档提取与 JSON 展开步骤已随引擎下线，此处用
+# 内嵌演示数据直通（含 supplier.* 点分列，演示嵌套展开的等价结果形态）。
+PIPELINE_SCRIPT = """\
+# 供应链演示数据（直通；canvas 引擎与 LLM/VLM 转换步骤已下线）
+result = [
+    {"日期": "2026-03-08", "物料编码": "MAT001", "操作类型": "出库",
+     "数量": 62, "库存状态": "正常", "所在仓库": "WH-A"},
+    {"日期": "2026-03-09", "物料编码": "MAT002", "操作类型": "入库",
+     "数量": 120, "库存状态": "正常", "所在仓库": "WH-B"},
+    {"日期": "2026-03-10", "物料编码": "MAT001", "操作类型": "盘点",
+     "数量": 185, "库存状态": "短缺", "所在仓库": "WH-A"},
+]
+"""
 
-    # Transform 节点配置：对非结构化文件使用 VLM，对半结构化使用 JSON 展开
-    transform_steps_unstructured_vlm = [
-        {"op": "document_to_markdown", "params": {"strategy": "vlm", "model_id": vlm_model_id}},
-        {"op": "llm_structurize",      "params": {"model_id": llm_model_id, "auto_extract": True}},
-    ]
-    transform_steps_unstructured = [
-        {"op": "document_to_markdown", "params": {"strategy": "markitdown"}},
-        {"op": "llm_structurize",      "params": {"model_id": llm_model_id, "auto_extract": True}},
-    ]
-    transform_steps_semi = [
-        {"op": "flatten_json",         "params": {"array_explode": True}},
-        {"op": "drop_duplicates",      "params": {}},
-    ]
-    transform_steps_structured = [
-        {"op": "drop_duplicates",      "params": {}},
-        {"op": "fill_nulls",           "params": {"strategy": "fill_empty"}},
-        {"op": "normalize_dates",      "params": {}},
-    ]
 
-    # 混合策略：按数据类型决定路径
-    has_vlm = any(info["strategy"] == "unstructured_vlm" for info in datasets.values())
-    has_unst = any(info["strategy"] in ("unstructured", "unstructured_vlm") for info in datasets.values())
-
-    definition = {
-        "nodes": [
-            {
-                "id": "node-connector",
-                "type": "connector",
-                "label": "供应链数据源 (8文件)",
-                "config": {
-                    "source_type": "file",
-                    "files": connector_files,
-                },
-            },
-            {
-                "id": "node-storage",
-                "type": "storage",
-                "label": "原始存储",
-                "config": {"storage_type": "raw"},
-            },
-            {
-                "id": "node-transform",
-                "type": "transform",
-                "label": "多路径转换 (LLM+VLM)",
-                "config": {
-                    "path": "structured",   # 默认结构化，非结构化文件按 kind 自动路由
-                    "engine": "auto",
-                    "steps": transform_steps_structured,
-                    # unstructured 文件用 VLM+LLM
-                    "unstructured_steps": transform_steps_unstructured_vlm,
-                    "semi_steps": transform_steps_semi,
-                },
-            },
-            {
-                "id": "node-output",
-                "type": "output",
-                "label": "结构化输出",
-                "config": {"format": "curated", "target": "ontology_mapping"},
-            },
-        ],
-        "edges": [
-            {"id": "e1", "source": "node-connector", "target": "node-storage"},
-            {"id": "e2", "source": "node-storage",   "target": "node-transform"},
-            {"id": "e3", "source": "node-transform",  "target": "node-output"},
-        ],
-    }
-
+def create_pipeline(c, token):
     r = c.post("/api/v2/pipelines", headers=h(token), json={
         "name": "供应链全链路Pipeline",
         "domain": "供应链",
-        "description": "结构化CSV/XLSX + JSON展开 + VLM(mimo-omni)文档提取 + LLM(deepseek)结构化",
-        "definition": definition,
+        "description": "供应链数据接入（python 引擎演示；canvas 已下线）",
+        "definition": {
+            "engine": "python",
+            "python": {"script": PIPELINE_SCRIPT},
+        },
     })
     if r.status_code == 400 and "已存在" in r.text:
         pls = c.get("/api/v2/pipelines", headers=h(token)).json()
@@ -369,7 +316,7 @@ def verify(c, token, ontology_id):
 def main():
     print("=" * 60)
     print("供应链 全流程 Pipeline + Ontology (v2)")
-    print("LLM: deepseek-v4  |  VLM: mimo-omni  |  Graph: Neo4j")
+    print("Pipeline: python 引擎  |  Mapping: LLM 建议  |  Graph: Neo4j")
     print("=" * 60)
 
     with httpx.Client(base_url=BASE_URL, timeout=300) as c:
@@ -377,18 +324,15 @@ def main():
         token = login(c)
         print("  [OK]")
 
-        # 获取模型配置
+        # 模型配置仅影响 Step 5 的 LLM 映射建议（服务端取用）；Pipeline 本身
+        # 已是 python 引擎直通脚本，不再消费 LLM/VLM 模型配置。
         models = c.get("/api/v1/models", headers=h(token)).json()
         models = models.get("data", []) if isinstance(models, dict) else models
         llm_cfg = next((m for m in models if "结构化提取" in (m.get("options") or {}).get("usage_tags", [])), None)
-        vlm_cfg = next((m for m in models if "VLM提取"   in (m.get("options") or {}).get("usage_tags", [])), None)
-        if not llm_cfg or not vlm_cfg:
-            print(f"[ERROR] 未找到模型配置. LLM={llm_cfg is not None} VLM={vlm_cfg is not None}")
-            sys.exit(1)
-        llm_id    = llm_cfg["id"]
-        vlm_id    = vlm_cfg["id"]
-        print(f"  LLM: {llm_cfg['name']} / {(llm_cfg.get('models') or ['?'])[0]}")
-        print(f"  VLM: {vlm_cfg['name']} / {(vlm_cfg.get('models') or ['?'])[0]}")
+        if llm_cfg:
+            print(f"  LLM: {llm_cfg['name']} / {(llm_cfg.get('models') or ['?'])[0]}")
+        else:
+            print("  [WARN] 未找到带「结构化提取」标签的模型配置，Step 5 映射建议可能失败")
 
         print("\n[Step 0] 清理旧供应链数据...")
         cleanup_old_data(c, token)
@@ -397,16 +341,16 @@ def main():
         datasets = upload_files(c, token)
         print(f"  [OK] 共 {len(datasets)} 个文件")
 
-        print("\n[Step 2] 创建 Pipeline...")
-        pipeline_id = create_pipeline(c, token, datasets, vlm_id, llm_id)
+        print("\n[Step 2] 创建 Pipeline (python 引擎)...")
+        pipeline_id = create_pipeline(c, token)
 
-        print("\n[Step 3] 运行 Pipeline (LLM+VLM 转换)...")
+        print("\n[Step 3] 运行 Pipeline...")
         curated_ids = run_pipeline(c, token, pipeline_id)
 
         print("\n[Step 4] 创建本体项目...")
         ontology_id = create_ontology(c, token)
 
-        print("\n[Step 5] LLM 自动映射 (deepseek)...")
+        print("\n[Step 5] LLM 自动映射...")
         mappings = auto_map_and_create(c, token, ontology_id)
         print(f"  [OK] 创建 {len(mappings)} 条映射")
 

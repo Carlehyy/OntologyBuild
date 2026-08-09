@@ -103,7 +103,7 @@ def validate_contract_structure(defs: list | None) -> list[str]:
 
     发布端点与数据管家审批共用同一套校验——n8n 的发布动作是审批，
     结构性坏契约（重复 field_key 会让入湖改名时两列互相覆盖）必须在
-    两条发布路径上都拦住，而不是只拦画布流水线。
+    两条发布路径上都拦住，而不是只拦其中一种引擎。
     """
     errors: list[str] = []
     for index, raw in enumerate(defs or [], start=1):

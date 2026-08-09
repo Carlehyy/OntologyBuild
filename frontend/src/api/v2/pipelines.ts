@@ -7,7 +7,7 @@ export interface PythonScriptDefinition {
   output_columns?: string[]
 }
 
-/** definition 除画布 nodes/edges 外，还承载引擎标记与引擎自有配置 */
+/** definition 承载引擎标记与引擎自有配置；nodes/edges 为画布时代遗留字段，新流水线恒为空数组 */
 export interface PipelineDefinition {
   nodes: unknown[]
   edges: unknown[]
@@ -16,10 +16,10 @@ export interface PipelineDefinition {
   python?: PythonScriptDefinition
 }
 
-/** 流水线引擎：canvas=旧版系统流水线 / n8n=数据管家托管 / python=Python 脚本 */
-export function getPipelineEngine(pl: Pick<Pipeline, 'definition'>): 'n8n' | 'python' | 'canvas' {
+/** 流水线引擎：n8n=数据管家托管 / python=Python 脚本；缺失或无法识别时返回 unknown（canvas 已下线，不再兜底） */
+export function getPipelineEngine(pl: Pick<Pipeline, 'definition'>): 'n8n' | 'python' | 'unknown' {
   const engine = (pl.definition as PipelineDefinition | null)?.engine
-  return engine === 'n8n' ? 'n8n' : engine === 'python' ? 'python' : 'canvas'
+  return engine === 'n8n' ? 'n8n' : engine === 'python' ? 'python' : 'unknown'
 }
 
 export interface Pipeline {
@@ -33,7 +33,7 @@ export interface Pipeline {
   definition?: PipelineDefinition | null
   column_definitions?: ColumnDefinition[] | null  // [{field_key, field_name, field_type, is_primary_key, nullable}]
   status: string
-  engine?: string          // canvas=系统自定义 / n8n=数据管家托管 / python=Python 脚本
+  engine?: string          // n8n=数据管家托管 / python=Python 脚本（canvas 已下线）
   enabled?: boolean        // 启用开关：停用后任务池/链式触发不执行
   branch?: string
   version?: number
@@ -155,12 +155,6 @@ export interface RunDetail {
   finished_at: string | null
 }
 
-export interface ValidateResult {
-  valid: boolean
-  errors: Array<{ node_id: string; severity: string; message: string }>
-  warnings: Array<{ node_id: string; severity: string; message: string }>
-}
-
 /** 字段定义校验 */
 export interface ValidateDefinitionsBody {
   column_definitions: ColumnDefinition[]
@@ -197,8 +191,6 @@ const pipelinesApi = {
     apiClientV2.delete(`/pipelines/${id}`).then(r => r),
 
   /** Validate & Publish */
-  validate: (id: string) =>
-    apiClientV2.post<ValidateResult>(`/pipelines/${id}/validate`).then(r => r),
   /** 发布（封版）；enable=true 同时启用 */
   publish: (id: string, enable = false) =>
     apiClientV2.post<{ id: string; status: string; version: number; enabled: boolean }>(`/pipelines/${id}/publish`, { enable }).then(r => r),
@@ -233,8 +225,6 @@ const pipelinesApi = {
   /** Runs */
   run: (id: string) =>
     apiClientV2.post<{ run_id: string; status: string }>(`/pipelines/${id}/run`).then(r => r),
-  runSync: (id: string) =>
-    apiClientV2.post<{ run_id: string; status: string; stats?: Record<string, unknown> }>(`/pipelines/${id}/run-sync`).then(r => r),
   runs: (id: string) =>
     apiClientV2.get<PipelineRunItem[]>(`/pipelines/${id}/runs`).then(r => r),
   getRun: (runId: string) =>
