@@ -224,6 +224,57 @@ def test_governance_reads_only_current_release_snapshot(
     assert facts[0]["ontologyReleaseId"] == release_id
 
 
+def test_fact_subject_label_falls_back_to_primary_key(
+    client, auth_headers, ontology, db,
+):
+    """实例缺少 name 类属性时，事实流标签回退到对象类型主键值，
+    与待审批列表的实例标识（_approval_instance_label）保持一致。"""
+    ontology_id = ontology["id"]
+    release_id = ontology["current_release_id"]
+    release = db.query(OntologyVersion).filter_by(id=release_id).one()
+    release.snapshot_formal = {
+        "objectTypes": [{
+            "id": "ot-pk-order", "name": "PkOrder",
+            "displayName": "主键订单", "primaryKey": "order_no",
+            "properties": [{"id": "order_no", "name": "order_no", "type": "string"}],
+        }],
+        "linkTypes": [], "actions": [], "functions": [],
+        "sentinels": [], "mappings": [], "linkMappings": [],
+    }
+    object_type = ObjectType(
+        id="ot-pk-order", ontology_id=ontology_id,
+        name="PkOrder", display_name="主键订单",
+        primary_key="order_no",
+        properties=[{"id": "order_no", "name": "order_no", "type": "string"}],
+    )
+    instance = ObjectInstance(
+        id="order-pk-1", ontology_id=ontology_id,
+        object_type_id=object_type.id,
+        properties={"order_no": "PO-9", "active": True},
+        ontology_release_id=release_id,
+    )
+    db.add_all([
+        object_type, instance,
+        PropertyFact(
+            id="fact-pk", ontology_id=ontology_id,
+            instance_id=instance.id, object_type_id=object_type.id,
+            property_name="status", value={"v": "current"},
+            kind="property", source="test", ontology_version="v0",
+            ontology_release_id=release_id,
+        ),
+    ])
+    db.commit()
+
+    response = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/facts/recent?release_id={release_id}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    facts = response.json()["data"]
+    assert [item["id"] for item in facts] == ["fact-pk"]
+    assert facts[0]["subjectLabel"] == "主键订单·PO-9"
+
+
 def test_runtime_audit_timestamps_are_explicit_utc(
     client, auth_headers, ontology, db,
 ):
