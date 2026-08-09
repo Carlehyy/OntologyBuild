@@ -310,6 +310,8 @@ def test_instance_browser_public_entry_delegates_to_canonical_service(
         page,
         page_size,
         keyword,
+        filters,
+        source,
         db,
     ):
         received["args"] = (
@@ -318,6 +320,8 @@ def test_instance_browser_public_entry_delegates_to_canonical_service(
             page,
             page_size,
             keyword,
+            filters,
+            source,
             db,
         )
         return expected
@@ -334,6 +338,8 @@ def test_instance_browser_public_entry_delegates_to_canonical_service(
         page=2,
         page_size=25,
         keyword="订单",
+        filters='{"status": "delayed"}',
+        source="pipeline",
         db=database,
         _=None,
     )
@@ -345,6 +351,52 @@ def test_instance_browser_public_entry_delegates_to_canonical_service(
         2,
         25,
         "订单",
+        '{"status": "delayed"}',
+        "pipeline",
+        database,
+    )
+
+
+def test_instance_browser_stats_public_entry_delegates_to_canonical_service(
+    monkeypatch,
+):
+    database = object()
+    expected = {"data": {"total": 0, "fields": []}}
+    received = {}
+
+    def fake_stats(
+        ontology_id,
+        object_type_id,
+        link_type_id,
+        db,
+    ):
+        received["args"] = (
+            ontology_id,
+            object_type_id,
+            link_type_id,
+            db,
+        )
+        return expected
+
+    monkeypatch.setattr(
+        instance_service,
+        "instance_browser_stats",
+        fake_stats,
+    )
+
+    result = formal_router.instance_browser_stats(
+        "ontology-1",
+        object_type_id="object-type-1",
+        link_type_id=None,
+        db=database,
+        _=None,
+    )
+
+    assert result is expected
+    assert received["args"] == (
+        "ontology-1",
+        "object-type-1",
+        None,
         database,
     )
 
