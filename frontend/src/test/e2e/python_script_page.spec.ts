@@ -194,7 +194,7 @@ test.describe('Python 脚本编辑页', () => {
     await page.goto(`/#/data/pipelines/script/${PIPELINE_ID}`)
 
     await page.getByRole('button', { name: /^执行$/ }).click()
-    await expect(page.getByText(/已执行 \d+s/)).toBeVisible()
+    await expect(page.getByText(/已执行 \d+s/).first()).toBeVisible()
     await page.getByRole('button', { name: '取消' }).first().click()
     await expect(page.getByText('已取消本次执行')).toBeVisible()
     executeGate.release?.()
