@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, CheckCircle2, ChevronRight, CircleAlert, Clock3, Database,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
+import RuntimeTrendChart from './RuntimeTrendChart'
 import VersionEvolutionCard from './VersionEvolutionCard'
 import './overview-dashboard.css'
 
@@ -82,6 +83,34 @@ const formatValue = (value: unknown, max = 30) => {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
+/* KPI 数字滚动：数据到达或变化时从旧值缓动到新值；
+   prefers-reduced-motion 下直接呈现最终值。 */
+function useCountUp(target: number, duration = 620) {
+  const [display, setDisplay] = useState(0)
+  const fromRef = useRef(0)
+  useEffect(() => {
+    const from = fromRef.current
+    if (from === target) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      fromRef.current = target
+      setDisplay(target)
+      return
+    }
+    const started = performance.now()
+    let raf = 0
+    const tick = (now: number) => {
+      const progress = Math.min((now - started) / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setDisplay(Math.round(from + (target - from) * eased))
+      if (progress < 1) raf = requestAnimationFrame(tick)
+      else fromRef.current = target
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, duration])
+  return display
+}
+
 function NetworkMark() {
   return (
     <svg viewBox="0 0 92 92" role="img" aria-label="本体网络" className="overview-network-mark">
@@ -129,6 +158,11 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
   }, [ontologyId, runtimeDayCount])
 
+  const kpiObjectTypes = useCountUp(overviewQuery.data?.model.objectTypes ?? 0)
+  const kpiInstances = useCountUp(overviewQuery.data?.data.instances ?? 0)
+  const kpiMappingsBound = useCountUp(overviewQuery.data?.data.mappings.bound ?? 0)
+  const kpiFactsTotal = useCountUp(overviewQuery.data?.facts.total ?? 0)
+
   if (!overviewQuery.data) {
     if (overviewQuery.isError) {
       return (
@@ -168,10 +202,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     success: summary.success + day.actionRuns.success,
     failed: summary.failed + day.actionRuns.failed,
   }), { fired: 0, error: 0, success: 0, failed: 0 })
-  const maxDailyRuntime = Math.max(...runtimeDays.flatMap(day => [
-    day.firings.fired + day.firings.error,
-    day.actionRuns.success + day.actionRuns.failed,
-  ]), 1)
   const selectedRuntimeTotal = selectedRuntime.fired + selectedRuntime.error
     + selectedRuntime.success + selectedRuntime.failed
   const runtimeStartLabel = hasRuntimeDays ? formatRuntimeDay(runtimeDays[runtimeRangeStart].date) : ''
@@ -184,7 +214,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const runtimeRangeSpan = Math.max(runtimeDays.length - 1, 1)
 
   return (
-    <main className={`overview-dashboard${healthItems.length ? ' has-health' : ''}`} aria-label="本体总览">
+    <main className="overview-dashboard" aria-label="本体总览">
       {healthItems.length > 0 && (
         <section className="overview-health" aria-label="待处理事项">
           {healthItems.slice(0, 3).map(item => (
@@ -230,7 +260,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('design')}>
             <span className="kpi-label">当前发布结构</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.model.objectTypes}<small>对象实体</small></strong>
+            <strong>{kpiObjectTypes}<small>对象实体</small></strong>
             <p>关系 {ov.model.linkTypes} · 动作 {ov.model.actions} · 函数 {ov.model.functions} · 哨兵 {ov.model.sentinels.total}</p>
             {ov.model.actions === 0
               ? <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
@@ -241,7 +271,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.data.instances}<small>对象实例</small></strong>
+            <strong>{kpiInstances}<small>对象实例</small></strong>
             <p>链接实例 {ov.data.linkInstances}</p>
             <em className="kpi-status is-neutral">
               {sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join(' · ') || '暂无实例数据'}
@@ -250,7 +280,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data-mapping')}>
             <span className="kpi-label">数据映射</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.data.mappings.bound}<small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
+            <strong>{kpiMappingsBound}<small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
             <p>名称匹配 {ov.data.mappings.nameMatch} · 数据自建 {ov.data.mappings.autoCreate}</p>
             <em className={`kpi-status ${ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? '' : 'is-warning'}`}>
               {ov.data.mappings.total === 0
@@ -263,7 +293,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('governance')}>
             <span className="kpi-label">当前版本事实流</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.facts.total}<small>条</small></strong>
+            <strong>{kpiFactsTotal}<small>条</small></strong>
             <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_META[kind]?.label || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
             {ov.runtime.pendingApprovals > 0
               ? <em className="kpi-status is-warning"><CircleAlert size={15} />{ov.runtime.pendingApprovals} 条动作待人工审批</em>
@@ -301,42 +331,9 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <div className="runtime-trend">
             <div className="runtime-trend-heading">
               <span>每日运行趋势</span>
-              <div className="runtime-trend-legend" aria-hidden="true">
-                <span><i className="tone-teal" />哨兵</span>
-                <span><i className="tone-blue" />动作</span>
-                <span><i className="tone-issue" />异常</span>
-              </div>
             </div>
-            <div className={`runtime-daily-chart ${selectedRuntimeTotal === 0 ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabel} 每日运行趋势`}>
-              <span className="runtime-gridline runtime-gridline--top" aria-hidden="true" />
-              <span className="runtime-gridline runtime-gridline--mid" aria-hidden="true" />
-              {runtimeDays.map((day, index) => {
-                const inRange = index >= runtimeRangeStart && index <= runtimeRangeEnd
-                const sentinelTotal = day.firings.fired + day.firings.error
-                const actionTotal = day.actionRuns.success + day.actionRuns.failed
-                return (
-                  <div className={`runtime-day ${inRange ? 'is-selected' : ''}`} key={day.date}>
-                    <div className="runtime-day-bars">
-                      <span
-                        className="runtime-day-stack runtime-day-stack--sentinel"
-                        title={`${formatRuntimeDay(day.date)}：哨兵命中 ${day.firings.fired}，错误 ${day.firings.error}`}
-                      >
-                        <i style={{ height: `${Math.max(day.firings.fired / maxDailyRuntime * 68, day.firings.fired ? 5 : 2)}px` }} />
-                        <b style={{ height: `${Math.max(day.firings.error / maxDailyRuntime * 68, day.firings.error ? 5 : 2)}px` }} />
-                      </span>
-                      <span
-                        className="runtime-day-stack runtime-day-stack--action"
-                        title={`${formatRuntimeDay(day.date)}：动作成功 ${day.actionRuns.success}，失败 ${day.actionRuns.failed}`}
-                      >
-                        <i style={{ height: `${Math.max(day.actionRuns.success / maxDailyRuntime * 68, day.actionRuns.success ? 5 : 2)}px` }} />
-                        <b style={{ height: `${Math.max(day.actionRuns.failed / maxDailyRuntime * 68, day.actionRuns.failed ? 5 : 2)}px` }} />
-                      </span>
-                    </div>
-                    <time dateTime={day.date}>{formatRuntimeDay(day.date)}</time>
-                    <span className="runtime-day-total">{sentinelTotal + actionTotal || '—'}</span>
-                  </div>
-                )
-              })}
+            <div className={`runtime-trend-chart ${selectedRuntimeTotal === 0 ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabel} 每日运行趋势`}>
+              <RuntimeTrendChart days={runtimeDays} rangeStart={runtimeRangeStart} rangeEnd={runtimeRangeEnd} />
               {selectedRuntimeTotal === 0 && (
                 <div className="runtime-empty-note">
                   <Sparkles size={17} />

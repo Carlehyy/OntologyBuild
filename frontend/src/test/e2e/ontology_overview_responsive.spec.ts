@@ -96,7 +96,14 @@ async function mockOverview(page: Page, options?: { singleVersion?: boolean; wit
       })
     }
     if (path === `/api/v2/formal/ontologies/${ontologyId}/facts/recent`) {
-      return ok(route, [])
+      return ok(route, [
+        { id: 'fact-1', subjectLabel: '订单·R-1006', propertyName: 'status', value: { v: '已发货' }, present: true, kind: 'property', source: 'pipeline', recordedAt: '2026-08-09T06:30:00Z' },
+        { id: 'fact-2', subjectLabel: '订单·R-1005', propertyName: 'amount', value: { v: 1299.5 }, present: true, kind: 'derived', source: 'action', recordedAt: '2026-08-09T05:12:00Z' },
+        { id: 'fact-3', subjectLabel: '动作·审核订单', propertyName: 'decision', value: 'APPROVED', present: true, kind: 'decision', source: 'action', recordedAt: '2026-08-09T03:40:00Z' },
+        { id: 'fact-4', subjectLabel: '订单·R-1004', propertyName: 'warehouse', value: { v: '华东仓' }, present: true, kind: 'property', source: 'manual', recordedAt: '2026-08-08T16:05:00Z' },
+        { id: 'fact-5', subjectLabel: '订单·R-1003', propertyName: 'link:belongs_to', value: { v: '客户·C-91' }, present: true, kind: 'link', source: 'pipeline', recordedAt: '2026-08-08T11:26:00Z' },
+        { id: 'fact-6', subjectLabel: '订单·R-1002', propertyName: 'status', value: { v: '已签收' }, present: true, kind: 'property', source: 'import', recordedAt: '2026-08-08T09:02:00Z' },
+      ])
     }
     if (path === `/api/v2/ontologies/${ontologyId}/version-tree`) {
       return ok(route, {
@@ -130,6 +137,8 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   await expect(page.locator('.kpi-cell').first().locator('strong')).toBeVisible()
   // 装不下时外壳必须可滚动，而不是 overflow:hidden 裁掉内容。
   await expect(shell).toHaveCSS('overflow-y', 'auto')
+  // 运行趋势图由 ECharts 渲染。
+  await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
   await page.locator('.recent-facts').scrollIntoViewIfNeeded()
   await expect(page.getByRole('heading', { name: '最近发生了什么' })).toBeVisible()
 
@@ -141,7 +150,7 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontologyId}\\?tab=governance`))
 })
 
-test('大屏（1920x1080）且无待办时保持一屏无滚动', async ({ page }) => {
+test('大屏（1920x1080）下完整呈现：趋势图与 6 条事实均可见', async ({ page }) => {
   await mockOverview(page, { withHealth: false })
   await page.setViewportSize({ width: 1920, height: 1080 })
   await page.goto(`/#/ontologies/${ontologyId}`, { waitUntil: 'domcontentloaded' })
@@ -150,14 +159,15 @@ test('大屏（1920x1080）且无待办时保持一屏无滚动', async ({ page 
   await expect(page.getByLabel('待处理事项')).toHaveCount(0)
 
   const shell = page.locator('.ontology-overview-shell')
-  const metrics = await shell.evaluate(element => ({
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-  }))
-  expect(metrics.scrollHeight - metrics.clientHeight).toBeLessThan(3)
+  await expect(shell).toHaveCSS('overflow-y', 'auto')
   const kpiBox = await page.locator('.kpi-rail').boundingBox()
   expect(kpiBox).not.toBeNull()
   expect(kpiBox!.height).toBeGreaterThan(160)
+  await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
+  // 底部事实区给足自然高度：6 条事实完整渲染，不再被压扁或面板内滚。
+  await expect(page.locator('.recent-row')).toHaveCount(6)
+  await page.locator('.recent-row').last().scrollIntoViewIfNeeded()
+  await expect(page.locator('.recent-row').last()).toBeVisible()
 })
 
 test('版本演化只有单个快照节点时隐藏播放与进度控制', async ({ page }) => {

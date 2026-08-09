@@ -340,35 +340,18 @@
 .runtime-highlight dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 0; padding-left: 10px; border-left: 1px solid #e0e8ec; }
 .runtime-highlight dl div { min-width: 0; }
 .runtime-highlight dt { display: flex; align-items: center; gap: 4px; color: #8490a0; font-size: 10px; white-space: nowrap; }
-.runtime-highlight dt i, .runtime-trend-legend i { display: inline-block; width: 6px; height: 6px; flex: 0 0 auto; border-radius: 2px; }
+.runtime-highlight dt i { display: inline-block; width: 6px; height: 6px; flex: 0 0 auto; border-radius: 2px; }
 .runtime-highlight dd { margin: 2px 0 0 10px; color: #415068; font-size: 11px; font-weight: 700; }
-.runtime-highlight .tone-teal, .runtime-trend-legend .tone-teal { background: #0ba28d; }
+.runtime-highlight .tone-teal { background: #0ba28d; }
 .runtime-highlight .tone-coral { background: #ec7474; }
-.runtime-highlight .tone-blue, .runtime-trend-legend .tone-blue { background: #3478ee; }
+.runtime-highlight .tone-blue { background: #3478ee; }
 .runtime-highlight .tone-amber { background: #e6a148; }
-.runtime-trend-legend .tone-issue { background: #ec8a72; }
 
 .runtime-trend { margin-top: 10px; padding: 9px 12px 8px; border: 1px solid #e8edf2; border-radius: 11px; background-color: #fbfcfd; background-image: radial-gradient(circle at 88% -20%, rgba(52, 120, 238, .08), transparent 42%), radial-gradient(circle at 5% 120%, rgba(9, 155, 136, .08), transparent 38%); }
 .runtime-trend-heading { display: flex; min-height: 20px; align-items: center; justify-content: space-between; gap: 12px; }
 .runtime-trend-heading > span { color: #526076; font-size: 10px; font-weight: 700; }
-.runtime-trend-legend { display: flex; align-items: center; gap: 11px; color: #7d899a; font-size: 10px; }
-.runtime-trend-legend span { display: inline-flex; align-items: center; gap: 4px; }
-.runtime-daily-chart { position: relative; display: grid; height: 122px; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 7px; margin-top: 2px; overflow: hidden; border-bottom: 1px solid #d7e0e8; }
-.runtime-gridline { position: absolute; right: 0; left: 0; height: 1px; background: #e9eef2; pointer-events: none; }
-.runtime-gridline--top { top: 27px; }
-.runtime-gridline--mid { top: 59px; }
-.runtime-day { position: relative; z-index: 1; display: grid; min-width: 0; grid-template-rows: 83px 17px 15px; justify-items: center; opacity: .32; transition: opacity .18s ease; }
-.runtime-day.is-selected { opacity: 1; }
-.runtime-day-bars { display: flex; height: 80px; align-items: flex-end; gap: 4px; padding-top: 8px; }
-.runtime-day-stack { display: flex; width: 12px; max-height: 72px; flex-direction: column-reverse; justify-content: flex-start; overflow: hidden; border-radius: 4px 4px 2px 2px; }
-.runtime-day-stack i, .runtime-day-stack b { display: block; width: 100%; flex: 0 0 auto; box-shadow: inset 0 1px rgba(255, 255, 255, .32); }
-.runtime-day-stack--sentinel i { background: linear-gradient(180deg, #18b49f, #08927f); }
-.runtime-day-stack--sentinel b { background: #eb7777; }
-.runtime-day-stack--action i { background: linear-gradient(180deg, #5998ff, #3478ee); }
-.runtime-day-stack--action b { background: #e7a24c; }
-.runtime-day time { color: #788699; font-size: 10px; white-space: nowrap; }
-.runtime-day-total { min-width: 18px; border-radius: 4px; color: #8c97a6; font-size: 10px; font-weight: 650; text-align: center; }
-.runtime-empty-note { position: absolute; top: 38px; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .9); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translateX(-50%); pointer-events: none; }
+.runtime-trend-chart { position: relative; height: 212px; margin-top: 6px; }
+.runtime-empty-note { position: absolute; top: 50%; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .92); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translate(-50%, -50%); pointer-events: none; }
 .runtime-empty-note svg { flex: 0 0 auto; color: #6b8dca; }
 .runtime-empty-note > span { color: #59687c; font-size: 10px; font-weight: 650; }
 .runtime-empty-note small { display: block; margin-top: 2px; color: #96a1af; font-size: 10px; font-weight: 500; }
@@ -389,10 +372,11 @@
 .runtime-range-input:active::-moz-range-thumb { cursor: grabbing; transform: scale(1.08); }
 .runtime-range-bounds { display: flex; align-items: center; justify-content: space-between; color: #98a2b1; font-size: 10px; }
 
-.fact-stack { display: flex; height: 50px; overflow: hidden; margin-top: 14px; border-radius: 6px; background: #edf1f5; }
+.fact-composition { display: flex; flex-direction: column; }
+.fact-stack { display: flex; height: 64px; overflow: hidden; margin-top: 18px; border-radius: 8px; background: #edf1f5; }
 .fact-stack span { display: grid; min-width: 2px; place-items: center; overflow: hidden; border-right: 1px solid rgba(255,255,255,.75); color: white; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .fact-stack .fact-empty { width: 100%; color: #8c97a7; }
-.fact-legend-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-top: 13px; }
+.fact-legend-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-top: auto; padding-top: 14px; }
 .fact-legend { display: flex; min-width: 0; flex-wrap: wrap; gap: 10px 16px; color: #5f6d81; font-size: 10px; }
 .fact-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .fact-legend i { width: 9px; height: 9px; border-radius: 2px; }
@@ -424,70 +408,6 @@
   .ontology-profile { padding-right: 22px; padding-left: 22px; }
   .kpi-cell { padding-right: 19px; padding-left: 19px; }
   .recent-row { grid-template-columns: 14px 42px minmax(80px,.7fr) minmax(70px,1fr) 9px minmax(80px,1.2fr) 62px 92px; gap: 5px; }
-}
-
-@media (min-width: 1251px) and (min-height: 890px) {
-  /* 一屏适配模式：高度足够时才锁定整页不滚动；外壳始终保留滚动兜底，
-     任何内容装不下时宁可出现滚动条，也绝不把内容裁到不可见。 */
-  .ontology-overview-shell { overflow: auto; }
-  .ontology-overview-shell .overview-dashboard {
-    height: 100%;
-    min-height: 0;
-    grid-template-rows: minmax(0, 1fr) clamp(172px, 21vh, 204px);
-  }
-  .ontology-overview-shell .overview-dashboard.has-health {
-    grid-template-rows: auto minmax(0, 1fr) clamp(172px, 21vh, 204px);
-  }
-  /* KPI 行与运行汇总行的最小高度保护：空间不足时溢出转滚动，
-     不允许 grid 自动最小尺寸把 KPI 栏压碎（overflow:hidden 会使其为 0）。 */
-  .ontology-overview-shell .overview-hero-grid {
-    min-height: 462px;
-    grid-template-rows: minmax(148px, auto) minmax(300px, 1fr);
-  }
-  .ontology-overview-shell .overview-row-facts,
-  .ontology-overview-shell .overview-row-facts > .overview-panel { min-height: 0; }
-  .ontology-overview-shell .overview-row-facts > .overview-panel { overflow: hidden; }
-  .ontology-overview-shell .recent-facts { display: flex; flex-direction: column; }
-  .ontology-overview-shell .recent-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-  .ontology-overview-shell .recent-empty { min-height: 112px; flex: 1; }
-}
-
-@media (min-width: 1251px) and (max-height: 980px) {
-  .ontology-profile { padding: 14px 20px 13px; }
-  .profile-heading { gap: 14px; margin-top: 12px; }
-  .profile-mark { width: 58px; height: 58px; flex-basis: 58px; }
-  .overview-network-mark { width: 43px; height: 43px; }
-  .profile-heading h1 { margin-bottom: 6px; font-size: 18px; }
-  .profile-description { margin: 12px 0 10px; line-height: 1.58; -webkit-line-clamp: 3; }
-  .profile-meta { margin-top: 8px; padding-top: 11px; }
-  .profile-evolution { min-height: 176px; flex-basis: 176px; margin-top: 10px; padding-top: 8px; }
-  .version-evolution-card { min-height: 176px; }
-  .evolution-canvas { min-height: 112px; }
-
-  .kpi-cell { padding: 13px 17px 11px; }
-  .kpi-cell strong { min-height: 36px; margin-top: 7px; font-size: 29px; }
-  .kpi-cell p { min-height: 25px; margin-bottom: 4px; }
-  .kpi-status { min-height: 20px; }
-
-  .runtime-summary, .fact-composition, .recent-facts { padding: 14px 18px; }
-  .runtime-highlights { gap: 8px; margin-top: 7px; }
-  .runtime-highlight { grid-template-columns: 32px minmax(58px,.7fr) minmax(100px,1fr); gap: 8px; padding: 7px 10px; }
-  .runtime-highlight-icon { width: 32px; height: 32px; }
-  .runtime-highlight-total strong { font-size: 20px; }
-  .runtime-trend { margin-top: 7px; padding: 6px 10px 5px; }
-  .runtime-daily-chart { height: 94px; }
-  .runtime-day { grid-template-rows: 57px 17px 15px; }
-  .runtime-day-bars { height: 56px; padding-top: 5px; }
-  .runtime-day-stack { max-height: 50px; }
-  .runtime-empty-note { top: 25px; padding: 6px 10px; }
-  .runtime-range { margin-top: 6px; }
-  .runtime-range-control { height: 20px; margin-top: 1px; }
-  .runtime-range-track { top: 8px; }
-
-  .fact-stack { height: 42px; margin-top: 10px; }
-  .fact-legend-row { margin-top: 9px; }
-  .recent-list { margin-top: 4px; }
-  .recent-row { min-height: 27px; }
 }
 
 @media (max-width: 1250px) {
@@ -534,8 +454,6 @@
   .runtime-highlights { grid-template-columns: 1fr; }
   .runtime-highlight { grid-template-columns: 36px minmax(64px, .7fr) minmax(108px, 1fr); }
   .runtime-trend { padding-right: 8px; padding-left: 8px; }
-  .runtime-daily-chart { gap: 3px; }
-  .runtime-day-stack { width: 9px; }
   .runtime-empty-note { min-width: min(260px, calc(100% - 16px)); }
   .fact-legend-row { flex-direction: column; }
   .fact-legend-row > p { white-space: normal; }
@@ -543,7 +461,21 @@
   .recent-row code, .recent-row .fact-equals, .recent-row .fact-value { display: none; }
 }
 
+/* 面板入场：依序轻微上浮淡入，让页面有层次感而不喧闹。 */
+@keyframes overview-panel-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.overview-health,
+.overview-hero-grid > .overview-panel,
+.overview-row-facts > .overview-panel { animation: overview-panel-in .48s cubic-bezier(.2, .7, .3, 1) both; }
+.overview-hero-grid > .kpi-rail { animation-delay: .05s; }
+.overview-hero-grid > .runtime-summary { animation-delay: .1s; }
+/* 事实区两块面板共用同一延迟：二者同行展示，保持任何时刻位移一致。 */
+.overview-row-facts > .overview-panel { animation-delay: .14s; }
+
 @media (prefers-reduced-motion: reduce) {
+  .overview-health, .overview-hero-grid > .overview-panel, .overview-row-facts > .overview-panel { animation: none; }
   .kpi-cell, .evolution-viewport, .evolution-edge, .evolution-node, .evolution-progress i { transition: none; }
   .spin, .evolution-node.is-current .evolution-node-halo, .evolution-skeleton-line, .evolution-skeleton-canvas { animation: none; }
 }
