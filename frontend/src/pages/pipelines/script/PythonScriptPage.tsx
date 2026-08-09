@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
+import { indentSelection } from '@codemirror/commands'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { python } from '@codemirror/lang-python'
 import {
   ArrowLeft, Play, Square, Save, Loader2, CheckCircle2, Circle, XCircle, AlertTriangle,
-  FileCode2, Terminal, RotateCcw, Keyboard, History, X, HelpCircle, Rocket,
+  FileCode2, Terminal, RotateCcw, Keyboard, History, X, HelpCircle, Rocket, Wand2,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline, ScriptExecutionResult, ScriptVersion } from '@/api/v2/pipelines'
@@ -13,7 +16,21 @@ import { useToast } from '@/components/ui/Toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import PipelineEditWizard from '../PipelineEditWizard'
 import { PYTHON_SCRIPT_TEMPLATE } from './template'
-import { inferColumnTypes, parseTracebackLines, TYPE_LABELS } from './scriptUtils'
+import { inferColumnTypes, parseTracebackLines, tidyPythonSource, TYPE_LABELS } from './scriptUtils'
+
+// Python 语法高亮（GitHub light 风格）：默认浅色主题对比太弱，关键字/字符串/
+// 注释/数字/函数/类名用高区分度配色，读代码时一眼可辨结构
+const pythonHighlight = syntaxHighlighting(HighlightStyle.define([
+  { tag: tags.keyword, color: '#cf222e', fontWeight: '600' },
+  { tag: [tags.string, tags.docComment], color: '#0a3069' },
+  { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
+  { tag: [tags.number, tags.bool, tags.null], color: '#0550ae', fontWeight: '600' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#8250df' },
+  { tag: [tags.className, tags.definition(tags.variableName)], color: '#953800' },
+  { tag: tags.propertyName, color: '#116329' },
+  { tag: tags.operator, color: '#cf222e' },
+  { tag: tags.escape, color: '#0550ae' },
+]))
 
 const PREVIEW_ROWS = 20
 
@@ -130,6 +147,22 @@ export default function PythonScriptPage() {
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
 
   const isPublished = pipeline?.status === 'published'
+
+  // 主区高度撑满到页底：页面本身不滚动，编辑器/结果区内部各自滚动。
+  // 以分栏容器顶部为基准，剩余视口高度即列高（含 16px 底部留白）。
+  const [columnPx, setColumnPx] = useState(560)
+  useEffect(() => {
+    const measure = () => {
+      const top = splitContainerRef.current?.getBoundingClientRect().top
+      if (top != null && top > 0) {
+        setColumnPx(Math.max(360, Math.floor(window.innerHeight - top - 16)))
+      }
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [loading, isPublished, draftRestoredAt])
+
   const wrongEngine = pipeline && (pipeline.definition as { engine?: string } | null)?.engine !== 'python'
   const dirty = script !== savedScript
   const scriptDirtySinceValidation = validatedScript === null || script !== validatedScript
@@ -330,6 +363,26 @@ export default function PythonScriptPage() {
     })
     view.focus()
   }, [])
+
+  // 一键格式化：语法感知自动缩进（全文）+ 空白整理（Tab→空格、行尾空白、多余空行）
+  const handleFormat = useCallback(() => {
+    const view = editorViewRef.current
+    if (!view || isPublished) return
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+    indentSelection({ state: view.state, dispatch: view.dispatch })
+    const before = view.state.doc.toString()
+    const tidied = tidyPythonSource(before)
+    if (tidied !== before) {
+      const cursor = view.state.selection.main.head
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: tidied },
+        selection: { anchor: Math.min(cursor, tidied.length) },
+      })
+    }
+    view.dispatch({ selection: { anchor: view.state.selection.main.head } })
+    view.focus()
+    toast({ tone: 'success', title: '已格式化', description: '已自动缩进并整理空白（Tab→空格、行尾空白、多余空行）。' })
+  }, [isPublished, toast])
 
   // 快捷键：Ctrl/⌘+Enter 执行，Ctrl/⌘+S 保存
   useEffect(() => {
@@ -546,6 +599,16 @@ export default function PythonScriptPage() {
             >
               <History size={13} /> 历史版本
             </button>
+            {!isPublished && (
+              <button
+                onClick={handleFormat}
+                disabled={executing || saving}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                title="一键格式化：语法感知自动缩进 + 整理空白（Tab→空格、行尾空白、多余空行）"
+              >
+                <Wand2 size={13} /> 格式化
+              </button>
+            )}
             <div className="relative ml-auto">
               <button
                 onClick={() => setShowHelp(v => !v)}
@@ -591,10 +654,14 @@ export default function PythonScriptPage() {
           <CodeMirror
             value={script}
             onChange={setScript}
-            extensions={[python()]}
+            extensions={[python(), pythonHighlight]}
             theme="light"
             readOnly={isPublished}
-            height="clamp(340px, 52vh, 780px)"
+            height={
+              isWide
+                ? `${Math.max(300, columnPx - (isPublished ? 71 : 104))}px`
+                : 'clamp(340px, 52vh, 780px)'
+            }
             placeholder="# 在此编写取数脚本，最终结果赋值给 result"
             onCreateEditor={view => { editorViewRef.current = view }}
             basicSetup={{
@@ -635,23 +702,28 @@ export default function PythonScriptPage() {
           </div>
         )}
 
-        {/* 执行结果 */}
-        <ResultPanel
-          result={result}
-          resultKind={resultKind}
-          executing={executing}
-          saving={saving}
-          elapsedSec={elapsedSec}
-          timeoutLimit={timeoutLimit}
-          onCancel={handleCancel}
-          sampleColumns={sampleColumns}
-          columnTypes={columnTypes}
-          tracebackLines={tracebackLines}
-          onJumpToLine={jumpToLine}
-          showNextSteps={showNextSteps && !isPublished}
-          onOpenWizard={() => setShowWizard(true)}
-          onDismissNextSteps={() => setShowNextSteps(false)}
-        />
+        {/* 执行结果：宽屏与编辑器同高、内部滚动，单页看全编辑与输出 */}
+        <div
+          className="min-w-0"
+          style={isWide ? { maxHeight: columnPx, overflowY: 'auto' } : undefined}
+        >
+          <ResultPanel
+            result={result}
+            resultKind={resultKind}
+            executing={executing}
+            saving={saving}
+            elapsedSec={elapsedSec}
+            timeoutLimit={timeoutLimit}
+            onCancel={handleCancel}
+            sampleColumns={sampleColumns}
+            columnTypes={columnTypes}
+            tracebackLines={tracebackLines}
+            onJumpToLine={jumpToLine}
+            showNextSteps={showNextSteps && !isPublished}
+            onOpenWizard={() => setShowWizard(true)}
+            onDismissNextSteps={() => setShowNextSteps(false)}
+          />
+        </div>
       </div>
 
       {/* 历史版本抽屉 */}

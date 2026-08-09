@@ -5,6 +5,7 @@ import {
   inferColumnTypes,
   inferValueType,
   parseTracebackLines,
+  tidyPythonSource,
   TYPE_LABELS,
 } from '../../../pages/pipelines/script/scriptUtils.ts'
 
@@ -77,5 +78,24 @@ describe('parseTracebackLines', () => {
   it('无匹配时返回空数组', () => {
     assert.deepEqual(parseTracebackLines('ValueError: boom'), [])
     assert.deepEqual(parseTracebackLines(''), [])
+  })
+})
+
+describe('tidyPythonSource', () => {
+  it('Tab 转空格、去行尾空白、空行收敛、保证单个文末换行', () => {
+    const messy = 'def f():\n\treturn 1  \n\n\n\n\nresult = f()'
+    assert.equal(
+      tidyPythonSource(messy),
+      'def f():\n    return 1\n\n\nresult = f()\n',
+    )
+  })
+
+  it('去掉开头空行；空行不残留空白字符', () => {
+    assert.equal(tidyPythonSource('\n\n  \nresult = 1\n'), 'result = 1\n')
+  })
+
+  it('已整洁的源码保持不变', () => {
+    const clean = 'result = [{"id": 1}]\n'
+    assert.equal(tidyPythonSource(clean), clean)
   })
 })
