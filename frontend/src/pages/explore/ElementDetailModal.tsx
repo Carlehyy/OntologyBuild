@@ -251,7 +251,7 @@ function Section({ icon: Icon, title, count, children }: {
 
 function Empty({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-[var(--color-border)] bg-[#fafbfc] px-4 py-5 text-center text-xs leading-relaxed text-[var(--color-text-tertiary)]">
+    <div className="rounded-xl border border-dashed border-[var(--color-border)] bg-[#fafbfc] px-4 py-5 text-center text-xs leading-relaxed text-[var(--color-text-tertiary)] dark:bg-[#121820]">
       {text}
     </div>
   )
@@ -272,7 +272,7 @@ function LogicChain({ title, description, items }: {
   items: LogicItem[]
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-[#f7f9fb] p-4">
+    <section className="rounded-2xl border border-slate-200 bg-[#f7f9fb] dark:bg-[#121820] p-4">
       <div className="mb-4">
         <div className="text-[11px] font-semibold tracking-[0.12em] text-teal-700">核心逻辑</div>
         <h4 className="mt-1 text-base font-semibold tracking-[-0.02em] text-[var(--color-text-primary)]">{title}</h4>
@@ -317,7 +317,7 @@ function AttributeTable({ attributes, keyName }: { attributes: AttrRow[]; keyNam
   if (!attributes.length) return <Empty text="还没有沉淀属性；模型详情暂时只保留已确认结构。" />
   return (
     <div className="overflow-hidden rounded-xl border border-[var(--color-border)]">
-      <div className="hidden grid-cols-[minmax(130px,1fr)_90px_minmax(150px,1.25fr)] gap-3 bg-[#f7f9fb] px-3 py-2 text-[10px] font-medium text-[var(--color-text-tertiary)] sm:grid">
+      <div className="hidden grid-cols-[minmax(130px,1fr)_90px_minmax(150px,1.25fr)] gap-3 bg-[#f7f9fb] dark:bg-[#121820] px-3 py-2 text-[10px] font-medium text-[var(--color-text-tertiary)] sm:grid">
         <span>字段</span>
         <span>类型</span>
         <span>业务约束</span>
@@ -1108,7 +1108,7 @@ export default function ElementDetailModal({ sectionKey, el, canvas, onClose, on
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto bg-[#f5f7f9] p-4 sm:p-5">
+        <div className="flex-1 overflow-y-auto bg-[#f5f7f9] p-4 sm:p-5 dark:bg-[#121820]">
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_250px]">
             <main className="min-w-0 rounded-2xl border border-[var(--color-border)] bg-white p-4 sm:p-5">
               {description && (

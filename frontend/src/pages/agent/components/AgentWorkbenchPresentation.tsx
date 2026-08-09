@@ -349,7 +349,7 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
 
   if (turns.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#f8fbff] p-8 text-center">
+      <div className="flex h-full items-center justify-center bg-[#f8fbff] p-8 text-center dark:bg-[#161c26]">
         <div className="max-w-sm">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-600 shadow-sm">
             <Workflow size={21} />
@@ -362,7 +362,7 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
   }
 
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto bg-[#f8fbff] px-4 py-4" data-testid="agent-call-chain-view">
+    <div className="scrollbar-thin h-full overflow-y-auto bg-[#f8fbff] px-4 py-4 dark:bg-[#161c26]" data-testid="agent-call-chain-view">
       <div className="mx-auto max-w-4xl">
         <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
           {[

@@ -232,7 +232,7 @@ export function OntologyNetworkView({
 
   if (objectTypes.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-6 text-center">
+      <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-6 text-center dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
         <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-500 shadow-sm">
           <Network size={24} />
         </div>
