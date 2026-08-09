@@ -5,6 +5,23 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenOntology</title>
+    <script>
+      // 防主题闪烁：首帧绘制前恢复深色偏好（与 src/lib/theme.ts 的解析逻辑保持一致）
+      ;(function () {
+        try {
+          var raw = localStorage.getItem('theme')
+          if (!raw) return
+          var theme = null
+          if (raw === 'dark' || raw === 'light') {
+            theme = raw
+          } else {
+            var parsed = JSON.parse(raw)
+            theme = parsed && parsed.state ? parsed.state.theme : null
+          }
+          if (theme === 'dark') document.documentElement.classList.add('dark')
+        } catch (e) { /* 非法值按默认浅色处理 */ }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

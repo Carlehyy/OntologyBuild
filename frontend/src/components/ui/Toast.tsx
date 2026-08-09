@@ -23,23 +23,23 @@ const ToastContext = React.createContext<ToastContextValue | null>(null)
 const toneMeta = {
   success: {
     icon: CheckCircle2,
-    iconClass: 'bg-emerald-50 text-emerald-600 ring-emerald-100',
-    accentClass: 'bg-emerald-500',
+    iconClass: 'bg-[var(--color-success-bg)] text-[var(--color-success)] ring-[var(--color-success-bg)]',
+    accentClass: 'bg-[var(--color-success)]',
   },
   error: {
     icon: AlertCircle,
-    iconClass: 'bg-red-50 text-red-600 ring-red-100',
-    accentClass: 'bg-red-500',
+    iconClass: 'bg-[var(--color-danger-bg)] text-[var(--color-danger)] ring-[var(--color-danger-bg)]',
+    accentClass: 'bg-[var(--color-danger)]',
   },
   warning: {
     icon: TriangleAlert,
-    iconClass: 'bg-amber-50 text-amber-600 ring-amber-100',
-    accentClass: 'bg-amber-500',
+    iconClass: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)] ring-[var(--color-warning-bg)]',
+    accentClass: 'bg-[var(--color-warning)]',
   },
   info: {
     icon: Info,
-    iconClass: 'bg-sky-50 text-sky-600 ring-sky-100',
-    accentClass: 'bg-sky-500',
+    iconClass: 'bg-[var(--color-info-bg)] text-[var(--color-info)] ring-[var(--color-info-bg)]',
+    accentClass: 'bg-[var(--color-info)]',
   },
 } satisfies Record<ToastTone, { icon: React.ElementType; iconClass: string; accentClass: string }>
 
@@ -55,7 +55,7 @@ function ToastCard({ item, onDismiss }: { item: ToastRecord; onDismiss: (id: num
   return (
     <div
       role={item.tone === 'error' ? 'alert' : 'status'}
-      className="pointer-events-auto relative w-[min(390px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-white/90 bg-white/95 p-4 shadow-[0_18px_52px_rgba(15,23,42,0.16)] backdrop-blur-xl animate-slide-up"
+      className="pointer-events-auto relative w-[min(390px,calc(100vw-32px))] overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-popover)] p-4 shadow-[var(--shadow-lg)] animate-slide-up"
     >
       <span className={`absolute inset-y-3 left-0 w-1 rounded-r-full ${meta.accentClass}`} />
       <div className="flex items-start gap-3">
@@ -63,14 +63,14 @@ function ToastCard({ item, onDismiss }: { item: ToastRecord; onDismiss: (id: num
           <Icon size={17} />
         </span>
         <div className="min-w-0 flex-1 pt-0.5">
-          <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-          {item.description && <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>}
+          <p className="text-sm font-semibold text-[var(--color-text-primary)]">{item.title}</p>
+          {item.description && <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{item.description}</p>}
         </div>
         <button
           type="button"
           onClick={() => onDismiss(item.id)}
           aria-label="关闭提示"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
         >
           <X size={14} />
         </button>

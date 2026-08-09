@@ -540,3 +540,107 @@
     animation-duration: 1.5s;
   }
 }
+
+/* ── 深色主题覆盖：保持同一布局与品牌青绿，仅替换表面与文字色 ── */
+.dark .ontology-login {
+  --login-ink: #e6e9ef;
+  --login-muted: #98a2b3;
+  background:
+    radial-gradient(circle at 2% 2%, rgba(20, 184, 166, 0.12), transparent 28%),
+    linear-gradient(135deg, #0b1210 0%, #0d1117 54%, #0e141b 100%);
+}
+
+.dark .ontology-login__canvas {
+  border-color: #2a3342;
+  background:
+    radial-gradient(circle at 48% 53%, rgba(20, 184, 166, 0.08), transparent 24%),
+    radial-gradient(circle at 78% 32%, rgba(35, 44, 58, 0.6), transparent 34%),
+    rgba(17, 22, 30, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
+.dark .ontology-login__reference-art {
+  opacity: 0.35;
+}
+
+.dark .ontology-login__brand::before {
+  background: linear-gradient(90deg, #11161e 0 92%, rgba(17, 22, 30, 0));
+}
+
+.dark .ontology-login__story::before {
+  background: linear-gradient(90deg, #11161e 0 88%, rgba(17, 22, 30, 0));
+}
+
+.dark .ontology-login__features::before {
+  background: linear-gradient(90deg, #11161e 0 72%, rgba(17, 22, 30, 0));
+}
+
+.dark .ontology-login__brand-mark {
+  border-color: rgba(20, 184, 166, 0.35);
+  background: linear-gradient(180deg, rgba(18, 63, 57, 0.9), rgba(13, 42, 38, 0.9));
+}
+
+.dark .ontology-login__story p {
+  color: #98a2b3;
+}
+
+.dark .ontology-login__features strong {
+  color: #e6e9ef;
+}
+
+.dark .ontology-login__features small {
+  color: #6b7688;
+}
+
+.dark .ontology-login__feature-icon {
+  background: rgba(20, 184, 166, 0.14);
+}
+
+.dark .ontology-login__card {
+  border-color: #2a3342;
+  background: rgba(22, 28, 38, 0.95);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.dark .ontology-login__heading p {
+  color: #98a2b3;
+}
+
+.dark .ontology-login__form label {
+  color: #e6e9ef;
+}
+
+.dark .ontology-login__input-wrap {
+  color: #6b7688;
+  border-color: #2a3342;
+  background: rgba(30, 38, 50, 0.6);
+  box-shadow: none;
+}
+
+.dark .ontology-login__input-wrap:focus-within {
+  background: #1e2632;
+}
+
+.dark .ontology-login__input-wrap input {
+  color: #e6e9ef;
+}
+
+.dark .ontology-login__input-wrap input::placeholder {
+  color: #6b7688;
+}
+
+.dark .ontology-login__visibility {
+  color: #6b7688;
+}
+
+.dark .ontology-login__error {
+  color: var(--color-danger);
+  border-color: var(--color-danger-bg);
+  background: var(--color-danger-bg);
+}
+
+@media (max-width: 540px) {
+  .dark .ontology-login {
+    background: #0d1117;
+  }
+}

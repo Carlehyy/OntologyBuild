@@ -1,10 +1,44 @@
 /* ═══════════════════════════════════════════════
    OntoPrompt Design Tokens
+   ───────────────────────────────────────────────
+   采用 shadcn 语义化主题约定（https://www.shadcn.com.cn/docs/theming）：
+   --background/--foreground/--primary 等语义变量是唯一事实来源，
+   历史 --color-* token 作为别名或项目扩展保留。
+   深色模式通过 <html class="dark"> 下的 .dark 块覆盖同一组变量实现，
+   浅色值保持平台既有外观，任何变量改动必须同时维护 :root 与 .dark。
    ═══════════════════════════════════════════════ */
 
 :root {
-  /* ── 主色 ── */
-  --color-primary: #1a1a2e;
+  /* ── shadcn 语义 token（浅色，对齐平台既有外观） ── */
+  --radius: 0.5rem;
+  --background: #eef1f5;
+  --foreground: #1a1a2e;
+  --card: #ffffff;
+  --card-foreground: #1a1a2e;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a2e;
+  --primary: #1a1a2e;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f3f5;
+  --secondary-foreground: #1a1a2e;
+  --muted: #f1f3f5;
+  --muted-foreground: #5a5a72;
+  --accent: #f1f3f5;
+  --accent-foreground: #1a1a2e;
+  --destructive: #c23b3b;
+  --destructive-foreground: #ffffff;
+  --border: #e2e4e9;
+  --input: #e2e4e9;
+  --ring: #0d9488;
+
+  /* ── 浮层/焦点环别名（衔接 shadcn 语义变量与 var(--color-*) 用法） ── */
+  --color-popover: var(--popover);
+  --color-muted: var(--muted);
+  --color-ring: var(--ring);
+
+  /* ── 主色（项目扩展） ── */
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
   --color-primary-hover: #16213e;
   --color-primary-active: #0f3460;
   --color-primary-light: #e8eaf6;
@@ -13,31 +47,33 @@
   --color-nav-light: #ccfbf1;
 
   /* ── 背景 ── */
-  --color-bg-base: #eef1f5;
+  --color-bg-base: var(--background);
   --color-bg-elevated: #f5f7fa;
   --color-bg-sidebar: #ffffff;
-  --color-bg-hover: #f1f3f5;
+  --color-bg-hover: var(--accent);
   --color-bg-active: #e8eaed;
   --color-bg-overlay: rgba(0, 0, 0, 0.45);
 
   /* ── 文字 ── */
-  --color-text-primary: #1a1a2e;
-  --color-text-secondary: #5a5a72;
+  --color-text-primary: var(--foreground);
+  --color-text-secondary: var(--muted-foreground);
   --color-text-tertiary: #8b8ba3;
   --color-text-disabled: #b8b8c8;
   --color-text-inverse: #ffffff;
 
   /* ── 边框 ── */
-  --color-border: #e2e4e9;
+  --color-border: var(--border);
   --color-border-hover: #c8ccd4;
   --color-border-active: #1a1a2e;
 
   /* ── 语义色 ── */
   --color-success: #2d8a4e;
+  --color-success-hover: #247a3e;
   --color-success-bg: #e8f5e9;
   --color-warning: #c9861a;
   --color-warning-bg: #fff8e1;
-  --color-danger: #c23b3b;
+  --color-danger: var(--destructive);
+  --color-danger-hover: #a83232;
   --color-danger-bg: #fde8e8;
   --color-info: #2563eb;
   --color-info-bg: #dbeafe;
@@ -94,4 +130,65 @@
   --z-modal: 300;
   --z-tooltip: 400;
   --z-toast: 500;
+}
+
+/* ── 深色主题：覆盖同一组 token，由主题切换在 <html> 上切换 .dark ── */
+.dark {
+  /* ── shadcn 语义 token（深色） ── */
+  --background: #0d1117;
+  --foreground: #e6e9ef;
+  --card: #161c26;
+  --card-foreground: #e6e9ef;
+  --popover: #161c26;
+  --popover-foreground: #e6e9ef;
+  --primary: #e6e9ef;
+  --primary-foreground: #1a1a2e;
+  --secondary: #1e2632;
+  --secondary-foreground: #e6e9ef;
+  --muted: #1e2632;
+  --muted-foreground: #98a2b3;
+  --accent: #232c3a;
+  --accent-foreground: #e6e9ef;
+  --destructive: #e5534b;
+  --destructive-foreground: #ffffff;
+  --border: #2a3342;
+  --input: #2a3342;
+  --ring: #14b8a6;
+
+  /* ── 主色（项目扩展） ── */
+  --color-primary-hover: #f4f6fa;
+  --color-primary-active: #cbd3de;
+  --color-primary-light: #26303e;
+
+  --color-nav-light: #123f39;
+
+  /* ── 背景 ── */
+  --color-bg-elevated: #161c26;
+  --color-bg-sidebar: #11161e;
+  --color-bg-active: #2b3542;
+  --color-bg-overlay: rgba(0, 0, 0, 0.6);
+
+  /* ── 文字 ── */
+  --color-text-tertiary: #6b7688;
+  --color-text-disabled: #475060;
+
+  /* ── 边框 ── */
+  --color-border-hover: #3a4556;
+  --color-border-active: #e6e9ef;
+
+  /* ── 语义色 ── */
+  --color-success: #3fb950;
+  --color-success-hover: #56d364;
+  --color-success-bg: rgba(63, 185, 80, 0.14);
+  --color-warning: #d29922;
+  --color-warning-bg: rgba(210, 153, 34, 0.14);
+  --color-danger-hover: #ef6f66;
+  --color-danger-bg: rgba(229, 83, 75, 0.14);
+  --color-info: #58a6ff;
+  --color-info-bg: rgba(88, 166, 255, 0.14);
+
+  /* ── 阴影 ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
