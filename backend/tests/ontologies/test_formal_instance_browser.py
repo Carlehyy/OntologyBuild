@@ -268,6 +268,64 @@ def test_instance_browser_pages_objects_and_rejects_unpublished_type(
     assert rogue.json()["detail"]["code"] == "release_type_not_found"
 
 
+def test_instance_browser_object_keyword_matches_values_not_keys(
+        client, auth_headers, ontology, db):
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_release_instance_data(ontology["id"], release, db)
+    base = (
+        f"/api/v2/formal/ontologies/{ontology['id']}"
+        "/instance-browser/objects?object_type_id=ot-order"
+    )
+
+    # 存储属性值与派生属性值都能命中
+    by_value = client.get(f"{base}&keyword=甲方", headers=auth_headers)
+    assert by_value.status_code == 200, by_value.text
+    assert [item["id"] for item in by_value.json()["data"]["items"]] == ["order-1"]
+    by_computed = client.get(f"{base}&keyword=高", headers=auth_headers)
+    assert [item["id"] for item in by_computed.json()["data"]["items"]] == ["order-3"]
+
+    # 只出现在键名里的词不再命中(修复键名污染)
+    by_key = client.get(f"{base}&keyword=customer", headers=auth_headers)
+    assert by_key.json()["data"]["total"] == 0
+
+    # id、external_id、source 维持可搜
+    by_id = client.get(f"{base}&keyword=order-1", headers=auth_headers)
+    assert [item["id"] for item in by_id.json()["data"]["items"]] == ["order-1"]
+    by_source = client.get(f"{base}&keyword=pipeline", headers=auth_headers)
+    assert [item["id"] for item in by_source.json()["data"]["items"]] == ["order-1"]
+
+
+def test_instance_browser_link_keyword_matches_endpoint_labels(
+        client, auth_headers, ontology, db):
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_release_instance_data(ontology["id"], release, db)
+    base = (
+        f"/api/v2/formal/ontologies/{ontology['id']}"
+        "/instance-browser/links?link_type_id=lt-owner"
+    )
+
+    # 端点在表格里显示的业务标签(目标端“张三”、源端“A-001”)可搜到关系
+    by_target = client.get(f"{base}&keyword=张三", headers=auth_headers)
+    assert by_target.status_code == 200, by_target.text
+    assert [item["id"] for item in by_target.json()["data"]["items"]] == ["link-1"]
+    by_source = client.get(f"{base}&keyword=A-001", headers=auth_headers)
+    assert [item["id"] for item in by_source.json()["data"]["items"]] == ["link-1"]
+
+    # 端点 external_id 同样可命中
+    by_external = client.get(f"{base}&keyword=source-order-1", headers=auth_headers)
+    assert [item["id"] for item in by_external.json()["data"]["items"]] == ["link-1"]
+
+    # 关系自身属性值可搜;只出现在键名里的词不命中
+    by_value = client.get(f"{base}&keyword=2026-01-01", headers=auth_headers)
+    assert [item["id"] for item in by_value.json()["data"]["items"]] == ["link-1"]
+    by_key = client.get(f"{base}&keyword=since", headers=auth_headers)
+    assert by_key.json()["data"]["total"] == 0
+
+
 def test_instance_browser_pages_links_with_readable_endpoints(
         client, auth_headers, ontology, db):
     release = db.query(OntologyVersion).filter_by(

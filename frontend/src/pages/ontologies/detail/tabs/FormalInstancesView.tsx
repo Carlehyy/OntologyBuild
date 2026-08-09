@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
 import {
@@ -16,114 +16,26 @@ import {
   Search,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import { ConfirmModal } from '@/components/ui/Modal'
+import { useToast } from '@/components/ui/Toast'
 import { useAuthStore } from '@/stores/authStore'
-
-interface ReleaseSummary {
-  id: string
-  version: string
-  publishedAt?: string | null
-}
-
-interface SchemaProperty {
-  id: string
-  name: string
-  displayName?: string
-  type?: string
-  required?: boolean
-  source?: string
-}
-
-interface AssociatedDataset {
-  id: string
-  name: string
-  kind?: string | null
-  roles: string[]
-  available: boolean
-}
-
-interface ObjectTypeNode {
-  id: string
-  name: string
-  displayName?: string
-  description?: string
-  primaryKey?: string | null
-  properties: SchemaProperty[]
-  instanceCount: number
-  associatedDatasets: AssociatedDataset[]
-}
-
-interface LinkTypeNode {
-  id: string
-  name: string
-  displayName?: string
-  description?: string
-  sourceObjectTypeId: string
-  targetObjectTypeId: string
-  cardinality?: string
-  properties: SchemaProperty[]
-  instanceCount: number
-  associatedDatasets: AssociatedDataset[]
-}
-
-interface InstanceCatalog {
-  release: ReleaseSummary
-  objectTypes: ObjectTypeNode[]
-  linkTypes: LinkTypeNode[]
-  legacyProjection: LegacyProjectionStatus
-}
-
-interface LegacyProjectionStatus {
-  objectInstances: number
-  linkInstances: number
-  total: number
-  canAdopt: boolean
-  recommendedAction: 'none' | 'adopt_legacy' | 'publish_draft' | 'manual_review'
-  blockingReasons: Array<{ code: string; message: string }>
-}
-
-interface ObjectRow {
-  id: string
-  objectTypeId: string
-  properties: Record<string, unknown>
-  computed: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
-}
-
-interface EndpointSummary {
-  label: string
-}
-
-interface LinkRow {
-  id: string
-  linkTypeId: string
-  sourceObjectId: string
-  targetObjectId: string
-  sourceObject?: EndpointSummary | null
-  targetObject?: EndpointSummary | null
-  properties: Record<string, unknown>
-}
-
-interface InstancePage<T> {
-  release: ReleaseSummary
-  items: T[]
-  total: number
-  page: number
-  pageSize: number
-}
-
-interface DataColumn {
-  name: string
-  label: string
-  type?: string
-  primary?: boolean
-  required?: boolean
-  computed?: boolean
-  runtime?: boolean
-}
-
-type Selection = { kind: 'object' | 'link'; id: string }
+import type {
+  AssociatedDataset,
+  DataColumn,
+  EndpointSummary,
+  FormalOverviewSummary,
+  InstanceCatalog,
+  InstancePage,
+  LinkRow,
+  LinkTypeNode,
+  ObjectRow,
+  SchemaProperty,
+  Selection,
+} from './instanceBrowserTypes'
+import { formatInstanceDateTime } from './instanceValueDisplay'
+import { FullValue, SourceChip } from './InstanceValueText'
+import InstanceDetailDrawer from './InstanceDetailDrawer'
+import InstanceSummaryBar from './InstanceSummaryBar'
 
 function errorMessage(error: unknown) {
   if (!error || typeof error !== 'object') return '数据加载失败，请稍后重试'
@@ -135,23 +47,18 @@ function errorMessage(error: unknown) {
   return typeof candidate.message === 'string' ? candidate.message : '数据加载失败，请稍后重试'
 }
 
-function typeLabel(item: { name: string; displayName?: string }) {
-  return item.displayName || item.name
+function errorCode(error: unknown) {
+  if (!error || typeof error !== 'object') return null
+  const detail = (error as { detail?: unknown }).detail
+  if (detail && typeof detail === 'object' && 'code' in detail) {
+    const code = (detail as { code: unknown }).code
+    return typeof code === 'string' ? code : null
+  }
+  return null
 }
 
-function formatDate(value?: string | null) {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  })
+function typeLabel(item: { name: string; displayName?: string }) {
+  return item.displayName || item.name
 }
 
 function columnsFor(
@@ -190,16 +97,27 @@ function columnsFor(
   return [...schemaColumns, ...Array.from(runtimeColumns.values())]
 }
 
-export default function FormalInstancesView({ ontologyId }: { ontologyId: string }) {
+export default function FormalInstancesView({
+  ontologyId,
+  onOpenVersions,
+}: {
+  ontologyId: string
+  onOpenVersions?: () => void
+}) {
   const base = `/formal/ontologies/${ontologyId}/instance-browser`
   const queryClient = useQueryClient()
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
+  const { toast } = useToast()
   const [selection, setSelection] = useState<Selection | null>(null)
   const [draftKeyword, setDraftKeyword] = useState('')
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const [pageDraft, setPageDraft] = useState('1')
   const [showAdoptConfirm, setShowAdoptConfirm] = useState(false)
+  const [drawerRow, setDrawerRow] = useState<ObjectRow | null>(null)
+  const tableScrollRef = useRef<HTMLDivElement>(null)
+  const [scrollHint, setScrollHint] = useState({ left: false, right: false })
 
   const catalogQuery = useQuery<InstanceCatalog>({
     queryKey: ['instance-browser-catalog', ontologyId],
@@ -207,6 +125,15 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
   })
   const catalog = catalogQuery.data
   const legacyProjection = catalog?.legacyProjection
+
+  // 与总览 Tab 共用同一 queryKey:先看过总览再进来的用户零额外请求;
+  // 直达本页时也只多一次轻量请求。失败不影响主流程(汇总条退化为仅总数)。
+  const overviewQuery = useQuery<FormalOverviewSummary>({
+    queryKey: ['formal-overview', ontologyId],
+    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/overview`) as Promise<FormalOverviewSummary>,
+    staleTime: 30000,
+    retry: 1,
+  })
 
   const adoptMutation = useMutation({
     mutationFn: () => {
@@ -219,6 +146,11 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
     },
     onSuccess: async () => {
       setShowAdoptConfirm(false)
+      toast({
+        tone: 'success',
+        title: '历史实例已安全归属',
+        description: `已归属到当前发布版本 ${catalog?.release.version || ''}，实例目录已刷新。`,
+      })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['instance-browser-catalog', ontologyId] }),
         queryClient.invalidateQueries({ queryKey: ['instance-browser-page', ontologyId] }),
@@ -285,11 +217,49 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
     selection?.kind || 'object',
   ), [activeObject?.primaryKey, rows, selectedType?.properties, selection?.kind])
 
+  // 对象表:属性列 + 来源 + 创建/更新时间;关系表:两端点 + 属性列 + 创建时间。
+  const totalColumns = columns.length + 3
+
+  useEffect(() => {
+    setPageDraft(String(page))
+  }, [page])
+
+  const updateScrollHints = useCallback(() => {
+    const element = tableScrollRef.current
+    if (!element) return
+    const left = element.scrollLeft > 4
+    const right = element.scrollWidth - element.clientWidth - element.scrollLeft > 4
+    setScrollHint(current => (
+      current.left === left && current.right === right ? current : { left, right }
+    ))
+  }, [])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(updateScrollHints)
+    window.addEventListener('resize', updateScrollHints)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', updateScrollHints)
+    }
+  }, [updateScrollHints, dataQuery.data, columns])
+
   const selectType = (next: Selection) => {
     setSelection(next)
     setPage(1)
     setDraftKeyword('')
     setKeyword('')
+    setDrawerRow(null)
+  }
+
+  // 关系端点跳转:用户看见的是端点业务标签,用修复后的值域搜索直接定位
+  // 到该对象实例(通常恰好一行),闭环“顺着关系往下看”的旅程。
+  const jumpToEndpoint = (endpoint: EndpointSummary) => {
+    if (!catalog?.objectTypes.some(item => item.id === endpoint.objectTypeId)) return
+    setSelection({ kind: 'object', id: endpoint.objectTypeId })
+    setPage(1)
+    setDraftKeyword(endpoint.label)
+    setKeyword(endpoint.label)
+    setDrawerRow(null)
   }
 
   const applySearch = () => {
@@ -303,6 +273,17 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
     setPage(1)
   }
 
+  const commitPageJump = () => {
+    const next = Number.parseInt(pageDraft.trim(), 10)
+    if (Number.isFinite(next)) {
+      const clamped = Math.min(Math.max(1, next), pages)
+      if (clamped !== page) setPage(clamped)
+      else setPageDraft(String(page))
+    } else {
+      setPageDraft(String(page))
+    }
+  }
+
   if (catalogQuery.isLoading) {
     return (
       <div className="flex h-full min-h-[420px] items-center justify-center gap-2 text-sm text-slate-400">
@@ -313,6 +294,27 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
   }
 
   if (catalogQuery.isError) {
+    // 尚未发布不是故障:给出旅程引导(建模→映射→发布),而不是永远失败的重试。
+    if (errorCode(catalogQuery.error) === 'current_release_missing') {
+      return (
+        <div className="h-full min-h-[420px] bg-white">
+          <EmptyData
+            icon={<Boxes size={28} />}
+            title="当前本体还没有发布版本"
+            note="实例数据展示已发布版本的当前态投影。请先在「本体结构」完成建模、在「数据映射」配置灌入，发布后再来验收实例数据。"
+            action={onOpenVersions ? (
+              <button
+                type="button"
+                onClick={onOpenVersions}
+                className="inline-flex h-8 items-center rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition hover:bg-teal-700"
+              >
+                查看版本演进
+              </button>
+            ) : undefined}
+          />
+        </div>
+      )
+    }
     return (
       <div className="flex h-full min-h-[420px] items-center justify-center p-8">
         <div className="max-w-md text-center">
@@ -454,6 +456,10 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
           </div>
         </header>
 
+        {catalog && (
+          <InstanceSummaryBar catalog={catalog} overview={overviewQuery.data} />
+        )}
+
         {legacyProjection && legacyProjection.total > 0 && (
           <div
             data-testid="legacy-projection-warning"
@@ -515,37 +521,92 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
           </div>
         )}
 
-        <div className="relative min-h-0 flex-1 overflow-auto bg-white">
-          {dataQuery.isLoading ? (
-            <div className="flex h-full min-h-64 items-center justify-center gap-2 text-xs text-slate-400">
-              <Loader2 size={16} className="animate-spin text-teal-600" /> 正在加载实例数据…
-            </div>
-          ) : !selectedType ? (
-            <EmptyData icon={<Boxes size={28} />} title="当前发布版本还没有对象实体或实体关系" />
-          ) : !rows.length && !dataQuery.isError ? (
-            <EmptyData
-              icon={selection?.kind === 'link' ? <Link2 size={28} /> : <Box size={28} />}
-              title={keyword ? '没有匹配的实例数据' : '该类型还没有实例数据'}
-              note={keyword ? '请调整查询条件后重试' : '这里展示数据映射、采集或动作写入后的当前态投影'}
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={tableScrollRef}
+            onScroll={updateScrollHints}
+            className="h-full overflow-auto bg-white"
+          >
+            {dataQuery.isLoading ? (
+              <div className="flex h-full min-h-64 items-center justify-center gap-2 text-xs text-slate-400">
+                <Loader2 size={16} className="animate-spin text-teal-600" /> 正在加载实例数据…
+              </div>
+            ) : !selectedType ? (
+              <EmptyData
+                icon={<Boxes size={28} />}
+                title="当前发布版本还没有对象实体或实体关系"
+                note="可先在「本体结构」查看发布快照的建模内容"
+                action={(
+                  <a
+                    href={`#/ontologies/${ontologyId}?tab=design`}
+                    className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700"
+                  >
+                    查看本体结构
+                  </a>
+                )}
+              />
+            ) : !rows.length && !dataQuery.isError ? (
+              <EmptyData
+                icon={selection?.kind === 'link' ? <Link2 size={28} /> : <Box size={28} />}
+                title={keyword ? '没有匹配的实例数据' : '该类型还没有实例数据'}
+                note={keyword ? '请调整查询条件后重试' : '这里展示数据映射、采集或动作写入后的当前态投影'}
+                action={keyword ? (
+                  <button
+                    type="button"
+                    onClick={clearSearch}
+                    className="inline-flex h-8 items-center rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition hover:bg-teal-700"
+                  >
+                    清除查询条件
+                  </button>
+                ) : (
+                  <a
+                    href={`#/ontologies/${ontologyId}?tab=data-mapping`}
+                    className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700"
+                  >
+                    前往数据映射
+                  </a>
+                )}
+              />
+            ) : rows.length ? (
+              <InstanceTable
+                kind={selection?.kind || 'object'}
+                rows={rows}
+                columns={columns}
+                catalog={catalog}
+                linkType={activeLink}
+                onOpenInstance={setDrawerRow}
+                onJumpEndpoint={jumpToEndpoint}
+              />
+            ) : null}
+          </div>
+          {scrollHint.right && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 right-0 z-30 w-12 bg-gradient-to-l from-white via-white/75 to-transparent"
             />
-          ) : rows.length ? (
-            <InstanceTable
-              kind={selection?.kind || 'object'}
-              rows={rows}
+          )}
+          {drawerRow && selection?.kind === 'object' && (
+            <InstanceDetailDrawer
+              ontologyId={ontologyId}
+              objectType={activeObject}
               columns={columns}
-              catalog={catalog}
-              linkType={activeLink}
+              row={drawerRow}
+              onClose={() => setDrawerRow(null)}
             />
-          ) : null}
+          )}
         </div>
 
-        <footer className="flex h-12 shrink-0 items-center justify-between border-t border-slate-200 bg-slate-50/70 px-5">
-          <div className="flex items-center gap-3 text-[11px] text-slate-400">
+        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-slate-200 bg-slate-50/70 px-5 py-1.5">
+          <div className="flex items-center gap-3 whitespace-nowrap text-xs text-slate-400">
             <span className="tabular-nums">{total ? `显示 ${rangeStart}–${rangeEnd} / ${total} 条` : '暂无记录'}</span>
-            <span className="hidden text-slate-300 xl:inline">完整字段值可在表格内横向、纵向滚动查看</span>
+            <span className="hidden text-slate-300 lg:inline">
+              {scrollHint.right || scrollHint.left
+                ? `共 ${totalColumns} 列，可横向滚动查看`
+                : '完整字段值可在表格内横向、纵向滚动查看'}
+            </span>
           </div>
           <div className="flex items-center gap-2">
-            <label className="mr-2 flex h-8 items-center gap-2 text-[11px] text-slate-500">
+            <label className="mr-2 flex h-8 items-center gap-2 whitespace-nowrap text-xs text-slate-500">
               每页
               <select
                 value={pageSize}
@@ -567,7 +628,24 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
             >
               <ChevronLeft size={14} />
             </button>
-            <span className="min-w-16 text-center text-xs tabular-nums text-slate-500">{page} / {pages}</span>
+            <span className="flex min-w-16 items-center justify-center gap-1 text-xs tabular-nums text-slate-500">
+              <input
+                data-testid="page-jump"
+                value={pageDraft}
+                onChange={event => setPageDraft(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitPageJump()
+                  }
+                }}
+                onBlur={commitPageJump}
+                inputMode="numeric"
+                aria-label="跳转至指定页"
+                className="h-7 w-10 rounded-md border border-slate-200 bg-white text-center text-xs text-slate-700 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+              />
+              / {pages}
+            </span>
             <button
               type="button"
               disabled={page >= pages || dataQuery.isFetching}
@@ -580,13 +658,14 @@ export default function FormalInstancesView({ ontologyId }: { ontologyId: string
           </div>
         </footer>
       </section>
-      <ConfirmDialog
+      <ConfirmModal
         open={showAdoptConfirm}
-        title="确认归属历史实例"
-        message={`系统将把 ${legacyProjection?.objectInstances || 0} 个对象实例和 ${legacyProjection?.linkInstances || 0} 条关系实例连同可验证事实归属到当前发布版本 ${catalog?.release.version || ''}。操作会写入审计日志；若数据在确认期间变化，服务端将拒绝提交。`}
-        confirmLabel="确认安全归属"
-        onCancel={() => setShowAdoptConfirm(false)}
+        onClose={() => setShowAdoptConfirm(false)}
         onConfirm={() => void adoptMutation.mutate()}
+        title="确认归属历史实例"
+        description={`系统将把 ${legacyProjection?.objectInstances || 0} 个对象实例和 ${legacyProjection?.linkInstances || 0} 条关系实例连同可验证事实归属到当前发布版本 ${catalog?.release.version || ''}。操作会写入审计日志；若数据在确认期间变化，服务端将拒绝提交。`}
+        confirmText="确认安全归属"
+        loading={adoptMutation.isPending}
       />
     </div>
   )
@@ -617,9 +696,13 @@ function TreeSection({
           {icon}
         </span>
         <span>{title}</span>
-        <span data-testid={`catalog-${tone}-count`} className={`ml-auto inline-flex h-5 min-w-6 items-center justify-center self-center rounded px-1.5 tabular-nums ${
-          objectTone ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'
-        }`}>{count}</span>
+        <span
+          data-testid={`catalog-${tone}-count`}
+          title="类型数量"
+          className={`ml-auto inline-flex h-5 min-w-6 items-center justify-center self-center rounded px-1.5 tabular-nums ${
+            objectTone ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'
+          }`}
+        >{count} 类</span>
       </div>
       <div className="mt-1 space-y-1">{children}</div>
     </section>
@@ -664,13 +747,16 @@ function TypeTreeButton({
       }`} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium" title={label}>{label}</span>
-        <span className="mt-0.5 block truncate font-mono text-[9px] text-slate-400" title={code}>{code}</span>
+        <span className="mt-0.5 block truncate font-mono text-[10px] text-slate-400" title={code}>{code}</span>
       </span>
-      <span className={`inline-flex h-5 min-w-6 shrink-0 items-center justify-center self-center rounded-md px-1.5 text-[10px] tabular-nums ${
-        objectTone
-          ? active ? 'bg-sky-100 text-sky-700' : 'bg-sky-50 text-sky-600'
-          : active ? 'bg-violet-100 text-violet-700' : 'bg-violet-50 text-violet-600'
-      }`}>
+      <span
+        title="实例数量"
+        className={`inline-flex h-5 min-w-6 shrink-0 items-center justify-center self-center rounded-md px-1.5 text-[10px] tabular-nums ${
+          objectTone
+            ? active ? 'bg-sky-100 text-sky-700' : 'bg-sky-50 text-sky-600'
+            : active ? 'bg-violet-100 text-violet-700' : 'bg-violet-50 text-violet-600'
+        }`}
+      >
         {count}
       </span>
     </button>
@@ -804,12 +890,16 @@ function InstanceTable({
   columns,
   catalog,
   linkType,
+  onOpenInstance,
+  onJumpEndpoint,
 }: {
   kind: Selection['kind']
   rows: Array<ObjectRow | LinkRow>
   columns: DataColumn[]
   catalog?: InstanceCatalog
   linkType?: LinkTypeNode | null
+  onOpenInstance: (row: ObjectRow) => void
+  onJumpEndpoint: (endpoint: EndpointSummary) => void
 }) {
   return (
     <table className="w-max min-w-full border-separate border-spacing-0 text-left text-xs">
@@ -853,7 +943,7 @@ function InstanceTable({
                   <span className="rounded bg-slate-200 px-1 py-0.5 text-[9px] text-slate-500">运行字段</span>
                 )}
               </div>
-              <div className="mt-1 flex items-center gap-1.5 font-mono text-[9px] font-normal text-slate-400">
+              <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] font-normal text-slate-400">
                 <span>{column.name}</span>
                 {column.type && <span>· {column.type}</span>}
               </div>
@@ -861,16 +951,28 @@ function InstanceTable({
           ))}
           {kind === 'object' ? (
             <>
+              <HeaderCell narrow>来源</HeaderCell>
               <HeaderCell>创建时间</HeaderCell>
               <HeaderCell>更新时间</HeaderCell>
             </>
-          ) : null}
+          ) : (
+            <HeaderCell>创建时间</HeaderCell>
+          )}
         </tr>
       </thead>
       <tbody>
         {rows.map(row => kind === 'object'
-          ? <ObjectDataRow key={row.id} row={row as ObjectRow} columns={columns} />
-          : <LinkDataRow key={row.id} row={row as LinkRow} columns={columns} />)}
+          ? <ObjectDataRow key={row.id} row={row as ObjectRow} columns={columns} onOpen={onOpenInstance} />
+          : (
+            <LinkDataRow
+              key={row.id}
+              row={row as LinkRow}
+              columns={columns}
+              catalog={catalog}
+              linkType={linkType}
+              onJumpEndpoint={onJumpEndpoint}
+            />
+          ))}
       </tbody>
     </table>
   )
@@ -890,24 +992,51 @@ function EndpointHeader({ label, side }: { label: string; side: 'source' | 'targ
         </span>
         <span className="font-medium text-slate-700">{label}</span>
       </div>
-      <div className="mt-1 text-[9px] font-normal text-slate-400">对象业务标识</div>
+      <div className="mt-1 text-[10px] font-normal text-slate-400">对象业务标识，点击可定位实例</div>
     </div>
   )
 }
 
-function HeaderCell({ children, sticky = false }: { children: React.ReactNode; sticky?: boolean }) {
+function HeaderCell({
+  children,
+  sticky = false,
+  narrow = false,
+}: {
+  children: React.ReactNode
+  sticky?: boolean
+  narrow?: boolean
+}) {
   return (
     <th scope="col" className={`border-b border-r border-slate-200 px-4 py-2.5 align-top font-medium ${
-      sticky ? 'sticky left-0 z-30 min-w-60 bg-slate-50/95' : 'min-w-48'
+      sticky ? 'sticky left-0 z-30 min-w-60 bg-slate-50/95' : narrow ? 'min-w-24' : 'min-w-48'
     }`}>
       {children}
     </th>
   )
 }
 
-function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[] }) {
+function ObjectDataRow({
+  row,
+  columns,
+  onOpen,
+}: {
+  row: ObjectRow
+  columns: DataColumn[]
+  onOpen: (row: ObjectRow) => void
+}) {
   return (
-    <tr className="group align-top hover:bg-teal-50/30">
+    <tr
+      className="group cursor-pointer align-top hover:bg-teal-50/30"
+      onClick={() => onOpen(row)}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen(row)
+        }
+      }}
+      tabIndex={0}
+      aria-label="查看实例详情"
+    >
       {columns.map((column, index) => (
         <DataCell
           key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}
@@ -918,8 +1047,11 @@ function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[]
             : row.properties?.[column.name]} />
         </DataCell>
       ))}
-      <DataCell><span className="whitespace-nowrap text-slate-500">{formatDate(row.createdAt)}</span></DataCell>
-      <DataCell><span className="whitespace-nowrap text-slate-500">{formatDate(row.updatedAt)}</span></DataCell>
+      <DataCell narrow>
+        {row.source ? <SourceChip source={row.source} /> : <span className="text-slate-300">—</span>}
+      </DataCell>
+      <DataCell><span className="whitespace-nowrap text-slate-500">{formatInstanceDateTime(row.createdAt)}</span></DataCell>
+      <DataCell><span className="whitespace-nowrap text-slate-500">{formatInstanceDateTime(row.updatedAt)}</span></DataCell>
     </tr>
   )
 }
@@ -927,93 +1059,103 @@ function ObjectDataRow({ row, columns }: { row: ObjectRow; columns: DataColumn[]
 function LinkDataRow({
   row,
   columns,
+  catalog,
+  linkType,
+  onJumpEndpoint,
 }: {
   row: LinkRow
   columns: DataColumn[]
+  catalog?: InstanceCatalog
+  linkType?: LinkTypeNode | null
+  onJumpEndpoint: (endpoint: EndpointSummary) => void
 }) {
   return (
     <tr className="group align-top hover:bg-teal-50/30">
       <DataCell sticky>
-        <EndpointCell endpoint={row.sourceObject} />
+        <EndpointCell
+          endpoint={row.sourceObject}
+          typeName={objectTypeName(catalog, linkType?.sourceObjectTypeId || '')}
+          onJump={onJumpEndpoint}
+        />
       </DataCell>
       <DataCell>
-        <EndpointCell endpoint={row.targetObject} />
+        <EndpointCell
+          endpoint={row.targetObject}
+          typeName={objectTypeName(catalog, linkType?.targetObjectTypeId || '')}
+          onJump={onJumpEndpoint}
+        />
       </DataCell>
       {columns.map((column, index) => (
         <DataCell key={`${column.name}:${index}`}><FullValue type={column.type} value={row.properties?.[column.name]} /></DataCell>
       ))}
+      <DataCell>
+        <span className="whitespace-nowrap text-slate-500">
+          {row.createdAt ? formatInstanceDateTime(row.createdAt) : '—'}
+        </span>
+      </DataCell>
     </tr>
   )
 }
 
-function DataCell({ children, sticky = false }: { children: React.ReactNode; sticky?: boolean }) {
+function DataCell({
+  children,
+  sticky = false,
+  narrow = false,
+}: {
+  children: React.ReactNode
+  sticky?: boolean
+  narrow?: boolean
+}) {
   return (
     <td className={`max-w-[32rem] border-b border-r border-slate-100 px-4 py-3 align-top leading-5 text-slate-600 ${
-      sticky ? 'sticky left-0 z-10 min-w-60 bg-white group-hover:bg-[#f5fcfa]' : 'min-w-48'
+      sticky ? 'sticky left-0 z-10 min-w-60 bg-white group-hover:bg-[#f5fcfa]' : narrow ? 'min-w-24' : 'min-w-48'
     }`}>
       {children}
     </td>
   )
 }
 
-function EndpointCell({ endpoint }: { endpoint?: EndpointSummary | null }) {
+function EndpointCell({
+  endpoint,
+  typeName,
+  onJump,
+}: {
+  endpoint?: EndpointSummary | null
+  typeName?: string
+  onJump?: (endpoint: EndpointSummary) => void
+}) {
+  if (!endpoint) {
+    return (
+      <div className="min-w-56 max-w-96">
+        <div className="font-medium text-slate-800">端点实例不可用</div>
+      </div>
+    )
+  }
   return (
     <div className="min-w-56 max-w-96">
-      <div className="font-medium text-slate-800">{endpoint?.label || '端点实例不可用'}</div>
+      <button
+        type="button"
+        onClick={() => onJump?.(endpoint)}
+        title={typeName ? `在「${typeName}」中定位该实例` : '定位该实例'}
+        className="group/endpoint -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 font-medium text-slate-800 transition hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+      >
+        <span className="truncate underline-offset-2 group-hover/endpoint:underline">{endpoint.label}</span>
+        <ArrowUpRight size={12} className="shrink-0 text-slate-300 transition group-hover/endpoint:text-teal-600" />
+      </button>
     </div>
   )
-}
-
-// 值展示统一转译为用户语言：数字加千分位；date/datetime 列与严格 ISO 字符串转本地可读时间。
-// 仅命中带时刻与可选时区的完整 ISO 形式，避免误伤 '2026-08'、编号等普通文本。
-const DATE_TYPE_RE = /^(date|datetime|timestamp|timestamptz|time)$/i
-const ISO_MOMENT_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/
-
-function FullValue({ value, type }: { value: unknown; type?: string }) {
-  if (value === null || value === undefined || value === '') {
-    return <span className="text-slate-300">—</span>
-  }
-  if (Array.isArray(value)) {
-    return (
-      <pre className="m-0 whitespace-nowrap font-mono text-[11px] leading-5 text-slate-600">
-        {JSON.stringify(value)}
-      </pre>
-    )
-  }
-  if (typeof value === 'object') {
-    return (
-      <pre className="m-0 max-w-[30rem] whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-slate-600">
-        {JSON.stringify(value, null, 2)}
-      </pre>
-    )
-  }
-  if (typeof value === 'number') {
-    return (
-      <span className="block max-w-[30rem] whitespace-pre-wrap break-words tabular-nums text-slate-700">
-        {value.toLocaleString('zh-CN')}
-      </span>
-    )
-  }
-  const text = String(value)
-  const isDateColumn = type ? DATE_TYPE_RE.test(type.trim().replace(/\(.*\)/, '')) : false
-  if ((isDateColumn || ISO_MOMENT_RE.test(text)) && !Number.isNaN(new Date(text).getTime())) {
-    return (
-      <span className="block max-w-[30rem] whitespace-nowrap tabular-nums text-slate-700" title={text}>
-        {formatDate(text)}
-      </span>
-    )
-  }
-  return <span className="block max-w-[30rem] whitespace-pre-wrap break-words text-slate-700">{text}</span>
 }
 
 function EmptyData({
   icon,
   title,
   note,
+  action,
 }: {
   icon: React.ReactNode
   title: string
   note?: string
+  action?: React.ReactNode
 }) {
   return (
     <div className="flex h-full min-h-64 items-center justify-center p-8 text-center">
@@ -1022,7 +1164,8 @@ function EmptyData({
           {icon}
         </div>
         <p className="mt-3 text-sm font-medium text-slate-600">{title}</p>
-        {note && <p className="mt-1 text-xs text-slate-400">{note}</p>}
+        {note && <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-slate-400">{note}</p>}
+        {action && <div className="mt-4 flex items-center justify-center gap-2">{action}</div>}
       </div>
     </div>
   )

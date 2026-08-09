@@ -8,7 +8,7 @@ import inspect
 from typing import Callable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import String, cast, func, or_
+from sqlalchemy import String, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.ontology_formal import (
@@ -351,6 +351,32 @@ def instance_browser_adopt_legacy(
     return _ok(result)
 
 
+def _json_value_match(column, term: str, param: str, db: Session):
+    """关键字只匹配 JSON 文档的“值”，不匹配键名。
+
+    用户搜的是表格里看得见的属性值；整段 JSON 文本匹配会让键名
+    （如 order_id）也命中，产生“搜什么键名都全量命中”的噪声。
+    PostgreSQL / SQLite 分别下发到各自的 JSON 值展开函数；其他方言
+    回退为整段文本匹配（宽松但不错杀）。``param`` 是本次查询内唯一的
+    bindparam 名，调用方负责区分同一语句里的多个值域条件。
+    """
+    pattern = f"%{term}%"
+    dialect = db.get_bind().dialect.name
+    table_name = column.class_.__table__.name
+    column_name = column.property.columns[0].name
+    if dialect == "postgresql":
+        return text(
+            f'EXISTS (SELECT 1 FROM json_each_text("{table_name}"."{column_name}")'
+            f' AS jv("key", "value") WHERE jv."value" ILIKE :{param})'
+        ).bindparams(**{param: pattern})
+    if dialect == "sqlite":
+        return text(
+            f'EXISTS (SELECT 1 FROM json_each("{table_name}"."{column_name}")'
+            f' WHERE lower(CAST(json_each."value" AS TEXT)) LIKE lower(:{param}))'
+        ).bindparams(**{param: pattern})
+    return cast(column, String).ilike(pattern)
+
+
 def instance_browser_objects(
         ontology_id: str,
         object_type_id: str,
@@ -375,8 +401,8 @@ def instance_browser_objects(
             ObjectInstance.id.ilike(pattern),
             ObjectInstance.external_id.ilike(pattern),
             ObjectInstance.source.ilike(pattern),
-            cast(ObjectInstance.properties, String).ilike(pattern),
-            cast(ObjectInstance.computed, String).ilike(pattern),
+            _json_value_match(ObjectInstance.properties, term, "obj_prop_kw", db),
+            _json_value_match(ObjectInstance.computed, term, "obj_comp_kw", db),
         ))
     total = query.count()
     items = query.order_by(
@@ -413,11 +439,23 @@ def instance_browser_links(
     term = (keyword or "").strip()
     if term:
         pattern = f"%{term}%"
+        # 表格里端点显示的是业务标签（主键/名称等属性值或 external_id），
+        # 用户按标签搜索时必须能命中，因此先解析出命中的端点实例再回过滤。
+        endpoint_hits = select(ObjectInstance.id).where(
+            ObjectInstance.ontology_id == ontology_id,
+            ObjectInstance.ontology_release_id == release.id,
+            or_(
+                ObjectInstance.external_id.ilike(pattern),
+                _json_value_match(ObjectInstance.properties, term, "ep_prop_kw", db),
+            ),
+        )
         query = query.filter(or_(
             LinkInstance.id.ilike(pattern),
             LinkInstance.source_object_id.ilike(pattern),
             LinkInstance.target_object_id.ilike(pattern),
-            cast(LinkInstance.properties, String).ilike(pattern),
+            _json_value_match(LinkInstance.properties, term, "link_prop_kw", db),
+            LinkInstance.source_object_id.in_(endpoint_hits),
+            LinkInstance.target_object_id.in_(endpoint_hits),
         ))
     total = query.count()
     items = query.order_by(
