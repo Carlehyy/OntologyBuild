@@ -1,0 +1,139 @@
+/* ════════════════════════════════════════════════════════════════
+   治理推演 · 叙事动效(纯 CSS,零依赖)
+   - gov-stagger:区块错落入场
+   - gov-pulse:哨兵在线雷达脉冲
+   - gov-iso:2.5D 等距流程图(数据→哨兵→动作→效果)
+   - gov-spark:执行心电图描线
+   - gov-dot-pop:自治履历点阵弹入
+   - gov-expand:故事卡展开
+   全部动画尊重 prefers-reduced-motion。
+   ════════════════════════════════════════════════════════════════ */
+
+/* 错落入场 */
+@keyframes govRise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.gov-stagger > * { animation: govRise 480ms cubic-bezier(.2,.8,.2,1) both; }
+.gov-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.gov-stagger > *:nth-child(2) { animation-delay: 60ms; }
+.gov-stagger > *:nth-child(3) { animation-delay: 120ms; }
+.gov-stagger > *:nth-child(4) { animation-delay: 180ms; }
+.gov-stagger > *:nth-child(5) { animation-delay: 240ms; }
+.gov-stagger > *:nth-child(6) { animation-delay: 300ms; }
+
+/* 哨兵在线雷达脉冲:在线点外扩散的同心圆 */
+@keyframes govPulse {
+  0% { transform: scale(1); opacity: .55; }
+  70% { transform: scale(2.6); opacity: 0; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+.gov-pulse { position: relative; }
+.gov-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: govPulse 2.2s ease-out infinite;
+}
+
+/* 故事卡展开(高度自适应的 0fr→1fr 网格动画) */
+.gov-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 320ms cubic-bezier(.2,.8,.2,1);
+}
+.gov-expand[data-open='true'] { grid-template-rows: 1fr; }
+.gov-expand > .gov-expand-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+@keyframes govChapterIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.gov-expand[data-open='true'] .gov-chapter { animation: govChapterIn 360ms cubic-bezier(.2,.8,.2,1) both; }
+.gov-expand[data-open='true'] .gov-chapter:nth-child(2) { animation-delay: 90ms; }
+.gov-expand[data-open='true'] .gov-chapter:nth-child(3) { animation-delay: 180ms; }
+
+/* 章节连接线的“流动”虚线 */
+@keyframes govFlowDash {
+  to { background-position-y: 16px; }
+}
+.gov-flowline {
+  background-image: linear-gradient(to bottom, currentColor 45%, transparent 45%);
+  background-size: 1px 16px;
+  background-repeat: repeat-y;
+  animation: govFlowDash 900ms linear infinite;
+}
+
+/* 执行心电图:柱条从底部生长 */
+@keyframes govBarGrow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+.gov-bar {
+  transform-origin: bottom;
+  animation: govBarGrow 560ms cubic-bezier(.2,.8,.2,1) both;
+}
+
+/* 自治履历点阵弹入 */
+@keyframes govDotPop {
+  0% { opacity: 0; transform: scale(.3); }
+  70% { transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.gov-dot-pop { animation: govDotPop 360ms cubic-bezier(.2,.8,.2,1) both; }
+
+/* 等级路径当前节点的呼吸光晕 */
+@keyframes govLevelGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(13,148,136,.35); }
+  50% { box-shadow: 0 0 0 6px rgba(13,148,136,0); }
+}
+.gov-level-current { animation: govLevelGlow 2.4s ease-in-out infinite; }
+
+/* ═══ 2.5D 等距流程图 ═══ */
+.gov-iso-stage {
+  perspective: 900px;
+}
+.gov-iso-plane {
+  transform: rotateX(55deg) rotateZ(-32deg);
+  transform-style: preserve-3d;
+}
+.gov-iso-node {
+  transform-style: preserve-3d;
+}
+@keyframes isoFloat {
+  0%, 100% { transform: translateZ(0); }
+  50% { transform: translateZ(8px); }
+}
+.gov-iso-float { animation: isoFloat 4.5s ease-in-out infinite; }
+.gov-iso-float[data-order='2'] { animation-delay: .9s; }
+.gov-iso-float[data-order='3'] { animation-delay: 1.8s; }
+.gov-iso-float[data-order='4'] { animation-delay: 2.7s; }
+.gov-iso-float[data-order='5'] { animation-delay: 3.6s; }
+@keyframes isoFlowDash {
+  to { stroke-dashoffset: -18; }
+}
+.gov-iso-edge {
+  stroke-dasharray: 6 6;
+  animation: isoFlowDash 1.1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gov-stagger > *,
+  .gov-pulse::after,
+  .gov-expand,
+  .gov-expand[data-open='true'] .gov-chapter,
+  .gov-flowline,
+  .gov-bar,
+  .gov-dot-pop,
+  .gov-level-current,
+  .gov-iso-float,
+  .gov-iso-edge {
+    animation: none !important;
+    transition: none !important;
+  }
+  .gov-expand { grid-template-rows: 1fr; }
+}
