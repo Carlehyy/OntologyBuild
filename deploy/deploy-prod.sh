@@ -156,7 +156,7 @@ restore_previous_runtime_on_exit() {
 trap restore_previous_runtime_on_exit EXIT
 stop_new_runtime_after_failed_deploy() {
   log "stopping the partially started new runtime after a post-migration failure"
-  if ! compose stop --timeout 30 frontend celery_worker backend; then
+  if ! compose stop --timeout 30 frontend pipeline_executor celery_worker backend; then
     log "failed to stop the new runtime completely; operator intervention is required"
   fi
 }
@@ -1108,7 +1108,7 @@ log "stopping backend and Celery worker before database migrations"
 # Revision 0055 changes the projection readiness contract. Old application
 # processes do not understand that fence, so no API/worker writer may remain
 # active while Alembic upgrades the database.
-run_with_retry compose stop -t 30 backend celery_worker
+run_with_retry compose stop -t 30 backend pipeline_executor celery_worker
 log "running database migrations"
 # Never rewrite Alembic history during a normal deploy.  If a legacy database
 # needs a one-off baseline stamp it must be an explicit, audited operation.
@@ -1128,7 +1128,7 @@ migration_head_revision="$(
   exit 1
 }
 running_services="$(compose ps --services --filter status=running 2>/dev/null || true)"
-for runtime_service in backend celery_worker frontend; do
+for runtime_service in backend pipeline_executor celery_worker frontend; do
   if grep -Fxq "$runtime_service" <<<"$running_services"; then
     previous_runtime_services+=("$runtime_service")
   fi
@@ -1140,7 +1140,7 @@ if [ "${#previous_runtime_services[@]}" -gt 0 ]; then
   fi
   log "stopping frontend, worker and API before the schema migration"
   runtime_stopped_for_migration=1
-  compose stop --timeout 30 frontend celery_worker backend
+  compose stop --timeout 30 frontend pipeline_executor celery_worker backend
 fi
 log "  upgrading to head"
 if ! run_with_retry compose run --rm --no-deps backend alembic upgrade head; then
