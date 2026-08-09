@@ -54,8 +54,11 @@ app/services/sentinel/__init__.py
 app/services/connection/sql_connector.py
 app/services/v2/graph/graph_analytics.py
 app/services/v2/graph/neo4j_service.py
-app/services/v2/pipeline/steps/md_to_structured.py
 ```
+
+注：`app/services/v2/pipeline/steps/md_to_structured.py` 曾在此台账中，
+已随 canvas/route A-B-C 流水线下线（迁移 0061）连同画布转换 steps 一并
+退役删除，不属于仍可依赖的兼容入口。
 
 `app/services/model_config_selector.py` 是纯转发 facade，但部分调用方在函数
 执行时从该路径导入以保留 monkeypatch/扩展点，兼容测试迁移前不得批量替换。
