@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -50,7 +50,9 @@ export default function OntologyDetailPage() {
   const requestedTab = searchParams.get('tab')
   const activeGroup = GROUPS.some(group => group.key === requestedTab) ? requestedTab! : 'overview'
   const groupTabsRef = useRef<HTMLDivElement>(null)
+  const tabNavScrollRef = useRef<HTMLDivElement>(null)
   const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
+  const [tabsMoreRight, setTabsMoreRight] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [exportFeedback, setExportFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [showVersionModal, setShowVersionModal] = useState(false)
@@ -114,6 +116,8 @@ export default function OntologyDetailPage() {
     if (!container) return
     const activeButton = container.querySelector(`[data-tab-value="${activeGroup}"]`) as HTMLElement | null
     if (!activeButton) return
+    // 窄屏下 Tab 容器横向滚动,先让激活页签进入视野再计算指示器位置
+    activeButton.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     const containerRect = container.getBoundingClientRect()
     const buttonRect = activeButton.getBoundingClientRect()
     setIndicatorPos({
@@ -121,6 +125,19 @@ export default function OntologyDetailPage() {
       width: buttonRect.width,
     })
   }, [activeGroup, ontology?.id])
+
+  // 窄屏时 Tab 栏可横向滚动但滚动条被隐藏,用右缘渐变提示“后面还有页签”
+  const updateTabScrollHint = useCallback(() => {
+    const element = tabNavScrollRef.current
+    if (!element) return
+    setTabsMoreRight(element.scrollWidth - element.clientWidth - element.scrollLeft > 4)
+  }, [])
+
+  useEffect(() => {
+    updateTabScrollHint()
+    window.addEventListener('resize', updateTabScrollHint)
+    return () => window.removeEventListener('resize', updateTabScrollHint)
+  }, [updateTabScrollHint])
 
   const selectGroup = (key: string) => {
     if (key === 'overview') setSearchParams({}, { replace: true })
@@ -134,7 +151,19 @@ export default function OntologyDetailPage() {
     <div className="onto-glass-root onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       {/* ═══ 功能导航与低频操作 ═══ */}
       <div data-testid="ontology-detail-header" className="onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4">
-        <div className="min-w-0 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+        <div className="relative min-w-0">
+          {tabsMoreRight && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 right-0 z-20 w-10 bg-gradient-to-l from-white via-white/80 to-transparent"
+            />
+          )}
+          <div
+            ref={tabNavScrollRef}
+            onScroll={updateTabScrollHint}
+            className="min-w-0 overflow-x-auto"
+            style={{ scrollbarWidth: 'none' }}
+          >
           <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
             <div
               aria-hidden="true"
@@ -169,6 +198,7 @@ export default function OntologyDetailPage() {
                 </button>
               )
             })}
+          </div>
           </div>
         </div>
 
@@ -241,7 +271,7 @@ export default function OntologyDetailPage() {
         </div>
       ) : activeGroup === 'data' ? (
         <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
-          <FormalInstancesView ontologyId={id!} />
+          <FormalInstancesView ontologyId={id!} onOpenVersions={() => setShowVersionModal(true)} />
         </div>
       ) : (
         <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto p-4">
