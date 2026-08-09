@@ -1,8 +1,13 @@
 """合并引擎性能基准：legacy 内存合并 vs merge_engine（DuckDB 下推）。
 
-场景：基座 100 万行 × 20 列 + 增量 1 万行（upsert / append_dedup）。
-两侧各记录墙钟与 tracemalloc 峰值，报告写
-.artifacts/pr5-merge-engine-benchmark.json（gitignored）。
+规模设计（CI shard 预算约束）：
+- 等价性断言在 10 万行基座上同尺度双跑（merged 行数/审计计数逐一致）；
+- legacy 计时只跑 10 万行基座（其 O(N) Python 成本线性外推即可，100 万行
+  在本机即需 2-4 分钟，CI 4 vCPU 会撑爆 verify-backend shard 的 15 分钟
+  超时——曾导致 run 31291874820 shard 1 被取消）；
+- 新引擎计时跑满 100 万行基座（任何机器上都应秒级完成）。
+
+报告写 .artifacts/pr5-merge-engine-benchmark.json（gitignored）。
 
 注意：tracemalloc 只追踪 Python 侧分配，DuckDB 原生内存不在内——这正是本 PR
 的论点：新引擎的 Python 侧峰值不再随湖中总量增长（只随增量批次增长）。
@@ -20,12 +25,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-BASE_ROWS = 1_000_000
+ENGINE_BASE_ROWS = 1_000_000
+# legacy 计时基座：O(N) 成本可线性外推，10 万行已足够证明量级差
+LEGACY_BASE_ROWS = 100_000
 BASE_COLS = 20
 INC_ROWS = 10_000
-# 本机（48GB）legacy 可跑满 100 万行；更小内存的机器可降到能跑的规模并在
-# 报告的 note 中注明——新引擎在任何机器上都必须跑满 100 万行。
-LEGACY_BASE_ROWS = BASE_ROWS
 
 REPORT_PATH = (
     Path(__file__).resolve().parents[4]
@@ -49,9 +53,9 @@ def _build_base_bytes(n: int, cols: int) -> bytes:
     return buf.getvalue()
 
 
-def _inc_rows(n: int, *, start: int = 0) -> list[dict]:
+def _inc_rows(n: int, *, start: int = 0, mod: int = ENGINE_BASE_ROWS) -> list[dict]:
     return [
-        {"id": f"k{(start + i) % BASE_ROWS:07d}",
+        {"id": f"k{(start + i) % mod:07d}",
          **{f"c{j}": f"n{start + i}-{j}" for j in range(BASE_COLS - 1)}}
         for i in range(n)
     ]
@@ -138,34 +142,22 @@ def _write_report():
 
 
 @pytest.fixture(scope="module")
-def base_bytes():
-    return _build_base_bytes(BASE_ROWS, BASE_COLS)
+def engine_base_bytes():
+    return _build_base_bytes(ENGINE_BASE_ROWS, BASE_COLS)
 
 
-def test_benchmark_upsert_1m_base(base_bytes):
-    """upsert：增量 1 万行全部命中既有主键（最重的合并形态）。"""
-    inc = _inc_rows(INC_ROWS)
-
-    legacy_result, legacy_wall, legacy_peak = _measure(
-        lambda: _legacy_chain(base_bytes, inc, "upsert", ["id"]))
-    _record("upsert", "legacy", BASE_ROWS, legacy_result, legacy_wall,
-            legacy_peak, note="全量读入 Python 内存合并")
-
-    engine_result, engine_wall, engine_peak = _measure(
-        lambda: _engine_chain(base_bytes, inc, "upsert", ["id"]))
-    rec = _record("upsert", "merge_engine", BASE_ROWS, engine_result,
-                  engine_wall, engine_peak, note="DuckDB 下推，零基座物化")
-    _write_report()
-
-    assert engine_result[0] == legacy_result[0], "合并行数不一致"
-    assert engine_result[2] == legacy_result[2], "审计 unchanged 计数不一致"
-    assert engine_wall < 120, f"新引擎 upsert 100 万基座耗时 {engine_wall:.1f}s"
-    assert engine_peak < legacy_peak, (
-        f"新引擎 Python 峰值 {rec['peak_tracemalloc_mb']}MB 应显著低于 legacy")
+@pytest.fixture(scope="module")
+def legacy_base_bytes():
+    return _build_base_bytes(LEGACY_BASE_ROWS, BASE_COLS)
 
 
-def test_benchmark_append_dedup_1m_base(base_bytes):
-    """append_dedup：增量中一半与基座整行重复、一半为新行。"""
+def _upsert_inc(mod: int) -> list[dict]:
+    """增量 1 万行全部命中既有主键（最重的合并形态）。"""
+    return _inc_rows(INC_ROWS, mod=mod)
+
+
+def _append_dedup_inc() -> list[dict]:
+    """增量中一半与基座整行重复、一半为新行。"""
     dupes = [
         {"id": f"k{i:07d}", **{f"c{j}": f"v{i % 5000}-{j}"
                                for j in range(BASE_COLS - 1)}}
@@ -176,20 +168,59 @@ def test_benchmark_append_dedup_1m_base(base_bytes):
                                   for j in range(BASE_COLS - 1)}}
         for i in range(INC_ROWS - INC_ROWS // 2)
     ]
-    inc = dupes + fresh
+    return dupes + fresh
 
+
+def test_benchmark_upsert(engine_base_bytes, legacy_base_bytes):
+    # 同尺度（10 万）等价：合并行数与审计计数必须一致
+    inc_small = _upsert_inc(LEGACY_BASE_ROWS)
+    legacy_eq, _, _ = _measure(
+        lambda: _legacy_chain(legacy_base_bytes, inc_small, "upsert", ["id"]))
+    engine_eq, _, _ = _measure(
+        lambda: _engine_chain(legacy_base_bytes, inc_small, "upsert", ["id"]))
+    assert engine_eq[0] == legacy_eq[0], "合并行数不一致"
+    assert engine_eq[2] == legacy_eq[2], "审计 unchanged 计数不一致"
+
+    # 计时：legacy@10 万（外推 O(N)）vs 引擎@100 万
     legacy_result, legacy_wall, legacy_peak = _measure(
-        lambda: _legacy_chain(base_bytes, inc, "append_dedup", []))
-    _record("append_dedup", "legacy", BASE_ROWS, legacy_result, legacy_wall,
-            legacy_peak, note="全量读入 Python 内存合并")
+        lambda: _legacy_chain(legacy_base_bytes, inc_small, "upsert", ["id"]))
+    _record("upsert", "legacy", LEGACY_BASE_ROWS, legacy_result, legacy_wall,
+            legacy_peak, note="全量读入 Python 内存合并（10 万基座，O(N) 可线性外推）")
 
     engine_result, engine_wall, engine_peak = _measure(
-        lambda: _engine_chain(base_bytes, inc, "append_dedup", []))
-    rec = _record("append_dedup", "merge_engine", BASE_ROWS, engine_result,
-                  engine_wall, engine_peak, note="DuckDB 下推，零基座物化")
+        lambda: _engine_chain(
+            engine_base_bytes, _upsert_inc(ENGINE_BASE_ROWS), "upsert", ["id"]))
+    rec = _record("upsert", "merge_engine", ENGINE_BASE_ROWS, engine_result,
+                  engine_wall, engine_peak, note="DuckDB 下推，零基座物化（100 万基座）")
     _write_report()
 
-    assert engine_result[0] == legacy_result[0], "合并行数不一致"
-    assert engine_wall < 120, f"新引擎 append_dedup 100 万基座耗时 {engine_wall:.1f}s"
+    assert engine_wall < 120, f"新引擎 upsert 100 万基座耗时 {engine_wall:.1f}s"
+    assert engine_peak < legacy_peak, (
+        f"新引擎 Python 峰值 {rec['peak_tracemalloc_mb']}MB 应显著低于 legacy")
+
+
+def test_benchmark_append_dedup(engine_base_bytes, legacy_base_bytes):
+    inc_small = _append_dedup_inc()
+    legacy_eq, _, _ = _measure(
+        lambda: _legacy_chain(legacy_base_bytes, inc_small, "append_dedup", []))
+    engine_eq, _, _ = _measure(
+        lambda: _engine_chain(legacy_base_bytes, inc_small, "append_dedup", []))
+    assert engine_eq[0] == legacy_eq[0], "合并行数不一致"
+
+    legacy_result, legacy_wall, legacy_peak = _measure(
+        lambda: _legacy_chain(legacy_base_bytes, inc_small, "append_dedup", []))
+    _record("append_dedup", "legacy", LEGACY_BASE_ROWS, legacy_result,
+            legacy_wall, legacy_peak,
+            note="全量读入 Python 内存合并（10 万基座，O(N) 可线性外推）")
+
+    engine_result, engine_wall, engine_peak = _measure(
+        lambda: _engine_chain(engine_base_bytes, inc_small, "append_dedup", []))
+    rec = _record("append_dedup", "merge_engine", ENGINE_BASE_ROWS,
+                  engine_result, engine_wall, engine_peak,
+                  note="DuckDB 下推，零基座物化（100 万基座）")
+    _write_report()
+
+    assert engine_wall < 120, (
+        f"新引擎 append_dedup 100 万基座耗时 {engine_wall:.1f}s")
     assert engine_peak < legacy_peak, (
         f"新引擎 Python 峰值 {rec['peak_tracemalloc_mb']}MB 应显著低于 legacy")
